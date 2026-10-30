@@ -182,7 +182,10 @@ def _entregas_vuupt(conn, sender_id: int, doc: str) -> list:
               JOIN nucleo_rotas r ON r.id = p.rota_id
               JOIN nucleo_pedidos ped ON ped.codigo = REPLACE(p.codigo, '#', '')
              WHERE p.situacao IN ('ENTREGUE', 'PARCIAL', 'INSUCESSO')
-               AND COALESCE(ped.sender_id, p.sender_id) = ?
+               -- o endereco vem da parada: ela tem de ser do embarcador (codigo
+               -- se repete entre embarcadores na Vuupt; revisao de seguranca 30/10)
+               AND p.sender_id = ?
+               AND (ped.sender_id IS NULL OR ped.sender_id = p.sender_id)
                AND REPLACE(REPLACE(REPLACE(ped.destinatario_codigo, '.', ''), '/', ''), '-', '') = ?
              ORDER BY r.data_rota DESC, p.completed_at DESC
         """, (sender_id, doc)).fetchall()

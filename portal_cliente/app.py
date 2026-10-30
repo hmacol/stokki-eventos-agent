@@ -948,7 +948,10 @@ def _casos_de_entrega(conn, itens: list[dict]) -> None:
 @requer_cliente
 def api_envios_cep(cep):
     """CEP do formulário de endereço de entrega da prévia (27/10). O confirmar
-    consulta de novo: isto só preenche a tela."""
+    consulta de novo: isto só preenche a tela. Chave desligada: a rota não
+    existe (revisão de segurança 30/10 -- não abrir proxy de CEP sem uso)."""
+    if not endereco_entrega.entrega_ativa(_CONFIG):
+        abort(404)
     _exige_pode_enviar()
     achado = cotacao.consultar_cep(cotacao.normalizar_cep(cep))
     if not achado:

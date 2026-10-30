@@ -111,6 +111,14 @@ class Rotas(unittest.TestCase):
         self.assertEqual(ok.get_json(), {k: v for k, v in dados.items() if k != "ibge"})
         self.assertEqual((nao.status_code, nao.get_json()), (404, {"erro": "CEP não encontrado"}))
 
+    def test_cep_com_chave_desligada_nao_consulta(self):
+        """Revisao de seguranca 30/10: sem a chave, nada de proxy de CEP."""
+        self.config.clear()
+        with mock.patch.object(cotacao, "consultar_cep") as consultar:
+            r = self.tc.get("/api/envios/cep/01414-001")
+        self.assertEqual(r.status_code, 404)
+        consultar.assert_not_called()
+
     def test_confirmar_passa_sender_id_e_config(self):
         with mock.patch.object(ep, "confirmar_envios", return_value=[]) as conf, \
              mock.patch.object(ep, "avisos_fora_dia_fixo", return_value=[]) as fora:
