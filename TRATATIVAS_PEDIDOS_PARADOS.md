@@ -73,8 +73,10 @@ cadastrar mais opções mais adiante").
 | **Reenvio** | **Sim** | Duplicar o pedido e reenviar à Vuupt o quanto antes, pra voltar pra rota |
 | **Agendado** | Não | Verificar e manter o agendamento já existente (não é caso de operação nem de duplicação) |
 | **Descartar** | **Nunca** | **Mesmo comportamento de "Cancelados"** (corrigido 24/08, pedido do Hugo: "precisamos comunicar a equipe") — cria card em Demandas com o mesmo molde de Cancelados (categoria "Cancelamento de Pedido e Retorno ao Estoque", área "Operações") |
+| **Retornar para Estoque** | **Nunca** | Cria card em Demandas (título "Retorno ao Estoque — {cliente}") pra equipe escolhida no Encaminhar (incluída 29/10, pedido do Hugo) |
 | **Verificar com Cliente** | **Nunca** | Cria card em Demandas pra área **Atendimento** (categoria "Verificar Pedido com Cliente", cadastrada pelo Hugo em 24/08) — antes de decidir Cancelados/Devolução Parcial/Reenvio, alguém do atendimento ou comercial confirma com o cliente o que fazer com o pedido |
 | **Em Rota** | Não | **Mesmo comportamento de "Agendado"** (pedido do Hugo, 25/08) — só marca como revisado, sem duplicar nem criar Demanda; pedido já está em rota, não precisa de mais nada |
+| **Na Vuupt** | Não | Pedido está na Vuupt (pool) mas **fora de rota** (incluída 30/10, pedido do Hugo). Só rótulo: sem botão, sem Demanda, e **continua em "só não tratados"** até entrar numa rota |
 | **Cliente Retira** | **Nunca** | **Não cria Demanda** (confirmado com o Hugo, 25/08) — botão manual "Notificar embarcador" dispara um e-mail (mesmo template visual/design dos outros notificadores automáticos do projeto, `email_utils.envelope_html`) avisando o embarcador que o pedido ainda não foi coletado. E-mail resolvido via `pedidos_historico.cliente_cnpj` → `interno.cnpj_embarcador` (cruza por CNPJ, não por nome); se o pedido não estiver em `pedidos_historico`, o embarcador não tiver e-mail cadastrado, ou tiver `notificar_email` desligado, a tela mostra erro em vez de enviar |
 | **Entregue** | Não | **Mesmo comportamento de "Agendado"** (pedido do Hugo, 25/08) — só marca como revisado, sem notificação, sem Demanda e sem duplicar; o pedido já foi entregue, o registro de "parado" ficou pra trás |
 | *(novo status futuro)* | **Indefinido até ser documentado aqui** | Tratar como Pendente — nunca duplicar nem presumir tratativa por conta própria; decidir manualmente e atualizar esta tabela |
@@ -102,17 +104,17 @@ número do pedido.
 Vuupt (segue a cadeia de reentregas até o serviço mais recente) e:
 - **Atribuído / Aceito / Em deslocamento / Chegou ao cliente**
   (`assigned`, `accepted`, `on_route`) → "Em Rota" (Hugo, 28/08);
-- **não atribuído** (`not_assigned`): sem agendamento ou agendado pra
-  **hoje** → **sem ação** ("NO POOL, ainda sem rota"; mudado em 28/09:
-  antes virava "Em Rota", que conta como tratado e escondia pedido
-  esquecido no pool — se já estava "Em Rota", a classificação é
-  desfeita e o pedido volta pro "só não tratados"); agendado pra
-  **depois de hoje** → "Agendado"; agendamento vencido → sem ação;
+- **não atribuído** (`not_assigned`): sem agendamento, agendado pra
+  **hoje** ou agendamento vencido → "Na Vuupt" ("NO POOL, ainda sem
+  rota"; 30/10. De 28/09 a 30/10 ficava sem ação; antes de 28/09 virava
+  "Em Rota", que conta como tratado e escondia pedido esquecido no
+  pool. "Na Vuupt" continua pendente, e um "Em Rota" falso é trocado
+  por ele); agendado pra **depois de hoje** → "Agendado";
 - **concluído com sucesso** (`done` + `status_done=success`) →
   "Entregue"; concluído com insucesso → sem ação (tratativa na Torre);
 - cancelado → sem ação.
-Só preenche classificação vazia ou troca entre Em Rota / Agendado /
-Entregue — Cancelados/Cliente Retira/Reenvio etc. já marcados não são
+Só preenche classificação vazia ou troca entre Na Vuupt / Em Rota /
+Agendado / Entregue — Cancelados/Cliente Retira/Reenvio etc. já marcados não são
 sobrescritos (viram "divergente"). Erro da Vuupt (ex.: 429) interrompe
 a rodada em vez de insistir. O status/agendamento vistos ficam em
 `pedidos_parados_vuupt` e aparecem embaixo do número.

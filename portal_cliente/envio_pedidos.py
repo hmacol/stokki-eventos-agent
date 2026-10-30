@@ -56,9 +56,11 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent
-if str(_RAIZ) not in sys.path:
-    sys.path.insert(0, str(_RAIZ))
+for _p in (_RAIZ, Path(__file__).parent):  # painel importa como portal_cliente.envio_pedidos
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
+import endereco_entrega  # noqa: E402
 from nucleo.fluxo_embarcador import FLUXOS, ROTULOS as FLUXO_ROTULOS  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -238,6 +240,12 @@ def conectar() -> sqlite3.Connection:
         "troca_nf_em": "TEXT",
         "troca_nf_erro": "TEXT",
         **COLUNAS_RETOMAR,
+        # endereço fiscal quando o XML tem <entrega> (24/09); vazio = igual
+        "endereco_fiscal": "TEXT",
+        # endereço de entrega escolhido no envio (27/10, endereco_entrega.py):
+        # origem fiscal|nota|cliente|ultima_entrega; json só em cliente/ultima_entrega
+        "endereco_entrega_origem": "TEXT",
+        "endereco_entrega_json": "TEXT",
     })
     _garantir_colunas(conn, "portal_clientes_envio", {"carrier_id": "TEXT", "prioridade": "TEXT"})
     conn.commit()
@@ -294,6 +302,15 @@ def _texto(el, caminho: str) -> str:
     return (achado.text or "").strip() if achado is not None and achado.text else ""
 
 
+def _endereco_linha(el) -> str:
+    """'Rua X, 10 - Compl' de um <enderDest> ou <entrega> (mesmas tags)."""
+    endereco = ", ".join(p for p in (_texto(el, "nfe:xLgr"), _texto(el, "nfe:nro")) if p)
+    compl = _texto(el, "nfe:xCpl")
+    if compl:
+        endereco = f"{endereco} - {compl}" if endereco else compl
+    return endereco
+
+
 def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
     """Extrai os campos que a máscara mostra/valida. Levanta ErroEnvio com
     mensagem pro usuário quando o arquivo não é uma NF-e (validação 1 do
@@ -338,12 +355,23 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
     except ValueError:
         valor = 0.0
 
-    logradouro = _texto(ender, "nfe:xLgr")
-    numero = _texto(ender, "nfe:nro")
-    compl = _texto(ender, "nfe:xCpl")
-    endereco = ", ".join(p for p in (logradouro, numero) if p)
-    if compl:
-        endereco = f"{endereco} - {compl}" if endereco else compl
+    endereco = _endereco_linha(ender)
+    bairro, municipio, uf = _texto(ender, "nfe:xBairro"), _texto(ender, "nfe:xMun"), _texto(ender, "nfe:UF")
+    cep, fone = _so_digitos(_texto(ender, "nfe:CEP")), _so_digitos(_texto(ender, "nfe:fone"))
+    # Grupo <entrega> (Hugo, 24/09, caso NF 41240 Maria Dolores): local de
+    # entrega diferente do endereço fiscal. É ESSE que vale pro processo todo
+    # (a Stokki também lê como "Local de Entrega" e o pipeline prioriza); o
+    # fiscal fica em endereco_fiscal só pra tela.
+    endereco_fiscal = ""
+    entrega = inf.find("nfe:entrega", NS)
+    if entrega is not None and _texto(entrega, "nfe:xLgr"):
+        endereco_fiscal = endereco_entrega.linha_fiscal({
+            "destinatario_endereco": endereco, "destinatario_bairro": bairro, "destinatario_municipio": municipio,
+            "destinatario_uf": uf, "destinatario_cep": cep})
+        endereco = _endereco_linha(entrega)
+        bairro, municipio, uf = _texto(entrega, "nfe:xBairro"), _texto(entrega, "nfe:xMun"), _texto(entrega, "nfe:UF")
+        cep = _so_digitos(_texto(entrega, "nfe:CEP"))
+        fone = _so_digitos(_texto(entrega, "nfe:fone")) or fone
 
     emitida = _texto(ide, "nfe:dhEmi") or _texto(ide, "nfe:dEmi")
     transporta = inf.find("nfe:transp/nfe:transporta", NS)
@@ -357,11 +385,12 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
         "destinatario_doc": _so_digitos(_texto(dest, "nfe:CNPJ") or _texto(dest, "nfe:CPF")),
         "destinatario_nome": _texto(dest, "nfe:xNome"),
         "destinatario_endereco": endereco,
-        "destinatario_bairro": _texto(ender, "nfe:xBairro"),
-        "destinatario_municipio": _texto(ender, "nfe:xMun"),
-        "destinatario_uf": _texto(ender, "nfe:UF"),
-        "destinatario_cep": _so_digitos(_texto(ender, "nfe:CEP")),
-        "destinatario_telefone": _so_digitos(_texto(ender, "nfe:fone")),
+        "destinatario_bairro": bairro,
+        "destinatario_municipio": municipio,
+        "destinatario_uf": uf,
+        "destinatario_cep": cep,
+        "destinatario_telefone": fone,
+        "endereco_fiscal": endereco_fiscal,
         "volumes": volumes or 1,
         "peso_kg": round(peso, 3),
         "valor_nf": round(valor, 2),
@@ -1185,7 +1214,7 @@ def _endereco_sintetico(nfe: dict) -> str:
     return ", ".join(p for p in partes if p) + ", Brasil"
 
 
-def avisos_fora_dia_fixo(itens: list[dict]) -> list[dict]:
+def avisos_fora_dia_fixo(itens: list[dict], config: dict | None = None) -> list[dict]:
     """Itens do confirmar (mesmo formato de confirmar_envios) com data de
     agendamento escolhida fora do dia de visita da região do destino (Hugo,
     03/10 -- spec dias fixos v2, 5.2). Fica de fora: sem data, agendamento
@@ -1206,6 +1235,12 @@ def avisos_fora_dia_fixo(itens: list[dict]) -> list[dict]:
         caminho = _caminho_temporario(item.get("token", ""))
         conteudo = caminho.read_bytes()
         nfe = json.loads(conteudo.decode("utf-8")) if caminho.suffix == ".json" else ler_nfe(conteudo)
+        if (caminho.suffix != ".json" and endereco_entrega.entrega_ativa(config)
+                and item.get("entrega_escolha") in ("cliente", "ultima_entrega")):
+            try:
+                nfe = endereco_entrega.aplicar_entrega(nfe, endereco_entrega.montar_endereco(item.get("entrega_endereco") or {}))
+            except endereco_entrega.ErroEndereco:
+                continue  # o confirmar recusa com a mensagem certa
         regra = rdf.regra_dia_fixo_do_servico({"address": _endereco_sintetico(nfe)})
         if not regra or rdf.data_valida_na_regiao(regra, data):
             continue
@@ -1265,12 +1300,47 @@ def escolher_fluxo(item: dict, disponiveis: list[str], origem: str, rotulo: str 
     return fluxo
 
 
+def _resolver_entrega(conn: sqlite3.Connection, item: dict, nfe: dict, emb: str, sender_id: int | None,
+                      config: dict | None) -> dict:
+    """Endereço de entrega de um XML no confirmar (spec 2026-10-27): recalcula
+    o caso no servidor, valida o endereço pelo CEP e devolve o nfe com
+    _entrega_origem (fiscal|nota|cliente|ultima_entrega) e _entrega_json.
+    Chave desligada: só registra a origem, pra memória já se formar."""
+    rot = rotulo_envio(nfe)
+    if not endereco_entrega.entrega_ativa(config):
+        return {**nfe, "_entrega_origem": "nota" if nfe.get("endereco_fiscal") else "fiscal", "_entrega_json": None}
+    caso = endereco_entrega.classificar_entrega(conn, nfe, emb, sender_id)
+    escolha = item.get("entrega_escolha") or ""
+    if escolha not in ("", "fiscal", "cliente", "ultima_entrega"):
+        raise ErroEnvio(f"{rot}: escolha de endereço inválida.")
+    if caso["modo"] in ("nota", "terceiros", "retirada"):
+        if escolha not in ("", "fiscal"):
+            raise ErroEnvio(f"{rot}: este pedido não aceita troca de endereço.")
+        return {**nfe, "_entrega_origem": "nota" if caso["modo"] == "nota" else "fiscal", "_entrega_json": None}
+    if caso["modo"] == "sugestao" and not escolha:
+        raise ErroEnvio(f"{rot}: escolha onde entregar (no último pedido a entrega foi em outro endereço).")
+    if escolha == "ultima_entrega" and caso["modo"] != "sugestao":
+        raise ErroEnvio(f"{rot}: não há entrega anterior em outro endereço pra repetir.")
+    if escolha not in ("cliente", "ultima_entrega"):
+        return {**nfe, "_entrega_origem": "fiscal", "_entrega_json": None}
+    try:
+        end = endereco_entrega.montar_endereco(item.get("entrega_endereco") or {})
+    except endereco_entrega.ErroEndereco as e:
+        raise ErroEnvio(f"{rot}: {e}")
+    gravado = {**end, "documento": nfe["destinatario_doc"], "nome": nfe["destinatario_nome"]}
+    return {**endereco_entrega.aplicar_entrega(nfe, end), "_entrega_origem": escolha,
+            "_entrega_json": json.dumps(gravado, ensure_ascii=False)}
+
+
 def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list[dict], enviado_por: str,
-                     config: dict | None, regra_xml: str, fluxos_disponiveis: list[str] | None = None) -> list[dict]:
+                     config: dict | None, regra_xml: str, fluxos_disponiveis: list[str] | None = None,
+                     sender_id: int | None = None) -> list[dict]:
     """Cada item: {token, horario_inicio?, horario_fim?, agendamento_data?,
     agendamento_hora_inicio?, agendamento_hora_fim?, agendamento_pendente?,
-    observacoes?}. Relê o XML temporário (nunca confia no que o navegador
-    mandou), revalida, grava o definitivo e cria a linha NA_FILA."""
+    observacoes?, entrega_escolha?, entrega_endereco?}. Relê o XML temporário
+    (nunca confia no que o navegador mandou), revalida, grava o definitivo e
+    cria a linha NA_FILA. sender_id: da empresa do envio, pra memória do
+    endereço de entrega (_resolver_entrega)."""
     emb = _so_digitos(cnpj_embarcador)
     if fluxos_disponiveis is not None and not fluxos_disponiveis:
         raise ErroEnvio(MSG_XD_AUSENTE)  # só Cross e o XD falta (fluxos_para_envio)
@@ -1294,6 +1364,10 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
             raise ErroEnvio(f"{rotulo_envio(nfe)}: " + " ".join(v["erros"]))
         nfe["_fluxo"] = escolher_fluxo(item, fluxos_disponiveis or ["armazenagem"], nfe.get("origem") or ORIGEM_XML,
                                        rotulo_envio(nfe))
+        # Endereço de entrega escolhido na prévia (27/10): antes da área, pra
+        # área, dia fixo e gravação já usarem o endereço de entrega.
+        if nfe.get("origem") == ORIGEM_XML:
+            nfe = _resolver_entrega(conn, item, nfe, emb, sender_id, config)
         # Área não atendida (Hugo, 23/09): classifica AQUI, antes de qualquer
         # escrita -- a geocodificação grava cache por outra conexão e travaria
         # ~5 s por NF se já houvesse transação de escrita aberta nesta.
@@ -1362,6 +1436,7 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
             "destinatario_endereco": nfe["destinatario_endereco"], "destinatario_bairro": nfe["destinatario_bairro"],
             "destinatario_municipio": nfe["destinatario_municipio"], "destinatario_uf": nfe["destinatario_uf"],
             "destinatario_cep": nfe["destinatario_cep"], "destinatario_telefone": nfe["destinatario_telefone"],
+            "endereco_fiscal": nfe.get("endereco_fiscal") or None,
             "volumes": nfe["volumes"], "peso_kg": nfe["peso_kg"], "valor_nf": nfe["valor_nf"], "itens": nfe["itens"],
             "xml_path": str(destino.relative_to(_RAIZ)), "regra_xml": None if planilha else regra_xml,
             "status": STATUS_AGUARDANDO_LIBERACAO if motivo else STATUS_NA_FILA, "tentativas": 0,
@@ -1380,6 +1455,7 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
             }, ensure_ascii=False) if planilha else None,
             "data_expedicao": nfe.get("data_expedicao") if planilha else None,
             "linhas_planilha": ",".join(str(n) for n in nfe.get("linhas") or []) if planilha else None,
+            "endereco_entrega_origem": nfe.get("_entrega_origem"), "endereco_entrega_json": nfe.get("_entrega_json"),
         }
         if existente:
             sets = ", ".join(f"{k} = ?" for k in campos if k != "chave_nfe")
@@ -1433,6 +1509,8 @@ def _linha(r: sqlite3.Row, solicitacoes: dict[int, list]) -> dict:
     # cliente pedir pra cancelar).
     if cancelamento_pedido:
         d["agendamento_pendente"] = 0
+    d["endereco_fiscal"] = d.get("endereco_fiscal") or ""
+    d["endereco_entrega_origem"] = d.get("endereco_entrega_origem") or ""
     d.update({
         "status_rotulo": ROTULOS_STATUS.get(d["status"], d["status"]),
         "criado_em_br": _dt_br(d["criado_em"]),

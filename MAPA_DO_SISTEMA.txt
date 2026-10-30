@@ -113,6 +113,10 @@
                                              aprovação no /inicio (total) ou gerenciar_clientes.py cadastro
  Página pública /cliente/regioes ........... portal_cliente/regioes_atendimento.py + templates/regioes.html
  Envio de pedido (XML) pelo cliente ........ portal_cliente/envio_pedidos.py + enviar_stokki.py
+ Endereço de entrega conferido no envio .... portal_cliente/endereco_entrega.py (prévia: casos nota/
+                                             terceiros/sugestao/livre; <entrega> no XML do lote);
+                                             chave portal_cliente.envios.endereco_entrega_ativo
+                                             (padrão desligado; spec 2026-10-27-endereco-entrega-portal)
  Fluxo Cross (item XD + troca de NF) ....... nucleo/fluxo_embarcador.py (interno.fluxos, XD achado em
                                              wms_produtos) -> regra "cross" do importador -> fila
                                              portal_cliente/trocas_nf.py -> stokki/trocar_nf.py; virada:
@@ -257,8 +261,8 @@
                 redefinida é provisória: requer_auth manda pra /trocar-senha.
                 Nível/nome lidos do banco a cada request (muda sem novo login).
                 Desativar (coluna ativo) tira o acesso na hora sem apagar o login.
-                /login: 5 senhas erradas do mesmo login+IP bloqueiam 15 min
-                (em memória no processo do painel; restart zera).
+                /login: sem trava de senha errada desde 29/10 (Hugo tirou a de
+                15 min; o portal e o app do motorista mantêm a deles).
                 Inatividade (24/10; 6 h desde 27/10): 6 h sem uso -> sessão cai (requer_auth,
                 _INATIVIDADE_MAX). Uso = navegar pra página (Sec-Fetch-Mode
                 navigate) ou POST /api/sessao/atividade que o
@@ -957,9 +961,11 @@
                            apagar só o autor em 15 min); aba Triagem lê daí
                            (só o dia mais recente; dias parado desde o 1º
                            registro). Encaminhar (Cancelados/Devolução/Descartar/
-                           Verificar) cria demanda na tela /demandas pra equipe
+                           Retornar p/ Estoque/Verificar) cria demanda na tela /demandas pra equipe
                            escolhida na hora (26/10; Verificar sugere Atendimento;
-                           ENCAMINHAMENTO_DEMANDAS_ATIVO=True). Testes:
+                           ENCAMINHAMENTO_DEMANDAS_ATIVO=True). "Na Vuupt" (30/10)
+                           = no pool sem rota, fica pendente; o Consultar Vuupt
+                           preenche sozinho. Testes:
                            test_pedidos_parados_registro.py.
  atendimento_chamados.py   Tela /atendimento (chamados do portal e do app).
  grupos_equipe.py          Aba "Grupos" do /atendimento (19/10): grupos internos
@@ -1108,6 +1114,9 @@
                            carga, e-mails e WhatsApp.
  dados_cliente.py          Monta o dia do embarcador (Vuupt + NF).
  envio_pedidos.py          "Máscara de envio": valida XML/planilha, fila.
+ endereco_entrega.py       Endereço de entrega escolhido na prévia: CEP com IBGE, última
+                           entrega do destinatário (Vuupt/portal, por embarcador), <entrega>
+                           inserido no XML do lote pelo worker (original intacto).
  enviar_stokki.py          Worker que cria o pedido na Stokki (Playwright) e, a cada
                            ciclo, executa os cancelamentos CANCELANDO sob a trava.
                            Fluxo Cross: converte pro item XD e enfileira a troca de NF.
