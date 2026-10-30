@@ -358,6 +358,54 @@ class Aplicar(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(self.conn.execute("SELECT status FROM agendamentos_pedido").fetchone()[0], "RESPONDIDO")
 
+    def test_registrar_falha_na_aplicada_ainda_avisa_e_devolve_ok(self):
+        f = FakeDeps()
+        plano = ae.Plano(tirar_da_rota=True, data_final=date(2026, 11, 12), origem_data="CLIENTE")
+        with mock.patch.object(store, "registrar", side_effect=sqlite3.OperationalError("database is locked")):
+            r = ae.aplicar(self.conn, self.s, validado(data=date(2026, 11, 12)), plano, CTX, f.deps())
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(len(f.avisos), 1)
+        self.assertIn("Alteração feita", r["mensagem"])
+
+    def test_falha_local_depois_do_reagendar_nao_vira_falhou(self):
+        f = FakeDeps()
+        plano = ae.Plano(tirar_da_rota=False, data_final=date(2026, 11, 11), origem_data="DIA_FIXO")
+        import registro_dia_fixo
+        with mock.patch.object(registro_dia_fixo, "registrar_origem", side_effect=sqlite3.OperationalError("locked")), \
+                self.assertLogs("portal_alterar_entrega", "WARNING"):
+            r = ae.aplicar(self.conn, self.s, validado(), plano, CTX, f.deps())
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(self.registros()[0]["status"], "APLICADA")
+
+    def test_horario_sem_documento_falha_antes_de_tudo(self):
+        f = FakeDeps()
+        plano = ae.Plano(tirar_da_rota=True, endereco_str="Rua X")
+        ctx = dict(CTX, destinatario_doc="")
+        r = ae.aplicar(self.conn, self.s, validado(endereco=END_NOVO, horario=("14:00", "18:00")), plano, ctx, f.deps())
+        self.assertFalse(r["ok"])
+        self.assertEqual(f.chamadas, [])
+        self.assertTrue(r["mensagem"].endswith(CHAT))
+
+    def test_cnpj_formatado_grava_digitos(self):
+        f = FakeDeps()
+        plano = ae.Plano(tirar_da_rota=False, data_final=date(2026, 11, 3), origem_data="CLIENTE")
+        ctx = dict(CTX, cnpj_embarcador="11.222.333/0001-81")
+        ae.aplicar(self.conn, self.s, validado(data=date(2026, 11, 3), horario=("14:00", "18:00")), plano, ctx, f.deps())
+        self.assertEqual(self.conn.execute("SELECT cnpj_embarcador FROM agendamentos_pedido").fetchone()[0], "11222333000181")
+        self.assertEqual(self.conn.execute("SELECT cnpj_embarcador FROM portal_destinatarios").fetchone()[0], "11222333000181")
+
+    def test_excecao_inesperada_nao_vaza_para_o_cliente(self):
+        f = FakeDeps()
+        deps = f.deps()
+        deps.reagendar = lambda *a: (_ for _ in ()).throw(KeyError("x"))
+        plano = ae.Plano(tirar_da_rota=True, data_final=date(2026, 11, 3), origem_data="CLIENTE")
+        with self.assertLogs("portal_alterar_entrega", "ERROR"):
+            r = ae.aplicar(self.conn, self.s, validado(data=date(2026, 11, 3)), plano, CTX, deps)
+        self.assertFalse(r["ok"])
+        self.assertNotIn("KeyError", r["mensagem"])
+        self.assertIn("erro inesperado", r["mensagem"])
+        self.assertIn("KeyError", self.registros()[0]["erro"])
+
 
 if __name__ == "__main__":
     unittest.main()

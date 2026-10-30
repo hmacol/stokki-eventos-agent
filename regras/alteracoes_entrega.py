@@ -43,10 +43,15 @@ CREATE INDEX IF NOT EXISTS idx_alteracoes_entrega_codigo_sender
 """
 
 
+def garantir_tabela(conn) -> None:
+    """Cria a tabela e o indice se faltarem (idempotente)."""
+    conn.executescript(_SCHEMA)
+
+
 def conectar(db_path=DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
-    conn.executescript(_SCHEMA)
+    garantir_tabela(conn)
     return conn
 
 

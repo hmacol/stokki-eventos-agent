@@ -232,6 +232,13 @@ def _janela_da_data(horario_novo, doc: str, mapa_horarios: dict) -> tuple[str, s
 def _registrar_data(conn, servico: dict, dia: date, ini: str, fim: str, plano: Plano, contexto: dict, codigos: list) -> None:
     """Data do cliente vai pra agendamentos_pedido (ja marcada como aplicada: o
     PUT na Vuupt acabou de acontecer); data recalculada pelo dia fixo, pra origem."""
+    try:
+        _gravar_data_local(conn, servico, dia, ini, fim, plano, contexto, codigos)
+    except Exception as e:  # noqa: BLE001 -- a Vuupt ja mudou; falha local so vira aviso no log
+        logger.warning(f"data do servico {servico.get('id')} gravada na Vuupt, mas o registro local falhou: {e}")
+
+
+def _gravar_data_local(conn, servico, dia, ini, fim, plano, contexto, codigos) -> None:
     if plano.origem_data == "DIA_FIXO":
         import registro_dia_fixo
         registro_dia_fixo.registrar_origem(conn, servico, dia, registro_dia_fixo.ORIGEM_DIA_FIXO)
@@ -282,21 +289,25 @@ def aplicar(conn, servico: dict, validado: dict, plano: Plano, contexto: dict, d
     from regras import alteracoes_entrega as registro
     from regras.complexidade_entrega import carregar_ajustes_manuais, horario_efetivo
     from pedidos_dedicados import codigos_do_servico
-    conn.executescript(registro._SCHEMA)  # idempotente; garante a tabela do registro neste banco
+    registro.garantir_tabela(conn)
+    contexto = dict(contexto, cnpj_embarcador=_digitos(contexto["cnpj_embarcador"]))
     sid = int(servico["id"])
     codigos = codigos_do_servico(servico)
     codigo = codigos[0] if codigos else ""
     doc = _digitos(contexto.get("destinatario_doc"))
     mapa = contexto.get("mapa_horarios") or {}
-    h_antes = horario_efetivo(doc, mapa, carregar_ajustes_manuais())
-    data_antes = _data_agendada(servico)
-    antes = {"endereco": servico.get("address"), "data": data_antes.isoformat() if data_antes else None,
-             "horario": list(h_antes)}
+    if validado.get("horario") and not doc:
+        return {"ok": False, "feito": [], "mensagem":
+                f"Não foi possível identificar o destinatário para alterar o horário. {CHAT}"}
+    antes: dict = {}
     depois: dict = {}
     feito: list[str] = []
     rota_id = lat = lng = None
     nova_data = validado.get("data") or plano.data_final
     try:
+        data_antes = _data_agendada(servico)
+        antes = {"endereco": servico.get("address"), "data": data_antes.isoformat() if data_antes else None,
+                 "horario": list(horario_efetivo(doc, mapa, carregar_ajustes_manuais()))}
         if plano.tirar_da_rota:
             r = _exige(deps.tirar_da_rota(sid), "Vuupt")
             rota_id = r.get("rota_id")
@@ -325,21 +336,22 @@ def aplicar(conn, servico: dict, validado: dict, plano: Plano, contexto: dict, d
             depois["horario"] = list(validado["horario"])
             feito.append("horário de recebimento gravado")
     except Exception as e:  # noqa: BLE001 -- qualquer falha para aqui e fica registrada
-        erro = str(e) or e.__class__.__name__
-        logger.error(f"alteracao do servico {sid} parou: {erro} (feito: {feito})")
+        if isinstance(e, _Falha):
+            erro = cliente = str(e) or "falha sem detalhe"
+            logger.error(f"alteracao do servico {sid} parou: {erro} (feito: {feito})")
+        else:  # detalhe tecnico fica no log e no registro, nunca na mensagem do cliente
+            erro = f"{e.__class__.__name__}: {e}"
+            cliente = "erro inesperado"
+            logger.exception(f"alteracao do servico {sid} parou com erro inesperado (feito: {feito})")
         _registrar_seguro(registro, conn, servico, contexto, codigo, antes, dict(depois, feito=feito),
                           validado.get("endereco"), lat, lng, rota_id, "FALHOU", erro)
         if rota_id:
             _avisar(deps, servico, contexto, codigo, rota_id, feito, erro)
             return {"ok": False, "feito": feito, "mensagem":
-                    f"Não conseguimos concluir a alteração ({erro}). O pedido já saiu da rota e aguarda a "
+                    f"Não conseguimos concluir a alteração ({cliente}). O pedido já saiu da rota e aguarda a "
                     "programação; a Fresh Log foi avisada."}
         return {"ok": False, "feito": feito, "mensagem":
-                f"Não conseguimos concluir a alteração ({erro}). {CHAT}"}
-    registro.registrar(conn, cnpj_embarcador=contexto["cnpj_embarcador"], sender_id=contexto.get("sender_id"),
-                       service_id=sid, codigo=codigo, por=contexto["por"], antes=antes, depois=dict(depois, feito=feito),
-                       endereco=validado.get("endereco"), latitude=lat, longitude=lng, rota_id_tirada=rota_id,
-                       status="APLICADA")
+                f"Não conseguimos concluir a alteração ({cliente}). {CHAT}"}
     partes = []
     if "endereco" in depois:
         partes.append("endereço atualizado")
@@ -351,6 +363,8 @@ def aplicar(conn, servico: dict, validado: dict, plano: Plano, contexto: dict, d
     if rota_id:
         mensagem += " O pedido saiu da rota e volta na próxima programação."
         _avisar(deps, servico, contexto, codigo, rota_id, feito, "")
+    _registrar_seguro(registro, conn, servico, contexto, codigo, antes, dict(depois, feito=feito),
+                      validado.get("endereco"), lat, lng, rota_id, "APLICADA", "")
     return {"ok": True, "mensagem": mensagem, "feito": feito}
 
 
