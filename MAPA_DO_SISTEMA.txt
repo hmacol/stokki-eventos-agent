@@ -1108,6 +1108,11 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
                           Rotas em app.py: GET/POST /api/pedidos/<id>/alteracao (404 com a chave
                           desligada; POST reavalia na Vuupt, 409 bloqueado, 400 fora da area);
                           /api/dia traz alteracao_entrega.
+                          DEPLOY: reiniciar portal-cliente E painel-agentes (nucleo/pool.py e
+                          importado por painel_agentes/planejamento_rotas.py, no web do painel).
+                          Na 1a importacao horaria apos o deploy, os pedidos ainda sem rota de
+                          destinatarios com ajuste manual de horario de recebimento sao
+                          reenviados uma vez.
  enviar_stokki.py          Worker que cria o pedido na Stokki (Playwright) e, a cada
                            ciclo, executa os cancelamentos CANCELANDO sob a trava.
                            Fluxo Cross: converte pro item XD e enfileira a troca de NF.
