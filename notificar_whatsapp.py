@@ -45,6 +45,13 @@ fora do dia de visita da regiao virou envio dedicado. Um aviso por pedido
 forcar_destino dos clientes.
     roteirizacao/notificar_fora_dia_fixo.py -> avisar_cliente_fora_dia_fixo
 
+Origem PARA FORA, motorista (cadastro pelo link publico): aviso no grupo
+(origem "cadastro_motorista", chamada via despachar com texto_cadastro_link
+e texto_cadastro_link_concluido) e boas-vindas individuais ao motorista novo,
+com teto proprio (motoristas.teto_diario) e piloto em
+cadastro_motorista_link.forcar_destino_whatsapp (vazio = envio real).
+    avisar_motorista_boas_vindas
+
 O numero que envia e o do proprio Hugo, por um gateway nao-oficial
 (integracao_openwa.py). Por isso: desligado por padrao, teto diario,
 intervalo minimo, sem repeticao e SEM reenvio automatico (licao do erro
@@ -75,6 +82,10 @@ config.yaml:
         dias_max: 3
         teto_diario: 30
         forcar_destino: ""       # numero do Hugo enquanto for piloto; vazio = envio real
+      motoristas:                # boas-vindas ao motorista novo (avisar_motorista_boas_vindas)
+        teto_diario: 20
+    cadastro_motorista_link:
+      forcar_destino_whatsapp: ""  # numero do Hugo enquanto for piloto; ausente/vazio = envio real
 """
 import logging
 import re
@@ -101,10 +112,14 @@ ORIGEM_CLIENTE_PILOTO = "cliente_sem_resposta_piloto"
 ORIGEM_CADASTRO_PILOTO = "cliente_cadastro_piloto"
 ORIGEM_TRANSPORTADORA_PILOTO = "cliente_transportadora_piloto"
 ORIGEM_FORA_DIA_FIXO_PILOTO = "cliente_fora_dia_fixo_piloto"
+# boas-vindas ao motorista novo (cadastro pelo link): mensagem individual, teto proprio
+# (motoristas.teto_diario); nao consome o teto interno nem o dos clientes
+ORIGEM_MOTORISTA = "motorista_boas_vindas"
 ORIGENS_PILOTO = (ORIGEM_CLIENTE_PILOTO, ORIGEM_CADASTRO_PILOTO, ORIGEM_TRANSPORTADORA_PILOTO,
                   ORIGEM_FORA_DIA_FIXO_PILOTO)
 TETO_PILOTO_PADRAO = 20
 TETO_CLIENTES_PADRAO = 30
+TETO_MOTORISTAS_PADRAO = 20
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS notificacoes_whatsapp (
@@ -469,6 +484,49 @@ def texto_cadastro_motorista(cadastro: dict, link: str, agora: datetime | None =
     return "\n".join(linhas)
 
 
+def texto_cadastro_link(cadastro: dict, link: str, pendencia: str | None, agora: datetime | None = None) -> str:
+    """Motorista novo se cadastrou pelo link publico. Leva o essencial e a
+    ficha no painel; `pendencia` (ex.: Vuupt recusou) vai com aviso. O link
+    nunca e cortado: nome e pendencia e que encurtam."""
+    quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
+    nome = _uma_linha(cadastro.get("nome"), 40) or "Motorista"
+    veiculo = _uma_linha(cadastro.get("tipo_veiculo"), 12)
+    frio = "refrigerado" if cadastro.get("refrigerado") else "seco"
+    partes = [p for p in (veiculo, frio, _uma_linha(cadastro.get("posicao"), 12),
+                          "iPhone" if cadastro.get("iphone") else "") if p]
+    cabeca = f"🧑‍✈️ *Motorista novo pelo link* · {quando}"
+    meio = f"{nome} · " + " · ".join(partes)
+
+    def montar(pend):
+        return "\n".join([cabeca, meio] + ([f"⚠️ {pend}"] if pend else []) + [link])
+
+    pend = _uma_linha(pendencia, MAX_MENSAGEM) if pendencia else ""
+    texto = montar(pend)
+    if len(texto) > MAX_MENSAGEM and pend:
+        texto = montar(_uma_linha(pend, max(1, MAX_MENSAGEM - len(montar("x")) + 1)))
+    return texto
+
+
+def texto_cadastro_link_concluido(cadastro: dict, agora: datetime | None = None) -> str:
+    """Cadastro do link terminou na Vuupt (agente criado e ligado ao veiculo)."""
+    nome = _uma_linha(cadastro.get("nome"), 60) or "Motorista"
+    return f"✅ Cadastro de {nome} concluído na Vuupt (agente {cadastro.get('agent_id')})"
+
+
+def texto_boas_vindas_motorista(primeiro_nome: str, email: str, senha: str, link_app: str, iphone: bool) -> str:
+    """Mensagem individual ao motorista novo (sem limite de 200). Android recebe
+    app + acesso; iPhone so o aviso de que a equipe chama (sem app da Vuupt)."""
+    nome = _uma_linha(primeiro_nome, 30) or "motorista"
+    if iphone:
+        return (f"Olá, {nome}! Seu cadastro na Fresh Log foi aprovado. "
+                "Como seu celular é iPhone, a equipe vai te chamar pra explicar como funcionam as entregas.")
+    return (f"Olá, {nome}! Seu cadastro na Fresh Log foi aprovado.\n"
+            f"Baixe o app: {link_app}\n"
+            f"E-mail: {email}\n"
+            f"Senha: {senha}\n"
+            "Qualquer dúvida, é só responder aqui.")
+
+
 def texto_alteracao_cadastro(nome: str, mudancas: list[dict], agora: datetime | None = None) -> str:
     """Motorista mudou telefone/e-mail/PIX/placa pelo app. Vale na hora
     (decisao do Hugo, 08/10); o aviso e so pra ele saber."""
@@ -522,18 +580,21 @@ def _registrar(conn, agora, origem, tipo, assinatura, situacao, motivo=None, id_
 
 
 def _enviados_hoje(conn, agora: datetime, origem: str) -> int:
-    """Teto interno, teto dos clientes e teto das copias de piloto nao se
-    misturam: aviso de cliente nao consome a cota dos alertas de falha, nem
-    o contrario, e a copia de piloto da tela de Notificacoes nao consome
-    nenhuma das duas."""
+    """Teto interno, teto dos clientes, teto dos motoristas e teto das copias
+    de piloto nao se misturam: aviso de cliente nao consome a cota dos alertas
+    de falha, nem o contrario, e a copia de piloto da tela de Notificacoes nao
+    consome nenhuma das outras."""
     inicio_do_dia = _iso(agora.replace(hour=0, minute=0, second=0, microsecond=0))
     marcas = ",".join("?" * len(ORIGENS_PILOTO))
     if origem == ORIGEM_CLIENTE:
         filtro, args = "origem = ?", (ORIGEM_CLIENTE,)
+    elif origem == ORIGEM_MOTORISTA:
+        filtro, args = "origem = ?", (ORIGEM_MOTORISTA,)
     elif origem in ORIGENS_PILOTO:
         filtro, args = f"origem IN ({marcas})", ORIGENS_PILOTO
     else:
-        filtro, args = f"origem != ? AND origem NOT IN ({marcas})", (ORIGEM_CLIENTE, *ORIGENS_PILOTO)
+        filtro, args = (f"origem NOT IN (?, ?) AND origem NOT IN ({marcas})",
+                        (ORIGEM_CLIENTE, ORIGEM_MOTORISTA, *ORIGENS_PILOTO))
     return conn.execute(
         f"SELECT COUNT(*) FROM notificacoes_whatsapp WHERE situacao = 'enviado' AND criado_em >= ? "
         f"AND {filtro}", (inicio_do_dia, *args)).fetchone()[0]
@@ -542,6 +603,8 @@ def _enviados_hoje(conn, agora: datetime, origem: str) -> int:
 def _teto(cfg: dict, origem: str) -> int:
     if origem == ORIGEM_CLIENTE:
         return _inteiro(cfg.get("clientes") or {}, "teto_diario", TETO_CLIENTES_PADRAO)
+    if origem == ORIGEM_MOTORISTA:
+        return _inteiro(cfg.get("motoristas") or {}, "teto_diario", TETO_MOTORISTAS_PADRAO)
     if origem in ORIGENS_PILOTO:
         return _inteiro(cfg.get("clientes") or {}, "teto_piloto", TETO_PILOTO_PADRAO)
     return _inteiro(cfg, "teto_diario", 20)
@@ -987,6 +1050,40 @@ def avisar_cliente_cadastro(cnpj: str, telefone: str, texto: str, assinatura: st
                 return "numero_sem_whatsapp"
         return despachar(config, origem, "cadastro", texto, assinatura, modo_teste=modo_teste,
                          grupo_id=f"{destino}@c.us", **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def avisar_motorista_boas_vindas(cadastro_id: int, telefone: str, texto: str, config: dict,
+                                 modo_teste: bool = False, **kw) -> str:
+    """Boas-vindas ao motorista novo (cadastro pelo link). Mensagem individual,
+    uma tentativa por cadastro (assinatura cadastro_link:<id>:boas_vindas).
+    Piloto: cadastro_motorista_link.forcar_destino_whatsapp com numero manda
+    pra la com o destino real na primeira linha; ausente ou vazio = envio real.
+    Nao depende de whatsapp_notificacoes.clientes.ativo (canal dos clientes)."""
+    try:
+        telefone = re.sub(r"\D", "", str(telefone or ""))
+        if not telefone or not gateway_clientes_ok(config):
+            return "desligado"
+        if len(telefone) in (10, 11):
+            telefone = "55" + telefone
+        cfg_cad = (config or {}).get("cadastro_motorista_link") or {}
+        destino = re.sub(r"\D", "", str(cfg_cad.get("forcar_destino_whatsapp") or ""))
+        if destino:
+            texto = f"[teste → +{telefone}]\n{texto}"
+        else:
+            destino = telefone
+        if not modo_teste:
+            existe = integracao_openwa.numero_existe(_cfg(config), destino)
+            if existe is None:
+                logger.warning(f"WhatsApp nao enviado (motorista {cadastro_id}): gateway nao confirmou o numero.")
+                return "indeterminado"
+            if not existe:
+                logger.info(f"WhatsApp nao enviado (motorista {cadastro_id}): numero sem WhatsApp.")
+                return "numero_sem_whatsapp"
+        return despachar(config, ORIGEM_MOTORISTA, "boas_vindas", texto, f"cadastro_link:{cadastro_id}:boas_vindas",
+                         modo_teste=modo_teste, grupo_id=f"{destino}@c.us", **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"
