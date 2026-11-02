@@ -290,6 +290,7 @@
       <div class="dica">produto (EAN da embalagem ou DUN da caixa) · posição (QR da etiqueta)</div>
     </div>
     <div class="acoes">
+      <button class="primario" data-ir="receber" style="grid-column:1 / -1"><b>Receber</b><span id="ini-receber">entradas esperadas da Stokki</span></button>
       <button class="primario" data-ir="mov" data-tipo="ENTRADA"><b>Entrada</b><span>produto chega na posição</span></button>
       <button data-ir="busca"><b>Consultar</b><span>onde está / o que tem</span></button>
       <button data-ir="mov" data-tipo="TRANSFERENCIA"><b>Mover</b><span>de uma posição a outra</span></button>
@@ -311,6 +312,10 @@
     app.querySelectorAll('[data-ir]').forEach((b) => b.addEventListener('click', () => ir(b.dataset.ir, b.dataset.tipo ? { tipo: b.dataset.tipo } : {})));
     const lr = document.getElementById('btn-limpar-recusados');
     if (lr) lr.addEventListener('click', () => { S.recusados = []; salvarRecusados(); render(); });
+    api('/recebimentos?estado=ESPERADO').then((r) => {
+      const el = document.getElementById('ini-receber'); const n = (r.recebimentos || []).length;
+      if (el) el.textContent = n ? n + (n === 1 ? ' entrada esperada' : ' entradas esperadas') + ' · encerre ao terminar' : 'nenhuma entrada esperada agora';
+    }).catch(() => { /* sem rede: fica o texto padrão */ });
   };
 
   // Operador
