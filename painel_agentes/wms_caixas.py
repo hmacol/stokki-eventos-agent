@@ -25,6 +25,15 @@ SITUACOES_CAIXA = ("IMPRESSA", "EM_ESTOQUE", "ABERTA", "EXPEDIDA", "CANCELADA")
 MAX_CAIXAS = 200
 MAX_QTD_UN = 100000
 
+
+class SobraRecebimento(ErroWMS):
+    """Caixa passaria do anunciado na linha do recebimento: a tela pede
+    confirmacao (ou reconferencia do produto) e reenvia com confirmar_sobra."""
+
+    def __init__(self, mensagem: str, dados: dict):
+        super().__init__(mensagem)
+        self.dados = dados
+
 _DDL = (
     """
 CREATE TABLE IF NOT EXISTS wms_caixas (
@@ -270,11 +279,15 @@ def _exigir_movimento_da_caixa(conn, uuid: str, caixa: dict, tipos: tuple):
 
 def ativar_caixa(conn, serial: str, posicao: str, *, operador: dict | None = None,
                  recebimento_id: int | None = None, item_id: int | None = None,
-                 dispositivo: str = "", criado_em: str | None = None) -> dict:
+                 dispositivo: str = "", criado_em: str | None = None,
+                 confirmar_sobra: bool = False) -> dict:
     """
     IMPRESSA -> EM_ESTOQUE na posicao. Sem recebimento soma por AJUSTE (nunca
     INVENTARIO, que grava a contagem absoluta da posicao); com recebimento
     soma por ENTRADA e anda a barra do recebimento com o mesmo uuid.
+    Caixa nova que passaria do anunciado na linha levanta SobraRecebimento
+    ate o operador confirmar (confirmar_sobra=True); recebimento ja
+    encerrado nao aceita caixa nova.
     """
     if (recebimento_id is None) != (item_id is None):
         raise ErroWMS("Informe recebimento e item juntos.")
@@ -283,18 +296,32 @@ def ativar_caixa(conn, serial: str, posicao: str, *, operador: dict | None = Non
     serial = caixa["serial"]
     posicao = wms.normalizar_codigo(posicao)
     uuid = f"cx-{serial}-ativar"
+    retry = None
     if caixa["situacao"] == "IMPRESSA":
         # So aqui um duplicado vira IMPRESSA -> EM_ESTOQUE; depois disso a quantidade da
         # caixa pode ter caido (consumo parcial) e o retry legitimo nao e comparavel.
-        _exigir_movimento_da_caixa(conn, uuid, caixa, ("AJUSTE", "ENTRADA"))
+        retry = _exigir_movimento_da_caixa(conn, uuid, caixa, ("AJUSTE", "ENTRADA"))
 
     if recebimento_id is not None:
-        item = conn.execute("SELECT produto_id FROM wms_recebimento_itens WHERE id = ? AND recebimento_id = ?",
-                            (int(item_id), int(recebimento_id))).fetchone()
+        item = conn.execute(
+            "SELECT i.produto_id, i.qtd_un, i.qtd_enderecada, r.estado FROM wms_recebimento_itens i "
+            "JOIN wms_recebimentos r ON r.id = i.recebimento_id WHERE i.id = ? AND i.recebimento_id = ?",
+            (int(item_id), int(recebimento_id))).fetchone()
         if not item:
             raise ErroWMS("Item nao pertence a esse recebimento.")
         if item["produto_id"] != caixa["produto_id"]:
             raise ErroWMS(f"Item do recebimento e de outro produto; caixa {serial} nao pode entrar nele.")
+        if caixa["situacao"] == "IMPRESSA" and not retry:
+            if item["estado"] != "ESPERADO":
+                raise ErroWMS(f"Recebimento ja encerrado ({item['estado']}); caixa {serial} nao pode entrar nele.")
+            anunciado = float(item["qtd_un"] or 0)
+            depois = round(float(item["qtd_enderecada"] or 0) + float(caixa["qtd_un"]), 3)
+            if item["qtd_un"] is not None and depois > anunciado + 1e-9 and not confirmar_sobra:
+                raise SobraRecebimento(
+                    f"Caixa {serial} passa do anunciado: anunciado {anunciado:g}, ficaria {depois:g}.",
+                    {"serial": serial, "anunciado": anunciado, "recebido": float(item["qtd_enderecada"] or 0),
+                     "depois": depois, "descricao": caixa["produto"]["descricao"],
+                     "sku": caixa["produto"].get("sku") or ""})
 
     if caixa["situacao"] in ("EM_ESTOQUE", "ABERTA"):
         if caixa["posicao"] != posicao:

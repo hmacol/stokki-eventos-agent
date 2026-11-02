@@ -133,6 +133,12 @@
   .grade-num { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
   .info-linha { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 4px 0; border-bottom: 1px dashed var(--borda); }
   .info-linha:last-child { border-bottom: none; }
+  .modal-sobra { position: fixed; inset: 0; z-index: 65; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .modal-sobra .cartao { width: 100%; max-width: 460px; margin: 0; }
+  table.encerra { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.encerra th { text-align: left; font-size: 11px; color: var(--texto-2, inherit); padding: 6px 4px; border-bottom: 1px solid var(--borda); }
+  table.encerra td { padding: 7px 4px; border-bottom: 1px solid var(--borda); vertical-align: top; }
+  table.encerra td.n { text-align: right; white-space: nowrap; }
   table.mov { width: 100%; border-collapse: collapse; font-size: 13px; }
   table.mov td { padding: 7px 4px; border-bottom: 1px solid var(--borda); vertical-align: top; }
   .ocupacao { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
@@ -691,12 +697,15 @@
     <div class="lista">${itens.map((it, i) => {
       const feito = it.produto_id && Number(it.qtd_enderecada || 0) >= Number(it.qtd_un || 0) - 0.001;
       const restante = Math.max(0, Math.round(((it.qtd_un || 0) - (it.qtd_enderecada || 0)) * 1000) / 1000);
+      // Aberto = aceita entrada mesmo com a linha completa (sobra pede confirmação).
+      const aberto = r.estado === 'ESPERADO';
       return `
-      <div class="cartao ${feito ? 'ok' : (it.produto_id ? '' : 'erro')}">
+      <div class="cartao ${feito ? 'ok' : (it.produto_id ? '' : 'erro')}" id="rec-card-${i}">
         <div class="rotulo">Linha ${it.linha}${feito ? ' · <span class="badge badge-ok">endereçado</span>' : ''}</div>
         <div class="valor">${esc(it.descricao)}</div>
         <div class="sub mono">SKU ${esc(it.sku || '-')}${it.produto_id ? '' : ' · sem produto no catálogo: ' + esc(it.motivo_pendencia)}</div>
-        ${it.produto_id && !feito && it.usa_caixas ? `
+        ${it.produto_id ? `<div class="sub" id="rec-prog-${i}">${progressoLinha(it)}</div>` : ''}
+        ${it.produto_id && aberto && it.usa_caixas ? `
         <div class="duas" style="margin-top:8px">
           <div class="campo"><label>Lote</label><input type="text" id="rec-lote-${i}" style="text-transform:uppercase" placeholder="opcional"></div>
           <div class="campo"><label>Validade</label><input type="date" id="rec-val-${i}"></div>
@@ -709,7 +718,7 @@
         <div class="campo"><label>Posição</label><div class="com-botao"><input type="text" id="rec-pos-${i}" placeholder="leia a etiqueta da posição" autocomplete="off" style="text-transform:uppercase"><button type="button" data-cam="${i}">📷</button></div></div>
         <div class="campo"><label>Bipe das caixas</label><div class="com-botao"><input type="text" id="rec-cx-${i}" class="mono" inputmode="none" placeholder="bipe cada caixa" autocomplete="off"><button type="button" data-camcx="${i}">📷</button></div></div>
         <div id="rec-log-${i}" class="lista"></div>` : ''}
-        ${it.produto_id && !feito && !it.usa_caixas ? `
+        ${it.produto_id && aberto && !it.usa_caixas ? `
         <div class="duas" style="margin-top:8px">
           <div class="campo"><label>Lote</label><input type="text" id="rec-lote-${i}" style="text-transform:uppercase" placeholder="opcional"></div>
           <div class="campo"><label>Validade</label><input type="date" id="rec-val-${i}"></div>
@@ -723,63 +732,103 @@
           <button class="botao" type="button" data-confirmar="${i}">Registrar entrada</button>
         </div>` : ''}
       </div>`; }).join('') || '<div class="vazio">Recebimento sem itens.</div>'}</div>
-    ${blocoDivergencia(r, itens)}`;
+    ${r.estado === 'ESPERADO' ? '<div class="botoes"><button class="botao" type="button" id="btn-encerrar">Encerrar recebimento</button></div>' : ''}`;
   };
-  // Chegou menos do que foi anunciado: o que falta pra cada linha resolvida.
-  // Mesmo critério do fechamento automático -- linha sem produto no catálogo
-  // fica de fora (é pendência nossa, não falta do cliente).
-  function faltasDoRecebimento(itens) {
-    return (itens || []).map((it) => Object.assign({}, it, {
-      falta: Math.round(((it.qtd_un || 0) - (it.qtd_enderecada || 0)) * 1000) / 1000,
-    })).filter((it) => it.produto_id && it.qtd_un !== null && it.falta > 0);
+  function progressoLinha(it) {
+    const rec = Number(it.qtd_enderecada || 0); const anu = Number(it.qtd_un || 0); const un = esc(it.unidade || 'UN');
+    const dif = Math.round((rec - anu) * 1000) / 1000;
+    const marca = dif > 0 ? ' · <span class="badge badge-atencao">sobra ' + num(dif) + '</span>'
+      : (dif < 0 ? ' · faltam ' + num(-dif) : ' · <span class="badge badge-ok">completo</span>');
+    return 'Recebido <b>' + num(rec) + '</b> de ' + num(anu) + ' ' + un + marca;
   }
-  function blocoDivergencia(r, itens) {
-    const faltas = faltasDoRecebimento(itens);
-    if (r.estado !== 'ESPERADO' || !faltas.length) return '';
-    return `
-    <div class="cartao erro" style="margin-top:14px">
-      <div class="rotulo">Encerrar com divergência</div>
-      <div class="sub">Chegou menos do que foi anunciado em ${faltas.length} item(ns). Encerrar tira o recebimento da lista <b>e envia o relatório de faltas por e-mail ao cliente</b>. O que já foi endereçado continua no estoque.</div>
-      <ul style="margin:10px 0 0;padding-left:18px">
-        ${faltas.map((it) => `<li style="margin-bottom:4px">${esc(it.descricao)} — anunciado ${num(it.qtd_un)}, recebido ${num(it.qtd_enderecada || 0)}, <b>faltou ${num(it.falta)} ${esc(it.unidade || 'UN')}</b></li>`).join('')}
-      </ul>
-      <div class="campo" style="margin-top:10px"><label>O que aconteceu (vai no e-mail do cliente)</label>
-        <input type="text" id="div-obs" maxlength="300" placeholder="ex.: 2 caixas chegaram avariadas"></div>
-      <div class="botoes"><button class="botao" type="button" id="btn-divergencia">Encerrar com divergência</button></div>
-    </div>`;
-  }
-  async function encerrarComDivergencia(r, itens) {
-    if (!S.operador) { toast('Identifique o operador primeiro', true); return ir('operador'); }
-    const faltas = faltasDoRecebimento(itens);
-    if (!faltas.length) return toast('Não há falta nenhuma neste recebimento.', true);
-    const obs = (document.getElementById('div-obs').value || '').trim();
-    const resumo = faltas.map((it) => '• ' + it.descricao + ': anunciado ' + num(it.qtd_un)
-      + ', recebido ' + num(it.qtd_enderecada || 0) + ', faltou ' + num(it.falta) + ' ' + (it.unidade || 'UN')).join('\n');
-    if (!confirm('Encerrar ' + r.codigo + ' com divergência?\n\nO cliente vai receber por e-mail:\n' + resumo
-      + (obs ? '\n\nObservação: ' + obs : '\n\n(sem observação)'))) return;
-    const btn = document.getElementById('btn-divergencia'); btn.disabled = true;
+  // Depois de cada entrada: relê o recebimento e atualiza o "Recebido X de Y" sem perder o log dos bipes.
+  async function atualizarProgresso(ctx) {
     try {
-      const resp = await api('/recebimentos/' + r.id + '/encerrar-divergencia', { method: 'POST', body: { observacao: obs } });
-      const envio = resp.envio || {};
-      // resp.ja_encerrado: resposta perdida e nova tentativa -- o trabalho
-      // dele já estava gravado, então isso é sucesso, não erro.
-      const feito = resp.ja_encerrado ? 'Já estava encerrado' : 'Encerrado';
-      const ok = envio.enviado || envio.motivo === 'ja_enviado';
-      toast(ok
-        ? feito + '. Relatório ' + (envio.enviado ? 'enviado para ' + (envio.destinos || []).join(', ') : 'já havia sido enviado')
-        : feito + ', mas o relatório NÃO foi enviado (' + (envio.motivo || 'motivo desconhecido') + '). Avise a equipe.', !ok);
-      ir('receber', {}, false);
-    } catch (e) {
-      if (e.status === 409 && e.dados && e.dados.sem_operador) { S.operador = null; toast(e.message, true); ir('operador'); }
-      else { toast(e.message, true); btn.disabled = false; }
-    }
+      const r = await api('/recebimentos/' + ctx.recebimento.id);
+      (r.itens || []).forEach((novo) => {
+        const i = ctx.recebimento.itens.findIndex((x) => x.id === novo.id); if (i < 0) return;
+        Object.assign(ctx.recebimento.itens[i], novo);
+        const el = document.getElementById('rec-prog-' + i); if (el) el.innerHTML = progressoLinha(novo);
+        const card = document.getElementById('rec-card-' + i);
+        if (card && novo.produto_id) card.classList.toggle('ok', Number(novo.qtd_enderecada || 0) >= Number(novo.qtd_un || 0) - 0.001);
+      });
+    } catch (e) { /* sem rede: o contador volta a bater na próxima leitura */ }
   }
+  // Caixa/quantidade além do anunciado: tela de confirmação ou reconferência (Hugo, 02/11).
+  function confirmarSobra(d) {
+    return new Promise((resolver) => {
+      const m = document.createElement('div'); m.className = 'modal-sobra';
+      m.innerHTML = `<div class="cartao atencao">
+        <div class="rotulo">Passou do anunciado</div>
+        <div class="valor">${esc(d.descricao || '')}</div>
+        <div class="sub mono">${d.sku ? 'SKU ' + esc(d.sku) : ''}${d.serial ? ' · caixa ' + esc(d.serial) : ''}</div>
+        <div class="sub" style="margin-top:8px">Anunciado <b>${num(d.anunciado)}</b> · já recebido <b>${num(d.recebido)}</b> · com esta entrada ficaria <b>${num(d.depois)}</b>.</div>
+        <div class="sub" style="margin-top:8px">Confira se é mesmo este produto antes de confirmar.</div>
+        <div class="botoes linha">
+          <button class="botao neutro" type="button" data-r="0">Reconferir</button>
+          <button class="botao" type="button" data-r="1">Confirmar entrada extra</button>
+        </div></div>`;
+      m.querySelectorAll('[data-r]').forEach((b) => b.addEventListener('click', () => { m.remove(); resolver(b.dataset.r === '1'); }));
+      document.body.appendChild(m);
+    });
+  }
+
+  // Encerramento: tabela anunciado x recebido; só fecha pelo botão (Hugo, 02/11).
+  const SIT_ENC = { OK: ['ok', 'ok'], FALTA: ['erro', 'falta'], SOBRA: ['atencao', 'sobra'], SEM_CADASTRO: ['neutro', 'sem cadastro'] };
+  TELAS.encerramento = (ctx) => `
+    <button class="voltar" id="btn-voltar">‹ Voltar</button>
+    <h1>Encerrar ${esc(ctx.recebimento.codigo)}<small>confira as divergências antes de confirmar</small></h1>
+    <div id="enc-corpo"><div class="vazio">Carregando…</div></div>`;
+  TELAS_POS.encerramento = async (ctx) => {
+    document.getElementById('btn-voltar').addEventListener('click', voltar);
+    const el = document.getElementById('enc-corpo'); const r = ctx.recebimento;
+    let res;
+    try { res = await api('/recebimentos/' + r.id + '/encerramento'); }
+    catch (e) { el.innerHTML = '<div class="vazio">' + esc(e.message) + '</div>'; return; }
+    const dif = (l) => l.diferenca === null ? '—' : (l.diferenca > 0 ? '+' : '') + num(l.diferenca);
+    el.innerHTML = `
+      <div class="cartao ${res.divergente ? 'atencao' : 'ok'}">
+        <div class="rotulo">${res.divergente ? 'Com divergência' : 'Tudo bateu'}</div>
+        <table class="encerra"><tr><th>Produto</th><th style="text-align:right">Anunc.</th><th style="text-align:right">Receb.</th><th style="text-align:right">Dif.</th><th></th></tr>
+        ${res.linhas.map((l) => `<tr><td>${esc(l.descricao)}<div class="sub mono">L${l.linha} · ${esc(l.sku || '-')}</div></td>
+          <td class="n">${l.anunciado === null ? '—' : num(l.anunciado)}</td><td class="n">${num(l.recebido)}</td><td class="n">${dif(l)}</td>
+          <td><span class="badge badge-${SIT_ENC[l.situacao][0]}">${SIT_ENC[l.situacao][1]}</span></td></tr>`).join('')}
+        </table>
+      </div>
+      ${res.faltas ? '<div class="cartao erro"><div class="sub">Há falta em ' + res.faltas + ' item(ns): ao confirmar, <b>o cliente recebe o relatório de faltas por e-mail</b>. O que já foi endereçado continua no estoque.</div></div>' : ''}
+      ${res.sem_cadastro ? '<div class="cartao"><div class="sub">' + res.sem_cadastro + ' linha(s) sem produto no catálogo: não contam como falta, ficam registradas como pendência.</div></div>' : ''}
+      <div class="campo"><label>Observação${res.faltas ? ' (vai no e-mail do cliente)' : ''}</label>
+        <input type="text" id="enc-obs" maxlength="300" placeholder="${res.divergente ? 'ex.: 2 caixas chegaram avariadas' : 'opcional'}"></div>
+      <div class="botoes"><button class="botao" type="button" id="btn-enc-confirmar">Confirmar encerramento</button></div>`;
+    document.getElementById('btn-enc-confirmar').addEventListener('click', async (ev) => {
+      if (!S.operador) { toast('Identifique o operador primeiro', true); return ir('operador'); }
+      const btn = ev.currentTarget; btn.disabled = true;
+      try {
+        const resp = await api('/recebimentos/' + r.id + '/encerrar', { method: 'POST', body: { observacao: (document.getElementById('enc-obs').value || '').trim() } });
+        const envio = resp.envio || {};
+        // resp.ja_encerrado: resposta perdida e nova tentativa -- o trabalho
+        // dele já estava gravado, então isso é sucesso, não erro.
+        const feito = (resp.ja_encerrado ? 'Já estava encerrado: ' : 'Recebimento encerrado: ') + r.codigo;
+        if (resp.recebimento.estado !== 'DIVERGENCIA') toast(feito);
+        else {
+          const ok = envio.enviado || envio.motivo === 'ja_enviado';
+          toast(ok
+            ? feito + '. Relatório de faltas ' + (envio.enviado ? 'enviado para ' + (envio.destinos || []).join(', ') : 'já havia sido enviado')
+            : feito + ', mas o relatório NÃO foi enviado (' + (envio.motivo || 'motivo desconhecido') + '). Avise a equipe.', !ok);
+        }
+        S.pilha = []; ir('receber', {}, false);
+      } catch (e) {
+        if (e.status === 409 && e.dados && e.dados.sem_operador) { S.operador = null; toast(e.message, true); ir('operador'); }
+        else { toast(e.message, true); btn.disabled = false; }
+      }
+    });
+  };
   TELAS_POS.recebimento = (ctx) => {
     document.getElementById('btn-voltar').addEventListener('click', voltar);
     const g = (id) => document.getElementById(id);
     const itens = (ctx.recebimento && ctx.recebimento.itens) || [];
-    const btnDiv = document.getElementById('btn-divergencia');
-    if (btnDiv) btnDiv.addEventListener('click', () => encerrarComDivergencia(ctx.recebimento, itens));
+    const btnEnc = document.getElementById('btn-encerrar');
+    if (btnEnc) btnEnc.addEventListener('click', () => ir('encerramento', { recebimento: ctx.recebimento }));
     app.querySelectorAll('[data-cam]').forEach((b) => b.addEventListener('click', () => abrirCamera((c) => {
       g('rec-pos-' + b.dataset.cam).value = c.replace(/^pos:/i, '').toUpperCase();
     })));
@@ -818,9 +867,20 @@
       if (!serial) return toast('Isso não é etiqueta de caixa.', true);
       const posicao = g('rec-pos-' + i).value.trim().toUpperCase().replace(/^POS:/, '');
       if (!posicao) return toast('Leia a posição primeiro.', true);
-      const res = await ativarCaixa(serial, posicao, { recebimento_id: ctx.recebimento.id, item_id: it.id });
+      let res = await ativarCaixa(serial, posicao, { recebimento_id: ctx.recebimento.id, item_id: it.id });
       if (res.semOperador) return;
+      if (res.sobra) {
+        if (await confirmarSobra(res.sobra)) {
+          res = await ativarCaixa(serial, posicao, { recebimento_id: ctx.recebimento.id, item_id: it.id, confirmar_sobra: true });
+          if (res.semOperador) return;
+        } else {
+          const st = estadoCx(i); st.log.unshift({ txt: serial + ': não entrou (reconferir o produto)', classe: 'atencao' });
+          if (st.log.length > 8) st.log.pop();
+          toast('Caixa ' + serial + ' não entrou. Reconfira o produto.'); return pintar(i);
+        }
+      }
       aplicarBipe(estadoCx(i), serial, res); pintar(i);
+      if (res.ok && !res.offline) atualizarProgresso(ctx);
     };
     ctx.biparCx = bipar;
     itens.forEach((it, i) => {
@@ -849,11 +909,13 @@
     extra = extra || {};
     if (!S.operador) { toast('Identifique o operador primeiro', true); ir('operador'); return { ok: false, semOperador: true }; }
     const corpo = { posicao, recebimento_id: extra.recebimento_id || null, item_id: extra.item_id || null, criado_em: agoraStr() };
+    if (extra.confirmar_sobra) corpo.confirmar_sobra = true;
     try {
       const r = await api('/caixas/' + encodeURIComponent(serial) + '/ativar', { method: 'POST', body: corpo });
       return { ok: true, duplicado: !!r.duplicado, caixa: r.caixa };
     } catch (e) {
       if (e.status === 409 && e.dados && e.dados.sem_operador) { S.operador = null; toast(e.message, true); ir('operador'); return { ok: false, semOperador: true }; }
+      if (e.status === 409 && e.dados && e.dados.sobra) return { ok: false, sobra: e.dados.sobra, erro: e.message };
       if (!e.status) {
         enfileirar({ tipo: 'ativar_caixa', serial, posicao, recebimento_id: corpo.recebimento_id, item_id: corpo.item_id, criado_em: corpo.criado_em });
         return { ok: true, offline: true };
@@ -902,6 +964,11 @@
     const posicao = g('rec-pos-' + i).value.trim().toUpperCase();
     if (!(qtd > 0)) return toast('Informe a quantidade.', true);
     if (!posicao) return toast('Leia a etiqueta da posição.', true);
+    const ja = Number(it.qtd_enderecada || 0); const depois = Math.round((ja + qtd) * 1000) / 1000;
+    if (it.qtd_un !== null && depois > Number(it.qtd_un) + 0.0005
+        && !(await confirmarSobra({ descricao: it.descricao, sku: it.sku, anunciado: it.qtd_un, recebido: ja, depois }))) {
+      return toast('Entrada não registrada. Reconfira o produto.');
+    }
     const btn = document.querySelector('[data-confirmar="' + i + '"]'); btn.disabled = true;
     // O MESMO uuid vai nas duas chamadas: a entrada em si já é idempotente
     // por uuid, e a contabilização passou a ser também -- resposta perdida

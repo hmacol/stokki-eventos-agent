@@ -896,19 +896,9 @@ def contabilizar_enderecamento(conn, recebimento_id: int, item_id: int, qtd: flo
         conn.execute(
             "UPDATE wms_recebimento_itens SET qtd_enderecada = ROUND(qtd_enderecada + ?, 3) WHERE id = ?",
             (qtd, int(item_id)))
-    # "Fecha sozinho" e exatamente "nao ha falta nenhuma": e a MESMA funcao
-    # que decide o que vai no relatorio de faltas do cliente, de proposito.
-    # Enquanto eram duas comparacoes iguais escritas em lugares diferentes
-    # (uma em SQL aqui, outra em Python la), qualquer mexida numa delas
-    # criava em silencio o recebimento que nao fecha automatico e tambem nao
-    # tem falta pra reportar -- o operador ficaria sem saida nenhuma.
-    if not faltas_do_recebimento(conn, recebimento_id):
-        # So o ESPERADO vira ENDERECADO: recebimento ja encerrado com
-        # DIVERGENCIA (relatorio enviado ao cliente) nao pode ser apagado
-        # por um enderecamento atrasado.
-        conn.execute("UPDATE wms_recebimentos SET estado = 'ENDERECADO', atualizado_em = ? "
-                     "WHERE id = ? AND estado = 'ESPERADO'",
-                     (wms.agora(), int(recebimento_id)))
+    # Nao fecha sozinho (Hugo, 02/11): o recebimento so sai da lista pelo
+    # botao "Encerrar recebimento" (encerrar_recebimento), que mostra a
+    # tabela de divergencias antes de confirmar.
     conn.commit()
     return {
         "duplicado": duplicado,
@@ -994,7 +984,7 @@ def encerrar_com_divergencia(conn, recebimento_id: int, observacao: str = "",
     faltas = faltas_do_recebimento(conn, recebimento_id)
     if not faltas:
         raise wms.ErroWMS(
-            "Nao ha falta nenhuma neste recebimento -- ele fecha sozinho quando a ultima linha bater.")
+            "Nao ha falta nenhuma neste recebimento -- encerre pelo botao Encerrar recebimento.")
 
     agora = wms.agora()
     for f in faltas:
@@ -1009,6 +999,63 @@ def encerrar_com_divergencia(conn, recebimento_id: int, observacao: str = "",
     return {"recebimento": dict(conn.execute(
         "SELECT * FROM wms_recebimentos WHERE id = ?", (int(recebimento_id),)).fetchone()),
         "faltas": faltas}
+
+
+def resumo_encerramento(conn, recebimento_id: int) -> dict:
+    """
+    Tabela da tela de encerramento: cada linha com anunciado x recebido e a
+    situacao (OK, FALTA, SOBRA ou SEM_CADASTRO). FALTA usa o mesmo criterio
+    de faltas_do_recebimento (e o que vai no e-mail do cliente); linha sem
+    produto no catalogo aparece como SEM_CADASTRO e nunca conta como falta.
+    """
+    if not conn.execute("SELECT 1 FROM wms_recebimentos WHERE id = ?", (int(recebimento_id),)).fetchone():
+        raise wms.ErroWMS("Recebimento nao encontrado.")
+    linhas = []
+    for it in itens_do_recebimento(conn, recebimento_id):
+        recebido = round(float(it.get("qtd_enderecada") or 0), 3)
+        if not it.get("produto_id") or it.get("qtd_un") is None:
+            anunciado, diferenca, situacao = it.get("qtd_embalagem"), None, "SEM_CADASTRO"
+        else:
+            anunciado = round(float(it["qtd_un"]), 3)
+            diferenca = round(recebido - anunciado, 3)
+            situacao = "OK" if diferenca == 0 else ("FALTA" if diferenca < 0 else "SOBRA")
+        linhas.append({"item_id": it["id"], "linha": it["linha"], "sku": it.get("sku") or "",
+                       "descricao": it.get("descricao") or "", "unidade": it.get("unidade") or "UN",
+                       "anunciado": anunciado, "recebido": recebido, "diferenca": diferenca,
+                       "situacao": situacao, "motivo_pendencia": it.get("motivo_pendencia") or ""})
+    conta = {s: sum(1 for l in linhas if l["situacao"] == s) for s in ("FALTA", "SOBRA", "SEM_CADASTRO")}
+    return {"linhas": linhas, "faltas": conta["FALTA"], "sobras": conta["SOBRA"],
+            "sem_cadastro": conta["SEM_CADASTRO"], "divergente": any(conta.values())}
+
+
+def encerrar_recebimento(conn, recebimento_id: int, observacao: str = "",
+                         operador: dict | None = None) -> dict:
+    """
+    Botao "Encerrar recebimento" (unico jeito de fechar, desde 02/11). Com
+    falta, segue o caminho de sempre (encerrar_com_divergencia: congela a
+    falta, estado DIVERGENCIA, e a rota manda o relatorio ao cliente). Sem
+    falta vira ENDERECADO; sobra e linha sem cadastro ficam registradas na
+    tabela (qtd_enderecada x qtd_un) e na observacao, sem e-mail.
+    """
+    rec = conn.execute("SELECT * FROM wms_recebimentos WHERE id = ?", (int(recebimento_id),)).fetchone()
+    if not rec:
+        raise wms.ErroWMS("Recebimento nao encontrado.")
+    if rec["estado"] != "ESPERADO":
+        raise wms.ErroWMS(f"Recebimento ja encerrado ({rec['estado']}).")
+    resumo = resumo_encerramento(conn, recebimento_id)
+    if resumo["faltas"]:
+        r = encerrar_com_divergencia(conn, recebimento_id, observacao, operador=operador)
+        return dict(r, resumo=resumo)
+    agora = wms.agora()
+    conn.execute(
+        "UPDATE wms_recebimentos SET estado = 'ENDERECADO', observacao_divergencia = ?, "
+        "encerrado_em = ?, encerrado_por = ?, atualizado_em = ? WHERE id = ? AND estado = 'ESPERADO'",
+        (" ".join(str(observacao or "").split())[:500], agora,
+         str((operador or {}).get("nome") or "")[:60], agora, int(recebimento_id)))
+    conn.commit()
+    return {"recebimento": dict(conn.execute(
+        "SELECT * FROM wms_recebimentos WHERE id = ?", (int(recebimento_id),)).fetchone()),
+        "faltas": [], "resumo": resumo}
 
 
 def listar_pedidos_wms(conn, estado: str | None = None, limite: int = 50) -> list[dict]:

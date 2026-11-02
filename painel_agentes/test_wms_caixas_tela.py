@@ -242,6 +242,48 @@ class Caixas(Base):
         j = self.cliente.get("/api/wms/recebimentos/1").get_json()
         self.assertEqual([i["usa_caixas"] for i in j["itens"]], [True, False])
 
+    def _recebimento_de_uma_caixa(self):
+        conn = wms_caixas.conectar()
+        conn.execute("INSERT INTO wms_recebimentos (id, id_stokki, codigo, lido_em, atualizado_em) "
+                     "VALUES (1, 5001, '#PE-5001', '2026-11-01 10:00:00', '2026-11-01 10:00:00')")
+        conn.execute("INSERT INTO wms_recebimento_itens (id, recebimento_id, linha, descricao, qtd_embalagem, "
+                     "qtd_un, produto_id) VALUES (10, 1, 1, 'PRODUTO', 1, 6, 1)")
+        conn.commit()
+        conn.close()
+
+    def test_caixa_alem_do_anunciado_da_409_com_sobra_e_confirmar_aceita(self):
+        self.operador()
+        self._recebimento_de_uma_caixa()
+        a, b = self.criar(2)["seriais"]
+        corpo = {"posicao": POS, "recebimento_id": 1, "item_id": 10}
+        self.assertEqual(self.post(f"/api/wms/caixas/{a}/ativar", corpo).status_code, 200)
+        r = self.post(f"/api/wms/caixas/{b}/ativar", corpo)
+        self.assertEqual(r.status_code, 409, r.get_data(as_text=True))
+        self.assertEqual((r.get_json()["sobra"]["anunciado"], r.get_json()["sobra"]["depois"]), (6, 12))
+        self.assertEqual(self.saldo(1), 6)
+        r = self.post(f"/api/wms/caixas/{b}/ativar", dict(corpo, confirmar_sobra=True))
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(self.saldo(1), 12)
+
+    def test_encerramento_mostra_tabela_e_encerrar_sem_falta_nao_manda_email(self):
+        self.operador()
+        self._recebimento_de_uma_caixa()
+        s = self.criar(1)["seriais"][0]
+        self.post(f"/api/wms/caixas/{s}/ativar", {"posicao": POS, "recebimento_id": 1, "item_id": 10})
+        res = self.cliente.get("/api/wms/recebimentos/1/encerramento").get_json()
+        self.assertEqual([(l["situacao"], l["anunciado"], l["recebido"]) for l in res["linhas"]], [("OK", 6, 6)])
+        with mock.patch.object(painel_agentes.wms_faltas_recebimento, "notificar_faltas") as notificar:
+            r = self.post("/api/wms/recebimentos/1/encerrar", {"observacao": ""})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(r.get_json()["recebimento"]["estado"], "ENDERECADO")
+        self.assertEqual(r.get_json()["envio"]["motivo"], "sem_falta")
+        notificar.assert_not_called()
+        # resposta perdida + novo toque: sucesso, nao erro
+        again = self.post("/api/wms/recebimentos/1/encerrar", {"observacao": ""})
+        self.assertEqual(again.status_code, 200)
+        self.assertTrue(again.get_json()["ja_encerrado"])
+        self.assertEqual(self.cliente.get("/api/wms/recebimentos/999/encerramento").status_code, 404)
+
 
 
 class Endurecimento(Base):

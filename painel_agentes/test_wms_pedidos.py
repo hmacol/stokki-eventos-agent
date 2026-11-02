@@ -982,12 +982,13 @@ class TestEnderecamentoDoRecebimento(BaseWMS):
         self.assertTrue(r2["duplicado"])
         self.assertEqual(r2["item"]["qtd_enderecada"], 10)
 
-    def test_dois_enderecamentos_diferentes_somam_e_fecham_o_recebimento(self):
+    def test_dois_enderecamentos_diferentes_somam_e_nao_fecham_sozinhos(self):
         wms_pedidos.contabilizar_enderecamento(self.conn, self.rid, self.item_id, 4, "mov-1")
         r = wms_pedidos.contabilizar_enderecamento(self.conn, self.rid, self.item_id, 6, "mov-2")
 
         self.assertEqual(r["item"]["qtd_enderecada"], 10)
-        self.assertEqual(r["recebimento"]["estado"], "ENDERECADO")
+        # Desde 02/11 so o botao Encerrar recebimento fecha.
+        self.assertEqual(r["recebimento"]["estado"], "ESPERADO")
 
 
 class TestPendencias(BaseWMS):

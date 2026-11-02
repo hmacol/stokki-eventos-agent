@@ -226,6 +226,47 @@ class TestAtivarMoverCancelar(BaseCaixas):
             cx.ativar_caixa(self.conn, s, "C9-E1-N1", recebimento_id=rid + 99, item_id=itens[0]["id"])
         self.assertEqual(self.n("wms_movimentos"), 0)
 
+    def _anunciar(self, item_id, qtd_un):
+        self.conn.execute("UPDATE wms_recebimento_itens SET qtd_un = ? WHERE id = ?", (qtd_un, item_id))
+        self.conn.commit()
+
+    def test_caixa_alem_do_anunciado_pede_confirmacao(self):
+        rid, itens = self.novo_recebimento()
+        self._anunciar(itens[0]["id"], 6)       # anunciado = 1 caixa de 6
+        s = self.novas(2)
+        cx.ativar_caixa(self.conn, s[0], "C9-E1-N1", recebimento_id=rid, item_id=itens[0]["id"])
+        with self.assertRaises(cx.SobraRecebimento) as ctx:
+            cx.ativar_caixa(self.conn, s[1], "C9-E1-N1", recebimento_id=rid, item_id=itens[0]["id"])
+        self.assertEqual((ctx.exception.dados["anunciado"], ctx.exception.dados["recebido"],
+                          ctx.exception.dados["depois"], ctx.exception.dados["serial"]), (6, 6, 12, s[1]))
+        # reconferir: nada mudou
+        self.assertEqual(cx.obter_caixa(self.conn, s[1])["situacao"], "IMPRESSA")
+        self.assertEqual((self.enderecada(itens[0]["id"]), self.saldo()), (6, 6))
+        # confirmar: entra como sobra
+        cx.ativar_caixa(self.conn, s[1], "C9-E1-N1", recebimento_id=rid, item_id=itens[0]["id"],
+                        confirmar_sobra=True)
+        self.assertEqual((self.enderecada(itens[0]["id"]), self.saldo()), (12, 12))
+
+    def test_repeticao_de_caixa_ja_contada_nao_pede_confirmacao(self):
+        rid, itens = self.novo_recebimento()
+        self._anunciar(itens[0]["id"], 6)
+        s = self.novas()[0]
+        cx.ativar_caixa(self.conn, s, "C9-E1-N1", recebimento_id=rid, item_id=itens[0]["id"])
+        r = cx.ativar_caixa(self.conn, s, "C9-E1-N1", recebimento_id=rid, item_id=itens[0]["id"])
+        self.assertTrue(r["duplicado"])
+        self.assertEqual(self.enderecada(itens[0]["id"]), 6)
+
+    def test_recebimento_encerrado_nao_aceita_caixa_nova(self):
+        rid, itens = self.novo_recebimento()
+        self.conn.execute("UPDATE wms_recebimentos SET estado = 'ENDERECADO' WHERE id = ?", (rid,))
+        self.conn.commit()
+        s = self.novas()[0]
+        with self.assertRaisesRegex(wms.ErroWMS, "ja encerrado"):
+            cx.ativar_caixa(self.conn, s, "C9-E1-N1", recebimento_id=rid, item_id=itens[0]["id"],
+                            confirmar_sobra=True)
+        self.assertEqual(cx.obter_caixa(self.conn, s)["situacao"], "IMPRESSA")
+        self.assertEqual(self.saldo(), 0)
+
     def test_queda_entre_movimento_e_caixa_completa_sem_somar(self):
         s = self.novas()[0]
         wms.registrar_movimento(self.conn, tipo="AJUSTE", produto_id=1, quantidade=6, lote="L1",

@@ -4737,8 +4737,11 @@ def api_wms_caixa_ativar(serial):
             conn, serial, body.get("posicao", ""), operador=op,
             recebimento_id=int(rec_id) if rec_id not in (None, "") else None,
             item_id=int(item_id) if item_id not in (None, "") else None,
-            dispositivo=(request.user_agent.string or "")[:80], criado_em=body.get("criado_em"))
+            dispositivo=(request.user_agent.string or "")[:80], criado_em=body.get("criado_em"),
+            confirmar_sobra=body.get("confirmar_sobra") is True)
         return jsonify({"caixa": r["caixa"], "duplicado": r["duplicado"]})
+    except wms_caixas.SobraRecebimento as e:
+        return jsonify({"erro": str(e), "sobra": e.dados}), 409
     except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
         return _wms_json_erro(e)
     finally:
@@ -4785,11 +4788,8 @@ def api_wms_recebimento_enderecar_item(recebimento_id, item_id):
     """
     Chamada depois que a ENTRADA em si ja foi aceita por /api/wms/movimentos
     (esta rota nao move estoque, so contabiliza o quanto desta linha do
-    recebimento ja foi endereçado). Soma ao qtd_enderecada da linha e fecha
-    o recebimento (estado=ENDERECADO) quando toda linha RESOLVIDA (produto
-    identificado) bateu a quantidade do pedido -- linha que ficou pendencia
-    (produto nao encontrado no catalogo) nunca entra nessa conta: ela so
-    aparece na tela como aviso, nunca trava o fechamento do recebimento.
+    recebimento ja foi endereçado). Soma ao qtd_enderecada da linha; não
+    fecha o recebimento (desde 02/11 só o botão Encerrar recebimento fecha).
 
     Idempotente pelo `uuid` do movimento de ENTRADA que o aparelho já
     mandou: resposta perdida + nova tentativa não conta duas vezes (a
@@ -4812,18 +4812,28 @@ def api_wms_recebimento_enderecar_item(recebimento_id, item_id):
                     "duplicado": r["duplicado"]})
 
 
+@app.route("/api/wms/recebimentos/<int:recebimento_id>/encerramento")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_recebimento_encerramento(recebimento_id):
+    """Tabela da tela de encerramento: anunciado x recebido por linha."""
+    conn = wms_pedidos.conectar()
+    try:
+        return jsonify(wms_pedidos.resumo_encerramento(conn, recebimento_id))
+    except wms.ErroWMS as e:
+        return _wms_json_erro(e, 404)
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/recebimentos/<int:recebimento_id>/encerrar", methods=["POST"])
 @app.route("/api/wms/recebimentos/<int:recebimento_id>/encerrar-divergencia", methods=["POST"])
 @requer_auth(niveis=_NIVEIS_WMS)
 @exige_mesma_origem
 def api_wms_recebimento_encerrar_divergencia(recebimento_id):
     """
-    O operador terminou a descarga e faltou mercadoria: encerra o
-    recebimento assumindo a falta e manda o relatório pro cliente.
-
-    Sem isto, recebimento que chegou parcial nunca alcança o esperado,
-    nunca fecha sozinho e fica pra sempre na lista do galpão. O
-    fechamento automático do caso normal continua onde estava
-    (contabilizar_enderecamento) -- este botão é só pro caso em que falta.
+    Botão "Encerrar recebimento" (desde 02/11 o único jeito de fechar: o
+    recebimento não fecha mais sozinho). Sem falta vira ENDERECADO; com
+    falta encerra assumindo a falta e manda o relatório pro cliente.
 
     NÃO mexe em estoque: o que chegou já entrou pelas ENTRADAs do
     endereçamento e o que faltou nunca existiu.
@@ -4849,20 +4859,22 @@ def api_wms_recebimento_encerrar_divergencia(recebimento_id):
     try:
         ja_encerrado = False
         try:
-            r = wms_pedidos.encerrar_com_divergencia(
+            r = wms_pedidos.encerrar_recebimento(
                 conn, recebimento_id, body.get("observacao") or "", operador=op)
         except (wms.ErroWMS, ValueError) as e:
             rec = conn.execute("SELECT * FROM wms_recebimentos WHERE id = ?", (recebimento_id,)).fetchone()
-            if not (rec and rec["estado"] == "DIVERGENCIA"):
+            if not (rec and rec["estado"] in ("DIVERGENCIA", "ENDERECADO")):
                 return _wms_json_erro(e)
             ja_encerrado = True
             r = {"recebimento": dict(rec),
                  "faltas": wms_pedidos.faltas_congeladas(conn, recebimento_id)}
-        try:
-            envio = wms_faltas_recebimento.notificar_faltas(conn, recebimento_id, _carregar_config())
-        except Exception as e:  # noqa: BLE001 -- e-mail nunca derruba o encerramento
-            logging.getLogger(__name__).exception("Falha no relatório de faltas do recebimento %s", recebimento_id)
-            envio = {"enviado": False, "motivo": "erro_inesperado", "detalhe": str(e)}
+        envio = {"enviado": False, "motivo": "sem_falta"}
+        if r["recebimento"]["estado"] == "DIVERGENCIA":
+            try:
+                envio = wms_faltas_recebimento.notificar_faltas(conn, recebimento_id, _carregar_config())
+            except Exception as e:  # noqa: BLE001 -- e-mail nunca derruba o encerramento
+                logging.getLogger(__name__).exception("Falha no relatório de faltas do recebimento %s", recebimento_id)
+                envio = {"enviado": False, "motivo": "erro_inesperado", "detalhe": str(e)}
     finally:
         conn.close()
     return jsonify({"ok": True, "ja_encerrado": ja_encerrado, "recebimento": r["recebimento"],
