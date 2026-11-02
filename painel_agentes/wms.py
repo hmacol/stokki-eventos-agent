@@ -168,6 +168,13 @@ def conectar(caminho: Path | None = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(_DDL)
+    # Migração aditiva: código interno (FLP + 6 dígitos) pra produto sem SKU e sem EAN.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(wms_produtos)")}
+    if "codigo_interno" not in cols:
+        conn.execute("ALTER TABLE wms_produtos ADD COLUMN codigo_interno TEXT")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_wms_produtos_codigo_interno "
+                 "ON wms_produtos(codigo_interno) WHERE codigo_interno IS NOT NULL")
+    conn.commit()
     return conn
 
 
