@@ -52,7 +52,7 @@ def dados_pagina_motoristas() -> dict:
         bruto = bruto or {}
         return {
             "id": id_,
-            "agent_id": m.agent_id, "nome": m.nome, "ativo": m.ativo,
+            "agent_id": m.agent_id, "nome": m.nome, "ativo": m.ativo, "posicao": m.posicao,
             "dias_disponiveis": ", ".join(rotulos_dias[d] for d in sorted(m.dias_disponiveis) if 0 <= d < 7),
             "zonas_preferidas": m.zonas_preferidas, "tipo_veiculo": m.tipo_veiculo,
             "telefone": m.telefone, "email": m.email, "placa": m.placa,
@@ -71,6 +71,7 @@ def dados_pagina_motoristas() -> dict:
                 "tipo_veiculo": m.tipo_veiculo if (bruto.get("TIPO_VEICULO") or "").strip() else "",
                 "vehicle_id": m.vehicle_id if m.vehicle_id is not None else "",
                 "apenas_carga_seca": m.apenas_carga_seca, "sem_app": m.sem_app,
+                "posicao": m.posicao,
             },
         }
 

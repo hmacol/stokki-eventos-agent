@@ -132,7 +132,7 @@
 <table class="tabela-motoristas">
   <thead>
     <tr>
-      <th>Nome</th><th>Agent ID</th><th>Ativo</th><th>Dias</th><th>Zonas</th><th>Veículo</th><th>Telefone</th><th>Placa</th><th title="Login do app: se vê o extrato (quem dirige carro de outro não vê)">App · Financeiro</th>{% if pode_editar %}<th></th>{% endif %}
+      <th>Nome</th><th>Agent ID</th><th>Ativo</th><th>Posição</th><th>Dias</th><th>Zonas</th><th>Veículo</th><th>Telefone</th><th>Placa</th><th title="Login do app: se vê o extrato (quem dirige carro de outro não vê)">App · Financeiro</th>{% if pode_editar %}<th></th>{% endif %}
     </tr>
   </thead>
   <tbody>
@@ -141,6 +141,7 @@
       <td>{{ m.nome }}</td>
       <td class="mono">{{ m.agent_id }}</td>
       <td>{% if m.ativo %}<span class="badge badge-sucesso">Ativo</span>{% else %}<span class="badge badge-erro">Inativo</span>{% endif %}</td>
+      <td>{{ "Fixo" if m.posicao == "FIXO" else "Esporádico" }}</td>
       <td>{{ m.dias_disponiveis or "—" }}</td>
       <td>{% for z in m.zonas_preferidas %}<span class="zona-chip">{{ z }}</span>{% else %}—{% endfor %}</td>
       <td>{{ m.tipo_veiculo or "—" }}</td>
@@ -249,6 +250,13 @@
     <div class="campo-motorista">
       <label><input type="checkbox" id="motorista-sem-app"> Sem app Vuupt (iPhone)</label>
     </div>
+    <div class="campo-motorista">
+      <label for="motorista-posicao">Posição</label>
+      <select id="motorista-posicao">
+        <option value="ESPORADICO">Esporádico</option>
+        <option value="FIXO">Fixo</option>
+      </select>
+    </div>
 
     <div class="acoes">
       <button type="button" class="cancelar" id="botao-cancelar-motorista">Cancelar</button>
@@ -313,6 +321,7 @@ const putJSON = (url, body) => postJSON(url, body, "PUT");
     document.getElementById("motorista-vehicle-id").value = d.vehicle_id ?? "";
     document.getElementById("motorista-carga-seca").checked = !!d.apenas_carga_seca;
     document.getElementById("motorista-sem-app").checked = !!d.sem_app;
+    document.getElementById("motorista-posicao").value = d.posicao || "ESPORADICO";
   }
 
   // Valores atuais do formulario (o que vai no payload).
@@ -333,6 +342,7 @@ const putJSON = (url, body) => postJSON(url, body, "PUT");
       vehicle_id: v("motorista-vehicle-id"),
       apenas_carga_seca: document.getElementById("motorista-carga-seca").checked,
       sem_app: document.getElementById("motorista-sem-app").checked,
+      posicao: v("motorista-posicao"),
     };
   }
   let camposOriginais = {};

@@ -17,6 +17,7 @@ escolher.
 """
 import logging
 import re
+import unicodedata
 
 import requests
 
@@ -103,6 +104,13 @@ def _inteiro_ou_none(valor):
     return int(valor) if valor not in (None, "") else None
 
 
+def _posicao(valor) -> str | None:
+    texto = unicodedata.normalize("NFKD", str(valor or "")).encode("ascii", "ignore").decode().strip().upper()
+    if texto not in ("", "FIXO", "ESPORADICO"):
+        raise ValueError(f"Posição '{valor}' não reconhecida (use FIXO ou ESPORADICO).")
+    return texto or None
+
+
 # chave do formulário -> (coluna, tradução). Só entram as chaves presentes no payload.
 _FORMULARIO = {
     "vehicle_id": ("VEHICLE_ID_VUUPT", _inteiro_ou_none),
@@ -119,6 +127,7 @@ _FORMULARIO = {
     "tipo_veiculo": ("TIPO_VEICULO", lambda v: str(v or "").strip().upper() or None),
     "apenas_carga_seca": ("APENAS_CARGA_SECA", _sim_nao),
     "sem_app": ("SEM_APP", _sim_nao),
+    "posicao": ("POSICAO", _posicao),
 }
 
 

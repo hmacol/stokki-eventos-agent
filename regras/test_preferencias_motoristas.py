@@ -119,6 +119,17 @@ class TestSemApp(unittest.TestCase):
             self.assertEqual(agent_ids_sem_app(Path(tmp) / "nao_existe.xlsx"), set())
 
 
+class TestPosicao(unittest.TestCase):
+    def test_vazio_ou_desconhecido_e_esporadico_e_fixo_ignora_caixa(self):
+        from regras.preferencias_motoristas import _construir_motorista
+        base = {"AGENT_ID_VUUPT": 1, "NOME_MOTORISTA": "A", "ATIVO": "SIM"}
+        self.assertEqual(_construir_motorista(base).posicao, "ESPORADICO")
+        self.assertEqual(_construir_motorista({**base, "POSICAO": float("nan")}).posicao, "ESPORADICO")
+        self.assertEqual(_construir_motorista({**base, "POSICAO": "qualquer"}).posicao, "ESPORADICO")
+        self.assertEqual(_construir_motorista({**base, "POSICAO": "fixo"}).posicao, "FIXO")
+        self.assertEqual(_construir_motorista({**base, "POSICAO": " Esporádico "}).posicao, "ESPORADICO")
+
+
 class TestCatalogoDoBanco(unittest.TestCase):
     """CatalogoMotoristas.carregar le da tabela bd_motoristas quando o caminho
     e o do espelho padrao e a tabela tem linhas; senao, comportamento antigo."""

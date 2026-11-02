@@ -179,6 +179,54 @@ class TestMotoristasBanco(unittest.TestCase):
             self.assertEqual(mb.caminho_espelho(), self.dir / "BD_MOTORISTAS.xlsx")
 
 
+class TestPosicao(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.dir = Path(self._tmp.name)
+        self.conn = banco.conectar(self.dir / "t.db")
+
+    def tearDown(self):
+        self.conn.close()
+        self._tmp.cleanup()
+
+    def test_espelho_tem_coluna_posicao(self):
+        mb.inserir(self.conn, _linha(AGENT_ID_VUUPT=1, NOME_MOTORISTA="A", ATIVO="SIM", POSICAO="FIXO"), "teste")
+        destino = self.dir / "espelho.xlsx"
+        self.assertTrue(mb.escrever_espelho(self.conn, destino))
+        df = pd.read_excel(destino, dtype=str)
+        self.assertEqual(df.columns[-1], "POSICAO")
+        self.assertEqual(df["POSICAO"][0], "FIXO")
+
+    def test_marcar_posicao_fixos_e_esporadicos_com_historico(self):
+        for agent, nome in ((31828, "A"), (47424, "Erick"), (47424, "Erick 2"), (50000, "C")):
+            mb.inserir(self.conn, _linha(AGENT_ID_VUUPT=agent, NOME_MOTORISTA=nome, ATIVO="SIM"), "teste")
+        self.assertEqual(mb.marcar_posicao(self.conn, {31828, 47424}, "marcar-posicao"), 4)
+        pos = [(r["AGENT_ID_VUUPT"], r["POSICAO"]) for r in mb.listar(self.conn)]
+        self.assertEqual(pos, [(31828, "FIXO"), (47424, "FIXO"), (47424, "FIXO"), (50000, "ESPORADICO")])
+        hist = self.conn.execute("SELECT COUNT(*) FROM bd_motoristas_alteracoes WHERE campo='POSICAO' AND origem='marcar-posicao'").fetchone()[0]
+        self.assertEqual(hist, 4)
+        # segunda vez nada muda
+        self.assertEqual(mb.marcar_posicao(self.conn, {31828, 47424}, "marcar-posicao"), 0)
+        # quem sai da lista volta a esporadico
+        self.assertEqual(mb.marcar_posicao(self.conn, {31828}, "marcar-posicao"), 2)
+
+    def test_cli_marcar_posicao(self):
+        db = self.dir / "c.db"
+        c = banco.conectar(db)
+        mb.inserir(c, _linha(AGENT_ID_VUUPT=1, NOME_MOTORISTA="A", ATIVO="SIM"), "teste")
+        mb.inserir(c, _linha(AGENT_ID_VUUPT=2, NOME_MOTORISTA="B", ATIVO="SIM"), "teste")
+        c.close()
+        saida = io.StringIO()
+        with contextlib.redirect_stdout(saida):
+            codigo = mb.main(["marcar-posicao", "--fixos", "1, 3", "--db", str(db)])
+        self.assertEqual(codigo, 0)
+        self.assertIn("2 linhas", saida.getvalue())
+        c = banco.conectar(db)
+        self.assertEqual([r["POSICAO"] for r in mb.listar(c)], ["FIXO", "ESPORADICO"])
+        c.close()
+        self.assertTrue((self.dir / "BD_MOTORISTAS.xlsx").exists())
+
+
 class TestCliMotoristasBanco(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)

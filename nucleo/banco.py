@@ -434,6 +434,7 @@ CREATE TABLE IF NOT EXISTS bd_motoristas (
     TIPO_VEICULO       TEXT,
     APENAS_CARGA_SECA  TEXT,
     SEM_APP            TEXT,
+    POSICAO            TEXT,
     inativado_em       TEXT,
     criado_em          TEXT NOT NULL,
     atualizado_em      TEXT NOT NULL
@@ -474,6 +475,7 @@ def garantir_esquema(conn: sqlite3.Connection):
     conn.executescript(_DDL_CADASTRO)
     conn.executescript(_DDL_BD_MOTORISTAS)
     _migrar_colunas(conn, "motoristas", _COLUNAS_MOTORISTAS_NOVAS)
+    _migrar_colunas(conn, "bd_motoristas", [("POSICAO", "TEXT")])   # FIXO | ESPORADICO
     # Tabela de 08/10 já existia na VPS quando dono_veiculo entrou no DDL:
     # CREATE IF NOT EXISTS não acrescenta coluna.
     _migrar_colunas(conn, "motoristas_cadastros", [("dono_veiculo", "INTEGER NOT NULL DEFAULT 1")])
