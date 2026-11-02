@@ -331,6 +331,38 @@ CREATE INDEX IF NOT EXISTS idx_motoristas_cadastros_status ON motoristas_cadastr
 """
 
 
+# Colunas do cadastro pelo link (02/11): dados extras, 3 documentos a mais e o
+# estado da criação do agente/veículo na Vuupt + aviso no grupo.
+_COLUNAS_CADASTRO_LINK = [
+    ("origem", "TEXT NOT NULL DEFAULT 'app'"),   # app | link
+    ("data_nascimento", "TEXT"),                 # ISO
+    ("emite_nf", "INTEGER"),
+    ("posicao", "TEXT"),                         # FIXO | ESPORADICO
+    ("celular", "TEXT"),                         # ANDROID | IPHONE
+    ("veiculo_modelo", "TEXT"),
+    ("veiculo_ano", "INTEGER"),
+    ("refrigerado", "INTEGER"),
+    ("temp_min_c", "REAL"),
+    ("selfie_arquivo", "TEXT"),
+    ("antt_arquivo", "TEXT"),
+    ("residencia_arquivo", "TEXT"),
+    ("enviado_em", "TEXT"),
+    ("vuupt_email", "TEXT"),
+    ("vuupt_senha_digitos", "INTEGER"),          # 6 ou 8
+    ("vehicle_id", "INTEGER"),
+    ("bd_motorista_id", "INTEGER"),
+    ("conflito_agent_id", "INTEGER"),
+    ("conflito_resolvido", "INTEGER NOT NULL DEFAULT 0"),
+    ("aviso_grupo_em", "TEXT"),
+    ("aviso_concluido_em", "TEXT"),
+    ("boas_vindas_situacao", "TEXT"),
+    ("ultimo_erro", "TEXT"),
+    ("tentativas", "INTEGER NOT NULL DEFAULT 0"),
+    ("processando_em", "TEXT"),
+    ("concluido_em", "TEXT"),
+]
+
+
 # Colunas novas de nucleo_pedidos (16/09): o pedido passa a ser espelhado
 # FORA da rota também (pool, retirada no galpão, reentrega -R, cancelamento)
 # por nucleo/sincronizar_servicos_vuupt.py -- até aqui o núcleo só via
@@ -445,6 +477,8 @@ def garantir_esquema(conn: sqlite3.Connection):
     # Tabela de 08/10 já existia na VPS quando dono_veiculo entrou no DDL:
     # CREATE IF NOT EXISTS não acrescenta coluna.
     _migrar_colunas(conn, "motoristas_cadastros", [("dono_veiculo", "INTEGER NOT NULL DEFAULT 1")])
+    # Cadastro pelo link público (Hugo, 02/11/2026): mesma tabela, origem 'link'.
+    _migrar_colunas(conn, "motoristas_cadastros", _COLUNAS_CADASTRO_LINK)
     _migrar_colunas(conn, "nucleo_pedidos", _COLUNAS_PEDIDOS_NOVAS)
     _migrar_colunas(conn, "nucleo_paradas", _COLUNAS_PARADAS_NOVAS)
     _migrar_colunas(conn, "nucleo_rotas", _COLUNAS_ROTAS_NOVAS)
