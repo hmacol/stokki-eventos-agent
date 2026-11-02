@@ -52,7 +52,9 @@ def _dados(**extra):
 class VuuptFalsa:
     """Guarda agentes/veículos criados; `falhas[metodo]` é uma fila de
     exceções levantadas nas próximas chamadas; `timeout_apos_post` registra
-    o agente e levanta erro de rede (a Vuupt criou, a resposta se perdeu)."""
+    o agente e levanta erro de rede (a Vuupt criou, a resposta se perdeu).
+    E-mail é único (422 email); agente com `_oculto` não sai na lista
+    (paginação truncada ou atraso da Vuupt)."""
 
     def __init__(self, agentes=None, veiculos=None):
         self.agentes = list(agentes or [])
@@ -76,7 +78,7 @@ class VuuptFalsa:
 
     def listar_agentes(self):
         self._talvez_falhar("listar_agentes")
-        return [dict(a) for a in self.agentes]
+        return [dict(a) for a in self.agentes if not a.get("_oculto")]
 
     def listar_veiculos(self):
         self._talvez_falhar("listar_veiculos")
@@ -85,6 +87,8 @@ class VuuptFalsa:
     def criar_agente(self, nome, email, senha, telefone):
         self.posts_agente.append({"nome": nome, "email": email, "senha": senha, "telefone": telefone})
         self._talvez_falhar("criar_agente")
+        if any(str(a.get("email") or "").lower() == email.lower() for a in self.agentes):
+            raise ErroVuupt("POST /users: HTTP 422", 422, '{"errors":{"email":["already taken"]}}')
         novo = {"id": self._novo_id(), "name": nome, "email": email, "phone_number": "+55" + telefone}
         self.agentes.append(novo)
         if self.timeout_apos_post:
@@ -171,6 +175,9 @@ class TestProcessador(unittest.TestCase):
         self.assertEqual(m["EMAIL_MOTORISTA"], "jps@freshhub.com.br")
         self.assertEqual(m["MAX_ROTAS_DIA"], 1)
         self.assertEqual(m["ACEITA_VIAGENS"], "NAO")
+        self.assertEqual(m["DIAS_DISPONIVEIS"], "SEGUNDA,TERCA")
+        self.assertEqual(m["ZONAS_PREFERIDAS"], "ZONA SUL")
+        self.assertEqual(m["TIPO_VEICULO"], "FIORINO")
         self.assertEqual(self.grupo.call_count, 1)
         tipo, texto = self._textos_grupo()[0]
         self.assertEqual(tipo, "cadastro_link")
@@ -267,6 +274,27 @@ class TestProcessador(unittest.TestCase):
         self.assertEqual(self._processar(cid)["situacao"], "concluido")
         self.assertEqual(len(self.vuupt.posts_agente), 1)
 
+    def test_422_no_proprio_email_nao_cria_outro_agente(self):
+        # caminho do revisor: POST criou, resposta perdeu, a lista não mostra o agente
+        self.grupo.side_effect = ["falhou", "enviado"]
+        cid = self._enviado()
+        self.vuupt.timeout_apos_post = True
+        self.assertEqual(self._processar(cid)["situacao"], "pendente")
+        self.vuupt.agentes[0]["_oculto"] = True
+        r = self._processar(cid)
+        self.assertEqual(r["situacao"], "pendente")
+        self.assertEqual([p["email"] for p in self.vuupt.posts_agente],
+                         ["jps@freshhub.com.br", "jps@freshhub.com.br"])
+        self.assertEqual(len(self.vuupt.agentes), 1)
+        l = self._linha(cid)
+        self.assertIsNone(l["agent_id"])
+        self.assertEqual(l["vuupt_email"], "jps@freshhub.com.br")
+        self.assertIn("jps@freshhub.com.br já existe na Vuupt", l["ultimo_erro"])
+        self.assertIn("confira se o agente foi criado", l["ultimo_erro"])
+        self.assertEqual(l["tentativas"], 2)
+        self.assertIn("já existe na Vuupt", self._textos_grupo()[1][1])
+        self.motorista.assert_not_called()
+
     def test_email_colisao_na_vuupt(self):
         cid = self._enviado()
         self.vuupt.falhas["criar_agente"] = [ErroVuupt("POST /users: HTTP 422", 422,
@@ -332,6 +360,50 @@ class TestProcessador(unittest.TestCase):
         cid = self._enviado()
         self.assertEqual(self._processar(cid)["situacao"], "concluido")
 
+    def test_placa_de_veiculo_de_outro_agente_e_conflito(self):
+        self.vuupt.veiculos.append({"id": 900, "license_plate": "ABC-1D23", "operational_base_id": 77})
+        self.vuupt.agentes.append({"id": 777, "email": "x@x.com", "phone_number": "+5511900001111", "vehicle_id": 900})
+        cid = self._enviado()
+        r = self._processar(cid)
+        self.assertEqual(r["situacao"], "conflito")
+        l = self._linha(cid)
+        self.assertIsNotNone(l["agent_id"])
+        self.assertIsNone(l["vehicle_id"])
+        self.assertEqual(l["conflito_agent_id"], 777)
+        self.assertEqual(self.vuupt.ligados, [])
+        self.assertEqual(self._tabela(l["agent_id"]), [])
+        self.assertIn("placa ABC1D23 já é do veículo do agente 777", self._textos_grupo()[0][1])
+        self.motorista.assert_not_called()
+        self.assertEqual(self._retentar(), [])
+
+        self.conn.execute("UPDATE motoristas_cadastros SET conflito_resolvido = 1 WHERE id = ?", (cid,))
+        self.conn.commit()
+        self.assertEqual([x["situacao"] for x in self._retentar()], ["concluido"])
+        l = self._linha(cid)
+        self.assertEqual(l["vehicle_id"], 900)
+        self.assertEqual(self.vuupt.ligados, [(l["agent_id"], 900)])
+        self.assertEqual(len(self.vuupt.posts_agente), 1)
+        self.assertEqual(self.vuupt.chamadas["criar_veiculo"], 0)
+
+    def test_telefone_resolvido_nao_libera_placa_de_outro_agente(self):
+        self.vuupt.agentes.append({"id": 321, "email": "f@x.com", "phone_number": "+5511998765432"})
+        self.vuupt.veiculos.append({"id": 900, "license_plate": "ABC1D23"})
+        self.vuupt.agentes.append({"id": 777, "email": "x@x.com", "vehicle_id": 900})
+        cid = self._enviado()
+        self.assertEqual(self._processar(cid)["situacao"], "conflito")
+        self.conn.execute("UPDATE motoristas_cadastros SET conflito_resolvido = 1 WHERE id = ?", (cid,))
+        self.conn.commit()
+        self.assertEqual(self._processar(cid)["situacao"], "conflito")
+        l = self._linha(cid)
+        self.assertEqual((l["conflito_agent_id"], l["conflito_resolvido"]), (777, 0))
+
+    def test_placa_de_agente_apagado_reaproveita(self):
+        self.vuupt.veiculos.append({"id": 900, "license_plate": "ABC1D23"})
+        self.vuupt.agentes.append({"id": 777, "email": "x@x.com", "vehicle_id": 900, "deleted_at": "2026-01-01"})
+        cid = self._enviado()
+        self.assertEqual(self._processar(cid)["situacao"], "concluido")
+        self.assertEqual(self._linha(cid)["vehicle_id"], 900)
+
     def test_placa_existente_reaproveita(self):
         self.vuupt.veiculos.append({"id": 900, "license_plate": "ABC-1D23", "operational_base_id": 77})
         cid = self._enviado()
@@ -372,6 +444,23 @@ class TestProcessador(unittest.TestCase):
         self.assertEqual(self.motorista.call_count, 2)
         self.assertEqual(self.grupo.call_count, 1)
 
+    def test_boas_vindas_nao_enviado_retenta(self):
+        self.motorista.side_effect = ["nao_enviado", "enviado"]
+        cid = self._enviado()
+        self.assertEqual(self._processar(cid)["situacao"], "pendente")
+        self.assertEqual(self._linha(cid)["tentativas"], 1)
+        self.assertEqual([x["situacao"] for x in self._retentar()], ["concluido"])
+        self.assertEqual(self.motorista.call_count, 2)
+
+    def test_boas_vindas_finais_concluem(self):
+        casos = [("desligado", "111444777", "AAA1A11", "11900000001"),
+                 ("modo_teste", "222555888", "BBB2B22", "11900000002"),
+                 ("numero_sem_whatsapp", "333666999", "CCC3C33", "11900000003")]
+        for situacao, base, placa, telefone in casos:
+            self.motorista.return_value = situacao
+            cid = self._enviado(cpf=_cpf_com_dv(base), placa=placa, telefone=telefone)
+            self.assertEqual(self._processar(cid)["situacao"], "concluido", situacao)
+
     def test_grupo_desligado_conta_como_avisado(self):
         self.grupo.return_value = "desligado"
         self.motorista.return_value = "desligado"
@@ -387,6 +476,44 @@ class TestProcessador(unittest.TestCase):
         self.assertIsNone(self._linha(cid)["aviso_grupo_em"])
         self._processar(cid)
         self.assertIsNotNone(self._linha(cid)["aviso_grupo_em"])
+
+    def test_retentar_segue_depois_de_erro_fora_das_etapas(self):
+        primeiro = self._enviado(cpf=_cpf_com_dv("111444777"), telefone="11911112222", placa="DEF1G23")
+        segundo = self._enviado()
+        self.grupo.side_effect = [RuntimeError("gateway quebrou"), "enviado"]
+        res = self._retentar()
+        self.assertEqual([(x["id"], x["situacao"]) for x in res], [(primeiro, "pendente"), (segundo, "concluido")])
+        l = self._linha(primeiro)
+        self.assertEqual(l["tentativas"], 1)
+        self.assertIn("gateway quebrou", l["ultimo_erro"])
+        self.assertIsNone(l["processando_em"])
+
+    def test_trava_de_outra_rodada_nao_e_solta(self):
+        cid = self._enviado()
+        outra = (AGORA + timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")
+
+        def outra_rodada_assume(*a):
+            self.conn.execute("UPDATE motoristas_cadastros SET processando_em = ? WHERE id = ?", (outra, cid))
+            self.conn.commit()
+            return "enviado"
+        self.grupo.side_effect = outra_rodada_assume
+        self._processar(cid)
+        self.assertEqual(self._linha(cid)["processando_em"], outra)
+
+    def test_ignorado_rascunho_concluido_e_app(self):
+        rascunho = cad.criar_cadastro_link(self.conn, _dados(cpf=_cpf_com_dv("111444777")))["id"]
+        self.assertEqual(self._processar(rascunho), {"situacao": "ignorado", "erro": None})
+        app = cad.criar_cadastro(self.conn, {**_dados(cpf=_cpf_com_dv("222555888")), "email": None})["id"]
+        self.conn.execute("UPDATE motoristas_cadastros SET enviado_em = '2026-11-01 10:00:00' WHERE id = ?", (app,))
+        self.conn.commit()
+        self.assertEqual(self._processar(app)["situacao"], "ignorado")
+        cid = self._enviado()
+        self._processar(cid)
+        concluido = self._linha(cid)["concluido_em"]
+        self.assertEqual(self._processar(cid, agora=AGORA + timedelta(hours=1))["situacao"], "ignorado")
+        self.assertEqual(self._linha(cid)["concluido_em"], concluido)
+        self.assertEqual(self._processar(99999)["situacao"], "ignorado")
+        self.assertEqual(len(self.vuupt.posts_agente), 1)
 
     def test_retentar_filtros(self):
         nao_enviado = cad.criar_cadastro_link(self.conn, _dados(cpf=_cpf_com_dv("111444777")))["id"]
