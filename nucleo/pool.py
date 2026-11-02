@@ -149,7 +149,8 @@ def _listar_pool_freshhub(config: dict | None) -> list[dict] | None:
 
 
 def _houve_alteracao_portal_recente() -> bool:
-    """Cliente alterou entrega/horario pelo portal na janela (so linhas APLICADA). Erro ao ler -> False."""
+    """Cliente alterou entrega/horario pelo portal na janela (APLICADA, ou FALHOU depois de tirar da rota).
+    Erro ao ler -> False."""
     try:
         from regras import alteracoes_entrega  # import tardio: este modulo fica leve
         conn = alteracoes_entrega.conectar()
