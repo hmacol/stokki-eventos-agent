@@ -439,7 +439,20 @@ def situacao_link(conn: sqlite3.Connection, cadastro_id: int, chave_envio: str) 
     c = _montar(_so_link(_por_chave(conn, cadastro_id, chave_envio)))
     return {"id": c["id"], "primeiro_nome": (c["nome"] or "").split(" ")[0],
             "documentos": {t: c[f"tem_{t}"] for t in DOCUMENTOS}, "enviado": bool(c.get("enviado_em")),
-            "status": c["status"]}
+            "status": c["status"], "resultado": _resultado_link(c)}
+
+
+def _resultado_link(c: dict) -> str | None:
+    """Tela final (Hugo, 02/11): "liberado" só quando entrou na bd_motoristas;
+    conflito ou etapa com erro = "em_avaliacao" (time da Fresh resolve);
+    enviado sem nada disso ainda = "processando"; não enviado = None."""
+    if not c.get("enviado_em"):
+        return None
+    if c.get("conflito_agent_id") and not c.get("conflito_resolvido"):
+        return "em_avaliacao"
+    if c.get("bd_motorista_id"):
+        return "liberado"
+    return "em_avaliacao" if c.get("ultimo_erro") else "processando"
 
 
 _MARCAS_HEIC = {b"heic", b"heix", b"mif1", b"msf1", b"hevc"}

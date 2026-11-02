@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cadastro de motorista - Fresh Log</title>
 <style>
-  :root { --verde:#1f8a4c; --verde-esc:#17693a; --texto:#1c2420; --suave:#5b6660; --linha:#cfd6d2; --erro:#b3261e; }
+  :root { --verde:#1a7f45; --verde-esc:#17693a; --texto:#1c2420; --suave:#5b6660; --linha:#cfd6d2; --erro:#b3261e; }
   * { box-sizing:border-box; }
   body { margin:0; background:#fff; color:var(--texto); font:18px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   header { background:var(--verde); color:#fff; padding:14px 16px; font-size:20px; font-weight:700; letter-spacing:.2px; }
@@ -398,9 +398,25 @@
     chamar('POST', url(URL_FIM, envio.id), {chave_envio: envio.chave}).then(function (r) {
       btn.textContent = 'Enviar cadastro';
       if (!r.ok) { erro(3, textoErro(r)); atualizarConcluir(); return; }
-      fim(r.j.primeiro_nome);
+      esperarResultado(envio, r.j.primeiro_nome);
     });
   });
+
+  // O cadastro é processado em segundo plano: pergunta a situação por até ~24 s.
+  // Sem resposta de "liberado" nesse tempo, vale "em avaliação" (Hugo, 02/11).
+  function esperarResultado(salvo, nome, tentativa) {
+    tentativa = tentativa || 0;
+    $('carregando').textContent = 'Finalizando seu cadastro...';
+    mostrar('carregando');
+    chamar('GET', url(URL_SIT, salvo.id) + '?chave_envio=' + encodeURIComponent(salvo.chave)).then(function (r) {
+      var res = r.ok ? r.j.resultado : null;
+      if (res === 'liberado' || res === 'em_avaliacao' || tentativa >= 11) {
+        fim(nome || (r.ok && r.j.primeiro_nome), res === 'liberado');
+        return;
+      }
+      setTimeout(function () { esperarResultado(salvo, nome, tentativa + 1); }, 2000);
+    });
+  }
 
   // Volta ao passo 1 sem o cadastro guardado neste aparelho (os campos na tela ficam).
   function recomecar(aviso) {
@@ -413,10 +429,13 @@
     if (confirm('Começar o cadastro de novo? Os documentos enviados até agora serão descartados.')) { recomecar(); }
   });
 
-  function fim(nome) {
+  function fim(nome, liberado) {
     apagar('cm_envio'); apagar('cm_campos');
-    $('msg-fim').textContent = 'Cadastro feito, ' + (nome || '') + '! Você já está liberado pra receber rotas. ' +
-      'Em instantes chega no seu WhatsApp o que fazer a seguir.';
+    $('msg-fim').textContent = liberado
+      ? 'Cadastro feito, ' + (nome || '') + '! Você já está liberado pra receber rotas. ' +
+        'Em instantes chega no seu WhatsApp o que fazer a seguir.'
+      : 'Cadastro recebido, ' + (nome || '') + '! Em avaliação do time da Fresh. ' +
+        'Em breve a gente te chama no WhatsApp.';
     mostrar('tela-fim');
   }
 
@@ -431,7 +450,7 @@
         recomecar('Seu cadastro anterior foi encerrado. Comece de novo.');
         return;
       }
-      if (r.ok && r.j.enviado) { fim(r.j.primeiro_nome); return; }
+      if (r.ok && r.j.enviado) { esperarResultado(salvo, r.j.primeiro_nome); return; }
       if (r.ok) {
         envio = salvo;
         enviados = r.j.documentos || {};
