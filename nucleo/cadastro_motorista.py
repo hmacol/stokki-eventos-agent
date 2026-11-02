@@ -370,11 +370,18 @@ def _por_chave(conn: sqlite3.Connection, cadastro_id: int, chave_envio: str):
     return row
 
 
+def _so_link(row):
+    """Enviar/retomar é só do cadastro do link; o do app não passa por aqui."""
+    if row["origem"] != ORIGEM_LINK:
+        raise CadastroInvalido("Cadastro não encontrado.", 404)
+    return row
+
+
 def marcar_enviado(conn: sqlite3.Connection, cadastro_id: int, chave_envio: str) -> dict:
     """Botão "Enviar" do link: exige os 5 documentos, grava enviado_em e já
     deixa APROVADO (revisado_por='link'). Chamar de novo devolve o cadastro
     sem mexer."""
-    row = _por_chave(conn, cadastro_id, chave_envio)
+    row = _so_link(_por_chave(conn, cadastro_id, chave_envio))
     if row["enviado_em"]:
         return buscar_cadastro(conn, cadastro_id)
     if row["status"] != STATUS_PENDENTE:
@@ -390,7 +397,7 @@ def marcar_enviado(conn: sqlite3.Connection, cadastro_id: int, chave_envio: str)
 
 def situacao_link(conn: sqlite3.Connection, cadastro_id: int, chave_envio: str) -> dict:
     """O que a página do link precisa pra retomar: quais documentos já foram."""
-    c = _montar(_por_chave(conn, cadastro_id, chave_envio))
+    c = _montar(_so_link(_por_chave(conn, cadastro_id, chave_envio)))
     return {"id": c["id"], "primeiro_nome": (c["nome"] or "").split(" ")[0],
             "documentos": {t: c[f"tem_{t}"] for t in DOCUMENTOS}, "enviado": bool(c.get("enviado_em"))}
 

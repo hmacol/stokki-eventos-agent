@@ -13,7 +13,7 @@
   h1 { font-size:22px; margin:8px 0 4px; }
   .passo { color:var(--suave); font-size:15px; margin:0 0 16px; }
   .barra { height:6px; background:#e6ebe8; border-radius:3px; margin:0 0 16px; overflow:hidden; }
-  .barra i { display:block; height:100%; background:var(--verde); width:33%; transition:width .2s; }
+  .barra i { display:block; height:100%; background:var(--verde); transform:scaleX(.33); transform-origin:left; transition:transform .2s; }
   label.campo { display:block; font-weight:600; margin:16px 0 6px; }
   .dica { display:block; font-weight:400; font-size:15px; color:var(--suave); }
   input[type=text], input[type=tel], input[type=date], input[type=number], select {
@@ -51,10 +51,15 @@
 <main>
 <div id="carregando" class="passo">Carregando...</div>
 
+<div id="tela-retomar" hidden>
+  <div class="erro on" id="retomar-msg" role="alert"></div>
+  <button type="button" id="retomar-btn">Tentar de novo</button>
+</div>
+
 <div id="tela-1" hidden>
   <h1>Seus dados</h1>
   <p class="passo">Passo 1 de 3</p>
-  <div class="barra"><i style="width:33%"></i></div>
+  <div class="barra"><i style="transform:scaleX(.33)"></i></div>
   <div class="erro" id="erro-1" role="alert"></div>
   <form id="f1" novalidate autocomplete="on">
     <label class="campo" for="nome">Nome completo</label>
@@ -111,7 +116,7 @@
 <div id="tela-2" hidden>
   <h1>Seu veículo</h1>
   <p class="passo">Passo 2 de 3</p>
-  <div class="barra"><i style="width:66%"></i></div>
+  <div class="barra"><i style="transform:scaleX(.66)"></i></div>
   <div class="erro" id="erro-2" role="alert"></div>
   <form id="f2" novalidate autocomplete="off">
     <label class="campo" for="tipo_veiculo">Tipo de veículo</label>
@@ -156,7 +161,7 @@
 <div id="tela-3" hidden>
   <h1>Seus documentos</h1>
   <p class="passo">Passo 3 de 3. Tire a foto de cada um (ou escolha um PDF).</p>
-  <div class="barra"><i style="width:100%"></i></div>
+  <div class="barra"><i style="transform:scaleX(1)"></i></div>
   <div class="erro" id="erro-3" role="alert"></div>
   <div id="docs"></div>
   <button type="button" id="concluir" disabled>Enviar cadastro</button>
@@ -194,7 +199,7 @@
   function apagar(k) { try { localStorage.removeItem(k); } catch (e) {} }
 
   function mostrar(qual) {
-    ['carregando', 'tela-1', 'tela-2', 'tela-3', 'tela-fim'].forEach(function (t) { $(t).hidden = (t !== qual); });
+    ['carregando', 'tela-retomar', 'tela-1', 'tela-2', 'tela-3', 'tela-fim'].forEach(function (t) { $(t).hidden = (t !== qual); });
     window.scrollTo(0, 0);
   }
   function erro(n, texto) {
@@ -293,7 +298,7 @@
       celular: radio('celular'), dias: marcados('dias'), zonas: marcados('zonas'), posicao: radio('posicao'),
       tipo_veiculo: $('tipo_veiculo').value, placa: $('placa').value, veiculo_modelo: $('veiculo_modelo').value,
       veiculo_ano: $('veiculo_ano').value, refrigerado: radio('refrigerado') === '1',
-      temp_min_c: $('temp_min_c').value, dono_veiculo: radio('dono_veiculo') === '1'
+      temp_min_c: radio('refrigerado') === '1' ? $('temp_min_c').value : null, dono_veiculo: radio('dono_veiculo') === '1'
     };
     chamar('POST', URL_NOVO, dados).then(function (r) {
       btn.disabled = false;
@@ -404,10 +409,11 @@
   }
 
   // ── abertura: retoma de onde parou, se este aparelho já começou ──
-  restaurarCampos();
-  var salvo;
-  try { salvo = JSON.parse(ler('cm_envio') || 'null'); } catch (e) { salvo = null; }
-  if (salvo && salvo.id && salvo.chave) {
+  function retomar() {
+    var salvo;
+    try { salvo = JSON.parse(ler('cm_envio') || 'null'); } catch (e) { salvo = null; }
+    if (!(salvo && salvo.id && salvo.chave)) { mostrar('tela-1'); return; }
+    mostrar('carregando');
     chamar('GET', url(URL_SIT, salvo.id) + '?chave_envio=' + encodeURIComponent(salvo.chave)).then(function (r) {
       if (r.ok && r.j.enviado) { fim(r.j.primeiro_nome); return; }
       if (r.ok) {
@@ -417,12 +423,14 @@
         mostrar('tela-3');
         return;
       }
-      if (r.status === 404 || r.status === 409) { apagar('cm_envio'); }
-      mostrar('tela-1');
+      if (r.status === 404 || r.status === 409) { apagar('cm_envio'); mostrar('tela-1'); return; }
+      $('retomar-msg').textContent = textoErro(r);
+      mostrar('tela-retomar');
     });
-  } else {
-    mostrar('tela-1');
   }
+  $('retomar-btn').addEventListener('click', retomar);
+  restaurarCampos();
+  retomar();
 })();
 </script>
 </body>

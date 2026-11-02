@@ -278,7 +278,8 @@ def criar_app(config: dict | None = None) -> Flask:
             raise cadastro.CadastroInvalido("Mande a foto no campo 'arquivo'.")
         c = cadastro.guardar_documento(conn(), cadastro_id, request.form.get("chave_envio"), request.form.get("tipo"),
                                        arq.filename, arq.read())
-        if c["completo"] and not c.get("avisado_em"):
+        # Cadastro do link: quem avisa o grupo é o processar, depois do Enviar.
+        if c["completo"] and not c.get("avisado_em") and c.get("origem") != cadastro.ORIGEM_LINK:
             import notificar_whatsapp
             _avisar_whatsapp("cadastro_novo", notificar_whatsapp.texto_cadastro_motorista(c, f"{_url_painel()}/motoristas"),
                              assinatura=f"cadastro:{cadastro_id}")

@@ -41,6 +41,11 @@ def _dados(cpf="52998224725", **extra):
     return d
 
 
+def _app_dados(cpf="52998224725"):
+    return {"nome": "Maria Souza Lima", "cpf": cpf, "telefone": "11988887777", "chave_pix": "maria@exemplo.com",
+            "placa": "ABC1D23", "tipo_veiculo": "fiorino", "zonas": ["ZONA SUL"], "dias": ["SEGUNDA"]}
+
+
 class TestApiCadastroLink(unittest.TestCase):
     def _app(self, ativo=True):
         cfg = {"api_motorista": {"secret_key": "x", "pasta_comprovantes": str(Path(self._tmp.name) / "f"), "gcs_ativo": False}}
@@ -82,8 +87,11 @@ class TestApiCadastroLink(unittest.TestCase):
             self.assertEqual(r.get_json(), {"erro": MSG_OFF})
 
     def test_desligado_nao_derruba_rotas_antigas(self):
-        r = self._app(ativo=False).post("/api/cadastro", json={})
-        self.assertNotEqual(r.status_code, 503)
+        cli = self._app(ativo=False)
+        r = cli.post("/api/cadastro", json={})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json()["erro"], "CPF precisa ter 11 dígitos.")
+        self.assertEqual(cli.post("/api/cadastro", json=_app_dados()).status_code, 201)
 
     def test_pagina_ligada(self):
         r = self.cli.get("/cadastro")
@@ -125,6 +133,35 @@ class TestApiCadastroLink(unittest.TestCase):
             r = self.cli.post(f"/api/cadastro/{c['id']}/concluir", json={"chave_envio": c["chave_envio"]})
         self.assertEqual(r.status_code, 400)
         proc.assert_not_called()
+
+    def test_link_nao_avisa_cadastro_novo_no_upload_e_app_avisa(self):
+        import notificar_whatsapp
+        c = self._criar()
+        for tipo in ("cnh", "crlv", "selfie", "antt", "residencia"):
+            self._subir(c["id"], c["chave_envio"], tipo)
+        tipos = [ch.args[2] for ch in notificar_whatsapp.despachar.call_args_list]
+        self.assertNotIn("cadastro_novo", tipos)
+        notificar_whatsapp.despachar.reset_mock()
+        a = self.cli.post("/api/cadastro", json=_app_dados(_cpf_valido("000000019"))).get_json()
+        for tipo in ("cnh", "crlv"):
+            self._subir(a["id"], a["chave_envio"], tipo)
+        tipos = [ch.args[2] for ch in notificar_whatsapp.despachar.call_args_list]
+        self.assertEqual(tipos.count("cadastro_novo"), 1)
+
+    def test_cadastro_do_app_nao_usa_concluir_nem_situacao(self):
+        a = self.cli.post("/api/cadastro", json=_app_dados()).get_json()
+        for tipo in ("cnh", "crlv"):
+            self._subir(a["id"], a["chave_envio"], tipo)
+        with mock.patch("nucleo.cadastro_motorista_link.processar") as proc:
+            r = self.cli.post(f"/api/cadastro/{a['id']}/concluir", json={"chave_envio": a["chave_envio"]})
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(r.get_json()["erro"], "Cadastro não encontrado.")
+        proc.assert_not_called()
+        r = self.cli.get(f"/api/cadastro/{a['id']}/situacao?chave_envio={a['chave_envio']}")
+        self.assertEqual(r.status_code, 404)
+        row = banco.conectar().execute("SELECT status, enviado_em FROM motoristas_cadastros WHERE id = ?", (a["id"],)).fetchone()
+        self.assertEqual(row["status"], "PENDENTE")
+        self.assertFalse(row["enviado_em"])
 
     def test_chave_errada_404(self):
         c = self._criar()
