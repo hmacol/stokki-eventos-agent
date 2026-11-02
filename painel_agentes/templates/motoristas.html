@@ -55,6 +55,21 @@
   .cadastro-acoes .botao-aprovar { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
   .cadastro-acoes .botao-aprovar:disabled { opacity: 0.5; cursor: not-allowed; }
   .cadastro-acoes .botao-recusar { background: var(--superficie); color: var(--erro); border: 1px solid var(--erro); }
+  /* Cadastros pelo link */
+  .cartao-link { border-color: var(--borda); }
+  .link-ficha { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 4px 16px; font-size: 12.5px; margin-bottom: 10px; }
+  .link-ficha span { color: var(--texto-suave); }
+  .link-etapas { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .etapa { font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--borda); }
+  .etapa-feito { border-color: var(--acento); color: var(--acento); }
+  .etapa-pendente { color: var(--texto-suave); }
+  .etapa-conflito { border-color: var(--erro); color: var(--erro); font-weight: 600; }
+  .link-erro { font-size: 12.5px; color: var(--erro); margin: 4px 0; }
+  .cadastro-docs img { height: 34px; border-radius: 4px; vertical-align: middle; }
+  .link-acoes { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 6px; }
+  .link-acoes input { width: 150px; padding: 7px 8px; }
+  .link-acoes button { padding: 8px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  .link-acoes button.principal { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
 </style>
 {% endblock %}
 
@@ -69,6 +84,71 @@
 {% if erro %}
 <div class="erro-caixa">Falha ao carregar motoristas: {{ erro }}</div>
 {% elif dados %}
+{% macro etapa(rotulo, estado) -%}<span class="etapa etapa-{{ 'feito' if estado == 'feito' else ('conflito' if estado == 'conflito' else 'pendente') }}">{{ rotulo }}: {{ estado }}</span>{%- endmacro %}
+{% if dados.cadastros_link %}
+<section class="pendentes" aria-labelledby="titulo-link">
+  <h2 id="titulo-link">Cadastros pelo link ({{ dados.cadastros_link | length }})</h2>
+  <p class="pendentes-ajuda">Motoristas que se cadastraram pelo link. O sistema cria o agente e o veículo na Vuupt e a linha na tabela sozinho; aqui ficam os que pararam num conflito ou num erro.</p>
+  {% for c in dados.cadastros_link %}
+  {% set aberto = c.conflito_agent_id and not c.conflito_resolvido %}
+  {% set bv = c.boas_vindas_situacao %}
+  <article class="cartao-cadastro cartao-link" data-link-id="{{ c.id }}">
+    <div class="cadastro-cab">
+      <div>
+        <strong>{{ c.nome }}</strong>{% if pode_aprovar %} <span class="mono">CPF {{ c.cpf }}</span>{% endif %}
+        <div class="cadastro-meta">enviado em {{ c.enviado_em }} · {{ c.telefone }}{% if c.vuupt_email %} · {{ c.vuupt_email }}{% endif %}{% if c.concluido_em %} · Concluído em {{ c.concluido_em[8:10] }}/{{ c.concluido_em[5:7] }} {{ c.concluido_em[11:16] }}{% endif %}</div>
+      </div>
+      {% if pode_aprovar %}
+      <div class="cadastro-docs">
+        {% for t, rot in (('selfie','Selfie'),('cnh','CNH'),('crlv','CRLV'),('antt','ANTT'),('residencia','Residência')) %}
+        {% if c['tem_' ~ t] %}<a href="{{ url_for('api_cadastro_documento', cadastro_id=c.id, tipo=t) }}" target="_blank" rel="noopener">{% if t == 'selfie' %}<img src="{{ url_for('api_cadastro_documento', cadastro_id=c.id, tipo=t) }}" alt="Selfie" loading="lazy">{% else %}{{ rot }}{% endif %}</a>{% else %}<span class="falta">sem {{ rot }}</span>{% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    <div class="link-ficha">
+      <div><span>Nascimento</span> {{ c.data_nascimento or "—" }}</div>
+      {% if pode_aprovar %}<div><span>Pix</span> {{ c.chave_pix or "—" }}</div>{% endif %}
+      <div><span>Emite NF</span> {{ "sim" if c.emite_nf else "não" }}</div>
+      <div><span>Posição</span> {{ c.posicao or "—" }}</div>
+      <div><span>Celular</span> {{ c.celular or "—" }}</div>
+      <div><span>Dias</span> {{ c.dias | join(", ") or "—" }}</div>
+      <div><span>Zonas</span> {{ c.zonas | join(", ") or "—" }}</div>
+      <div><span>Veículo</span> {{ c.tipo_veiculo }} · {{ c.placa }} · {{ c.veiculo_modelo or "—" }} {{ c.veiculo_ano or "" }}</div>
+      <div><span>Refrigerado</span> {% if c.refrigerado %}sim{% if c.temp_min_c is not none %} (mín. {{ c.temp_min_c }} °C){% endif %}{% else %}não{% endif %}</div>
+      <div><span>Veículo é dele</span> {{ "sim" if c.dono_veiculo else "não" }}</div>
+    </div>
+    <div class="link-etapas">
+      {{ etapa("Agente", "feito" if c.agent_id else ("conflito" if aberto else "pendente")) }}
+      {{ etapa("Veículo", "feito" if c.vehicle_id else ("conflito" if (aberto and c.agent_id) else "pendente")) }}
+      {{ etapa("Tabela", "feito" if c.bd_motorista_id else "pendente") }}
+      {{ etapa("Aviso", "feito" if c.aviso_grupo_em else "pendente") }}
+      {{ etapa("Boas-vindas", "—" if bv == "agente_existente" else ("feito" if bv == "enviado" else "pendente")) }}
+    </div>
+    {% if aberto %}
+    <div class="link-erro">{% if c.agent_id %}Placa {{ c.placa }} já é do veículo do agente {{ c.conflito_agent_id }} na Vuupt{% else %}Telefone já é do agente {{ c.conflito_agent_id }} na Vuupt{% endif %}</div>
+    {% endif %}
+    {% if c.ultimo_erro %}<div class="link-erro">{{ c.ultimo_erro }}</div>{% endif %}
+    {% if pode_aprovar and not c.concluido_em %}
+    <div class="link-acoes">
+      {% if aberto and c.agent_id %}
+      <button type="button" class="principal link-resolver" data-usar="">Reaproveitar o veículo da placa</button>
+      {% elif aberto %}
+      <button type="button" class="principal link-resolver" data-usar="{{ c.conflito_agent_id }}">É o mesmo: usar agente {{ c.conflito_agent_id }}</button>
+      <button type="button" class="link-resolver" data-usar="">É outra pessoa: criar agente novo</button>
+      {% else %}
+      {% if not c.agent_id %}
+      <input type="number" class="link-agent-id" placeholder="agent_id da Vuupt" min="1">
+      <button type="button" class="link-resolver link-usar-digitado">Usar este agente</button>
+      {% endif %}
+      <button type="button" class="principal link-tentar">Tentar de novo</button>
+      {% endif %}
+    </div>
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
 {% if pode_aprovar and dados.cadastros_pendentes %}
 <section class="pendentes" aria-labelledby="titulo-pendentes">
   <h2 id="titulo-pendentes">Cadastros pelo app esperando aprovação ({{ dados.cadastros_pendentes | length }})</h2>
@@ -475,6 +555,34 @@ const putJSON = (url, body) => postJSON(url, body, "PUT");
         alert(`Falha ao recusar: ${e.message}`);
       }
     });
+  }
+
+  // ── Cadastros pelo link: resolver conflito e tentar de novo ──
+  for (const cartao of document.querySelectorAll(".cartao-link")) {
+    const id = cartao.dataset.linkId;
+    const rodar = async (botao, url, corpo) => {
+      const texto = botao.textContent; botao.disabled = true; botao.textContent = "Processando...";
+      try {
+        const r = await postJSON(url, corpo);
+        alert(`Situação: ${r.resultado.situacao}${r.resultado.erro ? " — " + r.resultado.erro : ""}`);
+        location.reload();
+      } catch (e) {
+        alert(`Falha: ${e.message}`);
+        botao.disabled = false; botao.textContent = texto;
+      }
+    };
+    for (const botao of cartao.querySelectorAll(".link-resolver")) {
+      botao.addEventListener("click", () => {
+        let usar = botao.dataset.usar ? Number(botao.dataset.usar) : null;
+        if (botao.classList.contains("link-usar-digitado")) {
+          usar = Number(cartao.querySelector(".link-agent-id").value);
+          if (!usar) { alert("Informe o agent_id do agente na Vuupt."); return; }
+        }
+        rodar(botao, `/api/motoristas/cadastros-link/${id}/resolver`, { usar_agent_id: usar });
+      });
+    }
+    const tentar = cartao.querySelector(".link-tentar");
+    if (tentar) tentar.addEventListener("click", () => rodar(tentar, `/api/motoristas/cadastros-link/${id}/tentar`, {}));
   }
 
   document.getElementById("botao-salvar-motorista").addEventListener("click", async (ev) => {

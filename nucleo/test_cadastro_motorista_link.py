@@ -346,6 +346,64 @@ class TestProcessador(unittest.TestCase):
         self.assertEqual(len(self.vuupt.posts_agente), 1)
         self.assertEqual([t for t, _ in self._textos_grupo()], ["cadastro_link", "cadastro_link_concluido"])
 
+    def _resolver(self, cid, usar, usuario="hugo"):
+        return proc.resolver_conflito(self.conn, CONFIG, cid, usar, usuario, vuupt=self.vuupt, avisar_grupo=self.grupo,
+                                      avisar_motorista=self.motorista, agora=AGORA)
+
+    def test_resolver_conflito_usar_agente_existente(self):
+        self.vuupt.agentes.append({"id": 321, "name": "Fulano", "email": "fu@freshhub.com.br", "phone_number": "+5511998765432"})
+        cid = self._enviado()
+        self.assertEqual(self._processar(cid)["situacao"], "conflito")
+        self.assertEqual(self._resolver(cid, 321)["situacao"], "concluido")
+        l = self._linha(cid)
+        self.assertEqual((l["agent_id"], l["conflito_resolvido"], l["revisado_por"]), (321, 1, "hugo"))
+        self.assertIsNotNone(l["revisado_em"])
+        self.assertEqual((l["vuupt_email"], l["boas_vindas_situacao"]), ("fu@freshhub.com.br", "agente_existente"))
+        self.assertEqual(self.vuupt.posts_agente, [])
+        self.motorista.assert_not_called()
+        self.assertEqual(len(self._tabela(321)), 1)
+
+    def test_resolver_conflito_atualiza_linha_existente_da_tabela(self):
+        motoristas_banco.inserir(self.conn, {"AGENT_ID_VUUPT": 444, "NOME_MOTORISTA": "Antigo", "ATIVO": "NAO",
+                                             "TELEFONE_MOTORISTA": "11998765432", "CPF_MOTORISTA": "11122233344"}, "teste")
+        cid = self._enviado()
+        self.assertEqual(self._processar(cid)["situacao"], "conflito")
+        self._resolver(cid, 444, "ana")
+        linhas = self._tabela(444)
+        self.assertEqual(len(linhas), 1)
+        t = linhas[0]
+        self.assertEqual((t["ATIVO"], t["POSICAO"], t["PLACA"], t["CPF_MOTORISTA"]), ("SIM", "FIXO", "ABC1D23", "11122233344"))
+        self.assertEqual(t["DIAS_DISPONIVEIS"], "SEGUNDA,TERCA")
+        self.assertEqual(self._linha(cid)["bd_motorista_id"], t["id"])
+        self.assertEqual(self.vuupt.posts_agente, [])
+
+    def test_resolver_conflito_outra_pessoa_cria_agente_novo(self):
+        self.vuupt.agentes.append({"id": 321, "name": "Fulano", "email": "f@x.com", "phone_number": "+5511998765432"})
+        cid = self._enviado()
+        self._processar(cid)
+        self.assertEqual(self._resolver(cid, None)["situacao"], "concluido")
+        self.assertEqual(len(self.vuupt.posts_agente), 1)
+        self.assertEqual(self._linha(cid)["revisado_por"], "hugo")
+
+    def test_resolver_email_ja_existente_usando_agente(self):
+        cid = self._enviado()
+        self.conn.execute("UPDATE motoristas_cadastros SET ultimo_erro = 'agente: e-mail ja existe' WHERE id = ?", (cid,))
+        self.conn.commit()
+        self.assertEqual(self._resolver(cid, 999)["situacao"], "concluido")
+        l = self._linha(cid)
+        self.assertEqual((l["agent_id"], l["ultimo_erro"]), (999, None))
+        self.assertEqual(self.vuupt.posts_agente, [])
+
+    def test_resolver_cadastro_inexistente(self):
+        with self.assertRaises(cad.CadastroInvalido):
+            proc.resolver_conflito(self.conn, CONFIG, 9999, None, "hugo", vuupt=self.vuupt)
+
+    def test_contar_pendentes_ignora_cadastro_do_link(self):
+        r = cad.criar_cadastro_link(self.conn, _dados())
+        for t in cad.DOCUMENTOS:
+            cad.guardar_documento(self.conn, r["id"], r["chave_envio"], t, f"{t}.jpg", b"x" * 50)
+        self.assertEqual(cad.contar_pendentes(self.conn), 0)
+
     def test_conflito_telefone_na_tabela(self):
         motoristas_banco.inserir(self.conn, {"AGENT_ID_VUUPT": 444, "NOME_MOTORISTA": "Antigo",
                                              "TELEFONE_MOTORISTA": "11998765432"}, "teste")

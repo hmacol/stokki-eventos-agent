@@ -197,7 +197,7 @@ def listar_pendentes(conn: sqlite3.Connection) -> list[dict]:
 
 
 def contar_pendentes(conn: sqlite3.Connection, so_completos: bool = True) -> int:
-    sql = "SELECT COUNT(*) FROM motoristas_cadastros WHERE status = ?"
+    sql = "SELECT COUNT(*) FROM motoristas_cadastros WHERE status = ? AND origem = 'app'"
     if so_completos:
         sql += " AND cnh_arquivo IS NOT NULL AND crlv_arquivo IS NOT NULL"
     return conn.execute(sql, (STATUS_PENDENTE,)).fetchone()[0]

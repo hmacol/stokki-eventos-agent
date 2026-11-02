@@ -128,6 +128,107 @@ class TestCadastrosMotoristas(unittest.TestCase):
         self.assertIn(self._post("/api/motoristas/98765432100/ve-financeiro", {"ve": True}).status_code, (302, 403))
 
 
+class TestCadastrosPeloLink(unittest.TestCase):
+    """Seção "Cadastros pelo link" da tela /motoristas e as rotas resolver/tentar."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self._patch_db = mock.patch.object(banco, "DB_PATH", Path(self._tmp.name) / "t.db")
+        self._patch_db.start()
+        config = {**painel_agentes._carregar_config(), "painel_agentes": CONFIG_PAINEL}
+        p = mock.patch.object(painel_agentes, "_carregar_config", return_value=config)
+        p.start()
+        self.addCleanup(p.stop)
+        painel_agentes.app.config["TESTING"] = True
+        self.cliente = painel_agentes.app.test_client()
+        conn = banco.conectar()
+        r = cad.criar_cadastro_link(conn, {
+            "nome": "Carlos Link Souza", "cpf": "98765432100", "data_nascimento": "1990-05-17", "telefone": "11998765432",
+            "chave_pix": "pix-do-carlos", "emite_nf": False, "dias": ["SEGUNDA"], "zonas": ["ZONA SUL"], "posicao": "FIXO",
+            "celular": "ANDROID", "tipo_veiculo": "fiorino", "placa": "ABC1D23", "veiculo_modelo": "Fiorino",
+            "veiculo_ano": 2020, "refrigerado": False, "dono_veiculo": True})
+        self.cid = r["id"]
+        for t in cad.DOCUMENTOS:
+            cad.guardar_documento(conn, self.cid, r["chave_envio"], t, f"{t}.jpg", b"\xff\xd8" * 20)
+        cad.marcar_enviado(conn, self.cid, r["chave_envio"])
+        conn.execute("UPDATE motoristas_cadastros SET conflito_agent_id = 321, conflito_resolvido = 0 WHERE id = ?", (self.cid,))
+        conn.commit()
+        conn.close()
+
+    def tearDown(self):
+        self._patch_db.stop()
+        self._tmp.cleanup()
+
+    def _logar(self, nivel):
+        with self.cliente.session_transaction() as sess:
+            sess["nivel_acesso"] = nivel
+            sess["usuario"] = "hugo"
+
+    def _post(self, url, body):
+        return self.cliente.post(url, json=body, headers={"Origin": "http://localhost", "Referer": "http://localhost/"})
+
+    def test_tela_mostra_ficha_e_botoes_so_pro_total(self):
+        self._logar("total")
+        html = self.cliente.get("/motoristas").get_data(as_text=True)
+        self.assertIn("Carlos Link Souza", html)
+        self.assertIn("Telefone já é do agente 321 na Vuupt", html)
+        self.assertIn("É o mesmo: usar agente 321", html)
+        self.assertIn("É outra pessoa: criar agente novo", html)
+        self.assertIn("pix-do-carlos", html)
+        self.assertIn(f"/api/motoristas/cadastros/{self.cid}/documento/selfie", html)
+        self._logar("operador")
+        html = self.cliente.get("/motoristas").get_data(as_text=True)
+        self.assertIn("Carlos Link Souza", html)
+        for escondido in ("É o mesmo", "Tentar de novo", "pix-do-carlos", "98765432100", "/documento/selfie"):
+            self.assertNotIn(escondido, html)
+
+    def test_pendente_sem_conflito_mostra_tentar_de_novo(self):
+        conn = banco.conectar()
+        conn.execute("UPDATE motoristas_cadastros SET conflito_agent_id = NULL, ultimo_erro = 'agente: HTTP 500' WHERE id = ?", (self.cid,))
+        conn.commit()
+        conn.close()
+        self._logar("total")
+        html = self.cliente.get("/motoristas").get_data(as_text=True)
+        self.assertIn("Tentar de novo", html)
+        self.assertIn("agente: HTTP 500", html)
+        self.assertIn("Usar este agente", html)
+
+    def test_sem_cadastro_de_link_nao_ha_secao(self):
+        conn = banco.conectar()
+        conn.execute("DELETE FROM motoristas_cadastros")
+        conn.commit()
+        conn.close()
+        self._logar("total")
+        self.assertNotIn('id="titulo-link"', self.cliente.get("/motoristas").get_data(as_text=True))
+
+    def test_resolver_e_tentar_so_pro_total(self):
+        self._logar("operador")
+        r = self._post(f"/api/motoristas/cadastros-link/{self.cid}/resolver", {"usar_agent_id": 321})
+        self.assertIn(r.status_code, (302, 403))
+        r = self._post(f"/api/motoristas/cadastros-link/{self.cid}/tentar", {})
+        self.assertIn(r.status_code, (302, 403))
+
+    def test_resolver_e_tentar_chamam_o_processador(self):
+        from nucleo import cadastro_motorista_link as proc
+        self._logar("total")
+        ok = {"situacao": "concluido", "erro": None}
+        with mock.patch.object(proc, "resolver_conflito", return_value=ok) as res:
+            r = self._post(f"/api/motoristas/cadastros-link/{self.cid}/resolver", {"usar_agent_id": 321})
+        self.assertEqual((r.status_code, r.get_json()), (200, {"ok": True, "resultado": ok}))
+        self.assertEqual(res.call_args.args[2:5], (self.cid, 321, "hugo"))
+        with mock.patch.object(proc, "resolver_conflito", return_value=ok) as res:
+            self._post(f"/api/motoristas/cadastros-link/{self.cid}/resolver", {"usar_agent_id": None})
+        self.assertIsNone(res.call_args.args[3])
+        with mock.patch.object(proc, "processar", return_value={"situacao": "pendente", "erro": "x"}) as pr:
+            r = self._post(f"/api/motoristas/cadastros-link/{self.cid}/tentar", {})
+        self.assertEqual(r.get_json()["resultado"]["situacao"], "pendente")
+        self.assertEqual(pr.call_args.args[2], self.cid)
+        with mock.patch.object(proc, "processar", side_effect=RuntimeError("boom")):
+            self.assertEqual(self._post(f"/api/motoristas/cadastros-link/{self.cid}/tentar", {}).status_code, 500)
+        self.assertEqual(self._post(f"/api/motoristas/cadastros-link/{self.cid}/resolver", {"usar_agent_id": "abc"}).status_code, 400)
+        self.assertEqual(self._post("/api/motoristas/cadastros-link/9999/tentar", {}).status_code, 404)
+
+
 class TestEditarMotorista(unittest.TestCase):
     """PUT /api/motoristas/<id> e o botao Editar da tela (banco temporario)."""
 

@@ -3286,6 +3286,51 @@ def api_cadastro_aprovar(cadastro_id):
     return jsonify({"ok": True, **r})
 
 
+def _executar_cadastro_link(cadastro_id, acao):
+    """Roda `acao(conn, config)` (resolver/tentar do cadastro pelo link) e devolve o JSON."""
+    from nucleo import cadastro_motorista as cad
+    conn = _cadastro_conn()
+    try:
+        c = cad.buscar_cadastro(conn, cadastro_id)
+        if not c or c.get("origem") != cad.ORIGEM_LINK:
+            return jsonify({"erro": "Cadastro não encontrado."}), 404
+        return jsonify({"ok": True, "resultado": acao(conn, _carregar_config())})
+    except cad.CadastroInvalido as e:
+        return jsonify({"erro": e.mensagem}), e.codigo
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha no cadastro de motorista pelo link #%s", cadastro_id)
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route("/api/motoristas/cadastros-link/<int:cadastro_id>/resolver", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_cadastro_link_resolver(cadastro_id):
+    """Telefone/placa/e-mail que já é de um agente da Vuupt: usar esse agente
+    ({"usar_agent_id": N}) ou criar um novo ({"usar_agent_id": null})."""
+    from nucleo import cadastro_motorista_link as link
+    body = request.get_json(force=True, silent=True) or {}
+    usar = body.get("usar_agent_id")
+    if usar is not None:
+        try:
+            usar = int(usar)
+        except (TypeError, ValueError):
+            return jsonify({"erro": "usar_agent_id inválido."}), 400
+    usuario = session.get("usuario") or g.nivel_acesso
+    return _executar_cadastro_link(
+        cadastro_id, lambda conn, config: link.resolver_conflito(conn, config, cadastro_id, usar, usuario))
+
+
+@app.route("/api/motoristas/cadastros-link/<int:cadastro_id>/tentar", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_cadastro_link_tentar(cadastro_id):
+    from nucleo import cadastro_motorista_link as link
+    return _executar_cadastro_link(cadastro_id, lambda conn, config: link.processar(conn, config, cadastro_id))
+
+
 @app.route("/api/motoristas/<cpf>/ve-financeiro", methods=["POST"])
 @requer_auth(niveis=("total",))
 @exige_mesma_origem

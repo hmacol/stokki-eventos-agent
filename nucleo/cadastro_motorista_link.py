@@ -32,7 +32,7 @@ if str(_RAIZ) not in sys.path:
     sys.path.insert(0, str(_RAIZ))
 
 from nucleo import banco  # noqa: E402
-from nucleo.cadastro_motorista import ORIGEM_LINK, buscar_cadastro  # noqa: E402
+from nucleo.cadastro_motorista import ORIGEM_LINK, CadastroInvalido, buscar_cadastro  # noqa: E402
 from nucleo.vuupt_agentes import (  # noqa: E402
     ErroVuupt, VuuptAgentes, base_operacional_mais_comum, gerar_email, mesmo_telefone,
 )
@@ -318,6 +318,45 @@ def _processar(conn, config, cadastro_id, vuupt, avisar_grupo, avisar_motorista,
     _gravar(conn, cadastro_id, concluido_em=agora.strftime(_FMT), ultimo_erro=None)
     logger.info("cadastro #%s concluído (agente %s, veículo %s)", cadastro_id, c["agent_id"], c["vehicle_id"])
     return {"situacao": "concluido", "erro": None}
+
+
+def resolver_conflito(conn: sqlite3.Connection, config: dict, cadastro_id: int, usar_agent_id: int | None,
+                      usuario: str, *, vuupt=None, **kw) -> dict:
+    """Decisão da equipe no painel: `usar_agent_id` = é a mesma pessoa (usa esse
+    agente, sem criar outro nem mandar login); None = é outra pessoa (cria agente
+    novo). Serve também ao e-mail que já existe na Vuupt (pendente sem conflito).
+    Depois chama `processar` e devolve o resultado dele."""
+    from regras.cadastro_motoristas import _colunas_do_formulario, _espelhar
+    c = buscar_cadastro(conn, cadastro_id)
+    if not c or c.get("origem") != ORIGEM_LINK:
+        raise CadastroInvalido("Cadastro não encontrado.", 404)
+    if c.get("concluido_em"):
+        raise CadastroInvalido("Cadastro já concluído.", 409)
+    campos = {"conflito_resolvido": 1, "revisado_por": usuario, "revisado_em": banco.agora()}
+    if usar_agent_id is not None:
+        usar_agent_id = int(usar_agent_id)
+        vuupt = vuupt or VuuptAgentes(config["vuupt_api"]["token"])
+        achado = next((a for a in vuupt.listar_agentes() if a.get("id") is not None and int(a["id"]) == usar_agent_id), None)
+        campos.update(agent_id=usar_agent_id, ultimo_erro=None, boas_vindas_situacao="agente_existente")
+        if achado and achado.get("email"):
+            campos["vuupt_email"] = _email(achado["email"])
+        linha_id = _linha_da_tabela(conn, usar_agent_id)
+        if linha_id is not None:
+            # motorista que volta: a linha antiga vira a deste cadastro (processar só grava o vínculo)
+            atual = next(r for r in motoristas_banco.listar(conn) if r["id"] == linha_id)
+            novos = _colunas_do_formulario({
+                "ativo": True, "dias_disponiveis": c["dias"], "zonas_preferidas": c["zonas"],
+                "tipo_veiculo": c["tipo_veiculo"], "telefone": c["telefone"], "placa": c["placa"],
+                "posicao": c.get("posicao"), "apenas_carga_seca": not c.get("refrigerado"),
+                "sem_app": c.get("celular") == "IPHONE"})
+            if not atual.get("CPF_MOTORISTA"):
+                novos["CPF_MOTORISTA"] = c["cpf"]
+            motoristas_banco.atualizar(conn, linha_id, novos, f"link:{usuario}")
+            _espelhar(conn)
+    _gravar(conn, cadastro_id, **campos)
+    logger.info("cadastro #%s: conflito resolvido por %s (%s)", cadastro_id, usuario,
+                f"usar agente {usar_agent_id}" if usar_agent_id is not None else "agente novo")
+    return processar(conn, config, cadastro_id, vuupt=vuupt, **kw)
 
 
 def retentar(conn: sqlite3.Connection, config: dict, **kw) -> list[dict]:

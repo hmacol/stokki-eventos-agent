@@ -95,6 +95,7 @@ def dados_pagina_motoristas() -> dict:
         "dias_semana": DIAS_SEMANA,
         "tipos_veiculo": [{"codigo": t.codigo, "nome": t.nome} for t in TIPOS_VEICULO],
         "cadastros_pendentes": cadastros_pendentes(),
+        "cadastros_link": cadastros_link(),
     }
 
 
@@ -141,4 +142,25 @@ def cadastros_pendentes() -> list[dict]:
     except Exception as e:   # pragma: no cover - defesa
         import logging
         logging.getLogger(__name__).warning(f"Cadastros pendentes indisponíveis: {e}")
+        return []
+
+
+def cadastros_link() -> list[dict]:
+    """Cadastros feitos pelo link (nucleo/cadastro_motorista_link.py) enviados nos
+    últimos 30 dias ou ainda não concluídos, mais novos primeiro. Nunca derruba a tela."""
+    try:
+        from datetime import datetime, timedelta
+        from nucleo import banco as nucleo_banco, cadastro_motorista as cad
+        corte = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+        conn = nucleo_banco.conectar()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM motoristas_cadastros WHERE origem = ? AND enviado_em IS NOT NULL "
+                "AND (enviado_em >= ? OR concluido_em IS NULL) ORDER BY id DESC", (cad.ORIGEM_LINK, corte)).fetchall()
+            return [cad._montar(r) for r in rows]
+        finally:
+            conn.close()
+    except Exception as e:   # pragma: no cover - defesa
+        import logging
+        logging.getLogger(__name__).warning(f"Cadastros pelo link indisponíveis: {e}")
         return []
