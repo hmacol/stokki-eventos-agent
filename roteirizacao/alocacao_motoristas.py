@@ -128,6 +128,9 @@ def selecionar_motorista_equitativo(
     regras/tipo_veiculo.classificar_tipo_veiculo_com_folga). Padrão 0 =
     classificação de sempre.
 
+    `posicao` (Hugo, 28/10 e 02/11): motorista FIXO elegível sempre vem
+    antes de ESPORADICO elegível; dentro de cada grupo, a ordem acima.
+
     Tudo isto é ORDENAÇÃO, nunca filtro: nenhum motorista deixa de ser
     elegível por histórico, e nenhuma rota fica sem motorista por causa
     dessa ordem.
@@ -156,7 +159,10 @@ def selecionar_motorista_equitativo(
     rotas_7d = rotas_7d or {}
     rotas_30d = rotas_30d or {}
     longas_7d = longas_7d or {}
+    # Fixo antes do esporádico (Hugo, 28/10 e 02/11): entre elegíveis, o
+    # FIXO sempre vence; dentro do grupo vale a ordem acima, inalterada.
     elegiveis.sort(key=lambda m: (
+        0 if m.posicao == "FIXO" else 1,
         contagem_alocacoes_dia.get(m.agent_id, 0),
         longas_7d.get(m.agent_id, 0) if rota_longa else 0,
         rotas_7d.get(m.agent_id, 0),
