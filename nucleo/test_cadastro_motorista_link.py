@@ -365,7 +365,7 @@ class TestProcessador(unittest.TestCase):
 
     def test_resolver_conflito_atualiza_linha_existente_da_tabela(self):
         motoristas_banco.inserir(self.conn, {"AGENT_ID_VUUPT": 444, "NOME_MOTORISTA": "Antigo", "ATIVO": "NAO",
-                                             "TELEFONE_MOTORISTA": "11998765432", "CPF_MOTORISTA": "11122233344"}, "teste")
+                                             "TELEFONE_MOTORISTA": "11998765432", "CPF_MOTORISTA": "11122233344", "VEHICLE_ID_VUUPT": 999}, "teste")
         cid = self._enviado()
         self.assertEqual(self._processar(cid)["situacao"], "conflito")
         self._resolver(cid, 444, "ana")
@@ -375,6 +375,8 @@ class TestProcessador(unittest.TestCase):
         self.assertEqual((t["ATIVO"], t["POSICAO"], t["PLACA"], t["CPF_MOTORISTA"]), ("SIM", "FIXO", "ABC1D23", "11122233344"))
         self.assertEqual(t["DIAS_DISPONIVEIS"], "SEGUNDA,TERCA")
         self.assertEqual(self._linha(cid)["bd_motorista_id"], t["id"])
+        self.assertEqual(t["VEHICLE_ID_VUUPT"], self._linha(cid)["vehicle_id"])
+        self.assertNotEqual(t["VEHICLE_ID_VUUPT"], 999)
         self.assertEqual(self.vuupt.posts_agente, [])
 
     def test_resolver_conflito_outra_pessoa_cria_agente_novo(self):
@@ -393,6 +395,14 @@ class TestProcessador(unittest.TestCase):
         l = self._linha(cid)
         self.assertEqual((l["agent_id"], l["ultimo_erro"]), (999, None))
         self.assertEqual(self.vuupt.posts_agente, [])
+
+    def test_resolver_nao_troca_agente_que_o_cadastro_ja_tem(self):
+        cid = self._enviado()
+        self.assertEqual(self._processar(cid)["situacao"], "concluido")
+        proprio = self._linha(cid)["agent_id"]
+        with self.assertRaises(cad.CadastroInvalido):
+            self._resolver(cid, proprio + 1)
+        self.assertEqual(self._linha(cid)["agent_id"], proprio)
 
     def test_resolver_cadastro_inexistente(self):
         with self.assertRaises(cad.CadastroInvalido):

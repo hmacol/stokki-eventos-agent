@@ -96,7 +96,7 @@
     <div class="cadastro-cab">
       <div>
         <strong>{{ c.nome }}</strong>{% if pode_aprovar %} <span class="mono">CPF {{ c.cpf }}</span>{% endif %}
-        <div class="cadastro-meta">enviado em {{ c.enviado_em }} · {{ c.telefone }}{% if c.vuupt_email %} · {{ c.vuupt_email }}{% endif %}{% if c.concluido_em %} · Concluído em {{ c.concluido_em[8:10] }}/{{ c.concluido_em[5:7] }} {{ c.concluido_em[11:16] }}{% endif %}</div>
+        <div class="cadastro-meta">enviado em {{ c.enviado_em }} · {{ c.telefone }}{% if pode_aprovar and c.vuupt_email %} · {{ c.vuupt_email }}{% endif %}{% if c.concluido_em %} · Concluído em {{ c.concluido_em[8:10] }}/{{ c.concluido_em[5:7] }} {{ c.concluido_em[11:16] }}{% endif %}</div>
       </div>
       {% if pode_aprovar %}
       <div class="cadastro-docs">
@@ -107,7 +107,7 @@
       {% endif %}
     </div>
     <div class="link-ficha">
-      <div><span>Nascimento</span> {{ c.data_nascimento or "—" }}</div>
+      {% if pode_aprovar %}<div><span>Nascimento</span> {{ c.data_nascimento or "—" }}</div>{% endif %}
       {% if pode_aprovar %}<div><span>Pix</span> {{ c.chave_pix or "—" }}</div>{% endif %}
       <div><span>Emite NF</span> {{ "sim" if c.emite_nf else "não" }}</div>
       <div><span>Posição</span> {{ c.posicao or "—" }}</div>
@@ -123,12 +123,12 @@
       {{ etapa("Veículo", "feito" if c.vehicle_id else ("conflito" if (aberto and c.agent_id) else "pendente")) }}
       {{ etapa("Tabela", "feito" if c.bd_motorista_id else "pendente") }}
       {{ etapa("Aviso", "feito" if c.aviso_grupo_em else "pendente") }}
-      {{ etapa("Boas-vindas", "—" if bv == "agente_existente" else ("feito" if bv == "enviado" else "pendente")) }}
+      {{ etapa("Boas-vindas", {"enviado": "feito", "numero_sem_whatsapp": "não enviado (sem WhatsApp)", "desligado": "desligado", "modo_teste": "desligado", "agente_existente": "agente existente"}.get(bv, "pendente")) }}
     </div>
     {% if aberto %}
     <div class="link-erro">{% if c.agent_id %}Placa {{ c.placa }} já é do veículo do agente {{ c.conflito_agent_id }} na Vuupt{% else %}Telefone já é do agente {{ c.conflito_agent_id }} na Vuupt{% endif %}</div>
     {% endif %}
-    {% if c.ultimo_erro %}<div class="link-erro">{{ c.ultimo_erro }}</div>{% endif %}
+    {% if pode_aprovar and c.ultimo_erro %}<div class="link-erro">{{ c.ultimo_erro }}</div>{% endif %}
     {% if pode_aprovar and not c.concluido_em %}
     <div class="link-acoes">
       {% if aberto and c.agent_id %}

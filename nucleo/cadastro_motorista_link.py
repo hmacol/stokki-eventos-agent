@@ -190,6 +190,11 @@ def _linha_da_tabela(conn, agent_id: int):
 
 def _tabela(conn, config: dict, c: dict) -> None:
     bd_id = _linha_da_tabela(conn, c["agent_id"])
+    if bd_id is not None and c.get("vehicle_id"):
+        # motorista que volta: a linha antiga passa a apontar pro veículo deste cadastro
+        linha = next(r for r in motoristas_banco.listar(conn) if r["id"] == bd_id)
+        if linha.get("VEHICLE_ID_VUUPT") != c["vehicle_id"]:
+            motoristas_banco.atualizar(conn, bd_id, {"VEHICLE_ID_VUUPT": c["vehicle_id"]}, ORIGEM_LINK)
     if bd_id is None:
         from regras.cadastro_motoristas import cadastrar_motorista
         cadastrar_motorista(config, {
@@ -335,6 +340,8 @@ def resolver_conflito(conn: sqlite3.Connection, config: dict, cadastro_id: int, 
     campos = {"conflito_resolvido": 1, "revisado_por": usuario, "revisado_em": banco.agora()}
     if usar_agent_id is not None:
         usar_agent_id = int(usar_agent_id)
+        if c.get("agent_id") and int(c["agent_id"]) != usar_agent_id:
+            raise CadastroInvalido(f"Este cadastro já tem agente na Vuupt ({c['agent_id']}).", 409)
         vuupt = vuupt or VuuptAgentes(config["vuupt_api"]["token"])
         achado = next((a for a in vuupt.listar_agentes() if a.get("id") is not None and int(a["id"]) == usar_agent_id), None)
         campos.update(agent_id=usar_agent_id, ultimo_erro=None, boas_vindas_situacao="agente_existente")

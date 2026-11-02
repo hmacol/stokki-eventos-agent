@@ -168,6 +168,10 @@ class TestCadastrosPeloLink(unittest.TestCase):
         return self.cliente.post(url, json=body, headers={"Origin": "http://localhost", "Referer": "http://localhost/"})
 
     def test_tela_mostra_ficha_e_botoes_so_pro_total(self):
+        conn = banco.conectar()
+        conn.execute("UPDATE motoristas_cadastros SET vuupt_email = 'carlos@freshhub.com.br', ultimo_erro = 'erro-secreto-vuupt' WHERE id = ?", (self.cid,))
+        conn.commit()
+        conn.close()
         self._logar("total")
         html = self.cliente.get("/motoristas").get_data(as_text=True)
         self.assertIn("Carlos Link Souza", html)
@@ -175,11 +179,14 @@ class TestCadastrosPeloLink(unittest.TestCase):
         self.assertIn("É o mesmo: usar agente 321", html)
         self.assertIn("É outra pessoa: criar agente novo", html)
         self.assertIn("pix-do-carlos", html)
+        self.assertIn("1990-05-17", html)
+        self.assertIn("carlos@freshhub.com.br", html)
         self.assertIn(f"/api/motoristas/cadastros/{self.cid}/documento/selfie", html)
         self._logar("operador")
         html = self.cliente.get("/motoristas").get_data(as_text=True)
         self.assertIn("Carlos Link Souza", html)
-        for escondido in ("É o mesmo", "Tentar de novo", "pix-do-carlos", "98765432100", "/documento/selfie"):
+        for escondido in ("É o mesmo", "Tentar de novo", "pix-do-carlos", "98765432100", "/documento/selfie",
+                          "1990-05-17", "carlos@freshhub.com.br", "erro-secreto-vuupt"):
             self.assertNotIn(escondido, html)
 
     def test_pendente_sem_conflito_mostra_tentar_de_novo(self):
