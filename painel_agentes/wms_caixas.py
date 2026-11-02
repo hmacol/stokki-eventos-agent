@@ -11,6 +11,7 @@ Modulo de dados puro (sem Flask), mesmo estilo do wms_pedidos.py.
 - garantir_tabelas: DDL idempotente, sem commit (para quem abriu a conexao
   por wms.conectar / wms_pedidos.conectar).
 """
+import logging
 import sqlite3
 from pathlib import Path
 
@@ -389,6 +390,11 @@ def cancelar_caixa(conn, serial: str, motivo: str, *, operador: dict | None = No
 # Baixa da expedicao, checagem caixas x saldo e zerar saldo antigo
 # ---------------------------------------------------------------------------
 
+def _log_corrida(serial: str, movimento_uuid: str) -> None:
+    logging.getLogger(__name__).warning(
+        "caixa %s mudou durante o consumo (%s); pulada, a checagem mostra", serial, movimento_uuid)
+
+
 def consumir_caixas(conn, *, posicao: str, produto_id: int, lote: str, validade: str | None,
                     qtd_un: float, movimento_uuid: str) -> dict:
     """
@@ -423,14 +429,22 @@ def consumir_caixas(conn, *, posicao: str, produto_id: int, lote: str, validade:
             break
         q = round(float(c["qtd_un"]), 3)
         if q <= falta + 0.0004:
-            conn.execute("UPDATE wms_caixas SET situacao = 'EXPEDIDA', atualizado_em = ? WHERE serial = ?",
-                         (ts, c["serial"]))
+            cur = conn.execute("UPDATE wms_caixas SET situacao = 'EXPEDIDA', atualizado_em = ? "
+                               "WHERE serial = ? AND situacao = ? AND qtd_un = ?",
+                               (ts, c["serial"], c["situacao"], c["qtd_un"]))
+            if cur.rowcount != 1:
+                _log_corrida(c["serial"], movimento_uuid)
+                continue
             para, obs = "EXPEDIDA", f"Baixa da expedicao: {q:g} UN"
             expedidas.append(c["serial"])
             falta = round(falta - q, 3)
         else:
-            conn.execute("UPDATE wms_caixas SET situacao = 'ABERTA', qtd_un = ?, atualizado_em = ? WHERE serial = ?",
-                         (round(q - falta, 3), ts, c["serial"]))
+            cur = conn.execute("UPDATE wms_caixas SET situacao = 'ABERTA', qtd_un = ?, atualizado_em = ? "
+                               "WHERE serial = ? AND situacao = ? AND qtd_un = ?",
+                               (round(q - falta, 3), ts, c["serial"], c["situacao"], c["qtd_un"]))
+            if cur.rowcount != 1:
+                _log_corrida(c["serial"], movimento_uuid)
+                continue
             para, obs = "ABERTA", f"Baixa parcial da expedicao: {falta:g} UN de {q:g}"
             aberta = c["serial"]
             falta = 0.0
@@ -488,6 +502,11 @@ def zerar_saldo(conn, embarcador_id: int, motivo: str, operador: dict | None = N
     if not motivo:
         raise ErroWMS("Motivo obrigatorio para zerar o saldo.")
     _fechar_transacao(conn)
+    if conn.execute(
+            "SELECT 1 FROM wms_caixas c JOIN wms_produtos p ON p.id = c.produto_id "
+            "WHERE p.embarcador_id = ? AND c.situacao IN ('EM_ESTOQUE', 'ABERTA') LIMIT 1",
+            (embarcador_id,)).fetchone():
+        raise ErroWMS("Ja existem caixas ativas deste embarcador; zere antes do inventario.")
     dia = wms.agora()[:10].replace("-", "")
     n = 0
     for l in plano_zerar_saldo(conn, embarcador_id):

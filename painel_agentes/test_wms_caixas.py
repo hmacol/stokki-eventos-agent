@@ -516,6 +516,85 @@ class TestBaixaConsomeCaixas(BaseCaixas):
         self.assertEqual(self.sit(s), ("EM_ESTOQUE", 6))
         self.assertEqual(len(cx.divergencias(self.conn, 48)), 1)   # a checagem mostra
 
+    def test_saida_ja_gravada_com_reserva_ativa_consome_caixa_uma_vez(self):
+        s = self.ativar(1)[0]
+        pid = self.pedido(1008, 4)
+        rid = self.conn.execute("SELECT id FROM wms_reservas WHERE pedido_id = ?", (pid,)).fetchone()[0]
+        wms.registrar_movimento(self.conn, tipo="SAIDA", produto_id=1, quantidade=4, lote="L1",
+                                validade="2026-12-15", origem=self.POS, uuid=f"ps-1008-reserva-{rid}")
+        r = wms_pedidos.baixar_por_expedicao(self.conn, "PS-1008")   # SAIDA duplicada
+        self.assertEqual((r["baixas"], r["erros"]), (0, []))
+        self.assertEqual(self.sit(s), ("ABERTA", 2))
+        wms_pedidos.baixar_por_expedicao(self.conn, "PS-1008")
+        self.assertEqual(self.sit(s), ("ABERTA", 2))
+        self.assertEqual(cx.divergencias(self.conn, 48), [])
+        n = self.conn.execute("SELECT COUNT(*) FROM wms_caixa_eventos WHERE movimento_uuid = ?",
+                              (f"ps-1008-reserva-{rid}",)).fetchone()[0]
+        self.assertEqual(n, 1)
+
+    def _consumir_com_intervalo(self, intervalo):
+        """Roda consumir_caixas (2 UN) e, entre o SELECT e o UPDATE, `intervalo(outra)`."""
+        outra = wms_pedidos.conectar(self.db)
+        real, feito = wms.agora, {"x": False}
+
+        def agora_intercalado():
+            if not feito["x"]:
+                feito["x"] = True
+                intervalo(outra)
+            return real()
+        try:
+            with mock.patch.object(wms, "agora", agora_intercalado):
+                r = cx.consumir_caixas(self.conn, posicao=self.POS, produto_id=1, lote="L1",
+                                       validade="2026-12-15", qtd_un=2, movimento_uuid="mov-A")
+                self.conn.commit()
+            return r
+        finally:
+            outra.close()
+
+    def test_corrida_com_outra_baixa_nao_sobrescreve_a_caixa(self):
+        s = self.ativar(1)[0]
+
+        def outra_baixa(outra):
+            cx.consumir_caixas(outra, posicao=self.POS, produto_id=1, lote="L1", validade="2026-12-15",
+                               qtd_un=3, movimento_uuid="mov-B")
+            outra.commit()
+        r = self._consumir_com_intervalo(outra_baixa)
+        self.assertEqual(self.sit(s), ("ABERTA", 3))      # so a de B; a de A foi pulada
+        self.assertEqual((r["aberta"], r["faltou_un"]), (None, 2))
+        n = self.conn.execute("SELECT COUNT(*) FROM wms_caixa_eventos WHERE movimento_uuid = 'mov-A'").fetchone()[0]
+        self.assertEqual(n, 0)
+
+    def test_caixa_cancelada_no_meio_do_consumo_nao_ressuscita(self):
+        s = self.ativar(1)[0]
+        self._consumir_com_intervalo(lambda outra: cx.cancelar_caixa(outra, s, "queda"))
+        self.assertEqual(self.sit(s)[0], "CANCELADA")
+        self.assertEqual(self.saldo_pos(), 0)
+
+    def saldo_pos(self):
+        return wms._saldo_atual(self.conn, self.POS, 1, "L1", "2026-12-15")
+
+    def test_baixa_abre_transacao_imediata_antes_de_consumir(self):
+        self.ativar(1)
+        self.pedido(1009, 4)
+        vistos = []
+        real = cx.consumir_caixas
+
+        def espia(conn, **kw):
+            vistos.append(conn.in_transaction)
+            return real(conn, **kw)
+        with mock.patch.object(cx, "consumir_caixas", side_effect=espia):
+            wms_pedidos.baixar_por_expedicao(self.conn, "PS-1009")
+        self.assertEqual(vistos, [True])
+
+    def test_zerar_saldo_recusa_com_caixas_ativas_mas_plano_le(self):
+        s = self.ativar(1)[0]
+        self.assertEqual(len(cx.plano_zerar_saldo(self.conn, 48)), 1)
+        with self.assertRaises(wms.ErroWMS):
+            cx.zerar_saldo(self.conn, 48, "limpeza")
+        self.assertEqual(self.saldo_pos(), 6)
+        cx.cancelar_caixa(self.conn, s, "teste")
+        self.assertEqual(cx.zerar_saldo(self.conn, 48, "limpeza"), 0)
+
     def test_divergencia_aparece_dos_dois_lados(self):
         self.ativar(1)
         # saldo sem caixa

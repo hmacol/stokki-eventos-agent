@@ -15,6 +15,8 @@ Regras que este modulo garante:
   falta (decisao do Hugo, 21/09).
 - A baixa reusa wms.registrar_movimento(tipo="SAIDA") com uuid
   deterministico, entao rodar duas vezes nao baixa duas vezes.
+- A baixa tambem consome as caixas com serial (wms_caixas.consumir_caixas),
+  em melhor esforco: falha ali e registrada em log e nunca quebra a baixa.
 """
 import logging
 import re
@@ -598,6 +600,9 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
             # mostra). Roda tambem se a SAIDA foi duplicada (idempotente pelo
             # uuid do movimento).
             try:
+                # BEGIN IMMEDIATE: leitura e escrita das caixas na mesma
+                # transacao (sem corrida com outra baixa ou com cancelar).
+                conn.execute("BEGIN IMMEDIATE")
                 wms_caixas.consumir_caixas(
                     conn, posicao=r["posicao"], produto_id=r["produto_id"], lote=r["lote"],
                     validade=r["validade"], qtd_un=r["quantidade_un"], movimento_uuid=mov["uuid"])
