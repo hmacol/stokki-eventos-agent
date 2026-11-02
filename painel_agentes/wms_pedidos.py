@@ -16,6 +16,7 @@ Regras que este modulo garante:
 - A baixa reusa wms.registrar_movimento(tipo="SAIDA") com uuid
   deterministico, entao rodar duas vezes nao baixa duas vezes.
 """
+import logging
 import re
 import sqlite3
 from datetime import datetime, timedelta
@@ -543,6 +544,12 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
     # IMMEDIATE e nao aceita rodar dentro de uma ja aberta.
     conn.commit()
 
+    # Caixas com serial (so produtos que as usam; sem caixa e no-op). Import
+    # lazy: wms_caixas importa wms_pedidos. Tabela garantida 1x antes do laco.
+    import wms_caixas
+    wms_caixas.garantir_tabelas(conn)
+    conn.commit()
+
     baixas, erros, negativos = 0, [], []
     for r in reservas:
         # O uuid vem do ID DA RESERVA, que e estavel pra sempre -- nunca
@@ -586,6 +593,19 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
             conn.commit()
             if not mov.get("duplicado"):
                 baixas += 1
+            # Consumo das caixas com try proprio: falha aqui nunca vira erro de
+            # baixa nem muda o estado do pedido (a checagem caixas x saldo e que
+            # mostra). Roda tambem se a SAIDA foi duplicada (idempotente pelo
+            # uuid do movimento).
+            try:
+                wms_caixas.consumir_caixas(
+                    conn, posicao=r["posicao"], produto_id=r["produto_id"], lote=r["lote"],
+                    validade=r["validade"], qtd_un=r["quantidade_un"], movimento_uuid=mov["uuid"])
+                conn.commit()
+            except Exception as e_cx:  # noqa: BLE001
+                conn.rollback()
+                logging.getLogger(__name__).warning(
+                    "consumir_caixas falhou (%s, reserva %s): %s", uuid, r["id"], e_cx)
         except Exception as e:  # noqa: BLE001 -- uma reserva ruim nao derruba a expedicao
             erros.append(f"linha {r['linha']}: {e}")
 

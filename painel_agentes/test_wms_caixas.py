@@ -388,5 +388,181 @@ class TestAtivarMoverCancelar(BaseCaixas):
         self.assertEqual(self.saldo(), 0)
 
 
+class TestBaixaConsomeCaixas(BaseCaixas):
+    POS = "C9-E1-N1"
+
+    def setUp(self):
+        super().setUp()
+        wms.criar_area(self.conn, "C9", "CONTAINER", "Container 9")
+        wms.gerar_posicoes(self.conn, "C9", estantes=2, niveis=2)
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, embarcador_id, ean, "
+            "qtd_por_caixa, unidade, controla_validade, atualizado_em) VALUES (3, 902, 'OUTRO1', 'OUTRO EMB', "
+            "'OUTRO', 77, '333333333333', 1, 'UN', 0, '2026-09-21 10:00:00')")
+        self.conn.commit()
+
+    def ativar(self, n=1, produto=1):
+        seriais = cx.criar_caixas(self.conn, produto_id=produto, lote="L1", validade="2026-12-15",
+                                  qtd_un=None, quantidade=n)["seriais"]
+        for s in seriais:
+            cx.ativar_caixa(self.conn, s, self.POS)
+        return seriais
+
+    def pedido(self, id_stokki, qtd, sku="72400017", ean="724000170000", emb="MARIA DOLORES"):
+        pid = wms_pedidos.registrar_pedido(
+            self.conn, {"id_stokki": id_stokki, "codigo_ps": f"PS-{id_stokki}", "embarcador": emb,
+                        "situacao": "Waiting for Carrier"},
+            [{"linha": 1, "sku": sku, "ean_linha": ean, "descricao": "X", "qtd_embalagem": qtd}])
+        wms_pedidos.reservar_pedido(self.conn, pid)
+        self.conn.commit()
+        return pid
+
+    def sit(self, serial):
+        c = cx.obter_caixa(self.conn, serial)
+        return c["situacao"], c["qtd_un"]
+
+    def test_baixa_inteira_marca_caixa_expedida(self):
+        s = self.ativar(1)[0]
+        self.pedido(1001, 6)
+        r = wms_pedidos.baixar_por_expedicao(self.conn, "PS-1001")
+        self.assertEqual((r["baixas"], r["erros"]), (1, []))
+        self.assertEqual(self.sit(s), ("EXPEDIDA", 6))
+        self.assertEqual(cx.divergencias(self.conn, 48), [])
+        ev = self.conn.execute("SELECT para, movimento_uuid FROM wms_caixa_eventos WHERE serial = ? "
+                               "ORDER BY id DESC LIMIT 1", (s,)).fetchone()
+        self.assertEqual(ev["para"], "EXPEDIDA")
+        self.assertTrue(ev["movimento_uuid"].startswith("ps-1001-reserva-"))
+
+    def test_baixa_parcial_deixa_caixa_aberta_e_checagem_zerada(self):
+        s = self.ativar(1)[0]
+        self.pedido(1002, 4)
+        wms_pedidos.baixar_por_expedicao(self.conn, "PS-1002")
+        self.assertEqual(self.sit(s), ("ABERTA", 2))
+        self.assertEqual(wms._saldo_atual(self.conn, self.POS, 1, "L1", "2026-12-15"), 2)
+        self.assertEqual(cx.divergencias(self.conn, 48), [])
+        # cancelar a aberta tira so o que sobrou
+        cx.cancelar_caixa(self.conn, s, "sobra")
+        self.assertEqual(wms._saldo_atual(self.conn, self.POS, 1, "L1", "2026-12-15"), 0)
+
+    def test_aberta_e_consumida_primeiro_depois_serial_crescente(self):
+        s = self.ativar(3)
+        self.pedido(1003, 3)
+        wms_pedidos.baixar_por_expedicao(self.conn, "PS-1003")          # abre s[0] (resta 3)
+        self.pedido(1004, 5)
+        wms_pedidos.baixar_por_expedicao(self.conn, "PS-1004")          # s[0] inteira (3) + s[1] parcial (2)
+        self.assertEqual(self.sit(s[0]), ("EXPEDIDA", 3))
+        self.assertEqual(self.sit(s[1]), ("ABERTA", 4))
+        self.assertEqual(self.sit(s[2]), ("EM_ESTOQUE", 6))
+        self.assertEqual(cx.divergencias(self.conn, 48), [])
+
+    def test_baixa_rodada_duas_vezes_nao_consome_duas_vezes(self):
+        s = self.ativar(2)
+        self.pedido(1005, 4)
+        wms_pedidos.baixar_por_expedicao(self.conn, "PS-1005")
+        wms_pedidos.baixar_por_expedicao(self.conn, "PS-1005")
+        self.assertEqual(self.sit(s[0]), ("ABERTA", 2))
+        self.assertEqual(self.sit(s[1]), ("EM_ESTOQUE", 6))
+        movs = self.conn.execute("SELECT movimento_uuid FROM wms_caixa_eventos "
+                                 "WHERE movimento_uuid LIKE 'ps-1005%'").fetchall()
+        self.assertEqual(len(movs), 1)
+
+    def test_consumir_caixas_e_idempotente_mesmo_com_saida_duplicada(self):
+        s = self.ativar(1)[0]
+        a = cx.consumir_caixas(self.conn, posicao=self.POS, produto_id=1, lote="L1", validade="2026-12-15",
+                               qtd_un=2, movimento_uuid="mov-x")
+        self.conn.commit()
+        b = cx.consumir_caixas(self.conn, posicao=self.POS, produto_id=1, lote="L1", validade="2026-12-15",
+                               qtd_un=2, movimento_uuid="mov-x")
+        self.assertEqual((a["aberta"], a["ja_consumido"]), (s, False))
+        self.assertTrue(b["ja_consumido"])
+        self.assertEqual(self.sit(s), ("ABERTA", 4))
+
+    def test_validade_vazia_e_none_casam_as_mesmas_caixas(self):
+        self.conn.execute(
+            "INSERT INTO wms_caixas (serial, produto_id, lote, validade, qtd_un, posicao, situacao, criado_em, "
+            "atualizado_em) VALUES ('C9999999', 3, '', NULL, 5, ?, 'EM_ESTOQUE', 'x', 'x')", (self.POS,))
+        r = cx.consumir_caixas(self.conn, posicao=self.POS, produto_id=3, lote="", validade="",
+                               qtd_un=5, movimento_uuid="mov-y")
+        self.assertEqual(r["expedidas"], ["C9999999"])
+
+    def test_falta_de_caixa_vira_faltou_un_sem_erro(self):
+        s = self.ativar(1)[0]
+        r = cx.consumir_caixas(self.conn, posicao=self.POS, produto_id=1, lote="L1", validade="2026-12-15",
+                               qtd_un=10, movimento_uuid="mov-z")
+        self.assertEqual((r["expedidas"], r["faltou_un"]), ([s], 4))
+
+    def test_produto_sem_caixa_nao_quebra_a_baixa(self):
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=3, quantidade=10, lote="L9",
+                                destino=self.POS)
+        self.pedido(1006, 4, sku="OUTRO1", ean="333333333333", emb="OUTRO")
+        r = wms_pedidos.baixar_por_expedicao(self.conn, "PS-1006")
+        self.assertEqual((r["baixas"], r["erros"]), (1, []))
+        self.assertEqual(wms._saldo_atual(self.conn, self.POS, 3, "L9", ""), 6)
+        self.assertEqual(self.conn.execute("SELECT estado_reserva FROM wms_pedidos WHERE id_stokki = 1006")
+                         .fetchone()[0], "BAIXADO")
+        self.assertEqual(self.n("wms_caixa_eventos"), 0)
+
+    def test_falha_no_consumo_nao_quebra_a_baixa_nem_deixa_transacao_aberta(self):
+        s = self.ativar(1)[0]
+        self.pedido(1007, 6)
+        with mock.patch.object(cx, "consumir_caixas", side_effect=RuntimeError("quebrou")):
+            r = wms_pedidos.baixar_por_expedicao(self.conn, "PS-1007")
+        self.assertEqual((r["baixas"], r["erros"]), (1, []))
+        self.assertEqual(self.conn.execute("SELECT estado_reserva FROM wms_pedidos WHERE id_stokki = 1007")
+                         .fetchone()[0], "BAIXADO")
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM wms_movimentos WHERE tipo='SAIDA'")
+                         .fetchone()[0], 1)
+        self.assertFalse(self.conn.in_transaction)
+        self.assertEqual(self.sit(s), ("EM_ESTOQUE", 6))
+        self.assertEqual(len(cx.divergencias(self.conn, 48)), 1)   # a checagem mostra
+
+    def test_divergencia_aparece_dos_dois_lados(self):
+        self.ativar(1)
+        # saldo sem caixa
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=10, lote="L2",
+                                validade="2026-11-01", destino=self.POS)
+        # caixa sem saldo
+        self.conn.execute(
+            "INSERT INTO wms_caixas (serial, produto_id, lote, validade, qtd_un, posicao, situacao, criado_em, "
+            "atualizado_em) VALUES ('C9999998', 1, 'L3', '2026-10-01', 6, 'C9-E1-N2', 'EM_ESTOQUE', 'x', 'x')")
+        self.conn.commit()
+        # outro embarcador nao entra
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=3, quantidade=9, lote="L9",
+                                destino=self.POS)
+        self.conn.commit()
+        d = {(x["lote"]): x for x in cx.divergencias(self.conn, 48)}
+        self.assertEqual(set(d), {"L2", "L3"})
+        self.assertEqual((d["L2"]["saldo"], d["L2"]["caixas"], d["L2"]["sku"]), (10, 0, "72400017"))
+        self.assertEqual((d["L3"]["saldo"], d["L3"]["caixas"]), (0, 6))
+
+    def test_zerar_saldo_positivo_e_negativo(self):
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=10, lote="L2",
+                                validade="2026-11-01", destino=self.POS)
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=1, lote="L5", validade="2026-11-02",
+                                destino="C9-E1-N2")
+        wms.registrar_movimento(self.conn, tipo="SAIDA", produto_id=1, quantidade=3, lote="L5", validade="2026-11-02",
+                                origem="C9-E1-N2", permitir_negativo=True)   # L5: 1 - 3 = -2
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=3, quantidade=9, lote="L9",
+                                destino=self.POS)
+        self.conn.commit()
+        plano = cx.plano_zerar_saldo(self.conn, 48)
+        self.assertEqual(sorted(p["quantidade"] for p in plano), [-2, 10])
+        self.assertEqual(self.n("wms_movimentos"), 4)   # plano nao escreveu
+        with self.assertRaises(wms.ErroWMS):
+            cx.zerar_saldo(self.conn, 48, "  ")
+        self.assertEqual(cx.zerar_saldo(self.conn, 48, "limpeza do saldo antigo"), 2)
+        self.assertEqual(cx.plano_zerar_saldo(self.conn, 48), [])
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM wms_saldos s JOIN wms_produtos p ON p.id = s.produto_id "
+            "WHERE p.embarcador_id = 48").fetchone()[0], 0)
+        self.assertEqual(wms._saldo_atual(self.conn, self.POS, 3, "L9", ""), 9)   # outro embarcador intacto
+        m = self.conn.execute("SELECT uuid, observacao FROM wms_movimentos WHERE uuid LIKE 'zerar-%' "
+                              "ORDER BY id").fetchall()
+        self.assertEqual(len(m), 2)
+        self.assertRegex(m[0]["uuid"], r"^zerar-48-C9-E1-N\d-1-L\d-[\d-]*\d{8}$")
+        self.assertIn("limpeza do saldo antigo", m[0]["observacao"])
+        self.assertEqual(cx.zerar_saldo(self.conn, 48, "de novo"), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

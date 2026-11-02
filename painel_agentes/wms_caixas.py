@@ -383,3 +383,119 @@ def cancelar_caixa(conn, serial: str, motivo: str, *, operador: dict | None = No
                  observacao=motivo, manter_posicao=True)
     return {"caixa": _caixa_ou_erro(conn, serial), "duplicado": bool(mov.get("duplicado")),
             "movimento_uuid": uuid}
+
+
+# ---------------------------------------------------------------------------
+# Baixa da expedicao, checagem caixas x saldo e zerar saldo antigo
+# ---------------------------------------------------------------------------
+
+def consumir_caixas(conn, *, posicao: str, produto_id: int, lote: str, validade: str | None,
+                    qtd_un: float, movimento_uuid: str) -> dict:
+    """
+    Consome `qtd_un` das caixas (posicao, produto, lote, validade) da baixa da
+    expedicao: ABERTA primeiro, depois EM_ESTOQUE por serial crescente. Caixa
+    consumida inteira vira EXPEDIDA (qtd_un fica como o que saiu); a parcial fica
+    ABERTA com qtd_un reduzido (cancelar_caixa tira exatamente o que sobrou).
+    Falta de caixa nao e erro: volta em faltou_un. NAO faz commit (roda na
+    transacao de quem chama). No-op se ja houver evento com esse movimento_uuid.
+    """
+    movimento_uuid = str(movimento_uuid or "")
+    vazio = {"expedidas": [], "aberta": None, "faltou_un": 0.0, "ja_consumido": False}
+    if not movimento_uuid:
+        raise ErroWMS("movimento_uuid obrigatorio para consumir caixas.")
+    if conn.execute("SELECT 1 FROM wms_caixa_eventos WHERE movimento_uuid = ? LIMIT 1",
+                    (movimento_uuid,)).fetchone():
+        return {**vazio, "ja_consumido": True}
+    falta = round(float(qtd_un), 3)
+    posicao = wms.normalizar_codigo(posicao)
+    lote = " ".join(str(lote or "").split()).upper()
+    validade = str(validade or "")
+    caixas = conn.execute(
+        "SELECT serial, qtd_un, situacao FROM wms_caixas "
+        "WHERE posicao = ? AND produto_id = ? AND lote = ? AND COALESCE(validade, '') = ? "
+        "AND situacao IN ('ABERTA', 'EM_ESTOQUE') "
+        "ORDER BY CASE situacao WHEN 'ABERTA' THEN 0 ELSE 1 END, serial",
+        (posicao, produto_id, lote, validade)).fetchall()
+    ts = wms.agora()
+    expedidas, aberta = [], None
+    for c in caixas:
+        if falta <= 0.0004:
+            break
+        q = round(float(c["qtd_un"]), 3)
+        if q <= falta + 0.0004:
+            conn.execute("UPDATE wms_caixas SET situacao = 'EXPEDIDA', atualizado_em = ? WHERE serial = ?",
+                         (ts, c["serial"]))
+            para, obs = "EXPEDIDA", f"Baixa da expedicao: {q:g} UN"
+            expedidas.append(c["serial"])
+            falta = round(falta - q, 3)
+        else:
+            conn.execute("UPDATE wms_caixas SET situacao = 'ABERTA', qtd_un = ?, atualizado_em = ? WHERE serial = ?",
+                         (round(q - falta, 3), ts, c["serial"]))
+            para, obs = "ABERTA", f"Baixa parcial da expedicao: {falta:g} UN de {q:g}"
+            aberta = c["serial"]
+            falta = 0.0
+        conn.execute(
+            "INSERT OR IGNORE INTO wms_caixa_eventos (uuid, serial, de, para, posicao, movimento_uuid, "
+            "observacao, criado_em) VALUES (?,?,?,?,?,?,?,?)",
+            (f"{movimento_uuid}-{c['serial']}", c["serial"], c["situacao"], para, posicao,
+             movimento_uuid, obs, ts))
+    return {"expedidas": expedidas, "aberta": aberta, "faltou_un": max(falta, 0.0), "ja_consumido": False}
+
+
+def divergencias(conn, embarcador_id: int) -> list[dict]:
+    """Compara wms_saldos com a soma das caixas EM_ESTOQUE/ABERTA, por
+    (posicao, produto, lote, validade), so de produtos do embarcador. Tolerancia
+    0,001; aparecem os dois lados (saldo sem caixa e caixa sem saldo)."""
+    chaves: dict[tuple, dict] = {}
+    for r in conn.execute(
+            "SELECT s.posicao, s.produto_id, p.sku, s.lote, s.validade, s.quantidade "
+            "FROM wms_saldos s JOIN wms_produtos p ON p.id = s.produto_id "
+            "WHERE p.embarcador_id = ?", (embarcador_id,)):
+        k = (r["posicao"], r["produto_id"], r["lote"] or "", r["validade"] or "")
+        d = chaves.setdefault(k, {"sku": r["sku"], "saldo": 0.0, "caixas": 0.0})
+        d["saldo"] += float(r["quantidade"])
+    for r in conn.execute(
+            "SELECT c.posicao, c.produto_id, p.sku, c.lote, c.validade, SUM(c.qtd_un) AS q "
+            "FROM wms_caixas c JOIN wms_produtos p ON p.id = c.produto_id "
+            "WHERE p.embarcador_id = ? AND c.situacao IN ('EM_ESTOQUE', 'ABERTA') "
+            "GROUP BY c.posicao, c.produto_id, c.lote, c.validade", (embarcador_id,)):
+        k = (r["posicao"], r["produto_id"], r["lote"] or "", r["validade"] or "")
+        d = chaves.setdefault(k, {"sku": r["sku"], "saldo": 0.0, "caixas": 0.0})
+        d["caixas"] += float(r["q"] or 0)
+    saida = []
+    for (posicao, produto_id, lote, validade), d in sorted(chaves.items(), key=lambda kv: tuple(str(x) for x in kv[0])):
+        if abs(d["saldo"] - d["caixas"]) > 0.001:
+            saida.append({"posicao": posicao, "produto_id": produto_id, "sku": d["sku"], "lote": lote,
+                          "validade": validade, "saldo": round(d["saldo"], 3), "caixas": round(d["caixas"], 3)})
+    return saida
+
+
+def plano_zerar_saldo(conn, embarcador_id: int) -> list[dict]:
+    """Linhas de wms_saldos do embarcador que zerar_saldo ajustaria. Nao escreve."""
+    rows = conn.execute(
+        "SELECT s.posicao, s.produto_id, p.sku, s.lote, s.validade, s.quantidade "
+        "FROM wms_saldos s JOIN wms_produtos p ON p.id = s.produto_id "
+        "WHERE p.embarcador_id = ? AND ABS(s.quantidade) > 0.0004 "
+        "ORDER BY s.posicao, s.produto_id, s.lote, s.validade", (embarcador_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def zerar_saldo(conn, embarcador_id: int, motivo: str, operador: dict | None = None) -> int:
+    """Zera o saldo antigo do embarcador: um AJUSTE por linha (pra menos se > 0,
+    pra mais se < 0). uuid deterministico por dia: repetir no mesmo dia nao soma
+    duas vezes. Devolve quantas linhas ajustou."""
+    motivo = " ".join(str(motivo or "").split())
+    if not motivo:
+        raise ErroWMS("Motivo obrigatorio para zerar o saldo.")
+    _fechar_transacao(conn)
+    dia = wms.agora()[:10].replace("-", "")
+    n = 0
+    for l in plano_zerar_saldo(conn, embarcador_id):
+        uuid = f"zerar-{embarcador_id}-{l['posicao']}-{l['produto_id']}-{l['lote']}-{l['validade']}-{dia}"
+        q = float(l["quantidade"])
+        lado = {"origem": l["posicao"]} if q > 0 else {"destino": l["posicao"]}
+        wms.registrar_movimento(conn, tipo="AJUSTE", produto_id=l["produto_id"], quantidade=abs(q),
+                                lote=l["lote"], validade=l["validade"] or None, operador=operador, uuid=uuid,
+                                observacao=f"Zerar saldo antigo: {motivo}", **lado)
+        n += 1
+    return n
