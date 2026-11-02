@@ -21,6 +21,13 @@ from nucleo import auth_motorista as auth, banco, cadastro_motorista as cad  # n
 from regras import motoristas_banco  # noqa: E402
 
 CPF_OK = "52998224725"
+CABECALHOS = {"jpg": b"\xff\xd8\xff\xe0", "png": b"\x89PNG\r\n\x1a\n", "pdf": b"%PDF-1.4\n",
+              "heic": b"\x00\x00\x00\x18ftypheic", "webp": b"RIFF\x00\x00\x00\x00WEBPVP8 "}
+
+
+def _arq(nome: str, n: int = 50) -> bytes:
+    """Conteúdo com o cabeçalho do tipo pela extensão do nome."""
+    return CABECALHOS[nome.rsplit(".", 1)[-1]] + b"0" * n
 
 
 def _dados(**extra):
@@ -52,7 +59,7 @@ class TestCadastroLink(unittest.TestCase):
     def _completar(self, r):
         for t, nome in (("cnh", "cnh.jpg"), ("crlv", "crlv.pdf"), ("selfie", "selfie.heic"),
                         ("antt", "antt.pdf"), ("residencia", "res.png")):
-            cad.guardar_documento(self.conn, r["id"], r["chave_envio"], t, nome, b"x" * 50)
+            cad.guardar_documento(self.conn, r["id"], r["chave_envio"], t, nome, _arq(nome))
 
     def test_cpf_valido(self):
         self.assertTrue(cad.cpf_valido("52998224725"))
@@ -154,18 +161,18 @@ class TestCadastroLink(unittest.TestCase):
             cad.guardar_documento(self.conn, r["id"], r["chave_envio"], "cnh", "cnh.exe", b"x")
         c = None
         for t, nome in (("selfie", "selfie.heic"), ("antt", "antt.pdf"), ("cnh", "cnh.jpg"), ("crlv", "c.png")):
-            c = cad.guardar_documento(self.conn, r["id"], r["chave_envio"], t, nome, b"x" * 20)
+            c = cad.guardar_documento(self.conn, r["id"], r["chave_envio"], t, nome, _arq(nome))
         self.assertTrue(c["tem_selfie"] and c["tem_antt"])
         self.assertFalse(c["completo"])
-        c = cad.guardar_documento(self.conn, r["id"], r["chave_envio"], "residencia", "r.pdf", b"x" * 20)
+        c = cad.guardar_documento(self.conn, r["id"], r["chave_envio"], "residencia", "r.pdf", _arq("r.pdf"))
         self.assertTrue(c["completo"])
 
     def test_completo_do_app_segue_cnh_e_crlv(self):
         app = cad.criar_cadastro(self.conn, {
             "cpf": CPF_OK, "nome": "Maria da Silva", "telefone": "11998765432", "chave_pix": "x@y.com",
             "placa": "ABC1D23", "tipo_veiculo": "fiorino", "zonas": ["ZONA SUL"], "dias": ["SEGUNDA"]})
-        cad.guardar_documento(self.conn, app["id"], app["chave_envio"], "cnh", "a.jpg", b"x")
-        c = cad.guardar_documento(self.conn, app["id"], app["chave_envio"], "crlv", "b.jpg", b"x")
+        cad.guardar_documento(self.conn, app["id"], app["chave_envio"], "cnh", "a.jpg", _arq("a.jpg"))
+        c = cad.guardar_documento(self.conn, app["id"], app["chave_envio"], "crlv", "b.jpg", _arq("b.jpg"))
         self.assertTrue(c["completo"])
 
     def test_marcar_enviado(self):
@@ -185,6 +192,103 @@ class TestCadastroLink(unittest.TestCase):
         antes = l["enviado_em"]
         cad.marcar_enviado(self.conn, r["id"], r["chave_envio"])
         self.assertEqual(self._linha(r["id"])["enviado_em"], antes)
+
+    # ── Revisão de segurança 02/11 (A1, M1, M2, B3) ─────────────────────────
+
+    def test_registrar_envio_diz_se_gravou_agora(self):
+        r = cad.criar_cadastro_link(self.conn, _dados())
+        self._completar(r)
+        c, gravou = cad.registrar_envio(self.conn, r["id"], r["chave_envio"])
+        self.assertTrue(gravou)
+        self.assertTrue(c["enviado_em"])
+        c2, gravou2 = cad.registrar_envio(self.conn, r["id"], r["chave_envio"])
+        self.assertFalse(gravou2)
+        self.assertEqual(c2["enviado_em"], c["enviado_em"])
+
+    def test_tipo_do_arquivo_pelos_bytes(self):
+        for ext, cab in CABECALHOS.items():
+            self.assertEqual(cad.tipo_do_arquivo(cab + b"0" * 20), ext)
+        for marca in (b"heix", b"mif1", b"msf1", b"hevc"):
+            self.assertEqual(cad.tipo_do_arquivo(b"\x00\x00\x00\x18ftyp" + marca + b"0" * 8), "heic")
+        for ruim in (b"x" * 50, b"GIF89a" + b"0" * 20, b"\x00\x00\x00\x18ftypisom" + b"0" * 8,
+                     b"RIFF\x00\x00\x00\x00WAVE" + b"0" * 8, b"MZ\x90\x00", b"\xff\xd8"):
+            self.assertIsNone(cad.tipo_do_arquivo(ruim), ruim)
+
+    def test_documento_que_nao_e_foto_nem_pdf_400(self):
+        r = cad.criar_cadastro_link(self.conn, _dados())
+        with self.assertRaises(cad.CadastroInvalido) as cx:
+            cad.guardar_documento(self.conn, r["id"], r["chave_envio"], "cnh", "cnh.jpg", b"x" * 50)
+        self.assertEqual((cx.exception.codigo, cx.exception.mensagem), (400, "Arquivo não parece uma foto ou PDF."))
+        self.assertIsNone(self._linha(r["id"])["cnh_arquivo"])
+        self.assertFalse((cad.pasta_cadastros() / str(r["id"])).exists())
+
+    def test_reenvio_apaga_o_arquivo_antigo_do_tipo(self):
+        r = cad.criar_cadastro_link(self.conn, _dados())
+        pasta = cad.pasta_cadastros() / str(r["id"])
+        for nome in ("cnh.jpg", "cnh.png", "cnh.pdf", "cnh.webp"):
+            cad.guardar_documento(self.conn, r["id"], r["chave_envio"], "cnh", nome, _arq(nome))
+        cad.guardar_documento(self.conn, r["id"], r["chave_envio"], "crlv", "crlv.jpg", _arq("crlv.jpg"))
+        self.assertEqual(sorted(p.name for p in pasta.iterdir()), ["cnh.webp", "crlv.jpg"])
+        self.assertEqual(self._linha(r["id"])["cnh_arquivo"], "cnh.webp")
+        # o nome segue o conteúdo: HEIC chamado .jpg (iPhone) fica .heic
+        cad.guardar_documento(self.conn, r["id"], r["chave_envio"], "cnh", "IMG_1.jpg", _arq("x.heic"))
+        self.assertEqual(sorted(p.name for p in pasta.iterdir()), ["cnh.heic", "crlv.jpg"])
+        self.assertEqual(self._linha(r["id"])["cnh_arquivo"], "cnh.heic")
+        self.assertEqual(cad.caminho_documento(self.conn, r["id"], "cnh"), pasta / "cnh.heic")
+
+    def test_nome_ate_120_caracteres(self):
+        with self.assertRaises(cad.CadastroInvalido):
+            cad.criar_cadastro_link(self.conn, _dados(nome="Jo " + "a" * 118))
+        r = cad.criar_cadastro_link(self.conn, _dados(nome="Jo " + "a" * 117))
+        self.assertEqual(len(self._linha(r["id"])["nome"]), 120)
+
+    def _cpf(self, i):
+        d = f"{i:09d}"
+        for n in (9, 10):
+            soma = sum(int(d[k]) * (n + 1 - k) for k in range(n))
+            d += str((soma * 10 % 11) % 10)
+        return d
+
+    def test_freio_do_link_no_banco_sobrevive_a_restart(self):
+        """M1(c): 5 por IP por hora, contado em motoristas_cadastros.ip_origem."""
+        for i in range(cad.LIMITE_LINK_IP_HORA):
+            r = cad.criar_cadastro_link(self.conn, _dados(cpf=self._cpf(i + 1)), ip="1.2.3.4")
+        self.assertEqual(self._linha(r["id"])["ip_origem"], "1.2.3.4")
+        # "restart": conexão nova, nada em memória
+        self.conn.close()
+        self.conn = banco.conectar()
+        with self.assertRaises(cad.CadastroInvalido) as cx:
+            cad.criar_cadastro_link(self.conn, _dados(cpf=self._cpf(50)), ip="1.2.3.4")
+        self.assertEqual(cx.exception.codigo, 429)
+        self.assertFalse(self.conn.in_transaction)
+        cad.criar_cadastro_link(self.conn, _dados(cpf=self._cpf(51)), ip="5.6.7.8")
+        # passou uma hora: o IP volta a poder
+        self.conn.execute("UPDATE motoristas_cadastros SET criado_em = datetime(criado_em, '-61 minutes') "
+                          "WHERE ip_origem = '1.2.3.4'")
+        self.conn.commit()
+        cad.criar_cadastro_link(self.conn, _dados(cpf=self._cpf(52)), ip="1.2.3.4")
+
+    def test_freio_do_link_40_por_dia_no_total(self):
+        agora = banco.agora()
+        for i in range(cad.LIMITE_LINK_DIA):
+            self.conn.execute("INSERT INTO motoristas_cadastros (cpf, nome, chave_envio, status, criado_em, origem, ip_origem) "
+                              "VALUES (?, 'X Y', ?, 'SUBSTITUIDO', ?, 'link', ?)", (f"{i:011d}", f"k{i}", agora, f"10.0.0.{i}"))
+        # cadastro do app não conta no teto do link
+        self.conn.execute("INSERT INTO motoristas_cadastros (cpf, nome, chave_envio, status, criado_em, origem) "
+                          "VALUES ('99999999999', 'A B', 'kapp', 'PENDENTE', ?, 'app')", (agora,))
+        self.conn.commit()
+        with self.assertRaises(cad.CadastroInvalido) as cx:
+            cad.criar_cadastro_link(self.conn, _dados(), ip="9.9.9.9")
+        self.assertEqual(cx.exception.codigo, 429)
+        self.conn.execute("UPDATE motoristas_cadastros SET criado_em = datetime(criado_em, '-25 hours') WHERE id = 1")
+        self.conn.commit()
+        cad.criar_cadastro_link(self.conn, _dados(), ip="9.9.9.9")
+
+    def test_erro_de_validacao_nao_gasta_o_freio(self):
+        for _ in range(cad.LIMITE_LINK_IP_HORA + 2):
+            with self.assertRaises(cad.CadastroInvalido):
+                cad.criar_cadastro_link(self.conn, _dados(cpf="11111111111"), ip="1.2.3.4")
+        cad.criar_cadastro_link(self.conn, _dados(), ip="1.2.3.4")
 
     def test_situacao_link(self):
         r = cad.criar_cadastro_link(self.conn, _dados())

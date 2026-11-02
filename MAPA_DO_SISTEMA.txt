@@ -137,7 +137,11 @@
                                              bd_motoristas, aviso no grupo, boas-vindas pelo notificar_whatsapp.py);
                                              timer cadastro-motorista-link; ficha no painel /motoristas.
                                              Config: cadastro_motorista_link.{ativo, forcar_destino_whatsapp,
-                                             link_app_vuupt} e whatsapp_notificacoes.motoristas.teto_diario.
+                                             link_app_vuupt, max_agentes_dia (padrão 10)} e
+                                             whatsapp_notificacoes.motoristas.teto_diario.
+                                             Freios: POST /api/cadastro-link 5/IP/hora e 40/24 h contados no
+                                             banco (motoristas_cadastros.ip_origem); documentos, situação e
+                                             concluir 60/IP/hora cada (memória) -> 429.
  Pool do planejamento (Vuupt x núcleo) ..... nucleo/pool.py (config planejamento.fonte_pool: vuupt | nucleo | freshhub)
    fonte freshhub (plano 1.2 do novo) ..... GET /api/pool da API nova via nucleo/freshhub_client.py (config
                                              freshhub_api.url = http://127.0.0.1:8100 e freshhub_api.token, token
@@ -1635,7 +1639,12 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
    AUSENTE = vale whatsapp_notificacoes.clientes.forcar_destino e, sem ele, não
    manda). Telefone ou placa que já é de agente da Vuupt NÃO cria nada (a placa
    é conferida antes do POST do agente): vira conflito na ficha do /motoristas
-   (usar o agente existente ou criar novo). Entra na bd_motoristas sempre como
+   (usar o agente existente ou criar novo). Teto de agentes NOVOS por dia:
+   cadastro_motorista_link.max_agentes_dia (padrão 10, contado por
+   agente_criado_em); passou, o cadastro fica pendente sem POST e o grupo
+   recebe a pendência. Desligar `ativo` para também o timer e o processamento
+   (o "Tentar de novo"/resolver do painel respondem 409; o Desfazer segue).
+   Entra na bd_motoristas sempre como
    ESPORADICO (a ficha mostra "Pediu: Fixo"; a equipe promove pelo Editar).
    Cadastro falso/teste: botão "Desfazer" (inativa a linha, libera o CPF e,
    se pedido, apaga na Vuupt o agente/veículo que ELE criou). iPhone = sem app Vuupt (SEM_APP=SIM

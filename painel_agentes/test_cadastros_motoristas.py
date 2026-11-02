@@ -135,7 +135,8 @@ class TestCadastrosPeloLink(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self._patch_db = mock.patch.object(banco, "DB_PATH", Path(self._tmp.name) / "t.db")
         self._patch_db.start()
-        config = {**painel_agentes._carregar_config(), "painel_agentes": CONFIG_PAINEL}
+        self.config = config = {**painel_agentes._carregar_config(), "painel_agentes": CONFIG_PAINEL,
+                                "cadastro_motorista_link": {"ativo": True}}
         p = mock.patch.object(painel_agentes, "_carregar_config", return_value=config)
         p.start()
         self.addCleanup(p.stop)
@@ -268,10 +269,27 @@ class TestCadastrosPeloLink(unittest.TestCase):
             r = self._post(f"/api/motoristas/cadastros-link/{self.cid}/tentar", {})
         self.assertEqual(r.get_json()["resultado"]["situacao"], "pendente")
         self.assertEqual(pr.call_args.args[2], self.cid)
-        with mock.patch.object(proc, "processar", side_effect=RuntimeError("boom")):
-            self.assertEqual(self._post(f"/api/motoristas/cadastros-link/{self.cid}/tentar", {}).status_code, 500)
+        self.assertTrue(pr.call_args.kwargs["forcar"])   # destrava tentativas esgotadas
+        with mock.patch.object(proc, "processar", side_effect=RuntimeError("boom https://api.vuupt.com/x")):
+            r = self._post(f"/api/motoristas/cadastros-link/{self.cid}/tentar", {})
+        self.assertEqual((r.status_code, r.get_json()), (500, {"erro": "Erro interno."}))
         self.assertEqual(self._post(f"/api/motoristas/cadastros-link/{self.cid}/resolver", {"usar_agent_id": "abc"}).status_code, 400)
         self.assertEqual(self._post("/api/motoristas/cadastros-link/9999/tentar", {}).status_code, 404)
+
+    def test_link_desligado_tentar_e_resolver_409_desfazer_segue(self):
+        from nucleo import cadastro_motorista_link as proc
+        self.config["cadastro_motorista_link"] = {"ativo": False}
+        self._logar("total")
+        with mock.patch.object(proc, "processar") as pr, mock.patch.object(proc, "resolver_conflito") as res:
+            for url, body in (("tentar", {}), ("resolver", {"usar_agent_id": 321}), ("resolver", {"usar_agent_id": None})):
+                r = self._post(f"/api/motoristas/cadastros-link/{self.cid}/{url}", body)
+                self.assertEqual((r.status_code, r.get_json()), (409, {"erro": "Cadastro pelo link desligado no config."}))
+        pr.assert_not_called()
+        res.assert_not_called()
+        ok = {"situacao": "desfeito", "erro": None, "apagados": []}
+        with mock.patch.object(proc, "desfazer_cadastro_link", return_value=ok):
+            r = self._post(f"/api/motoristas/cadastros-link/{self.cid}/desfazer", {})
+        self.assertEqual(r.status_code, 200)
 
     def test_agente_da_vuupt_pra_confirmar(self):
         from nucleo import cadastro_motorista_link as proc
@@ -288,6 +306,9 @@ class TestCadastrosPeloLink(unittest.TestCase):
         self.assertEqual(ag.call_args.args[1], 321)
         with mock.patch.object(proc, "agente_da_vuupt", return_value=None):
             self.assertEqual(self.cliente.get(url).status_code, 404)
+        with mock.patch.object(proc, "agente_da_vuupt", side_effect=RuntimeError("GET /agents: HTTP 500 token")):
+            r = self.cliente.get(url)
+        self.assertEqual((r.status_code, r.get_json()), (500, {"erro": "Erro interno."}))
         self.assertEqual(self.cliente.get("/api/motoristas/cadastros-link/9999/agente/321").status_code, 404)
 
     def test_desfazer_so_pro_total(self):

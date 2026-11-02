@@ -211,6 +211,111 @@ class TestApiCadastroLink(unittest.TestCase):
         r = self.cli.post("/api/cadastro-link", json=_dados(cpf=_cpf_valido("000000099")))
         self.assertEqual(r.status_code, 429)
 
+    # ── Revisão de segurança 02/11 (A1, M1, M2, B2) ─────────────────────────
+
+    def test_freio_do_link_nao_zera_com_restart(self):
+        for i in range(5):
+            self._criar(cpf=_cpf_valido(f"{i + 1:09d}"))
+        cli = self._app()   # app novo = restart do motorista-api
+        r = cli.post("/api/cadastro-link", json=_dados(cpf=_cpf_valido("000000099")))
+        self.assertEqual(r.status_code, 429)
+        r = cli.post("/api/cadastro-link", json=_dados(cpf=_cpf_valido("000000099")), environ_base={"REMOTE_ADDR": "10.9.9.9"})
+        self.assertEqual(r.status_code, 201)
+
+    def test_link_nao_gasta_o_freio_do_app(self):
+        for i in range(5):
+            self._criar(cpf=_cpf_valido(f"{i + 1:09d}"))
+        self.assertEqual(self.cli.post("/api/cadastro", json=_app_dados(_cpf_valido("000000019"))).status_code, 201)
+
+    def _pronto(self):
+        c = self._criar()
+        for tipo in ("cnh", "crlv", "selfie", "antt", "residencia"):
+            self._subir(c["id"], c["chave_envio"], tipo)
+        return c
+
+    def test_concluir_repetido_processa_uma_vez(self):
+        """A1: só a chamada que grava o envio abre a thread."""
+        c = self._pronto()
+        with mock.patch("nucleo.cadastro_motorista_link.processar") as proc, \
+                mock.patch.object(api_motorista.threading, "Thread", wraps=api_motorista.threading.Thread) as th:
+            respostas = []
+            for _ in range(3):
+                respostas.append(self.cli.post(f"/api/cadastro/{c['id']}/concluir", json={"chave_envio": c["chave_envio"]}))
+                self._esperar_fundo()
+        self.assertEqual([r.status_code for r in respostas], [200, 200, 200])
+        self.assertTrue(all(r.get_json() == {"ok": True, "primeiro_nome": "João"} for r in respostas))
+        self.assertEqual(th.call_count, 1)
+        proc.assert_called_once()
+
+    def test_concluir_repetido_em_conflito_nao_chama_a_vuupt(self):
+        c = self._pronto()
+        with mock.patch("nucleo.cadastro_motorista_link.processar"):
+            self.assertEqual(self.cli.post(f"/api/cadastro/{c['id']}/concluir",
+                                           json={"chave_envio": c["chave_envio"]}).status_code, 200)
+            self._esperar_fundo()
+        conn = banco.conectar()
+        conn.execute("UPDATE motoristas_cadastros SET conflito_agent_id = 321, conflito_resolvido = 0 WHERE id = ?", (c["id"],))
+        conn.commit()
+        conn.close()
+        with mock.patch("nucleo.cadastro_motorista_link.VuuptAgentes") as vuupt,                 mock.patch.object(api_motorista.threading, "Thread", wraps=api_motorista.threading.Thread) as th:
+            for _ in range(3):
+                r = self.cli.post(f"/api/cadastro/{c['id']}/concluir", json={"chave_envio": c["chave_envio"]})
+                self.assertEqual(r.status_code, 200)
+        th.assert_not_called()
+        vuupt.assert_not_called()
+        # mesmo que a thread fosse aberta, processar sem forcar recusa o conflito em aberto
+        from nucleo import cadastro_motorista_link
+        falsa = mock.Mock()
+        conn = banco.conectar()
+        try:
+            r = cadastro_motorista_link.processar(conn, {"cadastro_motorista_link": {"ativo": True}}, c["id"], vuupt=falsa)
+        finally:
+            conn.close()
+        self.assertEqual(r["situacao"], "ignorado")
+        falsa.listar_agentes.assert_not_called()
+
+    def test_fundo_com_link_desligado_nao_processa(self):
+        """M1(b): a thread confere a chave de novo (desligada entre o concluir e o processar)."""
+        c = self._pronto()
+        with mock.patch("nucleo.cadastro_motorista_link.processar") as proc,                 mock.patch("nucleo.cadastro_motorista_link.link_ativo", return_value=False):
+            r = self.cli.post(f"/api/cadastro/{c['id']}/concluir", json={"chave_envio": c["chave_envio"]})
+            self._esperar_fundo()
+        self.assertEqual(r.status_code, 200)
+        proc.assert_not_called()
+
+    def test_freio_60_por_ip_nas_rotas_da_chave(self):
+        c = self._criar()
+        url = f"/api/cadastro/{c['id']}/situacao?chave_envio={c['chave_envio']}"
+        for _ in range(60):
+            self.assertEqual(self.cli.get(url).status_code, 200)
+        r = self.cli.get(url)
+        self.assertEqual(r.status_code, 429)
+        self.assertIn("erro", r.get_json())
+        self.assertEqual(self.cli.get(url, environ_base={"REMOTE_ADDR": "10.1.1.1"}).status_code, 200)
+        # grupos separados: documentos e concluir ainda passam
+        self.assertEqual(self._subir(c["id"], c["chave_envio"], "cnh").status_code, 200)
+        for _ in range(59):
+            self._subir(c["id"], c["chave_envio"], "cnh")
+        self.assertEqual(self._subir(c["id"], c["chave_envio"], "cnh").status_code, 429)
+        for _ in range(60):
+            self.cli.post(f"/api/cadastro/{c['id']}/concluir", json={"chave_envio": "errada"})
+        self.assertEqual(self.cli.post(f"/api/cadastro/{c['id']}/concluir", json={"chave_envio": "errada"}).status_code, 429)
+
+    def test_upload_que_nao_e_foto_400(self):
+        c = self._criar()
+        r = self.cli.post(f"/api/cadastro/{c['id']}/documentos",
+                          data={"chave_envio": c["chave_envio"], "tipo": "cnh", "arquivo": (io.BytesIO(b"MZ\x90\x00" * 10), "cnh.jpg")},
+                          content_type="multipart/form-data")
+        self.assertEqual((r.status_code, r.get_json()), (400, {"erro": "Arquivo não parece uma foto ou PDF."}))
+
+    def test_log_nao_mostra_a_chave_envio(self):
+        c = self._criar()
+        with self.assertLogs("nucleo.api_motorista", "INFO") as logs:
+            self.cli.get(f"/api/cadastro/{c['id']}/situacao?chave_envio={c['chave_envio']}&x=1")
+        texto = "\n".join(logs.output)
+        self.assertNotIn(c["chave_envio"], texto)
+        self.assertIn(f"/api/cadastro/{c['id']}/situacao?chave_envio=***&x=1", texto)
+
 
 if __name__ == "__main__":
     unittest.main()

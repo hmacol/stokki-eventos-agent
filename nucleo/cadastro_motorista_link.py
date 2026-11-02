@@ -45,6 +45,11 @@ ORIGEM_GRUPO = "cadastro_motorista"
 TRAVA_MINUTOS = 10
 MAX_TENTATIVAS = 20
 MAX_EMAILS = 9
+# Teto de agentes NOVOS (licença paga) criados pelo link por dia; config
+# cadastro_motorista_link.max_agentes_dia. Passou disso o cadastro fica
+# pendente (sem POST) e o grupo recebe a pendência.
+MAX_AGENTES_DIA = 10
+MSG_LIMITE_AGENTES = "limite diário de agentes novos atingido"
 # nao_enviado = canal em pausa ou teto do dia: o motorista ainda não recebeu o login
 BOAS_VINDAS_DE_NOVO = ("falhou", "indeterminado", "nao_enviado")
 AVISO_GRUPO_DE_NOVO = ("falhou", "nao_enviado")
@@ -59,6 +64,21 @@ _FMT = "%Y-%m-%d %H:%M:%S"
 
 class _PendenciaVuupt(ErroVuupt):
     """Erro que a equipe precisa conferir: a mensagem vai inteira como pendência pro grupo."""
+
+
+def link_ativo(config: dict) -> bool:
+    """cadastro_motorista_link.ativo: desligado também para o timer e o processamento (botão de parada)."""
+    return bool((config.get("cadastro_motorista_link") or {}).get("ativo"))
+
+
+def _max_agentes_dia(config: dict) -> int:
+    v = (config.get("cadastro_motorista_link") or {}).get("max_agentes_dia")
+    return MAX_AGENTES_DIA if v is None else int(v)
+
+
+def _agentes_criados_hoje(conn, agora: datetime) -> int:
+    return conn.execute("SELECT COUNT(*) FROM motoristas_cadastros WHERE origem = ? AND agente_criado = 1 "
+                        "AND agente_criado_em >= ?", (ORIGEM_LINK, agora.strftime("%Y-%m-%d"))).fetchone()[0]
 
 
 def _avisar_grupo_padrao(config, tipo, texto, assinatura, modo_teste=False):
@@ -116,15 +136,18 @@ def _dono_do_telefone(conn, agentes: list, c: dict):
     return None
 
 
-def _criar_agente(conn, vuupt, agentes: list, c: dict) -> int:
+def _criar_agente(conn, vuupt, agentes: list, c: dict, config: dict, agora: datetime) -> int:
     nosso = _email(c.get("vuupt_email"))
     if nosso:
         achado = next((a for a in agentes if not a.get("deleted_at") and _email(a.get("email")) == nosso), None)
         if achado:
             logger.info("cadastro #%s: agente %s já existia na Vuupt com %s", c["id"], achado["id"], nosso)
             # e-mail gravado por este cadastro antes do POST: o agente é nosso
-            _gravar(conn, c["id"], agent_id=int(achado["id"]), agente_criado=1)
+            _gravar(conn, c["id"], agent_id=int(achado["id"]), agente_criado=1, agente_criado_em=agora.strftime(_FMT))
             return int(achado["id"])
+    if _agentes_criados_hoje(conn, agora) >= _max_agentes_dia(config):
+        logger.warning("cadastro #%s: %s (%s)", c["id"], MSG_LIMITE_AGENTES, _max_agentes_dia(config))
+        raise _PendenciaVuupt(MSG_LIMITE_AGENTES, None, "")
     # e-mail de agente apagado continua ocupado (a Vuupt não deixa reusar)
     ocupados = {_email(a.get("email")) for a in agentes if a.get("email")}
     ocupados |= {_email(r[0]) for r in conn.execute(
@@ -152,7 +175,7 @@ def _criar_agente(conn, vuupt, agentes: list, c: dict) -> int:
                 ocupados.add(email)
                 continue
             raise
-        _gravar(conn, c["id"], agent_id=agent_id, agente_criado=1)
+        _gravar(conn, c["id"], agent_id=agent_id, agente_criado=1, agente_criado_em=agora.strftime(_FMT))
         logger.info("cadastro #%s: agente %s criado na Vuupt (%s)", c["id"], agent_id, email)
         return agent_id
     raise ErroVuupt(f"Vuupt recusou {MAX_EMAILS} tentativas de criar o agente", 422, "")
@@ -230,12 +253,16 @@ def _tabela(conn, config: dict, c: dict) -> None:
 # ── Processamento ─────────────────────────────────────────────────────────────
 
 def processar(conn: sqlite3.Connection, config: dict, cadastro_id: int, *, vuupt=None, avisar_grupo=None,
-              avisar_motorista=None, agora: datetime | None = None) -> dict:
+              avisar_motorista=None, agora: datetime | None = None, forcar: bool = False) -> dict:
     """Leva um cadastro enviado até o fim (ou até onde der). Devolve
     {"situacao": concluido | pendente | conflito | ocupado | ignorado, "erro": str | None}.
-    `ignorado` = não é do link, não foi enviado ou já concluiu (nada é feito)."""
+    `ignorado` = não é do link, não foi enviado ou já concluiu (nada é feito);
+    sem `forcar` também com MAX_TENTATIVAS esgotadas ou conflito em aberto
+    (os mesmos filtros do retentar). Só o painel ("Tentar de novo" e
+    resolver) passa forcar=True."""
     agora = agora or datetime.now()
-    if _ignorar(buscar_cadastro(conn, cadastro_id)):
+    c = buscar_cadastro(conn, cadastro_id)
+    if _ignorar(c) or (not forcar and _parado(c)):
         return {"situacao": "ignorado", "erro": None}
     trava = agora.strftime(_FMT)
     cur = conn.execute("UPDATE motoristas_cadastros SET processando_em = ? WHERE id = ? "
@@ -264,6 +291,12 @@ def _pendente(conn, cadastro_id: int, erro: str) -> dict:
 
 def _ignorar(c) -> bool:
     return not c or c.get("origem") != ORIGEM_LINK or not c.get("enviado_em") or bool(c.get("concluido_em"))
+
+
+def _parado(c) -> bool:
+    """Esgotou as tentativas ou tem conflito em aberto: só o painel destrava."""
+    return ((c.get("tentativas") or 0) >= MAX_TENTATIVAS
+            or (c.get("conflito_agent_id") is not None and not c.get("conflito_resolvido")))
 
 
 def _registrar_conflito(conn, cadastro_id: int, dono: int, tipo: str) -> None:
@@ -296,7 +329,7 @@ def _processar(conn, config, cadastro_id, vuupt, avisar_grupo, avisar_motorista,
         if situacao is None:
             etapa = "agente"
             if not c["agent_id"]:
-                c["agent_id"] = _criar_agente(conn, vuupt, agentes, c)
+                c["agent_id"] = _criar_agente(conn, vuupt, agentes, c, config, agora)
             etapa = "veiculo"
             dono = _veiculo(conn, vuupt, c)
             if dono is not None:
@@ -429,7 +462,7 @@ def resolver_conflito(conn: sqlite3.Connection, config: dict, cadastro_id: int, 
             _espelhar(conn)
     logger.info("cadastro #%s: conflito resolvido por %s (%s)", cadastro_id, usuario,
                 f"usar agente {usar_agent_id}" if usar_agent_id is not None else "agente novo")
-    return processar(conn, config, cadastro_id, vuupt=vuupt, **kw)
+    return processar(conn, config, cadastro_id, vuupt=vuupt, forcar=True, **kw)
 
 
 def desfazer_cadastro_link(conn: sqlite3.Connection, config: dict, cadastro_id: int, usuario: str, *,
@@ -482,7 +515,11 @@ def desfazer_cadastro_link(conn: sqlite3.Connection, config: dict, cadastro_id: 
 
 def retentar(conn: sqlite3.Connection, config: dict, **kw) -> list[dict]:
     """Todos os cadastros do link enviados e não concluídos, sem conflito em
-    aberto e com menos de MAX_TENTATIVAS. Cada item = {"id", "situacao", "erro"}."""
+    aberto e com menos de MAX_TENTATIVAS. Cada item = {"id", "situacao", "erro"}.
+    Com cadastro_motorista_link.ativo desligado não faz nada."""
+    if not link_ativo(config):
+        logger.info("cadastro_motorista_link.ativo desligado: retentar não processa nada.")
+        return []
     ids = [r[0] for r in conn.execute(
         "SELECT id FROM motoristas_cadastros WHERE origem = ? AND enviado_em IS NOT NULL AND concluido_em IS NULL "
         "AND tentativas < ? AND NOT (conflito_agent_id IS NOT NULL AND conflito_resolvido = 0) ORDER BY id",
@@ -572,8 +609,12 @@ def main(argv=None) -> int:
                 logger.error("vuupt_api.token ausente no config.yaml.")
                 return 1
             kw = {"vuupt": VuuptAgentes(config["vuupt_api"]["token"])}
-        resultados = ([{"id": args.id, **processar(conn, config, args.id, **kw)}] if args.id
-                      else retentar(conn, config, **kw))
+        if args.id and not link_ativo(config):
+            logger.info("cadastro_motorista_link.ativo desligado: cadastro #%s não processado.", args.id)
+            resultados = []
+        else:
+            resultados = ([{"id": args.id, **processar(conn, config, args.id, **kw)}] if args.id
+                          else retentar(conn, config, **kw))
     finally:
         motoristas_banco.escrever_espelho = espelho_original
         conn.close()

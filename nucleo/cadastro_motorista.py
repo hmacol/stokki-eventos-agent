@@ -21,7 +21,7 @@ import re
 import secrets
 import sqlite3
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent
@@ -54,6 +54,9 @@ EXTENSOES_DOCUMENTO = {"jpg", "jpeg", "png", "webp", "heic", "pdf"}
 POSICOES = ("FIXO", "ESPORADICO")
 CELULARES = ("ANDROID", "IPHONE")
 MAX_FOTO_BYTES = 10 * 1024 * 1024
+MAX_NOME = 120
+# Freio do POST /api/cadastro-link, contado no banco (coluna ip_origem).
+LIMITE_LINK_IP_HORA, LIMITE_LINK_DIA = 5, 40
 CAMPOS_EDITAVEIS = ("telefone", "email", "chave_pix", "placa")
 # PIN provisório da aprovação: sorteado por motorista (o painel mostra uma
 # vez e o Hugo manda no WhatsApp); o app obriga a troca no 1º login.
@@ -289,10 +292,26 @@ def _escolha(valor, permitidos, rotulo: str) -> str:
     return v
 
 
-def criar_cadastro_link(conn: sqlite3.Connection, dados: dict) -> dict:
+def _freio_link(conn: sqlite3.Connection, ip: str | None) -> None:
+    """Teto de cadastros do link contado no banco (restart não zera): 5 por IP
+    na última hora e 40 nas últimas 24 h. Chamar dentro do BEGIN IMMEDIATE
+    do INSERT, pra dois pedidos simultâneos não passarem juntos."""
+    agora = datetime.now()
+    hora = (agora - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+    dia = (agora - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    total = conn.execute("SELECT COUNT(*) FROM motoristas_cadastros WHERE origem = ? AND criado_em >= ?",
+                         (ORIGEM_LINK, dia)).fetchone()[0]
+    por_ip = conn.execute("SELECT COUNT(*) FROM motoristas_cadastros WHERE origem = ? AND ip_origem = ? AND criado_em >= ?",
+                          (ORIGEM_LINK, ip, hora)).fetchone()[0] if ip else 0
+    if por_ip >= LIMITE_LINK_IP_HORA or total >= LIMITE_LINK_DIA:
+        raise CadastroInvalido("Muitos pedidos de cadastro. Tente de novo mais tarde.", 429)
+
+
+def criar_cadastro_link(conn: sqlite3.Connection, dados: dict, ip: str | None = None) -> dict:
     """Cadastro vindo do link público (sem login). Devolve {id, chave_envio}.
     Diferente do app: pendente anterior do mesmo CPF vira SUBSTITUIDO (o
-    motorista pode refazer o formulário) em vez de barrar."""
+    motorista pode refazer o formulário) em vez de barrar. Só o cadastro
+    criado conta no freio (`ip` gravado em ip_origem)."""
     dados = dados or {}
     cpf = auth.normalizar_cpf(dados.get("cpf"))
     if not cpf_valido(cpf):
@@ -300,6 +319,8 @@ def criar_cadastro_link(conn: sqlite3.Connection, dados: dict) -> dict:
     nome = re.sub(r"\s+", " ", str(dados.get("nome") or "")).strip()
     if len(nome) < 5 or " " not in nome:
         raise CadastroInvalido("Informe o nome completo.")
+    if len(nome) > MAX_NOME:
+        raise CadastroInvalido(f"Nome longo demais (até {MAX_NOME} caracteres).")
     nascimento = _data_nascimento(dados.get("data_nascimento"))
     telefone = validar_telefone(dados.get("telefone"))
     if not telefone:
@@ -346,19 +367,28 @@ def criar_cadastro_link(conn: sqlite3.Connection, dados: dict) -> dict:
         raise CadastroInvalido("Você já é motorista da Fresh Log. Entre no app com o seu PIN "
                                "ou fale com a Fresh Log.", 409)
 
-    conn.execute("UPDATE motoristas_cadastros SET status = ? WHERE cpf = ? AND status = ?",
-                 (STATUS_SUBSTITUIDO, cpf, STATUS_PENDENTE))
-    chave = secrets.token_urlsafe(24)
-    cur = conn.execute("""
-        INSERT INTO motoristas_cadastros (cpf, nome, telefone, chave_pix, placa, tipo_veiculo, zonas, dias,
-                                          aceita_viagens, dono_veiculo, chave_envio, status, criado_em, origem,
-                                          data_nascimento, emite_nf, posicao, celular, veiculo_modelo, veiculo_ano,
-                                          refrigerado, temp_min_c)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (cpf, nome, telefone, chave_pix, placa, tipo_veiculo, ",".join(zonas), ",".join(dias),
-          int(bool(dados.get("dono_veiculo", True))), chave, STATUS_PENDENTE, banco.agora(), ORIGEM_LINK,
-          nascimento, int(bool(dados.get("emite_nf"))), posicao, celular, modelo, ano, int(refrigerado), temp_min))
-    conn.commit()
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        _freio_link(conn, ip)
+        conn.execute("UPDATE motoristas_cadastros SET status = ? WHERE cpf = ? AND status = ?",
+                     (STATUS_SUBSTITUIDO, cpf, STATUS_PENDENTE))
+        chave = secrets.token_urlsafe(24)
+        cur = conn.execute("""
+            INSERT INTO motoristas_cadastros (cpf, nome, telefone, chave_pix, placa, tipo_veiculo, zonas, dias,
+                                              aceita_viagens, dono_veiculo, chave_envio, status, criado_em, origem,
+                                              data_nascimento, emite_nf, posicao, celular, veiculo_modelo, veiculo_ano,
+                                              refrigerado, temp_min_c, ip_origem)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (cpf, nome, telefone, chave_pix, placa, tipo_veiculo, ",".join(zonas), ",".join(dias),
+              int(bool(dados.get("dono_veiculo", True))), chave, STATUS_PENDENTE, banco.agora(), ORIGEM_LINK,
+              nascimento, int(bool(dados.get("emite_nf"))), posicao, celular, modelo, ano, int(refrigerado), temp_min,
+              ip))
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
     logger.info("cadastro #%s (link) criado pra %s (%s)", cur.lastrowid, nome, tipo_veiculo)
     return {"id": cur.lastrowid, "chave_envio": chave}
 
@@ -377,22 +407,30 @@ def _so_link(row):
     return row
 
 
-def marcar_enviado(conn: sqlite3.Connection, cadastro_id: int, chave_envio: str) -> dict:
+def registrar_envio(conn: sqlite3.Connection, cadastro_id: int, chave_envio: str) -> tuple[dict, bool]:
     """Botão "Enviar" do link: exige os 5 documentos, grava enviado_em e já
-    deixa APROVADO (revisado_por='link'). Chamar de novo devolve o cadastro
-    sem mexer."""
+    deixa APROVADO (revisado_por='link'). Devolve (cadastro, gravou): gravou
+    = esta chamada registrou o envio (só ela dispara o processamento);
+    chamar de novo devolve o cadastro sem mexer e gravou=False."""
     row = _so_link(_por_chave(conn, cadastro_id, chave_envio))
     if row["enviado_em"]:
-        return buscar_cadastro(conn, cadastro_id)
+        return buscar_cadastro(conn, cadastro_id), False
     if row["status"] != STATUS_PENDENTE:
         raise CadastroInvalido("Este cadastro não está mais aberto para envio.", 409)
     if not buscar_cadastro(conn, cadastro_id)["completo"]:
         raise CadastroInvalido("Faltam documentos: envie os 5 antes de concluir.")
     agora = banco.agora()
-    conn.execute("UPDATE motoristas_cadastros SET enviado_em = ?, status = ?, revisado_em = ?, revisado_por = ? WHERE id = ?",
-                 (agora, STATUS_APROVADO, agora, ORIGEM_LINK, cadastro_id))
+    # condicional: dois "Enviar" simultâneos, só um grava
+    cur = conn.execute("UPDATE motoristas_cadastros SET enviado_em = ?, status = ?, revisado_em = ?, revisado_por = ? "
+                       "WHERE id = ? AND enviado_em IS NULL AND status = ?",
+                       (agora, STATUS_APROVADO, agora, ORIGEM_LINK, cadastro_id, STATUS_PENDENTE))
     conn.commit()
-    return buscar_cadastro(conn, cadastro_id)
+    return buscar_cadastro(conn, cadastro_id), cur.rowcount == 1
+
+
+def marcar_enviado(conn: sqlite3.Connection, cadastro_id: int, chave_envio: str) -> dict:
+    """registrar_envio sem o indicador (testes e chamadores antigos)."""
+    return registrar_envio(conn, cadastro_id, chave_envio)[0]
 
 
 def situacao_link(conn: sqlite3.Connection, cadastro_id: int, chave_envio: str) -> dict:
@@ -402,6 +440,24 @@ def situacao_link(conn: sqlite3.Connection, cadastro_id: int, chave_envio: str) 
     return {"id": c["id"], "primeiro_nome": (c["nome"] or "").split(" ")[0],
             "documentos": {t: c[f"tem_{t}"] for t in DOCUMENTOS}, "enviado": bool(c.get("enviado_em")),
             "status": c["status"]}
+
+
+_MARCAS_HEIC = {b"heic", b"heix", b"mif1", b"msf1", b"hevc"}
+
+
+def tipo_do_arquivo(conteudo: bytes) -> str | None:
+    """Extensão pelos bytes do começo (JPEG, PNG, WEBP, PDF, HEIC) ou None."""
+    if conteudo[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if conteudo[:4] == b"\x89PNG":
+        return "png"
+    if conteudo[:4] == b"RIFF" and conteudo[8:12] == b"WEBP":
+        return "webp"
+    if conteudo[:4] == b"%PDF":
+        return "pdf"
+    if conteudo[4:8] == b"ftyp" and conteudo[8:12] in _MARCAS_HEIC:
+        return "heic"
+    return None
 
 
 def guardar_documento(conn: sqlite3.Connection, cadastro_id: int, chave_envio: str, tipo: str,
@@ -423,8 +479,15 @@ def guardar_documento(conn: sqlite3.Connection, cadastro_id: int, chave_envio: s
         raise CadastroInvalido("Arquivo vazio.")
     if len(conteudo) > MAX_FOTO_BYTES:
         raise CadastroInvalido("Foto grande demais (máx. 10 MB).", 413)
+    # o nome segue o conteúdo (iPhone manda HEIC chamado .jpg); o que não é foto/PDF não entra
+    ext = tipo_do_arquivo(conteudo)
+    if not ext:
+        raise CadastroInvalido("Arquivo não parece uma foto ou PDF.")
     pasta = pasta_cadastros() / str(cadastro_id)
     pasta.mkdir(parents=True, exist_ok=True)
+    # um arquivo por tipo: o reenvio com outra extensão não deixa o antigo no disco
+    for antigo in pasta.glob(f"{tipo}.*"):
+        antigo.unlink()
     nome = f"{tipo}.{ext}"
     (pasta / nome).write_bytes(conteudo)
     conn.execute(f"UPDATE motoristas_cadastros SET {tipo}_arquivo = ? WHERE id = ?", (nome, cadastro_id))

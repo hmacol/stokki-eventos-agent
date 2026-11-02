@@ -28,6 +28,7 @@ pedidos/{codigo}/{tipo}/...).
 """
 import hashlib
 import logging
+import re
 import secrets
 import sys
 import threading
@@ -126,8 +127,10 @@ def criar_app(config: dict | None = None) -> Flask:
         if request.path != "/api/saude":
             ms = int((time.monotonic() - getattr(g, "inicio", time.monotonic())) * 1000)
             agente = (getattr(g, "motorista", None) or {}).get("agent_id")
+            # chave_envio do cadastro pelo link não vai pro journal
+            caminho = re.sub(r"(chave_envio=)[^&]*", r"\g<1>***", request.full_path.rstrip("?"))
             logger.info("%s %s -> %s %dms agent=%s ip=%s len=%s",
-                        request.method, request.full_path.rstrip("?"), resp.status_code, ms, agente,
+                        request.method, caminho, resp.status_code, ms, agente,
                         request.remote_addr, request.content_length)
         return resp
 
@@ -245,8 +248,9 @@ def criar_app(config: dict | None = None) -> Flask:
             _avisar_whatsapp("alteracao_cadastro", notificar_whatsapp.texto_alteracao_cadastro(m["nome"], mudancas))
         return jsonify({"motorista": auth.publico(m), "mudancas": mudancas})
 
-    # Rota pública: freio simples em memória contra enxurrada (5 pedidos por
+    # Rota pública do app: freio simples em memória contra enxurrada (5 pedidos por
     # IP a cada hora, 40 por dia no total). O IP real vem do ProxyFix (x_for).
+    # O cadastro pelo link tem o próprio freio, contado no banco.
     _pedidos_cadastro: dict[str, list[float]] = {}
     LIMITE_CADASTRO_IP, LIMITE_CADASTRO_DIA = 5, 40
 
@@ -272,8 +276,25 @@ def criar_app(config: dict | None = None) -> Flask:
         _pedidos_cadastro.setdefault(ip, []).append(time.time())
         return jsonify(r), 201
 
+    # Freio por IP das rotas públicas que usam a chave_envio (documentos,
+    # situação, concluir): 60 por IP por hora em cada grupo, em memória.
+    _pedidos_por_grupo: dict[tuple[str, str], list[float]] = {}
+    LIMITE_ROTA_IP_HORA = 60
+
+    def _freio(grupo: str) -> None:
+        agora, ip = time.time(), request.remote_addr or "?"
+        for chave in list(_pedidos_por_grupo):
+            _pedidos_por_grupo[chave] = [t for t in _pedidos_por_grupo[chave] if agora - t < 3600]
+            if not _pedidos_por_grupo[chave]:
+                del _pedidos_por_grupo[chave]
+        lista = _pedidos_por_grupo.setdefault((grupo, ip), [])
+        if len(lista) >= LIMITE_ROTA_IP_HORA:
+            raise cadastro.CadastroInvalido("Muitos pedidos. Tente de novo mais tarde.", 429)
+        lista.append(agora)
+
     @app.post("/api/cadastro/<int:cadastro_id>/documentos")
     def cadastro_documento(cadastro_id):
+        _freio("documentos")
         arq = request.files.get("arquivo")
         if arq is None or not arq.filename:
             raise cadastro.CadastroInvalido("Mande a foto no campo 'arquivo'.")
@@ -312,35 +333,41 @@ def criar_app(config: dict | None = None) -> Flask:
 
     @app.post("/api/cadastro-link")
     def cadastro_link_novo():
+        """Freio contado no banco (5/IP/hora, 40/24 h; restart não zera), à
+        parte do /api/cadastro do app."""
         _exigir_link()
-        ip = request.remote_addr or "?"
-        _freio_cadastro(ip)
-        r = cadastro.criar_cadastro_link(conn(), corpo())
-        _pedidos_cadastro.setdefault(ip, []).append(time.time())
+        r = cadastro.criar_cadastro_link(conn(), corpo(), ip=request.remote_addr or "?")
         return jsonify(r), 201
 
     @app.get("/api/cadastro/<int:cadastro_id>/situacao")
     def cadastro_link_situacao(cadastro_id):
         _exigir_link()
+        _freio("situacao")
         return jsonify(cadastro.situacao_link(conn(), cadastro_id, request.args.get("chave_envio")))
 
     @app.post("/api/cadastro/<int:cadastro_id>/concluir")
     def cadastro_link_concluir(cadastro_id):
         _exigir_link()
+        _freio("concluir")
         chave = corpo().get("chave_envio")
-        cadastro.marcar_enviado(conn(), cadastro_id, chave)
+        _, gravou = cadastro.registrar_envio(conn(), cadastro_id, chave)
         primeiro_nome = cadastro.situacao_link(conn(), cadastro_id, chave)["primeiro_nome"]
-        # Vuupt + intervalo do WhatsApp levam 20-40 s: o motorista não espera.
-        # A thread guardada em app.config é o gancho dos testes (join).
-        t = threading.Thread(target=_processar_link_em_fundo, args=(cadastro_id,), daemon=True)
-        app.config["THREAD_CADASTRO_LINK"] = t
-        t.start()
+        # Só a chamada que registrou o envio processa; repetir só responde (quem retenta é o timer).
+        if gravou:
+            # Vuupt + intervalo do WhatsApp levam 20-40 s: o motorista não espera.
+            # A thread guardada em app.config é o gancho dos testes (join).
+            t = threading.Thread(target=_processar_link_em_fundo, args=(cadastro_id,), daemon=True)
+            app.config["THREAD_CADASTRO_LINK"] = t
+            t.start()
         return jsonify({"ok": True, "primeiro_nome": primeiro_nome})
 
     def _processar_link_em_fundo(cadastro_id: int) -> None:
+        from nucleo import cadastro_motorista_link
+        if not cadastro_motorista_link.link_ativo(app.config["CONFIG_PROJETO"]):
+            logger.info("cadastro_motorista_link.ativo desligado: cadastro #%s fica pro timer.", cadastro_id)
+            return
         c = banco.conectar()
         try:
-            from nucleo import cadastro_motorista_link
             cadastro_motorista_link.processar(c, app.config["CONFIG_PROJETO"], cadastro_id)
         except Exception:
             # O cadastro já está salvo e enviado; o timer de retentativa termina o serviço.

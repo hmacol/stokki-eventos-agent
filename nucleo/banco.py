@@ -363,6 +363,8 @@ _COLUNAS_CADASTRO_LINK = [
     ("conflito_tipo", "TEXT"),                   # telefone | placa
     ("agente_criado", "INTEGER"),                # 1 = o POST deste cadastro criou o agente (desfazer pode apagar)
     ("vehicle_criado", "INTEGER"),               # 1 = este cadastro criou o veículo (não reaproveitou)
+    ("agente_criado_em", "TEXT"),                # quando o POST criou o agente (teto diário max_agentes_dia)
+    ("ip_origem", "TEXT"),                       # IP do POST /api/cadastro-link (freio por IP no banco)
 ]
 
 

@@ -23,8 +23,9 @@ from nucleo.vuupt_agentes import ErroVuupt  # noqa: E402
 from regras import motoristas_banco  # noqa: E402
 
 AGORA = datetime(2026, 11, 2, 10, 0, 0)
-CONFIG = {"vuupt_api": {"token": "x"},
+CONFIG = {"vuupt_api": {"token": "x"}, "cadastro_motorista_link": {"ativo": True},
           "portal_cliente": {"chamados": {"url_painel": "https://painel.teste/painel/"}}}
+JPEG = b"\xff\xd8\xff\xe0" + b"0" * 50
 
 
 def _cpf_com_dv(base9: str) -> str:
@@ -134,7 +135,7 @@ class TestProcessador(unittest.TestCase):
     def _enviado(self, **extra):
         r = cad.criar_cadastro_link(self.conn, _dados(**extra))
         for t in cad.DOCUMENTOS:
-            cad.guardar_documento(self.conn, r["id"], r["chave_envio"], t, f"{t}.jpg", b"x" * 50)
+            cad.guardar_documento(self.conn, r["id"], r["chave_envio"], t, f"{t}.jpg", JPEG)
         cad.marcar_enviado(self.conn, r["id"], r["chave_envio"])
         return r["id"]
 
@@ -425,7 +426,7 @@ class TestProcessador(unittest.TestCase):
     def test_contar_pendentes_ignora_cadastro_do_link(self):
         r = cad.criar_cadastro_link(self.conn, _dados())
         for t in cad.DOCUMENTOS:
-            cad.guardar_documento(self.conn, r["id"], r["chave_envio"], t, f"{t}.jpg", b"x" * 50)
+            cad.guardar_documento(self.conn, r["id"], r["chave_envio"], t, f"{t}.jpg", JPEG)
         self.assertEqual(cad.contar_pendentes(self.conn), 0)
 
     def test_conflito_telefone_na_tabela(self):
@@ -790,6 +791,90 @@ class TestProcessador(unittest.TestCase):
         self.assertEqual([x["id"] for x in res], [cid])
         self.assertIsNone(self._linha(nao_enviado)["agent_id"])
 
+    # ── Revisão de segurança 02/11 (A1, M1) ──────────────────────────────────
+
+    def test_processar_sem_forcar_ignora_esgotado_e_conflito_em_aberto(self):
+        """A1: processar vindo da API não pula os filtros do retentar."""
+        cid = self._enviado()
+        self.conn.execute("UPDATE motoristas_cadastros SET tentativas = 20 WHERE id = ?", (cid,))
+        self.conn.commit()
+        self.assertEqual(self._processar(cid), {"situacao": "ignorado", "erro": None})
+        self.conn.execute("UPDATE motoristas_cadastros SET tentativas = 0, conflito_agent_id = 321, "
+                          "conflito_resolvido = 0 WHERE id = ?", (cid,))
+        self.conn.commit()
+        self.assertEqual(self._processar(cid), {"situacao": "ignorado", "erro": None})
+        self.assertEqual(sum(self.vuupt.chamadas.values()), 0)   # nem listar_agentes
+        self.assertIsNone(self._linha(cid)["processando_em"])
+        self.grupo.assert_not_called()
+
+    def test_forcar_destrava_esgotado(self):
+        """O "Tentar de novo" do painel passa forcar=True."""
+        cid = self._enviado()
+        self.conn.execute("UPDATE motoristas_cadastros SET tentativas = 20 WHERE id = ?", (cid,))
+        self.conn.commit()
+        r = proc.processar(self.conn, CONFIG, cid, vuupt=self.vuupt, avisar_grupo=self.grupo,
+                           avisar_motorista=self.motorista, agora=AGORA, forcar=True)
+        self.assertEqual(r["situacao"], "concluido")
+
+    def test_resolver_destrava_conflito_com_tentativas_esgotadas(self):
+        self.vuupt.agentes.append({"id": 321, "name": "Fulano", "email": "f@x.com", "phone_number": "+5511998765432"})
+        cid = self._enviado()
+        self.assertEqual(self._processar(cid)["situacao"], "conflito")
+        self.conn.execute("UPDATE motoristas_cadastros SET tentativas = 20 WHERE id = ?", (cid,))
+        self.conn.commit()
+        self.assertEqual(self._resolver(cid, None)["situacao"], "concluido")
+
+    def test_retentar_desligado_nao_faz_nada(self):
+        """M1(b): ativo desligado é o botão de parada também pro timer."""
+        cid = self._enviado()
+        desligado = {**CONFIG, "cadastro_motorista_link": {"ativo": False}}
+        with self.assertLogs("nucleo.cadastro_motorista_link", "INFO") as logs:
+            self.assertEqual(proc.retentar(self.conn, desligado, vuupt=self.vuupt, avisar_grupo=self.grupo,
+                                           avisar_motorista=self.motorista, agora=AGORA), [])
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn("desligado", logs.output[0])
+        sem_chave = {k: v for k, v in CONFIG.items() if k != "cadastro_motorista_link"}
+        self.assertEqual(proc.retentar(self.conn, sem_chave, vuupt=self.vuupt), [])
+        self.assertEqual(sum(self.vuupt.chamadas.values()), 0)
+        self.assertIsNone(self._linha(cid)["agent_id"])
+
+    def test_teto_diario_de_agentes_novos(self):
+        """M1(a): passou do teto, não faz POST; pendência no grupo; no outro dia segue."""
+        cfg = {**CONFIG, "cadastro_motorista_link": {"ativo": True, "max_agentes_dia": 1}}
+        primeiro = self._enviado()
+        segundo = self._enviado(cpf=_cpf_com_dv("222555888"), telefone="11911112222", placa="DEF1G23")
+        kw = dict(vuupt=self.vuupt, avisar_grupo=self.grupo, avisar_motorista=self.motorista, agora=AGORA)
+        self.assertEqual(proc.processar(self.conn, cfg, primeiro, **kw)["situacao"], "concluido")
+        self.assertEqual(self._linha(primeiro)["agente_criado_em"], "2026-11-02 10:00:00")
+        self.grupo.reset_mock()
+        r = proc.processar(self.conn, cfg, segundo, **kw)
+        self.assertEqual(r["situacao"], "pendente")
+        self.assertIn(proc.MSG_LIMITE_AGENTES, r["erro"])
+        self.assertEqual(len(self.vuupt.posts_agente), 1)
+        l = self._linha(segundo)
+        self.assertIn(proc.MSG_LIMITE_AGENTES, l["ultimo_erro"])
+        self.assertEqual(l["tentativas"], 1)
+        self.assertIsNone(l["agent_id"])
+        self.assertIn(proc.MSG_LIMITE_AGENTES, self._textos_grupo()[0][1])
+        self.motorista.assert_called_once()   # só as boas-vindas do primeiro
+        amanha = dict(kw, agora=AGORA + timedelta(days=1))
+        self.assertEqual(proc.processar(self.conn, cfg, segundo, **amanha)["situacao"], "concluido")
+        self.assertEqual(len(self.vuupt.posts_agente), 2)
+
+    def test_teto_padrao_e_10_e_conta_so_criados_pelo_link(self):
+        for i in range(proc.MAX_AGENTES_DIA):
+            self.conn.execute("INSERT INTO motoristas_cadastros (cpf, nome, chave_envio, status, criado_em, origem, "
+                              "agente_criado, agente_criado_em) VALUES (?, 'X Y', ?, 'APROVADO', ?, 'link', 1, ?)",
+                              (f"{i:011d}", f"k{i}", "2026-11-02 08:00:00", "2026-11-02 08:00:00"))
+        self.conn.commit()
+        cid = self._enviado()
+        self.assertEqual(self._processar(cid)["situacao"], "pendente")
+        self.assertEqual(self.vuupt.posts_agente, [])
+        # agente apagado no "Desfazer" (agente_criado = 0) libera a vaga
+        self.conn.execute("UPDATE motoristas_cadastros SET agente_criado = 0 WHERE cpf = '00000000000'")
+        self.conn.commit()
+        self.assertEqual(self._processar(cid)["situacao"], "concluido")
+
 
 class TestMain(unittest.TestCase):
     def setUp(self):
@@ -805,7 +890,7 @@ class TestMain(unittest.TestCase):
         conn = banco.conectar()
         r = cad.criar_cadastro_link(conn, _dados())
         for t in cad.DOCUMENTOS:
-            cad.guardar_documento(conn, r["id"], r["chave_envio"], t, f"{t}.jpg", b"x" * 50)
+            cad.guardar_documento(conn, r["id"], r["chave_envio"], t, f"{t}.jpg", JPEG)
         cad.marcar_enviado(conn, r["id"], r["chave_envio"])
         conn.close()
         with mock.patch.object(proc, "_carregar_config", return_value=dict(CONFIG)), \
@@ -820,6 +905,12 @@ class TestMain(unittest.TestCase):
         finally:
             conn.close()
         self.assertFalse(motoristas_banco.caminho_espelho().exists())
+
+    def test_id_com_link_desligado_nao_processa(self):
+        desligado = {**CONFIG, "cadastro_motorista_link": {"ativo": False}}
+        with mock.patch.object(proc, "_carregar_config", return_value=desligado), \
+                mock.patch.object(proc, "processar", side_effect=AssertionError("processou")):
+            self.assertEqual(proc.main(["--id", "1"]), 0)
 
 
 if __name__ == "__main__":
