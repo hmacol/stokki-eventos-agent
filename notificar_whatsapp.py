@@ -177,6 +177,7 @@ NOMES_DAS_TAREFAS = {
     "backup-gcs": "Cópia de segurança diária dos dados",
     "batimento-pedidos": "Batimento diário dos pedidos",
     "backup-horario": "Cópia de segurança de hora em hora",
+    "cadastro-motorista-link": "Cadastro do motorista novo na Vuupt",
     "cancelar-rotas-sem-motorista": "Aviso das rotas sem baixa",
     "coleta-emporio-quatro-estrelas": "Coleta diária do Empório Quatro Estrelas",
     "comparar-pool": "Conferência dos pedidos que aguardam rota",
