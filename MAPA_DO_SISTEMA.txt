@@ -106,7 +106,9 @@
                                               ouve o evento do _menu_lateral_script), API /api/sidebar/contadores + /api/avisos/ignorar,
                                               tabela painel_avisos_ignorados, módulo painel_agentes/avisos_pendencias.py
  Login / níveis de acesso do painel ........ painel_agentes/painel_agentes.py (requer_auth)
- WMS do galpão ............................. painel_agentes/wms.py, wms_pedidos.py
+ WMS do galpão ............................. painel_agentes/wms.py, wms_pedidos.py, wms_caixas.py
+                                             (caixas com serial/eventos), wms_fila_impressao.py (fila de etiquetas)
+                                             Spec: docs/superpowers/specs/2026-11-01-galpao-separacao-conferencia-etiquetagem-design.md
  Portal do cliente ......................... portal_cliente/app.py
  Embarcador novo na Stokki (pré-cadastro) .. embarcadores_stokki.py (timer stokki-embarcadores-novos, 07h-19h)
                                              + cadastro_embarcador.py; tela /cliente/completar-cadastro;
@@ -374,6 +376,7 @@
  a cada 15 min               wms-reservar-pedidos            sincronizar_pedidos_wms.py
  xx:09 e xx:39               wms-recebimentos                sincronizar_recebimentos_wms.py
  xx:07 e xx:37               wms-sincronizar-produtos        sincronizar_produtos_stokki.py
+ 06h40                       wms-checar-caixas               checar_caixas_wms.py
  a cada minuto               atendimento-reenviar-pendentes  atendimento/reenviar_pendentes.py
  a cada 5 min                atendimento-monitorar-saude-ev. atendimento/monitorar_saude_evolution.py
  a cada 2 min                avisar-cliente-sem-resposta     avisar_cliente_sem_resposta.py (só age no
@@ -588,6 +591,7 @@
  sincronizar_pedidos_wms.py      Reserva estoque (FEFO) para os pedidos.
  sincronizar_recebimentos_wms.py Recebimentos viram entrada esperada.
  sincronizar_produtos_stokki.py  Catálogo -> wms_produtos.
+ checar_caixas_wms.py            Caixas x saldo da Stokki (divergências; 06h40).
 
  --- Lalamove ---
  lalamove_client.py      Cliente API v3 (HMAC, cotação, pedido).
@@ -1000,9 +1004,10 @@
  pagina_inicial.py         Dados da página inicial /inicio (pendências por
                            nível, resumo do dia via snapshot da Torre,
                            rotinas do painel). Nunca chama fonte cara.
- wms.py, wms_pedidos.py, wms_etiqueta_produto.py, wms_faltas_recebimento.py
+ wms.py, wms_pedidos.py, wms_etiqueta_produto.py, wms_faltas_recebimento.py,
+ wms_caixas.py, wms_fila_impressao.py
                            WMS do galpão (posições, movimentos, reservas,
-                           recebimentos, etiquetas).
+                           recebimentos, etiquetas, caixas com serial, fila de impressão).
  test_*.py                 Testes.
 
  Telas (URL -> template)
@@ -1072,6 +1077,7 @@
    /consulta (+/rota, /pedido) consulta*.html
    /atendimento (+/mobile)    atendimento*.html
    /wms, /wms/estoque         wms.html (PWA), wms_estoque.html
+   /etiquetas/fila            fila_etiquetas.html (fila de impressão das etiquetas)
    /motoristas                motoristas.html (tem Editar; grava em bd_motoristas)
    /financeiro/pedagios       pedagios.html
    /canhotos                  canhotos.html
@@ -1390,6 +1396,9 @@
    rascunhos_rota, rascunhos_parada  painel_agentes/rascunhos_rota.py  (coluna turno: NULL = manha, TARDE)
    painel_execucoes          painel_agentes/executor.py
    wms_*                     painel_agentes/wms*.py
+   wms_caixas, wms_caixa_eventos, wms_contadores   painel_agentes/wms_caixas.py
+   wms_fila_impressao        painel_agentes/wms_fila_impressao.py
+   wms_produtos.codigo_interno  código interno do produto (QR da etiqueta, wms.py)
    clientes_portal, portal_* portal_cliente/ (envios, chamados, cotações)
    confirmacoes_rota, ofertas_rota, ofertas_avisos,
    disponibilidade_motoristas, ajustes_complexidade_cliente   regras/
