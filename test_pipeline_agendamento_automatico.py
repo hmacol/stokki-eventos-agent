@@ -173,5 +173,57 @@ class ProcessarPedidoAutomaticoTest(unittest.TestCase):
         self.assertFalse(vuupt.criar_ou_atualizar_servico.call_args[0][0].get("scheduled_start"))
 
 
+class InicioRodadaTest(unittest.TestCase):
+    """Revisao final 02/11: o inicio da rodada (corte das 14h) e pego antes da
+    Estacao de Impressao e da espera da trava, e nao depois."""
+
+    def _relogio(self, eventos):
+        horas = iter([datetime(2026, 11, 9, 14, 5), datetime(2026, 11, 9, 14, 30)])
+
+        class Relogio(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                eventos.append("now")
+                return next(horas)
+        return Relogio
+
+    def test_main_horario_passa_o_inicio_pego_antes_da_estacao(self):
+        eventos = []
+        with mock.patch.object(pipeline, "datetime", self._relogio(eventos)), \
+                mock.patch.object(pipeline, "_obter_trava_horario", return_value=True), \
+                mock.patch.object(pipeline, "_estacao_impressao_horaria",
+                                  side_effect=lambda *_: eventos.append("estacao")), \
+                mock.patch.object(pipeline, "_renovar_trava"), \
+                mock.patch("stokki.sessao_uso.liberar"), \
+                mock.patch.object(pipeline, "main") as main:
+            pipeline.main_horario(modo_teste=True)
+        self.assertEqual(eventos, ["now", "estacao"])
+        self.assertEqual(main.call_args.kwargs["inicio_rodada"], datetime(2026, 11, 9, 14, 5))
+
+    def test_main_mantem_o_inicio_recebido_na_chamada_recursiva(self):
+        main_original = pipeline.main
+        inicio = datetime(2026, 11, 9, 14, 5)
+        with mock.patch("stokki.sessao_uso.adquirir", return_value=True), \
+                mock.patch("stokki.sessao_uso.liberar"), \
+                mock.patch.object(pipeline, "main") as recursiva:
+            main_original(modo_teste=True, inicio_rodada=inicio)
+        self.assertEqual(recursiva.call_args.kwargs["inicio_rodada"], inicio)
+
+    def test_main_sem_inicio_pega_antes_da_espera_da_trava(self):
+        main_original = pipeline.main
+        eventos = []
+
+        def adquirir(*_a, **_k):
+            eventos.append("adquirir")
+            return True
+        with mock.patch.object(pipeline, "datetime", self._relogio(eventos)), \
+                mock.patch("stokki.sessao_uso.adquirir", side_effect=adquirir), \
+                mock.patch("stokki.sessao_uso.liberar"), \
+                mock.patch.object(pipeline, "main") as recursiva:
+            main_original(modo_teste=True)
+        self.assertEqual(eventos, ["now", "adquirir"])
+        self.assertEqual(recursiva.call_args.kwargs["inicio_rodada"], datetime(2026, 11, 9, 14, 5))
+
+
 if __name__ == "__main__":
     unittest.main()

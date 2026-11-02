@@ -1194,20 +1194,30 @@ def _estacao_impressao_horaria(modo_teste: bool) -> None:
 def main_horario(modo_teste: bool = False, fila_freshhub: bool = False) -> None:
     if not _obter_trava_horario():
         return
+    # Início da rodada (corte das 14h da data automática) logo depois da trava e
+    # ANTES da Estação de Impressão, que pode levar 10+ min e empurraria a
+    # rodada das 14h05 pra D+2 (revisão final, 02/11).
+    inicio_rodada = datetime.now(timezone(timedelta(hours=-3)))
     from stokki import sessao_uso
     try:
         _estacao_impressao_horaria(modo_teste)
         _renovar_trava(DONO_TRAVA_HORARIO)
-        main(modo_teste=modo_teste, dono_trava=DONO_TRAVA_HORARIO, fila_freshhub=fila_freshhub)
+        main(modo_teste=modo_teste, dono_trava=DONO_TRAVA_HORARIO, fila_freshhub=fila_freshhub,
+             inicio_rodada=inicio_rodada)
     finally:
         sessao_uso.liberar(DONO_TRAVA_HORARIO)
 
 
 def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: str = "",
          filtro_statuses: list[str] | None = None, dono_trava: str | None = None,
-         fila_freshhub: bool = False):
-    # Início da rodada (corte das 14h da data automática): antes de qualquer espera.
-    inicio_rodada = datetime.now(timezone(timedelta(hours=-3)))
+         fila_freshhub: bool = False, inicio_rodada: datetime | None = None):
+    # Início da rodada (corte das 14h da data automática). A rodada horária
+    # passa o horário que o main_horario pegou logo depois da trava (antes da
+    # Estação de Impressão); os outros chamadores usam o do 1º main(). A espera
+    # da trava da Stokki abaixo (sessao_uso.adquirir) conta como processamento:
+    # a chamada recursiva mantém este valor (revisão final, 02/11).
+    if inicio_rodada is None:
+        inicio_rodada = datetime.now(timezone(timedelta(hours=-3)))
     # Rodada completa fora do --horario (sequências, painel): entra na fila
     # da Stokki e espera a vez até 2h (Hugo, 05/10). Sem a vez, desiste
     # SEM logar por cima de ninguém -- o erro vai pro resumo da sequência
@@ -1221,7 +1231,8 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
                                f"derrubar quem está usando.")
         try:
             return main(modo_teste=modo_teste, filtro_statuses=filtro_statuses,
-                        dono_trava=DONO_TRAVA_SEQUENCIA, fila_freshhub=fila_freshhub)
+                        dono_trava=DONO_TRAVA_SEQUENCIA, fila_freshhub=fila_freshhub,
+                        inicio_rodada=inicio_rodada)
         finally:
             sessao_uso.liberar(DONO_TRAVA_SEQUENCIA)
 
