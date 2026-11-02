@@ -549,9 +549,18 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
 
     # Caixas com serial (so produtos que as usam; sem caixa e no-op). Import
     # lazy: wms_caixas importa wms_pedidos. Tabela garantida 1x antes do laco.
-    import wms_caixas
-    wms_caixas.garantir_tabelas(conn)
-    conn.commit()
+    # Falha aqui (ex.: database is locked) nunca derruba a baixa: so pula o
+    # consumo das caixas nesta chamada (a checagem caixas x saldo mostra).
+    try:
+        import wms_caixas
+        wms_caixas.garantir_tabelas(conn)
+        conn.commit()
+    except Exception as e_tab:  # noqa: BLE001
+        conn.rollback()
+        wms_caixas = None
+        logging.getLogger(__name__).warning(
+            "garantir_tabelas das caixas falhou (%s): baixa segue sem consumir caixas: %s",
+            pedido["codigo_ps"], e_tab)
 
     baixas, erros, negativos = 0, [], []
     for r in reservas:
@@ -600,6 +609,8 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
             # baixa nem muda o estado do pedido (a checagem caixas x saldo e que
             # mostra). Roda tambem se a SAIDA foi duplicada (idempotente pelo
             # uuid do movimento).
+            if wms_caixas is None:
+                continue
             try:
                 # BEGIN IMMEDIATE: leitura e escrita das caixas na mesma
                 # transacao (sem corrida com outra baixa ou com cancelar).

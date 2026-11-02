@@ -3,6 +3,7 @@
 Testes das caixas com serial e do codigo interno (dados).
 Rodar (da raiz): py -3.11 -m unittest painel_agentes.test_wms_caixas -v
 """
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -724,6 +725,183 @@ class TestEndurecimento(BaseCaixas):
             with self.subTest(q=q), self.assertRaises(wms.ErroWMS):
                 wms.registrar_movimento(self.conn, tipo="AJUSTE", produto_id=1, quantidade=q, lote="L1",
                                         validade="2026-12-15", destino="C9-E1-N1", uuid=f"n-{q}")
+
+
+class TestRevisaoFinal(BaseCaixas):
+    """Correcoes da revisao final: mover reservada, reparo (acertar), zerar com reserva, M1."""
+    POS = TestBaixaConsomeCaixas.POS
+
+    def setUp(self):
+        super().setUp()
+        wms.criar_area(self.conn, "C9", "CONTAINER", "Container 9")
+        wms.gerar_posicoes(self.conn, "C9", estantes=2, niveis=2)
+        self.conn.commit()
+
+    ativar = TestBaixaConsomeCaixas.ativar
+    pedido = TestBaixaConsomeCaixas.pedido
+    sit = TestBaixaConsomeCaixas.sit
+    saldo_pos = TestBaixaConsomeCaixas.saldo_pos
+
+    def eventos(self, serial):
+        return self.conn.execute("SELECT para, observacao, movimento_uuid FROM wms_caixa_eventos "
+                                 "WHERE serial = ? ORDER BY id", (serial,)).fetchall()
+
+    # I2a -------------------------------------------------------------------
+    def test_mover_caixa_reservada_recusa_e_nao_sobra_divergencia(self):
+        # cenario do probe: 2 caixas de 6, reserva de 6, mover as duas depois da reserva
+        s = self.ativar(2)
+        self.pedido(1010, 6)
+        cx.mover_caixa(self.conn, s[0], "C9-E2-N1", uuid="x" + "a" * 16)     # sobra 6 >= 6 reservado
+        with self.assertRaises(wms.ErroWMS) as ctx:
+            cx.mover_caixa(self.conn, s[1], "C9-E2-N1", uuid="x" + "b" * 16)
+        self.assertEqual(str(ctx.exception),
+                         "Caixa reservada para PS-1010: separe ou troque a reserva antes de mover.")
+        self.assertEqual(cx.obter_caixa(self.conn, s[1])["posicao"], self.POS)
+        self.assertFalse(self.conn.in_transaction)
+        r = wms_pedidos.baixar_por_expedicao(self.conn, "PS-1010")
+        self.assertEqual((r["baixas"], r["erros"]), (1, []))
+        self.assertEqual(self.sit(s[1]), ("EXPEDIDA", 6))
+        self.assertEqual(self.sit(s[0]), ("EM_ESTOQUE", 6))
+        self.assertEqual(cx.divergencias(self.conn, 48), [])
+
+    def test_mover_ignora_reserva_de_outra_chave_e_consumida(self):
+        s = self.ativar(1)[0]
+        pid = self.pedido(1011, 6)
+        self.conn.execute("UPDATE wms_reservas SET lote = 'OUTRO' WHERE pedido_id = ?", (pid,))
+        self.conn.commit()
+        cx.mover_caixa(self.conn, s, "C9-E2-N1", uuid="x" + "c" * 16)
+        self.assertEqual(cx.obter_caixa(self.conn, s)["posicao"], "C9-E2-N1")
+        s2 = self.ativar(1)[0]
+        pid2 = self.pedido(1012, 6)
+        self.conn.execute("UPDATE wms_reservas SET estado = 'CONSUMIDA' WHERE pedido_id = ?", (pid2,))
+        self.conn.commit()
+        cx.mover_caixa(self.conn, s2, "C9-E2-N1", uuid="x" + "d" * 16)
+
+    # I2b -------------------------------------------------------------------
+    def test_acertar_caixa_marca_sem_movimento_e_grava_evento(self):
+        a, b = self.ativar(2)
+        movs = self.n("wms_movimentos")
+        r = cx.acertar_caixa(self.conn, a, "EXPEDIDA", "saiu no PS-1 sem baixa", operador={"id": 1, "nome": "Hugo"})
+        self.assertEqual(r["caixa"]["situacao"], "EXPEDIDA")
+        self.assertEqual(self.n("wms_movimentos"), movs)
+        self.assertEqual(self.saldo_pos(), 12)
+        ev = self.eventos(a)[-1]
+        self.assertEqual((ev["para"], ev["movimento_uuid"]), ("EXPEDIDA", None))
+        self.assertIn("saiu no PS-1 sem baixa", ev["observacao"])
+        cx.acertar_caixa(self.conn, b.lower(), "CANCELADA", "sumiu")
+        self.assertEqual(self.sit(b)[0], "CANCELADA")
+        self.assertFalse(self.conn.in_transaction)
+
+    def test_acertar_caixa_recusa_situacao_motivo_e_caixa_fora_de_estoque(self):
+        s = self.ativar(1)[0]
+        impressa = cx.criar_caixas(self.conn, produto_id=1, lote="L1", validade="2026-12-15",
+                                   qtd_un=None, quantidade=1)["seriais"][0]
+        for serial, sit, motivo in ((s, "EM_ESTOQUE", "x"), (s, "ABERTA", "x"), (s, "EXPEDIDA", "  "),
+                                    (impressa, "CANCELADA", "x"), ("C7777777", "EXPEDIDA", "x")):
+            with self.subTest(serial=serial, sit=sit), self.assertRaises(wms.ErroWMS):
+                cx.acertar_caixa(self.conn, serial, sit, motivo)
+        cx.acertar_caixa(self.conn, s, "EXPEDIDA", "ok")
+        with self.assertRaises(wms.ErroWMS):
+            cx.acertar_caixa(self.conn, s, "CANCELADA", "de novo")
+
+    def test_acertar_saldo_pra_menos_e_repetir_nao_faz_nada(self):
+        self.ativar(1)
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=4, lote="L1",
+                                validade="2026-12-15", destino=self.POS)
+        self.assertEqual(self.saldo_pos(), 10)
+        r = cx.acertar_saldo(self.conn, self.POS.lower(), 1, "l1", "2026-12-15", "sobra de 4 sem caixa")
+        self.assertEqual((r["saldo"], r["caixas"], r["ajuste"]), (10, 6, -4))
+        self.assertEqual(self.saldo_pos(), 6)
+        self.assertEqual(cx.divergencias(self.conn, 48), [])
+        m = self.conn.execute("SELECT uuid, tipo, posicao_origem, observacao FROM wms_movimentos "
+                              "WHERE uuid LIKE 'acertar-%'").fetchall()
+        self.assertEqual(len(m), 1)
+        self.assertEqual((m[0]["tipo"], m[0]["posicao_origem"]), ("AJUSTE", self.POS))
+        self.assertRegex(m[0]["uuid"], r"^acertar-C9-E1-N1-1-L1-2026-12-15-\d{8}$")
+        self.assertIn("sobra de 4 sem caixa", m[0]["observacao"])
+        r = cx.acertar_saldo(self.conn, self.POS, 1, "L1", "2026-12-15", "de novo")
+        self.assertEqual(r["ajuste"], 0)
+        self.assertEqual(self.n("wms_movimentos"), 3)
+
+    def test_acertar_saldo_pra_mais_e_motivo_obrigatorio(self):
+        self.conn.execute(
+            "INSERT INTO wms_caixas (serial, produto_id, lote, validade, qtd_un, posicao, situacao, criado_em, "
+            "atualizado_em) VALUES ('C9999997', 1, 'L3', '2026-10-01', 6, 'C9-E1-N2', 'EM_ESTOQUE', 'x', 'x')")
+        self.conn.commit()
+        with self.assertRaises(wms.ErroWMS):
+            cx.acertar_saldo(self.conn, "C9-E1-N2", 1, "L3", "2026-10-01", " ")
+        r = cx.acertar_saldo(self.conn, "C9-E1-N2", 1, "L3", "2026-10-01", "caixa sem saldo")
+        self.assertEqual(r["ajuste"], 6)
+        self.assertEqual(wms._saldo_atual(self.conn, "C9-E1-N2", 1, "L3", "2026-10-01"), 6)
+        self.assertEqual(cx.divergencias(self.conn, 48), [])
+
+    # I3 --------------------------------------------------------------------
+    def test_zerar_recusa_com_reservas_ativas_do_embarcador(self):
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=10, lote="L2",
+                                validade="2026-11-01", destino=self.POS)
+        pid = self.pedido(1013, 4)
+        self.assertEqual(cx.contar_reservas_ativas(self.conn, 48), 1)
+        self.assertEqual(cx.contar_reservas_ativas(self.conn, 77), 0)
+        with self.assertRaises(wms.ErroWMS) as ctx:
+            cx.zerar_saldo(self.conn, 48, "limpeza")
+        self.assertEqual(str(ctx.exception),
+                         "Ha 1 reservas ativas do embarcador: cancele as reservas antes de zerar.")
+        self.assertEqual(wms._saldo_atual(self.conn, self.POS, 1, "L2", "2026-11-01"), 10)
+        wms_pedidos.cancelar_reservas(self.conn, pid, "teste")
+        self.conn.commit()
+        self.assertEqual(cx.contar_reservas_ativas(self.conn, 48), 0)
+        self.assertEqual(cx.zerar_saldo(self.conn, 48, "limpeza"), 1)
+
+    # M1 --------------------------------------------------------------------
+    def test_falha_ao_garantir_tabelas_nao_derruba_a_baixa(self):
+        s = self.ativar(1)[0]
+        self.pedido(1014, 6)
+        with mock.patch.object(cx, "garantir_tabelas", side_effect=sqlite3.OperationalError("database is locked")), \
+                self.assertLogs("wms_pedidos", level="WARNING"):
+            r = wms_pedidos.baixar_por_expedicao(self.conn, "PS-1014")
+        self.assertEqual((r["baixas"], r["erros"]), (1, []))
+        self.assertEqual(self.conn.execute("SELECT estado_reserva FROM wms_pedidos WHERE id_stokki = 1014")
+                         .fetchone()[0], "BAIXADO")
+        self.assertFalse(self.conn.in_transaction)
+        self.assertEqual(self.sit(s)[0], "EM_ESTOQUE")   # sem consumo; a checagem mostra
+
+
+class TestMigracaoCodigoInterno(unittest.TestCase):
+    """M2: dois processos abrindo o banco ao mesmo tempo -- o ALTER do segundo da duplicate column."""
+
+    def test_corrida_na_migracao_segue(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db = Path(tmp) / "d.db"
+            wms.conectar(db).close()            # coluna ja criada pelo "outro processo"
+            real = sqlite3.connect
+
+            class Atrasada(sqlite3.Connection):
+                def execute(self, sql, *a):
+                    cur = super().execute(sql, *a)
+                    if sql.startswith("PRAGMA table_info(wms_produtos)"):
+                        return [r for r in cur if r["name"] != "codigo_interno"]
+                    return cur
+
+            with mock.patch.object(wms.sqlite3, "connect",
+                                   side_effect=lambda *a, **kw: real(*a, factory=Atrasada, **kw)):
+                conn = wms.conectar(db)
+            conn.close()
+
+    def test_outro_erro_operacional_continua_subindo(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db = Path(tmp) / "d.db"
+            real = sqlite3.connect
+
+            class Quebrada(sqlite3.Connection):
+                def execute(self, sql, *a):
+                    if sql.startswith("ALTER TABLE wms_produtos ADD COLUMN codigo_interno"):
+                        raise sqlite3.OperationalError("disk I/O error")
+                    return super().execute(sql, *a)
+
+            with mock.patch.object(wms.sqlite3, "connect",
+                                   side_effect=lambda *a, **kw: real(*a, factory=Quebrada, **kw)), \
+                    self.assertRaises(sqlite3.OperationalError):
+                wms.conectar(db)
 
 
 if __name__ == "__main__":

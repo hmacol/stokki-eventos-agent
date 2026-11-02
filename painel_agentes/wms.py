@@ -172,7 +172,12 @@ def conectar(caminho: Path | None = None) -> sqlite3.Connection:
     # Migração aditiva: código interno (FLP + 6 dígitos) pra produto sem SKU e sem EAN.
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(wms_produtos)")}
     if "codigo_interno" not in cols:
-        conn.execute("ALTER TABLE wms_produtos ADD COLUMN codigo_interno TEXT")
+        try:
+            conn.execute("ALTER TABLE wms_produtos ADD COLUMN codigo_interno TEXT")
+        except sqlite3.OperationalError as e:
+            # Corrida: outro processo (painel, timer) criou a coluna entre o PRAGMA e o ALTER.
+            if "duplicate column" not in str(e).lower():
+                raise
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_wms_produtos_codigo_interno "
                  "ON wms_produtos(codigo_interno) WHERE codigo_interno IS NOT NULL")
     conn.commit()

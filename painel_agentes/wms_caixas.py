@@ -330,6 +330,26 @@ def ativar_caixa(conn, serial: str, posicao: str, *, operador: dict | None = Non
             "movimento_uuid": uuid}
 
 
+def _recusar_se_reservada(conn, caixa: dict) -> None:
+    """Mover leva o saldo da chave de origem (posicao, produto, lote, validade).
+    Se as reservas ATIVAS dessa chave passam do que sobra, a baixa sairia de
+    uma posicao sem a caixa e a divergencia so se consertaria com SQL."""
+    validade = caixa["validade"] or ""
+    rows = conn.execute(
+        "SELECT p.codigo_ps, SUM(r.quantidade_un) AS q FROM wms_reservas r "
+        "JOIN wms_pedidos p ON p.id = r.pedido_id "
+        "WHERE r.estado = 'ATIVA' AND r.posicao = ? AND r.produto_id = ? AND r.lote = ? "
+        "AND COALESCE(r.validade, '') = ? GROUP BY p.codigo_ps ORDER BY p.codigo_ps",
+        (caixa["posicao"], caixa["produto_id"], caixa["lote"], validade)).fetchall()
+    if not rows:
+        return
+    reservado = sum(float(r["q"] or 0) for r in rows)
+    sobra = wms._saldo_atual(conn, caixa["posicao"], caixa["produto_id"], caixa["lote"], validade) - float(caixa["qtd_un"])
+    if reservado > sobra + 0.0004:
+        pedidos = ", ".join(str(r["codigo_ps"]) for r in rows)
+        raise ErroWMS(f"Caixa reservada para {pedidos}: separe ou troque a reserva antes de mover.")
+
+
 def mover_caixa(conn, serial: str, destino: str, *, uuid: str, operador: dict | None = None) -> dict:
     """TRANSFERENCIA da caixa (leva o saldo junto). uuid do aparelho obrigatorio."""
     uuid = str(uuid or "").strip()
@@ -361,6 +381,7 @@ def mover_caixa(conn, serial: str, destino: str, *, uuid: str, operador: dict | 
         return {"caixa": _caixa_ou_erro(conn, serial), "duplicado": True, "movimento_uuid": uuid}
     if caixa["posicao"] == destino:
         raise ErroWMS(f"Caixa {serial} ja esta em {destino}.")
+    _recusar_se_reservada(conn, caixa)
     origem = caixa["posicao"]
     wms.registrar_movimento(conn, tipo="TRANSFERENCIA", produto_id=caixa["produto_id"],
                             quantidade=caixa["qtd_un"], lote=caixa["lote"], validade=caixa["validade"],
@@ -517,6 +538,13 @@ def plano_zerar_saldo(conn, embarcador_id: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def contar_reservas_ativas(conn, embarcador_id: int) -> int:
+    """Reservas ATIVAS de produtos do embarcador (zerar com reserva deixaria a baixa negativa)."""
+    return conn.execute(
+        "SELECT COUNT(*) FROM wms_reservas r JOIN wms_produtos p ON p.id = r.produto_id "
+        "WHERE p.embarcador_id = ? AND r.estado = 'ATIVA'", (embarcador_id,)).fetchone()[0]
+
+
 def zerar_saldo(conn, embarcador_id: int, motivo: str, operador: dict | None = None) -> int:
     """Zera o saldo antigo do embarcador: um AJUSTE por linha (pra menos se > 0,
     pra mais se < 0). uuid deterministico por dia: repetir no mesmo dia nao soma
@@ -530,6 +558,9 @@ def zerar_saldo(conn, embarcador_id: int, motivo: str, operador: dict | None = N
             "WHERE p.embarcador_id = ? AND c.situacao IN ('EM_ESTOQUE', 'ABERTA') LIMIT 1",
             (embarcador_id,)).fetchone():
         raise ErroWMS("Ja existem caixas ativas deste embarcador; zere antes do inventario.")
+    n_reservas = contar_reservas_ativas(conn, embarcador_id)
+    if n_reservas:
+        raise ErroWMS(f"Ha {n_reservas} reservas ativas do embarcador: cancele as reservas antes de zerar.")
     dia = wms.agora()[:10].replace("-", "")
     n = 0
     for l in plano_zerar_saldo(conn, embarcador_id):
@@ -543,8 +574,71 @@ def zerar_saldo(conn, embarcador_id: int, motivo: str, operador: dict | None = N
     return n
 
 
+# ---------------------------------------------------------------------------
+# Reparo de divergencia (CLI): sem isso a divergencia so se conserta com SQL
+# ---------------------------------------------------------------------------
+
+def acertar_caixa(conn, serial: str, situacao: str, motivo: str, operador: dict | None = None) -> dict:
+    """Marca a caixa EXPEDIDA ou CANCELADA SEM movimento de saldo: caso "a caixa
+    ja nao existe fisicamente e o saldo ja saiu". So EM_ESTOQUE/ABERTA."""
+    situacao = str(situacao or "").strip().upper()
+    if situacao not in ("EXPEDIDA", "CANCELADA"):
+        raise ErroWMS("Situacao do acerto deve ser EXPEDIDA ou CANCELADA.")
+    motivo = " ".join(str(motivo or "").split())
+    if not motivo:
+        raise ErroWMS("Motivo obrigatorio para acertar a caixa.")
+    _fechar_transacao(conn)
+    caixa = _caixa_ou_erro(conn, serial)
+    serial = caixa["serial"]
+    if caixa["situacao"] not in ("EM_ESTOQUE", "ABERTA"):
+        raise ErroWMS(f"Caixa {serial} esta {caixa['situacao']} e nao pode ser acertada.")
+    mudou = _mudar_caixa(conn, serial, de_situacoes=("EM_ESTOQUE", "ABERTA"), para=situacao, posicao=None,
+                         evento_uuid=f"cx-{serial}-acertar", movimento_uuid=None, operador=operador,
+                         observacao=f"Acerto sem movimento de saldo: {motivo}", manter_posicao=True)
+    if not mudou:
+        raise ErroWMS(f"Caixa {serial} mudou durante o acerto; confira e repita.")
+    return {"caixa": _caixa_ou_erro(conn, serial)}
+
+
+def acertar_saldo(conn, posicao: str, produto_id: int, lote: str, validade: str | None, motivo: str,
+                  operador: dict | None = None) -> dict:
+    """AJUSTE (pra mais ou pra menos) que deixa wms_saldos da chave igual a soma
+    das caixas EM_ESTOQUE/ABERTA. uuid deterministico por chave e dia (prefixo
+    acertar-): repetir no mesmo dia nao ajusta duas vezes. Ja igual: nada."""
+    motivo = " ".join(str(motivo or "").split())
+    if not motivo:
+        raise ErroWMS("Motivo obrigatorio para acertar o saldo.")
+    _fechar_transacao(conn)
+    posicao = wms.normalizar_codigo(posicao)
+    produto_id = int(produto_id)
+    lote = " ".join(str(lote or "").split()).upper()
+    validade = wms._validar_validade(validade) or ""
+    saldo = wms._saldo_atual(conn, posicao, produto_id, lote, validade)
+    caixas = float(conn.execute(
+        "SELECT COALESCE(SUM(qtd_un), 0) FROM wms_caixas WHERE posicao = ? AND produto_id = ? AND lote = ? "
+        "AND COALESCE(validade, '') = ? AND situacao IN ('EM_ESTOQUE', 'ABERTA')",
+        (posicao, produto_id, lote, validade)).fetchone()[0])
+    diff = round(caixas - saldo, 3)
+    res = {"posicao": posicao, "produto_id": produto_id, "lote": lote, "validade": validade,
+           "saldo": round(saldo, 3), "caixas": round(caixas, 3), "ajuste": 0.0, "duplicado": False}
+    if abs(diff) <= 0.0004:
+        return res
+    dia = wms.agora()[:10].replace("-", "")
+    uuid = f"acertar-{posicao}-{produto_id}-{lote}-{validade}-{dia}"
+    lado = {"destino": posicao} if diff > 0 else {"origem": posicao}
+    mov = wms.registrar_movimento(conn, tipo="AJUSTE", produto_id=produto_id, quantidade=abs(diff), lote=lote,
+                                  validade=validade or None, operador=operador, uuid=uuid,
+                                  observacao=f"Acertar saldo com as caixas: {motivo}", **lado)
+    if mov.get("duplicado"):
+        res["duplicado"] = True       # ja houve acerto desta chave hoje; nada novo foi gravado
+    else:
+        res["ajuste"] = diff
+    return res
+
+
 def main(argv=None) -> int:
-    """CLI: divergencias e zerar-saldo (sem --aplicar so mostra o plano)."""
+    """CLI: divergencias, zerar-saldo (sem --aplicar so mostra o plano) e os
+    reparos acertar-caixa / acertar-saldo (exigem --motivo)."""
     import argparse
     ap = argparse.ArgumentParser(description="Caixas x saldo do WMS.")
     ap.add_argument("--db", help="caminho do banco (padrao: dados/dados.db)")
@@ -555,6 +649,16 @@ def main(argv=None) -> int:
     p_z.add_argument("--embarcador-id", type=int, required=True)
     p_z.add_argument("--motivo", required=True)
     p_z.add_argument("--aplicar", action="store_true", help="sem isso so mostra o plano")
+    p_ac = sub.add_parser("acertar-caixa", help="marca a caixa sem mexer no saldo (caixa sumiu, saldo ja saiu)")
+    p_ac.add_argument("--serial", required=True)
+    p_ac.add_argument("--situacao", required=True, type=str.upper, choices=("EXPEDIDA", "CANCELADA"))
+    p_ac.add_argument("--motivo", required=True)
+    p_as = sub.add_parser("acertar-saldo", help="ajusta o saldo da chave para a soma das caixas")
+    p_as.add_argument("--posicao", required=True)
+    p_as.add_argument("--produto-id", type=int, required=True)
+    p_as.add_argument("--lote", default="")
+    p_as.add_argument("--validade", default="", help="AAAA-MM-DD (vazio: sem validade)")
+    p_as.add_argument("--motivo", required=True)
     args = ap.parse_args(argv)
 
     conn = conectar(Path(args.db) if args.db else None)
@@ -565,9 +669,30 @@ def main(argv=None) -> int:
                 print(f"{d['posicao']}	{d['sku']}	{d['lote']}	{d['validade']}	saldo={d['saldo']}	caixas={d['caixas']}")
             print(f"{len(linhas)} divergencia(s).")
             return 0
+        if args.cmd == "acertar-caixa":
+            try:
+                c = acertar_caixa(conn, args.serial, args.situacao, args.motivo)["caixa"]
+            except ErroWMS as e:
+                print(f"Erro: {e}")
+                return 1
+            print(f"Caixa {c['serial']} agora {c['situacao']} (saldo nao mudou).")
+            return 0
+        if args.cmd == "acertar-saldo":
+            try:
+                r = acertar_saldo(conn, args.posicao, args.produto_id, args.lote, args.validade, args.motivo)
+            except ErroWMS as e:
+                print(f"Erro: {e}")
+                return 1
+            if r["duplicado"]:
+                print(f"Erro: ja houve acerto desta chave hoje (saldo={r['saldo']} caixas={r['caixas']}).")
+                return 1
+            print(f"{r['posicao']}	{r['lote']}	{r['validade']}	saldo={r['saldo']}	caixas={r['caixas']}	"
+                  f"ajuste={r['ajuste']:g}")
+            return 0
         plano = plano_zerar_saldo(conn, args.embarcador_id)
         for l in plano:
             print(f"{l['posicao']}	{l['sku']}	{l['lote']}	{l['validade']}	saldo={l['quantidade']}")
+        print(f"Reservas ATIVAS do embarcador: {contar_reservas_ativas(conn, args.embarcador_id)}.")
         if not args.aplicar:
             print(f"Plano: {len(plano)} linha(s). Nada foi alterado (use --aplicar).")
             return 0
