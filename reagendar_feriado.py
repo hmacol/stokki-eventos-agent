@@ -11,7 +11,7 @@ conhecer o calendario (12/10/2026 foi o primeiro caso) e pra qualquer
 feriado futuro em que um embarcador escolha a data errada.
 
 A data nova e registrada em agendamentos_origem como DIA_FIXO (data do
-sistema), entao fora_dia_fixo.py nao a trata como data do cliente.
+sistema) -- ou AUTOMATICO se a data do feriado ja era automatica --, entao fora_dia_fixo.py nao a trata como data do cliente.
 
 Uso (da raiz, na VPS como www-data):
   venv/bin/python reagendar_feriado.py --modo-teste            # proximo feriado, so lista
@@ -80,7 +80,10 @@ def plano(servicos: list[dict], feriado: date) -> list[dict]:
 
 def aplicar(itens: list[dict], vuupt, db_path=None) -> int:
     import registro_dia_fixo
+    db_path = db_path or registro_dia_fixo.DB_PATH
     feitos = []
+    automaticos = []
+    conn = registro_dia_fixo.conectar(db_path)
     for i in itens:
         s, d = i["servico"], i["para"]
         try:
@@ -88,13 +91,16 @@ def aplicar(itens: list[dict], vuupt, db_path=None) -> int:
                 "scheduled_start": f"{d.isoformat()}T{HORARIO_INICIO_PADRAO}-03:00",
                 "scheduled_end": f"{d.isoformat()}T{HORARIO_FIM_PADRAO}-03:00",
             })
-            feitos.append({"servico": s, "data": d})
+            # data do feriado era automatica: a nova continua automatica
+            grupo = automaticos if registro_dia_fixo.data_e_automatica(conn, s, i["de"]) else feitos
+            grupo.append({"servico": s, "data": d})
             logger.info(f"  {s.get('code')}: {i['de']:%d/%m} -> {d:%d/%m} ({i['regiao']})")
         except Exception as e:
             logger.warning(f"  {s.get('code')}: falha ao reagendar ({e})")
-    registro_dia_fixo.registrar_origens(feitos, registro_dia_fixo.ORIGEM_DIA_FIXO,
-                                        db_path or registro_dia_fixo.DB_PATH)
-    return len(feitos)
+    conn.close()
+    registro_dia_fixo.registrar_origens(feitos, registro_dia_fixo.ORIGEM_DIA_FIXO, db_path)
+    registro_dia_fixo.registrar_origens(automaticos, registro_dia_fixo.ORIGEM_AUTOMATICO, db_path)
+    return len(feitos) + len(automaticos)
 
 
 def main(argv=None) -> int:

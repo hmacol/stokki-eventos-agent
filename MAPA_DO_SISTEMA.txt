@@ -204,7 +204,8 @@
  3) pipeline.py lista os "Aguardando Transportador", resolve endereço
     (regras/endereco.py), geocodifica (geocodificacao.py), pega telefone do
     XML (telefone_origem.py), calcula nível e tipo de carga, trata agendamento
-    (agendamento_confirmacao.py) e redespacho (redespacho_confirmacao.py),
+    (agendamento_confirmacao.py; pedido novo sem agendamento nasce com data
+    automatica, corte 14h) e redespacho (redespacho_confirmacao.py),
     e cria/atualiza o SERVIÇO na Vuupt (vuupt_client.py). Grava em paralelo
     em nucleo_pedidos. Retiradas viram serviço avulso (retiradas/).
  4) 16h: roteirizacao/criar_rotas_diarias.py --gerar-rascunho
@@ -404,7 +405,8 @@
  infra/sequencia_tarde.sh (16h desde 05/10, para no 1º erro):
    executar_tudo.py -> verificar_pedidos_duplicados_vuupt.py ->
    atualizar_agendamentos_confirmados.py -> marcar_clientes_agenda.py ->
-   roteirizacao/criar_rotas_diarias.py --gerar-rascunho ->
+   roteirizacao/criar_rotas_diarias.py --gerar-rascunho (antes do rascunho anda a
+   data automatica de quem nao saiu) ->
    documentos_pedido/processar_documentos.py
  infra/sequencia_incremento.sh (18h, para no 1º erro):
    executar_tudo.py -> verificar_pedidos_duplicados_vuupt.py ->
@@ -749,6 +751,9 @@
                             é lida pela roteirização nem por relatório.
  tipo_carga_embarcador.py   Seco/Refrigerado/Congelado por embarcador.
  clientes_agendamento.py    Quem exige agendamento ("AGENDA" na BD_CLIENTES).
+ agendamento_automatico.py Pedido novo sem agendamento nasce com data (corte 14h, proximo
+                            dia util, so servicos criados a partir de 03/11/2026) e horario
+                            (mensagem da Stokki > horario do destinatario > dia todo).
  feriados.py                Calendário de feriados (nacionais, Carnaval, Corpus
                             Christi, 09/07, 25/01; móveis pela Páscoa) e as
                             funções de dia útil usadas por rota do dia, dia
@@ -832,8 +837,11 @@
                            (piloto, sai mesmo com notificacoes_automaticas
                            desligada); "" = envio real, exige a chave geral.
  registro_dia_fixo.py      Tabelas agendamentos_origem (origem da data
-                           gravada pelo sistema: DIA_FIXO ou EQUIPE) e
+                           gravada pelo sistema: DIA_FIXO, EQUIPE ou AUTOMATICO) e
                            avisos_fora_dia_fixo.
+ datas_automaticas.py      marcar_datas_automaticas (_data_automatica) e, na rodada das 16h,
+                           andar_datas_automaticas: quem tem data AUTOMATICO anterior a data
+                           alvo anda pro proximo dia util (fora de rascunho/rota, nao pausado).
  dedicados.py              Tira dedicados da rota compartilhada.
 
  Vuupt

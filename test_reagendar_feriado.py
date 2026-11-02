@@ -66,6 +66,32 @@ class TestAplicar(unittest.TestCase):
         self.assertEqual(v.chamadas[0][0], 7)
         self.assertEqual(v.chamadas[0][1]["scheduled_start"], "2026-10-13T08:00:00-03:00")
 
+    def test_feriado_preserva_origem_automatica(self):
+        import tempfile
+        from pathlib import Path
+        import registro_dia_fixo
+
+        class Vuupt:
+            def atualizar_servico(self, sid, payload):
+                pass
+
+        auto = svc(8, "PS-8", "Rua A 1, Centro, Jacareí - SP, 12300-000, Brasil", "2026-10-12T08:00:00-03:00")
+        manual = svc(9, "PS-9", "Rua A 2, Centro, Jacareí - SP, 12300-000, Brasil", "2026-10-12T08:00:00-03:00")
+        nova = date(2026, 10, 13)
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            db = Path(tmp) / "t.db"
+            registro_dia_fixo.registrar_origens([{"servico": auto, "data": FERIADO}],
+                                                registro_dia_fixo.ORIGEM_AUTOMATICO, db)
+            n = rf.aplicar(rf.plano([auto, manual], FERIADO), Vuupt(), db_path=db)
+            conn = registro_dia_fixo.conectar(db)
+            try:
+                self.assertTrue(registro_dia_fixo.data_e_automatica(conn, auto, nova))
+                self.assertFalse(registro_dia_fixo.data_e_automatica(conn, manual, nova))
+                self.assertTrue(registro_dia_fixo.data_nao_e_do_cliente(conn, manual, nova))
+            finally:
+                conn.close()
+        self.assertEqual(n, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
