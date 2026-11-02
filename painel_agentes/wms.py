@@ -23,6 +23,7 @@ Regras de negócio que este módulo garante:
 import hashlib
 import hmac
 import io
+import math
 import re
 import secrets
 import sqlite3
@@ -693,6 +694,8 @@ def registrar_movimento(conn, *, tipo: str, produto_id: int, quantidade, lote: s
         quantidade = float(str(quantidade).replace(",", "."))
     except (TypeError, ValueError):
         raise ErroWMS("Quantidade inválida.")
+    if not math.isfinite(quantidade):
+        raise ErroWMS("Quantidade invalida.")
     if tipo == "INVENTARIO":
         if quantidade < 0:
             raise ErroWMS("Contagem não pode ser negativa.")

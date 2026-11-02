@@ -183,5 +183,46 @@ class Caixas(Base):
         self.assertEqual([i["usa_caixas"] for i in j["itens"]], [True, False])
 
 
+
+class Endurecimento(Base):
+    def test_movimento_com_uuid_reservado_recusa(self):
+        self.operador()
+        for uuid in ("cx-C0000001-ativar", "ZERAR-1-x", "Cx-abc"):
+            r = self.post("/api/wms/movimentos", self.mov(2, uuid))
+            self.assertEqual(r.status_code, 400)
+            self.assertEqual(r.get_json()["erro"], "Identificador reservado pelo sistema.")
+        r = self.post("/api/wms/movimentos/lote", {"movimentos": [self.mov(2, "cx-C0000002-ativar"),
+                                                                    self.mov(2, "ok-1", 4)]})
+        res = r.get_json()["resultados"]
+        self.assertFalse(res[0]["ok"])
+        self.assertEqual(res[0]["erro"], "Identificador reservado pelo sistema.")
+        self.assertTrue(res[1]["ok"])
+        self.assertEqual(self.saldo(2), 4)
+
+    def test_qtd_un_nao_finita_recusa(self):
+        self.operador()
+        for q in ("nan", "inf", 0, -1, 100001, "abc"):
+            r = self.post("/api/wms/caixas", {"produto_id": 1, "lote": "L1", "qtd_un": q, "quantidade": 1})
+            self.assertEqual(r.status_code, 400, (q, r.get_data(as_text=True)))
+        for n in ("x", 0, 201, None):
+            r = self.post("/api/wms/caixas", {"produto_id": 1, "lote": "L1", "quantidade": n})
+            self.assertEqual(r.status_code, 400, n)
+        r = self.post("/api/wms/caixas", {"produto_id": "abc", "quantidade": 1})
+        self.assertEqual(r.status_code, 400)
+
+    def test_criar_caixa_de_produto_fora_do_piloto_recusa_na_rota(self):
+        self.operador()
+        r = self.post("/api/wms/caixas", {"produto_id": 2, "lote": "L1", "quantidade": 1})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json()["erro"], "Produto fora do piloto: use Movimentos.")
+
+    def test_leitura_nao_cria_caixa(self):
+        self.operador()
+        with self.cliente.session_transaction() as s:
+            s["nivel_acesso"] = "leitura"
+        r = self.post("/api/wms/caixas", {"produto_id": 1, "lote": "L1", "quantidade": 1})
+        self.assertEqual(r.status_code, 403)
+
+
 if __name__ == "__main__":
     unittest.main()

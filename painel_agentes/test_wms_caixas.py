@@ -264,7 +264,7 @@ class TestAtivarMoverCancelar(BaseCaixas):
         s = self.novas()[0]
         wms.registrar_movimento(self.conn, tipo="AJUSTE", produto_id=1, quantidade=6, lote="L1",
                                 validade="2026-12-15", destino="C9-E1-N1", uuid=f"cx-{s}-ativar",
-                                observacao="x")
+                                observacao=f"Inventario de abertura - caixa {s}")
         with self.assertRaises(wms.ErroWMS):
             cx.ativar_caixa(self.conn, s, "C9-E1-N1", recebimento_id=rid, item_id=itens[0]["id"])
         self.assertEqual(self.enderecada(itens[0]["id"]), 0)
@@ -305,7 +305,7 @@ class TestAtivarMoverCancelar(BaseCaixas):
         s = self.novas()[0]
         wms.registrar_movimento(self.conn, tipo="AJUSTE", produto_id=1, quantidade=6, lote="L1",
                                 validade="2026-12-15", destino="C9-E1-N1", uuid=f"cx-{s}-ativar",
-                                observacao="x")
+                                observacao=f"Inventario de abertura - caixa {s}")
         self.assertEqual(self.saldo(), 6)
         r = cx.cancelar_caixa(self.conn, s, "etiqueta errada")
         self.assertEqual(r["caixa"]["situacao"], "CANCELADA")
@@ -381,7 +381,7 @@ class TestAtivarMoverCancelar(BaseCaixas):
         cx.ativar_caixa(self.conn, s, "C9-E1-N1")
         wms.registrar_movimento(self.conn, tipo="AJUSTE", produto_id=1, quantidade=6, lote="L1",
                                 validade="2026-12-15", origem="C9-E1-N1", uuid=f"cx-{s}-cancelar",
-                                observacao="Cancelamento")
+                                observacao=f"Cancelamento da caixa {s}: queda")
         r = cx.cancelar_caixa(self.conn, s, "queda")
         self.assertTrue(r["duplicado"])
         self.assertEqual(r["caixa"]["situacao"], "CANCELADA")
@@ -641,6 +641,71 @@ class TestBaixaConsomeCaixas(BaseCaixas):
         self.assertRegex(m[0]["uuid"], r"^zerar-48-C9-E1-N\d-1-L\d-[\d-]*\d{8}$")
         self.assertIn("limpeza do saldo antigo", m[0]["observacao"])
         self.assertEqual(cx.zerar_saldo(self.conn, 48, "de novo"), 0)
+
+
+
+class TestEndurecimento(BaseCaixas):
+    def setUp(self):
+        super().setUp()
+        wms.criar_area(self.conn, "C9", "CONTAINER", "Container 9")
+        wms.gerar_posicoes(self.conn, "C9", estantes=2, niveis=2)
+        self.conn.commit()
+
+    def novas(self, q=1, produto=1):
+        return cx.criar_caixas(self.conn, produto_id=produto, lote="L1", validade="2026-12-15",
+                               qtd_un=None, quantidade=q)["seriais"]
+
+    def alheio(self, uuid, tipo="AJUSTE", produto=2, qtd=6, obs="x"):
+        wms.registrar_movimento(self.conn, tipo=tipo, produto_id=produto, quantidade=qtd, lote="L1",
+                                validade="2026-12-15", destino="C9-E1-N1", uuid=uuid, observacao=obs)
+
+    def test_ativar_recusa_movimento_alheio_com_uuid_da_caixa(self):
+        for produto, qtd, obs in ((2, 6, "Caixa C0000001"), (1, 7, "Caixa C0000001"), (1, 6, "Caixa C0000099")):
+            with self.subTest(produto=produto, qtd=qtd, obs=obs):
+                s = self.novas(produto=1)[0]
+                self.alheio(f"cx-{s}-ativar", produto=produto, qtd=qtd, obs=obs)
+                with self.assertRaises(wms.ErroWMS) as ctx:
+                    cx.ativar_caixa(self.conn, s, "C9-E1-N1")
+                self.assertIn("nao pertence", str(ctx.exception))
+                self.assertEqual(cx.obter_caixa(self.conn, s)["situacao"], "IMPRESSA")
+
+    def test_ativar_recusa_tipo_errado(self):
+        s = self.novas()[0]
+        self.alheio(f"cx-{s}-ativar", tipo="ENTRADA", produto=1, obs=f"Caixa {s}")
+        self.conn.execute("UPDATE wms_movimentos SET tipo = 'SAIDA' WHERE uuid = ?", (f"cx-{s}-ativar",))
+        self.conn.commit()
+        with self.assertRaises(wms.ErroWMS):
+            cx.ativar_caixa(self.conn, s, "C9-E1-N1")
+
+    def test_cancelar_recusa_movimento_alheio_com_uuid_da_caixa(self):
+        s = self.novas()[0]
+        cx.ativar_caixa(self.conn, s, "C9-E1-N1")
+        self.alheio(f"cx-{s}-cancelar", produto=2)
+        with self.assertRaises(wms.ErroWMS):
+            cx.cancelar_caixa(self.conn, s, "erro")
+        self.assertEqual(cx.obter_caixa(self.conn, s)["situacao"], "EM_ESTOQUE")
+
+    def test_cancelar_impressa_recusa_ativar_alheio(self):
+        s = self.novas()[0]
+        self.alheio(f"cx-{s}-ativar", produto=2)
+        with self.assertRaises(wms.ErroWMS):
+            cx.cancelar_caixa(self.conn, s, "erro")
+        self.assertEqual(cx.obter_caixa(self.conn, s)["situacao"], "IMPRESSA")
+
+    def test_qtd_un_nao_finita_recusa(self):
+        for q in (float("nan"), float("inf"), 0, -1, 100001, "abc"):
+            with self.subTest(q=q):
+                with self.assertRaises(wms.ErroWMS):
+                    cx.criar_caixas(self.conn, produto_id=1, lote="L1", validade="2026-12-15",
+                                    qtd_un=q, quantidade=1)
+        self.assertEqual(self.n("wms_caixas"), 0)
+        cx.criar_caixas(self.conn, produto_id=1, lote="L1", validade="2026-12-15", qtd_un=100000, quantidade=1)
+
+    def test_registrar_movimento_recusa_quantidade_nao_finita(self):
+        for q in ("nan", "inf", float("inf")):
+            with self.assertRaises(wms.ErroWMS):
+                wms.registrar_movimento(self.conn, tipo="AJUSTE", produto_id=1, quantidade=q, lote="L1",
+                                        validade="2026-12-15", destino="C9-E1-N1", uuid=f"n-{q}")
 
 
 if __name__ == "__main__":

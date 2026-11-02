@@ -4341,6 +4341,9 @@ def api_wms_produto_controla_validade(produto_id):
 
 
 def _wms_registrar(conn, item: dict, op: dict) -> dict:
+    # uuid cx-/zerar- é do sistema (idempotência das caixas); o cliente não pode forjar.
+    if str(item.get("uuid") or "").strip().lower().startswith(("cx-", "zerar-")):
+        raise wms.ErroWMS("Identificador reservado pelo sistema.")
     # Trava: produto do piloto só muda de saldo por caixa (Inventário, Receber, Mover).
     produto = wms.obter_produto(conn, int(item.get("produto_id") or 0))
     if produto and wms_caixas.produto_usa_caixas(produto, _wms_piloto_id()):
@@ -4671,12 +4674,16 @@ def api_wms_caixas_criar():
     conn = wms_caixas.conectar()
     try:
         qtd_un = body.get("qtd_un")
+        produto_id = int(body.get("produto_id") or 0)
+        produto = wms.obter_produto(conn, produto_id)
+        if produto and not wms_caixas.produto_usa_caixas(produto, _wms_piloto_id()):
+            return _wms_json_erro("Produto fora do piloto: use Movimentos.")
         r = wms_caixas.criar_caixas(
-            conn, produto_id=int(body.get("produto_id") or 0), lote=body.get("lote", ""),
+            conn, produto_id=produto_id, lote=body.get("lote", ""),
             validade=body.get("validade"), qtd_un=float(qtd_un) if qtd_un not in (None, "") else None,
             quantidade=body.get("quantidade"), operador=op)
         return jsonify(r)
-    except (wms.ErroWMS, ValueError) as e:
+    except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
         return _wms_json_erro(e)
     finally:
         conn.close()

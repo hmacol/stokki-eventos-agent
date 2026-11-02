@@ -12,6 +12,7 @@ Modulo de dados puro (sem Flask), mesmo estilo do wms_pedidos.py.
   por wms.conectar / wms_pedidos.conectar).
 """
 import logging
+import math
 import sqlite3
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from wms import ErroWMS
 
 SITUACOES_CAIXA = ("IMPRESSA", "EM_ESTOQUE", "ABERTA", "EXPEDIDA", "CANCELADA")
 MAX_CAIXAS = 200
+MAX_QTD_UN = 100000
 
 _DDL = (
     """
@@ -121,7 +123,7 @@ def criar_caixas(conn, *, produto_id: int, lote: str, validade: str | None,
     """Cria N caixas IMPRESSA e o trabalho de impressao, tudo numa transacao."""
     try:
         quantidade = int(quantidade)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise ErroWMS("Quantidade de caixas invalida.")
     if not 1 <= quantidade <= MAX_CAIXAS:
         raise ErroWMS(f"Quantidade de caixas deve ficar entre 1 e {MAX_CAIXAS}.")
@@ -139,9 +141,12 @@ def criar_caixas(conn, *, produto_id: int, lote: str, validade: str | None,
         lote_n = " ".join(str(lote or "").split()).upper()
         if qtd_un is None:
             qtd_un = produto.get("qtd_por_caixa") or 1
-        qtd_un = float(qtd_un)
-        if qtd_un <= 0:
-            raise ErroWMS("Quantidade por caixa deve ser maior que zero.")
+        try:
+            qtd_un = float(qtd_un)
+        except (TypeError, ValueError):
+            raise ErroWMS("Quantidade por caixa invalida.")
+        if not math.isfinite(qtd_un) or qtd_un <= 0 or qtd_un > MAX_QTD_UN:
+            raise ErroWMS(f"Quantidade por caixa deve ficar entre 0 e {MAX_QTD_UN}.")
         primeiro = reservar_numeros(conn, "caixa", quantidade)
         seriais = [formatar_serial(primeiro + i) for i in range(quantidade)]
         impressao_id = wms_fila_impressao.enfileirar(
@@ -250,6 +255,19 @@ def _contabilizar(conn, caixa: dict, recebimento_id, item_id, uuid: str) -> None
         wms_pedidos.contabilizar_enderecamento(conn, recebimento_id, item_id, caixa["qtd_un"], uuid=uuid)
 
 
+def _exigir_movimento_da_caixa(conn, uuid: str, caixa: dict, tipos: tuple):
+    """Movimento ja gravado com o uuid da caixa so vale se for mesmo desta caixa."""
+    ja = conn.execute("SELECT * FROM wms_movimentos WHERE uuid = ?", (uuid,)).fetchone()
+    if not ja:
+        return None
+    if (ja["tipo"] not in tipos or ja["produto_id"] != caixa["produto_id"]
+            or ja["lote"] != caixa["lote"] or (ja["validade"] or None) != (caixa["validade"] or None)
+            or abs(float(ja["quantidade"]) - float(caixa["qtd_un"])) > 1e-9
+            or caixa["serial"] not in str(ja["observacao"] or "")):
+        raise ErroWMS(f"Movimento {uuid} nao pertence a caixa {caixa['serial']}.")
+    return ja
+
+
 def ativar_caixa(conn, serial: str, posicao: str, *, operador: dict | None = None,
                  recebimento_id: int | None = None, item_id: int | None = None,
                  dispositivo: str = "", criado_em: str | None = None) -> dict:
@@ -265,6 +283,7 @@ def ativar_caixa(conn, serial: str, posicao: str, *, operador: dict | None = Non
     serial = caixa["serial"]
     posicao = wms.normalizar_codigo(posicao)
     uuid = f"cx-{serial}-ativar"
+    _exigir_movimento_da_caixa(conn, uuid, caixa, ("AJUSTE", "ENTRADA"))
 
     if recebimento_id is not None:
         item = conn.execute("SELECT produto_id FROM wms_recebimento_itens WHERE id = ? AND recebimento_id = ?",
@@ -359,9 +378,10 @@ def cancelar_caixa(conn, serial: str, motivo: str, *, operador: dict | None = No
     caixa = _caixa_ou_erro(conn, serial)
     serial = caixa["serial"]
     uuid = f"cx-{serial}-cancelar"
+    _exigir_movimento_da_caixa(conn, uuid, caixa, ("AJUSTE",))
     if caixa["situacao"] == "IMPRESSA":
         # Queda entre o movimento de ativar e a caixa: tira o saldo orfao antes de cancelar.
-        ativ = conn.execute("SELECT * FROM wms_movimentos WHERE uuid = ?", (f"cx-{serial}-ativar",)).fetchone()
+        ativ = _exigir_movimento_da_caixa(conn, f"cx-{serial}-ativar", caixa, ("AJUSTE", "ENTRADA"))
         mov_uuid = None
         if ativ:
             wms.registrar_movimento(conn, tipo="AJUSTE", produto_id=ativ["produto_id"],
