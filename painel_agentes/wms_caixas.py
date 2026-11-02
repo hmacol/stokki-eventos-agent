@@ -146,7 +146,7 @@ def criar_caixas(conn, *, produto_id: int, lote: str, validade: str | None,
         except (TypeError, ValueError):
             raise ErroWMS("Quantidade por caixa invalida.")
         if not math.isfinite(qtd_un) or qtd_un <= 0 or qtd_un > MAX_QTD_UN:
-            raise ErroWMS(f"Quantidade por caixa deve ficar entre 0 e {MAX_QTD_UN}.")
+            raise ErroWMS(f"Quantidade por caixa deve ser maior que 0 e no maximo {MAX_QTD_UN}.")
         primeiro = reservar_numeros(conn, "caixa", quantidade)
         seriais = [formatar_serial(primeiro + i) for i in range(quantidade)]
         impressao_id = wms_fila_impressao.enfileirar(
@@ -283,7 +283,10 @@ def ativar_caixa(conn, serial: str, posicao: str, *, operador: dict | None = Non
     serial = caixa["serial"]
     posicao = wms.normalizar_codigo(posicao)
     uuid = f"cx-{serial}-ativar"
-    _exigir_movimento_da_caixa(conn, uuid, caixa, ("AJUSTE", "ENTRADA"))
+    if caixa["situacao"] == "IMPRESSA":
+        # So aqui um duplicado vira IMPRESSA -> EM_ESTOQUE; depois disso a quantidade da
+        # caixa pode ter caido (consumo parcial) e o retry legitimo nao e comparavel.
+        _exigir_movimento_da_caixa(conn, uuid, caixa, ("AJUSTE", "ENTRADA"))
 
     if recebimento_id is not None:
         item = conn.execute("SELECT produto_id FROM wms_recebimento_itens WHERE id = ? AND recebimento_id = ?",

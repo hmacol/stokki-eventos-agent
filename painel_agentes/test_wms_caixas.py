@@ -655,15 +655,16 @@ class TestEndurecimento(BaseCaixas):
         return cx.criar_caixas(self.conn, produto_id=produto, lote="L1", validade="2026-12-15",
                                qtd_un=None, quantidade=q)["seriais"]
 
-    def alheio(self, uuid, tipo="AJUSTE", produto=2, qtd=6, obs="x"):
-        wms.registrar_movimento(self.conn, tipo=tipo, produto_id=produto, quantidade=qtd, lote="L1",
+    def alheio(self, uuid, tipo="AJUSTE", produto=2, qtd=6, obs="x", lote="L1"):
+        wms.registrar_movimento(self.conn, tipo=tipo, produto_id=produto, quantidade=qtd, lote=lote,
                                 validade="2026-12-15", destino="C9-E1-N1", uuid=uuid, observacao=obs)
 
     def test_ativar_recusa_movimento_alheio_com_uuid_da_caixa(self):
-        for produto, qtd, obs in ((2, 6, "Caixa C0000001"), (1, 7, "Caixa C0000001"), (1, 6, "Caixa C0000099")):
-            with self.subTest(produto=produto, qtd=qtd, obs=obs):
+        for produto, qtd, obs, lote in ((2, 6, None, "L1"), (1, 7, None, "L1"), (1, 6, "Caixa C0000099", "L1"),
+                                        (1, 6, None, "OUTRO")):
+            with self.subTest(produto=produto, qtd=qtd, obs=obs, lote=lote):
                 s = self.novas(produto=1)[0]
-                self.alheio(f"cx-{s}-ativar", produto=produto, qtd=qtd, obs=obs)
+                self.alheio(f"cx-{s}-ativar", produto=produto, qtd=qtd, obs=obs or f"Caixa {s}", lote=lote)
                 with self.assertRaises(wms.ErroWMS) as ctx:
                     cx.ativar_caixa(self.conn, s, "C9-E1-N1")
                 self.assertIn("nao pertence", str(ctx.exception))
@@ -701,9 +702,26 @@ class TestEndurecimento(BaseCaixas):
         self.assertEqual(self.n("wms_caixas"), 0)
         cx.criar_caixas(self.conn, produto_id=1, lote="L1", validade="2026-12-15", qtd_un=100000, quantidade=1)
 
+    def test_ativar_de_novo_apos_consumo_parcial_e_duplicado(self):
+        s = self.novas()[0]
+        cx.ativar_caixa(self.conn, s, "C9-E1-N1")
+        cx.consumir_caixas(self.conn, posicao="C9-E1-N1", produto_id=1, lote="L1", validade="2026-12-15",
+                           qtd_un=2, movimento_uuid="mov-x")
+        self.conn.commit()
+        r = cx.ativar_caixa(self.conn, s, "C9-E1-N1")
+        self.assertTrue(r["duplicado"])
+        self.assertEqual(r["caixa"]["situacao"], "ABERTA")
+
+    def test_ativar_cancelada_diz_que_esta_cancelada(self):
+        s = self.novas()[0]
+        cx.cancelar_caixa(self.conn, s, "erro")
+        with self.assertRaises(wms.ErroWMS) as ctx:
+            cx.ativar_caixa(self.conn, s, "C9-E1-N1")
+        self.assertIn("CANCELADA", str(ctx.exception))
+
     def test_registrar_movimento_recusa_quantidade_nao_finita(self):
         for q in ("nan", "inf", float("inf")):
-            with self.assertRaises(wms.ErroWMS):
+            with self.subTest(q=q), self.assertRaises(wms.ErroWMS):
                 wms.registrar_movimento(self.conn, tipo="AJUSTE", produto_id=1, quantidade=q, lote="L1",
                                         validade="2026-12-15", destino="C9-E1-N1", uuid=f"n-{q}")
 

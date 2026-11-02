@@ -4340,10 +4340,20 @@ def api_wms_produto_controla_validade(produto_id):
         conn.close()
 
 
-def _wms_registrar(conn, item: dict, op: dict) -> dict:
-    # uuid cx-/zerar- é do sistema (idempotência das caixas); o cliente não pode forjar.
-    if str(item.get("uuid") or "").strip().lower().startswith(("cx-", "zerar-")):
+_UUID_APARELHO = re.compile(r"^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|x[0-9a-f]{8,40})$", re.I)
+
+
+def _wms_exige_uuid_do_aparelho(uuid):
+    """uuid vindo do cliente só no formato que o aparelho gera (randomUUID ou 'x'+hex).
+    cx-/zerar-/ps-...-reserva- são do sistema (idempotência) e não podem ser forjados."""
+    if uuid in (None, ""):
+        return
+    if not isinstance(uuid, str) or not _UUID_APARELHO.match(uuid):
         raise wms.ErroWMS("Identificador reservado pelo sistema.")
+
+
+def _wms_registrar(conn, item: dict, op: dict) -> dict:
+    _wms_exige_uuid_do_aparelho(item.get("uuid"))
     # Trava: produto do piloto só muda de saldo por caixa (Inventário, Receber, Mover).
     produto = wms.obter_produto(conn, int(item.get("produto_id") or 0))
     if produto and wms_caixas.produto_usa_caixas(produto, _wms_piloto_id()):
@@ -4377,7 +4387,7 @@ def api_wms_registrar_movimento():
     conn = wms.conectar()
     try:
         m = _wms_registrar(conn, body, op)
-    except (wms.ErroWMS, ValueError) as e:
+    except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
         return _wms_json_erro(e)
     finally:
         conn.close()
@@ -4400,7 +4410,7 @@ def api_wms_movimentos_lote():
             try:
                 m = _wms_registrar(conn, item, op_item)
                 resultados.append({"uuid": item.get("uuid"), "ok": True, "movimento": m})
-            except (wms.ErroWMS, ValueError) as e:
+            except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
                 resultados.append({"uuid": item.get("uuid"), "ok": False, "erro": str(e)})
     finally:
         conn.close()
@@ -4717,7 +4727,7 @@ def api_wms_caixa_ativar(serial):
             item_id=int(item_id) if item_id not in (None, "") else None,
             dispositivo=(request.user_agent.string or "")[:80], criado_em=body.get("criado_em"))
         return jsonify({"caixa": r["caixa"], "duplicado": r["duplicado"]})
-    except (wms.ErroWMS, ValueError) as e:
+    except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
         return _wms_json_erro(e)
     finally:
         conn.close()
@@ -4731,9 +4741,10 @@ def api_wms_caixa_mover(serial):
     body = request.get_json(force=True) or {}
     conn = wms_caixas.conectar()
     try:
+        _wms_exige_uuid_do_aparelho(body.get("uuid"))
         r = wms_caixas.mover_caixa(conn, serial, body.get("destino", ""), uuid=body.get("uuid") or "", operador=op)
         return jsonify({"ok": True, "caixa": r["caixa"], "duplicado": r["duplicado"]})
-    except (wms.ErroWMS, ValueError) as e:
+    except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
         return _wms_json_erro(e)
     finally:
         conn.close()
@@ -4749,7 +4760,7 @@ def api_wms_caixa_cancelar(serial):
     try:
         r = wms_caixas.cancelar_caixa(conn, serial, body.get("motivo", ""), operador=op)
         return jsonify({"ok": True, "caixa": r["caixa"], "duplicado": r["duplicado"]})
-    except (wms.ErroWMS, ValueError) as e:
+    except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
         return _wms_json_erro(e)
     finally:
         conn.close()
@@ -4781,7 +4792,7 @@ def api_wms_recebimento_enderecar_item(recebimento_id, item_id):
     try:
         r = wms_pedidos.contabilizar_enderecamento(
             conn, recebimento_id, item_id, body.get("qtd") or 0, body.get("uuid") or "")
-    except (wms.ErroWMS, ValueError) as e:
+    except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
         return _wms_json_erro(e)
     finally:
         conn.close()

@@ -695,7 +695,7 @@ def registrar_movimento(conn, *, tipo: str, produto_id: int, quantidade, lote: s
     except (TypeError, ValueError):
         raise ErroWMS("Quantidade inválida.")
     if not math.isfinite(quantidade):
-        raise ErroWMS("Quantidade invalida.")
+        raise ErroWMS("Quantidade inválida.")
     if tipo == "INVENTARIO":
         if quantidade < 0:
             raise ErroWMS("Contagem não pode ser negativa.")

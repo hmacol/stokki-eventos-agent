@@ -969,6 +969,11 @@ class TestEnderecamentoDoRecebimento(BaseWMS):
         self.item_id = self.conn.execute(
             "SELECT id FROM wms_recebimento_itens WHERE recebimento_id = ?", (self.rid,)).fetchone()["id"]
 
+    def test_quantidade_nao_finita_recusa(self):
+        for q in ("nan", "inf"):
+            with self.subTest(q=q), self.assertRaises(wms.ErroWMS):
+                wms_pedidos.contabilizar_enderecamento(self.conn, self.rid, self.item_id, q, "mov-n")
+
     def test_mesma_chamada_repetida_nao_conta_duas_vezes(self):
         r1 = wms_pedidos.contabilizar_enderecamento(self.conn, self.rid, self.item_id, 10, "mov-1")
         r2 = wms_pedidos.contabilizar_enderecamento(self.conn, self.rid, self.item_id, 10, "mov-1")

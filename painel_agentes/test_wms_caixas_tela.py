@@ -79,20 +79,20 @@ class Base(unittest.TestCase):
 class Trava(Base):
     def test_movimento_avulso_de_produto_do_piloto_recusa(self):
         self.operador()
-        r = self.post("/api/wms/movimentos", self.mov(1, "u-1"))
+        r = self.post("/api/wms/movimentos", self.mov(1, "x00000001"))
         self.assertEqual(r.status_code, 400)
         self.assertEqual(r.get_json()["erro"], "Produto controlado por caixa: use Inventario, Receber ou Mover caixa.")
         self.assertEqual(self.saldo(1), 0)
 
     def test_movimento_de_outro_embarcador_continua_igual(self):
         self.operador()
-        r = self.post("/api/wms/movimentos", self.mov(2, "u-2"))
+        r = self.post("/api/wms/movimentos", self.mov(2, "x00000002"))
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
         self.assertEqual(self.saldo(2), 6)
 
     def test_lote_recusa_o_piloto_e_processa_o_outro(self):
         self.operador()
-        r = self.post("/api/wms/movimentos/lote", {"movimentos": [self.mov(1, "u-a"), self.mov(2, "u-b", 4)]})
+        r = self.post("/api/wms/movimentos/lote", {"movimentos": [self.mov(1, "x0000000a"), self.mov(2, "x0000000b", 4)]})
         self.assertEqual(r.status_code, 200)
         res = r.get_json()["resultados"]
         self.assertFalse(res[0]["ok"])
@@ -104,8 +104,8 @@ class Trava(Base):
         self.operador()
         cfg = {**CFG, "wms": {"embarcador_piloto_id": 99}}
         with mock.patch.object(painel_agentes, "_carregar_config", return_value=cfg):
-            self.assertEqual(self.post("/api/wms/movimentos", self.mov(2, "u-3")).status_code, 400)
-            self.assertEqual(self.post("/api/wms/movimentos", self.mov(1, "u-4")).status_code, 200)
+            self.assertEqual(self.post("/api/wms/movimentos", self.mov(2, "x00000003")).status_code, 400)
+            self.assertEqual(self.post("/api/wms/movimentos", self.mov(1, "x00000004")).status_code, 200)
 
     def test_bootstrap_traz_piloto_id(self):
         self.assertEqual(self.cliente.get("/api/wms/bootstrap").get_json()["piloto_id"], 48)
@@ -162,7 +162,7 @@ class Caixas(Base):
         a, b = self.criar(2)["seriais"]
         self.post(f"/api/wms/caixas/{a}/ativar", {"posicao": POS})
         self.post(f"/api/wms/caixas/{b}/ativar", {"posicao": POS})
-        r = self.post(f"/api/wms/caixas/{a}/mover", {"destino": "C9-E1-N2", "uuid": "mv-1"})
+        r = self.post(f"/api/wms/caixas/{a}/mover", {"destino": "C9-E1-N2", "uuid": "x00000a01"})
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
         self.assertEqual(r.get_json()["caixa"]["posicao"], "C9-E1-N2")
         r = self.post(f"/api/wms/caixas/{b}/cancelar", {"motivo": "avariada"})
@@ -187,17 +187,44 @@ class Caixas(Base):
 class Endurecimento(Base):
     def test_movimento_com_uuid_reservado_recusa(self):
         self.operador()
-        for uuid in ("cx-C0000001-ativar", "ZERAR-1-x", "Cx-abc"):
+        ruins = ("cx-C0000001-ativar", "ZERAR-1-x", "Cx-abc", "ps-123-reserva-9", " cx-C0000001-ativar",
+                 "texto qualquer", "u-1", "x123")
+        for uuid in ruins:
             r = self.post("/api/wms/movimentos", self.mov(2, uuid))
-            self.assertEqual(r.status_code, 400)
+            self.assertEqual(r.status_code, 400, uuid)
             self.assertEqual(r.get_json()["erro"], "Identificador reservado pelo sistema.")
         r = self.post("/api/wms/movimentos/lote", {"movimentos": [self.mov(2, "cx-C0000002-ativar"),
-                                                                    self.mov(2, "ok-1", 4)]})
+                                                                    self.mov(2, "x0123abcd", 4)]})
         res = r.get_json()["resultados"]
         self.assertFalse(res[0]["ok"])
         self.assertEqual(res[0]["erro"], "Identificador reservado pelo sistema.")
         self.assertTrue(res[1]["ok"])
         self.assertEqual(self.saldo(2), 4)
+
+    def test_uuid_do_aparelho_e_aceito(self):
+        self.operador()
+        for uuid in ("3F2504E0-4F89-41D3-9A0C-0305E82C3301", "x18c2f3a1b2c" + "3d4e5f6a7b8"):
+            self.assertEqual(self.post("/api/wms/movimentos", self.mov(2, uuid, 1)).status_code, 200, uuid)
+        self.assertEqual(self.post("/api/wms/movimentos", {**self.mov(2, None, 1), "uuid": None}).status_code, 200)
+
+    def test_mover_com_uuid_reservado_recusa(self):
+        self.operador()
+        a, b = self.post("/api/wms/caixas", {"produto_id": 1, "lote": "L1", "validade": "2026-12-15",
+                                              "quantidade": 2}).get_json()["seriais"]
+        self.post(f"/api/wms/caixas/{a}/ativar", {"posicao": POS})
+        r = self.post(f"/api/wms/caixas/{a}/mover", {"destino": "C9-E1-N2", "uuid": f"cx-{b}-ativar"})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json()["erro"], "Identificador reservado pelo sistema.")
+
+    def test_ativar_com_numero_invalido_da_400(self):
+        self.operador()
+        a = self.post("/api/wms/caixas", {"produto_id": 1, "lote": "L1", "validade": "2026-12-15",
+                                           "quantidade": 1}).get_json()["seriais"][0]
+        r = self.post(f"/api/wms/caixas/{a}/ativar", {"posicao": POS, "recebimento_id": 1, "item_id": [1]})
+        self.assertEqual(r.status_code, 400)
+        r = self.cliente.post(f"/api/wms/caixas/{a}/ativar", headers=ORIGEM, content_type="application/json",
+                              data='{"posicao":"C9-E1-N1","recebimento_id":1,"item_id":Infinity}')
+        self.assertEqual(r.status_code, 400)
 
     def test_qtd_un_nao_finita_recusa(self):
         self.operador()

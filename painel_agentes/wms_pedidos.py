@@ -19,6 +19,7 @@ Regras que este modulo garante:
   em melhor esforco: falha ali e registrada em log e nunca quebra a baixa.
 """
 import logging
+import math
 import re
 import sqlite3
 from datetime import datetime, timedelta
@@ -869,6 +870,8 @@ def contabilizar_enderecamento(conn, recebimento_id: int, item_id: int, qtd: flo
     if not item:
         raise wms.ErroWMS("Item do recebimento nao encontrado.")
     qtd = round(float(qtd or 0), 3)
+    if not math.isfinite(qtd):
+        raise wms.ErroWMS("Quantidade invalida.")
     uuid = str(uuid or "").strip()
     duplicado = False
     if uuid:
