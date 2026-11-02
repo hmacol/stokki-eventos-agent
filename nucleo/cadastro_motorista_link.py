@@ -32,7 +32,7 @@ if str(_RAIZ) not in sys.path:
     sys.path.insert(0, str(_RAIZ))
 
 from nucleo import banco  # noqa: E402
-from nucleo.cadastro_motorista import ORIGEM_LINK, CadastroInvalido, buscar_cadastro  # noqa: E402
+from nucleo.cadastro_motorista import ORIGEM_LINK, STATUS_RECUSADO, CadastroInvalido, buscar_cadastro  # noqa: E402
 from nucleo.vuupt_agentes import (  # noqa: E402
     ErroVuupt, VuuptAgentes, base_operacional_mais_comum, gerar_email, mesmo_telefone,
 )
@@ -47,7 +47,12 @@ MAX_TENTATIVAS = 20
 MAX_EMAILS = 9
 # nao_enviado = canal em pausa ou teto do dia: o motorista ainda não recebeu o login
 BOAS_VINDAS_DE_NOVO = ("falhou", "indeterminado", "nao_enviado")
-ROTULOS = {"conflito": "conferência do telefone na Vuupt", "agente": "agente na Vuupt",
+AVISO_GRUPO_DE_NOVO = ("falhou", "nao_enviado")
+# Quem vem pelo link entra como esporádico; o "Fixo" pedido fica em
+# motoristas_cadastros.posicao e a equipe promove pelo Editar (decisão de 02/11).
+POSICAO_TABELA = "ESPORADICO"
+MOTIVO_DESFEITO = "desfeito no painel"
+ROTULOS = {"conflito": "conferência do telefone e da placa na Vuupt", "agente": "agente na Vuupt",
            "veiculo": "veículo na Vuupt", "tabela": "linha na tabela de motoristas"}
 _FMT = "%Y-%m-%d %H:%M:%S"
 
@@ -117,7 +122,8 @@ def _criar_agente(conn, vuupt, agentes: list, c: dict) -> int:
         achado = next((a for a in agentes if not a.get("deleted_at") and _email(a.get("email")) == nosso), None)
         if achado:
             logger.info("cadastro #%s: agente %s já existia na Vuupt com %s", c["id"], achado["id"], nosso)
-            _gravar(conn, c["id"], agent_id=int(achado["id"]))
+            # e-mail gravado por este cadastro antes do POST: o agente é nosso
+            _gravar(conn, c["id"], agent_id=int(achado["id"]), agente_criado=1)
             return int(achado["id"])
     # e-mail de agente apagado continua ocupado (a Vuupt não deixa reusar)
     ocupados = {_email(a.get("email")) for a in agentes if a.get("email")}
@@ -146,35 +152,46 @@ def _criar_agente(conn, vuupt, agentes: list, c: dict) -> int:
                 ocupados.add(email)
                 continue
             raise
-        _gravar(conn, c["id"], agent_id=agent_id)
+        _gravar(conn, c["id"], agent_id=agent_id, agente_criado=1)
         logger.info("cadastro #%s: agente %s criado na Vuupt (%s)", c["id"], agent_id, email)
         return agent_id
     raise ErroVuupt(f"Vuupt recusou {MAX_EMAILS} tentativas de criar o agente", 422, "")
 
 
-def _dono_do_veiculo(vuupt, vehicle_id: int, c: dict):
-    """Outro agente (não apagado) que já está com esse veículo, ou None."""
-    for a in vuupt.listar_agentes():
-        if (not a.get("deleted_at") and a.get("vehicle_id") is not None and int(a["vehicle_id"]) == vehicle_id
-                and int(a["id"]) != c["agent_id"]):
-            return int(a["id"])
+def _veiculo_da_placa(veiculos: list, c: dict):
+    return next((v for v in veiculos if _placa(v.get("license_plate")) == _placa(c["placa"])), None)
+
+
+def _dono_da_placa(veiculos: list, agentes: list, c: dict):
+    """Outro agente (não apagado) que já está com o veículo da placa, ou None.
+    A resolução no painel vale só pro agente que estava em conflito."""
+    existente = _veiculo_da_placa(veiculos, c)
+    if not existente:
+        return None
+    for a in agentes:
+        if (not a.get("deleted_at") and a.get("vehicle_id") is not None and int(a["vehicle_id"]) == int(existente["id"])
+                and int(a["id"]) != c.get("agent_id")):
+            dono = int(a["id"])
+            return None if (c["conflito_resolvido"] and c["conflito_agent_id"] == dono) else dono
     return None
 
 
 def _veiculo(conn, vuupt, c: dict):
     """Cria ou reaproveita o veículo e liga ao agente. Devolve o agent_id de
-    quem já tem o veículo da placa (conflito: nada é ligado) ou None."""
+    quem já tem o veículo da placa (conflito: nada é ligado) ou None.
+    A placa já foi conferida antes de criar o agente; aqui confere de novo
+    (pode ter sido ligada a outro agente entre as etapas)."""
     if not c.get("vehicle_id"):
         veiculos = vuupt.listar_veiculos()
-        existente = next((v for v in veiculos if _placa(v.get("license_plate")) == _placa(c["placa"])), None)
+        existente = _veiculo_da_placa(veiculos, c)
         if existente:
-            dono = _dono_do_veiculo(vuupt, int(existente["id"]), c)
-            # a resolução no painel vale só pro agente que estava em conflito
-            if dono is not None and not (c["conflito_resolvido"] and c["conflito_agent_id"] == dono):
+            dono = _dono_da_placa(veiculos, vuupt.listar_agentes(), c)
+            if dono is not None:
                 return dono
         vehicle_id = (int(existente["id"]) if existente else
                       vuupt.criar_veiculo(c["placa"], base_operacional_mais_comum(veiculos), c["agent_id"]))
-        _gravar(conn, c["id"], vehicle_id=vehicle_id)
+        # vehicle_criado: só o veículo criado aqui pode ser apagado no "Desfazer"
+        _gravar(conn, c["id"], vehicle_id=vehicle_id, vehicle_criado=0 if existente else 1)
         c["vehicle_id"] = vehicle_id
         logger.info("cadastro #%s: veículo %s (%s)", c["id"], vehicle_id, "reaproveitado" if existente else "criado")
     # PUT idempotente: repete enquanto a tabela não foi gravada (ligar pode ter falhado antes)
@@ -203,7 +220,7 @@ def _tabela(conn, config: dict, c: dict) -> None:
             "tipo_veiculo": c["tipo_veiculo"], "telefone": c["telefone"], "email": c["vuupt_email"],
             "placa": c["placa"], "cpf": c["cpf"], "vehicle_id": c["vehicle_id"],
             "apenas_carga_seca": not c.get("refrigerado"), "sem_app": c.get("celular") == "IPHONE",
-            "posicao": c.get("posicao"),
+            "posicao": POSICAO_TABELA,
         }, origem=ORIGEM_LINK, conn=conn)
         bd_id = _linha_da_tabela(conn, c["agent_id"])
     _gravar(conn, c["id"], bd_motorista_id=bd_id)
@@ -237,12 +254,20 @@ def processar(conn: sqlite3.Connection, config: dict, cadastro_id: int, *, vuupt
         conn.commit()
 
 
+def _pendente(conn, cadastro_id: int, erro: str) -> dict:
+    """Etapa final (aviso) que precisa de outra rodada: conta tentativa."""
+    conn.execute("UPDATE motoristas_cadastros SET ultimo_erro = ?, tentativas = tentativas + 1 WHERE id = ?",
+                 (erro, cadastro_id))
+    conn.commit()
+    return {"situacao": "pendente", "erro": erro}
+
+
 def _ignorar(c) -> bool:
     return not c or c.get("origem") != ORIGEM_LINK or not c.get("enviado_em") or bool(c.get("concluido_em"))
 
 
-def _registrar_conflito(conn, cadastro_id: int, dono: int) -> None:
-    _gravar(conn, cadastro_id, conflito_agent_id=dono, conflito_resolvido=0)
+def _registrar_conflito(conn, cadastro_id: int, dono: int, tipo: str) -> None:
+    _gravar(conn, cadastro_id, conflito_agent_id=dono, conflito_resolvido=0, conflito_tipo=tipo)
 
 
 def _processar(conn, config, cadastro_id, vuupt, avisar_grupo, avisar_motorista, agora) -> dict:
@@ -253,21 +278,29 @@ def _processar(conn, config, cadastro_id, vuupt, avisar_grupo, avisar_motorista,
     situacao, pendencia, erro, etapa = None, None, None, "conflito"
     try:
         agentes = None
-        if not c["agent_id"] and not c["conflito_resolvido"]:
+        if not c["agent_id"]:
             agentes = vuupt.listar_agentes()
-            dono = _dono_do_telefone(conn, agentes, c)
+            dono = None if c["conflito_resolvido"] else _dono_do_telefone(conn, agentes, c)
             if dono is not None:
-                _registrar_conflito(conn, cadastro_id, dono)
+                _registrar_conflito(conn, cadastro_id, dono, "telefone")
                 situacao, pendencia = "conflito", f"telefone já é do agente {dono} — resolver no painel"
                 logger.warning("cadastro #%s: telefone já é do agente %s", cadastro_id, dono)
+            else:
+                # placa antes do POST: cada agente é uma licença paga
+                dono = _dono_da_placa(vuupt.listar_veiculos(), agentes, c)
+                if dono is not None:
+                    _registrar_conflito(conn, cadastro_id, dono, "placa")
+                    situacao = "conflito"
+                    pendencia = f"placa {c['placa']} já é do veículo do agente {dono} — resolver no painel"
+                    logger.warning("cadastro #%s: placa %s já é do agente %s", cadastro_id, c["placa"], dono)
         if situacao is None:
             etapa = "agente"
             if not c["agent_id"]:
-                c["agent_id"] = _criar_agente(conn, vuupt, agentes if agentes is not None else vuupt.listar_agentes(), c)
+                c["agent_id"] = _criar_agente(conn, vuupt, agentes, c)
             etapa = "veiculo"
             dono = _veiculo(conn, vuupt, c)
             if dono is not None:
-                _registrar_conflito(conn, cadastro_id, dono)
+                _registrar_conflito(conn, cadastro_id, dono, "placa")
                 situacao = "conflito"
                 pendencia = f"placa {c['placa']} já é do veículo do agente {dono} — resolver no painel"
                 logger.warning("cadastro #%s: placa %s já é do agente %s", cadastro_id, c["placa"], dono)
@@ -289,9 +322,11 @@ def _processar(conn, config, cadastro_id, vuupt, avisar_grupo, avisar_motorista,
                      f"{ROTULOS[etapa]} pendente ({_motivo_curto(e)}); nova tentativa em 15 min")
 
     cad_texto = {**c, "iphone": c.get("celular") == "IPHONE"}
+    aviso = None
     if not c["aviso_grupo_em"]:
         texto = nw.texto_cadastro_link(cad_texto, _url_ficha(config), pendencia, agora=agora)
-        if avisar_grupo(config, "cadastro_link", texto, f"cadastro_link:{cadastro_id}:inicio") != "falhou":
+        aviso = avisar_grupo(config, "cadastro_link", texto, f"cadastro_link:{cadastro_id}:inicio")
+        if aviso not in AVISO_GRUPO_DE_NOVO:
             # sem pendência o próprio aviso já diz que deu tudo certo: não há "concluído" a mandar
             _gravar(conn, cadastro_id, aviso_grupo_em=agora.strftime(_FMT),
                     **({} if pendencia else {"aviso_concluido_em": agora.strftime(_FMT)}))
@@ -310,19 +345,38 @@ def _processar(conn, config, cadastro_id, vuupt, avisar_grupo, avisar_motorista,
         bv = avisar_motorista(cadastro_id, c["telefone"], texto, config)
         _gravar(conn, cadastro_id, boas_vindas_situacao=bv)
         if bv in BOAS_VINDAS_DE_NOVO:
-            erro = f"boas-vindas: {bv}"
-            conn.execute("UPDATE motoristas_cadastros SET ultimo_erro = ?, tentativas = tentativas + 1 WHERE id = ?",
-                         (erro, cadastro_id))
-            conn.commit()
-            return {"situacao": "pendente", "erro": erro}
+            return _pendente(conn, cadastro_id, f"boas-vindas: {bv}")
+    if aviso in AVISO_GRUPO_DE_NOVO:
+        # canal em pausa, teto do dia ou gateway fora: sem isso o aviso se perderia ao concluir
+        return _pendente(conn, cadastro_id, f"aviso do grupo: {aviso}")
 
     if c["aviso_grupo_em"] and not c["aviso_concluido_em"]:
         texto = nw.texto_cadastro_link_concluido(cad_texto, agora=agora)
-        if avisar_grupo(config, "cadastro_link_concluido", texto, f"cadastro_link:{cadastro_id}:concluido") != "falhou":
-            _gravar(conn, cadastro_id, aviso_concluido_em=agora.strftime(_FMT))
+        aviso = avisar_grupo(config, "cadastro_link_concluido", texto, f"cadastro_link:{cadastro_id}:concluido")
+        if aviso in AVISO_GRUPO_DE_NOVO:
+            return _pendente(conn, cadastro_id, f"aviso de concluído do grupo: {aviso}")
+        _gravar(conn, cadastro_id, aviso_concluido_em=agora.strftime(_FMT))
     _gravar(conn, cadastro_id, concluido_em=agora.strftime(_FMT), ultimo_erro=None)
     logger.info("cadastro #%s concluído (agente %s, veículo %s)", cadastro_id, c["agent_id"], c["vehicle_id"])
     return {"situacao": "concluido", "erro": None}
+
+
+def _agente_ativo(agentes: list, agent_id: int):
+    """O agente (não apagado) com esse id na lista da Vuupt, ou None."""
+    return next((a for a in agentes if a.get("id") is not None and int(a["id"]) == int(agent_id)
+                 and not a.get("deleted_at")), None)
+
+
+def agente_da_vuupt(config: dict, agent_id: int, *, vuupt=None) -> dict | None:
+    """{id, nome, telefone} do agente da Vuupt (confirmação do "usar agente"
+    no painel), ou None se não existe ou foi apagado."""
+    vuupt = vuupt or VuuptAgentes(config["vuupt_api"]["token"])
+    a = _agente_ativo(vuupt.listar_agentes(), agent_id)
+    return {"id": int(a["id"]), "nome": a.get("name"), "telefone": a.get("phone_number")} if a else None
+
+
+def _limite_trava(agora: datetime | None) -> str:
+    return ((agora or datetime.now()) - timedelta(minutes=TRAVA_MINUTOS)).strftime(_FMT)
 
 
 def resolver_conflito(conn: sqlite3.Connection, config: dict, cadastro_id: int, usar_agent_id: int | None,
@@ -333,20 +387,33 @@ def resolver_conflito(conn: sqlite3.Connection, config: dict, cadastro_id: int, 
     Depois chama `processar` e devolve o resultado dele."""
     from regras.cadastro_motoristas import _colunas_do_formulario, _espelhar
     c = buscar_cadastro(conn, cadastro_id)
-    if not c or c.get("origem") != ORIGEM_LINK:
+    if not c or c.get("origem") != ORIGEM_LINK or not c.get("enviado_em"):
         raise CadastroInvalido("Cadastro não encontrado.", 404)
     if c.get("concluido_em"):
         raise CadastroInvalido("Cadastro já concluído.", 409)
     campos = {"conflito_resolvido": 1, "revisado_por": usuario, "revisado_em": banco.agora()}
-    if usar_agent_id is not None:
+    if usar_agent_id is None:
+        _gravar(conn, cadastro_id, **campos)
+    else:
         usar_agent_id = int(usar_agent_id)
         if c.get("agent_id") and int(c["agent_id"]) != usar_agent_id:
             raise CadastroInvalido(f"Este cadastro já tem agente na Vuupt ({c['agent_id']}).", 409)
         vuupt = vuupt or VuuptAgentes(config["vuupt_api"]["token"])
-        achado = next((a for a in vuupt.listar_agentes() if a.get("id") is not None and int(a["id"]) == usar_agent_id), None)
-        campos.update(agent_id=usar_agent_id, ultimo_erro=None, boas_vindas_situacao="agente_existente")
-        if achado and achado.get("email"):
+        achado = _agente_ativo(vuupt.listar_agentes(), usar_agent_id)
+        if not achado:
+            raise CadastroInvalido(f"Agente {usar_agent_id} não existe na Vuupt (ou foi apagado).", 400)
+        # agente_criado = 0: agente que já existia nunca é apagado pelo "Desfazer"
+        campos.update(agent_id=usar_agent_id, agente_criado=0, ultimo_erro=None, boas_vindas_situacao="agente_existente")
+        if achado.get("email"):
             campos["vuupt_email"] = _email(achado["email"])
+        # condicional: uma rodada do processar em andamento pode estar criando o agente agora
+        cur = conn.execute(
+            f"UPDATE motoristas_cadastros SET {', '.join(f'{k} = ?' for k in campos)} WHERE id = ? "
+            "AND (agent_id IS NULL OR agent_id = ?) AND (processando_em IS NULL OR processando_em < ?)",
+            (*campos.values(), cadastro_id, usar_agent_id, _limite_trava(kw.get("agora"))))
+        conn.commit()
+        if cur.rowcount == 0:
+            raise CadastroInvalido("Cadastro em processamento, tente de novo em instantes.", 409)
         linha_id = _linha_da_tabela(conn, usar_agent_id)
         if linha_id is not None:
             # motorista que volta: a linha antiga vira a deste cadastro (processar só grava o vínculo)
@@ -354,16 +421,63 @@ def resolver_conflito(conn: sqlite3.Connection, config: dict, cadastro_id: int, 
             novos = _colunas_do_formulario({
                 "ativo": True, "dias_disponiveis": c["dias"], "zonas_preferidas": c["zonas"],
                 "tipo_veiculo": c["tipo_veiculo"], "telefone": c["telefone"], "placa": c["placa"],
-                "posicao": c.get("posicao"), "apenas_carga_seca": not c.get("refrigerado"),
+                "posicao": POSICAO_TABELA, "apenas_carga_seca": not c.get("refrigerado"),
                 "sem_app": c.get("celular") == "IPHONE"})
             if not atual.get("CPF_MOTORISTA"):
                 novos["CPF_MOTORISTA"] = c["cpf"]
             motoristas_banco.atualizar(conn, linha_id, novos, f"link:{usuario}")
             _espelhar(conn)
-    _gravar(conn, cadastro_id, **campos)
     logger.info("cadastro #%s: conflito resolvido por %s (%s)", cadastro_id, usuario,
                 f"usar agente {usar_agent_id}" if usar_agent_id is not None else "agente novo")
     return processar(conn, config, cadastro_id, vuupt=vuupt, **kw)
+
+
+def desfazer_cadastro_link(conn: sqlite3.Connection, config: dict, cadastro_id: int, usuario: str, *,
+                           apagar_na_vuupt: bool, vuupt=None, agora: datetime | None = None) -> dict:
+    """Cadastro falso ou de teste (botão do painel): inativa a linha da
+    bd_motoristas, libera o CPF pra um cadastro novo e encerra o cadastro
+    (RECUSADO, sai do retentar). Com `apagar_na_vuupt`, apaga o veículo e o
+    agente só se foram criados por este cadastro (agente vindo de "usar
+    agente" nunca). Erro da Vuupt volta em "erro" sem desfazer o resto.
+    Pode rodar de novo (apaga na Vuupt o que ficou)."""
+    from regras.cadastro_motoristas import _espelhar
+    c = buscar_cadastro(conn, cadastro_id)
+    if not c or c.get("origem") != ORIGEM_LINK:
+        raise CadastroInvalido("Cadastro não encontrado.", 404)
+    agora = agora or datetime.now()
+    cur = conn.execute(
+        "UPDATE motoristas_cadastros SET status = ?, motivo = ?, revisado_por = ?, revisado_em = ?, "
+        "concluido_em = COALESCE(concluido_em, ?) WHERE id = ? AND (processando_em IS NULL OR processando_em < ?)",
+        (STATUS_RECUSADO, MOTIVO_DESFEITO, usuario, banco.agora(), agora.strftime(_FMT), cadastro_id,
+         _limite_trava(agora)))
+    conn.commit()
+    if cur.rowcount == 0:
+        raise CadastroInvalido("Cadastro em processamento, tente de novo em instantes.", 409)
+    origem = f"link-desfeito:{usuario}"
+    linha = next((r for r in motoristas_banco.listar(conn) if r["id"] == c.get("bd_motorista_id")), None)
+    if linha:
+        motoristas_banco.atualizar(conn, linha["id"], {"ATIVO": "NAO"}, origem)
+        # só o CPF deste cadastro: linha reaproveitada pode ter o CPF de outra pessoa
+        if re.sub(r"\D", "", str(linha.get("CPF_MOTORISTA") or "")) == c["cpf"]:
+            motoristas_banco.liberar_cpf(conn, linha["id"], origem)
+        _espelhar(conn)
+    apagados, erros = [], []
+    if apagar_na_vuupt and (c.get("vehicle_criado") or c.get("agente_criado")):
+        vuupt = vuupt or VuuptAgentes(config["vuupt_api"]["token"])
+        for rotulo, chave, coluna, apagar in (("veículo", "vehicle_id", "vehicle_criado", vuupt.apagar_veiculo),
+                                              ("agente", "agent_id", "agente_criado", vuupt.apagar_agente)):
+            if not (c.get(coluna) and c.get(chave)):
+                continue
+            try:
+                apagar(int(c[chave]))
+            except Exception as e:
+                logger.warning("cadastro #%s: apagar %s %s na Vuupt falhou: %s", cadastro_id, rotulo, c[chave], e)
+                erros.append(f"{rotulo} {c[chave]}: {e}")
+                continue
+            _gravar(conn, cadastro_id, **{coluna: 0})
+            apagados.append(f"{rotulo} {c[chave]}")
+    logger.info("cadastro #%s desfeito por %s (apagados na Vuupt: %s)", cadastro_id, usuario, ", ".join(apagados) or "nada")
+    return {"situacao": "desfeito", "erro": "; ".join(erros)[:500] or None, "apagados": apagados}
 
 
 def retentar(conn: sqlite3.Connection, config: dict, **kw) -> list[dict]:

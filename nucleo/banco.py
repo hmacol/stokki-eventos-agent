@@ -360,6 +360,9 @@ _COLUNAS_CADASTRO_LINK = [
     ("tentativas", "INTEGER NOT NULL DEFAULT 0"),
     ("processando_em", "TEXT"),
     ("concluido_em", "TEXT"),
+    ("conflito_tipo", "TEXT"),                   # telefone | placa
+    ("agente_criado", "INTEGER"),                # 1 = o POST deste cadastro criou o agente (desfazer pode apagar)
+    ("vehicle_criado", "INTEGER"),               # 1 = este cadastro criou o veículo (não reaproveitou)
 ]
 
 

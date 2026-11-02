@@ -174,6 +174,18 @@ class TestMotoristasBanco(unittest.TestCase):
                               " WHERE motorista_id = ? AND campo = 'PLACA'", (mid,)).fetchall()
         self.assertEqual([tuple(x) for x in h], [("PLACA", "AAA1111", "ZZZ9999", "app:1234:nao_repassada")])
 
+    def test_liberar_cpf_zera_e_registra_historico(self):
+        mid = mb.inserir(self.conn, _linha(AGENT_ID_VUUPT=1, NOME_MOTORISTA="A", ATIVO="SIM", CPF_MOTORISTA="01234567890"), "teste")
+        self.assertTrue(mb.liberar_cpf(self.conn, mid, "link-desfeito:hugo"))
+        self.assertIsNone(mb.listar(self.conn)[0]["CPF_MOTORISTA"])
+        self.assertEqual(mb.por_cpf(self.conn, "01234567890"), [])
+        h = self.conn.execute("SELECT campo, valor_antigo, valor_novo, origem FROM bd_motoristas_alteracoes"
+                              " WHERE motorista_id = ? AND campo = 'CPF_MOTORISTA'", (mid,)).fetchall()
+        self.assertEqual([tuple(x) for x in h], [("CPF_MOTORISTA", "01234567890", None, "link-desfeito:hugo")])
+        self.assertFalse(mb.liberar_cpf(self.conn, mid, "link-desfeito:hugo"))
+        with self.assertRaises(ValueError):
+            mb.liberar_cpf(self.conn, 9999, "teste")
+
     def test_caminho_espelho_segue_db_path(self):
         with mock.patch.object(banco, "DB_PATH", self.dir / "t.db"):
             self.assertEqual(mb.caminho_espelho(), self.dir / "BD_MOTORISTAS.xlsx")

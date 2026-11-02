@@ -165,6 +165,22 @@ def atualizar(conn, motorista_id: int, campos: dict, origem: str) -> list[dict]:
     return mudancas
 
 
+def liberar_cpf(conn, motorista_id: int, origem: str) -> bool:
+    """Zera CPF_MOTORISTA (cadastro falso/de teste desfeito no painel: o CPF
+    volta a poder se cadastrar). atualizar() recusa mudar CPF preenchido; esta
+    e a saida explicita, e fica no historico. Devolve se mudou."""
+    atual = conn.execute("SELECT * FROM bd_motoristas WHERE id = ?", (motorista_id,)).fetchone()
+    if atual is None:
+        raise ValueError(f"motorista id={motorista_id} nao existe")
+    if atual["CPF_MOTORISTA"] is None:
+        return False
+    agora = banco.agora()
+    conn.execute("UPDATE bd_motoristas SET CPF_MOTORISTA = NULL, atualizado_em = ? WHERE id = ?", (agora, motorista_id))
+    _historico(conn, motorista_id, atual["AGENT_ID_VUUPT"], "CPF_MOTORISTA", atual["CPF_MOTORISTA"], None, origem, agora)
+    conn.commit()
+    return True
+
+
 def marcar_posicao(conn, fixos: set[int], origem: str) -> int:
     """FIXO pra quem tem AGENT_ID_VUUPT em `fixos`, ESPORADICO pro resto (pelo
     atualizar(): fica no historico). Devolve quantas linhas mudaram."""

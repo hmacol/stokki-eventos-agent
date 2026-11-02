@@ -92,11 +92,14 @@
   {% for c in dados.cadastros_link %}
   {% set aberto = c.conflito_agent_id and not c.conflito_resolvido %}
   {% set bv = c.boas_vindas_situacao %}
+  {% set placa_em_conflito = aberto and (c.agent_id or c.conflito_tipo == "placa") %}
+  {% set desfeito = c.status == "RECUSADO" %}
+  {% set pode_desfazer = not desfeito or c.agente_criado or c.vehicle_criado %}
   <article class="cartao-link" data-link-id="{{ c.id }}">
     <div class="cadastro-cab">
       <div>
         <strong>{{ c.nome }}</strong>{% if pode_aprovar %} <span class="mono">CPF {{ c.cpf }}</span>{% endif %}
-        <div class="cadastro-meta">enviado em {{ c.enviado_em }} · {{ c.telefone }}{% if pode_aprovar and c.vuupt_email %} · {{ c.vuupt_email }}{% endif %}{% if c.concluido_em %} · Concluído em {{ c.concluido_em[8:10] }}/{{ c.concluido_em[5:7] }} {{ c.concluido_em[11:16] }}{% endif %}</div>
+        <div class="cadastro-meta">enviado em {{ c.enviado_em }} · {{ c.telefone }}{% if pode_aprovar and c.vuupt_email %} · {{ c.vuupt_email }}{% endif %}{% if desfeito %} · Desfeito por {{ c.revisado_por }}{% elif c.concluido_em %} · Concluído em {{ c.concluido_em[8:10] }}/{{ c.concluido_em[5:7] }} {{ c.concluido_em[11:16] }}{% endif %}</div>
       </div>
       {% if pode_aprovar %}
       <div class="cadastro-docs">
@@ -110,7 +113,7 @@
       {% if pode_aprovar %}<div><span>Nascimento</span> {{ c.data_nascimento or "—" }}</div>{% endif %}
       {% if pode_aprovar %}<div><span>Pix</span> {{ c.chave_pix or "—" }}</div>{% endif %}
       <div><span>Emite NF</span> {{ "sim" if c.emite_nf else "não" }}</div>
-      <div><span>Posição</span> {{ c.posicao or "—" }}</div>
+      <div><span>Posição</span> {{ "Pediu: Fixo" if c.posicao == "FIXO" else "Esporádico" }}</div>
       <div><span>Celular</span> {{ c.celular or "—" }}</div>
       <div><span>Dias</span> {{ c.dias | join(", ") or "—" }}</div>
       <div><span>Zonas</span> {{ c.zonas | join(", ") or "—" }}</div>
@@ -120,19 +123,23 @@
     </div>
     <div class="link-etapas">
       {{ etapa("Agente", "feito" if c.agent_id else ("conflito" if aberto else "pendente")) }}
-      {{ etapa("Veículo", "feito" if c.vehicle_id else ("conflito" if (aberto and c.agent_id) else "pendente")) }}
+      {{ etapa("Veículo", "feito" if c.vehicle_id else ("conflito" if placa_em_conflito else "pendente")) }}
       {{ etapa("Tabela", "feito" if c.bd_motorista_id else "pendente") }}
       {{ etapa("Aviso", "feito" if c.aviso_grupo_em else "pendente") }}
       {{ etapa("Boas-vindas", {"enviado": "feito", "numero_sem_whatsapp": "não enviado (sem WhatsApp)", "desligado": "desligado", "modo_teste": "desligado", "agente_existente": "agente existente"}.get(bv, "pendente")) }}
     </div>
     {% if aberto %}
-    <div class="link-erro">{% if c.agent_id %}Placa {{ c.placa }} já é do veículo do agente {{ c.conflito_agent_id }} na Vuupt{% else %}Telefone já é do agente {{ c.conflito_agent_id }} na Vuupt{% endif %}</div>
+    <div class="link-erro">{% if placa_em_conflito %}Placa {{ c.placa }} já é do veículo do agente {{ c.conflito_agent_id }} na Vuupt{% else %}Telefone já é do agente {{ c.conflito_agent_id }} na Vuupt{% endif %}</div>
     {% endif %}
     {% if pode_aprovar and c.ultimo_erro %}<div class="link-erro">{{ c.ultimo_erro }}</div>{% endif %}
-    {% if pode_aprovar and not c.concluido_em %}
+    {% if pode_aprovar and (not c.concluido_em or pode_desfazer) %}
     <div class="link-acoes">
-      {% if aberto and c.agent_id %}
+      {% if c.concluido_em %}
+      {% elif aberto and c.agent_id %}
       <button type="button" class="principal link-resolver" data-usar="">Reaproveitar o veículo da placa</button>
+      {% elif placa_em_conflito %}
+      <button type="button" class="principal link-resolver" data-usar="{{ c.conflito_agent_id }}">É o mesmo motorista: usar agente {{ c.conflito_agent_id }}</button>
+      <button type="button" class="link-resolver" data-usar="">É outra pessoa: criar agente novo e reaproveitar o veículo</button>
       {% elif aberto %}
       <button type="button" class="principal link-resolver" data-usar="{{ c.conflito_agent_id }}">É o mesmo: usar agente {{ c.conflito_agent_id }}</button>
       <button type="button" class="link-resolver" data-usar="">É outra pessoa: criar agente novo</button>
@@ -142,6 +149,9 @@
       <button type="button" class="link-resolver link-usar-digitado">Usar este agente</button>
       {% endif %}
       <button type="button" class="principal link-tentar">Tentar de novo</button>
+      {% endif %}
+      {% if pode_desfazer %}
+      <button type="button" class="link-desfazer" data-apagavel="{{ '1' if (c.agente_criado or c.vehicle_criado) else '' }}">Desfazer (é falso/teste)</button>
       {% endif %}
     </div>
     {% endif %}
@@ -572,17 +582,36 @@ const putJSON = (url, body) => postJSON(url, body, "PUT");
       }
     };
     for (const botao of cartao.querySelectorAll(".link-resolver")) {
-      botao.addEventListener("click", () => {
+      botao.addEventListener("click", async () => {
         let usar = botao.dataset.usar ? Number(botao.dataset.usar) : null;
         if (botao.classList.contains("link-usar-digitado")) {
           usar = Number(cartao.querySelector(".link-agent-id").value);
           if (!usar) { alert("Informe o agent_id do agente na Vuupt."); return; }
+        }
+        if (usar) {
+          // confere na Vuupt quem é antes de ligar o cadastro a esse agente
+          try {
+            const resp = await fetch(BASE_PATH + `/api/motoristas/cadastros-link/${id}/agente/${usar}`);
+            const a = await resp.json();
+            if (!resp.ok) { alert(a.erro || `Agente ${usar} não encontrado na Vuupt.`); return; }
+            if (!confirm(`Usar o agente ${usar} — ${a.nome || "sem nome"} (${a.telefone || "sem telefone"})?`)) return;
+          } catch (e) {
+            alert(`Falha ao consultar o agente: ${e.message}`);
+            return;
+          }
         }
         rodar(botao, `/api/motoristas/cadastros-link/${id}/resolver`, { usar_agent_id: usar });
       });
     }
     const tentar = cartao.querySelector(".link-tentar");
     if (tentar) tentar.addEventListener("click", () => rodar(tentar, `/api/motoristas/cadastros-link/${id}/tentar`, {}));
+    const desfazer = cartao.querySelector(".link-desfazer");
+    if (desfazer) desfazer.addEventListener("click", () => {
+      if (!confirm("Desfazer este cadastro (falso ou de teste)? A linha na tabela fica inativa e o CPF volta a poder se cadastrar.")) return;
+      const apagar = desfazer.dataset.apagavel === "1" &&
+        confirm("Apagar também na Vuupt o agente e o veículo que este cadastro criou?\n\nOK = apagar na Vuupt · Cancelar = manter lá");
+      rodar(desfazer, `/api/motoristas/cadastros-link/${id}/desfazer`, { apagar_na_vuupt: apagar });
+    });
   }
 
   document.getElementById("botao-salvar-motorista").addEventListener("click", async (ev) => {

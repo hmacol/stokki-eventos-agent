@@ -273,6 +273,66 @@ class TestCadastrosPeloLink(unittest.TestCase):
         self.assertEqual(self._post(f"/api/motoristas/cadastros-link/{self.cid}/resolver", {"usar_agent_id": "abc"}).status_code, 400)
         self.assertEqual(self._post("/api/motoristas/cadastros-link/9999/tentar", {}).status_code, 404)
 
+    def test_agente_da_vuupt_pra_confirmar(self):
+        from nucleo import cadastro_motorista_link as proc
+        url = f"/api/motoristas/cadastros-link/{self.cid}/agente/321"
+        self._logar("operador")
+        with mock.patch.object(proc, "agente_da_vuupt") as ag:
+            self.assertEqual(self.cliente.get(url).status_code, 403)
+        ag.assert_not_called()
+        self._logar("total")
+        with mock.patch.object(proc, "agente_da_vuupt",
+                               return_value={"id": 321, "nome": "Fulano", "telefone": "+5511998765432"}) as ag:
+            r = self.cliente.get(url)
+        self.assertEqual((r.status_code, r.get_json()), (200, {"nome": "Fulano", "telefone": "+5511998765432"}))
+        self.assertEqual(ag.call_args.args[1], 321)
+        with mock.patch.object(proc, "agente_da_vuupt", return_value=None):
+            self.assertEqual(self.cliente.get(url).status_code, 404)
+        self.assertEqual(self.cliente.get("/api/motoristas/cadastros-link/9999/agente/321").status_code, 404)
+
+    def test_desfazer_so_pro_total(self):
+        from nucleo import cadastro_motorista_link as proc
+        url = f"/api/motoristas/cadastros-link/{self.cid}/desfazer"
+        self._logar("operador")
+        with mock.patch.object(proc, "desfazer_cadastro_link") as d:
+            self.assertEqual(self._post(url, {"apagar_na_vuupt": True}).status_code, 403)
+        d.assert_not_called()
+        self._logar("total")
+        ok = {"situacao": "desfeito", "erro": None, "apagados": []}
+        with mock.patch.object(proc, "desfazer_cadastro_link", return_value=ok) as d:
+            r = self._post(url, {"apagar_na_vuupt": True})
+        self.assertEqual((r.status_code, r.get_json()), (200, {"ok": True, "resultado": ok}))
+        self.assertEqual(d.call_args.args[2:4], (self.cid, "hugo"))
+        self.assertTrue(d.call_args.kwargs["apagar_na_vuupt"])
+        # de verdade (sem linha na tabela, sem Vuupt): o cadastro fica RECUSADO e sai da fila
+        r = self._post(url, {})
+        self.assertEqual(r.get_json()["resultado"]["situacao"], "desfeito")
+        conn = banco.conectar()
+        try:
+            row = conn.execute("SELECT status, motivo, concluido_em FROM motoristas_cadastros WHERE id = ?", (self.cid,)).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual((row["status"], row["motivo"]), ("RECUSADO", "desfeito no painel"))
+        self.assertIsNotNone(row["concluido_em"])
+        html = self.cliente.get("/motoristas").get_data(as_text=True)
+        self.assertIn("Desfeito por hugo", html)
+        self.assertNotIn("Desfazer (é falso/teste)", html)
+
+    def test_cartao_conflito_de_placa_sem_agente_e_pediu_fixo(self):
+        conn = banco.conectar()
+        conn.execute("UPDATE motoristas_cadastros SET conflito_tipo = 'placa' WHERE id = ?", (self.cid,))
+        conn.commit()
+        conn.close()
+        self._logar("total")
+        html = self.cliente.get("/motoristas").get_data(as_text=True)
+        self.assertIn("Placa ABC1D23 já é do veículo do agente 321 na Vuupt", html)
+        self.assertIn("É o mesmo motorista: usar agente 321", html)
+        self.assertIn("É outra pessoa: criar agente novo e reaproveitar o veículo", html)
+        self.assertNotIn("Telefone já é do agente", html)
+        self.assertIn("Pediu: Fixo", html)
+        self.assertIn("Desfazer (é falso/teste)", html)
+        self.assertIn("/agente/${usar}", html)
+
 
 class TestEditarMotorista(unittest.TestCase):
     """PUT /api/motoristas/<id> e o botao Editar da tela (banco temporario)."""
