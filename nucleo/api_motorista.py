@@ -38,7 +38,7 @@ from pathlib import Path
 _RAIZ = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ))
 
-from flask import Flask, g, jsonify, request
+from flask import Flask, g, jsonify, render_template, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
@@ -285,6 +285,55 @@ def criar_app(config: dict | None = None) -> Flask:
             cadastro.marcar_avisado(conn(), cadastro_id)
             c = cadastro.buscar_cadastro(conn(), cadastro_id)
         return jsonify(c)
+
+    # ── Cadastro pelo link (WhatsApp -> navegador, sem app) ──────────────────
+    # Atrás de cadastro_motorista_link.ativo; /api/cadastro e o envio de
+    # documentos acima seguem valendo com a chave desligada.
+    MSG_LINK_OFF = "Cadastro indisponível no momento."
+
+    def _link_ativo() -> bool:
+        return bool((app.config["CONFIG_PROJETO"].get("cadastro_motorista_link") or {}).get("ativo"))
+
+    def _exigir_link() -> None:
+        if not _link_ativo():
+            raise cadastro.CadastroInvalido(MSG_LINK_OFF, 503)
+
+    @app.get("/cadastro")
+    def cadastro_pagina():
+        if not _link_ativo():
+            return ("<!doctype html><html lang=pt-BR><meta charset=utf-8>"
+                    "<meta name=viewport content='width=device-width,initial-scale=1'><title>Fresh Log</title>"
+                    "<body style='font-family:sans-serif;padding:32px 16px;text-align:center'>"
+                    f"<h1 style='font-size:20px'>{MSG_LINK_OFF}</h1></body></html>"), 503
+        from regras.tipo_veiculo import TIPOS_VEICULO
+        return render_template("cadastro_motorista.html", zonas=cadastro.ZONAS, dias=cadastro.DIAS, tipos=TIPOS_VEICULO)
+
+    @app.post("/api/cadastro-link")
+    def cadastro_link_novo():
+        _exigir_link()
+        ip = request.remote_addr or "?"
+        _freio_cadastro(ip)
+        r = cadastro.criar_cadastro_link(conn(), corpo())
+        _pedidos_cadastro.setdefault(ip, []).append(time.time())
+        return jsonify(r), 201
+
+    @app.get("/api/cadastro/<int:cadastro_id>/situacao")
+    def cadastro_link_situacao(cadastro_id):
+        _exigir_link()
+        return jsonify(cadastro.situacao_link(conn(), cadastro_id, request.args.get("chave_envio")))
+
+    @app.post("/api/cadastro/<int:cadastro_id>/concluir")
+    def cadastro_link_concluir(cadastro_id):
+        _exigir_link()
+        chave = corpo().get("chave_envio")
+        cadastro.marcar_enviado(conn(), cadastro_id, chave)
+        try:
+            from nucleo import cadastro_motorista_link
+            cadastro_motorista_link.processar(conn(), app.config["CONFIG_PROJETO"], cadastro_id)
+        except Exception:
+            # O cadastro já está salvo e enviado; o timer de retentativa termina o serviço.
+            logger.exception("Processar do cadastro #%s falhou (o timer retenta)", cadastro_id)
+        return jsonify({"ok": True, "primeiro_nome": cadastro.situacao_link(conn(), cadastro_id, chave)["primeiro_nome"]})
 
     @app.post("/api/push-token")
     @requer_motorista
