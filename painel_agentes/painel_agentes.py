@@ -94,6 +94,8 @@ import pagina_inicial
 import wms
 import wms_pedidos
 import wms_etiqueta_produto
+import wms_caixas
+import wms_fila_impressao
 import wms_faltas_recebimento
 import acesso_telas
 import avisos_pendencias
@@ -4766,6 +4768,84 @@ def wms_etiqueta_produto_pdf():
         conn.close()
     return Response(pdf, mimetype="application/pdf",
                     headers={"Content-Disposition": "inline; filename=etiqueta-produto.pdf"})
+
+
+# Fila de impressão das etiquetas de caixa (computador da equipe): o celular
+# do galpão pede as etiquetas (wms_caixas.criar_caixas enfileira) e quem está
+# no computador com a térmica abre o PDF e marca como impresso.
+_NIVEIS_FILA_ETIQUETAS = ("total", "operador", "expedicao")
+
+
+@app.route("/etiquetas/fila")
+@requer_auth(niveis=_NIVEIS_FILA_ETIQUETAS)
+def fila_etiquetas():
+    return render_template("fila_etiquetas.html")
+
+
+@app.route("/api/etiquetas/fila")
+@requer_auth(niveis=_NIVEIS_FILA_ETIQUETAS)
+def api_fila_etiquetas():
+    situacao = request.args.get("situacao") or "PENDENTE"
+    if situacao not in wms_fila_impressao.SITUACOES:
+        return jsonify({"erro": f"Situação inválida: {situacao}."}), 400
+    conn = wms_caixas.conectar()
+    try:
+        trabalhos = wms_fila_impressao.listar(conn, situacao)
+    finally:
+        conn.close()
+    return jsonify({"trabalhos": trabalhos})
+
+
+@app.route("/etiquetas/fila/<int:impressao_id>.pdf")
+@requer_auth(niveis=_NIVEIS_FILA_ETIQUETAS)
+def fila_etiquetas_pdf(impressao_id):
+    """PDF do trabalho da fila, com a mesma calibração da etiqueta de
+    mercadoria (config.yaml wms.etiqueta_*, sobrescrevível por ?orientacao,
+    ?margem, ?dx, ?dy)."""
+    cfg_wms = _carregar_config().get("wms", {}) or {}
+    orientacao = request.args.get("orientacao") or cfg_wms.get("etiqueta_orientacao") or "paisagem"
+    padrao = {"margem": cfg_wms.get("etiqueta_margem_mm", 0), "dx": cfg_wms.get("etiqueta_dx_mm", 0),
+              "dy": cfg_wms.get("etiqueta_dy_mm", 0)}
+
+    def _mm(nome):
+        bruto = request.args.get(nome)
+        if bruto in (None, ""):
+            bruto = padrao[nome]
+        try:
+            return float(str(bruto).replace(",", "."))
+        except ValueError:
+            abort(400, f"Parâmetro {nome} inválido.")
+    margem, dx, dy = _mm("margem"), _mm("dx"), _mm("dy")
+    conn = wms_caixas.conectar()
+    try:
+        trabalho = wms_fila_impressao.obter(conn, impressao_id)
+        if trabalho is None:
+            abort(404, "Pedido de impressão não encontrado.")
+        try:
+            pdf = wms_etiqueta_produto.gerar_pdf_caixas(
+                conn, trabalho["itens"], orientacao=orientacao, margem_mm=margem,
+                desloc_x_mm=dx, desloc_y_mm=dy)
+        except wms.ErroWMS as e:
+            abort(400, str(e))
+    finally:
+        conn.close()
+    return Response(pdf, mimetype="application/pdf",
+                    headers={"Content-Disposition": f"inline; filename=etiquetas-{impressao_id}.pdf"})
+
+
+@app.route("/api/etiquetas/fila/<int:impressao_id>/impresso", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_FILA_ETIQUETAS)
+@exige_mesma_origem
+def api_fila_etiquetas_impresso(impressao_id):
+    conn = wms_caixas.conectar()
+    try:
+        trabalho = wms_fila_impressao.marcar_impresso(
+            conn, impressao_id, session.get("usuario") or g.nivel_acesso)
+    except wms.ErroWMS as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"trabalho": trabalho})
 
 
 @app.route("/wms/estoque")

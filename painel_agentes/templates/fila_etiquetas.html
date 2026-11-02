@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block titulo %}Fila de etiquetas{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  main { max-width: 1000px; }
+  .cabecalho-pagina { margin-bottom: 16px; }
+  .cabecalho-pagina h1 { font-size: 20px; margin: 0; }
+  .cabecalho-pagina p { margin: 4px 0 0; color: var(--texto-suave); font-size: 12.5px; }
+  table.tabela-fila { width: 100%; border-collapse: collapse; background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; overflow: hidden; }
+  table.tabela-fila th, table.tabela-fila td { padding: 9px 12px; text-align: left; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: middle; }
+  table.tabela-fila th { background: var(--fundo); color: var(--texto-suave); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  table.tabela-fila tr:last-child td { border-bottom: none; }
+  .vazio { color: var(--texto-suave); font-size: 13px; padding: 14px 12px; }
+  .acoes { display: flex; gap: 8px; white-space: nowrap; }
+  .acoes a, .acoes button { padding: 5px 10px; border: 1px solid var(--borda); border-radius: 6px; background: var(--fundo); color: var(--texto); font-size: 12px; cursor: pointer; text-decoration: none; }
+  .acoes a:hover, .acoes button:hover { border-color: var(--texto-suave); }
+  .acoes button[disabled] { opacity: 0.5; cursor: progress; }
+  #erro { color: var(--erro); font-size: 13px; margin: 8px 0; min-height: 1em; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <h1>Fila de etiquetas</h1>
+  <p>Etiquetas de caixa pedidas pelo galpão. Abra o PDF, imprima na térmica e marque como impresso. Atualiza sozinha a cada 30 segundos.</p>
+</div>
+<div id="erro" role="alert"></div>
+<table class="tabela-fila" id="tab-fila">
+  <thead><tr><th>Pedido</th><th>Etiquetas</th><th>Pedido por</th><th>Quando</th><th>Ação</th></tr></thead>
+  <tbody><tr><td colspan="5" class="vazio">Carregando…</td></tr></tbody>
+</table>
+
+<script>
+(function() {
+  const URL_LISTA = "{{ url_for('api_fila_etiquetas') }}";
+  const URL_PDF = "{{ url_for('fila_etiquetas_pdf', impressao_id=0) }}";
+  const URL_IMPRESSO = "{{ url_for('api_fila_etiquetas_impresso', impressao_id=0) }}";
+  const corpo = document.querySelector("#tab-fila tbody");
+  const erro = document.getElementById("erro");
+
+  function esc(t) {
+    const d = document.createElement("div");
+    d.textContent = t == null ? "" : String(t);
+    return d.innerHTML;
+  }
+
+  async function carregar() {
+    try {
+      const r = await fetch(URL_LISTA, { credentials: "same-origin" });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).erro || ("Erro " + r.status));
+      const trabalhos = (await r.json()).trabalhos;
+      erro.textContent = "";
+      if (!trabalhos.length) {
+        corpo.innerHTML = '<tr><td colspan="5" class="vazio">Nenhuma etiqueta esperando impressão.</td></tr>';
+        return;
+      }
+      corpo.innerHTML = trabalhos.map(function(t) {
+        return '<tr><td>' + esc(t.titulo) + '</td><td>' + t.itens.length + '</td><td>' + esc(t.pedido_por) +
+          '</td><td>' + esc(t.criado_em) + '</td><td class="acoes">' +
+          '<a href="' + URL_PDF.replace(/0\.pdf$/, t.id + ".pdf") + '" target="_blank" rel="noopener">Abrir PDF</a>' +
+          '<button type="button" data-id="' + t.id + '">Marcar impresso</button></td></tr>';
+      }).join("");
+    } catch (e) {
+      erro.textContent = e.message;
+    }
+  }
+
+  corpo.addEventListener("click", async function(ev) {
+    const b = ev.target.closest("button[data-id]");
+    if (!b) return;
+    b.disabled = true;
+    try {
+      const r = await fetch(URL_IMPRESSO.replace(/\/0\/impresso$/, "/" + b.dataset.id + "/impresso"),
+                            { method: "POST", credentials: "same-origin" });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).erro || ("Erro " + r.status));
+      await carregar();
+    } catch (e) {
+      erro.textContent = e.message;
+      b.disabled = false;
+    }
+  });
+
+  carregar();
+  setInterval(carregar, 30000);
+})();
+</script>
+{% endblock %}
