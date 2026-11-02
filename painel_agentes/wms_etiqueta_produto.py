@@ -92,16 +92,21 @@ def desenhar_etiqueta_produto(dados: dict):
 
     x0 = 30 + lado + 40
     largura = W - x0 - 30
-    descricao = _cortar((dados.get("descricao") or "").upper(), 60)
-    f_desc = wms._ajustar_fonte(draw, descricao, largura, 50, negrito=True, condensada=True)
-    draw.text((x0, 35), descricao, fill=0, font=f_desc)
-    y = 35 + f_desc.size + 14
+    # SKU em destaque: primeira linha, maior fonte da etiqueta. A palavra "SKU"
+    # vai pequena pra o numero ganhar a largura toda; os dois na mesma base.
+    f_rotulo = wms._fonte(40, negrito=True, condensada=True)
+    larg_rotulo = draw.textlength("SKU ", font=f_rotulo)
+    valor_sku = str(dados.get("sku") or "-")
+    f_sku = wms._ajustar_fonte(draw, valor_sku, largura - larg_rotulo, 120, negrito=True, condensada=True)
+    base = 30 + f_sku.getmetrics()[0]
+    draw.text((x0, base), "SKU", fill=0, font=f_rotulo, anchor="ls")
+    draw.text((x0 + larg_rotulo, base), valor_sku, fill=0, font=f_sku, anchor="ls")
+    y = 30 + f_sku.size + 12
 
-    # SKU em destaque
-    linha_sku = f"SKU {dados.get('sku') or '-'}"
-    f_sku = wms._ajustar_fonte(draw, linha_sku, largura, 58, negrito=True, condensada=True)
-    draw.text((x0, y), linha_sku, fill=0, font=f_sku)
-    y += f_sku.size + 14
+    descricao = _cortar((dados.get("descricao") or "").upper(), 60)
+    f_desc = wms._ajustar_fonte(draw, descricao, largura, 42, negrito=True, condensada=True)
+    draw.text((x0, y), descricao, fill=0, font=f_desc)
+    y += f_desc.size + 14
 
     linha_lote = f"LOTE {dados.get('lote') or '-'}"
     validade = dados.get("validade") or ""
@@ -113,7 +118,7 @@ def desenhar_etiqueta_produto(dados: dict):
             pass
     linha_val = f"VAL {validade}" if validade else "SEM VALIDADE"
     # as duas linhas no mesmo tamanho: o da que for mais larga
-    fontes = [wms._ajustar_fonte(draw, t, largura, 72, condensada=True) for t in (linha_lote, linha_val)]
+    fontes = [wms._ajustar_fonte(draw, t, largura, 64, condensada=True) for t in (linha_lote, linha_val)]
     f_big = min(fontes, key=lambda f: f.size)
     draw.text((x0, y), linha_lote, fill=0, font=f_big)
     y += f_big.size + 8

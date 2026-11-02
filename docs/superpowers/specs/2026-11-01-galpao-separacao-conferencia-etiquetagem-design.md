@@ -86,7 +86,7 @@ Seria falha, mesmo que "funcione":
 | H5 | Serial | Cada caixa tem serial único; **substitui a D5 de 21/09 ("sem serial")** |
 | H6 | QR | Um QR só por caixa: `FL\|CÓDIGO\|LOTE\|VALIDADE\|SERIAL`. Sem código de barras extra |
 | H7 | Produto sem EAN | Código interno gerado no backend, vai dentro do QR no lugar do SKU/EAN |
-| H8 | Layout da etiqueta de produto | Descrição, **SKU em destaque**, LOTE, VAL, faixa `CAIXA <serial>`, rodapé embarcador · Freshlog (mockup aprovado) |
+| H8 | Layout da etiqueta de produto | **SKU na 1ª linha, maior fonte da etiqueta** (02/11), descrição, LOTE, VAL, faixa `CAIXA <serial>`, rodapé embarcador · Freshlog (mockup aprovado) |
 | H9 | Etiqueta de volume | Impressa no fechamento, sem rota: PS, NF, embarcador, destinatário (nome, bairro, cidade), "X / Y", QR do volume. Sem temperatura |
 | H10 | Separação | Pedido a pedido **e** em onda |
 | H11 | Montar onda | Botão "montar onda", filtro por data de entrega |
@@ -250,8 +250,9 @@ por e-mail interno.
 
 ## 8. Etiquetas
 
-- **Caixa, 10×5 (H8):** mockup aprovado em 01/11, com descrição, SKU grande,
-  LOTE, VAL, faixa preta `CAIXA C0001234` e rodapé. Reusa
+- **Caixa, 10×5 (H8):** mockup aprovado em 01/11; em 02/11 o SKU subiu pra
+  1ª linha, com a maior fonte da etiqueta ("SKU" pequeno, número grande).
+  Depois vêm descrição, LOTE, VAL, faixa preta `CAIXA C0001234` e rodapé. Reusa
   `desenhar_etiqueta_produto` e a calibração da VPS. N cópias geram N seriais
   diferentes.
 - **Avulsa, 10×5 (C8):** só o QR `FC|…` e `CAIXA <serial>`, impressa em rolo
