@@ -87,6 +87,10 @@ class TestCaixas(BaseCaixas):
         self.assertEqual(self.n("wms_contadores"), 0)
         self.assertFalse(self.conn.in_transaction)
 
+    def test_lote_vazio_e_aceito(self):
+        r = cx.criar_caixas(self.conn, produto_id=1, lote="", validade="2026-12-15", qtd_un=None, quantidade=1)
+        self.assertEqual(cx.obter_caixa(self.conn, r["seriais"][0])["lote"], "")
+
     def test_obter_caixa_inexistente(self):
         self.assertIsNone(cx.obter_caixa(self.conn, "C9999999"))
 

@@ -136,8 +136,6 @@ def criar_caixas(conn, *, produto_id: int, lote: str, validade: str | None,
         if produto.get("controla_validade") and not val:
             raise ErroWMS("Validade obrigatoria para este produto.")
         lote_n = " ".join(str(lote or "").split()).upper()
-        if produto.get("controla_lote") and not lote_n:
-            raise ErroWMS("Lote obrigatorio para este produto.")
         if qtd_un is None:
             qtd_un = produto.get("qtd_por_caixa") or 1
         qtd_un = float(qtd_un)
