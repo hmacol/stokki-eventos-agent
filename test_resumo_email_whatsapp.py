@@ -10,6 +10,7 @@ from datetime import date, datetime
 from unittest.mock import patch
 
 import notificar_whatsapp as nw
+import resumo_email_whatsapp as rew
 from resumo_email_whatsapp import escolher_resumo
 
 HOJE = date(2026, 10, 29)
@@ -62,6 +63,24 @@ class TestAvisarResumoEmail(unittest.TestCase):
     def test_sem_grupo_fica_desligado(self, enviar):
         config = {"whatsapp_notificacoes": dict(CONFIG["whatsapp_notificacoes"], grupo_resumo_email_id="")}
         self.assertEqual(self._avisar(config), "desligado")
+        enviar.assert_not_called()
+
+
+class TestExecutar(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+
+    @patch("notificar_whatsapp.integracao_openwa.enviar_texto", return_value=(True, "m1"))
+    def test_ja_enviado_nem_abre_o_gmail(self, _enviar):
+        with patch.object(rew, "buscar_resumo_do_dia", return_value="*Ler*") as buscar:
+            self.assertEqual(rew.executar(CONFIG, HOJE, conn=self.conn), 0)
+            self.assertEqual(rew.executar(CONFIG, HOJE, conn=self.conn), 0)
+        self.assertEqual(buscar.call_count, 1)
+
+    @patch("notificar_whatsapp.integracao_openwa.enviar_texto")
+    def test_gmail_fora_sai_sem_erro_e_nao_envia(self, enviar):
+        with patch.object(rew, "buscar_resumo_do_dia", side_effect=TimeoutError("The read operation timed out")):
+            self.assertEqual(rew.executar(CONFIG, HOJE, conn=self.conn), 0)
         enviar.assert_not_called()
 
 

@@ -102,18 +102,31 @@ def main(argv=None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
         config = yaml.safe_load(f) or {}
+    return executar(config, datetime.now().date(), args.modo_teste)
+
+
+def executar(config: dict, hoje: date, modo_teste: bool = False, conn=None) -> int:
     grupo = (config.get("whatsapp_notificacoes") or {}).get("grupo_resumo_email_id")
-    if not args.modo_teste and not (nw.gateway_clientes_ok(config) and grupo):
+    if not modo_teste and not (nw.gateway_clientes_ok(config) and grupo):
         logger.info("WhatsApp desligado ou sem whatsapp_notificacoes.grupo_resumo_email_id: nada a fazer.")
         return 0
-    hoje = datetime.now().date()
-    corpo = buscar_resumo_do_dia(config.get("email") or {}, hoje)
+    # Ja foi hoje: nem abre o Gmail (as rodadas seguintes do timer so confirmam).
+    if not modo_teste and nw._ja_enviada_alguma_vez(conn, "resumo_email", f"resumo_email:{hoje.isoformat()}"):
+        logger.info(f"Resumo de {hoje:%d/%m}: ja_enviado.")
+        return 0
+    try:
+        corpo = buscar_resumo_do_dia(config.get("email") or {}, hoje)
+    except (imaplib.IMAP4.error, OSError) as exc:
+        # Gmail lento/fora (29/10: timeout de leitura): a proxima rodada de
+        # 15 min tenta de novo; sair com erro so dispararia o alerta de falha.
+        logger.warning(f"Gmail nao respondeu ({exc}); a proxima rodada tenta de novo.")
+        return 0
     if not corpo:
         logger.info(f"Resumo de {hoje:%d/%m} ainda nao chegou no Gmail.")
         return 0
-    situacao = nw.avisar_resumo_email(corpo, hoje, config, modo_teste=args.modo_teste)
+    situacao = nw.avisar_resumo_email(corpo, hoje, config, modo_teste=modo_teste, conn=conn)
     logger.info(f"Resumo de {hoje:%d/%m}: {situacao}.")
-    if args.modo_teste:
+    if modo_teste:
         print(nw.texto_resumo_email(corpo))
     return 0
 
