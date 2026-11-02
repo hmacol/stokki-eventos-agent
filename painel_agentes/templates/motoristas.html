@@ -44,7 +44,7 @@
   .pendentes { margin-bottom: 24px; }
   .pendentes h2 { font-size: 16px; margin: 0 0 4px; }
   .pendentes-ajuda { font-size: 12.5px; color: var(--texto-suave); margin: 0 0 12px; }
-  .cartao-cadastro { background: var(--superficie); border: 1px solid var(--acento); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+  .cartao-cadastro, .cartao-link { background: var(--superficie); border: 1px solid var(--acento); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
   .cadastro-cab { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
   .cadastro-meta { font-size: 12px; color: var(--texto-suave); margin-top: 3px; }
   .cadastro-docs { display: flex; gap: 8px; white-space: nowrap; }
@@ -92,7 +92,7 @@
   {% for c in dados.cadastros_link %}
   {% set aberto = c.conflito_agent_id and not c.conflito_resolvido %}
   {% set bv = c.boas_vindas_situacao %}
-  <article class="cartao-cadastro cartao-link" data-link-id="{{ c.id }}">
+  <article class="cartao-link" data-link-id="{{ c.id }}">
     <div class="cadastro-cab">
       <div>
         <strong>{{ c.nome }}</strong>{% if pode_aprovar %} <span class="mono">CPF {{ c.cpf }}</span>{% endif %}

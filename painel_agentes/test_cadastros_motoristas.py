@@ -200,6 +200,44 @@ class TestCadastrosPeloLink(unittest.TestCase):
         self.assertIn("agente: HTTP 500", html)
         self.assertIn("Usar este agente", html)
 
+    def test_cartao_do_link_nao_casa_com_seletor_do_fluxo_do_app(self):
+        """Regressão: o JS do app faz querySelectorAll('.cartao-cadastro') e exige
+        .botao-aprovar em cada um; o cartão do link não pode cair nesse seletor."""
+        from html.parser import HTMLParser
+        conn = banco.conectar()
+        app_id = cad.criar_cadastro(conn, CADASTRO)["id"]
+        chave = conn.execute("SELECT chave_envio FROM motoristas_cadastros WHERE id = ?", (app_id,)).fetchone()[0]
+        cad.guardar_documento(conn, app_id, chave, "cnh", "cnh.jpg", b"\xff\xd8" * 20)
+        cad.guardar_documento(conn, app_id, chave, "crlv", "crlv.jpg", b"\xff\xd8" * 20)
+        conn.close()
+
+        class Coletor(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.pilha, self.cartoes, self.links = [], [], []
+
+            def handle_starttag(self, tag, attrs):
+                a = dict(attrs)
+                classes = (a.get("class") or "").split()
+                if tag == "article":
+                    atual = {"classes": classes, "aprovar": False}
+                    (self.cartoes if "cartao-cadastro" in classes else self.links).append(atual)
+                    self.pilha.append(atual)
+                elif "botao-aprovar" in classes and self.pilha:
+                    self.pilha[-1]["aprovar"] = True
+
+            def handle_endtag(self, tag):
+                if tag == "article" and self.pilha:
+                    self.pilha.pop()
+
+        self._logar("total")
+        c = Coletor()
+        c.feed(self.cliente.get("/motoristas").get_data(as_text=True))
+        self.assertEqual(len(c.cartoes), 1)
+        self.assertEqual(len(c.links), 1)
+        self.assertTrue(all(x["aprovar"] for x in c.cartoes))
+        self.assertNotIn("cartao-cadastro", c.links[0]["classes"])
+
     def test_sem_cadastro_de_link_nao_ha_secao(self):
         conn = banco.conectar()
         conn.execute("DELETE FROM motoristas_cadastros")
