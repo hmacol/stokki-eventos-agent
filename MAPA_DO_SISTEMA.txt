@@ -754,6 +754,8 @@
  agendamento_automatico.py Pedido novo sem agendamento nasce com data (corte 14h, proximo
                             dia util, so servicos criados a partir de 03/11/2026) e horario
                             (mensagem da Stokki > horario do destinatario > dia todo).
+                            Registrada como AUTOMATICO em agendamentos_origem: nunca vira
+                            dedicado (nao e data do cliente).
  feriados.py                Calendário de feriados (nacionais, Carnaval, Corpus
                             Christi, 09/07, 25/01; móveis pela Páscoa) e as
                             funções de dia útil usadas por rota do dia, dia

@@ -92,6 +92,50 @@ class TestAplicar(unittest.TestCase):
                 conn.close()
         self.assertEqual(n, 2)
 
+    def test_falha_na_consulta_de_origem_nao_para_o_reagendamento(self):
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        import registro_dia_fixo
+
+        class Vuupt:
+            def __init__(self):
+                self.chamadas = []
+
+            def atualizar_servico(self, sid, payload):
+                self.chamadas.append(sid)
+
+        s = svc(11, "PS-11", "Rua A 1, Centro, Jacareí - SP, 12300-000, Brasil", "2026-10-12T08:00:00-03:00")
+        nova = date(2026, 10, 13)
+        for alvo in ("data_e_automatica", "conectar"):
+            with self.subTest(alvo=alvo), tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+                db = Path(tmp) / "t.db"
+                original = registro_dia_fixo.conectar
+                v = Vuupt()
+                if alvo == "conectar":
+                    # falha so na 1a chamada (a de aplicar); o registro posterior conecta normal
+                    chamadas = []
+
+                    def conectar_quebrado(*a, **k):
+                        chamadas.append(1)
+                        if len(chamadas) == 1:
+                            raise RuntimeError("banco travado")
+                        return original(*a, **k)
+                    patch = mock.patch.object(registro_dia_fixo, "conectar", conectar_quebrado)
+                else:
+                    patch = mock.patch.object(registro_dia_fixo, "data_e_automatica",
+                                              side_effect=RuntimeError("consulta falhou"))
+                with patch:
+                    n = rf.aplicar(rf.plano([s], FERIADO), v, db_path=db)
+                self.assertEqual(n, 1)
+                self.assertEqual(v.chamadas, [11])
+                conn = original(db)
+                try:
+                    self.assertFalse(registro_dia_fixo.data_e_automatica(conn, s, nova))
+                    self.assertTrue(registro_dia_fixo.data_nao_e_do_cliente(conn, s, nova))
+                finally:
+                    conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()
