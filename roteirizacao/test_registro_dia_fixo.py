@@ -56,6 +56,20 @@ class TestRegistro(unittest.TestCase):
         reg.registrar_origem(self.conn, {"id": 1, "code": "PS-1001"}, QUINTA, "CLIENTE")
         self.assertFalse(reg.data_nao_e_do_cliente(self.conn, {"id": 1, "code": "PS-1001"}, QUINTA))
 
+    def test_data_automatica_nao_e_do_cliente(self):
+        s = {"id": 7, "code": "#PS-1001"}
+        reg.registrar_origem(self.conn, s, QUINTA, reg.ORIGEM_AUTOMATICO)
+        self.assertTrue(reg.data_nao_e_do_cliente(self.conn, s, QUINTA))
+        self.assertTrue(reg.data_e_automatica(self.conn, s, QUINTA))
+        self.assertFalse(reg.data_e_automatica(self.conn, s, QUINTA + timedelta(days=1)))
+
+    def test_dia_fixo_e_equipe_nao_sao_automaticas(self):
+        s = {"id": 8, "code": "#PS-1002"}
+        reg.registrar_origem(self.conn, s, QUINTA, reg.ORIGEM_DIA_FIXO)
+        reg.registrar_origem(self.conn, s, QUINTA, reg.ORIGEM_EQUIPE)
+        self.assertFalse(reg.data_e_automatica(self.conn, s, QUINTA))
+        self.assertFalse(reg.data_e_automatica(self.conn, {}, QUINTA))
+
     def test_servico_sem_codigo_e_sem_id(self):
         self.assertFalse(reg.data_nao_e_do_cliente(self.conn, {}, QUINTA))
         self.assertEqual(reg.registrar_origem(self.conn, {}, QUINTA, reg.ORIGEM_EQUIPE), 0)

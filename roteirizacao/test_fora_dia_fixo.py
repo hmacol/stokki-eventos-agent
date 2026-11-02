@@ -78,6 +78,13 @@ class TestDeteccaoEMarcacao(Base):
         conn.close()
         self.assertEqual(self._marcar([s]), [])
 
+    def test_data_automatica_nao_marca(self):
+        s = _servico()
+        conn = reg.conectar(self.db)
+        reg.registrar_origem(conn, s, date(2026, 10, 8), reg.ORIGEM_AUTOMATICO)
+        conn.close()
+        self.assertEqual(self._marcar([s]), [])
+
     def test_data_reagendada_pela_equipe_nao_marca(self):
         # Hugo, 03/10: data posta pela equipe no Planejamento (só service_id) não vira dedicado
         conn = reg.conectar(self.db)
