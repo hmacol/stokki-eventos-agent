@@ -767,7 +767,7 @@
  disponibilidade_motoristas.py  Férias/atestado por data.
  confirmacao_rotas.py       Estado da confirmação de rota pelo motorista.
  ofertas_rota.py            Marketplace de rotas.
- prioridade_ofertas.py      Ondas de prioridade das ofertas.
+ prioridade_ofertas.py      Ondas de prioridade das ofertas. FIXO vê antes do esporádico (02/11).
  resumo_oferta.py           Resumo da rota exibido ao motorista.
  tarifa_motorista.py        Remuneração por rota/veículo.
  km_cobrado.py              Qual km entra na franquia.

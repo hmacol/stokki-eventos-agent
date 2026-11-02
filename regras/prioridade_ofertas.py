@@ -12,6 +12,9 @@ todos", de 22/08, continua valendo); quem tem prioridade só ganha
 vantagem de TEMPO.
 
 Ordem de prioridade (menor tupla = vê primeiro):
+  0. Motorista FIXO antes do ESPORADICO (Hugo, 02/11 -- mesma regra de
+     selecionar_motorista_equitativo); os critérios abaixo valem dentro
+     de cada grupo.
   1. Rodízio de SP, "leitura B" confirmada pelo Hugo em 03/09: numa
      rota FORA do Centro Expandido, o motorista cuja placa está
      restrita naquele dia vem primeiro -- essas rotas são as únicas
@@ -287,6 +290,7 @@ def priorizar(
     ordenados = sorted(
         elegiveis,
         key=lambda m: (
+            0 if m.posicao == "FIXO" else 1,   # Hugo, 02/11: fixo antes do esporádico, como na alocação
             0 if _prioridade_rodizio(m) else 1,
             contagem_curta.get(m.agent_id, 0),
             contagem_longa.get(m.agent_id, 0),
