@@ -1,0 +1,27 @@
+{# reduzirImagem(arq) -> Promise<File>, incluído DENTRO do <script> de
+   baixa_sem_app.html, torre_controle.html e planejamento_rotas.html
+   (checklist da VUUPT pelas telas). Sempre resolve: na dúvida, o original. #}
+// Foto do celular vem com 3-5 MB: reduz no navegador (lado maior 2000 px, JPEG 0.85) antes de enviar.
+// PDF ou imagem que o navegador nao decodifica (ex.: HEIC fora do Safari) vai como veio.
+function reduzirImagem(arq) {
+  if (!arq || !arq.type || arq.type.indexOf('image/') !== 0) return Promise.resolve(arq);
+  return new Promise(function (ok) {
+    var url = URL.createObjectURL(arq), img = new Image();
+    img.onload = function () {
+      try {
+        var k = Math.min(1, 2000 / Math.max(img.naturalWidth, img.naturalHeight));
+        var c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        c.toBlob(function (b) {
+          ok(b ? new File([b], (arq.name || 'foto').replace(/\.[^.]*$/, '') + '.jpg', {type: 'image/jpeg'}) : arq);
+        }, 'image/jpeg', 0.85);
+      } catch (e) {
+        URL.revokeObjectURL(url); ok(arq);
+      }
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); ok(arq); };
+    img.src = url;
+  });
+}

@@ -11,6 +11,7 @@ docs/superpowers/specs/2026-10-08-motoristas-sem-app-design.md
 """
 import json
 import logging
+import shutil
 import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -92,9 +93,13 @@ def excecoes_torre(data_iso: str, db_path: Path | None = None, hoje: date | None
 # ── Baixa ─────────────────────────────────────────────────────────────────────
 
 def concluir_servico(vuupt, service_id: int, sucesso: bool, failed_reason_id: int | None,
-                     agent_id: int | None) -> str:
+                     agent_id: int | None, fotos: dict[int, bytes] | None = None,
+                     info: dict | None = None) -> str:
     """Mesmo caminho de lalamove_integracao._concluir_na_vuupt, com insucesso.
-    GET sem resposta (429/timeout) levanta: nunca escreve num servico que nao leu."""
+    GET sem resposta (429/timeout) levanta: nunca escreve num servico que nao leu.
+    fotos (campo -> JPEG) vao pro checklist da Vuupt so na entrega: insucesso nunca
+    leva foto. Falha do checklist levanta ANTES do check-out (pedido nao conclui).
+    info recebe checklist_id quando o checklist foi gravado."""
     servico = vuupt.buscar_servico_por_id(service_id)
     if not servico:
         raise RuntimeError(f"Vuupt nao devolveu o servico {service_id}; nada foi alterado, tente de novo.")
@@ -109,8 +114,11 @@ def concluir_servico(vuupt, service_id: int, sucesso: bool, failed_reason_id: in
         elif agent_id:
             vuupt.atribuir_agente(service_id, agent_id)
             status = "assigned"
-    vuupt.concluir_como_agente(service_id, sucesso=sucesso,
-                               failed_reason_id=None if sucesso else failed_reason_id, status_atual=status)
+    checklist_id = vuupt.concluir_como_agente(
+        service_id, sucesso=sucesso, failed_reason_id=None if sucesso else failed_reason_id, status_atual=status,
+        fotos_checklist=(fotos or None) if sucesso else None, servico=servico)
+    if info is not None and checklist_id:
+        info["checklist_id"] = checklist_id
     return "entregue" if sucesso else "insucesso"
 
 
@@ -118,12 +126,46 @@ def criar_lote(conn: sqlite3.Connection, vuupt_route_id: int, agent_id: int, por
     garantir_tabela(conn)
     itens = [{"service_id": int(i["service_id"]), "codigo": i.get("codigo") or "",
               "entregue": bool(i["entregue"]), "failed_reason_id": i.get("failed_reason_id"),
-              "status": "pendente"} for i in itens]
+              "status": "pendente",
+              **{k: i[k] for k in ("justificativa", "texto_outro", "aviso") if i.get(k)}} for i in itens]
     cur = conn.execute(
         "INSERT INTO baixas_sem_app (vuupt_route_id, agent_id, criado_por, criado_em, itens_json) VALUES (?, ?, ?, ?, ?)",
         (vuupt_route_id, agent_id, por, datetime.now().strftime(FMT), json.dumps(itens, ensure_ascii=False)))
     conn.commit()
     return cur.lastrowid
+
+
+def pasta_fotos(lote_id: int, db_path: Path | None = None) -> Path:
+    return Path(db_path or banco.DB_PATH).parent / "checklist_fotos" / f"lote_{int(lote_id)}"
+
+
+def gravar_fotos(conn: sqlite3.Connection, lote_id: int, fotos_por_servico: dict[int, dict[int, bytes]],
+                 db_path: Path | None = None) -> None:
+    """Grava os JPEG em dados/checklist_fotos/lote_<id>/<sid>_<campo>.jpg (so inteiros no nome) e
+    guarda os caminhos no item, ANTES da thread. Se falhar, o lote vira erro (nao fica pendente)."""
+    lote = ler_lote(conn, lote_id)
+    itens = lote["itens"]
+    try:
+        pasta = pasta_fotos(lote_id, db_path)
+        for item in itens:
+            fotos = fotos_por_servico.get(item["service_id"])
+            if not fotos:
+                continue
+            pasta.mkdir(parents=True, exist_ok=True)      # so cria a pasta se ha foto
+            item["fotos"] = {}
+            for campo, conteudo in fotos.items():
+                nome = f"{int(item['service_id'])}_{int(campo)}.jpg"
+                (pasta / nome).write_bytes(conteudo)
+                item["fotos"][str(int(campo))] = nome      # relativo a pasta do lote
+        _salvar_itens(conn, lote_id, itens)
+    except Exception as e:  # noqa: BLE001
+        # o erro completo (com o caminho do servidor) so vai pro log; a pasta parcial nao fica pra tras
+        logger.warning(f"Baixa sem app lote {lote_id}: fotos nao gravadas: {e}")
+        shutil.rmtree(pasta_fotos(lote_id, db_path), ignore_errors=True)
+        for item in itens:
+            item["status"], item["erro"] = "erro", "Fotos nao gravadas no servidor; tente de novo."
+        _salvar_itens(conn, lote_id, itens, terminado=True)
+        raise
 
 
 MINUTOS_LOTE_ATIVO = 10
@@ -163,9 +205,19 @@ def _registrar_tratativa(item: dict, por: str) -> None:
     import tratativas
     from insucesso_entrega.motivos_falha import texto_do_motivo
     if item["status"] == "entregue":
+        # como a Torre: diz como a entrega foi comprovada
+        detalhe = ""
+        if item.get("justificativa"):
+            from nucleo.justificativas_sem_canhoto import JUSTIFICATIVAS
+            detalhe = JUSTIFICATIVAS.get(item["justificativa"], item["justificativa"])
+            if item.get("texto_outro"):
+                detalhe += f": {item['texto_outro']}"
+        elif item.get("checklist_id"):
+            detalhe = "com foto no checklist da VUUPT"
         tratativas.registrar_evento(item["codigo"], "BAIXA_SEM_APP", "BAIXA_SEM_APP",
                                     service_id=item["service_id"],
-                                    texto=f"Baixa de motorista sem app por {por}: entregue.")
+                                    texto=f"Baixa de motorista sem app por {por}: entregue"
+                                          + (f" ({detalhe})." if detalhe else "."))
     elif item["status"] == "insucesso":
         motivo = texto_do_motivo(item["failed_reason_id"])
         tratativas.registrar_evento(item["codigo"], "BAIXA_SEM_APP", "BAIXA_SEM_APP",
@@ -189,8 +241,21 @@ def executar_lote(lote_id: int, vuupt, db_path: Path | None = None) -> dict:
             if item["status"] != "pendente":
                 continue
             try:
+                fotos, info = None, {}
+                if item["entregue"] and item.get("fotos"):
+                    try:
+                        fotos = {int(c): (pasta_fotos(lote_id, db_path) / Path(a).name).read_bytes()
+                                 for c, a in item["fotos"].items()}
+                    except OSError as e:      # mensagem fixa: o caminho do servidor so vai pro log
+                        logger.warning(f"Baixa sem app lote {lote_id}: foto de {item['codigo']} ilegivel: {e}")
+                        raise RuntimeError("Fotos do checklist nao encontradas no servidor; tente de novo.") from e
                 item["status"] = concluir_servico(vuupt, item["service_id"], item["entregue"],
-                                                  item.get("failed_reason_id"), lote["agent_id"])
+                                                  item.get("failed_reason_id"), lote["agent_id"],
+                                                  fotos=fotos, info=info)
+                if info.get("checklist_id"):
+                    item["checklist_id"] = info["checklist_id"]
+                if item["status"] == "ja_fechado" and item.get("fotos"):
+                    item["aviso"] = "Já estava concluído; a foto não foi para o checklist."
             except Exception as e:  # noqa: BLE001 -- um item com erro nao para os outros
                 item["status"], item["erro"] = "erro", str(e)[:200]
                 logger.warning(f"Baixa sem app lote {lote_id}: {item['codigo']} falhou: {e}")
@@ -209,4 +274,7 @@ def executar_lote(lote_id: int, vuupt, db_path: Path | None = None) -> dict:
                 logger.warning(f"Ressincronizacao do nucleo falhou: {e}")
         return ler_lote(conn, lote_id)
     finally:
+        # Retentativa e um POST novo com upload novo: a pasta nunca fica pra tras,
+        # nem quando o lote estoura no meio (SQLite travado, painel reiniciando).
+        shutil.rmtree(pasta_fotos(lote_id, db_path), ignore_errors=True)
         conn.close()

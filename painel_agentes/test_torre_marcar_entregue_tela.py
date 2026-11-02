@@ -50,34 +50,82 @@ class _Base(unittest.TestCase):
             sess["nivel_acesso"] = nivel
             sess["usuario"] = "teste"
 
-    def _post(self, corpo, origem=True):
+    def _post(self, corpo, origem=True, arquivos=None):
+        import io
         headers = {"Origin": "http://localhost"} if origem else {}
-        return self.cliente.post("/api/torre/marcar-entregue", json=corpo, headers=headers)
+        data = dict(corpo)
+        for nome, conteudo in (arquivos or {}).items():
+            data[nome] = (io.BytesIO(conteudo), "foto.jpg")
+        return self.cliente.post("/api/torre/marcar-entregue", data=data,
+                                 content_type="multipart/form-data", headers=headers)
 
 
 class TestEndpoint(_Base):
 
-    def test_operador_chama_a_funcao_com_usuario_da_sessao(self):
+    def test_api_multipart_ok(self):
         self._logar("operador")
         with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual",
-                               return_value={"ok": True, "codigo": "#PS-77"}) as fn:
-            r = self._post({"service_id": "77", "observacao": "confirmado por telefone"})
+                               return_value={"ok": True, "codigo": "#PS-77", "checklist_id": 9}) as fn:
+            r = self._post({"service_id": "77", "justificativa": "outro", "texto_outro": "porteiro recebeu"},
+                           arquivos={"foto_canhoto": b"canhoto", "foto_nota_retorno": b"nota"})
         self.assertEqual(r.status_code, 200, r.data)
-        self.assertEqual(r.get_json()["codigo"], "#PS-77")
-        fn.assert_called_once_with(77, "teste", "confirmado por telefone")
+        self.assertEqual(r.get_json()["checklist_id"], 9)
+        fn.assert_called_once_with(77, "teste", b"canhoto", b"nota", "outro", "porteiro recebeu",
+                                   lote_referencia=None)
+
+    def test_api_sem_arquivo_manda_none(self):
+        self._logar("total")
+        with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual",
+                               return_value={"ok": True, "codigo": "#PS-77"}) as fn:
+            r = self._post({"service_id": "77", "justificativa": "sem_bateria"})
+        self.assertEqual(r.status_code, 200, r.data)
+        fn.assert_called_once_with(77, "teste", None, None, "sem_bateria", None, lote_referencia=None)
+
+    def test_api_repassa_lote_referencia(self):
+        self._logar("operador")
+        with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual",
+                               return_value={"ok": True, "codigo": "#PS-78"}) as fn:
+            r = self._post({"service_id": "78", "lote_referencia": "77"}, arquivos={"foto_canhoto": b"c"})
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(fn.call_args.kwargs["lote_referencia"], 77)
+        with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual") as fn:
+            r = self._post({"service_id": "78", "lote_referencia": "abc"}, arquivos={"foto_canhoto": b"c"})
+        self.assertEqual(r.status_code, 400)
+        fn.assert_not_called()
+
+    def test_api_arquivo_grande_413(self):
+        self._logar("operador")
+        with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual") as fn:
+            # o test_client recalcula o Content-Length: baixa o limite em vez de mandar 32 MB
+            with mock.patch.object(painel_agentes, "LIMITE_REQUISICAO_ENTREGUE", 5):
+                r = self._post({"service_id": "77"}, arquivos={"foto_canhoto": b"x" * 100})
+            self.assertEqual(r.status_code, 413)
+            # arquivo acima de 15 MB dentro do limite da requisicao
+            with mock.patch("nucleo.canhotos_manuais.LIMITE_BYTES", 5):
+                r = self._post({"service_id": "77"}, arquivos={"foto_canhoto": b"x" * 100})
+            self.assertEqual(r.status_code, 413)
+        fn.assert_not_called()
 
     def test_erro_de_negocio_vira_400(self):
         self._logar("total")
         with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual",
                                return_value={"ok": False, "erro": "sem motorista"}):
-            r = self._post({"service_id": 77, "observacao": "x"})
+            r = self._post({"service_id": "77", "justificativa": "sem_bateria"})
         self.assertEqual(r.status_code, 400)
         self.assertEqual(r.get_json()["erro"], "sem motorista")
 
     def test_service_id_invalido_400_sem_chamar(self):
         self._logar("total")
         with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual") as fn:
-            r = self._post({"service_id": "abc", "observacao": "x"})
+            r = self._post({"service_id": "abc"})
+        self.assertEqual(r.status_code, 400)
+        fn.assert_not_called()
+
+    def test_json_antigo_nao_vale_mais(self):
+        self._logar("total")
+        with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual") as fn:
+            r = self.cliente.post("/api/torre/marcar-entregue", json={"service_id": 77, "observacao": "x"},
+                                  headers={"Origin": "http://localhost"})
         self.assertEqual(r.status_code, 400)
         fn.assert_not_called()
 
@@ -85,14 +133,64 @@ class TestEndpoint(_Base):
         for nivel in ("leitura", "atendimento"):
             self._logar(nivel)
             with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual") as fn:
-                r = self._post({"service_id": 77, "observacao": "x"})
+                r = self._post({"service_id": "77", "justificativa": "sem_bateria"})
             self.assertEqual(r.status_code, 403, nivel)
             fn.assert_not_called()
 
-    def test_sem_origem_e_csrf(self):
+    def test_api_exige_mesma_origem(self):
         self._logar("total")
         with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual") as fn:
-            r = self._post({"service_id": 77, "observacao": "x"}, origem=False)
+            r = self._post({"service_id": "77", "justificativa": "sem_bateria"}, origem=False)
+        self.assertEqual(r.status_code, 403)
+        fn.assert_not_called()
+
+
+class TestValidarLoteFoto(_Base):
+    """POST /api/torre/validar-lote-foto (Hugo, 30/10): o Planejamento chama
+    uma vez antes do laco quando ha foto e mais de um pedido."""
+
+    def _validar(self, corpo, origem=True):
+        headers = {"Origin": "http://localhost"} if origem else {}
+        return self.cliente.post("/api/torre/validar-lote-foto", json=corpo, headers=headers)
+
+    def test_lote_compativel_ok(self):
+        self._logar("logistica")
+        with mock.patch.object(painel_agentes.torre_controle, "validar_lote_foto",
+                               return_value={"ok": True}) as fn:
+            r = self._validar({"service_ids": [1, "2"]})
+        self.assertEqual(r.status_code, 200, r.data)
+        self.assertEqual(r.get_json(), {"ok": True})
+        fn.assert_called_once_with([1, 2])
+
+    def test_lote_misturado_400_com_os_de_fora(self):
+        self._logar("total")
+        msg = painel_agentes.torre_controle.MSG_FOTO_EM_MASSA
+        with mock.patch.object(painel_agentes.torre_controle, "validar_lote_foto",
+                               return_value={"ok": False, "erro": msg, "fora": ["#PS-3"]}):
+            r = self._validar({"service_ids": [1, 3]})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json(), {"erro": msg, "fora": ["#PS-3"]})
+        self.assertEqual(msg, "Foto em massa só para pedidos do mesmo embarcador e do mesmo "
+                              "destinatário ou local de entrega.")
+
+    def test_corpo_invalido_400_sem_ler_vuupt(self):
+        self._logar("total")
+        for corpo in ({}, {"service_ids": []}, {"service_ids": ["x"]}, {"service_ids": 5}):
+            with mock.patch.object(painel_agentes.torre_controle, "validar_lote_foto") as fn:
+                r = self._validar(corpo)
+            self.assertEqual(r.status_code, 400, corpo)
+            fn.assert_not_called()
+
+    def test_niveis_e_origem(self):
+        for nivel in ("leitura", "atendimento"):
+            self._logar(nivel)
+            with mock.patch.object(painel_agentes.torre_controle, "validar_lote_foto") as fn:
+                r = self._validar({"service_ids": [1, 2]})
+            self.assertEqual(r.status_code, 403, nivel)
+            fn.assert_not_called()
+        self._logar("total")
+        with mock.patch.object(painel_agentes.torre_controle, "validar_lote_foto") as fn:
+            r = self._validar({"service_ids": [1, 2]}, origem=False)
         self.assertEqual(r.status_code, 403)
         fn.assert_not_called()
 
@@ -118,7 +216,7 @@ class TestTemplates(_Base):
         fonte = self._fonte("planejamento_rotas.html")
         self.assertIn('rotulo: "Marcar como entregue"', fonte)
         self.assertIn('id="modal-entregue"', fonte)
-        self.assertIn('"/api/torre/marcar-entregue"', fonte)
+        self.assertIn("url_for('api_torre_marcar_entregue')", fonte)
         # em massa (23/10): botao na barra de selecao das rotas
         self.assertIn('id="botao-entregue-selecao-rotas"', fonte)
         self.assertIn("function abrirModalEntregueLote", fonte)
@@ -130,6 +228,110 @@ class TestTemplates(_Base):
         html = r.get_data(as_text=True)
         self.assertIn("/api/torre/marcar-entregue", html)
         self.assertIn("Marcar como entregue", html)
+
+
+class TestModalFotoEJustificativa(_Base):
+    """Checklist da Vuupt pelas telas (Task 4): o modal pede foto do canhoto
+    ou justificativa; a lista vem do servidor, nao do HTML."""
+
+    def _fonte(self, nome):
+        env = painel_agentes.app.jinja_env
+        return env.loader.get_source(env, nome)[0]
+
+    def _opcoes(self, html):
+        import re
+        from html import unescape
+        trecho = html.split('id="entregue-justificativa"', 1)[1].split("</select>", 1)[0]
+        return [(v, unescape(t).strip()) for v, t in re.findall(r'<option value="([^"]*)"[^>]*>([^<]*)</option>', trecho) if v]
+
+    def _confere_modal(self, html):
+        from nucleo.justificativas_sem_canhoto import JUSTIFICATIVAS
+        self.assertRegex(html, r'id="entregue-foto-canhoto"[^>]*accept="image/\*,application/pdf"')
+        # fotos chegam pelo WhatsApp/galeria: capture forcaria a camera no celular
+        self.assertNotIn('capture=', html)
+        self.assertRegex(html, r'id="entregue-foto-nota"[^>]*accept="image/\*"')
+        # nota so com a foto do canhoto: comeca desabilitada
+        self.assertRegex(html, r'id="entregue-foto-nota"[^>]*disabled')
+        self.assertIn("Foto da nota de retorno (opcional)", html)
+        self.assertIn('id="entregue-texto-outro"', html)
+        self.assertIn("Fecha na VUUPT agora. Com foto, ela vai para o checklist da VUUPT.", html)
+        self.assertEqual(self._opcoes(html), list(JUSTIFICATIVAS.items()))
+
+    def test_modal_tem_fotos_e_justificativas(self):
+        self._logar("operador")
+        r = self.cliente.get("/torre")
+        self.assertEqual(r.status_code, 200)
+        html = r.get_data(as_text=True)
+        self._confere_modal(html)
+        # foto reduzida no navegador antes do envio (mesma funcao da baixa sem app)
+        self.assertIn("function reduzirImagem(", html)
+        self.assertIn("'image/jpeg', 0.85", html)
+        r = self.cliente.get("/planejamento")
+        self.assertEqual(r.status_code, 200)
+        self._confere_modal(r.get_data(as_text=True))
+        # sem dados de teste o /planejamento cai no ramo de erro e nao renderiza o script principal
+        self.assertIn('{% include "_reduzir_imagem.js.html" %}', self._fonte("planejamento_rotas.html"))
+
+    def test_labels_nao_duplicados_nos_fontes(self):
+        for nome in ("torre_controle.html", "planejamento_rotas.html"):
+            fonte = self._fonte(nome)
+            self.assertNotIn("Cliente não assinou", fonte, nome)
+            self.assertIn("justificativas", fonte, nome)
+
+    def test_planejamento_usa_url_for(self):
+        fonte = self._fonte("planejamento_rotas.html")
+        self.assertIn("url_for('api_torre_marcar_entregue')", fonte)
+        self.assertNotIn('postJSON("/api/torre/marcar-entregue"', fonte)
+        self.assertNotIn('"/api/torre/marcar-entregue"', fonte)
+
+    def test_lote_mesma_foto_um_checklist_por_pedido(self):
+        fonte = self._fonte("planejamento_rotas.html")
+        corpo = fonte.split("async function confirmarEntregue(", 1)[1].split("pedido (ou lote de pedidos", 1)[0]
+        self.assertIn("for (const [i, it] of pendente.itens.entries())", corpo)
+        antes, laco = corpo.split("for (const [i, it]", 1)
+        self.assertIn("new FormData()", laco)  # um FormData por item
+        self.assertIn('fd.append("service_id"', laco)
+        self.assertIn('fd.append("foto_canhoto", fotoCanhoto)', laco)
+        self.assertIn('fd.append("foto_nota_retorno", fotoNota)', laco)
+        self.assertIn("dados.aviso", corpo)
+        self.assertNotIn("Content-Type", corpo)
+        # reduz uma vez ANTES do laco e reaproveita o File em todos os POSTs
+        self.assertIn("reduzirImagem(", antes)
+        self.assertNotIn("reduzirImagem(", laco)
+        # foto em massa: valida o lote inteiro uma vez antes do laco
+        self.assertIn("await validarLoteFoto(", antes)
+        self.assertIn("pendente.itens.length > 1", antes)
+        validar = fonte.split("async function validarLoteFoto(", 1)[1].split("async function confirmarEntregue(", 1)[0]
+        self.assertIn("URL_PLANEJAMENTO_VALIDAR_LOTE_FOTO", validar)
+        # rede de seguranca: os itens 2..N levam o 1o pedido como referencia
+        self.assertIn('fd.append("lote_referencia"', laco)
+        self.assertIn("url_for('api_torre_validar_lote_foto')", fonte)
+
+    def test_torre_reduz_foto_antes_do_append(self):
+        fonte = self._fonte("torre_controle.html")
+        corpo = fonte.split("async function confirmarEntregueChip(", 1)[1].split("function renderPedidosStatus", 1)[0]
+        self.assertIn("reduzirImagem(", corpo)
+        self.assertLess(corpo.index("reduzirImagem("), corpo.index('fd.append("foto_canhoto"'))
+
+    def test_nota_presa_ao_canhoto_nas_duas_telas(self):
+        for nome in ("torre_controle.html", "planejamento_rotas.html"):
+            fonte = self._fonte(nome)
+            corpo = fonte.split("function aoMudarFotoEntregue()", 1)[1].split("function aoMudarJustificativaEntregue", 1)[0]
+            self.assertIn('getElementById("entregue-foto-nota")', corpo, nome)
+            self.assertIn(".disabled = ", corpo, nome)
+            self.assertIn('.value = ""', corpo, nome)
+
+    def test_planejamento_input_de_arquivo_cabe_no_modal(self):
+        fonte = self._fonte("planejamento_rotas.html")
+        self.assertRegex(fonte, r'\.modal-reagendar input\[type="file"\][^}]*width: 100%[^}]*box-sizing: border-box')
+
+    def test_torre_envia_formdata_sem_content_type(self):
+        fonte = self._fonte("torre_controle.html")
+        corpo = fonte.split("async function confirmarEntregueChip(", 1)[1].split("function renderPedidosStatus", 1)[0]
+        self.assertIn("new FormData()", corpo)
+        self.assertIn('fd.append("foto_canhoto"', corpo)
+        self.assertNotIn("Content-Type", corpo)
+        self.assertNotIn("JSON.stringify", corpo)
 
 
 if __name__ == "__main__":

@@ -85,6 +85,7 @@ from portal_cliente.regioes_atendimento import URL_PUBLICA as URL_PAGINA_REGIOES
 URL_PAGINA_COTACAO = "https://app.freshhub.com.br/cliente/cotacao"
 import rascunhos_rota
 import torre_controle
+from nucleo import justificativas_sem_canhoto
 import tratativas
 import pedidos_parados_triagem
 import consulta_expedicao
@@ -202,47 +203,8 @@ def _logins_fixos(cfg_painel: dict) -> set:
     return {cfg_painel.get(c) for c in chaves if cfg_painel.get(c)}
 
 
-# Limite de tentativas no /login (23/10): 5 senhas erradas do mesmo login
-# vindas do mesmo IP bloqueiam esse par por 15 min. Por login+IP, e nao so
-# por IP, pra um erro de digitacao no escritorio (IP unico) nao travar a
-# equipe toda. Mais um teto de 30 erros por login vindo de qualquer IP (quem
-# espalha a tentativa por muitos IPs). O IP e o que o Caddy acrescenta
-# (ProxyFix x_for=1; waitress so escuta em 127.0.0.1). Em memoria: o painel
-# roda num processo so (waitress); um restart zera, o que e aceitavel.
-_LOGIN_MAX_FALHAS = 5
-_LOGIN_MAX_FALHAS_TODOS_IPS = 30
-_LOGIN_JANELA = timedelta(minutes=15)
-_login_falhas: dict = {}
-_login_falhas_lock = threading.Lock()
-
-
-def _chaves_login(ip, usuario: str):
-    usuario = usuario.strip().lower()
-    return ((ip, usuario), _LOGIN_MAX_FALHAS), (("*", usuario), _LOGIN_MAX_FALHAS_TODOS_IPS)
-
-
-def _login_bloqueado(chaves) -> bool:
-    agora = datetime.now()
-    bloqueado = False
-    with _login_falhas_lock:
-        for chave, maximo in chaves:
-            recentes = [t for t in _login_falhas.get(chave, []) if agora - t < _LOGIN_JANELA]
-            if recentes:
-                _login_falhas[chave] = recentes
-            else:
-                _login_falhas.pop(chave, None)
-            bloqueado = bloqueado or len(recentes) >= maximo
-    return bloqueado
-
-
-def _registrar_falha_login(chaves) -> None:
-    agora = datetime.now()
-    with _login_falhas_lock:
-        if len(_login_falhas) > 5000:   # muitos logins chutados: limpa os vencidos
-            for k in [k for k, ts in _login_falhas.items() if agora - ts[-1] >= _LOGIN_JANELA]:
-                del _login_falhas[k]
-        for chave, _ in chaves:
-            _login_falhas.setdefault(chave, []).append(agora)
+# Limite de tentativas no /login (23/10: 5 senhas erradas travavam 15 min)
+# SAIU em 29/10 a pedido do Hugo: senha errada nao trava mais o login do painel.
 
 
 # Deslogar por inatividade (24/10, Hugo; 27/10 subiu de 30 min pra 6 h): 6 h
@@ -519,16 +481,11 @@ def login():
         cfg_painel = config.get("painel_agentes", {})
         usuario = request.form.get("usuario", "")
         senha = request.form.get("senha", "")
-        chave_limite = _chaves_login(request.remote_addr, usuario)
-        if _login_bloqueado(chave_limite):
-            return render_template("login.html",
-                                   erro="Muitas tentativas erradas. Espere 15 minutos e tente de novo."), 429
         nivel = _nivel_das_credenciais(usuario, senha, cfg_painel)
         conta = acesso_telas.conta(usuario) if nivel else None
         telas = conta["telas"] if conta else None
         paginas = [t for t in telas or [] if t in acesso_telas.PAGINAS]
         if nivel is None:
-            _registrar_falha_login(chave_limite)
             erro = "Usuário ou senha incorretos."
         elif telas is not None and not paginas:
             erro = "Seu usuário não tem nenhuma tela liberada. Fale com o Hugo."
@@ -1099,6 +1056,7 @@ def planejamento():
         # de acesso (ver bloqueia_planejamento_passado pro reforço
         # equivalente no backend das rotas de mutação).
         pode_editar=g.nivel_acesso in ("total", "operador", "logistica") and data_alvo >= date.today(),
+        justificativas=justificativas_sem_canhoto.JUSTIFICATIVAS,
     )
 
 
@@ -1372,7 +1330,9 @@ def baixa_sem_app():
                          "status": s.get("status") or "",
                          "fechado": (s.get("status") or "") in ("done", "canceled", "cancelled")})
     motivos = sorted(((k, v["texto"]) for k, v in MOTIVOS_FALHA.items()), key=lambda kv: kv[1])
-    return render_template("baixa_sem_app.html", rota=rota, erro=erro, servicos=servicos, motivos=motivos)
+    from nucleo.justificativas_sem_canhoto import JUSTIFICATIVAS
+    return render_template("baixa_sem_app.html", rota=rota, erro=erro, servicos=servicos, motivos=motivos,
+                           justificativas=JUSTIFICATIVAS, limite_bytes=LIMITE_REQUISICAO_BAIXA)
 
 
 @app.route("/api/baixa-sem-app", methods=["POST"])
@@ -1386,7 +1346,7 @@ def api_baixa_sem_app():
     from insucesso_entrega.motivos_falha import MOTIVOS_FALHA
     # Recusa antes de ler: canhotos de 15 MB cada, nunca uma rota inteira de fotos gigantes.
     if (request.content_length or 0) > LIMITE_REQUISICAO_BAIXA:
-        return jsonify({"erro": "Envio grande demais: mande menos canhotos de cada vez ou fotos menores."}), 413
+        return jsonify({"erro": "Envio grande demais (mais de 60 MB no total): tire as fotos em resolução menor ou dê a baixa em duas etapas."}), 413
     # multipart quando vem canhoto (09/10): o JSON de antes vai no campo "dados"
     if (request.content_type or "").startswith("multipart/form-data"):
         try:
@@ -1415,26 +1375,70 @@ def api_baixa_sem_app():
         return jsonify({"erro": "pedido que não é dessa rota"}), 400
     for i in itens:
         i["codigo"] = codigo_por_id[int(i["service_id"])]
+        i.pop("aviso", None)                     # o aviso e do servidor, nunca do navegador
+        if not i.get("entregue"):
+            i.pop("justificativa", None), i.pop("texto_outro", None)
     conn = nucleo_banco.conectar()
     try:
         if bsa.lote_em_andamento(conn, route_id):
             return jsonify({"erro": "Já tem uma baixa dessa rota em andamento. Aguarde terminar e recarregue."}), 409
         # Canhoto ANTES do lote: a expedicao roda a cada 30 min e a Stokki
-        # nao aceita anexo em pedido ja expedido. Valida todos, depois grava.
-        from nucleo import canhotos_manuais
-        canhotos = []
+        # nao aceita anexo em pedido ja expedido. Valida e converte tudo (em
+        # memoria) antes de gravar qualquer coisa.
+        from nucleo import canhotos_manuais, justificativas_sem_canhoto
+        from vuupt_checklist import CAMPO_CANHOTO, CAMPO_NOTA_RETORNO, para_jpeg
+        canhotos, fotos_por_servico = [], {}
         for i in itens:
-            arq = request.files.get(f"canhoto_{int(i.get('service_id') or 0)}")
-            if not arq or not i.get("entregue"):
+            if not i.get("entregue"):
                 continue
+            sid = int(i.get("service_id") or 0)
+            conteudos = {}
+            for chave in ("canhoto", "nota"):
+                arq = request.files.get(f"{chave}_{sid}")
+                conteudo = arq.read(canhotos_manuais.LIMITE_BYTES + 1) if arq else b""
+                if len(conteudo) > canhotos_manuais.LIMITE_BYTES:
+                    return jsonify({"erro": f"{i.get('codigo')}: arquivo maior que 15 MB."}), 413
+                conteudos[chave] = conteudo or None
+            fotos, avisos = {}, []
             try:
-                canhotos.append((i, canhotos_manuais.para_pdf(arq.read())))
-            except canhotos_manuais.CanhotoInvalido as e:
-                return jsonify({"erro": f"{i.get('codigo')}: {e}"}), 400
+                if conteudos["canhoto"]:
+                    canhotos.append((i, canhotos_manuais.para_pdf(conteudos["canhoto"])))
+                    if conteudos["canhoto"][:5] == b"%PDF-":
+                        avisos.append("Canhoto em PDF: ficou só como cópia local; no checklist da VUUPT vão apenas fotos.")
+                    else:
+                        fotos[CAMPO_CANHOTO] = para_jpeg(conteudos["canhoto"])
+            except (canhotos_manuais.CanhotoInvalido, ValueError) as e:
+                return jsonify({"erro": f"{i.get('codigo')}: Canhoto: {e}"}), 400
+            # Hugo, 30/10: a nota de retorno so vai junto da FOTO do canhoto (nunca sozinha nem com PDF)
+            if conteudos["nota"] and CAMPO_CANHOTO not in fotos:
+                conteudos["nota"] = None
+                avisos.append(torre_controle.AVISO_NOTA_SEM_CANHOTO)
+            if avisos:
+                i["aviso"] = " ".join(avisos)
+            try:
+                if conteudos["nota"]:
+                    fotos[CAMPO_NOTA_RETORNO] = para_jpeg(conteudos["nota"])
+            except ValueError as e:
+                msg = str(e)
+                return jsonify({"erro": f"{i.get('codigo')}: Foto da nota de retorno: {msg[:1].lower()}{msg[1:]}"}), 400
+            if conteudos["canhoto"]:
+                i.pop("justificativa", None), i.pop("texto_outro", None)   # com canhoto a justificativa e ignorada
+            else:
+                try:
+                    i["justificativa"], i["texto_outro"] = justificativas_sem_canhoto.validar(
+                        i.get("justificativa"), i.get("texto_outro"))
+                except ValueError as e:
+                    return jsonify({"erro": f"{i.get('codigo')}: {e}"}), 400
+            if fotos:
+                fotos_por_servico[sid] = fotos
         por = session.get("usuario") or g.nivel_acesso
         for i, pdf in canhotos:
             canhotos_manuais.salvar(conn, i.get("codigo") or "", int(i["service_id"]), pdf, por, _carregar_config())
         lote = bsa.criar_lote(conn, route_id, rota.get("agent_id"), por, itens)
+        try:
+            bsa.gravar_fotos(conn, lote, fotos_por_servico)
+        except Exception:  # noqa: BLE001 -- gravar_fotos ja marcou o lote como erro e logou o motivo
+            return jsonify({"erro": "Não consegui guardar as fotos do checklist no servidor. Tente de novo."}), 500
     finally:
         conn.close()
     token = (_carregar_config().get("vuupt_api") or {}).get("token", "")
@@ -2431,6 +2435,7 @@ def torre():
         # sem data na torre, toda rota mostrada é "de hoje em diante"
         # do ponto de vista da operação (ainda aberta).
         pode_excluir_pedido=pode_editar,
+        justificativas=justificativas_sem_canhoto.JUSTIFICATIVAS,
     )
 
 
@@ -2504,6 +2509,9 @@ def api_torre_excluir_pedido():
     return jsonify(resultado)
 
 
+LIMITE_REQUISICAO_ENTREGUE = 32 * 1024 * 1024  # canhoto + nota de retorno, 15 MB cada (29/10)
+
+
 @app.route("/api/torre/marcar-entregue", methods=["POST"])
 @requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
@@ -2512,17 +2520,56 @@ def api_torre_marcar_entregue():
     parada do Planejamento (Hugo, 08/10): fecha o servico na VUUPT na
     hora, por API, sem passar pelo app do motorista (ver
     torre_controle.marcar_entregue_manual). Mesmo nivel do "Excluir da
-    rota" -- muda o pedido na VUUPT."""
-    body = request.get_json(force=True) or {}
+    rota" -- muda o pedido na VUUPT. Multipart: service_id, foto_canhoto
+    e foto_nota_retorno (opcionais), justificativa e texto_outro."""
+    from nucleo import canhotos_manuais
+    # Recusa antes de ler: duas fotos de 15 MB no maximo (mesmo teto da baixa sem app).
+    if (request.content_length or 0) > LIMITE_REQUISICAO_ENTREGUE:
+        return jsonify({"erro": "Envio grande demais: mande fotos menores (até 15 MB cada)."}), 413
     try:
-        service_id = int(body["service_id"])
+        service_id = int(request.form["service_id"])
     except (KeyError, TypeError, ValueError):
         return jsonify({"erro": "service_id ausente ou inválido."}), 400
+    # lote do Planejamento com foto: os itens 2..N mandam o 1o como referencia (Hugo, 30/10)
+    try:
+        lote_referencia = int(request.form["lote_referencia"]) if request.form.get("lote_referencia") else None
+    except (TypeError, ValueError):
+        return jsonify({"erro": "lote_referencia inválido."}), 400
+    arquivos = {}
+    for campo in ("foto_canhoto", "foto_nota_retorno"):
+        arq = request.files.get(campo)
+        conteudo = arq.read(canhotos_manuais.LIMITE_BYTES + 1) if arq else b""
+        if len(conteudo) > canhotos_manuais.LIMITE_BYTES:
+            return jsonify({"erro": "Arquivo maior que 15 MB."}), 413
+        arquivos[campo] = conteudo or None
     resultado = torre_controle.marcar_entregue_manual(
-        service_id, session.get("usuario", ""), body.get("observacao") or "")
+        service_id, session.get("usuario", ""), arquivos["foto_canhoto"], arquivos["foto_nota_retorno"],
+        request.form.get("justificativa") or None, request.form.get("texto_outro") or None,
+        lote_referencia=lote_referencia)
     if not resultado.get("ok"):
         return jsonify({"erro": resultado.get("erro", "Falha ao marcar como entregue.")}), 400
     return jsonify(resultado)
+
+
+@app.route("/api/torre/validar-lote-foto", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+def api_torre_validar_lote_foto():
+    """Foto em massa no Planejamento (Hugo, 30/10): so para pedidos do mesmo
+    embarcador e do mesmo destinatario ou local de entrega
+    (torre_controle.mesmo_destino_para_foto). A tela chama uma vez antes do
+    laco de marcar-entregue; sem foto o lote segue livre. JSON {service_ids}."""
+    ids = (request.get_json(silent=True) or {}).get("service_ids")
+    try:
+        if not isinstance(ids, list) or not ids:
+            raise ValueError
+        ids = [int(i) for i in ids]
+    except (TypeError, ValueError):
+        return jsonify({"erro": "service_ids ausente ou inválido."}), 400
+    resultado = torre_controle.validar_lote_foto(ids)
+    if not resultado.get("ok"):
+        return jsonify({"erro": resultado["erro"], "fora": resultado.get("fora", [])}), 400
+    return jsonify({"ok": True})
 
 
 @app.route("/api/torre/encerrar-rota", methods=["POST"])

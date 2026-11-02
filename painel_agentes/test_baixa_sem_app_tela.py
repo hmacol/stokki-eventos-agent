@@ -136,7 +136,8 @@ class TestTelaBaixa(unittest.TestCase):
 
     def test_segundo_lote_da_mesma_rota_e_recusado(self):
         self._logar("operador")
-        body = {"rota": 5000, "itens": [{"service_id": 1, "codigo": "PS-1", "entregue": True}]}
+        body = {"rota": 5000, "itens": [{"service_id": 1, "codigo": "PS-1", "entregue": True,
+                                                  "justificativa": "sem_bateria"}]}
         self.assertEqual(self._post(body).status_code, 200)
         self.assertEqual(self._post(body).status_code, 409)   # executar_lote mockado: o 1o segue "em andamento"
 
@@ -145,8 +146,199 @@ class TestTelaBaixa(unittest.TestCase):
         r = self._post({"rota": 5000, "itens": [{"service_id": 1, "codigo": "PS-1", "entregue": False}]})
         self.assertEqual(r.status_code, 400)
         with mock.patch("regras.preferencias_motoristas.agent_ids_sem_app", return_value=set()):
-            r = self._post({"rota": 5000, "itens": [{"service_id": 1, "codigo": "PS-1", "entregue": True}]})
+            r = self._post({"rota": 5000, "itens": [{"service_id": 1, "codigo": "PS-1", "entregue": True,
+                                                     "justificativa": "sem_bateria"}]})
         self.assertEqual(r.status_code, 400)
+
+    # ── checklist da Vuupt (29/10) ──
+    def _png(self, w=40, h=30):
+        import io
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", (w, h), (200, 10, 10)).save(buf, "PNG")
+        return buf.getvalue()
+
+    def _item(self, **kw):
+        return {"service_id": 1, "codigo": "PS-1", "entregue": True, **kw}
+
+    def test_tela_tem_nota_e_justificativa(self):
+        self._logar("operador")
+        html = self.cliente.get("/baixa-sem-app?rota=5000").get_data(as_text=True)
+        for trecho in ('class="nota"', 'class="justificativa"', "Canhoto chega depois (motorista vai trazer)",
+                       'class="texto-outro"'):
+            self.assertIn(trecho, html)
+
+    def test_item_entregue_sem_canhoto_sem_justificativa_400(self):
+        self._logar("operador")
+        with mock.patch("nucleo.baixa_sem_app.criar_lote") as criar:
+            r = self._post_multipart({"rota": 5000, "itens": [self._item()]}, {})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("PS-1", r.get_json()["erro"])
+        criar.assert_not_called()
+
+    def test_outro_sem_texto_400(self):
+        self._logar("operador")
+        r = self._post_multipart({"rota": 5000, "itens": [self._item(justificativa="outro", texto_outro="ab")]}, {})
+        self.assertEqual(r.status_code, 400)
+
+    def test_item_com_justificativa_sem_foto_ok(self):
+        self._logar("operador")
+        r = self._post_multipart({"rota": 5000, "itens": [
+            self._item(justificativa="outro", texto_outro="  cliente ausente ")]}, {})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        item = self.cliente.get(f"/api/baixa-sem-app/{r.get_json()['lote']}").get_json()["itens"][0]
+        self.assertEqual((item["justificativa"], item["texto_outro"]), ("outro", "cliente ausente"))
+        self.assertNotIn("fotos", item)
+
+    def test_fotos_gravadas_antes_da_thread(self):
+        self._logar("operador")
+        visto = {}
+
+        def thread_falsa(lote_id, *a, **k):
+            from nucleo import baixa_sem_app as bsa
+            conn = banco.conectar()
+            try:
+                visto["item"] = bsa.ler_lote(conn, lote_id)["itens"][0]
+            finally:
+                conn.close()
+            pasta = bsa.pasta_fotos(lote_id)
+            visto["existe"] = {c: (pasta / p).exists() for c, p in visto["item"]["fotos"].items()}
+            visto["jpeg"] = (pasta / visto["item"]["fotos"]["15086"]).read_bytes().startswith(b"\xff\xd8")
+        with mock.patch("nucleo.canhotos_manuais.salvar", return_value={}), \
+             mock.patch("nucleo.baixa_sem_app.executar_lote", side_effect=thread_falsa), \
+             mock.patch("threading.Thread") as th:
+            th.side_effect = lambda target, args, daemon: mock.Mock(start=lambda: target(*args))
+            r = self._post_multipart({"rota": 5000, "itens": [self._item(justificativa="sem_bateria")]},
+                                     {"canhoto_1": self._png(), "nota_1": self._png(60, 20)})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(visto["existe"], {"15086": True, "15349": True})
+        self.assertNotIn("justificativa", visto["item"])        # com canhoto a justificativa e ignorada
+        self.assertTrue(visto["jpeg"])
+        self.assertEqual(visto["item"]["fotos"]["15086"], "1_15086.jpg")
+
+    def test_canhoto_pdf_so_copia_local_com_aviso(self):
+        self._logar("operador")
+        with mock.patch("nucleo.canhotos_manuais.salvar", return_value={}) as salvar:
+            r = self._post_multipart({"rota": 5000, "itens": [self._item()]}, {"canhoto_1": b"%PDF-1.4 x"})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        salvar.assert_called_once()
+        item = self.cliente.get(f"/api/baixa-sem-app/{r.get_json()['lote']}").get_json()["itens"][0]
+        self.assertNotIn("fotos", item)
+        self.assertIn("PDF", item["aviso"])
+
+    def test_tela_reduz_imagem_no_navegador_antes_do_append(self):
+        self._logar("operador")
+        html = self.cliente.get("/baixa-sem-app?rota=5000").get_data(as_text=True)
+        self.assertIn("function reduzirImagem(", html)
+        self.assertIn("2000", html)
+        self.assertIn("'image/jpeg', 0.85", html)
+        self.assertIn("reduzirImagem(t[2])", html)
+        self.assertLess(html.index("reduzirImagem(t[2])"), html.index("fd.append(tarefas[n][0]"))
+
+    def test_insucesso_ignora_canhoto_e_nota_enviados(self):
+        self._logar("operador")
+        with mock.patch("nucleo.canhotos_manuais.salvar") as salvar:
+            r = self._post_multipart({"rota": 5000, "itens": [
+                {"service_id": 1, "codigo": "PS-1", "entregue": False, "failed_reason_id": 5433,
+                 "justificativa": "sem_bateria", "texto_outro": "x", "aviso": "forjado"}]},
+                {"canhoto_1": self._png(), "nota_1": self._png()})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        salvar.assert_not_called()
+        item = self.cliente.get(f"/api/baixa-sem-app/{r.get_json()['lote']}").get_json()["itens"][0]
+        for chave in ("fotos", "justificativa", "texto_outro", "aviso"):
+            self.assertNotIn(chave, item)
+        self.assertFalse((Path(banco.DB_PATH).parent / "checklist_fotos").exists())
+
+    def test_aviso_vindo_do_navegador_e_descartado(self):
+        self._logar("operador")
+        r = self._post_multipart({"rota": 5000, "itens": [self._item(justificativa="sem_bateria", aviso="forjado")]}, {})
+        item = self.cliente.get(f"/api/baixa-sem-app/{r.get_json()['lote']}").get_json()["itens"][0]
+        self.assertNotIn("aviso", item)
+
+    def test_justificativa_de_tipo_errado_400_nao_500(self):
+        self._logar("operador")
+        r = self._post_multipart({"rota": 5000, "itens": [self._item(justificativa=["outro"])]}, {})
+        self.assertEqual(r.status_code, 400)
+
+    def test_nota_que_nao_e_imagem_400_sem_gravar(self):
+        self._logar("operador")
+        with mock.patch("nucleo.canhotos_manuais.salvar") as salvar, \
+             mock.patch("nucleo.baixa_sem_app.criar_lote") as criar:
+            r = self._post_multipart({"rota": 5000, "itens": [self._item()]},
+                                     {"canhoto_1": self._png(), "nota_1": b"%PDF-1.4 x"})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("Foto da nota de retorno", r.get_json()["erro"])
+        salvar.assert_not_called()
+        criar.assert_not_called()
+
+    # ── nota so com a foto do canhoto (Hugo, 30/10) ──
+    AVISO_NOTA = "A foto da nota de retorno só vai junto da foto do canhoto."
+
+    def test_nota_sem_canhoto_descartada_com_aviso(self):
+        self._logar("operador")
+        r = self._post_multipart({"rota": 5000, "itens": [self._item(justificativa="sem_bateria")]},
+                                 {"nota_1": self._png()})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        item = self.cliente.get(f"/api/baixa-sem-app/{r.get_json()['lote']}").get_json()["itens"][0]
+        self.assertNotIn("fotos", item)
+        self.assertEqual(item["aviso"], self.AVISO_NOTA)
+        self.assertEqual(item["justificativa"], "sem_bateria")
+        self.assertFalse((Path(banco.DB_PATH).parent / "checklist_fotos").exists())
+
+    def test_canhoto_pdf_com_nota_descarta_a_nota(self):
+        self._logar("operador")
+        with mock.patch("nucleo.canhotos_manuais.salvar", return_value={}) as salvar:
+            r = self._post_multipart({"rota": 5000, "itens": [self._item()]},
+                                     {"canhoto_1": b"%PDF-1.4 x", "nota_1": self._png()})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        salvar.assert_called_once()
+        item = self.cliente.get(f"/api/baixa-sem-app/{r.get_json()['lote']}").get_json()["itens"][0]
+        self.assertNotIn("fotos", item)
+        self.assertIn("PDF", item["aviso"])
+        self.assertIn(self.AVISO_NOTA, item["aviso"])
+
+    def test_tela_nota_presa_ao_canhoto_e_sem_capture(self):
+        self._logar("operador")
+        html = self.cliente.get("/baixa-sem-app?rota=5000").get_data(as_text=True)
+        self.assertNotIn("capture=", html)
+        self.assertRegex(html, r'<input type="file" class="nota"[^>]*disabled')
+        corpo = html.split("function ajustaJust()", 1)[1].split("if (cb) cb.addEventListener", 1)[0]
+        self.assertIn("fn.disabled", corpo)
+        self.assertIn("fn.value = ''", corpo)
+
+    def test_reduzir_imagem_sempre_resolve(self):
+        # try/catch dentro do onload: canvas/toBlob que estoura cai no arquivo original
+        self._logar("operador")
+        html = self.cliente.get("/baixa-sem-app?rota=5000").get_data(as_text=True)
+        corpo = html.split("img.onload = function", 1)[1].split("img.onerror", 1)[0]
+        self.assertIn("try {", corpo)
+        self.assertIn("catch (e)", corpo)
+
+    def test_arquivo_maior_que_15mb_413(self):
+        self._logar("operador")
+        with mock.patch("nucleo.canhotos_manuais.LIMITE_BYTES", 10), \
+             mock.patch("nucleo.baixa_sem_app.criar_lote") as criar:
+            r = self._post_multipart({"rota": 5000, "itens": [self._item(justificativa="sem_bateria")]},
+                                     {"nota_1": b"x" * 50})
+        self.assertEqual(r.status_code, 413)
+        criar.assert_not_called()
+
+    def test_falha_ao_gravar_fotos_500_e_lote_erro(self):
+        self._logar("operador")
+        with mock.patch("nucleo.canhotos_manuais.salvar", return_value={}), \
+             mock.patch.object(Path, "write_bytes",
+                               side_effect=OSError(28, "No space left on device", "/opt/x/checklist_fotos/lote_1/1.jpg")):
+            r = self._post_multipart({"rota": 5000, "itens": [self._item()]}, {"canhoto_1": self._png()})
+        self.assertEqual(r.status_code, 500)
+        self.assertNotIn("/opt/x", r.get_json()["erro"])           # caminho do servidor nunca vai pra tela
+        self.assertNotIn("No space", r.get_json()["erro"])
+        conn = banco.conectar()
+        try:
+            from nucleo import baixa_sem_app as bsa
+            d = bsa.ler_lote(conn, 1)
+        finally:
+            conn.close()
+        self.assertEqual(d["itens"][0]["status"], "erro")
 
 
 if __name__ == "__main__":

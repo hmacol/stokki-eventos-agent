@@ -59,6 +59,12 @@ class TestCatalogo(unittest.TestCase):
         self.assertFalse(acesso_telas.caminho_liberado("/api/cadastro-embarcador/123/aprovar", ["inicio"]))
         self.assertTrue(acesso_telas.caminho_liberado("/api/cadastro-embarcador/123/aprovar", ["aprovar_embarcadores"]))
 
+    def test_planejamento_valida_foto_em_massa(self):
+        # o modal do Planejamento chama a validacao do lote antes do marcar-entregue (30/10)
+        self.assertTrue(acesso_telas.caminho_liberado("/api/torre/validar-lote-foto", ["planejamento"]))
+        self.assertTrue(acesso_telas.caminho_liberado("/api/torre/marcar-entregue", ["planejamento"]))
+        self.assertFalse(acesso_telas.caminho_liberado("/api/torre/dados", ["planejamento"]))
+
     def test_galpao_nao_abre_estoque_nem_expedicao_abre_consulta(self):
         self.assertFalse(acesso_telas.caminho_liberado("/wms/estoque", ["wms"]))
         self.assertTrue(acesso_telas.caminho_liberado("/wms/etiquetas.pdf", ["wms"]))
@@ -81,7 +87,6 @@ class TestAcessoPersonalizado(unittest.TestCase):
         for p in self._patches:
             p.start()
         painel_agentes.app.config["TESTING"] = True
-        painel_agentes._login_falhas.clear()
         conn = acesso_telas.conectar()
         try:
             acesso_telas.importar_do_config(conn, self.cfg_painel)
@@ -349,26 +354,13 @@ class TestCadastroPelaTela(TestAcessoPersonalizado):
         self.assertEqual(cliente.post("/api/acessos/ativo", json={"usuario": "chefe", "ativo": False},
                                       headers=hdr).status_code, 400)
 
-    def test_login_bloqueia_depois_de_5_erros_so_aquele_login(self):
-        for _ in range(5):
+    def test_login_nao_trava_depois_de_erros(self):
+        # 29/10 (Hugo): sem trava de senha errada no /login do painel
+        for _ in range(30):
             _, r = self._logar("ana", "errada")
             self.assertEqual(r.status_code, 200)
-        _, r = self._logar("ana", "s_ana")                         # ate a senha certa espera
-        self.assertEqual(r.status_code, 429)
-        self.assertIn("15 minutos", r.get_data(as_text=True))
-        _, r = self._logar("chefe", "s_chefe")                     # outro login do mesmo IP entra
-        self.assertEqual(r.status_code, 302)
-        painel_agentes._login_falhas.clear()
         _, r = self._logar("ana", "s_ana")
         self.assertEqual(r.status_code, 302)
-
-    def test_login_bloqueia_depois_de_30_erros_de_ips_diferentes(self):
-        for i in range(30):
-            c = painel_agentes.app.test_client()
-            c.post("/login", data={"usuario": "ana", "senha": "errada"}, environ_base={"REMOTE_ADDR": f"10.0.0.{i}"})
-        c = painel_agentes.app.test_client()
-        r = c.post("/login", data={"usuario": "ana", "senha": "s_ana"}, environ_base={"REMOTE_ADDR": "10.0.1.1"})
-        self.assertEqual(r.status_code, 429)
 
     def test_derrubar_todas_as_sessoes(self):
         ana, _ = self._logar("ana", "s_ana")

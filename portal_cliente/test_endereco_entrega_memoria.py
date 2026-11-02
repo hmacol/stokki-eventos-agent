@@ -146,6 +146,14 @@ class UltimaEntrega(Base):
         self.envio(ONTEM, origem="cliente", emb=OUTRO_EMB)
         self.assertEqual(self.caso()["modo"], "livre")
 
+    def test_codigo_repetido_de_outro_embarcador_nao_vaza(self):
+        """Revisao de seguranca 30/10: na Vuupt ha codigos repetidos entre
+        embarcadores (30 casos na VPS, ex. PS-32887). A parada de OUTRO com o
+        mesmo codigo do nosso pedido nao pode virar sugestao."""
+        self.parada(ANTEONTEM, END_FISCAL, codigo="PS-90")
+        self.parada(ONTEM, END_HADDOCK, sender=OUTRO_SENDER, codigo="PS-90")
+        self.assertEqual(self.caso()["modo"], "livre")
+
     def test_sem_sender_so_portal(self):
         self.parada(ONTEM, END_HADDOCK)
         self.assertEqual(self.caso(sender=None)["modo"], "livre")

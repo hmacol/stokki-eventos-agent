@@ -60,7 +60,7 @@ TELAS = [
     ("retornos_tela", "Retornos", "Operar", [r"^/retornos(/|$)", r"^/api/retornos(/|$)"]),
     ("demandas", "Demandas", "Operar", [r"^/demandas$", r"^/api/demandas(/|$)"]),
     ("planejamento", "Planejamento", "Planejar", [r"^/planejamento(/|$)", r"^/api/planejamento/",
-                                                  r"^/api/torre/marcar-entregue$"]),
+                                                  r"^/api/torre/(marcar-entregue|validar-lote-foto)$"]),
     ("mapa_rotas", "Mapa", "Planejar", [r"^/mapa-rotas$"]),
     ("laboratorio_rotas", "Laboratório", "Planejar", [r"^/laboratorio-rotas$"]),
     ("expedicao", "Expedição", "Operar", [r"^/expedicao$", r"^/api/expedicao/(romaneio|excluir-pedido)(/|$)"]),

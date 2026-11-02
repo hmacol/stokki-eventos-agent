@@ -153,9 +153,14 @@
                                              motivo, assinatura; divergência/parcial -> grupo "Alertas" do
                                              /atendimento; 07h dia útil alertar_retornos_atrasados.py.
                                              Selo "No galpão" na Torre e na Consulta. Não segura reentrega.
+ Justificativas sem canhoto ................ nucleo/justificativas_sem_canhoto.py: lista fixa de justificativas (codigo -> rotulo) e validar()
+                                              usada pela API da Torre/Planejamento e pela tela /baixa-sem-app (checklist Vuupt pelas telas).
  Baixa de motorista sem app (iPhone) ....... nucleo/baixa_sem_app.py: item "aguardando baixa" na Torre,
                                              tela /baixa-sem-app (baixa_sem_app.html, total/operador),
                                              lote em baixas_sem_app; SEM_APP em bd_motoristas.
+                                             Checklist da Vuupt (29/10): canhoto/nota de retorno em foto vao pro checklist; sem
+                                             canhoto, justificativa da lista. JPEG do lote ficam em dados/checklist_fotos/lote_<id>/
+                                             (apagados ao fim do lote).
                                              Canhoto opcional na tela -> nucleo/canhotos_manuais.py
                                              (dados/canhotos_manuais/{PS}.pdf + GCS); a expedição
                                              (expedir_pedidos.pdf_do_canhoto) usa quando a Vuupt não tem
@@ -256,8 +261,8 @@
                 redefinida é provisória: requer_auth manda pra /trocar-senha.
                 Nível/nome lidos do banco a cada request (muda sem novo login).
                 Desativar (coluna ativo) tira o acesso na hora sem apagar o login.
-                /login: 5 senhas erradas do mesmo login+IP bloqueiam 15 min
-                (em memória no processo do painel; restart zera).
+                /login: sem trava de senha errada desde 29/10 (Hugo tirou a de
+                15 min; o portal e o app do motorista mantêm a deles).
                 Inatividade (24/10; 6 h desde 27/10): 6 h sem uso -> sessão cai (requer_auth,
                 _INATIVIDADE_MAX). Uso = navegar pra página (Sec-Fetch-Mode
                 navigate) ou POST /api/sessao/atividade que o
@@ -426,6 +431,8 @@
 
  --- Vuupt ---
  vuupt_client.py         Cliente REST da Vuupt (serviços, skills, telefone E.164).
+ vuupt_checklist.py      Checklist de entrega da Vuupt por API (fotos canhoto/nota de retorno, 29/10); usado por
+                         VuuptClient.concluir_como_agente(fotos_checklist=...). Teste: test_vuupt_checklist.py.
  http_retry.py           Backoff para HTTP 429.
  fingerprint_importacao.py  Hash do payload enviado (não reenviar igual).
  fingerprint_status_vuupt.py  Cache de pedidos que já saíram de not_assigned
@@ -916,6 +923,13 @@
                            fecha na Vuupt por API (concluir_como_agente, sem
                            canhoto; expedição sai "sem comprovante"). Auditoria
                            em torre_entregas_manuais + tratativas ENTREGUE_MANUAL.
+                           Foto em massa (30/10): POST /api/torre/validar-lote-foto
+                           (Planejamento chama antes do laço) e lote_referencia no
+                           marcar-entregue; regra em mesmo_destino_para_foto (mesmo
+                           sender_id E mesmo customer_id ou endereço/até 50 m).
+                           Nota de retorno só junto da foto do canhoto. Foto
+                           reduzida no navegador: templates/_reduzir_imagem.js.html
+                           (Torre, Planejamento e /baixa-sem-app).
  planejamento_rotas.py     Dados/ações do Planejamento. Reagendar (um ou
                            lote) registra a data como EQUIPE em
                            agendamentos_origem (não vira dedicado sozinho);
@@ -949,9 +963,11 @@
                            apagar só o autor em 15 min); aba Triagem lê daí
                            (só o dia mais recente; dias parado desde o 1º
                            registro). Encaminhar (Cancelados/Devolução/Descartar/
-                           Verificar) cria demanda na tela /demandas pra equipe
+                           Retornar p/ Estoque/Verificar) cria demanda na tela /demandas pra equipe
                            escolhida na hora (26/10; Verificar sugere Atendimento;
-                           ENCAMINHAMENTO_DEMANDAS_ATIVO=True). Testes:
+                           ENCAMINHAMENTO_DEMANDAS_ATIVO=True). "Na Vuupt" (30/10)
+                           = no pool sem rota, fica pendente; o Consultar Vuupt
+                           preenche sozinho. Testes:
                            test_pedidos_parados_registro.py.
  atendimento_chamados.py   Tela /atendimento (chamados do portal e do app).
  grupos_equipe.py          Aba "Grupos" do /atendimento (19/10): grupos internos

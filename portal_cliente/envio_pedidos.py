@@ -239,13 +239,13 @@ def conectar() -> sqlite3.Connection:
         "troca_nf_status": "TEXT",
         "troca_nf_em": "TEXT",
         "troca_nf_erro": "TEXT",
+        **COLUNAS_RETOMAR,
         # endereço fiscal quando o XML tem <entrega> (24/09); vazio = igual
         "endereco_fiscal": "TEXT",
         # endereço de entrega escolhido no envio (27/10, endereco_entrega.py):
         # origem fiscal|nota|cliente|ultima_entrega; json só em cliente/ultima_entrega
         "endereco_entrega_origem": "TEXT",
         "endereco_entrega_json": "TEXT",
-        **COLUNAS_RETOMAR,
     })
     _garantir_colunas(conn, "portal_clientes_envio", {"carrier_id": "TEXT", "prioridade": "TEXT"})
     conn.commit()

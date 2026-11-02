@@ -29,6 +29,22 @@ class CanhotoInvalido(ValueError):
     pass
 
 
+_HEIF_OK = None
+
+
+def heif_disponivel() -> bool:
+    """True se pillow-heif esta instalado (registra o leitor de HEIC no Pillow, 1x)."""
+    global _HEIF_OK
+    if _HEIF_OK is None:
+        try:
+            import pillow_heif
+            pillow_heif.register_heif_opener()
+            _HEIF_OK = True
+        except Exception:  # noqa: BLE001
+            _HEIF_OK = False
+    return _HEIF_OK
+
+
 def normalizar(codigo) -> str:
     return str(codigo or "").strip().lstrip("#").upper()
 
@@ -42,11 +58,13 @@ def para_pdf(conteudo: bytes) -> bytes:
         raise CanhotoInvalido("Arquivo maior que 15 MB.")
     if conteudo[:5] == b"%PDF-":
         return conteudo
-    if conteudo[4:12] in _HEIC:
+    if conteudo[4:12] in _HEIC and not heif_disponivel():
         raise CanhotoInvalido("Foto em HEIC não é aceita: tire a foto pela própria tela ou envie JPG/PDF.")
+    heif_disponivel()   # registra o leitor de HEIC quando instalado
     try:
         from PIL import Image, ImageOps
-        img = Image.open(io.BytesIO(conteudo))      # preguicoso: so le o cabecalho
+        # so formatos de foto: EPS/PS disfarcado nunca chega ao Ghostscript
+        img = Image.open(io.BytesIO(conteudo), formats=["JPEG", "PNG", "WEBP", "HEIF"])
     except Exception as e:  # noqa: BLE001
         raise CanhotoInvalido("Formato não aceito: envie foto (JPG/PNG) ou PDF.") from e
     if img.size[0] * img.size[1] > MAX_PIXELS:
@@ -83,6 +101,15 @@ def codigos_validos(codigo: str) -> list[str]:
     if not cods or any(not _RE_CODIGO.match(c) for c in cods):
         raise CanhotoInvalido(f"Código de pedido inválido: {codigo!r}.")
     return cods
+
+
+def existe(conn: sqlite3.Connection, codigo: str) -> bool:
+    """Ja ha canhoto manual gravado para algum dos codigos? (salvar SOBRESCREVE: quem nao
+    pode trocar comprovante existente confere aqui antes.)"""
+    garantir_tabela(conn)
+    cods = codigos_validos(codigo)
+    marcas = ",".join("?" * len(cods))
+    return conn.execute(f"SELECT 1 FROM canhotos_manuais WHERE codigo IN ({marcas}) LIMIT 1", cods).fetchone() is not None
 
 
 def salvar(conn: sqlite3.Connection, codigo: str, service_id: int | None, pdf: bytes, por: str,
