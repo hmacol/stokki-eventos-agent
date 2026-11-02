@@ -30,6 +30,7 @@ import hashlib
 import logging
 import secrets
 import sys
+import threading
 import time
 from datetime import date, datetime, timedelta
 from functools import wraps
@@ -328,13 +329,24 @@ def criar_app(config: dict | None = None) -> Flask:
         _exigir_link()
         chave = corpo().get("chave_envio")
         cadastro.marcar_enviado(conn(), cadastro_id, chave)
+        primeiro_nome = cadastro.situacao_link(conn(), cadastro_id, chave)["primeiro_nome"]
+        # Vuupt + intervalo do WhatsApp levam 20-40 s: o motorista não espera.
+        # A thread guardada em app.config é o gancho dos testes (join).
+        t = threading.Thread(target=_processar_link_em_fundo, args=(cadastro_id,), daemon=True)
+        app.config["THREAD_CADASTRO_LINK"] = t
+        t.start()
+        return jsonify({"ok": True, "primeiro_nome": primeiro_nome})
+
+    def _processar_link_em_fundo(cadastro_id: int) -> None:
+        c = banco.conectar()
         try:
             from nucleo import cadastro_motorista_link
-            cadastro_motorista_link.processar(conn(), app.config["CONFIG_PROJETO"], cadastro_id)
+            cadastro_motorista_link.processar(c, app.config["CONFIG_PROJETO"], cadastro_id)
         except Exception:
             # O cadastro já está salvo e enviado; o timer de retentativa termina o serviço.
             logger.exception("Processar do cadastro #%s falhou (o timer retenta)", cadastro_id)
-        return jsonify({"ok": True, "primeiro_nome": cadastro.situacao_link(conn(), cadastro_id, chave)["primeiro_nome"]})
+        finally:
+            c.close()
 
     @app.post("/api/push-token")
     @requer_motorista

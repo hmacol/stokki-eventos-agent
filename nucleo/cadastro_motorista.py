@@ -396,10 +396,12 @@ def marcar_enviado(conn: sqlite3.Connection, cadastro_id: int, chave_envio: str)
 
 
 def situacao_link(conn: sqlite3.Connection, cadastro_id: int, chave_envio: str) -> dict:
-    """O que a página do link precisa pra retomar: quais documentos já foram."""
+    """O que a página do link precisa pra retomar: quais documentos já foram e
+    o status (SUBSTITUIDO/RECUSADO = encerrado, a página começa de novo)."""
     c = _montar(_so_link(_por_chave(conn, cadastro_id, chave_envio)))
     return {"id": c["id"], "primeiro_nome": (c["nome"] or "").split(" ")[0],
-            "documentos": {t: c[f"tem_{t}"] for t in DOCUMENTOS}, "enviado": bool(c.get("enviado_em"))}
+            "documentos": {t: c[f"tem_{t}"] for t in DOCUMENTOS}, "enviado": bool(c.get("enviado_em")),
+            "status": c["status"]}
 
 
 def guardar_documento(conn: sqlite3.Connection, cadastro_id: int, chave_envio: str, tipo: str,

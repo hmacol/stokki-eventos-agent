@@ -193,8 +193,11 @@ class TestCadastroLink(unittest.TestCase):
         self.assertEqual(set(s["documentos"]), set(cad.DOCUMENTOS))
         self.assertFalse(any(s["documentos"].values()))
         self.assertFalse(s["enviado"])
+        self.assertEqual(s["status"], cad.STATUS_PENDENTE)
         with self.assertRaises(cad.CadastroInvalido):
             cad.situacao_link(self.conn, r["id"], "errada")
+        cad.criar_cadastro_link(self.conn, _dados())   # refez o formulário: o anterior é substituído
+        self.assertEqual(cad.situacao_link(self.conn, r["id"], r["chave_envio"])["status"], cad.STATUS_SUBSTITUIDO)
 
     def test_pendentes_do_app_sem_link(self):
         cad.criar_cadastro_link(self.conn, _dados())

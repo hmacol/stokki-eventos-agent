@@ -165,6 +165,7 @@
   <div class="erro" id="erro-3" role="alert"></div>
   <div id="docs"></div>
   <button type="button" id="concluir" disabled>Enviar cadastro</button>
+  <button type="button" class="volta" id="recomecar">Começar de novo</button>
 </div>
 
 <div id="tela-fim" hidden class="final">
@@ -401,6 +402,17 @@
     });
   });
 
+  // Volta ao passo 1 sem o cadastro guardado neste aparelho (os campos na tela ficam).
+  function recomecar(aviso) {
+    apagar('cm_envio'); apagar('cm_campos');
+    envio = null; enviados = {};
+    mostrar('tela-1');
+    erro(1, aviso || '');
+  }
+  $('recomecar').addEventListener('click', function () {
+    if (confirm('Começar o cadastro de novo? Os documentos enviados até agora serão descartados.')) { recomecar(); }
+  });
+
   function fim(nome) {
     apagar('cm_envio'); apagar('cm_campos');
     $('msg-fim').textContent = 'Cadastro feito, ' + (nome || '') + '! Você já está liberado pra receber rotas. ' +
@@ -415,6 +427,10 @@
     if (!(salvo && salvo.id && salvo.chave)) { mostrar('tela-1'); return; }
     mostrar('carregando');
     chamar('GET', url(URL_SIT, salvo.id) + '?chave_envio=' + encodeURIComponent(salvo.chave)).then(function (r) {
+      if (r.ok && (r.j.status === 'SUBSTITUIDO' || r.j.status === 'RECUSADO')) {
+        recomecar('Seu cadastro anterior foi encerrado. Comece de novo.');
+        return;
+      }
       if (r.ok && r.j.enviado) { fim(r.j.primeiro_nome); return; }
       if (r.ok) {
         envio = salvo;

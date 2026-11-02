@@ -100,6 +100,9 @@ class TestApiCadastroLink(unittest.TestCase):
         self.assertIn("ZONA SUL", html)
         self.assertIn("Fiorino", html)
         self.assertIn("setAttribute('capture', 'user')", html)
+        self.assertIn('id="recomecar"', html)
+        self.assertIn("Seu cadastro anterior foi encerrado. Comece de novo.", html)
+        self.assertIn("r.j.status === 'SUBSTITUIDO' || r.j.status === 'RECUSADO'", html)
 
     def test_fluxo_completo(self):
         c = self._criar()
@@ -113,17 +116,46 @@ class TestApiCadastroLink(unittest.TestCase):
         self.assertTrue(all(s["documentos"].values()))
         with mock.patch("nucleo.cadastro_motorista_link.processar") as proc:
             r = self.cli.post(f"/api/cadastro/{cid}/concluir", json={"chave_envio": chave})
+            self._esperar_fundo()
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.get_json(), {"ok": True, "primeiro_nome": "João"})
         proc.assert_called_once()
         self.assertEqual(proc.call_args.args[2], cid)
 
+    def _esperar_fundo(self):
+        t = self.cli.application.config["THREAD_CADASTRO_LINK"]
+        t.join(10)
+        self.assertFalse(t.is_alive())
+
+    def test_concluir_responde_sem_esperar_o_processar(self):
+        import threading
+        c = self._criar()
+        for tipo in ("cnh", "crlv", "selfie", "antt", "residencia"):
+            self._subir(c["id"], c["chave_envio"], tipo)
+        liberar, conexoes = threading.Event(), []
+
+        def processar_lento(conn, config, cadastro_id):
+            conexoes.append(conn)
+            liberar.wait(10)
+        with mock.patch("nucleo.cadastro_motorista_link.processar", side_effect=processar_lento):
+            r = self.cli.post(f"/api/cadastro/{c['id']}/concluir", json={"chave_envio": c["chave_envio"]})
+            self.assertEqual(r.status_code, 200)
+            self.assertTrue(self.cli.application.config["THREAD_CADASTRO_LINK"].is_alive())
+            liberar.set()
+            self._esperar_fundo()
+        self.assertEqual(len(conexoes), 1)
+        with self.assertRaises(Exception):   # conexão própria da thread, fechada no fim
+            conexoes[0].execute("SELECT 1")
+
     def test_processar_com_erro_nao_vira_500(self):
         c = self._criar()
         for tipo in ("cnh", "crlv", "selfie", "antt", "residencia"):
             self._subir(c["id"], c["chave_envio"], tipo)
-        with mock.patch("nucleo.cadastro_motorista_link.processar", side_effect=RuntimeError("vuupt fora")):
+        with mock.patch("nucleo.cadastro_motorista_link.processar", side_effect=RuntimeError("vuupt fora")) as proc, \
+                self.assertLogs("nucleo.api_motorista", "ERROR"):
             r = self.cli.post(f"/api/cadastro/{c['id']}/concluir", json={"chave_envio": c["chave_envio"]})
+            self._esperar_fundo()
+        proc.assert_called_once()
         self.assertEqual(r.status_code, 200)
         self.assertTrue(r.get_json()["ok"])
 
