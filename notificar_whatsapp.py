@@ -49,7 +49,8 @@ Origem PARA FORA, motorista (cadastro pelo link publico): aviso no grupo
 (origem "cadastro_motorista", chamada via despachar com texto_cadastro_link
 e texto_cadastro_link_concluido) e boas-vindas individuais ao motorista novo,
 com teto proprio (motoristas.teto_diario) e piloto em
-cadastro_motorista_link.forcar_destino_whatsapp (vazio = envio real).
+cadastro_motorista_link.forcar_destino_whatsapp (vazio = envio real; ausente =
+vale clientes.forcar_destino, e sem ele nao manda).
     avisar_motorista_boas_vindas
 
 O numero que envia e o do proprio Hugo, por um gateway nao-oficial
@@ -85,7 +86,8 @@ config.yaml:
       motoristas:                # boas-vindas ao motorista novo (avisar_motorista_boas_vindas)
         teto_diario: 20
     cadastro_motorista_link:
-      forcar_destino_whatsapp: ""  # numero do Hugo enquanto for piloto; ausente/vazio = envio real
+      forcar_destino_whatsapp: ""  # numero do Hugo enquanto for piloto; vazio = envio real;
+                                   # ausente = vale clientes.forcar_destino (sem ele: nao manda)
 """
 import logging
 import re
@@ -1061,7 +1063,9 @@ def avisar_motorista_boas_vindas(cadastro_id: int, telefone: str, texto: str, co
     """Boas-vindas ao motorista novo (cadastro pelo link). Mensagem individual,
     uma tentativa por cadastro (assinatura cadastro_link:<id>:boas_vindas).
     Piloto: cadastro_motorista_link.forcar_destino_whatsapp com numero manda
-    pra la com o destino real na primeira linha; ausente ou vazio = envio real.
+    pra la com o destino real na primeira linha; presente e vazio ("") = envio
+    real. Chave ausente: vale clientes.forcar_destino; se esse tambem faltar
+    ou estiver vazio, devolve "desligado" (esquecer a chave nao libera o envio).
     Nao depende de whatsapp_notificacoes.clientes.ativo (canal dos clientes)."""
     try:
         telefone = re.sub(r"\D", "", str(telefone or ""))
@@ -1070,7 +1074,13 @@ def avisar_motorista_boas_vindas(cadastro_id: int, telefone: str, texto: str, co
         if len(telefone) in (10, 11):
             telefone = "55" + telefone
         cfg_cad = (config or {}).get("cadastro_motorista_link") or {}
-        destino = re.sub(r"\D", "", str(cfg_cad.get("forcar_destino_whatsapp") or ""))
+        if "forcar_destino_whatsapp" in cfg_cad:
+            destino = re.sub(r"\D", "", str(cfg_cad["forcar_destino_whatsapp"] or ""))
+        else:
+            destino = re.sub(r"\D", "", str(_cfg_clientes(config).get("forcar_destino") or ""))
+            if not destino:
+                logger.info(f"WhatsApp nao enviado (motorista {cadastro_id}): forcar_destino_whatsapp ausente.")
+                return "desligado"
         if destino:
             texto = f"[teste → +{telefone}]\n{texto}"
         else:

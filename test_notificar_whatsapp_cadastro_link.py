@@ -62,18 +62,40 @@ class BoasVindas(unittest.TestCase):
         self.assertEqual(d.call_args.args[1], nw.ORIGEM_MOTORISTA)
         self.assertEqual(d.call_args.args[4], "cadastro_link:7:boas_vindas")
 
-    def test_sem_forcar_manda_pro_motorista_com_55(self):
+    def test_forcar_presente_vazio_manda_pro_motorista_com_55(self):
         config = {"whatsapp_notificacoes": {"ativo": True, "base_url": "http://x", "api_key": "k", "sessao": "s",
-                                            "grupo_id": "g@g.us"}}
+                                            "grupo_id": "g@g.us", "clientes": {"forcar_destino": "5511900000000"}},
+                  "cadastro_motorista_link": {"forcar_destino_whatsapp": ""}}
         with mock.patch.object(nw.integracao_openwa, "numero_existe", return_value=True), \
                 mock.patch.object(nw, "despachar", return_value="enviado") as d:
             nw.avisar_motorista_boas_vindas(7, "11998765432", "oi", config)
         self.assertEqual(d.call_args.kwargs["grupo_id"], "5511998765432@c.us")
         self.assertEqual(d.call_args.args[3], "oi")
 
+    def test_forcar_ausente_vale_o_dos_clientes(self):
+        config = {"whatsapp_notificacoes": {"ativo": True, "base_url": "http://x", "api_key": "k", "sessao": "s",
+                                            "grupo_id": "g@g.us", "clientes": {"forcar_destino": "5511900000000"}},
+                  "cadastro_motorista_link": {"ativo": True}}
+        with mock.patch.object(nw.integracao_openwa, "numero_existe", return_value=True), \
+                mock.patch.object(nw, "despachar", return_value="enviado") as d:
+            self.assertEqual(nw.avisar_motorista_boas_vindas(7, "11998765432", "oi", config), "enviado")
+        self.assertEqual(d.call_args.kwargs["grupo_id"], "5511900000000@c.us")
+        self.assertTrue(d.call_args.args[3].startswith("[teste → +5511998765432]"))
+
+    def test_forcar_ausente_sem_o_dos_clientes_nao_manda(self):
+        base = {"ativo": True, "base_url": "http://x", "api_key": "k", "sessao": "s", "grupo_id": "g@g.us"}
+        for config in ({"whatsapp_notificacoes": dict(base)},
+                       {"whatsapp_notificacoes": dict(base, clientes={"forcar_destino": ""})}):
+            with mock.patch.object(nw.integracao_openwa, "numero_existe", return_value=True) as existe, \
+                    mock.patch.object(nw, "despachar", return_value="enviado") as d:
+                self.assertEqual(nw.avisar_motorista_boas_vindas(7, "11998765432", "oi", config), "desligado")
+            d.assert_not_called()
+            existe.assert_not_called()
+
     def test_sem_telefone_numero_sem_whatsapp_e_indeterminado(self):
         config = {"whatsapp_notificacoes": {"ativo": True, "base_url": "http://x", "api_key": "k", "sessao": "s",
-                                            "grupo_id": "g@g.us"}}
+                                            "grupo_id": "g@g.us"},
+                  "cadastro_motorista_link": {"forcar_destino_whatsapp": ""}}
         self.assertEqual(nw.avisar_motorista_boas_vindas(7, "", "oi", config), "desligado")
         with mock.patch.object(nw.integracao_openwa, "numero_existe", return_value=False):
             self.assertEqual(nw.avisar_motorista_boas_vindas(7, "11998765432", "oi", config), "numero_sem_whatsapp")
