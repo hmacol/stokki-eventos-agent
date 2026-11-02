@@ -303,6 +303,25 @@ class TestCadastroLink(unittest.TestCase):
         cad.criar_cadastro_link(self.conn, _dados())   # refez o formulário: o anterior é substituído
         self.assertEqual(cad.situacao_link(self.conn, r["id"], r["chave_envio"])["status"], cad.STATUS_SUBSTITUIDO)
 
+    def test_situacao_resultado_pra_tela_final(self):
+        # Hugo, 02/11: "liberado" só quando entrou na tabela; conflito ou pendência = "em avaliação"
+        r = cad.criar_cadastro_link(self.conn, _dados())
+        sit = lambda: cad.situacao_link(self.conn, r["id"], r["chave_envio"])["resultado"]
+        self.assertIsNone(sit())   # ainda não enviou
+        self.conn.execute("UPDATE motoristas_cadastros SET enviado_em = ? WHERE id = ?", (banco.agora(), r["id"]))
+        self.conn.commit()
+        self.assertEqual(sit(), "processando")
+        self.conn.execute("UPDATE motoristas_cadastros SET conflito_agent_id = 321 WHERE id = ?", (r["id"],))
+        self.conn.commit()
+        self.assertEqual(sit(), "em_avaliacao")
+        self.conn.execute("UPDATE motoristas_cadastros SET conflito_resolvido = 1, ultimo_erro = 'Vuupt 500', "
+                          "tentativas = 1 WHERE id = ?", (r["id"],))
+        self.conn.commit()
+        self.assertEqual(sit(), "em_avaliacao")
+        self.conn.execute("UPDATE motoristas_cadastros SET bd_motorista_id = 7, ultimo_erro = NULL WHERE id = ?", (r["id"],))
+        self.conn.commit()
+        self.assertEqual(sit(), "liberado")
+
     def test_pendentes_do_app_sem_link(self):
         cad.criar_cadastro_link(self.conn, _dados())
         self.assertEqual(cad.listar_pendentes(self.conn), [])
