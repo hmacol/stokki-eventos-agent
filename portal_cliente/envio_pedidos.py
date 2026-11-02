@@ -1781,14 +1781,12 @@ def registrar_agendamento_pedido(conn: sqlite3.Connection, envio: dict, por: str
         """, (envio["codigo_pedido"], envio.get("destinatario_doc") or "", envio.get("destinatario_nome"), envio["cnpj_embarcador"],
               envio.get("numero_nf"), data_br, envio.get("agendamento_hora_inicio"), envio.get("agendamento_hora_fim"),
               f"Definido pelo portal do cliente ({por})"))
-        # Pedido criado direto na Stokki (alteração de entrega pelo portal) não tem linha em portal_envios.
-        if envio.get("id"):
-            conn.execute("UPDATE portal_envios SET agendamento_aplicado_em = ?, atualizado_em = ? WHERE id = ?",
-                         (_agora(), _agora(), envio["id"]))
+        conn.execute("UPDATE portal_envios SET agendamento_aplicado_em = ?, atualizado_em = ? WHERE id = ?",
+                     (_agora(), _agora(), envio["id"]))
         conn.commit()
         return True
     except sqlite3.OperationalError as e:
-        logger.warning(f"[envios] agendamentos_pedido indisponível ({e}) -- agendamento do envio {envio.get('id')} fica só no portal.")
+        logger.warning(f"[envios] agendamentos_pedido indisponível ({e}) -- agendamento do envio {envio['id']} fica só no portal.")
         return False
 
 

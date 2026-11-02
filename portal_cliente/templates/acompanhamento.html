@@ -132,7 +132,6 @@
   .alt-campos .alt-larga { grid-column: 1 / -1; }
   .alt-modal input { width: 100%; min-width: 0; box-sizing: border-box; }
   .alt-nota { font-size: 12px; color: var(--texto-suave); margin: 0; }
-  .alt-avisos { margin: 0; padding: 10px 12px 10px 28px; background: var(--erro-bg); color: var(--erro); border-radius: 8px; font-size: 12.5px; display: flex; flex-direction: column; gap: 4px; }
   .alt-msg { font-size: 12.5px; padding: 8px 12px; border-radius: 8px; }
   .alt-msg.ok { background: var(--sucesso-bg); color: var(--sucesso); }
   .alt-msg.erro { background: var(--erro-bg); color: var(--erro); }
@@ -486,7 +485,7 @@
       case 'comprovante':
         if (p.situacao === 'entregue') return `<td class="nw"><a class="link" href="${BASE}/api/canhoto/${p.service_id}" target="_blank" rel="noopener">${ICO_CAM}<span>Canhoto</span></a></td>`;
         if (p.situacao === 'insucesso' && dados.atencao.some(g => g.codigos.includes(p.codigo))) return `<td class="nw"><a class="link falha" href="#atencao" data-ir-atencao="1">${ICO_ALERTA}<span>Responder</span></a></td>`;
-        if (dados.alteracao_entrega && SITUACOES_ALTERAVEIS.includes(p.situacao)) return `<td class="nw"><a class="link" href="#" data-alterar="${p.service_id}">${ICO_EDITAR}<span>Alterar entrega</span></a></td>`;
+        if (dados.alteracao_entrega && SITUACOES_ALTERAVEIS.includes(p.situacao)) return `<td class="nw"><a class="link" href="#" data-alterar="${p.service_id}">${ICO_EDITAR}<span>Pedir alteração</span></a></td>`;
         return `<td class="nw" style="color:var(--texto-suave)">—</td>`;
       case 'ordem': return `<td class="nw num">${p.ordem ? p.ordem + ' de ' + p.total_paradas : '—'}</td>`;
       default: return `<td>${esc(p[id]) || '<span style="color:var(--texto-suave)">—</span>'}</td>`;
@@ -670,7 +669,7 @@
 
   // ── Alterar entrega ────────────────────────────────────────────────────────
   // GET mostra o valor atual e se pode; POST manda só os blocos que o cliente
-  // abriu. Com aviso (ex.: pedido já em rota) o botão vira "Alterar mesmo assim".
+  // abriu e vira chamado pro atendimento (nada muda no pedido -- Hugo, 01/11).
   let alt = null;
   const cepFmt = c => { const d = String(c || '').replace(/\D/g, ''); return d.length === 8 ? d.slice(0, 5) + '-' + d.slice(5) : d; };
   const dataBr = iso => iso ? iso.split('-').reverse().join('/') : '';
@@ -694,7 +693,7 @@
     alt = { sid, cnpj: cnpjDaEmpresa(pedido && pedido.sender_id), codigo: pedido ? pedido.codigo : '', d: null, carregando: true,
             end: { aberto: false, cep: '', numero: '', complemento: '', logradouro: '', bairro: '', cidade: '', erro: '' },
             data: { aberto: false, v: '' }, hor: { aberto: false, ini: '', fim: '' },
-            avisos: null, msg: '', erro: '', enviando: false, feito: false };
+            msg: '', erro: '', enviando: false, feito: false, chamado: null };
     $('alt-fundo').classList.add('aberto');
     renderAlteracao();
     const meu = alt;
@@ -722,7 +721,7 @@
   }
   function renderAlteracao() {
     const a = alt, caixa = $alt();
-    const cab = `<h3 id="alt-titulo">Alterar entrega${a.codigo ? ' · ' + esc(a.codigo) : ''}</h3>`;
+    const cab = `<h3 id="alt-titulo">Pedir alteração da entrega${a.codigo ? ' · ' + esc(a.codigo) : ''}</h3>`;
     const fechar = `<div class="pe"><button type="button" class="botao-linha" data-alt-fechar>Fechar</button></div>`;
     if (a.carregando) { caixa.innerHTML = `${cab}<p class="carregando">Consultando o pedido…</p>`; return; }
     if (!a.d) { caixa.innerHTML = `${cab}<div class="alt-msg erro">${esc(a.erro)}</div>${fechar}`; return; }
@@ -741,24 +740,21 @@
     const campoHor = `<div class="alt-campos">
         <label>Das <input type="time" data-f="hini" value="${esc(a.hor.ini)}"></label>
         <label>Até <input type="time" data-f="hfim" value="${esc(a.hor.fim)}"></label>
-        <p class="alt-nota alt-larga">Vale para todos os próximos pedidos desse destinatário, de qualquer embarcador.</p>
       </div>`;
     const dataAtual = d.atual.data ? dataBr(d.atual.data) : 'Sem data agendada';
     let rodape;
-    if (a.feito) rodape = `<div class="pe"><button type="button" class="botao" data-alt-fechar>Fechar</button></div>`;
+    if (a.feito) rodape = `<div class="pe"><button type="button" class="botao-linha" data-alt-fechar>Fechar</button>
+        ${a.chamado && window.atdAbrirChamado ? '<button type="button" class="botao" data-alt-chat>Abrir a conversa</button>' : ''}</div>`;
     else rodape = `<div class="pe"><button type="button" class="botao-linha" data-alt-fechar>Cancelar</button>
-        <button type="button" class="botao" id="alt-salvar" ${a.enviando ? 'disabled' : ''}>${a.avisos ? 'Alterar mesmo assim' : 'Salvar'}</button></div>`;
+        <button type="button" class="botao" id="alt-salvar" ${a.enviando ? 'disabled' : ''}>Enviar ao atendimento</button></div>`;
     caixa.innerHTML = `${cab}
       <p>${esc(d.destinatario)}</p>
-      ${a.feito ? '' : blocoAlt('end', 'Endereço de entrega', esc(d.atual.endereco) || '—', campoEnd, e.aberto)
+      ${a.feito ? '' : '<p class="alt-nota">Marque o que você quer mudar. O pedido vai para o atendimento da Fresh Log, que confere e responde pelo chat.</p>'
+        + blocoAlt('end', 'Endereço de entrega', esc(d.atual.endereco) || '—', campoEnd, e.aberto)
         + blocoAlt('data', 'Data da entrega', esc(dataAtual), campoData, a.data.aberto)
         + blocoAlt('hor', 'Horário de recebimento', esc(horarioTexto(d.atual.horario)), campoHor, a.hor.aberto)}
-      <div id="alt-avisos">${avisosHtml()}</div>
       <div id="alt-msg">${msgHtml()}</div>
       ${rodape}`;
-  }
-  function avisosHtml() {
-    return alt.avisos ? `<ul class="alt-avisos">${alt.avisos.map(v => `<li>${esc(v.texto)}</li>`).join('')}</ul>` : '';
   }
   function msgHtml() {
     if (alt.erro) return `<div class="alt-msg erro">${esc(alt.erro)}</div>`;
@@ -792,23 +788,20 @@
     const a = alt;
     let corpo;
     try { corpo = corpoAlteracao(); } catch (err) { a.erro = err.message; $('alt-msg').innerHTML = msgHtml(); return; }
-    corpo.confirmar = !!a.avisos;
     a.erro = ''; a.msg = ''; a.enviando = true;
     $('alt-salvar').disabled = true;
-    $('alt-msg').innerHTML = '<div class="alt-msg ok pulsando">Aplicando a alteração…</div>';
+    $('alt-msg').innerHTML = '<div class="alt-msg ok pulsando">Enviando ao atendimento…</div>';
     try {
       const r = await altFetch(`${BASE}/api/pedidos/${a.sid}/alteracao`, { method: 'POST',
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
       const j = await r.json().catch(() => ({}));
       if (alt !== a) return;
       a.enviando = false;
-      if (!r.ok) { a.erro = j.erro || 'Não foi possível alterar agora.'; }
-      else if (j.precisa_confirmar) { a.avisos = j.avisos || []; }
-      else if (j.ok) { a.msg = j.mensagem || 'Alteração feita.'; a.feito = true; a.avisos = null; carregar(true); }
-      else { a.erro = j.erro || 'Não foi possível alterar agora.'; }
+      if (r.ok && j.ok) { a.msg = j.mensagem || 'Pedido de alteração enviado ao atendimento.'; a.feito = true; a.chamado = j.chamado_id || null; }
+      else { a.erro = j.erro || 'Não foi possível enviar agora.'; }
     } catch (err) {
       if (alt !== a) return;
-      a.enviando = false; a.erro = 'Não foi possível alterar agora. Tente de novo.';
+      a.enviando = false; a.erro = 'Não foi possível enviar agora. Tente de novo.';
     }
     renderAlteracao();
   }
@@ -840,10 +833,11 @@
   $('alt-caixa').addEventListener('click', e => {
     if (!alt) return;
     if (e.target.closest('[data-alt-fechar]')) { fecharAlteracao(); return; }
+    if (e.target.closest('[data-alt-chat]')) { const id = alt.chamado; fecharAlteracao(); window.atdAbrirChamado(id); return; }
     const t = e.target.closest('[data-alt-toggle]');
     if (t) {
       const k = t.dataset.altToggle, b = k === 'end' ? alt.end : k === 'data' ? alt.data : alt.hor;
-      b.aberto = !b.aberto; alt.avisos = null; alt.erro = ''; renderAlteracao();
+      b.aberto = !b.aberto; alt.erro = ''; renderAlteracao();
       const primeiro = b.aberto && $alt().querySelector(`[data-bloco="${k}"] input`); if (primeiro) primeiro.focus();
       return;
     }
@@ -857,9 +851,6 @@
     else if (f === 'data') alt.data.v = e.target.value;
     else if (f === 'hini') alt.hor.ini = e.target.value;
     else if (f === 'hfim') alt.hor.fim = e.target.value;
-    if (alt.avisos) {   // mudou algo depois do aviso: confere de novo
-      alt.avisos = null; $('alt-avisos').innerHTML = ''; $('alt-salvar').textContent = 'Salvar';
-    }
   });
   $('alt-fundo').addEventListener('click', e => { if (e.target === $('alt-fundo')) fecharAlteracao(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && alt) fecharAlteracao(); });

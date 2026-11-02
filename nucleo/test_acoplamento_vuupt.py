@@ -66,7 +66,6 @@ PERMITIDOS = {
     "painel_agentes/torre_controle.py",
     "pipeline.py",
     "portal_cliente/dados_cliente.py",
-    "portal_cliente/alterar_entrega.py",     # 29/10: aplica na hora, na Vuupt, a alteracao pedida pelo cliente no portal (tirar da rota, endereco, data e contato); mesmo caso de solicitacoes_execucao
     "reconciliar_pedidos_retirada.py",
     "regras/cadastro_motoristas.py",
     "relatorio_operacional.py",
