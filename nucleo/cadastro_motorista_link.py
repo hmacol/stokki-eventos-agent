@@ -469,8 +469,8 @@ def desfazer_cadastro_link(conn: sqlite3.Connection, config: dict, cadastro_id: 
                            apagar_na_vuupt: bool, vuupt=None, agora: datetime | None = None) -> dict:
     """Cadastro falso ou de teste (botão do painel): inativa a linha da
     bd_motoristas, libera o CPF pra um cadastro novo e encerra o cadastro
-    (RECUSADO, sai do retentar). Com `apagar_na_vuupt`, apaga o veículo e o
-    agente só se foram criados por este cadastro (agente vindo de "usar
+    (RECUSADO, sai do retentar). Com `apagar_na_vuupt`, apaga o agente e o
+    veículo (nessa ordem) só se foram criados por este cadastro (agente vindo de "usar
     agente" nunca). Erro da Vuupt volta em "erro" sem desfazer o resto.
     Pode rodar de novo (apaga na Vuupt o que ficou)."""
     from regras.cadastro_motoristas import _espelhar
@@ -497,8 +497,9 @@ def desfazer_cadastro_link(conn: sqlite3.Connection, config: dict, cadastro_id: 
     apagados, erros = [], []
     if apagar_na_vuupt and (c.get("vehicle_criado") or c.get("agente_criado")):
         vuupt = vuupt or VuuptAgentes(config["vuupt_api"]["token"])
-        for rotulo, chave, coluna, apagar in (("veículo", "vehicle_id", "vehicle_criado", vuupt.apagar_veiculo),
-                                              ("agente", "agent_id", "agente_criado", vuupt.apagar_agente)):
+        # agente antes: a Vuupt recusa (400) apagar veículo ligado a agente que existe (provado 02/11)
+        for rotulo, chave, coluna, apagar in (("agente", "agent_id", "agente_criado", vuupt.apagar_agente),
+                                              ("veículo", "vehicle_id", "vehicle_criado", vuupt.apagar_veiculo)):
             if not (c.get(coluna) and c.get(chave)):
                 continue
             try:

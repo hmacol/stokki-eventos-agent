@@ -114,6 +114,9 @@ class VuuptFalsa:
 
     def apagar_veiculo(self, vehicle_id):
         self._talvez_falhar("apagar_veiculo")
+        # como a Vuupt real (provado 02/11): veículo ligado a agente que ainda existe -> 400
+        if any(v == vehicle_id and ("agente", a) not in self.apagados for a, v in self.ligados):
+            raise ErroVuupt(f"DELETE /vehicles/{vehicle_id}: HTTP 400", 400, "")
         self.apagados.append(("veiculo", vehicle_id))
 
 
@@ -730,7 +733,7 @@ class TestProcessador(unittest.TestCase):
         self._processar(cid)
         l = self._linha(cid)
         r = self._desfazer(cid, True)
-        self.assertEqual(self.vuupt.apagados, [("veiculo", l["vehicle_id"]), ("agente", l["agent_id"])])
+        self.assertEqual(self.vuupt.apagados, [("agente", l["agent_id"]), ("veiculo", l["vehicle_id"])])
         self.assertEqual(len(r["apagados"]), 2)
         d = self._linha(cid)
         self.assertEqual((d["agente_criado"], d["vehicle_criado"]), (0, 0))
