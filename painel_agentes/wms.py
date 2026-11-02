@@ -570,6 +570,9 @@ def buscar_por_codigo(conn, codigo: str) -> list[dict]:
     if not out and bruto:
         for r in conn.execute("SELECT * FROM wms_produtos WHERE ativo = 1 AND sku = ? COLLATE NOCASE ORDER BY descricao", (bruto,)):
             d = _produto_dict(r); d["lido_como"] = "SKU"; out.append(d)
+    if not out and bruto:
+        for r in conn.execute("SELECT * FROM wms_produtos WHERE ativo = 1 AND codigo_interno = ? COLLATE NOCASE ORDER BY descricao", (bruto,)):
+            d = _produto_dict(r); d["lido_como"] = "INTERNO"; out.append(d)
     return out
 
 
@@ -830,6 +833,13 @@ def ler_codigo(conn, codigo: str) -> dict:
     if bruto.upper().startswith(PREFIXO_QR_PRODUTO):
         import wms_etiqueta_produto
         lido = wms_etiqueta_produto.parse_qr(bruto)
+        if lido and lido["serial"]:
+            import wms_caixas
+            wms_caixas.garantir_tabelas(conn)
+            caixa = wms_caixas.obter_caixa(conn, lido["serial"])
+            if not caixa:
+                return {"tipo": "caixa_inexistente", "serial": lido["serial"], "codigo": bruto}
+            return {"tipo": "caixa", "caixa": caixa, "codigo": bruto}
         if lido:
             produtos = buscar_por_codigo(conn, lido["sku"])
             if not produtos:
