@@ -136,5 +136,30 @@ class TestUnidadeDoItemDoRecebimento(unittest.TestCase):
         self.assertEqual(itens[1]["unidade"], "UN")
 
 
+class TestCaixasNaTela(unittest.TestCase):
+    """Task 8: caixa com serial na tela do galpao (inventario, receber, consultar)."""
+
+    def test_aba_inventario_existe(self):
+        self.assertIn('data-aba="inventario"', _WMS)
+
+    def test_ativacao_chama_a_rota_da_caixa(self):
+        self.assertIn("'/caixas/' + ", _WMS)
+        self.assertIn("/ativar'", _WMS)
+
+    def test_receber_respeita_usa_caixas(self):
+        self.assertIn("it.usa_caixas", _WMS)
+
+    def test_fila_offline_reenvia_ativacao(self):
+        self.assertIn("ativar_caixa", _WMS)
+
+    def test_consultar_trata_caixa(self):
+        self.assertIn("r.tipo === 'caixa'", _WMS)
+        self.assertIn("caixa_inexistente", _WMS)
+
+    def test_fila_nao_reenvia_recusado_pra_sempre(self):
+        # recusa do servidor tira da fila; so falha de rede mantem
+        self.assertIn("filaRecusados", _WMS)
+
+
 if __name__ == "__main__":
     unittest.main()
