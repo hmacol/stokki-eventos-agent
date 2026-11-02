@@ -121,6 +121,69 @@ class TestDatasAutomaticas(unittest.TestCase):
         self.assertEqual(ids, {4, 5, 6, 7, 8, 9, 10, 11})
 
 
+class TestForaDoAndar(unittest.TestCase):
+    """Revisao final 02/11: pedido em rota da Vuupt (incremento 18h/22h, rota
+    feita a mao) nao anda; listagem falhou = ninguem anda."""
+    HOJE = date(2026, 11, 10)
+
+    def _listar_rotas(self, rotas):
+        self.chamadas_rotas = []
+
+        def listar(**kw):
+            self.chamadas_rotas.append(kw)
+            return rotas
+        return listar
+
+    def test_ids_em_rotas_recentes(self):
+        rotas = [{"id": 1, "status": "not_started", "services": {"data": [{"id": 10}, {"id": 11}]}},
+                 {"id": 2, "status": "in_progress", "services": [{"id": 12}]},
+                 {"id": 3, "status": "canceled", "services": {"data": [{"id": 13}]}},
+                 {"id": 4, "status": "not_started"}]
+        ids = da.ids_em_rotas_recentes(self.HOJE, self._listar_rotas(rotas))
+        self.assertEqual(ids, {10, 11, 12})  # cancelada nao conta
+        self.assertEqual(self.chamadas_rotas, [{
+            "include": ["services"],
+            "filtro": [{"field": "start_at", "operator": "gte", "value": "2026-11-04 00:00:00"}]}])
+
+    def test_fora_do_andar_junta_rascunho_e_rota(self):
+        ids = da.ids_fora_do_andar(self.HOJE, QUA,
+                                   self._listar_rotas([{"status": "not_started", "services": [{"id": 50}]}]),
+                                   lambda d: [{"paradas": [{"service_id": 60}]}] if d == self.HOJE else [])
+        self.assertEqual(ids, {50, 60})
+
+    def test_falha_ao_listar_rotas_ninguem_anda(self):
+        def falha(**_kw):
+            raise RuntimeError("Vuupt 500")
+        with self.assertLogs(da.logger, "ERROR"):
+            self.assertIsNone(da.ids_fora_do_andar(self.HOJE, QUA, falha, lambda d: []))
+
+    def test_falha_ao_listar_rascunhos_ninguem_anda(self):
+        def falha(_d):
+            raise RuntimeError("banco travado")
+        with self.assertLogs(da.logger, "ERROR"):
+            self.assertIsNone(da.ids_fora_do_andar(self.HOJE, QUA, self._listar_rotas([]), falha))
+
+    def test_pedido_em_rota_enviada_nao_anda(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        db = Path(tmp.name) / "t.db"
+        em_rota, livre = svc(1), svc(2)
+        conn = reg.conectar(db)
+        try:
+            for s in (em_rota, livre):
+                reg.registrar_origem(conn, s, TER, reg.ORIGEM_AUTOMATICO)
+        finally:
+            conn.close()
+        da.marcar_datas_automaticas([em_rota, livre], db)
+        ids = da.ids_fora_do_andar(self.HOJE, QUA,
+                                   self._listar_rotas([{"status": "not_started", "services": {"data": [{"id": 1}]}}]),
+                                   lambda d: [])
+        vuupt = FakeVuupt()
+        feitos = da.andar_datas_automaticas([em_rota, livre], vuupt, QUA, ids, False, db)
+        self.assertEqual([f["servico"]["id"] for f in feitos], [2])
+        self.assertEqual([c[0] for c in vuupt.chamadas], [2])
+
+
 class TestRoteirizacaoTrataDataAutomatica(unittest.TestCase):
     def test_data_automatica_pode_ser_segurada(self):
         import rotas_fracas

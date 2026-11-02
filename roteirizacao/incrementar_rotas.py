@@ -515,11 +515,9 @@ def main(modo_teste: bool = False):
         # not_assigned está de fato em alguma rota agora? Se sim, pula
         # (já foi cuidado, seja pelo agente ou manualmente). Se não, é
         # elegível -- sempre respeitando o agendamento (ver mais abaixo).
-        ids_ja_em_alguma_rota: set[int] = set()
-        for r in todas_rotas:
-            for s in _extrair_servicos_da_rota(r):
-                if isinstance(s, dict) and s.get("id") is not None:
-                    ids_ja_em_alguma_rota.add(s["id"])
+        # (revisão final, 02/11: mesma conta que a data automática usa pra não
+        # andar pedido que está em rota -- roteirizacao_dados.ids_servicos_em_rotas)
+        ids_ja_em_alguma_rota: set[int] = roteirizacao_dados.ids_servicos_em_rotas(todas_rotas)
 
         # Regiões com dia fixo de entrega (pedido do Hugo, 02/08) --
         # roda antes de tudo, mesma lógica de criar_rotas_diarias.py.

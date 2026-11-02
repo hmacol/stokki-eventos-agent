@@ -186,6 +186,25 @@ def elegivel_para_data(servico: dict, data_alvo) -> bool:
     return data_agendada <= data_alvo
 
 
+def ids_servicos_em_rotas(rotas: list[dict]) -> set:
+    """IDs dos serviços que estão nas rotas da Vuupt (vindas com
+    include=services), menos as rotas canceladas -- serviço que sobrou em
+    rota cancelada é órfão, não conta como "já em rota". 'services' vem
+    embrulhado como {"data": [...]} (confirmado 02/08). Usado pelo
+    incremento e pela data automática (revisão final, 02/11)."""
+    ids: set = set()
+    for rota in rotas:
+        if rota.get("status") == "canceled":
+            continue
+        servicos = rota.get("services")
+        if isinstance(servicos, dict):
+            servicos = servicos.get("data") or []
+        for s in servicos if isinstance(servicos, list) else []:
+            if isinstance(s, dict) and s.get("id") is not None:
+                ids.add(s["id"])
+    return ids
+
+
 def extrair_volume_caixas(servico: dict) -> int:
     """
     Quantidade de caixas/volumes do pedido, vinda do campo

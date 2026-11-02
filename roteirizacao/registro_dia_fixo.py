@@ -120,7 +120,9 @@ def data_nao_e_do_cliente(conn: sqlite3.Connection, servico: dict, data: date) -
 
 
 def data_e_automatica(conn: sqlite3.Connection, servico: dict, data: date) -> bool:
-    """A data foi gravada pelo pipeline (AUTOMATICO) e e a que o pedido tem agora?"""
+    """Existe linha AUTOMATICO pra este pedido (qualquer codigo do servico OU o
+    mesmo service_id) nesta data? So isso: quem chama passa a data que o
+    pedido tem agora (revisao final, 02/11)."""
     return _tem_origem(conn, servico, data, (ORIGEM_AUTOMATICO,))
 
 

@@ -238,6 +238,19 @@ class TestMainComRascunho(unittest.TestCase):
         self._rodar([], [{"id": 7, "status": "RASCUNHO", "paradas": []}])
         self.assertEqual([s["id"] for s in self.aplicar_dia_fixo.call_args[0][0]], [1, 2])
 
+    # Revisao final 02/11: a data automatica e marcada ANTES de procurar
+    # agendamento pendente (data automatica nunca vale como agendamento do AGENDA).
+    def test_marca_data_automatica_antes_do_agendamento_pendente(self):
+        def marcar(servicos, db_path=None):
+            for s in servicos:
+                s["_data_automatica"] = True
+            return len(servicos)
+        with mock.patch("datas_automaticas.marcar_datas_automaticas", side_effect=marcar):
+            self._rodar([], [{"id": 7, "status": "RASCUNHO", "paradas": []}])
+            vistos = inc.identificar_pendentes.call_args[0][0]
+        self.assertEqual([s["id"] for s in vistos], [1, 2])
+        self.assertTrue(all(s.get("_data_automatica") for s in vistos))
+
 
 if __name__ == "__main__":
     unittest.main()

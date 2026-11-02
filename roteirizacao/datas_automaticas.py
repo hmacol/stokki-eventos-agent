@@ -22,6 +22,7 @@ for _p in (_RAIZ, _AQUI):
 import registro_dia_fixo  # noqa: E402
 from fora_dia_fixo import data_agendada  # noqa: E402
 from regioes_dia_fixo import ajustar_data_por_dia_fixo  # noqa: E402
+from roteirizacao_dados import ids_servicos_em_rotas  # noqa: E402
 from nucleo.normalizacao import vuupt_para_local  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,31 @@ def ids_em_rascunho_recentes(hoje: date, data_alvo: date, listar=None) -> set[in
                 if sid is not None:
                     ids.add(int(sid))
     return ids
+
+
+def ids_em_rotas_recentes(hoje: date, listar_rotas) -> set[int]:
+    """service_id das rotas da Vuupt com start_at de hoje-6 dias em diante,
+    menos as canceladas (revisao final, 02/11): o incremento das 18h/22h poe
+    pedido direto em rota ENVIADA sem passar por rascunhos_parada, e rota
+    feita a mao na Vuupt tambem nao passa; sem motorista o pedido continua
+    not_assigned. listar_rotas(include=..., filtro=...) vem de quem chama
+    (rotas_client com o token). Falha sobe."""
+    desde = (hoje - timedelta(days=DIAS_RASCUNHO_RECENTE)).strftime("%Y-%m-%d") + " 00:00:00"
+    rotas = listar_rotas(include=["services"],
+                         filtro=[{"field": "start_at", "operator": "gte", "value": desde}])
+    return {int(i) for i in ids_servicos_em_rotas(rotas or [])}
+
+
+def ids_fora_do_andar(hoje: date, data_alvo: date, listar_rotas, listar_rascunhos=None) -> set[int] | None:
+    """Quem esta em rascunho ou em rota recente (nao anda). None se qualquer
+    das listagens falhar: ai NINGUEM anda nesta rodada, nunca anda com
+    informacao parcial (revisao final, 02/11)."""
+    try:
+        return (ids_em_rascunho_recentes(hoje, data_alvo, listar_rascunhos)
+                | ids_em_rotas_recentes(hoje, listar_rotas))
+    except Exception as e:
+        logger.error(f"Data automatica NAO andou nesta rodada: falha ao listar rascunhos/rotas ({e}).")
+        return None
 
 
 def _hhmm_local(ts) -> str | None:

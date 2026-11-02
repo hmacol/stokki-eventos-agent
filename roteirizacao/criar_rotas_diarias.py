@@ -95,7 +95,7 @@ from selecao_modelo import escolher_melhor_modelo, agrupar_atual
 from otimizacao_rotas import ordenar_2opt
 from polimento_rotas import polir_entre_rotas
 from rota_tarde import separar_pedidos_tarde, montar_rotas_tarde
-from rotas_client import criar_rota_removendo_conflitos
+from rotas_client import criar_rota_removendo_conflitos, listar_rotas
 from fingerprint_rotas import marcar_alocado
 from documentacao_rota import agendar as agendar_documentacao, aguardar as aguardar_documentacao
 sys.path.insert(0, str(_RAIZ_PROJETO / "painel_agentes"))
@@ -881,12 +881,17 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         # útil. ANTES do dia fixo -- a data nova passa pelas regras de região.
         try:
             from datas_automaticas import (
-                marcar_datas_automaticas, ids_em_rascunho_recentes, andar_datas_automaticas)
+                marcar_datas_automaticas, ids_fora_do_andar, andar_datas_automaticas)
             marcar_datas_automaticas(servicos_brutos)
             if gerar_rascunho:
-                andaram = andar_datas_automaticas(
-                    servicos_brutos, vuupt, data_alvo,
-                    ids_em_rascunho_recentes(agora_brasilia.date(), data_alvo), modo_teste)
+                # Fora do andar: rascunho E rota da Vuupt (o incremento das
+                # 18h/22h põe pedido direto em rota ENVIADA; rota feita à mão
+                # também). Se alguma listagem falhar, ids_fora vem None e
+                # ninguém anda nesta rodada (revisão final, 02/11).
+                ids_fora = ids_fora_do_andar(agora_brasilia.date(), data_alvo,
+                                             lambda **kw: listar_rotas(token, **kw))
+                andaram = (andar_datas_automaticas(servicos_brutos, vuupt, data_alvo, ids_fora, modo_teste)
+                           if ids_fora is not None else [])
                 if andaram:
                     for a in andaram:
                         logger.info(f"{'[SIMULAÇÃO] ' if modo_teste else ''}Data automática andou: "
