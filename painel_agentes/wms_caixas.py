@@ -541,3 +541,47 @@ def zerar_saldo(conn, embarcador_id: int, motivo: str, operador: dict | None = N
                                 observacao=f"Zerar saldo antigo: {motivo}", **lado)
         n += 1
     return n
+
+
+def main(argv=None) -> int:
+    """CLI: divergencias e zerar-saldo (sem --aplicar so mostra o plano)."""
+    import argparse
+    ap = argparse.ArgumentParser(description="Caixas x saldo do WMS.")
+    ap.add_argument("--db", help="caminho do banco (padrao: dados/dados.db)")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p_d = sub.add_parser("divergencias", help="lista onde o saldo difere da soma das caixas")
+    p_d.add_argument("--embarcador-id", type=int, required=True)
+    p_z = sub.add_parser("zerar-saldo", help="zera o saldo antigo do embarcador (antes do inventario por caixa)")
+    p_z.add_argument("--embarcador-id", type=int, required=True)
+    p_z.add_argument("--motivo", required=True)
+    p_z.add_argument("--aplicar", action="store_true", help="sem isso so mostra o plano")
+    args = ap.parse_args(argv)
+
+    conn = conectar(Path(args.db) if args.db else None)
+    try:
+        if args.cmd == "divergencias":
+            linhas = divergencias(conn, args.embarcador_id)
+            for d in linhas:
+                print(f"{d['posicao']}	{d['sku']}	{d['lote']}	{d['validade']}	saldo={d['saldo']}	caixas={d['caixas']}")
+            print(f"{len(linhas)} divergencia(s).")
+            return 0
+        plano = plano_zerar_saldo(conn, args.embarcador_id)
+        for l in plano:
+            print(f"{l['posicao']}	{l['sku']}	{l['lote']}	{l['validade']}	saldo={l['quantidade']}")
+        if not args.aplicar:
+            print(f"Plano: {len(plano)} linha(s). Nada foi alterado (use --aplicar).")
+            return 0
+        try:
+            n = zerar_saldo(conn, args.embarcador_id, args.motivo)
+        except ErroWMS as e:
+            print(f"Erro: {e}")
+            return 1
+        print(f"{n} linha(s) ajustada(s).")
+        return 0
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())

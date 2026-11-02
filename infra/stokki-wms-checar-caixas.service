@@ -1,0 +1,9 @@
+[Unit]
+Description=Stokki Eventos - Checagem diaria caixas x saldo do WMS
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/checar_caixas_wms.py
