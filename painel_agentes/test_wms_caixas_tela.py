@@ -22,7 +22,8 @@ import wms_caixas  # noqa: E402
 from test_fila_etiquetas_tela import painel_agentes  # noqa: E402
 
 ORIGEM = {"Origin": "http://localhost"}
-CFG = {"painel_agentes": {"usuario": "u", "senha": "s"}, "wms": {}}
+CFG = {"painel_agentes": {"usuario": "u", "senha": "s"}, "wms": {"caixas_ativo": True}}
+CFG_OFF = {"painel_agentes": {"usuario": "u", "senha": "s"}, "wms": {}}
 POS = "C9-E1-N1"
 MSG = "controlado por caixa"
 
@@ -102,13 +103,72 @@ class Trava(Base):
 
     def test_piloto_vem_do_config(self):
         self.operador()
-        cfg = {**CFG, "wms": {"embarcador_piloto_id": 99}}
+        cfg = {**CFG, "wms": {"embarcador_piloto_id": 99, "caixas_ativo": True}}
         with mock.patch.object(painel_agentes, "_carregar_config", return_value=cfg):
             self.assertEqual(self.post("/api/wms/movimentos", self.mov(2, "x00000003")).status_code, 400)
             self.assertEqual(self.post("/api/wms/movimentos", self.mov(1, "x00000004")).status_code, 200)
 
     def test_bootstrap_traz_piloto_id(self):
-        self.assertEqual(self.cliente.get("/api/wms/bootstrap").get_json()["piloto_id"], 48)
+        j = self.cliente.get("/api/wms/bootstrap").get_json()
+        self.assertEqual((j["piloto_id"], j["caixas_ativo"]), (48, True))
+
+
+class ChaveDesligada(Base):
+    """wms.caixas_ativo ausente/false: sem trava, sem usa_caixas, sem criar caixa;
+    ler, ativar, mover e cancelar continuam (preparar o zerar e o mutirao)."""
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(painel_agentes, "_carregar_config", return_value=CFG_OFF)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_bootstrap_e_tela_dizem_desligada(self):
+        self.assertFalse(self.cliente.get("/api/wms/bootstrap").get_json()["caixas_ativo"])
+        for valor in (False, "false", 0, None):
+            with mock.patch.object(painel_agentes, "_carregar_config",
+                                   return_value={**CFG_OFF, "wms": {"caixas_ativo": valor}}):
+                self.assertFalse(self.cliente.get("/api/wms/bootstrap").get_json()["caixas_ativo"], valor)
+
+    def test_movimento_avulso_do_piloto_passa(self):
+        self.operador()
+        r = self.post("/api/wms/movimentos", self.mov(1, "x00000011"))
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(self.saldo(1), 6)
+
+    def test_criar_caixa_recusa(self):
+        self.operador()
+        r = self.post("/api/wms/caixas", {"produto_id": 1, "lote": "L1", "validade": "2026-12-15", "quantidade": 1})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json()["erro"], "Caixas desligadas (wms.caixas_ativo).")
+
+    def test_recebimento_nao_marca_usa_caixas(self):
+        conn = wms_caixas.conectar()
+        conn.execute("INSERT INTO wms_recebimentos (id, id_stokki, lido_em, atualizado_em) "
+                     "VALUES (1, 5001, '2026-11-01 10:00:00', '2026-11-01 10:00:00')")
+        conn.execute("INSERT INTO wms_recebimento_itens (recebimento_id, linha, qtd_embalagem, qtd_un, produto_id) "
+                     "VALUES (1, 1, 1, 6, 1)")
+        conn.commit()
+        conn.close()
+        j = self.cliente.get("/api/wms/recebimentos/1").get_json()
+        self.assertEqual([i["usa_caixas"] for i in j["itens"]], [False])
+
+    def test_ler_ativar_mover_cancelar_continuam(self):
+        self.operador()
+        conn = wms_caixas.conectar()
+        a, b = wms_caixas.criar_caixas(conn, produto_id=1, lote="L1", validade="2026-12-15", qtd_un=None,
+                                       quantidade=2)["seriais"]
+        conn.close()
+        self.assertEqual(self.cliente.get(f"/api/wms/caixas/{a}").status_code, 200)
+        self.assertEqual(self.cliente.get(f"/api/wms/ler?codigo={a}").status_code, 200)
+        for s in (a, b):
+            r = self.post(f"/api/wms/caixas/{s}/ativar", {"posicao": POS})
+            self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        r = self.post(f"/api/wms/caixas/{a}/mover", {"destino": "C9-E1-N2", "uuid": "x00000b01"})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        r = self.post(f"/api/wms/caixas/{b}/cancelar", {"motivo": "teste"})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(self.saldo(1), 6)
 
 
 class Caixas(Base):
@@ -188,7 +248,8 @@ class Endurecimento(Base):
     def test_movimento_com_uuid_reservado_recusa(self):
         self.operador()
         ruins = ("cx-C0000001-ativar", "ZERAR-1-x", "Cx-abc", "ps-123-reserva-9", " cx-C0000001-ativar",
-                 "texto qualquer", "u-1", "x123")
+                 "texto qualquer", "u-1", "x123", "x0123abcd\n",
+                 "3F2504E0-4F89-41D3-9A0C-0305E82C3301\n")
         for uuid in ruins:
             r = self.post("/api/wms/movimentos", self.mov(2, uuid))
             self.assertEqual(r.status_code, 400, uuid)

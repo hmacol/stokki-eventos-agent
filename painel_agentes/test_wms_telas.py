@@ -170,6 +170,10 @@ class TestCaixasNaTela(unittest.TestCase):
     def test_produto_fora_do_piloto_nao_pede_etiqueta(self):
         self.assertIn("Produto fora do piloto: use Movimentos.", _WMS)
 
+    def test_inventario_respeita_a_chave_caixas_ativo(self):
+        self.assertIn("BOOT.caixas_ativo", _WMS)
+        self.assertIn("Caixas desligadas", _WMS)
+
 
 if __name__ == "__main__":
     unittest.main()

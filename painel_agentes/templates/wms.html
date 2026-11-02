@@ -928,6 +928,10 @@
   const INV = { posicao: null, produto: null, lote: '', validade: '', qtd_un: '', n: '', st: novoEstadoBipes(), achados: [] };
   function resetInv() { Object.assign(INV, { posicao: null, produto: null, lote: '', validade: '', qtd_un: '', n: '', impressaoId: null, st: novoEstadoBipes(), achados: [] }); }
   TELAS.inventario = () => {
+    // Chave wms.caixas_ativo desligada: nada de inventário por caixa (Receber e Separar seguem como antes).
+    if (!BOOT.caixas_ativo) return `
+    <h1>Inventário</h1>
+    <div class="cartao atencao"><div class="valor">Caixas desligadas</div></div>`;
     const p = INV.produto;
     const fora = !!p && Number(p.embarcador_id) !== Number(BOOT.piloto_id);
     const passo2 = !INV.posicao ? '' : (!p ? `
@@ -969,6 +973,7 @@
     ${INV.posicao ? '<div class="cartao"><div class="rotulo">3. Bipe cada caixa</div><div class="sub">Cada caixa bipada é ativada nesta posição. Caixa de outro pedido de etiquetas também vale.</div><div id="inv-passo3" class="lista"></div></div>' : ''}`;
   };
   TELAS_POS.inventario = () => {
+    if (!BOOT.caixas_ativo) return;
     const g = (id) => document.getElementById(id);
     const pintar = () => { const el = g('inv-passo3'); if (el) el.innerHTML = htmlBipes(INV.st); };
     pintar();
@@ -1255,7 +1260,7 @@
   }
   async function lerCodigo(codigo) {
     codigo = String(codigo || '').trim(); if (!codigo) return;
-    if (S.tela === 'inventario') return invLer(codigo);
+    if (S.tela === 'inventario' && BOOT.caixas_ativo) return invLer(codigo);
     const serialDigitado = serialDe(codigo);
     if (serialDigitado) {
       if (S.tela === 'recebimento') {

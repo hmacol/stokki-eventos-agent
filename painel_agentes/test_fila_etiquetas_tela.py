@@ -132,6 +132,8 @@ class Fila(Base):
         self.logar("total")
         tid = self.get("/api/etiquetas/fila").get_json()["trabalhos"][0]["id"]
         self.assertEqual(self.get(f"/etiquetas/fila/{tid}.pdf?margem=abc").status_code, 400)
+        for ruim in ("nan", "inf", "-inf", "1e999"):
+            self.assertEqual(self.get(f"/etiquetas/fila/{tid}.pdf?dx={ruim}").status_code, 400, ruim)
 
     def test_tela_fila_esta_em_acesso_telas(self):
         telas = {t[0]: t for t in acesso_telas.TELAS}

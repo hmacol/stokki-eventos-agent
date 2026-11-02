@@ -19,7 +19,8 @@ import checar_caixas_wms as chk  # noqa: E402
 import wms  # noqa: E402
 import wms_caixas as cx  # noqa: E402
 
-CONFIG = {"wms": {"embarcador_piloto_id": "48", "alertas_email": ["ops@x.com"]}, "email": {"remetente": "r@x.com"}}
+CONFIG = {"wms": {"embarcador_piloto_id": "48", "alertas_email": ["ops@x.com"], "caixas_ativo": True},
+          "email": {"remetente": "r@x.com"}}
 
 
 class Base(unittest.TestCase):
@@ -63,6 +64,8 @@ class TestChecar(Base):
         self.assertIn("1 divergencia", assunto)
         self.assertIn("C9-E1-N1", corpo)
         self.assertIn("72400017&lt;X&gt;", corpo)   # escapado
+        self.assertIn("acertar-caixa --serial", corpo)    # rodape com os comandos de reparo
+        self.assertIn("acertar-saldo --posicao", corpo)
 
     def test_modo_teste_nao_manda(self):
         self.saldo()
@@ -82,8 +85,57 @@ class TestChecar(Base):
             chk.checar(self.conn, {"email": {"remetente": "r@x.com"}})
         self.assertEqual(env.call_args.args[0], ["r@x.com"])
         with mock.patch.object(chk.email_utils, "enviar_email") as env:
-            self.assertEqual(chk.checar(self.conn, {})["email"], "nada")
+            self.assertEqual(chk.checar(self.conn, {})["email"], "sem_destinatario")
         env.assert_not_called()
+
+
+class TestMain(Base):
+    """Chave wms.caixas_ativo e codigo de saida (OnFailure do systemd)."""
+
+    def rodar(self, config, *args):
+        with mock.patch.object(chk, "_carregar_config", return_value=config):
+            return chk.main(["--db", str(self.db), *args])
+
+    def test_chave_desligada_nao_calcula_nem_manda(self):
+        self.saldo()
+        for cfg in ({"wms": {"embarcador_piloto_id": "48", "alertas_email": ["ops@x.com"]}},
+                    {"wms": {**CONFIG["wms"], "caixas_ativo": False}}):
+            with mock.patch.object(chk.wms_caixas, "divergencias") as div,                     mock.patch.object(chk.email_utils, "enviar_email") as env,                     self.assertLogs("checar_caixas_wms", level="INFO") as logs:
+                self.assertEqual(self.rodar(cfg), 0)
+            div.assert_not_called()
+            env.assert_not_called()
+            self.assertTrue(any("caixas desligadas" in m for m in logs.output))
+
+    def test_forcar_so_com_modo_teste(self):
+        self.saldo()
+        cfg = {"wms": {"embarcador_piloto_id": "48", "alertas_email": ["ops@x.com"]}}
+        with mock.patch.object(chk.email_utils, "enviar_email") as env,                 mock.patch.object(chk.wms_caixas, "divergencias", wraps=chk.wms_caixas.divergencias) as div:
+            self.assertEqual(self.rodar(cfg, "--modo-teste", "--forcar"), 0)
+            self.assertEqual(div.call_count, 1)
+            self.assertEqual(self.rodar(cfg, "--forcar"), 0)       # sem --modo-teste nao forca
+            self.assertEqual(div.call_count, 1)
+        env.assert_not_called()
+
+    def test_ligada_e_sem_divergencia_sai_0(self):
+        with mock.patch.object(chk.email_utils, "enviar_email") as env:
+            self.assertEqual(self.rodar(CONFIG), 0)
+        env.assert_not_called()
+
+    def test_email_falhou_sai_1(self):
+        self.saldo()
+        with mock.patch.object(chk.email_utils, "enviar_email", return_value=False):
+            self.assertEqual(self.rodar(CONFIG), 1)
+
+    def test_divergencia_sem_destinatario_sai_1(self):
+        self.saldo()
+        with mock.patch.object(chk.email_utils, "enviar_email") as env:
+            self.assertEqual(self.rodar({"wms": {"caixas_ativo": True}}), 1)
+        env.assert_not_called()
+
+    def test_email_enviado_sai_0(self):
+        self.saldo()
+        with mock.patch.object(chk.email_utils, "enviar_email", return_value=True):
+            self.assertEqual(self.rodar(CONFIG), 0)
 
 
 class TestCLI(Base):
@@ -124,6 +176,41 @@ class TestCLI(Base):
         self.assertEqual(rc, 1)
         self.assertIn("Erro", out)
         self.assertEqual(self.saldo_total(), 6)
+
+    def test_zerar_saldo_mostra_reservas_ativas(self):
+        self.saldo(10)
+        rc, out = self.run_cli("zerar-saldo", "--embarcador-id", "48", "--motivo", "limpeza")
+        self.assertEqual(rc, 0)
+        self.assertIn("Reservas ATIVAS do embarcador: 0.", out)
+
+    def caixa(self, serial="C0000001", q=6, pos="C9-E1-N1"):
+        self.conn.execute(
+            "INSERT INTO wms_caixas (serial, produto_id, lote, validade, qtd_un, posicao, situacao, criado_em, "
+            "atualizado_em) VALUES (?, 1, 'L1', '2026-12-15', ?, ?, 'EM_ESTOQUE', 'x', 'x')", (serial, q, pos))
+        self.conn.commit()
+
+    def test_acertar_caixa_pelo_cli(self):
+        self.caixa()
+        rc, out = self.run_cli("acertar-caixa", "--serial", "C0000001", "--situacao", "expedida",
+                               "--motivo", "saiu sem baixa")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("EXPEDIDA", out)
+        rc, out = self.run_cli("acertar-caixa", "--serial", "C0000001", "--situacao", "CANCELADA", "--motivo", "x")
+        self.assertEqual(rc, 1)
+        self.assertIn("Erro", out)
+        with self.assertRaises(SystemExit):
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.run_cli("acertar-caixa", "--serial", "C0000001", "--situacao", "EXPEDIDA")   # sem motivo
+
+    def test_acertar_saldo_pelo_cli(self):
+        self.caixa()
+        self.saldo(10)
+        rc, out = self.run_cli("acertar-saldo", "--posicao", "C9-E1-N1", "--produto-id", "1", "--lote", "L1",
+                               "--validade", "2026-12-15", "--motivo", "sobra")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("ajuste=-4", out)
+        self.assertEqual(self.saldo_total(), 6)
+        self.assertEqual(cx.divergencias(self.conn, 48), [])
 
 
 if __name__ == "__main__":

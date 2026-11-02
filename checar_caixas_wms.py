@@ -6,11 +6,16 @@ Checagem diaria: compara o saldo do WMS (wms_saldos) com a soma das caixas
 em estoque, por posicao/produto/lote/validade, so do embarcador piloto. Se
 houver divergencia, manda UM e-mail com a tabela. Nao corrige nada.
 
-Sai com 0 quando rodou (com ou sem divergencia); 1 so em excecao (ex.: banco).
+So roda com wms.caixas_ativo ligado no config (padrao desligado): desligado,
+loga "caixas desligadas" e sai 0 sem calcular nem mandar e-mail.
+
+Sai com 0 quando rodou sem problema; 1 em excecao (ex.: banco), quando o
+e-mail falhou ou quando ha divergencia e nenhum destinatario (pro OnFailure).
 
 COMO USAR (timer systemd 06h40, infra/stokki-wms-checar-caixas.*):
     venv/bin/python checar_caixas_wms.py
     venv/bin/python checar_caixas_wms.py --modo-teste     # imprime, nao manda e-mail
+    venv/bin/python checar_caixas_wms.py --modo-teste --forcar   # roda mesmo com a chave desligada
     venv/bin/python checar_caixas_wms.py --db caminho.db  # banco alternativo (teste)
 """
 import argparse
@@ -38,6 +43,11 @@ def _carregar_config() -> dict:
         return yaml.safe_load(f) or {}
 
 
+def _caixas_ativo(config: dict) -> bool:
+    valor = (config.get("wms", {}) or {}).get("caixas_ativo", False)
+    return str(valor).strip().lower() in ("true", "1", "sim")
+
+
 def _piloto_id(config: dict) -> int:
     return int(str((config.get("wms", {}) or {}).get("embarcador_piloto_id", "48")).strip())
 
@@ -55,20 +65,25 @@ def _destinatarios(config: dict) -> list[str]:
 
 def _corpo_html(linhas: list[dict]) -> str:
     cab = "".join(f"<th style='text-align:left;padding:4px 8px'>{h}</th>"
-                  for h in ("Posicao", "SKU", "Lote", "Validade", "Saldo", "Caixas"))
+                  for h in ("Posicao", "Produto ID", "SKU", "Lote", "Validade", "Saldo", "Caixas"))
     corpo = ""
     for d in linhas:
-        cels = [d["posicao"], d["sku"], d["lote"], d["validade"], d["saldo"], d["caixas"]]
+        cels = [d["posicao"], d["produto_id"], d["sku"], d["lote"], d["validade"], d["saldo"], d["caixas"]]
         corpo += "<tr>" + "".join(
             f"<td style='padding:4px 8px;border-top:1px solid #ddd'>{html.escape(str(c if c is not None else ''))}</td>"
             for c in cels) + "</tr>"
     return ("<p>O saldo do WMS nao bate com a soma das caixas nestas linhas:</p>"
             "<table style='border-collapse:collapse;font-family:sans-serif;font-size:13px'>"
-            f"<tr>{cab}</tr>{corpo}</table>")
+            f"<tr>{cab}</tr>{corpo}</table>"
+            "<p style='font-size:12px;color:#555'>Conserto (VPS, como www-data): caixa que ja nao existe -&gt; "
+            "<code>venv/bin/python painel_agentes/wms_caixas.py acertar-caixa --serial S --situacao "
+            "EXPEDIDA|CANCELADA --motivo \"...\"</code>; saldo diferente das caixas -&gt; "
+            "<code>venv/bin/python painel_agentes/wms_caixas.py acertar-saldo --posicao P --produto-id N "
+            "--lote L --validade V --motivo \"...\"</code>.</p>")
 
 
 def checar(conn, config: dict, modo_teste: bool = False) -> dict:
-    """Devolve {"divergencias": n, "email": "enviado"|"teste"|"nada"|"falhou"}."""
+    """Devolve {"divergencias": n, "email": "enviado"|"teste"|"nada"|"falhou"|"sem_destinatario"}."""
     embarcador_id = _piloto_id(config)
     linhas = wms_caixas.divergencias(conn, embarcador_id)
     resultado = {"divergencias": len(linhas), "email": "nada"}
@@ -81,7 +96,8 @@ def checar(conn, config: dict, modo_teste: bool = False) -> dict:
         return resultado
     destinatarios = _destinatarios(config)
     if not destinatarios:
-        logger.warning("Sem destinatario (wms.alertas_email / email.remetente): e-mail nao enviado.")
+        logger.error("Sem destinatario (wms.alertas_email / email.remetente): e-mail nao enviado.")
+        resultado["email"] = "sem_destinatario"
         return resultado
     assunto = f"WMS: {len(linhas)} divergencia(s) caixas x saldo ({embarcador_id})"
     ok = email_utils.enviar_email(destinatarios, assunto, _corpo_html(linhas), config.get("email", {}) or {})
@@ -96,6 +112,7 @@ def checar(conn, config: dict, modo_teste: bool = False) -> dict:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--modo-teste", action="store_true", help="nao manda e-mail, so imprime")
+    ap.add_argument("--forcar", action="store_true", help="com --modo-teste, roda mesmo com wms.caixas_ativo desligado")
     ap.add_argument("--db", help="caminho do banco (padrao: dados/dados.db)")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
@@ -106,6 +123,9 @@ def main(argv=None) -> int:
             if not args.modo_teste:
                 raise
             config = {}
+        if not _caixas_ativo(config) and not (args.modo_teste and args.forcar):
+            logger.info("caixas desligadas (wms.caixas_ativo): nada a checar.")
+            return 0
         conn = wms_caixas.conectar(Path(args.db) if args.db else None)
         try:
             res = checar(conn, config, args.modo_teste)
@@ -116,7 +136,7 @@ def main(argv=None) -> int:
         return 1
     logger.info("Checagem: %s", res)
     print(res)
-    return 0
+    return 1 if res["email"] in ("falhou", "sem_destinatario") else 0
 
 
 if __name__ == "__main__":

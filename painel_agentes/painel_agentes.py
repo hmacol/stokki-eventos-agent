@@ -17,6 +17,7 @@ COMO USAR (produção):
 import hmac
 import json
 import logging
+import math
 import re
 import sys
 import threading
@@ -4175,9 +4176,18 @@ def _wms_piloto_id() -> int:
         return 48
 
 
+def _wms_caixas_ativo() -> bool:
+    """Chave wms.caixas_ativo (padrão desligada): liga a trava do movimento avulso,
+    o usa_caixas do Receber, o criar caixa e a aba Inventário. Ler, ativar, mover e
+    cancelar caixa funcionam com ela desligada (preparar o zerar e o mutirão)."""
+    valor = ((_carregar_config() or {}).get("wms") or {}).get("caixas_ativo", False)
+    return str(valor).strip().lower() in ("true", "1", "sim")
+
+
 def _wms_bootstrap(conn) -> dict:
     return {
         "piloto_id": _wms_piloto_id(),
+        "caixas_ativo": _wms_caixas_ativo(),
         "operador": _wms_operador_atual(),
         "operadores": wms.listar_operadores(conn),
         "areas": wms.listar_areas(conn),
@@ -4340,7 +4350,7 @@ def api_wms_produto_controla_validade(produto_id):
         conn.close()
 
 
-_UUID_APARELHO = re.compile(r"^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|x[0-9a-f]{8,40})$", re.I)
+_UUID_APARELHO = re.compile(r"(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|x[0-9a-f]{8,40})", re.I)
 
 
 def _wms_exige_uuid_do_aparelho(uuid):
@@ -4348,15 +4358,15 @@ def _wms_exige_uuid_do_aparelho(uuid):
     cx-/zerar-/ps-...-reserva- são do sistema (idempotência) e não podem ser forjados."""
     if uuid in (None, ""):
         return
-    if not isinstance(uuid, str) or not _UUID_APARELHO.match(uuid):
+    if not isinstance(uuid, str) or not _UUID_APARELHO.fullmatch(uuid):
         raise wms.ErroWMS("Identificador reservado pelo sistema.")
 
 
 def _wms_registrar(conn, item: dict, op: dict) -> dict:
     _wms_exige_uuid_do_aparelho(item.get("uuid"))
-    # Trava: produto do piloto só muda de saldo por caixa (Inventário, Receber, Mover).
+    # Trava (só com wms.caixas_ativo): produto do piloto só muda de saldo por caixa (Inventário, Receber, Mover).
     produto = wms.obter_produto(conn, int(item.get("produto_id") or 0))
-    if produto and wms_caixas.produto_usa_caixas(produto, _wms_piloto_id()):
+    if produto and _wms_caixas_ativo() and wms_caixas.produto_usa_caixas(produto, _wms_piloto_id()):
         raise wms.ErroWMS("Produto controlado por caixa: use Inventario, Receber ou Mover caixa.")
     return wms.registrar_movimento(
         conn, tipo=item.get("tipo", ""), produto_id=int(item.get("produto_id") or 0),
@@ -4666,10 +4676,10 @@ def api_wms_recebimento(recebimento_id):
         # A unidade vem do produto do catálogo (wms_recebimento_itens não tem
         # essa coluna -- a tela mostrava "undefined" no rótulo da quantidade).
         itens = wms_pedidos.itens_do_recebimento(conn, recebimento_id)
-        piloto = _wms_piloto_id()
+        piloto, ativo = _wms_piloto_id(), _wms_caixas_ativo()
         for it in itens:
             produto = wms.obter_produto(conn, int(it.get("produto_id") or 0))
-            it["usa_caixas"] = bool(produto and wms_caixas.produto_usa_caixas(produto, piloto))
+            it["usa_caixas"] = bool(ativo and produto and wms_caixas.produto_usa_caixas(produto, piloto))
         return jsonify({"recebimento": dict(rec), "itens": itens})
     finally:
         conn.close()
@@ -4679,6 +4689,8 @@ def api_wms_recebimento(recebimento_id):
 @requer_auth(niveis=_NIVEIS_WMS)
 @exige_mesma_origem
 def api_wms_caixas_criar():
+    if not _wms_caixas_ativo():
+        return _wms_json_erro("Caixas desligadas (wms.caixas_ativo).")
     op = _wms_exige_operador()
     body = request.get_json(force=True) or {}
     conn = wms_caixas.conectar()
@@ -4933,9 +4945,12 @@ def fila_etiquetas_pdf(impressao_id):
         if bruto in (None, ""):
             bruto = padrao[nome]
         try:
-            return float(str(bruto).replace(",", "."))
+            valor = float(str(bruto).replace(",", "."))
         except ValueError:
             abort(400, f"Parâmetro {nome} inválido.")
+        if not math.isfinite(valor):
+            abort(400, f"Parâmetro {nome} inválido.")
+        return valor
     margem, dx, dy = _mm("margem"), _mm("dx"), _mm("dy")
     conn = wms_caixas.conectar()
     try:
