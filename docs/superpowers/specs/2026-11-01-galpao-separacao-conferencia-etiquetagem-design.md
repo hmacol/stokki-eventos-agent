@@ -342,6 +342,25 @@ O Hugo decide quando o fluxo está provado (H18).
 - O ZXing vem do unpkg: sem internet, só o leitor HID funciona.
 - **Inventário de abertura é mutirão:** a fila de impressão precisa aguentar
   centenas de etiquetas, e o banco recebe commits pequenos.
+- **Ordem de rollout das caixas (F1).** A chave `wms.caixas_ativo` (padrão
+  desligada) liga a trava do movimento avulso, o `usa_caixas` do Receber, o
+  criar caixa, a aba Inventário e a checagem das 06h40. Ler, ativar, mover e
+  cancelar caixa funcionam com ela desligada.
+  1. deploy com `wms.caixas_ativo` desligado;
+  2. conferir que não há reservas ATIVAS da Maria Dolores;
+  3. `zerar-saldo` (plano, depois `--aplicar`); ele recusa com reserva ATIVA
+     ou com caixa ativa;
+  4. ligar `wms.caixas_ativo: true` logo antes do mutirão (criar caixa recusa
+     com a chave desligada), numa janela sem chegada nem saída da Maria
+     Dolores, e fazer o inventário;
+  5. a checagem das 06h40 do dia seguinte precisa dar 0 divergência.
+  Divergência se conserta com `wms_caixas.py acertar-caixa` (caixa que já não
+  existe, sem mexer no saldo) ou `acertar-saldo` (saldo igual às caixas),
+  ambos com `--motivo`.
+- **Serial conta, não rastreia (C12).** Na F1 o serial vale para a contagem.
+  A caixa marcada EXPEDIDA pela baixa é escolhida por FEFO/serial e pode não
+  ser a caixa física que saiu. O rastro por serial só fica exato quando a
+  separação gravar o serial (F2).
 
 ## 12. Fases (cada uma com uma prova real)
 

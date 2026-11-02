@@ -592,6 +592,15 @@
  sincronizar_recebimentos_wms.py Recebimentos viram entrada esperada.
  sincronizar_produtos_stokki.py  Catálogo -> wms_produtos.
  checar_caixas_wms.py            Caixas x saldo da Stokki (divergências; 06h40).
+                                 Só age com wms.caixas_ativo: true (padrão desligado;
+                                 ativo também trava movimento avulso do piloto, liga
+                                 o criar caixa e a aba Inventário). Reparo:
+                                 wms_caixas.py acertar-caixa / acertar-saldo (--motivo).
+                                 Rollout: deploy desligado -> sem reserva ATIVA da
+                                 Maria Dolores -> zerar-saldo (plano, --aplicar) ->
+                                 ligar a chave logo antes do mutirão (janela sem
+                                 chegada/saída) -> 06h40 seguinte = 0 divergência.
+                                 F1: serial conta, não rastreia a caixa que saiu (F2).
 
  --- Lalamove ---
  lalamove_client.py      Cliente API v3 (HMAC, cotação, pedido).
