@@ -160,6 +160,16 @@ class TestCaixasNaTela(unittest.TestCase):
         # recusa do servidor tira da fila; so falha de rede mantem
         self.assertIn("filaRecusados", _WMS)
 
+    def test_separar_aceita_etiqueta_de_caixa(self):
+        self.assertIn("function caixaComoLote", _WMS)
+        self.assertIn("r = caixaComoLote(r);", _WMS)
+
+    def test_mover_reusa_o_uuid_no_retry(self):
+        self.assertIn("ctx.mover.uuid", _WMS)
+
+    def test_produto_fora_do_piloto_nao_pede_etiqueta(self):
+        self.assertIn("Produto fora do piloto: use Movimentos.", _WMS)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -113,8 +113,8 @@
   .chip { border: 1px solid var(--borda); background: var(--superficie); border-radius: 100px; padding: 6px 12px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--texto); font-family: inherit; }
   .chip.on { background: var(--texto); color: var(--fundo); border-color: var(--texto); }
   .voltar { background: none; border: none; color: var(--acento); font-weight: 700; font-size: 14px; padding: 6px 0; cursor: pointer; font-family: inherit; }
-  .barra-inferior { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; display: flex; background: var(--superficie); border-top: 1px solid var(--borda); padding-bottom: env(safe-area-inset-bottom); }
-  .aba { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 4px 7px; color: var(--texto-suave); background: none; border: none; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; cursor: pointer; font-family: inherit; }
+  .barra-inferior { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; display: flex; background: var(--superficie); border-top: 1px solid var(--borda); padding-bottom: env(safe-area-inset-bottom); overflow-x: auto; }
+  .aba { flex: 1 0 auto; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 8px 7px; color: var(--texto-suave); background: none; border: none; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; cursor: pointer; font-family: inherit; }
   .aba .ic { font-size: 19px; line-height: 1; }
   .aba.on { color: var(--acento); }
   .vazio { color: var(--texto-suave); font-size: 13.5px; padding: 14px 4px; text-align: center; }
@@ -331,6 +331,7 @@
       if (!opId || pin.length !== 4) return;
       try {
         const r = await api('/operador/entrar', { method: 'POST', body: { operador_id: opId, pin } });
+        if (!S.operador || S.operador.id !== r.operador.id) resetInv();
         S.operador = r.operador; toast('Olá, ' + r.operador.nome.split(' ')[0] + '!');
         if (S.pilha.length) voltar(); else ir('inicio');
       } catch (e) { pin = ''; mostrar(); toast(e.message, true); }
@@ -348,7 +349,7 @@
       else if (e.key === 'Enter') entrar();
     });
     const sair = document.getElementById('btn-sair-op');
-    if (sair) sair.addEventListener('click', async () => { await api('/operador/sair', { method: 'POST', body: {} }); S.operador = null; render(); });
+    if (sair) sair.addEventListener('click', async () => { await api('/operador/sair', { method: 'POST', body: {} }); S.operador = null; resetInv(); render(); });
   };
 
   // Busca
@@ -367,6 +368,7 @@
       if (q.length < 2) return;
       if (/^(pos:)?[a-z]{1,3}\d{1,2}-/i.test(q)) { res.innerHTML = '<div class="vazio">Parece uma posição. Dê Enter pra abrir.</div>'; return; }
       const r = await api('/produtos?q=' + encodeURIComponent(q));
+      if (S.tela !== 'busca') return; // saiu da tela (ex.: bipou uma caixa) enquanto a busca rodava
       if (!r.produtos.length) { res.innerHTML = '<div class="vazio">Nada encontrado no catálogo. <button class="voltar" id="btn-novo-prod">Cadastrar produto manual</button></div>'; document.getElementById('btn-novo-prod').addEventListener('click', () => ir('novoProduto', { ean: /^\d{8,14}$/.test(q) ? q : '' })); return; }
       res.innerHTML = r.produtos.map((p) => `<div class="item" data-pid="${p.id}" style="grid-template-columns:1fr"><div class="cod">${esc(p.descricao)}</div><div class="meta"><span class="mono">${esc(p.ean || p.sku || '')}</span>${p.embarcador ? '· ' + esc(p.embarcador.split(' ').slice(0, 3).join(' ')) : ''}${p.origem === 'MANUAL' ? ' · <span class="badge badge-atencao">manual</span>' : ''}</div></div>`).join('');
       res.querySelectorAll('[data-pid]').forEach((el) => el.addEventListener('click', () => abrirProduto(Number(el.dataset.pid))));
@@ -802,6 +804,7 @@
       const i = Number(b.dataset.pedir); const it = itens[i];
       const n = Number(g('rec-ncx-' + i).value);
       if (!(n >= 1 && n <= 200)) return toast('Informe de 1 a 200 caixas.', true);
+      if (estadoCx(i).impressaoId && !confirm('Pedir mais ' + n + ' etiquetas?')) return;
       b.disabled = true;
       const r = await pedirEtiquetas({ produto_id: it.produto_id, lote: g('rec-lote-' + i).value.trim().toUpperCase(), validade: g('rec-val-' + i).value || null, quantidade: n });
       b.disabled = false;
@@ -819,6 +822,7 @@
       if (res.semOperador) return;
       aplicarBipe(estadoCx(i), serial, res); pintar(i);
     };
+    ctx.biparCx = bipar;
     itens.forEach((it, i) => {
       const cx = g('rec-cx-' + i); if (!cx) return;
       pintar(i);
@@ -838,7 +842,7 @@
     if (p[0] === 'FL' && p.length >= 5 && /^C\d{7}$/.test(p[4])) return p[4];
     return null;
   }
-  const agoraStr = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
+  const agoraStr = () => { const d = new Date(); const z = (n) => String(n).padStart(2, '0'); return d.getFullYear() + '-' + z(d.getMonth() + 1) + '-' + z(d.getDate()) + ' ' + z(d.getHours()) + ':' + z(d.getMinutes()) + ':' + z(d.getSeconds()); };
   // Ativa a caixa na posição. Recusa do servidor (400 etc.) volta como erro pro
   // operador; só falha de rede vai pra fila offline.
   async function ativarCaixa(serial, posicao, extra) {
@@ -922,14 +926,20 @@
   // Inventário por caixa (produto do piloto): posição → etiquetas → bipe de cada caixa.
   // O estado fica fora de S.ctx pra sobreviver à troca de aba no meio da contagem.
   const INV = { posicao: null, produto: null, lote: '', validade: '', qtd_un: '', n: '', st: novoEstadoBipes(), achados: [] };
+  function resetInv() { Object.assign(INV, { posicao: null, produto: null, lote: '', validade: '', qtd_un: '', n: '', impressaoId: null, st: novoEstadoBipes(), achados: [] }); }
   TELAS.inventario = () => {
     const p = INV.produto;
+    const fora = !!p && Number(p.embarcador_id) !== Number(BOOT.piloto_id);
     const passo2 = !INV.posicao ? '' : (!p ? `
       <div class="cartao"><div class="rotulo">2. Produto</div>
         <div class="sub">Bipe o produto (EAN ou SKU) ou busque pelo nome.</div>
         <div class="campo"><div class="com-botao"><input type="search" id="inv-busca" placeholder="nome, SKU ou EAN" autocomplete="off"><button type="button" id="btn-inv-buscar">Buscar</button></div></div>
         <div class="lista" id="inv-achados">${INV.achados.map((x, i) => `<div class="item" data-ach="${i}" style="grid-template-columns:1fr"><div class="cod">${esc(x.descricao)}</div><div class="meta"><span class="mono">${esc(x.ean || x.sku || '')}</span></div></div>`).join('')}</div>
-      </div>` : `
+      </div>` : fora ? `
+      <div class="cartao atencao"><div class="rotulo">2. Produto</div>
+        <div class="valor">${esc(p.descricao)}</div>
+        <div class="sub">Produto fora do piloto: use Movimentos.</div>
+        <button class="voltar" id="btn-inv-trocar-prod">Trocar produto</button></div>` : `
       <div class="cartao"><div class="rotulo">2. Produto e etiquetas</div>
         <div class="valor">${esc(p.descricao)}</div>
         <div class="sub mono">${esc(p.ean || p.sku || '')}</div>
@@ -990,6 +1000,7 @@
       if (!(n >= 1 && n <= 200)) return toast('Informe de 1 a 200 caixas.', true);
       if (!(un > 0)) return toast('Informe as UN por caixa.', true);
       if (INV.produto.controla_validade && !INV.validade) return toast('Validade é obrigatória pra esse produto.', true);
+      if (INV.impressaoId && !confirm('Pedir mais ' + n + ' etiquetas?')) return;
       pedir.disabled = true;
       const r = await pedirEtiquetas({ produto_id: INV.produto.id, lote: INV.lote.trim().toUpperCase(), validade: INV.validade || null, qtd_un: un, quantidade: n });
       pedir.disabled = false;
@@ -1071,8 +1082,8 @@
     g('btn-cx-mover').addEventListener('click', () => { ctx.acao = ctx.acao === 'mover' ? null : 'mover'; render(); });
     g('btn-cx-cancelar').addEventListener('click', () => { ctx.acao = ctx.acao === 'cancelar' ? null : 'cancelar'; render(); });
     const recarregar = async () => {
-      const r = await api('/ler?codigo=' + encodeURIComponent(c.serial));
-      if (r.tipo === 'caixa') ir('caixa', { caixa: r.caixa }, false); else voltar();
+      const r = await api('/caixas/' + encodeURIComponent(c.serial));
+      ir('caixa', { caixa: r.caixa }, false);
     };
     const acao = async (btn, fn) => {
       if (!S.operador) { toast('Identifique o operador primeiro', true); return ir('operador'); }
@@ -1094,7 +1105,10 @@
       ok.addEventListener('click', () => {
         limpar(); if (!mv.value) return toast('Bipe a posição de destino.', true);
         acao(ok, async () => {
-          await api('/caixas/' + encodeURIComponent(c.serial) + '/mover', { method: 'POST', body: { destino: mv.value, uuid: uuid() } });
+          // mesmo uuid enquanto o destino for o mesmo: repetir após erro 500 não duplica o movimento
+          if (!ctx.mover || ctx.mover.destino !== mv.value) ctx.mover = { destino: mv.value, uuid: uuid() };
+          await api('/caixas/' + encodeURIComponent(c.serial) + '/mover', { method: 'POST', body: { destino: mv.value, uuid: ctx.mover.uuid } });
+          ctx.mover = null;
           toast('Caixa movida para ' + mv.value); await recarregar();
         });
       });
@@ -1112,6 +1126,15 @@
       });
     }
   };
+
+  // Etiqueta de caixa (serial) vale como etiqueta de lote na separação: usa
+  // produto, lote, validade e posição da própria caixa.
+  function caixaComoLote(r) {
+    if (r.tipo !== 'caixa') return r;
+    const c = r.caixa;
+    if (c.situacao !== 'EM_ESTOQUE' && c.situacao !== 'ABERTA') return { tipo: 'caixa_fora', erro: 'Caixa ' + c.serial + ' não está em estoque (' + c.situacao + ').' };
+    return { tipo: 'produto_lote', produtos: [c.produto], lote: c.lote || '', validade: c.validade || null, posicaoCaixa: c.posicao };
+  }
 
   // Separar -- pedidos reservados por lote, troca do lote sugerido (WMS fase 2, Task 5+10)
   TELAS.separar = () => `
@@ -1161,7 +1184,8 @@
       if (!S.operador) { toast('Identifique o operador primeiro', true); return ir('operador'); }
       let r;
       try { r = await api('/ler?codigo=' + encodeURIComponent(codigo)); } catch (e) { return toast(e.message, true); }
-      if (r.tipo !== 'produto_lote') { toast('Bipe a etiqueta de mercadoria (com QR de lote), não a de posição.', true); return; }
+      r = caixaComoLote(r);
+      if (r.tipo !== 'produto_lote') { toast(r.tipo === 'caixa_fora' ? r.erro : 'Bipe a etiqueta de mercadoria (com QR de lote), não a de posição.', true); return; }
       const sep = ctx.separacao || [];
       // Casa pela LINHA da separação, não pelo produto: o mesmo SKU aparece
       // em mais de uma linha do pedido (a linha é por embalagem) e casar
@@ -1173,7 +1197,7 @@
       if (!alvo) { toast('Esse produto está em mais de uma linha: toque na linha que você está separando e bipe de novo.', true); return; }
       const produto = r.produtos.find((p) => p.id === alvo.produto_id);
       const nosSaldos = (produto.saldos || []).filter((s) => (s.lote || '') === (r.lote || ''));
-      let posicao = nosSaldos.length === 1 ? nosSaldos[0].posicao : null;
+      let posicao = r.posicaoCaixa || (nosSaldos.length === 1 ? nosSaldos[0].posicao : null);
       if (!posicao) posicao = prompt('Em qual posição você pegou o lote ' + (r.lote || '(sem lote)') + '?', (nosSaldos[0] || {}).posicao || '');
       if (!posicao) return;
       try {
@@ -1232,6 +1256,17 @@
   async function lerCodigo(codigo) {
     codigo = String(codigo || '').trim(); if (!codigo) return;
     if (S.tela === 'inventario') return invLer(codigo);
+    const serialDigitado = serialDe(codigo);
+    if (serialDigitado) {
+      if (S.tela === 'recebimento') {
+        // caixa lida fora do campo de bipe: vale se só há um item de caixa aberto
+        const abertos = ((S.ctx.recebimento && S.ctx.recebimento.itens) || []).map((it, i) => i).filter((i) => document.getElementById('rec-cx-' + i));
+        if (abertos.length === 1 && S.ctx.biparCx) return S.ctx.biparCx(abertos[0], codigo);
+        return toast('Toque no campo de bipe do item', true);
+      }
+      try { const rc = await api('/caixas/' + encodeURIComponent(serialDigitado)); return ir('caixa', { caixa: rc.caixa }); }
+      catch (e) { return toast(e.status === 404 ? 'Caixa ' + serialDigitado + ' não existe.' : e.message, true); }
+    }
     let r;
     try { r = await api('/ler?codigo=' + encodeURIComponent(codigo)); } catch (e) { return toast(e.message, true); }
     // caixa com serial (Consultar): cartão com Mover / Cancelar
