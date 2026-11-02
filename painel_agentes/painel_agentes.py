@@ -4167,8 +4167,17 @@ def _wms_json_erro(e, status=400):
     return jsonify({"erro": str(e)}), status
 
 
+def _wms_piloto_id() -> int:
+    """Embarcador que controla estoque por caixa (config wms.embarcador_piloto_id, padrão 48)."""
+    try:
+        return int(((_carregar_config() or {}).get("wms") or {}).get("embarcador_piloto_id") or 48)
+    except (TypeError, ValueError):
+        return 48
+
+
 def _wms_bootstrap(conn) -> dict:
     return {
+        "piloto_id": _wms_piloto_id(),
         "operador": _wms_operador_atual(),
         "operadores": wms.listar_operadores(conn),
         "areas": wms.listar_areas(conn),
@@ -4332,6 +4341,10 @@ def api_wms_produto_controla_validade(produto_id):
 
 
 def _wms_registrar(conn, item: dict, op: dict) -> dict:
+    # Trava: produto do piloto só muda de saldo por caixa (Inventário, Receber, Mover).
+    produto = wms.obter_produto(conn, int(item.get("produto_id") or 0))
+    if produto and wms_caixas.produto_usa_caixas(produto, _wms_piloto_id()):
+        raise wms.ErroWMS("Produto controlado por caixa: use Inventario, Receber ou Mover caixa.")
     return wms.registrar_movimento(
         conn, tipo=item.get("tipo", ""), produto_id=int(item.get("produto_id") or 0),
         quantidade=item.get("quantidade"), lote=item.get("lote", ""), validade=item.get("validade"),
@@ -4639,8 +4652,98 @@ def api_wms_recebimento(recebimento_id):
             return _wms_json_erro("Recebimento não encontrado.", 404)
         # A unidade vem do produto do catálogo (wms_recebimento_itens não tem
         # essa coluna -- a tela mostrava "undefined" no rótulo da quantidade).
-        return jsonify({"recebimento": dict(rec),
-                        "itens": wms_pedidos.itens_do_recebimento(conn, recebimento_id)})
+        itens = wms_pedidos.itens_do_recebimento(conn, recebimento_id)
+        piloto = _wms_piloto_id()
+        for it in itens:
+            produto = wms.obter_produto(conn, int(it.get("produto_id") or 0))
+            it["usa_caixas"] = bool(produto and wms_caixas.produto_usa_caixas(produto, piloto))
+        return jsonify({"recebimento": dict(rec), "itens": itens})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/caixas", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_caixas_criar():
+    op = _wms_exige_operador()
+    body = request.get_json(force=True) or {}
+    conn = wms_caixas.conectar()
+    try:
+        qtd_un = body.get("qtd_un")
+        r = wms_caixas.criar_caixas(
+            conn, produto_id=int(body.get("produto_id") or 0), lote=body.get("lote", ""),
+            validade=body.get("validade"), qtd_un=float(qtd_un) if qtd_un not in (None, "") else None,
+            quantidade=body.get("quantidade"), operador=op)
+        return jsonify(r)
+    except (wms.ErroWMS, ValueError) as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/caixas/<serial>")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_caixa(serial):
+    conn = wms_caixas.conectar()
+    try:
+        caixa = wms_caixas.obter_caixa(conn, serial)
+        if not caixa:
+            return _wms_json_erro("Caixa nao encontrada.", 404)
+        return jsonify({"caixa": caixa})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/caixas/<serial>/ativar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_caixa_ativar(serial):
+    op = _wms_exige_operador()
+    body = request.get_json(force=True) or {}
+    conn = wms_caixas.conectar()
+    try:
+        rec_id, item_id = body.get("recebimento_id"), body.get("item_id")
+        r = wms_caixas.ativar_caixa(
+            conn, serial, body.get("posicao", ""), operador=op,
+            recebimento_id=int(rec_id) if rec_id not in (None, "") else None,
+            item_id=int(item_id) if item_id not in (None, "") else None,
+            dispositivo=(request.user_agent.string or "")[:80], criado_em=body.get("criado_em"))
+        return jsonify({"caixa": r["caixa"], "duplicado": r["duplicado"]})
+    except (wms.ErroWMS, ValueError) as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/caixas/<serial>/mover", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_caixa_mover(serial):
+    op = _wms_exige_operador()
+    body = request.get_json(force=True) or {}
+    conn = wms_caixas.conectar()
+    try:
+        r = wms_caixas.mover_caixa(conn, serial, body.get("destino", ""), uuid=body.get("uuid") or "", operador=op)
+        return jsonify({"ok": True, "caixa": r["caixa"], "duplicado": r["duplicado"]})
+    except (wms.ErroWMS, ValueError) as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/caixas/<serial>/cancelar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_caixa_cancelar(serial):
+    op = _wms_exige_operador()
+    body = request.get_json(force=True) or {}
+    conn = wms_caixas.conectar()
+    try:
+        r = wms_caixas.cancelar_caixa(conn, serial, body.get("motivo", ""), operador=op)
+        return jsonify({"ok": True, "caixa": r["caixa"], "duplicado": r["duplicado"]})
+    except (wms.ErroWMS, ValueError) as e:
+        return _wms_json_erro(e)
     finally:
         conn.close()
 
