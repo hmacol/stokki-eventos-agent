@@ -126,5 +126,198 @@ class TestGarantirTabelas(unittest.TestCase):
                 conn.close()
 
 
+class TestAtivarMoverCancelar(BaseCaixas):
+    def setUp(self):
+        super().setUp()
+        wms.criar_area(self.conn, "C9", "CONTAINER", "Container 9")
+        wms.gerar_posicoes(self.conn, "C9", estantes=2, niveis=2)
+        self.conn.commit()
+
+    def novas(self, q=1, produto=1):
+        return cx.criar_caixas(self.conn, produto_id=produto, lote="L1", validade="2026-12-15",
+                               qtd_un=None, quantidade=q)["seriais"]
+
+    def saldo(self, pos="C9-E1-N1", produto=1):
+        return wms._saldo_atual(self.conn, pos, produto, "L1", "2026-12-15")
+
+    def novo_recebimento(self):
+        rid = wms_pedidos.registrar_recebimento(
+            self.conn, {"id_stokki": 2478, "codigo": "#PE-2478", "embarcador": "MARIA DOLORES",
+                        "situacao": "Recebido", "chegada": "22/09/2026"},
+            [{"linha": 1, "sku": "72400017", "ean_linha": "", "descricao": "COXINHA FESTA", "qtd_embalagem": 12},
+             {"linha": 2, "sku": "", "ean_linha": "", "descricao": "SEM CODIGO", "qtd_embalagem": 3}])
+        self.conn.commit()
+        itens = self.conn.execute("SELECT id, produto_id FROM wms_recebimento_itens WHERE recebimento_id = ? "
+                                  "ORDER BY linha", (rid,)).fetchall()
+        return rid, itens
+
+    def enderecada(self, item_id):
+        return self.conn.execute("SELECT qtd_enderecada FROM wms_recebimento_itens WHERE id = ?",
+                                 (item_id,)).fetchone()[0]
+
+    def test_ativar_no_inventario_soma_no_saldo_e_vira_em_estoque(self):
+        s = self.novas(2)
+        cx.ativar_caixa(self.conn, s[0], "C9-E1-N1")
+        cx.ativar_caixa(self.conn, s[1], "C9-E1-N1")
+        self.assertEqual(self.saldo(), 12)  # AJUSTE soma; INVENTARIO daria 6
+        c = cx.obter_caixa(self.conn, s[0])
+        self.assertEqual((c["situacao"], c["posicao"]), ("EM_ESTOQUE", "C9-E1-N1"))
+        mov = self.conn.execute("SELECT tipo, observacao FROM wms_movimentos WHERE uuid = ?",
+                                (f"cx-{s[0]}-ativar",)).fetchone()
+        self.assertEqual(mov["tipo"], "AJUSTE")
+        self.assertEqual(mov["observacao"], f"Inventario de abertura - caixa {s[0]}")
+        ev = self.conn.execute("SELECT de, para FROM wms_caixa_eventos WHERE serial = ? ORDER BY id",
+                               (s[0],)).fetchall()
+        self.assertEqual([(e[0], e[1]) for e in ev], [(None, "IMPRESSA"), ("IMPRESSA", "EM_ESTOQUE")])
+        self.assertFalse(self.conn.in_transaction)
+
+    def test_ativar_duas_vezes_soma_uma(self):
+        s = self.novas()[0]
+        r1 = cx.ativar_caixa(self.conn, s, "C9-E1-N1")
+        r = cx.ativar_caixa(self.conn, s, "C9-E1-N1")
+        self.assertFalse(r1["duplicado"])
+        self.assertTrue(r["duplicado"])
+        self.assertEqual(self.saldo(), 6)
+        self.assertEqual(self.n("wms_caixa_eventos"), 2)
+
+    def test_ativar_em_outra_posicao_recusa(self):
+        s = self.novas()[0]
+        cx.ativar_caixa(self.conn, s, "C9-E1-N1")
+        with self.assertRaisesRegex(wms.ErroWMS, "Use Mover"):
+            cx.ativar_caixa(self.conn, s, "C9-E1-N2")
+        self.assertEqual(self.saldo("C9-E1-N2"), 0)
+
+    def test_ativar_cancelada_ou_inexistente_recusa(self):
+        s = self.novas()[0]
+        cx.cancelar_caixa(self.conn, s, "errada")
+        with self.assertRaises(wms.ErroWMS):
+            cx.ativar_caixa(self.conn, s, "C9-E1-N1")
+        with self.assertRaises(wms.ErroWMS):
+            cx.ativar_caixa(self.conn, "C9999999", "C9-E1-N1")
+        self.assertEqual(self.saldo(), 0)
+
+    def test_ativar_pelo_recebimento_anda_a_barra_uma_vez(self):
+        rid, itens = self.novo_recebimento()
+        s = self.novas()[0]
+        r = cx.ativar_caixa(self.conn, s, "C9-E1-N1", recebimento_id=rid, item_id=itens[0]["id"])
+        self.assertFalse(r["duplicado"])
+        r = cx.ativar_caixa(self.conn, s, "C9-E1-N1", recebimento_id=rid, item_id=itens[0]["id"])
+        self.assertTrue(r["duplicado"])
+        self.assertEqual(self.enderecada(itens[0]["id"]), 6)
+        self.assertEqual(self.saldo(), 6)
+        tipo = self.conn.execute("SELECT tipo FROM wms_movimentos WHERE uuid = ?", (f"cx-{s}-ativar",)).fetchone()[0]
+        self.assertEqual(tipo, "ENTRADA")
+
+    def test_ativar_recebimento_de_outro_produto_recusa(self):
+        rid, itens = self.novo_recebimento()
+        s = self.novas(produto=1)[0]
+        with self.assertRaises(wms.ErroWMS):
+            cx.ativar_caixa(self.conn, s, "C9-E1-N1", recebimento_id=rid, item_id=itens[1]["id"])
+        self.assertEqual(self.saldo(), 0)
+        self.assertEqual(cx.obter_caixa(self.conn, s)["situacao"], "IMPRESSA")
+        self.assertEqual(self.n("wms_movimentos"), 0)
+
+    def test_ativar_item_de_outro_recebimento_recusa(self):
+        rid, itens = self.novo_recebimento()
+        s = self.novas()[0]
+        with self.assertRaises(wms.ErroWMS):
+            cx.ativar_caixa(self.conn, s, "C9-E1-N1", recebimento_id=rid + 99, item_id=itens[0]["id"])
+        self.assertEqual(self.n("wms_movimentos"), 0)
+
+    def test_queda_entre_movimento_e_caixa_completa_sem_somar(self):
+        s = self.novas()[0]
+        wms.registrar_movimento(self.conn, tipo="AJUSTE", produto_id=1, quantidade=6, lote="L1",
+                                validade="2026-12-15", destino="C9-E1-N1", uuid=f"cx-{s}-ativar",
+                                observacao=f"Inventario de abertura - caixa {s}")
+        self.assertEqual(cx.obter_caixa(self.conn, s)["situacao"], "IMPRESSA")
+        r = cx.ativar_caixa(self.conn, s, "C9-E1-N1")
+        self.assertTrue(r["duplicado"])
+        self.assertEqual(cx.obter_caixa(self.conn, s)["situacao"], "EM_ESTOQUE")
+        self.assertEqual(self.saldo(), 6)
+
+    def test_queda_no_recebimento_completa_barra_na_repeticao(self):
+        rid, itens = self.novo_recebimento()
+        s = self.novas()[0]
+        cx.ativar_caixa(self.conn, s, "C9-E1-N1")  # sem a barra: simula contabilizar perdido
+        cx.ativar_caixa(self.conn, s, "C9-E1-N1", recebimento_id=rid, item_id=itens[0]["id"])
+        self.assertEqual(self.enderecada(itens[0]["id"]), 6)
+        self.assertEqual(self.saldo(), 6)
+
+    def test_mover_caixa_leva_o_saldo_junto(self):
+        s = self.novas()[0]
+        cx.ativar_caixa(self.conn, s, "C9-E1-N1")
+        r = cx.mover_caixa(self.conn, s, "C9-E1-N2", uuid="dev-1")
+        self.assertEqual(r["caixa"]["posicao"], "C9-E1-N2")
+        self.assertEqual((self.saldo("C9-E1-N1"), self.saldo("C9-E1-N2")), (0, 6))
+        r = cx.mover_caixa(self.conn, s, "C9-E1-N2", uuid="dev-1")  # resposta perdida
+        self.assertTrue(r["duplicado"])
+        self.assertEqual((self.saldo("C9-E1-N1"), self.saldo("C9-E1-N2")), (0, 6))
+        self.assertEqual(self.n("wms_caixa_eventos"), 3)
+
+    def test_mover_para_mesma_posicao_recusa(self):
+        s = self.novas()[0]
+        cx.ativar_caixa(self.conn, s, "C9-E1-N1")
+        with self.assertRaises(wms.ErroWMS):
+            cx.mover_caixa(self.conn, s, "C9-E1-N1", uuid="dev-2")
+        self.assertEqual(self.saldo(), 6)
+
+    def test_mover_exige_uuid_e_caixa_em_estoque(self):
+        s = self.novas()[0]
+        with self.assertRaises(wms.ErroWMS):
+            cx.mover_caixa(self.conn, s, "C9-E1-N2", uuid="dev-3")  # IMPRESSA
+        cx.ativar_caixa(self.conn, s, "C9-E1-N1")
+        with self.assertRaises(wms.ErroWMS):
+            cx.mover_caixa(self.conn, s, "C9-E1-N2", uuid="")
+
+    def test_cancelar_impressa_sem_movimento_e_em_estoque_com_ajuste(self):
+        a, b = self.novas(2)
+        cx.cancelar_caixa(self.conn, a, "etiqueta errada")
+        self.assertEqual(cx.obter_caixa(self.conn, a)["situacao"], "CANCELADA")
+        self.assertEqual(self.n("wms_movimentos"), 0)
+        cx.ativar_caixa(self.conn, b, "C9-E1-N1")
+        self.assertEqual(self.saldo(), 6)
+        r = cx.cancelar_caixa(self.conn, b, "caixa avariada")
+        self.assertEqual(r["caixa"]["situacao"], "CANCELADA")
+        self.assertEqual(self.saldo(), 0)
+        mov = self.conn.execute("SELECT tipo, observacao FROM wms_movimentos WHERE uuid = ?",
+                                (f"cx-{b}-cancelar",)).fetchone()
+        self.assertEqual(mov["tipo"], "AJUSTE")
+        self.assertIn("caixa avariada", mov["observacao"])
+        self.assertIn(b, mov["observacao"])
+
+    def test_cancelar_sem_motivo_recusa(self):
+        s = self.novas()[0]
+        cx.ativar_caixa(self.conn, s, "C9-E1-N1")
+        for m in ("", "   ", None):
+            with self.assertRaises(wms.ErroWMS):
+                cx.cancelar_caixa(self.conn, s, m)
+        self.assertEqual(self.saldo(), 6)
+        self.assertEqual(cx.obter_caixa(self.conn, s)["situacao"], "EM_ESTOQUE")
+
+    def test_cancelar_expedida_ou_cancelada_recusa(self):
+        s = self.novas()[0]
+        cx.ativar_caixa(self.conn, s, "C9-E1-N1")
+        self.conn.execute("UPDATE wms_caixas SET situacao = 'EXPEDIDA' WHERE serial = ?", (s,))
+        self.conn.commit()
+        with self.assertRaises(wms.ErroWMS):
+            cx.cancelar_caixa(self.conn, s, "x")
+        self.assertEqual(self.saldo(), 6)
+        t = self.novas()[0]
+        cx.cancelar_caixa(self.conn, t, "x")
+        with self.assertRaises(wms.ErroWMS):
+            cx.cancelar_caixa(self.conn, t, "x")
+
+    def test_cancelar_repetido_depois_de_queda_completa_sem_tirar_duas_vezes(self):
+        s = self.novas()[0]
+        cx.ativar_caixa(self.conn, s, "C9-E1-N1")
+        wms.registrar_movimento(self.conn, tipo="AJUSTE", produto_id=1, quantidade=6, lote="L1",
+                                validade="2026-12-15", origem="C9-E1-N1", uuid=f"cx-{s}-cancelar",
+                                observacao="Cancelamento")
+        r = cx.cancelar_caixa(self.conn, s, "queda")
+        self.assertTrue(r["duplicado"])
+        self.assertEqual(r["caixa"]["situacao"], "CANCELADA")
+        self.assertEqual(self.saldo(), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
