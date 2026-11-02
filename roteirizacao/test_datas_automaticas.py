@@ -121,5 +121,34 @@ class TestDatasAutomaticas(unittest.TestCase):
         self.assertEqual(ids, {4, 5, 6, 7, 8, 9, 10, 11})
 
 
+class TestRoteirizacaoTrataDataAutomatica(unittest.TestCase):
+    def test_data_automatica_pode_ser_segurada(self):
+        import rotas_fracas
+        # recreated_order_origin_id faz a funcao parar no motivo seguinte, sem geocodificar
+        s = {"scheduled_start": "2026-11-10 03:00:00", "_data_automatica": True, "code": "#PS-1",
+             "recreated_order_origin_id": 5}
+        self.assertEqual(rotas_fracas.motivo_nao_segurar(s, QUA, set()), "é reentrega")
+        s.pop("_data_automatica")
+        self.assertEqual(rotas_fracas.motivo_nao_segurar(s, QUA, set()), "tem agendamento")
+
+    def test_nivel4_junta_data_automatica(self):
+        import roteirizacao_dados as rd
+        a = {"address": "X", "sender_id": 1, "scheduled_start": "2026-11-10T00:00:00-03:00", "_data_automatica": True}
+        b = {"address": "X", "sender_id": 1, "scheduled_start": "2026-11-09T00:00:00-03:00", "_data_automatica": True}
+        c = {"address": "X", "sender_id": 1}
+        self.assertEqual(rd._chave_nivel4(a), rd._chave_nivel4(b))
+        self.assertEqual(rd._chave_nivel4(a), rd._chave_nivel4(c))
+
+    def test_data_gerada_depois_do_corte_fica_fora_do_rascunho_de_amanha(self):
+        import roteirizacao_dados as rd
+        from datetime import datetime
+        from regras import agendamento_automatico as aa
+        # segunda 09/11 16:00 (depois do corte) -> data automatica = 11/11
+        self.assertEqual(aa.data_automatica(datetime(2026, 11, 9, 16, 0)), QUA)
+        s = svc(1, start="2026-11-11 03:00:00", end="2026-11-12 02:59:00")
+        self.assertFalse(rd.elegivel_para_data(s, TER))
+        self.assertTrue(rd.elegivel_para_data(s, QUA))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1241,6 +1241,9 @@ def roteirizar_selecionados(data_alvo: date, service_ids: list[int],
     # fica de fora (a tela só marca o card); conta à parte de "indisponíveis".
     import pedidos_pausados_cliente
     selecionados, pausados = pedidos_pausados_cliente.separar_pausados(selecionados)
+    # Data automática não é agendamento do cliente (marca; não anda a data aqui).
+    from datas_automaticas import marcar_datas_automaticas
+    marcar_datas_automaticas(selecionados)
     if pausados and not selecionados:
         raise ValueError("Os pedidos selecionados estão em espera a pedido do cliente "
                          "e não entram em rota. Retome a espera antes de roteirizar.")

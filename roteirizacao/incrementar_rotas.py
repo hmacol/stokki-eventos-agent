@@ -464,6 +464,10 @@ def main(modo_teste: bool = False):
         import pedidos_pausados_cliente
         servicos, _pausados = pedidos_pausados_cliente.separar_pausados(servicos)
 
+        # Data automática não é agendamento do cliente (marca; não anda a data aqui).
+        from datas_automaticas import marcar_datas_automaticas
+        marcar_datas_automaticas(servicos)
+
         # Busca as rotas ATIVAS (hoje em diante) -- pedido do Hugo, 06/08:
         # antes buscava o HISTÓRICO INTEIRO de rotas (rotas de anos atrás,
         # já finalizadas, sem necessidade nenhuma de olhar pra elas). O
