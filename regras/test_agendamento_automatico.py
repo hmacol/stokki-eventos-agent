@@ -42,6 +42,21 @@ class TestJanela(unittest.TestCase):
         self.assertEqual(aa.janela_automatica(None, "12.3", {"123": ("07:00", "10:00")}, {}), ("07:00", "10:00"))
         self.assertEqual(aa.janela_automatica({"inicio": "", "fim": ""}, "999", {}, {}), aa.DIA_TODO)
 
+    def test_janela_invalida_cai_pra_proxima(self):  # revisao final 02/11
+        planilha = {"123": ("07:00", "10:00")}
+        # mensagem invalida (fim antes do inicio, igual, formato ruim) -> horario do destinatario
+        for msg in ({"inicio": "12:00", "fim": "09:00"}, {"inicio": "09:00", "fim": "09:00"},
+                    {"inicio": "9h", "fim": "12:00"}, {"inicio": "25:00", "fim": "26:00"}):
+            self.assertEqual(aa.janela_automatica(msg, "123", planilha, {}), ("07:00", "10:00"), msg)
+        # destinatario invalido (planilha ou ajuste manual) -> dia todo
+        self.assertEqual(aa.janela_automatica(None, "123", {"123": ("16:00", "08:00")}, {}), aa.DIA_TODO)
+        self.assertEqual(aa.janela_automatica(None, "123", {"123": (None, "08:00")}, {}), aa.DIA_TODO)
+        ajuste = {"123": {"horario_atendimento_inicio": "18:00", "horario_atendimento_fim": "07:00"}}
+        self.assertEqual(aa.janela_automatica(None, "123", planilha, ajuste), aa.DIA_TODO)
+        # mensagem e destinatario invalidos -> dia todo
+        self.assertEqual(aa.janela_automatica({"inicio": "12:00", "fim": "09:00"}, "123",
+                                              {"123": ("16:00", "08:00")}, {}), aa.DIA_TODO)
+
 
 if __name__ == "__main__":
     unittest.main()

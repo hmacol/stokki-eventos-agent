@@ -7,6 +7,7 @@ das 14h05 ainda conta como antes do corte (compara-se a hora de INICIO da
 rodada com CORTE_RODADA). `data_saida` (expedition_date da Stokki) e data
 minima: se for depois da data do corte, vale ela, rolada pra dia util.
 """
+import re
 from datetime import date, datetime, time
 
 from regras import feriados
@@ -15,6 +16,7 @@ from regras.complexidade_entrega import horario_efetivo
 CORTE_RODADA = time(14, 15)
 A_PARTIR_DE = date(2026, 11, 3)
 DIA_TODO = ("00:00", "23:59")
+_HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
 def _parse_saida(texto: str):
@@ -40,9 +42,23 @@ def data_automatica(inicio_rodada: datetime, data_saida: str = "") -> date:
     return data
 
 
+def _janela_valida(ini, fim) -> bool:
+    """Dois "HH:MM" validos com inicio < fim (revisao final, 02/11: planilha,
+    ajuste manual e mensagem nao garantem; a Vuupt recusaria fim < inicio e o
+    pedido nunca seria criado)."""
+    return (isinstance(ini, str) and isinstance(fim, str)
+            and bool(_HHMM.match(ini)) and bool(_HHMM.match(fim)) and ini < fim)
+
+
 def janela_automatica(horario_mensagem: dict | None, documento: str,
                       mapa_horarios: dict, ajustes_manuais: dict) -> tuple[str, str]:
-    """Horario da mensagem (inicio/fim) vence; senao o do destinatario."""
-    if horario_mensagem and horario_mensagem.get("inicio") and horario_mensagem.get("fim"):
-        return horario_mensagem["inicio"], horario_mensagem["fim"]
-    return horario_efetivo(documento, mapa_horarios, ajustes_manuais)
+    """Horario da mensagem (inicio/fim) vence; senao o do destinatario; senao
+    o dia todo. Janela invalida (formato ou inicio >= fim) cai pra proxima."""
+    if horario_mensagem:
+        ini, fim = horario_mensagem.get("inicio"), horario_mensagem.get("fim")
+        if _janela_valida(ini, fim):
+            return ini, fim
+    ini, fim = horario_efetivo(documento, mapa_horarios, ajustes_manuais)
+    if _janela_valida(ini, fim):
+        return ini, fim
+    return DIA_TODO
