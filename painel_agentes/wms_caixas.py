@@ -207,27 +207,38 @@ def _caixa_ou_erro(conn, serial: str) -> dict:
 
 def _mudar_caixa(conn, serial: str, *, de_situacoes: tuple, para: str, posicao: str | None,
                  evento_uuid: str, movimento_uuid: str | None, operador: dict | None,
-                 observacao: str = "", manter_posicao: bool = False) -> None:
-    """UPDATE da caixa + evento numa transacao curta. Idempotente pelo uuid do evento."""
+                 observacao: str = "", manter_posicao: bool = False,
+                 posicao_antes: str | None = None) -> bool:
+    """UPDATE da caixa + evento numa transacao curta. O evento so entra se a caixa
+    mudou de fato (rowcount 1). posicao_antes trava o UPDATE na posicao esperada.
+    Devolve True se mudou."""
     op_id, op_nome = _op(operador)
     marcas = ",".join("?" * len(de_situacoes))
+    trava, args_trava = "", ()
+    if posicao_antes is not None:
+        trava, args_trava = " AND posicao = ?", (posicao_antes,)
     conn.execute("BEGIN IMMEDIATE")
     try:
         atual = conn.execute("SELECT situacao, posicao FROM wms_caixas WHERE serial = ?", (serial,)).fetchone()
         ts = wms.agora()
         if manter_posicao:
-            conn.execute(f"UPDATE wms_caixas SET situacao = ?, atualizado_em = ? "
-                         f"WHERE serial = ? AND situacao IN ({marcas})", (para, ts, serial, *de_situacoes))
+            cur = conn.execute(f"UPDATE wms_caixas SET situacao = ?, atualizado_em = ? "
+                               f"WHERE serial = ? AND situacao IN ({marcas}){trava}",
+                               (para, ts, serial, *de_situacoes, *args_trava))
         else:
-            conn.execute(f"UPDATE wms_caixas SET situacao = ?, posicao = ?, atualizado_em = ? "
-                         f"WHERE serial = ? AND situacao IN ({marcas})", (para, posicao, ts, serial, *de_situacoes))
-        conn.execute(
-            "INSERT OR IGNORE INTO wms_caixa_eventos (uuid, serial, de, para, posicao, movimento_uuid, "
-            "operador_id, operador_nome, observacao, criado_em) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (evento_uuid, serial, atual["situacao"] if atual else None, para,
-             posicao if posicao is not None else (atual["posicao"] if atual else None),
-             movimento_uuid, op_id, op_nome, observacao[:500], ts))
+            cur = conn.execute(f"UPDATE wms_caixas SET situacao = ?, posicao = ?, atualizado_em = ? "
+                               f"WHERE serial = ? AND situacao IN ({marcas}){trava}",
+                               (para, posicao, ts, serial, *de_situacoes, *args_trava))
+        mudou = cur.rowcount == 1
+        if mudou:
+            conn.execute(
+                "INSERT OR IGNORE INTO wms_caixa_eventos (uuid, serial, de, para, posicao, movimento_uuid, "
+                "operador_id, operador_nome, observacao, criado_em) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (evento_uuid, serial, atual["situacao"] if atual else None, para,
+                 posicao if posicao is not None else (atual["posicao"] if atual else None),
+                 movimento_uuid, op_id, op_nome, observacao[:500], ts))
         conn.commit()
+        return mudou
     except Exception:
         conn.rollback()
         raise
@@ -265,7 +276,12 @@ def ativar_caixa(conn, serial: str, posicao: str, *, operador: dict | None = Non
     if caixa["situacao"] in ("EM_ESTOQUE", "ABERTA"):
         if caixa["posicao"] != posicao:
             raise ErroWMS(f"Caixa {serial} ja esta em {caixa['posicao']}. Use Mover.")
-        # Resposta perdida: completa a barra do recebimento (idempotente pelo uuid).
+        # Resposta perdida: completa a barra do recebimento (idempotente pelo uuid),
+        # mas so se a caixa entrou por ENTRADA; ativada no inventario nao conta como recebida.
+        if recebimento_id is not None:
+            ativ = conn.execute("SELECT tipo FROM wms_movimentos WHERE uuid = ?", (uuid,)).fetchone()
+            if not ativ or ativ["tipo"] != "ENTRADA":
+                raise ErroWMS(f"Caixa {serial} ja foi ativada no inventario; nao pode entrar neste recebimento.")
         _contabilizar(conn, caixa, recebimento_id, item_id, uuid)
         return {"caixa": _caixa_ou_erro(conn, serial), "duplicado": True, "movimento_uuid": uuid}
     if caixa["situacao"] != "IMPRESSA":
@@ -279,6 +295,8 @@ def ativar_caixa(conn, serial: str, posicao: str, *, operador: dict | None = Non
     else:
         mov = wms.registrar_movimento(conn, tipo="AJUSTE",
                                       observacao=f"Inventario de abertura - caixa {serial}", **comum)
+    if recebimento_id is not None and mov.get("tipo") != "ENTRADA":
+        raise ErroWMS(f"Caixa {serial} ja foi ativada no inventario; nao pode entrar neste recebimento.")
     # A posicao que vale e a do movimento gravado (pode ser de uma chamada anterior).
     pos_real = mov.get("posicao_destino") or posicao
     _mudar_caixa(conn, serial, de_situacoes=("IMPRESSA",), para="EM_ESTOQUE", posicao=pos_real,
@@ -300,14 +318,23 @@ def mover_caixa(conn, serial: str, destino: str, *, uuid: str, operador: dict | 
     destino = wms.normalizar_codigo(destino)
     evento_uuid = f"cx-{serial}-mover-{uuid}"
 
+    if conn.execute("SELECT 1 FROM wms_caixa_eventos WHERE uuid = ?", (evento_uuid,)).fetchone():
+        # Reenvio de um mover ja concluido: nada a fazer.
+        return {"caixa": caixa, "duplicado": True, "movimento_uuid": uuid}
     if caixa["situacao"] not in ("EM_ESTOQUE", "ABERTA"):
         raise ErroWMS(f"Caixa {serial} esta {caixa['situacao']} e nao pode ser movida.")
-    ja = conn.execute("SELECT posicao_destino FROM wms_movimentos WHERE uuid = ?", (uuid,)).fetchone()
+    ja = conn.execute("SELECT * FROM wms_movimentos WHERE uuid = ?", (uuid,)).fetchone()
     if ja:
-        # Repeticao depois de queda: o saldo ja andou; so garante a caixa na posicao do movimento.
+        # Movimento ja gravado (queda antes de atualizar a caixa). So vale se for desta caixa.
+        if (ja["tipo"] != "TRANSFERENCIA" or ja["produto_id"] != caixa["produto_id"]
+                or ja["lote"] != caixa["lote"] or (ja["validade"] or None) != (caixa["validade"] or None)
+                or abs(float(ja["quantidade"]) - float(caixa["qtd_un"])) > 1e-9
+                or ja["observacao"] != f"Caixa {serial}"):
+            raise ErroWMS(f"uuid {uuid} ja foi usado por outro movimento; nao e desta caixa {serial}.")
         _mudar_caixa(conn, serial, de_situacoes=("EM_ESTOQUE", "ABERTA"), para=caixa["situacao"],
                      posicao=ja["posicao_destino"], evento_uuid=evento_uuid, movimento_uuid=uuid,
-                     operador=operador, observacao=f"Moveu para {ja['posicao_destino']}")
+                     operador=operador, observacao=f"Moveu de {ja['posicao_origem']} para {ja['posicao_destino']}",
+                     posicao_antes=ja["posicao_origem"])
         return {"caixa": _caixa_ou_erro(conn, serial), "duplicado": True, "movimento_uuid": uuid}
     if caixa["posicao"] == destino:
         raise ErroWMS(f"Caixa {serial} ja esta em {destino}.")
@@ -332,10 +359,19 @@ def cancelar_caixa(conn, serial: str, motivo: str, *, operador: dict | None = No
     serial = caixa["serial"]
     uuid = f"cx-{serial}-cancelar"
     if caixa["situacao"] == "IMPRESSA":
+        # Queda entre o movimento de ativar e a caixa: tira o saldo orfao antes de cancelar.
+        ativ = conn.execute("SELECT * FROM wms_movimentos WHERE uuid = ?", (f"cx-{serial}-ativar",)).fetchone()
+        mov_uuid = None
+        if ativ:
+            wms.registrar_movimento(conn, tipo="AJUSTE", produto_id=ativ["produto_id"],
+                                    quantidade=ativ["quantidade"], lote=ativ["lote"], validade=ativ["validade"],
+                                    origem=ativ["posicao_destino"], operador=operador, uuid=uuid,
+                                    observacao=f"Cancelamento da caixa {serial}: {motivo}")
+            mov_uuid = uuid
         _mudar_caixa(conn, serial, de_situacoes=("IMPRESSA",), para="CANCELADA", posicao=None,
-                     evento_uuid=f"{uuid}-evento", movimento_uuid=None, operador=operador,
+                     evento_uuid=f"{uuid}-evento", movimento_uuid=mov_uuid, operador=operador,
                      observacao=motivo, manter_posicao=True)
-        return {"caixa": _caixa_ou_erro(conn, serial), "duplicado": False, "movimento_uuid": None}
+        return {"caixa": _caixa_ou_erro(conn, serial), "duplicado": False, "movimento_uuid": mov_uuid}
     if caixa["situacao"] not in ("EM_ESTOQUE", "ABERTA"):
         raise ErroWMS(f"Caixa {serial} esta {caixa['situacao']} e nao pode ser cancelada.")
     mov = wms.registrar_movimento(conn, tipo="AJUSTE", produto_id=caixa["produto_id"],

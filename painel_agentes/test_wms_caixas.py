@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _RAIZ = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ))
@@ -238,10 +239,78 @@ class TestAtivarMoverCancelar(BaseCaixas):
     def test_queda_no_recebimento_completa_barra_na_repeticao(self):
         rid, itens = self.novo_recebimento()
         s = self.novas()[0]
-        cx.ativar_caixa(self.conn, s, "C9-E1-N1")  # sem a barra: simula contabilizar perdido
-        cx.ativar_caixa(self.conn, s, "C9-E1-N1", recebimento_id=rid, item_id=itens[0]["id"])
+        # queda real: a ENTRADA e a caixa foram gravadas, mas a barra do recebimento falhou
+        with mock.patch.object(wms_pedidos, "contabilizar_enderecamento", side_effect=RuntimeError("queda")):
+            with self.assertRaises(RuntimeError):
+                cx.ativar_caixa(self.conn, s, "C9-E1-N1", recebimento_id=rid, item_id=itens[0]["id"])
+        self.assertEqual(self.enderecada(itens[0]["id"]), 0)
+        self.assertEqual(cx.obter_caixa(self.conn, s)["situacao"], "EM_ESTOQUE")
+        r = cx.ativar_caixa(self.conn, s, "C9-E1-N1", recebimento_id=rid, item_id=itens[0]["id"])
+        self.assertTrue(r["duplicado"])
         self.assertEqual(self.enderecada(itens[0]["id"]), 6)
         self.assertEqual(self.saldo(), 6)
+
+    def test_caixa_ativada_no_inventario_nao_entra_no_recebimento(self):
+        rid, itens = self.novo_recebimento()
+        s = self.novas()[0]
+        cx.ativar_caixa(self.conn, s, "C9-E1-N1")
+        with self.assertRaisesRegex(wms.ErroWMS, "ativada no inventario"):
+            cx.ativar_caixa(self.conn, s, "C9-E1-N1", recebimento_id=rid, item_id=itens[0]["id"])
+        self.assertEqual(self.enderecada(itens[0]["id"]), 0)
+        self.assertEqual(self.saldo(), 6)
+
+    def test_queda_ajuste_gravado_e_depois_recebimento_recusa_sem_mexer(self):
+        rid, itens = self.novo_recebimento()
+        s = self.novas()[0]
+        wms.registrar_movimento(self.conn, tipo="AJUSTE", produto_id=1, quantidade=6, lote="L1",
+                                validade="2026-12-15", destino="C9-E1-N1", uuid=f"cx-{s}-ativar",
+                                observacao="x")
+        with self.assertRaises(wms.ErroWMS):
+            cx.ativar_caixa(self.conn, s, "C9-E1-N1", recebimento_id=rid, item_id=itens[0]["id"])
+        self.assertEqual(self.enderecada(itens[0]["id"]), 0)
+        self.assertEqual(cx.obter_caixa(self.conn, s)["situacao"], "IMPRESSA")
+
+    def test_reenvio_de_mover_antigo_nao_muda_caixa(self):
+        a = self.novas()[0]
+        cx.ativar_caixa(self.conn, a, "C9-E1-N1")
+        cx.mover_caixa(self.conn, a, "C9-E1-N2", uuid="dev-1")
+        cx.mover_caixa(self.conn, a, "C9-E1-N1", uuid="dev-2")
+        r = cx.mover_caixa(self.conn, a, "C9-E1-N2", uuid="dev-1")  # reenvio atrasado
+        self.assertTrue(r["duplicado"])
+        self.assertEqual(cx.obter_caixa(self.conn, a)["posicao"], "C9-E1-N1")
+        self.assertEqual((self.saldo("C9-E1-N1"), self.saldo("C9-E1-N2")), (6, 0))
+
+    def test_mover_com_uuid_de_outra_caixa_recusa(self):
+        a, b = self.novas(2)
+        cx.ativar_caixa(self.conn, a, "C9-E1-N1")
+        cx.ativar_caixa(self.conn, b, "C9-E1-N1")
+        cx.mover_caixa(self.conn, a, "C9-E1-N2", uuid="dev-x")
+        with self.assertRaises(wms.ErroWMS):
+            cx.mover_caixa(self.conn, b, "C9-E1-N2", uuid="dev-x")
+        self.assertEqual(cx.obter_caixa(self.conn, b)["posicao"], "C9-E1-N1")
+        self.assertEqual((self.saldo("C9-E1-N1"), self.saldo("C9-E1-N2")), (6, 6))
+
+    def test_queda_do_mover_completa_a_caixa(self):
+        a = self.novas()[0]
+        cx.ativar_caixa(self.conn, a, "C9-E1-N1")
+        wms.registrar_movimento(self.conn, tipo="TRANSFERENCIA", produto_id=1, quantidade=6, lote="L1",
+                                validade="2026-12-15", origem="C9-E1-N1", destino="C9-E1-N2",
+                                uuid="dev-q", observacao=f"Caixa {a}")
+        r = cx.mover_caixa(self.conn, a, "C9-E1-N2", uuid="dev-q")
+        self.assertTrue(r["duplicado"])
+        self.assertEqual(r["caixa"]["posicao"], "C9-E1-N2")
+        self.assertEqual((self.saldo("C9-E1-N1"), self.saldo("C9-E1-N2")), (0, 6))
+
+    def test_cancelar_impressa_com_ativar_gravado_tira_o_saldo_orfao(self):
+        s = self.novas()[0]
+        wms.registrar_movimento(self.conn, tipo="AJUSTE", produto_id=1, quantidade=6, lote="L1",
+                                validade="2026-12-15", destino="C9-E1-N1", uuid=f"cx-{s}-ativar",
+                                observacao="x")
+        self.assertEqual(self.saldo(), 6)
+        r = cx.cancelar_caixa(self.conn, s, "etiqueta errada")
+        self.assertEqual(r["caixa"]["situacao"], "CANCELADA")
+        self.assertEqual(self.saldo(), 0)
+        self.assertEqual(self.n("wms_movimentos"), 2)
 
     def test_mover_caixa_leva_o_saldo_junto(self):
         s = self.novas()[0]
