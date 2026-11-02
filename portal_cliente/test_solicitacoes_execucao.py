@@ -516,6 +516,17 @@ class DependenciasReais(unittest.TestCase):
         self.assertEqual((r["ok"], r["rota_id"]), (True, None))
         exc.assert_not_called()
 
+    def test_tirar_da_rota_remover_parada_que_falha_nao_perde_a_rota(self):
+        from unittest import mock
+        expedicao, rotas_client, vuupt_client, cancelar_servico = self._modulos_reais()
+        import rascunhos_rota
+        amanha = date.today() + timedelta(days=1)
+        vuupt = mock.Mock()
+        vuupt.buscar_servico_por_id.return_value = {"id": 777, "status": "assigned", "route_id": 9001}
+        with mock.patch.object(vuupt_client, "VuuptClient", return_value=vuupt),                 mock.patch.object(rotas_client, "buscar_rota", return_value={"route": {"start_at": f"{amanha} 11:00:00"}}),                 mock.patch.object(cancelar_servico, "rascunho_do_servico", return_value=(42, None)),                 mock.patch.object(rascunhos_rota, "remover_parada", side_effect=sqlite3.OperationalError("database is locked")),                 mock.patch.object(expedicao, "excluir_pedido_da_rota", return_value={"ok": True, "rota_cancelada": False}):
+            r = se.dependencias_reais({}).tirar_da_rota_vuupt(777)
+        self.assertEqual(r, {"ok": True, "erro": "", "rota_id": 9001, "rota_cancelada": False})
+
     def test_reagendar_real_put_direto_sem_origem_equipe(self):
         from unittest import mock
         _, _, vuupt_client, _ = self._modulos_reais()

@@ -121,6 +121,21 @@
   .oculto { display: none !important; }
   @keyframes pulso { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
   .pulsando { animation: pulso 1.2s ease-in-out infinite; }
+
+  /* Alterar entrega (janela) -- reaproveita .modal-fundo/.modal do _envios.html */
+  .alt-modal { max-width: 480px; max-height: calc(100vh - 32px); overflow-y: auto; }
+  .alt-bloco { border: 1px solid var(--borda); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .alt-bloco .alt-topo { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+  .alt-bloco .alt-rot { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--texto-suave); }
+  .alt-bloco .alt-atual { font-size: 13px; color: var(--texto); overflow-wrap: anywhere; }
+  .alt-campos { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .alt-campos .alt-larga { grid-column: 1 / -1; }
+  .alt-modal input { width: 100%; min-width: 0; box-sizing: border-box; }
+  .alt-nota { font-size: 12px; color: var(--texto-suave); margin: 0; }
+  .alt-msg { font-size: 12.5px; padding: 8px 12px; border-radius: 8px; }
+  .alt-msg.ok { background: var(--sucesso-bg); color: var(--sucesso); }
+  .alt-msg.erro { background: var(--erro-bg); color: var(--erro); }
+  .alt-link { background: none; border: none; padding: 0; font-family: inherit; color: var(--acento); cursor: pointer; }
 </style>
 {% endblock %}
 
@@ -216,6 +231,11 @@
     </aside>
   </div>
 
+  {# Alterar entrega (endereço, data, horário) -- aberta pelo link da linha #}
+  <div class="modal-fundo" id="alt-fundo">
+    <div class="modal alt-modal" id="alt-caixa" role="dialog" aria-modal="true" aria-labelledby="alt-titulo"></div>
+  </div>
+
   {# Máscara de envio de pedidos (XML → Stokki), 08/09 -- mesma tela, outra vista #}
   {% include "_envios.html" %}
 </main>
@@ -296,7 +316,9 @@
   const ICO_CAM = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>';
   const ICO_ALERTA = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>';
   const ICO_CAMINHAO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:-2px"><rect x="1" y="3" width="15" height="13"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle><circle cx="18.5" cy="18.5" r="2.5"></circle></svg>';
-  const ICO_CIMA = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>';
+  const ICO_EDITAR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>';
+  const SITUACOES_ALTERAVEIS = ['programado', 'aguardando_saida', 'agendado'];
+  const ICO_CIMA ='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>';
   const ICO_BAIXO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
 
   // ── Recorte por empresa (login de grupo) ───────────────────────────────────
@@ -463,6 +485,7 @@
       case 'comprovante':
         if (p.situacao === 'entregue') return `<td class="nw"><a class="link" href="${BASE}/api/canhoto/${p.service_id}" target="_blank" rel="noopener">${ICO_CAM}<span>Canhoto</span></a></td>`;
         if (p.situacao === 'insucesso' && dados.atencao.some(g => g.codigos.includes(p.codigo))) return `<td class="nw"><a class="link falha" href="#atencao" data-ir-atencao="1">${ICO_ALERTA}<span>Responder</span></a></td>`;
+        if (dados.alteracao_entrega && SITUACOES_ALTERAVEIS.includes(p.situacao)) return `<td class="nw"><a class="link" href="#" data-alterar="${p.service_id}">${ICO_EDITAR}<span>Pedir alteração</span></a></td>`;
         return `<td class="nw" style="color:var(--texto-suave)">—</td>`;
       case 'ordem': return `<td class="nw num">${p.ordem ? p.ordem + ' de ' + p.total_paradas : '—'}</td>`;
       default: return `<td>${esc(p[id]) || '<span style="color:var(--texto-suave)">—</span>'}</td>`;
@@ -643,6 +666,202 @@
     if (pulsando) a.classList.add('pulsando');
     a.textContent = texto;
   }
+
+  // ── Alterar entrega ────────────────────────────────────────────────────────
+  // GET mostra o valor atual e se pode; POST manda só os blocos que o cliente
+  // abriu e vira chamado pro atendimento (nada muda no pedido -- Hugo, 01/11).
+  let alt = null;
+  const cepFmt = c => { const d = String(c || '').replace(/\D/g, ''); return d.length === 8 ? d.slice(0, 5) + '-' + d.slice(5) : d; };
+  const dataBr = iso => iso ? iso.split('-').reverse().join('/') : '';
+  const hora = h => String(h || '').slice(0, 5);
+  const horarioTexto = h => (hora(h.inicio) === '00:00' && hora(h.fim) === '23:59') ? 'Dia todo' : `${hora(h.inicio)} às ${hora(h.fim)}`;
+  function amanha() {
+    const d = new Date(HOJE + 'T12:00:00'); d.setDate(d.getDate() + 1);
+    return d.toISOString().slice(0, 10);
+  }
+  function cnpjDaEmpresa(senderId) {
+    const e = EMPRESAS.find(x => String(x.sender_id) === String(senderId));
+    return e && e.cnpj ? e.cnpj : '';
+  }
+  function altFetch(url, o) {
+    const cnpj = alt && alt.cnpj;
+    return fetch(url, { credentials: 'same-origin', ...o,
+      headers: { ...((o && o.headers) || {}), ...(cnpj ? { 'X-Portal-Empresa': cnpj } : {}) } });
+  }
+  const $alt = () => $('alt-caixa');
+  function abrirAlteracao(sid, pedido) {
+    alt = { sid, cnpj: cnpjDaEmpresa(pedido && pedido.sender_id), codigo: pedido ? pedido.codigo : '', d: null, carregando: true,
+            end: { aberto: false, cep: '', numero: '', complemento: '', logradouro: '', bairro: '', cidade: '', erro: '' },
+            data: { aberto: false, v: '' }, hor: { aberto: false, ini: '', fim: '' },
+            msg: '', erro: '', enviando: false, feito: false, chamado: null };
+    $('alt-fundo').classList.add('aberto');
+    renderAlteracao();
+    const meu = alt;
+    altFetch(`${BASE}/api/pedidos/${sid}/alteracao`).then(async r => {
+      const j = await r.json().catch(() => ({}));
+      if (alt !== meu) return;
+      if (!r.ok) throw new Error(j.erro || 'Não foi possível consultar o pedido agora.');
+      meu.d = j; meu.carregando = false;
+      meu.hor.ini = hora(j.atual.horario.inicio); meu.hor.fim = hora(j.atual.horario.fim);
+      renderAlteracao();
+    }).catch(e => {
+      if (alt !== meu) return;
+      meu.carregando = false; meu.erro = e.message || 'Não foi possível consultar o pedido agora.';
+      renderAlteracao();
+    });
+  }
+  function fecharAlteracao() { $('alt-fundo').classList.remove('aberto'); alt = null; }
+
+  function blocoAlt(chave, rotulo, atualHtml, camposHtml, aberto) {
+    return `<div class="alt-bloco" data-bloco="${chave}">
+      <div class="alt-topo">
+        <div><div class="alt-rot">${rotulo}</div><div class="alt-atual">${atualHtml}</div></div>
+        <button type="button" class="botao-linha" data-alt-toggle="${chave}" style="padding:5px 12px;font-size:12px;">${aberto ? 'Manter atual' : 'Alterar'}</button>
+      </div>${aberto ? camposHtml : ''}</div>`;
+  }
+  function renderAlteracao() {
+    const a = alt, caixa = $alt();
+    const cab = `<h3 id="alt-titulo">Pedir alteração da entrega${a.codigo ? ' · ' + esc(a.codigo) : ''}</h3>`;
+    const fechar = `<div class="pe"><button type="button" class="botao-linha" data-alt-fechar>Fechar</button></div>`;
+    if (a.carregando) { caixa.innerHTML = `${cab}<p class="carregando">Consultando o pedido…</p>`; return; }
+    if (!a.d) { caixa.innerHTML = `${cab}<div class="alt-msg erro">${esc(a.erro)}</div>${fechar}`; return; }
+    const d = a.d;
+    if (!d.pode) { caixa.innerHTML = `${cab}<p>${esc(d.destinatario)}</p><div class="alt-msg erro">${esc(d.motivo)}</div>${fechar}`; return; }
+    const e = a.end;
+    const campoEnd = `<div class="alt-campos">
+        <label>CEP <input data-f="cep" inputmode="numeric" maxlength="9" placeholder="00000-000" value="${esc(cepFmt(e.cep))}"></label>
+        <label>Número <input data-f="numero" maxlength="10" value="${esc(e.numero)}"></label>
+        <label class="alt-larga">Rua / Avenida <input data-f="logradouro" maxlength="60" placeholder="preenche pelo CEP" value="${esc(e.logradouro)}"></label>
+        <label>Complemento <input data-f="complemento" maxlength="40" value="${esc(e.complemento)}"></label>
+        <label>Bairro <input data-f="bairro" maxlength="60" value="${esc(e.bairro)}"></label>
+        <div class="alt-larga alt-nota" id="alt-cep-info">${esc(e.erro || (e.cidade ? e.cidade : ''))}</div>
+      </div>`;
+    const campoData = `<label>Nova data <input type="date" data-f="data" min="${amanha()}" value="${esc(a.data.v)}"></label>`;
+    const campoHor = `<div class="alt-campos">
+        <label>Das <input type="time" data-f="hini" value="${esc(a.hor.ini)}"></label>
+        <label>Até <input type="time" data-f="hfim" value="${esc(a.hor.fim)}"></label>
+      </div>`;
+    const dataAtual = d.atual.data ? dataBr(d.atual.data) : 'Sem data agendada';
+    let rodape;
+    if (a.feito) rodape = `<div class="pe"><button type="button" class="botao-linha" data-alt-fechar>Fechar</button>
+        ${a.chamado && window.atdAbrirChamado ? '<button type="button" class="botao" data-alt-chat>Abrir a conversa</button>' : ''}</div>`;
+    else rodape = `<div class="pe"><button type="button" class="botao-linha" data-alt-fechar>Cancelar</button>
+        <button type="button" class="botao" id="alt-salvar" ${a.enviando ? 'disabled' : ''}>Enviar ao atendimento</button></div>`;
+    caixa.innerHTML = `${cab}
+      <p>${esc(d.destinatario)}</p>
+      ${a.feito ? '' : '<p class="alt-nota">Marque o que você quer mudar. O pedido vai para o atendimento da Fresh Log, que confere e responde pelo chat.</p>'
+        + blocoAlt('end', 'Endereço de entrega', esc(d.atual.endereco) || '—', campoEnd, e.aberto)
+        + blocoAlt('data', 'Data da entrega', esc(dataAtual), campoData, a.data.aberto)
+        + blocoAlt('hor', 'Horário de recebimento', esc(horarioTexto(d.atual.horario)), campoHor, a.hor.aberto)}
+      <div id="alt-msg">${msgHtml()}</div>
+      ${rodape}`;
+  }
+  function msgHtml() {
+    if (alt.erro) return `<div class="alt-msg erro">${esc(alt.erro)}</div>`;
+    if (alt.msg) return `<div class="alt-msg ok">${esc(alt.msg)}</div>`;
+    return '';
+  }
+
+  function corpoAlteracao() {
+    const a = alt, corpo = {};
+    if (a.end.aberto) {
+      const cep = a.end.cep.replace(/\D/g, '');
+      if (cep.length !== 8) throw new Error('Informe o CEP com 8 dígitos.');
+      if (!a.end.numero.trim()) throw new Error('Informe o número do endereço.');
+      if (!a.end.logradouro.trim()) throw new Error('Informe a rua ou avenida.');
+      corpo.endereco = { cep, numero: a.end.numero.trim(), complemento: a.end.complemento.trim(),
+                         logradouro: a.end.logradouro.trim(), bairro: a.end.bairro.trim() };
+    }
+    if (a.data.aberto) {
+      if (!a.data.v) throw new Error('Escolha a nova data.');
+      corpo.data = a.data.v;
+    }
+    if (a.hor.aberto) {
+      if (!a.hor.ini || !a.hor.fim) throw new Error('Informe o horário de início e de fim.');
+      corpo.horario = { inicio: a.hor.ini, fim: a.hor.fim };
+    }
+    if (!Object.keys(corpo).length) throw new Error('Clique em "Alterar" no que você quer mudar.');
+    return corpo;
+  }
+
+  async function salvarAlteracao() {
+    const a = alt;
+    let corpo;
+    try { corpo = corpoAlteracao(); } catch (err) { a.erro = err.message; $('alt-msg').innerHTML = msgHtml(); return; }
+    a.erro = ''; a.msg = ''; a.enviando = true;
+    $('alt-salvar').disabled = true;
+    $('alt-msg').innerHTML = '<div class="alt-msg ok pulsando">Enviando ao atendimento…</div>';
+    try {
+      const r = await altFetch(`${BASE}/api/pedidos/${a.sid}/alteracao`, { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
+      const j = await r.json().catch(() => ({}));
+      if (alt !== a) return;
+      a.enviando = false;
+      if (r.ok && j.ok) { a.msg = j.mensagem || 'Pedido de alteração enviado ao atendimento.'; a.feito = true; a.chamado = j.chamado_id || null; }
+      else { a.erro = j.erro || 'Não foi possível enviar agora.'; }
+    } catch (err) {
+      if (alt !== a) return;
+      a.enviando = false; a.erro = 'Não foi possível enviar agora. Tente de novo.';
+    }
+    renderAlteracao();
+  }
+
+  async function buscarCepAlt() {
+    const a = alt, e = a.end, d = e.cep.replace(/\D/g, '');
+    if (d.length !== 8) return;
+    e.erro = ''; e.cidade = '';
+    const info = () => { const el = $('alt-cep-info'); if (el) el.textContent = e.erro || e.cidade; };
+    try {
+      const r = await altFetch(`${BASE}/api/envios/cep/${d}`);
+      const j = await r.json();
+      if (alt !== a || e.cep.replace(/\D/g, '') !== d) return;   // trocou o CEP/janela antes da resposta
+      if (!r.ok) throw new Error(j.erro);
+      if (j.logradouro) e.logradouro = j.logradouro;
+      if (j.bairro) e.bairro = j.bairro;
+      e.cidade = [j.cidade, j.uf].filter(Boolean).join('/');
+      const cx = $alt();
+      cx.querySelector('[data-f="logradouro"]').value = e.logradouro;
+      cx.querySelector('[data-f="bairro"]').value = e.bairro;
+      const foco = cx.querySelector(`[data-f="${e.logradouro ? 'numero' : 'logradouro'}"]`); if (foco) foco.focus();
+    } catch (err) {
+      if (alt !== a || e.cep.replace(/\D/g, '') !== d) return;
+      e.erro = 'CEP não encontrado';
+    }
+    info();
+  }
+
+  $('alt-caixa').addEventListener('click', e => {
+    if (!alt) return;
+    if (e.target.closest('[data-alt-fechar]')) { fecharAlteracao(); return; }
+    if (e.target.closest('[data-alt-chat]')) { const id = alt.chamado; fecharAlteracao(); window.atdAbrirChamado(id); return; }
+    const t = e.target.closest('[data-alt-toggle]');
+    if (t) {
+      const k = t.dataset.altToggle, b = k === 'end' ? alt.end : k === 'data' ? alt.data : alt.hor;
+      b.aberto = !b.aberto; alt.erro = ''; renderAlteracao();
+      const primeiro = b.aberto && $alt().querySelector(`[data-bloco="${k}"] input`); if (primeiro) primeiro.focus();
+      return;
+    }
+    if (e.target.closest('#alt-salvar') && !alt.enviando) salvarAlteracao();
+  });
+  $('alt-caixa').addEventListener('input', e => {
+    const f = e.target.dataset.f;
+    if (!alt || !f) return;
+    if (f === 'cep') { alt.end.cep = e.target.value; if (e.target.value.replace(/\D/g, '').length === 8) buscarCepAlt(); else { alt.end.cidade = ''; alt.end.erro = ''; const i = $('alt-cep-info'); if (i) i.textContent = ''; } }
+    else if (f === 'numero' || f === 'complemento' || f === 'logradouro' || f === 'bairro') alt.end[f] = e.target.value;
+    else if (f === 'data') alt.data.v = e.target.value;
+    else if (f === 'hini') alt.hor.ini = e.target.value;
+    else if (f === 'hfim') alt.hor.fim = e.target.value;
+  });
+  $('alt-fundo').addEventListener('click', e => { if (e.target === $('alt-fundo')) fecharAlteracao(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && alt) fecharAlteracao(); });
+  $('tabela').addEventListener('click', e => {
+    const a = e.target.closest('[data-alterar]');
+    if (!a) return;
+    e.preventDefault();
+    const sid = Number(a.dataset.alterar);
+    const todos = [...(dados.pedidos || []), ...(dados.agendados_futuros || [])];
+    abrirAlteracao(sid, todos.find(p => p.service_id === sid));
+  });
 
   // ── Eventos gerais ─────────────────────────────────────────────────────────
   $('abas').addEventListener('click', e => { const b = e.target.closest('[data-aba]'); if (!b) return; aba = b.dataset.aba; mostrando = LOTE; renderTudo(); });

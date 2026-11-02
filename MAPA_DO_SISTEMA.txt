@@ -1132,6 +1132,14 @@
  endereco_entrega.py       Endereço de entrega escolhido na prévia: CEP com IBGE, última
                            entrega do destinatário (Vuupt/portal, por embarcador), <entrega>
                            inserido no XML do lote pelo worker (original intacto).
+alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horário): o cliente NÃO
+                          altera sozinho (Hugo, 01/11); o pedido vira chamado na área Entrega
+                          (mesmo caminho do "Deixar chamado") e o atendimento trata internamente.
+                          Chave portal_cliente.alteracao_entrega. Rotas em app.py:
+                          GET/POST /api/pedidos/<id>/alteracao (404 com a chave desligada; POST
+                          reavalia o pedido, 409 bloqueado, 400 inválido, 403 equipe);
+                          /api/dia traz alteracao_entrega.
+                          Nada muda na Vuupt; deploy so reinicia portal-cliente.
  enviar_stokki.py          Worker que cria o pedido na Stokki (Playwright) e, a cada
                            ciclo, executa os cancelamentos CANCELANDO sob a trava.
                            Fluxo Cross: converte pro item XD e enfileira a troca de NF.
