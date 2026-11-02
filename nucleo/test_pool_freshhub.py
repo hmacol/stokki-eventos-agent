@@ -6,7 +6,6 @@ com `planejamento.fonte_pool: freshhub` o pool vem de GET /api/pool; se a API ca
 
     py -3.11 -m unittest nucleo.test_pool_freshhub -v
 """
-import sqlite3
 import sys
 import unittest
 from pathlib import Path
@@ -76,56 +75,6 @@ class TestFonteFreshhub(_Base):
             self.assertIn("HTTP 503", corpo)
         finally:
             pool._ULTIMO_ALERTA.clear()
-
-    def test_freshhub_com_alteracao_recente_le_vuupt(self):
-        vuupt = mock.Mock()
-        vuupt.listar_servicos.return_value = [{"id": 3}]
-        conn = mock.Mock()
-        with mock.patch("regras.alteracoes_entrega.conectar", return_value=conn), \
-                mock.patch("regras.alteracoes_entrega.houve_alteracao_desde", return_value=True) as houve, \
-                mock.patch.object(pool.freshhub_client.FreshhubClient, "listar_pool") as api, \
-                mock.patch.object(pool, "_alertar_freshhub_indisponivel") as alerta, \
-                self.assertLogs("nucleo.pool", level="INFO") as logs:
-            itens = pool.listar_pool_not_assigned(_config(), vuupt)
-        self.assertEqual(itens, [{"id": 3}])
-        houve.assert_called_once_with(conn, pool.JANELA_ALTERACAO_PORTAL_MIN)
-        conn.close.assert_called_once()
-        api.assert_not_called()
-        alerta.assert_not_called()
-        vuupt.listar_servicos.assert_called_once()
-        self.assertTrue(any("pool.freshhub_alteracao_portal" in linha for linha in logs.output))
-
-    def test_freshhub_sem_alteracao_le_freshhub(self):
-        vuupt = mock.Mock()
-        item = _item_api()
-        conn = mock.Mock()
-        with mock.patch("regras.alteracoes_entrega.conectar", return_value=conn), \
-                mock.patch("regras.alteracoes_entrega.houve_alteracao_desde", return_value=False), \
-                mock.patch.object(pool.freshhub_client.FreshhubClient, "listar_pool", return_value=[item]):
-            itens = pool.listar_pool_not_assigned(_config(), vuupt)
-        self.assertEqual(itens, [item])
-        vuupt.listar_servicos.assert_not_called()
-        conn.close.assert_called_once()
-
-    def test_erro_ao_ler_alteracoes_segue_pelo_freshhub(self):
-        vuupt = mock.Mock()
-        item = _item_api()
-        with mock.patch("regras.alteracoes_entrega.conectar", side_effect=sqlite3.OperationalError("locked")), \
-                mock.patch.object(pool.freshhub_client.FreshhubClient, "listar_pool", return_value=[item]), \
-                self.assertLogs("nucleo.pool", level="WARNING"):
-            itens = pool.listar_pool_not_assigned(_config(), vuupt)
-        self.assertEqual(itens, [item])
-        vuupt.listar_servicos.assert_not_called()
-
-    def test_fonte_nucleo_ignora_alteracoes(self):
-        vuupt = mock.Mock()
-        cfg = {"planejamento": {"fonte_pool": "nucleo"}}
-        with mock.patch("regras.alteracoes_entrega.conectar") as conectar, \
-                mock.patch.object(pool, "listar_pool", return_value=[]) as listar:
-            pool.listar_pool_not_assigned(cfg, vuupt)
-        conectar.assert_not_called()
-        listar.assert_called_once()
-
 
     def test_item_da_api_vira_o_mesmo_item_da_tela_que_o_servico_da_vuupt(self):
         # mesma tecnica de test_pool.TestEquivalenciaComATela: o item da API tem as chaves do servico da Vuupt

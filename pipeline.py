@@ -22,7 +22,6 @@ Modo de execução:
     py -3.11 pipeline.py --pedido PS-34345  # processa um único pedido (por código)
 """
 import argparse
-import atexit
 import logging
 import re
 import sqlite3
@@ -50,8 +49,7 @@ from geocodificacao import geocodificar
 from historico import registrar_execucao
 from email_utils import notificacoes_automaticas_ativas
 from telefone_origem import indexar_xmls, telefone_correto
-from regras.complexidade_entrega import carregar_niveis, classificar_nivel, carregar_ajustes_manuais
-from regras import alteracoes_entrega
+from regras.complexidade_entrega import carregar_niveis, classificar_nivel
 from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agendamento
 from regras import feriados
 from fingerprint_status_vuupt import ja_confirmado_atribuido, marcar_atribuido
@@ -500,63 +498,6 @@ def _liberar_parado_transportadora(res: dict, config_app: dict | None, modo_test
 
 # ── Processamento de um pedido ─────────────────────────────────────────────────
 
-def aplicar_alteracoes_do_cliente(
-    codigo_ps: str,
-    sender_id: int | None,
-    documento_dest: str,
-    endereco_resolvido: dict,
-    horario_entrega: dict | None,
-    conn=None,
-    ajustes=None,
-) -> tuple[dict, dict | None, tuple[float, float] | None]:
-    """O que o cliente escolheu no portal vence o que a importacao extrai.
-    Devolve (endereco, horario, coordenadas fixas ou None):
-      - endereco vigente da alteracao APLICADA (so com sender_id) troca o da NF;
-      - ajuste manual de horario do documento do destinatario troca o extraido.
-    Falha ao ler as tabelas: aviso no log e segue com o da NF (nunca derruba)."""
-    endereco, horario, coords = endereco_resolvido, horario_entrega, None
-    if sender_id is not None:
-        conn_propria = None
-        try:
-            if conn is None:
-                conn = conn_propria = alteracoes_entrega.conectar()
-            vigente = alteracoes_entrega.endereco_vigente(conn, codigo_ps, sender_id)
-        except Exception as e:
-            vigente = None
-            logger.warning(f"  {codigo_ps}: falha ao ler alteracao de entrega do cliente "
-                           f"(segue com o endereco da NF): {e}")
-        finally:
-            if conn_propria is not None:
-                conn_propria.close()
-        if vigente:
-            novo = vigente["endereco"]
-            endereco = dict(endereco_resolvido)
-            endereco.update({
-                "logradouro":  f"{novo.get('logradouro', '')}, {novo.get('numero', '')}".strip(", "),
-                "complemento": novo.get("complemento", ""),
-                "bairro":      novo.get("bairro", ""),
-                "cidade":      novo.get("municipio", ""),
-                "uf":          novo.get("uf", ""),
-                "cep":         novo.get("cep", ""),
-            })
-            if vigente.get("latitude") is not None and vigente.get("longitude") is not None:
-                coords = (vigente["latitude"], vigente["longitude"])
-            logger.info(f"  {codigo_ps}: endereco alterado pelo cliente no portal prevalece sobre o da NF.")
-    try:
-        if ajustes is None:
-            ajustes = carregar_ajustes_manuais()
-        doc = "".join(c for c in str(documento_dest or "") if c.isdigit())
-        aj = ajustes.get(doc)
-        if aj and aj.get("horario_atendimento_inicio") and aj.get("horario_atendimento_fim"):
-            horario = {"inicio": aj["horario_atendimento_inicio"], "fim": aj["horario_atendimento_fim"]}
-            logger.info(f"  {codigo_ps}: horario de recebimento do ajuste manual "
-                        f"({horario['inicio']} as {horario['fim']}) prevalece sobre o extraido.")
-    except Exception as e:
-        logger.warning(f"  {codigo_ps}: falha ao ler ajuste manual de horario "
-                       f"(segue com o extraido): {e}")
-    return endereco, horario, coords
-
-
 def processar_pedido(
     id_stokki: int,
     codigo_ps: str,
@@ -574,8 +515,6 @@ def processar_pedido(
     conjunto_agendamento: set | None = None,
     config_email: dict | None = None,
     config_app: dict | None = None,
-    conn_alteracoes=None,
-    ajustes_manuais: dict | None = None,
 ) -> dict:
     """
     Processa um único pedido: detalhe → endereço → VUUPT.
@@ -763,15 +702,6 @@ def processar_pedido(
         stkkc_id_final = stkkc_id_emb or detalhe.get("stkkc_id")
         dados_banco = _buscar_dados_embarcador_banco(stkkc_id_final) if stkkc_id_final else {}
 
-        # O que o cliente escolheu no portal (endereco/horario) vence o da NF
-        # e o extraido; so neste caminho, que monta o payload da Vuupt.
-        endereco_final, horario_final, coords_fixas = aplicar_alteracoes_do_cliente(
-            codigo_ps, dados_banco.get("sender_id"),
-            detalhe.get("destino", {}).get("documento", ""),
-            res_end.endereco, res_end.horario_entrega,
-            conn=conn_alteracoes, ajustes=ajustes_manuais)
-        resultado["endereco_cliente_portal"] = endereco_final is not res_end.endereco
-
         # Skill do serviço: "{TipoCarga}-{Nível}". Tipo de carga
         # (Congelado/Seco/Refrigerado) é definido pelo EMBARCADOR — vem
         # direto de interno.habilidade (já confiável no banco, confirmado
@@ -889,8 +819,8 @@ def processar_pedido(
             codigo_ps=codigo_ps,
             referencia=ref_final,
             detalhe=detalhe,
-            endereco_resolvido=endereco_final,
-            horario_entrega=horario_final,
+            endereco_resolvido=res_end.endereco,
+            horario_entrega=res_end.horario_entrega,
             skill_ids=skill_ids,
             sender_id=dados_banco.get("sender_id"),
             apelido_embarcador=dados_banco.get("apelido", ""),
@@ -955,15 +885,14 @@ def processar_pedido(
         #   - no customer: alimenta o upsert do contato via
         #     resolver_customer_id, o fingerprint e a forma leve/completa.
         endereco_payload = payload.get("customer", {}).get("address", "")
-        coords = coords_fixas or geocodificar(endereco_payload, google_maps_api_key)
+        coords = geocodificar(endereco_payload, google_maps_api_key)
         if coords:
             payload["latitude"]  = coords[0]
             payload["longitude"] = coords[1]
             payload["customer"]["latitude"]  = coords[0]
             payload["customer"]["longitude"] = coords[1]
-            rotulo = "coordenadas gravadas do endereco do cliente (portal)" if coords_fixas else "geocodificado"
             logger.info(
-                f"  {codigo_ps}: {rotulo} ({coords[0]:.6f}, {coords[1]:.6f})"
+                f"  {codigo_ps}: geocodificado ({coords[0]:.6f}, {coords[1]:.6f})"
             )
         else:
             logger.info(
@@ -985,7 +914,7 @@ def processar_pedido(
                 resultado["vuupt_service_id"] = servico.get("id")
                 resultado["servico_vuupt"] = servico
             logger.info(
-                f"  {codigo_ps}: {acao} no VUUPT (endereço via {'cliente no portal' if resultado['endereco_cliente_portal'] else res_end.fonte})"
+                f"  {codigo_ps}: {acao} no VUUPT (endereço via {res_end.fonte})"
             )
             # Dual-write no núcleo próprio (Fase A do app de motoristas,
             # DOC_EXECUCAO_CLAUDE_APP_MOTORISTAS.md) -- best-effort: a VUUPT
@@ -1282,19 +1211,6 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
     sess_stokki = StokkiSession(config)
     vuupt = VuuptClient(vuupt_token)
 
-    # Alteracoes do cliente no portal: conexao e ajustes manuais lidos UMA vez por rodada
-    # (falha aqui nao para a importacao: processar_pedido cai no que ler por pedido / na NF)
-    conn_alteracoes, ajustes_manuais = None, None
-    try:
-        conn_alteracoes = alteracoes_entrega.conectar()
-        atexit.register(conn_alteracoes.close)
-    except Exception as e:
-        logger.warning(f"Alteracoes do cliente indisponiveis nesta rodada (segue com a NF): {e}")
-    try:
-        ajustes_manuais = carregar_ajustes_manuais()
-    except Exception as e:
-        logger.warning(f"Ajustes manuais de horario indisponiveis nesta rodada (segue com o extraido): {e}")
-
     # Fila de replica do sistema novo (plano 1.2): mesmo processar_pedido, mesma sessao da Stokki e mesma
     # trava da rodada; roda DEPOIS dos pedidos da Stokki (o pipeline normal pode ja ter criado o servico;
     # criar_ou_atualizar_servico e idempotente por code e a fila so devolve o id)
@@ -1312,8 +1228,7 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
                 id_stokki=id_stokki, codigo_ps=codigo, sess_stokki=sess_stokki, catalogo=catalogo, vuupt=vuupt,
                 anthropic_api_key=anthropic_key, modo_teste=modo_teste, google_maps_api_key=gmaps_key,
                 indice_xmls=indice_xmls, mapa_niveis=mapa_niveis, conjunto_agendamento=conjunto_agendamento,
-                config_email=config.get("email", {}), config_app=config,
-                conn_alteracoes=conn_alteracoes, ajustes_manuais=ajustes_manuais),
+                config_email=config.get("email", {}), config_app=config),
             modo_teste=modo_teste, buscar_servico=vuupt.buscar_servico_por_code)
 
     # Lista pedidos
@@ -1479,8 +1394,6 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
             conjunto_agendamento=conjunto_agendamento,
             config_email=config.get("email", {}),
             config_app=config,
-            conn_alteracoes=conn_alteracoes,
-            ajustes_manuais=ajustes_manuais,
         )
         res["fonte_coleta"] = (
             linha.get("_fonte", "manual") if isinstance(linha, dict) else "manual"

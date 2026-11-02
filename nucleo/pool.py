@@ -39,9 +39,6 @@ FONTE_NUCLEO = "nucleo"
 FONTE_FRESHHUB = "freshhub"
 # e-mail da queda pra Vuupt no maximo 1x/hora por processo (a tela recarrega o pool a toda hora)
 INTERVALO_ALERTA_S = 3600
-# o freshhub copia o legado a :10/:40 e carrega a :25/:55 a tarde: alteracao do portal pode levar
-# ~45 min pra aparecer la. Dentro dessa janela a rodada le a Vuupt (so com fonte freshhub).
-JANELA_ALTERACAO_PORTAL_MIN = 60
 _ULTIMO_ALERTA: dict[str, float] = {}
 
 _SQL_BASE = """SELECT * FROM nucleo_pedidos
@@ -121,16 +118,10 @@ def listar_pool_not_assigned(config: dict | None, vuupt) -> list[dict]:
     if fonte == FONTE_NUCLEO:
         return listar_pool()
     if fonte == FONTE_FRESHHUB:
-        # Cliente alterou entrega no portal ha pouco: o freshhub pode ainda nao ter o dado
-        # (copia o legado a :10/:40), entao esta rodada le a Vuupt, que ja tem a alteracao.
-        if _houve_alteracao_portal_recente():
-            logger.info("pool.freshhub_alteracao_portal: alteracao do cliente no portal nos ultimos "
-                        "%d min; rodada le a Vuupt em vez do freshhub", JANELA_ALTERACAO_PORTAL_MIN)
-        else:
-            itens = _listar_pool_freshhub(config)
-            if itens is not None:
-                return itens
-            # API nova fora: a rodada nao para (plano 1.2, Focus 5) -- segue pela Vuupt
+        itens = _listar_pool_freshhub(config)
+        if itens is not None:
+            return itens
+        # API nova fora: a rodada nao para (plano 1.2, Focus 5) -- segue pela Vuupt
     filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"}]
     return vuupt.listar_servicos(filtro, per_page=100, include=["customer"])
 
@@ -146,22 +137,6 @@ def _listar_pool_freshhub(config: dict | None) -> list[dict] | None:
         logger.error("pool.freshhub_indisponivel: caindo pra Vuupt nesta rodada (%s)", e)
         _alertar_freshhub_indisponivel(config, str(e))
         return None
-
-
-def _houve_alteracao_portal_recente() -> bool:
-    """Cliente alterou entrega/horario pelo portal na janela (APLICADA, ou FALHOU depois de tirar da rota).
-    Erro ao ler -> False."""
-    try:
-        from regras import alteracoes_entrega  # import tardio: este modulo fica leve
-        conn = alteracoes_entrega.conectar()
-        try:
-            return alteracoes_entrega.houve_alteracao_desde(conn, JANELA_ALTERACAO_PORTAL_MIN)
-        finally:
-            conn.close()
-    except Exception:  # noqa: BLE001 - falha ao ler a tabela nao pode parar a rodada
-        logger.warning("pool.alteracao_portal_indisponivel: nao consegui ler alteracoes do portal; "
-                       "segue pelo freshhub", exc_info=True)
-        return False
 
 
 def _alertar_freshhub_indisponivel(config: dict | None, erro: str) -> bool:
