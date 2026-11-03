@@ -110,7 +110,8 @@ def motivo_nao_segurar(servico: dict, data_alvo: date, ja_segurados: set[str],
                        api_key: str | None = None) -> str | None:
     """None = o pedido pode esperar 1 dia util. Senao, o motivo (texto
     curto, vai pra etiqueta da rota). Na duvida, nao segura."""
-    if servico.get("scheduled_start"):
+    # Data automática (gerada pelo sistema) não é agendamento do cliente (pedido do Hugo, 02/11).
+    if servico.get("scheduled_start") and not servico.get("_data_automatica"):
         return "tem agendamento"
     if servico.get("recreated_order_origin_id") or _PADRAO_REENTREGA.search(str(servico.get("code") or "")):
         return "é reentrega"

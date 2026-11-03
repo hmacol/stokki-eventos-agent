@@ -131,6 +131,17 @@
                                              data na Vuupt + fecha a pausa -> CRIADO | EM_ESPERA_CLIENTE; sem Stokki)
  Chat/chamados ............................. portal_cliente/chamados.py
  API do app do motorista ................... nucleo/api_motorista.py (+ nucleo/operacao.py)
+ Cadastro de motorista pelo link ........... app.freshhub.com.br/motorista/cadastro (nucleo/api_motorista.py +
+                                             nucleo/templates/cadastro_motorista.html) -> nucleo/cadastro_motorista_link.py
+                                             (agente e veículo na Vuupt via nucleo/vuupt_agentes.py, linha em
+                                             bd_motoristas, aviso no grupo, boas-vindas pelo notificar_whatsapp.py);
+                                             timer cadastro-motorista-link; ficha no painel /motoristas.
+                                             Config: cadastro_motorista_link.{ativo, forcar_destino_whatsapp,
+                                             link_app_vuupt, max_agentes_dia (padrão 10)} e
+                                             whatsapp_notificacoes.motoristas.teto_diario.
+                                             Freios: POST /api/cadastro-link 5/IP/hora e 40/24 h contados no
+                                             banco (motoristas_cadastros.ip_origem); documentos, situação e
+                                             concluir 60/IP/hora cada (memória) -> 429.
  Pool do planejamento (Vuupt x núcleo) ..... nucleo/pool.py (config planejamento.fonte_pool: vuupt | nucleo | freshhub)
    fonte freshhub (plano 1.2 do novo) ..... GET /api/pool da API nova via nucleo/freshhub_client.py (config
                                              freshhub_api.url = http://127.0.0.1:8100 e freshhub_api.token, token
@@ -193,7 +204,8 @@
  3) pipeline.py lista os "Aguardando Transportador", resolve endereço
     (regras/endereco.py), geocodifica (geocodificacao.py), pega telefone do
     XML (telefone_origem.py), calcula nível e tipo de carga, trata agendamento
-    (agendamento_confirmacao.py) e redespacho (redespacho_confirmacao.py),
+    (agendamento_confirmacao.py; pedido novo sem agendamento nasce com data
+    automatica, corte 14h) e redespacho (redespacho_confirmacao.py),
     e cria/atualiza o SERVIÇO na Vuupt (vuupt_client.py). Grava em paralelo
     em nucleo_pedidos. Retiradas viram serviço avulso (retiradas/).
  4) 16h: roteirizacao/criar_rotas_diarias.py --gerar-rascunho
@@ -238,6 +250,8 @@
    (local: 8070; para testar use outra porta, ex. 8099)
  resposta-insucesso     8072   app.freshhub.com.br/insucesso    resposta_insucesso/app.py
  motorista-api          8073   app.freshhub.com.br/motorista    nucleo/api_motorista.py
+                                                                 (página pública do link do cadastro de
+                                                                 motorista: /motorista/cadastro)
  portal-cliente         8074   app.freshhub.com.br/cliente      portal_cliente/app.py
  confirmacao-motoristas 8090   confirmacao.freshhub.com.br      confirmacao_motoristas/app.py
    (instalação separada em /opt/confirmacao-motoristas, cópia manual)
@@ -368,6 +382,10 @@
  18:00                       sequencia-incremento            infra/sequencia_incremento.sh (abaixo)
  20:00                       resumo-diario-embarcador        resumo_diario_embarcador.py --data hoje
  22:00                       sequencia-noite                 infra/sequencia_noite.sh (abaixo)
+ xx:02/17/32/47              cadastro-motorista-link         nucleo/cadastro_motorista_link.py --retentar
+                                                             (termina cadastros do link que a Vuupt ou o
+                                                             WhatsApp deixaram pendentes; sem conflito
+                                                             aberto, até 20 tentativas; desligado = nada)
  a cada 15 min               nucleo-sincronizar-servicos     nucleo/sincronizar_servicos_vuupt.py
  xx:15 e xx:45               nucleo-sincronizar-vuupt        nucleo/sincronizar_vuupt.py
  a cada 15 min               sincronizar-confirmacoes        roteirizacao/sincronizar_respostas_confirmacao.py
@@ -387,7 +405,8 @@
  infra/sequencia_tarde.sh (16h desde 05/10, para no 1º erro):
    executar_tudo.py -> verificar_pedidos_duplicados_vuupt.py ->
    atualizar_agendamentos_confirmados.py -> marcar_clientes_agenda.py ->
-   roteirizacao/criar_rotas_diarias.py --gerar-rascunho ->
+   roteirizacao/criar_rotas_diarias.py --gerar-rascunho (antes do rascunho anda a
+   data automatica de quem nao saiu) ->
    documentos_pedido/processar_documentos.py
  infra/sequencia_incremento.sh (18h, para no 1º erro):
    executar_tudo.py -> verificar_pedidos_duplicados_vuupt.py ->
@@ -732,6 +751,11 @@
                             é lida pela roteirização nem por relatório.
  tipo_carga_embarcador.py   Seco/Refrigerado/Congelado por embarcador.
  clientes_agendamento.py    Quem exige agendamento ("AGENDA" na BD_CLIENTES).
+ agendamento_automatico.py Pedido novo sem agendamento nasce com data (corte 14h, proximo
+                            dia util, so servicos criados a partir de 03/11/2026) e horario
+                            (mensagem da Stokki > horario do destinatario > dia todo).
+                            Registrada como AUTOMATICO em agendamentos_origem: nunca vira
+                            dedicado (nao e data do cliente).
  feriados.py                Calendário de feriados (nacionais, Carnaval, Corpus
                             Christi, 09/07, 25/01; móveis pela Páscoa) e as
                             funções de dia útil usadas por rota do dia, dia
@@ -748,10 +772,13 @@
  preferencias_motoristas.py Catálogo de motoristas (lê a tabela bd_motoristas; planilha
                             só se a tabela estiver vazia).
  cadastro_motoristas.py     Grava motorista novo na tabela bd_motoristas.
+ (motoristas_banco) marcar-posicao: py -3.11 -m regras.motoristas_banco marcar-posicao
+                            --fixos <agent_id,agent_id,...> marca FIXO nesses agentes (resto
+                            ESPORADICO); usado uma vez no deploy do cadastro pelo link.
  disponibilidade_motoristas.py  Férias/atestado por data.
  confirmacao_rotas.py       Estado da confirmação de rota pelo motorista.
  ofertas_rota.py            Marketplace de rotas.
- prioridade_ofertas.py      Ondas de prioridade das ofertas.
+ prioridade_ofertas.py      Ondas de prioridade das ofertas. FIXO vê antes do esporádico (02/11).
  resumo_oferta.py           Resumo da rota exibido ao motorista.
  tarifa_motorista.py        Remuneração por rota/veículo.
  km_cobrado.py              Qual km entra na franquia.
@@ -792,7 +819,9 @@
  roteirizar.py             LEGADO (agrupamento por CEP + otimizador da Vuupt).
 
  Motoristas e restrições
- alocacao_motoristas.py    Alocação equitativa com travas.
+ alocacao_motoristas.py    Alocação equitativa com travas. Fixo antes de esporádico
+                           (bd_motoristas.POSICAO, 02/11): motorista FIXO elegível sempre
+                           vem antes do esporádico; dentro do grupo vale a ordem anterior.
  zonas_sp.py               Zonas da Grande SP.
  rodizio_sp.py             Rodízio municipal por placa.
  regioes_dia_fixo.py       Regiões com dia fixo: dias, frequência (quinzenais:
@@ -810,8 +839,11 @@
                            (piloto, sai mesmo com notificacoes_automaticas
                            desligada); "" = envio real, exige a chave geral.
  registro_dia_fixo.py      Tabelas agendamentos_origem (origem da data
-                           gravada pelo sistema: DIA_FIXO ou EQUIPE) e
+                           gravada pelo sistema: DIA_FIXO, EQUIPE ou AUTOMATICO) e
                            avisos_fora_dia_fixo.
+ datas_automaticas.py      marcar_datas_automaticas (_data_automatica) e, na rodada das 16h,
+                           andar_datas_automaticas: quem tem data AUTOMATICO anterior a data
+                           alvo anda pro proximo dia util (fora de rascunho/rota, nao pausado).
  dedicados.py              Tira dedicados da rota compartilhada.
 
  Vuupt
@@ -893,6 +925,21 @@
                            provisório). Aviso no WhatsApp ALERTAS. Chave
                            ve_financeiro (não é dono do carro = sem extrato no
                            app, só Despesas; marcada na tabela /motoristas).
+ cadastro_motorista_link.py  Cadastro pelo link público (02/11): do cadastro enviado até agente
+                           + veículo na Vuupt, linha em bd_motoristas, aviso no grupo e
+                           boas-vindas ao motorista. processar (idempotente, trava de 10
+                           min), retentar, resolver_conflito, agente_da_vuupt e
+                           desfazer_cadastro_link (cadastro falso/teste: linha inativa,
+                           CPF liberado, apaga na Vuupt só o que ele criou) -- usados
+                           pelo painel. Quem vem pelo link entra como ESPORADICO na
+                           bd_motoristas (o pedido Fixo fica em motoristas_cadastros.posicao). CLI:
+                           py -3.11 nucleo/cadastro_motorista_link.py --retentar
+                           [--modo-teste]. Atrás de cadastro_motorista_link.ativo.
+ vuupt_agentes.py          Cliente da Vuupt p/ criar/ligar/apagar agente e veículo
+                           (POST /users, /vehicles) e gerar e-mail nome@freshhub.com.br.
+ templates/cadastro_motorista.html  Página pública do link: 3 passos pelo celular (dados,
+                           veículo, 5 documentos reduzidos no navegador); retoma de onde
+                           parou (localStorage + /situacao).
  financeiro.py             Extrato do motorista.
  tempos.py, metricas.py    Durações por parada.
  recalcular_km_rotas.py    Backfill de km.
@@ -1087,7 +1134,12 @@
    /atendimento (+/mobile)    atendimento*.html
    /wms, /wms/estoque         wms.html (PWA), wms_estoque.html
    /etiquetas/fila            fila_etiquetas.html (fila de impressão das etiquetas)
-   /motoristas                motoristas.html (tem Editar; grava em bd_motoristas)
+   /motoristas                motoristas.html (tem Editar; grava em bd_motoristas; seção
+                              "Cadastros pelo link": ficha, 5 documentos, etapas, resolver
+                              conflito de telefone/placa, "Tentar de novo" e "Desfazer
+                              (é falso/teste)", só nível total; APIs /api/motoristas/
+                              cadastros-link/<id>/{resolver, tentar, desfazer} e GET
+                              .../agente/<agent_id> (nome e telefone na Vuupt pro confirm))
    /financeiro/pedagios       pedagios.html
    /canhotos                  canhotos.html
    /  (agentes), /execucao/<id>, /historico   index.html, execucao.html, historico.html
@@ -1409,7 +1461,18 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
                              comprovantes, pedágios, reconciliações...)
    motoristas, tarifas_motorista  nucleo/banco.py
    bd_motoristas, bd_motoristas_alteracoes  regras/motoristas_banco.py (cadastro
-                             dos motoristas; histórico de cada mudança com a origem)
+                             dos motoristas; histórico de cada mudança com a origem;
+                             POSICAO = FIXO | ESPORADICO, 02/11)
+   motoristas_cadastros      nucleo/cadastro_motorista.py (auto-cadastro). Colunas do
+                             link (02/11, nucleo/banco.py _COLUNAS_CADASTRO_LINK):
+                             origem (app|link), dados pessoais e do veículo, 3
+                             documentos a mais (selfie, antt, residencia), enviado_em,
+                             estado da Vuupt (vuupt_email, agent_id, vehicle_id,
+                             bd_motorista_id, conflito_* com conflito_tipo
+                             telefone|placa, agente_criado/vehicle_criado = criados
+                             por este cadastro), avisos (aviso_grupo_em,
+                             boas_vindas_situacao), ultimo_erro/tentativas e a trava
+                             processando_em/concluido_em.
    rascunhos_rota, rascunhos_parada  painel_agentes/rascunhos_rota.py  (coluna turno: NULL = manha, TARDE)
    painel_execucoes          painel_agentes/executor.py
    wms_*                     painel_agentes/wms*.py
@@ -1577,3 +1640,23 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
    "Notificador"; painel-agentes.service diz "somente leitura".
  - Pedido segurado fica no pool de propósito até a data nova; o vigia só
    alarma na véspera do prazo de 3 dias úteis.
+ - Cadastro do motorista pelo link (app.freshhub.com.br/motorista/cadastro): vem
+   DESLIGADO (cadastro_motorista_link.ativo; a página e a API respondem 503).
+   Ligado, cada envio cria agente e veículo NA VUUPT DE VERDADE (licença paga,
+   e-mail nome@freshhub.com.br, senha = 6 primeiros dígitos do CPF) e manda
+   boas-vindas ao motorista; enquanto cadastro_motorista_link.forcar_destino_
+   whatsapp tiver número, as boas-vindas vão só pra ele ("" = envio real; chave
+   AUSENTE = vale whatsapp_notificacoes.clientes.forcar_destino e, sem ele, não
+   manda). Telefone ou placa que já é de agente da Vuupt NÃO cria nada (a placa
+   é conferida antes do POST do agente): vira conflito na ficha do /motoristas
+   (usar o agente existente ou criar novo). Teto de agentes NOVOS por dia:
+   cadastro_motorista_link.max_agentes_dia (padrão 10, contado por
+   agente_criado_em); passou, o cadastro fica pendente sem POST e o grupo
+   recebe a pendência. Desligar `ativo` para também o timer e o processamento
+   (o "Tentar de novo"/resolver do painel respondem 409; o Desfazer segue).
+   Entra na bd_motoristas sempre como
+   ESPORADICO (a ficha mostra "Pediu: Fixo"; a equipe promove pelo Editar).
+   Cadastro falso/teste: botão "Desfazer" (inativa a linha, libera o CPF e,
+   se pedido, apaga na Vuupt o agente/veículo que ELE criou). iPhone = sem app Vuupt (SEM_APP=SIM
+   e boas-vindas diferentes). Teste local: sempre Vuupt/WhatsApp falsos
+   (--modo-teste do módulo usa ids falsos); nunca o token real.

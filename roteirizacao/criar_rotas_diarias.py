@@ -95,7 +95,7 @@ from selecao_modelo import escolher_melhor_modelo, agrupar_atual
 from otimizacao_rotas import ordenar_2opt
 from polimento_rotas import polir_entre_rotas
 from rota_tarde import separar_pedidos_tarde, montar_rotas_tarde
-from rotas_client import criar_rota_removendo_conflitos
+from rotas_client import criar_rota_removendo_conflitos, listar_rotas
 from fingerprint_rotas import marcar_alocado
 from documentacao_rota import agendar as agendar_documentacao, aguardar as aguardar_documentacao
 sys.path.insert(0, str(_RAIZ_PROJETO / "painel_agentes"))
@@ -875,6 +875,34 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         # pedido que está parado de propósito. Falha de leitura = segue sem filtro.
         import pedidos_pausados_cliente
         servicos_brutos, _pausados = pedidos_pausados_cliente.separar_pausados(servicos_brutos)
+
+        # Data automática (pedido novo sem agendamento do cliente): marca os
+        # serviços e, no rascunho, anda a data de quem não saiu pro próximo dia
+        # útil. ANTES do dia fixo -- a data nova passa pelas regras de região.
+        try:
+            from datas_automaticas import (
+                marcar_datas_automaticas, ids_fora_do_andar, andar_datas_automaticas)
+            marcar_datas_automaticas(servicos_brutos)
+            if gerar_rascunho:
+                # Fora do andar: rascunho E rota da Vuupt (o incremento das
+                # 18h/22h põe pedido direto em rota ENVIADA; rota feita à mão
+                # também). Se alguma listagem falhar, ids_fora vem None e
+                # ninguém anda nesta rodada (revisão final, 02/11).
+                ids_fora = ids_fora_do_andar(agora_brasilia.date(), data_alvo,
+                                             lambda **kw: listar_rotas(token, **kw))
+                andaram = (andar_datas_automaticas(servicos_brutos, vuupt, data_alvo, ids_fora, modo_teste)
+                           if ids_fora is not None else [])
+                if andaram:
+                    for a in andaram:
+                        logger.info(f"{'[SIMULAÇÃO] ' if modo_teste else ''}Data automática andou: "
+                                    f"{a['servico'].get('code')} {a['de']} -> {a['para']}")
+                    if not modo_teste:
+                        from nucleo.sincronizar_servicos_vuupt import ressincronizar_ids
+                        ressincronizar_ids(vuupt, [a["servico"]["id"] for a in andaram])
+                    logger.info(f"{len(andaram)} pedido(s) com data automática andaram"
+                                f"{' (simulação)' if modo_teste else ''}.")
+        except Exception as e:
+            logger.error(f"Falha ao tratar datas automáticas (não afeta a criação de rotas): {e}")
 
         # Regiões com dia fixo de entrega (pedido do Hugo, 02/08) --
         # roda ANTES de tudo: define scheduled_start pra quem ainda

@@ -186,6 +186,25 @@ def elegivel_para_data(servico: dict, data_alvo) -> bool:
     return data_agendada <= data_alvo
 
 
+def ids_servicos_em_rotas(rotas: list[dict]) -> set:
+    """IDs dos serviços que estão nas rotas da Vuupt (vindas com
+    include=services), menos as rotas canceladas -- serviço que sobrou em
+    rota cancelada é órfão, não conta como "já em rota". 'services' vem
+    embrulhado como {"data": [...]} (confirmado 02/08). Usado pelo
+    incremento e pela data automática (revisão final, 02/11)."""
+    ids: set = set()
+    for rota in rotas:
+        if rota.get("status") == "canceled":
+            continue
+        servicos = rota.get("services")
+        if isinstance(servicos, dict):
+            servicos = servicos.get("data") or []
+        for s in servicos if isinstance(servicos, list) else []:
+            if isinstance(s, dict) and s.get("id") is not None:
+                ids.add(s["id"])
+    return ids
+
+
 def extrair_volume_caixas(servico: dict) -> int:
     """
     Quantidade de caixas/volumes do pedido, vinda do campo
@@ -255,12 +274,16 @@ def _chave_nivel4(servico: dict) -> tuple[object, object, object]:
     diferentes sai em rotas independentes, mesmo indo pro mesmo CD;
     até então embarcador não entrava na chave, regra de 17/08, que por
     sua vez substituiu a "mesma rede" por raiz de CNPJ). A data de
-    agendamento só entra na comparação quando AMBOS têm agendamento.
+    agendamento só entra na comparação quando AMBOS têm agendamento;
+    data automática (`_data_automatica`, gerada pelo sistema) não conta
+    como agendamento (pedido do Hugo, 02/11).
     Sem agendamento (`_dia_agendamento` retorna None pros dois) junta
     só por endereço+embarcador; um agendado + um sem agendamento nunca
     junta (chaves com `dia` None x data nunca batem), mesmo endereço
     igual."""
-    return (servico.get("address"), servico.get("sender_id"), _dia_agendamento(servico))
+    # Data automática não é agendamento do cliente: dia None (pedido do Hugo, 02/11).
+    dia = None if servico.get("_data_automatica") else _dia_agendamento(servico)
+    return (servico.get("address"), servico.get("sender_id"), dia)
 
 
 def _dia_agendamento(servico: dict):
@@ -716,6 +739,7 @@ def consolidar_regioes_pequenas(grupos: dict[str, list[dict]], minimo: int = 10,
 # ambos têm agendamento (`scheduled_start`), a data também precisa
 # bater; sem agendamento nos dois, junta só pelo endereço+embarcador;
 # um agendado + um sem agendamento nunca junta -- ver _chave_nivel4.
+# Data automática (`_data_automatica`) não conta como agendamento.
 # Grupo cujo volume SOMADO já cabe num tipo de veículo grande (regras/
 # tipo_veiculo.py) sai como 1 rota só desse tipo, sem teto de 100
 # caixas nem de NIVEL_4_TAMANHO_MAXIMO_ROTA pedidos (pedido do Hugo,
@@ -1790,7 +1814,8 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
     Nível 4 (pedido do Hugo, 10/08 -- ajustado 15/08, 17/08 e 09/09):
     nunca divide rota com pedido de nível 1/2/3. Mas PODE dividir rota
     com OUTRO nível 4 do MESMO endereço de entrega e MESMO embarcador
-    (e mesma data de agendamento, quando ambos têm agendamento); grupo
+    (e mesma data de agendamento, quando ambos têm agendamento; data
+    automática não conta como agendamento); grupo
     que soma volume de veículo grande sai como 1 rota desse tipo -- ver
     _chave_nivel4 e separar_pedidos_exclusivos, chamada abaixo,
     compartilhada por TODOS os esquemas de roteirização (não só este).

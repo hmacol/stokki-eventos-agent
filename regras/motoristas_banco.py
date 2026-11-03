@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 COLUNAS = [
     "AGENT_ID_VUUPT", "VEHICLE_ID_VUUPT", "NOME_MOTORISTA", "ACEITA_VIAGENS", "DIAS_DISPONIVEIS",
     "MAX_ROTAS_DIA", "ATIVO", "ZONAS_PREFERIDAS", "TELEFONE_MOTORISTA", "EMAIL_MOTORISTA", "PLACA",
-    "CPF_MOTORISTA", "TIPO_VEICULO", "APENAS_CARGA_SECA", "SEM_APP",
+    "CPF_MOTORISTA", "TIPO_VEICULO", "APENAS_CARGA_SECA", "SEM_APP", "POSICAO",
 ]
 _INTEIROS = {"AGENT_ID_VUUPT", "VEHICLE_ID_VUUPT", "MAX_ROTAS_DIA"}
 
@@ -165,6 +165,33 @@ def atualizar(conn, motorista_id: int, campos: dict, origem: str) -> list[dict]:
     return mudancas
 
 
+def liberar_cpf(conn, motorista_id: int, origem: str) -> bool:
+    """Zera CPF_MOTORISTA (cadastro falso/de teste desfeito no painel: o CPF
+    volta a poder se cadastrar). atualizar() recusa mudar CPF preenchido; esta
+    e a saida explicita, e fica no historico. Devolve se mudou."""
+    atual = conn.execute("SELECT * FROM bd_motoristas WHERE id = ?", (motorista_id,)).fetchone()
+    if atual is None:
+        raise ValueError(f"motorista id={motorista_id} nao existe")
+    if atual["CPF_MOTORISTA"] is None:
+        return False
+    agora = banco.agora()
+    conn.execute("UPDATE bd_motoristas SET CPF_MOTORISTA = NULL, atualizado_em = ? WHERE id = ?", (agora, motorista_id))
+    _historico(conn, motorista_id, atual["AGENT_ID_VUUPT"], "CPF_MOTORISTA", atual["CPF_MOTORISTA"], None, origem, agora)
+    conn.commit()
+    return True
+
+
+def marcar_posicao(conn, fixos: set[int], origem: str) -> int:
+    """FIXO pra quem tem AGENT_ID_VUUPT em `fixos`, ESPORADICO pro resto (pelo
+    atualizar(): fica no historico). Devolve quantas linhas mudaram."""
+    mudadas = 0
+    for registro in listar(conn):
+        posicao = "FIXO" if registro["AGENT_ID_VUUPT"] in fixos else "ESPORADICO"
+        if atualizar(conn, registro["id"], {"POSICAO": posicao}, origem):
+            mudadas += 1
+    return mudadas
+
+
 def escrever_espelho(conn, caminho: Path | None = None) -> bool:
     """Grava a planilha-espelho (só COLUNAS, na ordem de id) via arquivo
     temporário + os.replace. Nunca levanta: erro vira log e False."""
@@ -248,12 +275,21 @@ def main(argv=None) -> int:
         p.add_argument("--db", default=None, help="banco alternativo (ensaio); padrao: dados/dados.db")
         if nome == "importar":
             p.add_argument("--substituir", action="store_true")
+    p = sub.add_parser("marcar-posicao")
+    p.add_argument("--fixos", required=True, help="AGENT_ID_VUUPT dos fixos, separados por virgula")
+    p.add_argument("--db", default=None, help="banco alternativo (ensaio); padrao: dados/dados.db")
     args = ap.parse_args(argv)
     conn = banco.conectar(args.db)
     try:
         if args.cmd == "importar":
             n = importar_planilha(conn, Path(args.planilha), substituir=args.substituir)
             print(f"{n} motoristas importados")
+            escrever_espelho(conn, (Path(args.db).parent / "BD_MOTORISTAS.xlsx") if args.db else None)
+            return 0
+        if args.cmd == "marcar-posicao":
+            fixos = {int(x) for x in args.fixos.split(",") if x.strip()}
+            n = marcar_posicao(conn, fixos, "marcar-posicao")
+            print(f"{n} linhas alteradas")
             escrever_espelho(conn, (Path(args.db).parent / "BD_MOTORISTAS.xlsx") if args.db else None)
             return 0
         difs = conferir(conn, Path(args.planilha))

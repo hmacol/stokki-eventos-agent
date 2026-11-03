@@ -11,7 +11,8 @@ conhecer o calendario (12/10/2026 foi o primeiro caso) e pra qualquer
 feriado futuro em que um embarcador escolha a data errada.
 
 A data nova e registrada em agendamentos_origem como DIA_FIXO (data do
-sistema), entao fora_dia_fixo.py nao a trata como data do cliente.
+sistema) -- ou AUTOMATICO se a data do feriado ja era automatica --, entao
+fora_dia_fixo.py nao a trata como data do cliente.
 
 Uso (da raiz, na VPS como www-data):
   venv/bin/python reagendar_feriado.py --modo-teste            # proximo feriado, so lista
@@ -80,21 +81,39 @@ def plano(servicos: list[dict], feriado: date) -> list[dict]:
 
 def aplicar(itens: list[dict], vuupt, db_path=None) -> int:
     import registro_dia_fixo
+    db_path = db_path or registro_dia_fixo.DB_PATH
     feitos = []
-    for i in itens:
-        s, d = i["servico"], i["para"]
-        try:
-            vuupt.atualizar_servico(s["id"], {
-                "scheduled_start": f"{d.isoformat()}T{HORARIO_INICIO_PADRAO}-03:00",
-                "scheduled_end": f"{d.isoformat()}T{HORARIO_FIM_PADRAO}-03:00",
-            })
-            feitos.append({"servico": s, "data": d})
-            logger.info(f"  {s.get('code')}: {i['de']:%d/%m} -> {d:%d/%m} ({i['regiao']})")
-        except Exception as e:
-            logger.warning(f"  {s.get('code')}: falha ao reagendar ({e})")
-    registro_dia_fixo.registrar_origens(feitos, registro_dia_fixo.ORIGEM_DIA_FIXO,
-                                        db_path or registro_dia_fixo.DB_PATH)
-    return len(feitos)
+    automaticos = []
+    try:
+        conn = registro_dia_fixo.conectar(db_path)
+    except Exception as e:
+        logger.warning(f"  banco de origens indisponivel ({e}); todos como DIA_FIXO")
+        conn = None
+    try:
+        for i in itens:
+            s, d = i["servico"], i["para"]
+            # data do feriado era automatica: a nova continua automatica
+            automatica = False
+            if conn is not None:
+                try:
+                    automatica = registro_dia_fixo.data_e_automatica(conn, s, i["de"])
+                except Exception as e:
+                    logger.warning(f"  {s.get('code')}: nao consegui consultar a origem ({e}); DIA_FIXO")
+            try:
+                vuupt.atualizar_servico(s["id"], {
+                    "scheduled_start": f"{d.isoformat()}T{HORARIO_INICIO_PADRAO}-03:00",
+                    "scheduled_end": f"{d.isoformat()}T{HORARIO_FIM_PADRAO}-03:00",
+                })
+                (automaticos if automatica else feitos).append({"servico": s, "data": d})
+                logger.info(f"  {s.get('code')}: {i['de']:%d/%m} -> {d:%d/%m} ({i['regiao']})")
+            except Exception as e:
+                logger.warning(f"  {s.get('code')}: falha ao reagendar ({e})")
+    finally:
+        if conn is not None:
+            conn.close()
+    registro_dia_fixo.registrar_origens(feitos, registro_dia_fixo.ORIGEM_DIA_FIXO, db_path)
+    registro_dia_fixo.registrar_origens(automaticos, registro_dia_fixo.ORIGEM_AUTOMATICO, db_path)
+    return len(feitos) + len(automaticos)
 
 
 def main(argv=None) -> int:

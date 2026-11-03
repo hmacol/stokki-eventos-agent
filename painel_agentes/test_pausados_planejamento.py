@@ -6,6 +6,7 @@ pedido pausado (nao esconde) e "roteirizar selecionados" pula quem esta pausado.
     py -3.11 -m unittest test_pausados_planejamento   (de dentro de painel_agentes/)
 """
 import sys
+import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
@@ -47,7 +48,13 @@ class TestRoteirizarSelecionados(unittest.TestCase):
         rascunhos = [{"sublote": [{"id": 2}], "nome": "x"}]
         self.roteirizar = mock.Mock(return_value=rascunhos)
         import criar_rotas_diarias
+        # marcar_datas_automaticas abre o registro de origens: banco temporario,
+        # nunca o dados/dados.db (revisao final, 02/11)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.db = Path(tmp.name) / "t.db"
         patches = [
+            mock.patch("registro_dia_fixo.DB_PATH", self.db),
             mock.patch.object(pr, "_carregar_config", return_value={}),
             mock.patch.object(pr.rascunhos_rota, "listar_rascunhos_do_dia", return_value=[]),
             mock.patch.object(pr, "VuuptClient"),
@@ -71,6 +78,7 @@ class TestRoteirizarSelecionados(unittest.TestCase):
     def test_sem_pausado_conta_zero(self):
         r = self._rodar([1, 2], set())
         self.assertEqual(r["pedidos_pausados"], 0)
+        self.assertTrue(self.db.exists())  # o registro de origens abriu o banco temporario
 
     def test_tudo_pausado_diz_o_motivo(self):
         with self.assertRaises(ValueError) as ctx:

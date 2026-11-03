@@ -45,7 +45,15 @@ EMAIL_TESTE = "hugo@freshlogbr.com"
 
 def _precisa_de_agendamento_valido(servico: dict, hoje: date) -> bool:
     """True se o scheduled_start está em branco OU com data anterior a
-    hoje (agendamento vencido/nunca preenchido)."""
+    hoje (agendamento vencido/nunca preenchido).
+
+    Data automática (posta pelo sistema, marcada por
+    datas_automaticas.marcar_datas_automaticas) nunca é agendamento
+    válido: destinatário que virou AGENDA depois de o pedido ganhar a
+    data automática continua precisando da data do cliente (revisão
+    final, 02/11). Quem chama tem de marcar ANTES de identificar_pendentes."""
+    if servico.get("_data_automatica"):
+        return True
     scheduled_start = servico.get("scheduled_start")
     if not scheduled_start:
         return True

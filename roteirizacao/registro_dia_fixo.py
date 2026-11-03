@@ -7,8 +7,9 @@ spec docs/superpowers/specs/2026-10-03-dias-fixos-v2-design.md):
 
   agendamentos_origem   origem de cada scheduled_start que o PROPRIO sistema
                         gravou: DIA_FIXO (regioes_dia_fixo.aplicar_regioes_dia_fixo)
-                        ou EQUIPE (Planejamento: reagendar_pedido/reagendar_pedidos).
-                        Data sem linha DIA_FIXO/EQUIPE = data do CLIENTE
+                        EQUIPE (Planejamento: reagendar_pedido/reagendar_pedidos) ou
+                        AUTOMATICO (data gravada pelo pipeline / data que andou).
+                        Data sem linha DIA_FIXO/EQUIPE/AUTOMATICO = data do CLIENTE
                         (fora_dia_fixo.py). Edicao direta na tela da Vuupt nao
                         passa por aqui e conta como do cliente.
   avisos_fora_dia_fixo  um aviso por pedido ao embarcador quando a data dele
@@ -35,7 +36,8 @@ DB_PATH = _RAIZ / "dados" / "dados.db"
 
 ORIGEM_DIA_FIXO = "DIA_FIXO"
 ORIGEM_EQUIPE = "EQUIPE"
-ORIGENS_NAO_CLIENTE = (ORIGEM_DIA_FIXO, ORIGEM_EQUIPE)
+ORIGEM_AUTOMATICO = "AUTOMATICO"
+ORIGENS_NAO_CLIENTE = (ORIGEM_DIA_FIXO, ORIGEM_EQUIPE, ORIGEM_AUTOMATICO)
 
 
 def conectar(db_path=DB_PATH) -> sqlite3.Connection:
@@ -91,14 +93,14 @@ def registrar_origem(conn: sqlite3.Connection, servico: dict, data: date, origem
     return gravados
 
 
-def data_nao_e_do_cliente(conn: sqlite3.Connection, servico: dict, data: date) -> bool:
-    """A data foi gravada pelo dia fixo ou pela equipe pra este pedido
-    (qualquer codigo do servico OU o mesmo service_id)?"""
+def _tem_origem(conn: sqlite3.Connection, servico: dict, data: date, origens: tuple) -> bool:
+    """Existe linha com uma dessas origens na data pra algum codigo do
+    servico OU o mesmo service_id?"""
     codigos = pedidos_dedicados.codigos_do_servico(servico)
     sid = _service_id(servico)
     if not codigos and not sid:
         return False
-    condicoes, params = [], [data.isoformat(), *ORIGENS_NAO_CLIENTE]
+    condicoes, params = [], [data.isoformat(), *origens]
     if codigos:
         condicoes.append(f"codigo IN ({','.join('?' * len(codigos))})")
         params += codigos
@@ -106,8 +108,22 @@ def data_nao_e_do_cliente(conn: sqlite3.Connection, servico: dict, data: date) -
         condicoes.append("service_id = ?")
         params.append(sid)
     return conn.execute(
-        f"SELECT 1 FROM agendamentos_origem WHERE data = ? AND origem IN (?, ?) AND ({' OR '.join(condicoes)}) LIMIT 1",
+        f"SELECT 1 FROM agendamentos_origem WHERE data = ? AND origem IN ({','.join('?' * len(origens))}) "
+        f"AND ({' OR '.join(condicoes)}) LIMIT 1",
         params).fetchone() is not None
+
+
+def data_nao_e_do_cliente(conn: sqlite3.Connection, servico: dict, data: date) -> bool:
+    """A data foi gravada pelo dia fixo, pela equipe ou pelo pipeline
+    (automatica) pra este pedido (qualquer codigo do servico OU o mesmo service_id)?"""
+    return _tem_origem(conn, servico, data, ORIGENS_NAO_CLIENTE)
+
+
+def data_e_automatica(conn: sqlite3.Connection, servico: dict, data: date) -> bool:
+    """Existe linha AUTOMATICO pra este pedido (qualquer codigo do servico OU o
+    mesmo service_id) nesta data? So isso: quem chama passa a data que o
+    pedido tem agora (revisao final, 02/11)."""
+    return _tem_origem(conn, servico, data, (ORIGEM_AUTOMATICO,))
 
 
 def registrar_origens(itens: list[dict], origem: str, db_path=DB_PATH) -> int:

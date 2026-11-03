@@ -128,6 +128,22 @@ class TestCadastroMotoristas(unittest.TestCase):
         self.assertEqual((reg["ACEITA_VIAGENS"], reg["ATIVO"], reg["APENAS_CARGA_SECA"]), ("NAO", "NAO", "SIM"))
         self.assertEqual((reg["DIAS_DISPONIVEIS"], reg["MAX_ROTAS_DIA"]), ("SEGUNDA,TERCA", 3))
 
+    def test_posicao_aceita_fixo_esporadico_e_vazio(self):
+        mid = self._cadastrado()
+        cm.editar_motorista({}, mid, {"posicao": "fixo"}, "hugo", conn=self.conn)
+        self.assertEqual(mb.listar(self.conn)[0]["POSICAO"], "FIXO")
+        cm.editar_motorista({}, mid, {"posicao": "Esporadico"}, "hugo", conn=self.conn)
+        self.assertEqual(mb.listar(self.conn)[0]["POSICAO"], "ESPORADICO")
+        cm.editar_motorista({}, mid, {"posicao": ""}, "hugo", conn=self.conn)
+        self.assertIsNone(mb.listar(self.conn)[0]["POSICAO"])
+
+    def test_posicao_invalida_levanta(self):
+        mid = self._cadastrado()
+        with self.assertRaises(ValueError):
+            cm.editar_motorista({}, mid, {"posicao": "QUALQUER"}, "hugo", conn=self.conn)
+        with self.assertRaises(ValueError):
+            cm.cadastrar_motorista({}, self._dados(agent_id=78, posicao="QUALQUER"), conn=self.conn)
+
     def test_editar_agent_id_e_tipo_invalido_levantam(self):
         mid = self._cadastrado()
         with self.assertRaises(ValueError):

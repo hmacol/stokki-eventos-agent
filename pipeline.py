@@ -28,7 +28,7 @@ import sqlite3
 import sys
 import time
 import unicodedata
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
@@ -49,7 +49,9 @@ from geocodificacao import geocodificar
 from historico import registrar_execucao
 from email_utils import notificacoes_automaticas_ativas
 from telefone_origem import indexar_xmls, telefone_correto
-from regras.complexidade_entrega import carregar_niveis, classificar_nivel
+from regras.complexidade_entrega import (
+    carregar_ajustes_manuais, carregar_horarios, carregar_niveis, classificar_nivel)
+from regras.agendamento_automatico import A_PARTIR_DE, data_automatica, janela_automatica
 from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agendamento
 from regras import feriados
 from fingerprint_status_vuupt import ja_confirmado_atribuido, marcar_atribuido
@@ -496,6 +498,69 @@ def _liberar_parado_transportadora(res: dict, config_app: dict | None, modo_test
         logger.warning(f"  {res.get('codigo_ps')}: falha ao liberar parado de transportadora: {e}")
 
 
+# ── Agendamento automático (pedido do Hugo, 02/11) ─────────────────────────────
+
+FONTE_PROXIMO_DIA_UTIL = "proximo_dia_util"
+
+
+def _data_automatica_ja_gravada(servico_existente: dict, db_path=None):
+    """Servico que já existe e cuja data foi gravada por nós (origem AUTOMATICO): devolve a MESMA
+    janela, senão o fingerprint (que guarda o payload da criação) vê diferença na rodada seguinte e
+    manda PUT sem data. Qualquer falha só vai pro log e segue como antes (sem data)."""
+    inicio, fim = servico_existente.get("scheduled_start"), servico_existente.get("scheduled_end")
+    if not inicio or not fim:
+        return None
+    try:
+        from nucleo.normalizacao import vuupt_para_local
+        from roteirizacao import registro_dia_fixo
+        ini_local = datetime.fromisoformat(vuupt_para_local(inicio))
+        fim_local = datetime.fromisoformat(vuupt_para_local(fim))
+        conn = registro_dia_fixo.conectar(db_path or registro_dia_fixo.DB_PATH)
+        try:
+            if not registro_dia_fixo.data_e_automatica(conn, servico_existente, ini_local.date()):
+                return None
+        finally:
+            conn.close()
+        par = (_converter_data_para_iso(ini_local.strftime("%d/%m/%Y %H:%M")),
+               _converter_data_para_iso(fim_local.strftime("%d/%m/%Y %H:%M")))
+        return par if all(par) else None
+    except Exception as e:
+        logger.warning(f"  data automática já gravada não conferida ({e}) — segue sem data.")
+        return None
+
+
+def agendamento_automatico(servico_existente, horario_mensagem, documento, data_saida,
+                           inicio_rodada, mapa_horarios, ajustes_manuais, db_path=None):
+    """(inicio, fim) ISO da data automática. Data NOVA só na CRIAÇÃO do serviço: o pipeline reprocessa
+    os not_assigned toda rodada, então serviço que já existe nunca ganha nem muda data (se a data dele
+    é automática, repete a mesma pra o payload não sair sem data)."""
+    if servico_existente:
+        return _data_automatica_ja_gravada(servico_existente, db_path)
+    if inicio_rodada is None or inicio_rodada.date() < A_PARTIR_DE:
+        return None
+    data = data_automatica(inicio_rodada, data_saida).strftime("%d/%m/%Y")
+    ini, fim = janela_automatica(horario_mensagem, documento, mapa_horarios, ajustes_manuais)
+    par = (_converter_data_para_iso(f"{data} {ini}"), _converter_data_para_iso(f"{data} {fim}"))
+    return par if all(par) else None
+
+
+def _texto_agendado_automatico(payload: dict) -> str:
+    ini, fim = payload["scheduled_start"], payload.get("scheduled_end") or payload["scheduled_start"]
+    return (f"agendado automaticamente pra {ini[8:10]}/{ini[5:7]} ({ini[11:16]}-{fim[11:16]})")
+
+
+def registrar_data_automatica(servico: dict, scheduled_start: str, db_path=None) -> int:
+    """Marca a data como AUTOMATICO (não vira dedicado). Tolerante: falha só vai pro log."""
+    try:
+        from roteirizacao import registro_dia_fixo
+        return registro_dia_fixo.registrar_origens(
+            [{"servico": servico, "data": date.fromisoformat(scheduled_start[:10])}],
+            registro_dia_fixo.ORIGEM_AUTOMATICO, db_path or registro_dia_fixo.DB_PATH)
+    except Exception as e:
+        logger.warning(f"  data automática não registrada ({e})")
+        return 0
+
+
 # ── Processamento de um pedido ─────────────────────────────────────────────────
 
 def processar_pedido(
@@ -515,6 +580,9 @@ def processar_pedido(
     conjunto_agendamento: set | None = None,
     config_email: dict | None = None,
     config_app: dict | None = None,
+    mapa_horarios: dict | None = None,
+    ajustes_manuais: dict | None = None,
+    inicio_rodada: datetime | None = None,
 ) -> dict:
     """
     Processa um único pedido: detalhe → endereço → VUUPT.
@@ -810,8 +878,21 @@ def processar_pedido(
                         f"  {codigo_ps}: exige agendamento mas embarcador sem e-mail/"
                         f"notificação desativada — aguardando confirmação manual."
                     )
+        else:
+            # Sem agendamento de verdade: pedido NOVO nasce com a data do próximo
+            # dia útil (pedido do Hugo, 02/11). Não é agendamento do cliente.
+            try:
+                automatico = agendamento_automatico(
+                    servico_existente, res_end.horario_entrega, cnpj_destino_bruto, data_saida,
+                    inicio_rodada, mapa_horarios or {}, ajustes_manuais or {})
+            except Exception as e:
+                logger.warning(f"  {codigo_ps}: falha na data automática (segue sem data): {e}")
+                automatico = None
+            if automatico:
+                scheduled_start_final, scheduled_end_final = automatico
+                fonte_agendamento = FONTE_PROXIMO_DIA_UTIL
 
-        resultado["tem_agendamento"] = fonte_agendamento != "nao_exigido"
+        resultado["tem_agendamento"] = fonte_agendamento not in ("nao_exigido", FONTE_PROXIMO_DIA_UTIL)
         resultado["fonte_agendamento"] = fonte_agendamento
 
         payload = montar_payload_vuupt(
@@ -903,6 +984,8 @@ def processar_pedido(
         if modo_teste:
             logger.info(f"  {codigo_ps}: [TESTE] payload montado, fonte={res_end.fonte}")
             resultado["acao"] = "simulado"
+            if fonte_agendamento == FONTE_PROXIMO_DIA_UTIL and payload.get("scheduled_start"):
+                logger.info(f"  {codigo_ps}: [TESTE] {_texto_agendado_automatico(payload)}")
         else:
             resposta_vuupt, acao = vuupt.criar_ou_atualizar_servico(payload)
             resultado["acao"] = acao
@@ -916,6 +999,13 @@ def processar_pedido(
             logger.info(
                 f"  {codigo_ps}: {acao} no VUUPT (endereço via {res_end.fonte})"
             )
+            if (acao == "criado" and fonte_agendamento == FONTE_PROXIMO_DIA_UTIL
+                    and resultado.get("vuupt_service_id")):
+                try:
+                    registrar_data_automatica(servico, payload["scheduled_start"])
+                    logger.info(f"  {codigo_ps}: {_texto_agendado_automatico(payload)}")
+                except Exception as e:
+                    logger.warning(f"  {codigo_ps}: data automática não registrada ({e})")
             # Dual-write no núcleo próprio (Fase A do app de motoristas,
             # DOC_EXECUCAO_CLAUDE_APP_MOTORISTAS.md) -- best-effort: a VUUPT
             # já foi atualizada, falha aqui só vira aviso.
@@ -1104,18 +1194,30 @@ def _estacao_impressao_horaria(modo_teste: bool) -> None:
 def main_horario(modo_teste: bool = False, fila_freshhub: bool = False) -> None:
     if not _obter_trava_horario():
         return
+    # Início da rodada (corte das 14h da data automática) logo depois da trava e
+    # ANTES da Estação de Impressão, que pode levar 10+ min e empurraria a
+    # rodada das 14h05 pra D+2 (revisão final, 02/11).
+    inicio_rodada = datetime.now(timezone(timedelta(hours=-3)))
     from stokki import sessao_uso
     try:
         _estacao_impressao_horaria(modo_teste)
         _renovar_trava(DONO_TRAVA_HORARIO)
-        main(modo_teste=modo_teste, dono_trava=DONO_TRAVA_HORARIO, fila_freshhub=fila_freshhub)
+        main(modo_teste=modo_teste, dono_trava=DONO_TRAVA_HORARIO, fila_freshhub=fila_freshhub,
+             inicio_rodada=inicio_rodada)
     finally:
         sessao_uso.liberar(DONO_TRAVA_HORARIO)
 
 
 def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: str = "",
          filtro_statuses: list[str] | None = None, dono_trava: str | None = None,
-         fila_freshhub: bool = False):
+         fila_freshhub: bool = False, inicio_rodada: datetime | None = None):
+    # Início da rodada (corte das 14h da data automática). A rodada horária
+    # passa o horário que o main_horario pegou logo depois da trava (antes da
+    # Estação de Impressão); os outros chamadores usam o do 1º main(). A espera
+    # da trava da Stokki abaixo (sessao_uso.adquirir) conta como processamento:
+    # a chamada recursiva mantém este valor (revisão final, 02/11).
+    if inicio_rodada is None:
+        inicio_rodada = datetime.now(timezone(timedelta(hours=-3)))
     # Rodada completa fora do --horario (sequências, painel): entra na fila
     # da Stokki e espera a vez até 2h (Hugo, 05/10). Sem a vez, desiste
     # SEM logar por cima de ninguém -- o erro vai pro resumo da sequência
@@ -1129,7 +1231,8 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
                                f"derrubar quem está usando.")
         try:
             return main(modo_teste=modo_teste, filtro_statuses=filtro_statuses,
-                        dono_trava=DONO_TRAVA_SEQUENCIA, fila_freshhub=fila_freshhub)
+                        dono_trava=DONO_TRAVA_SEQUENCIA, fila_freshhub=fila_freshhub,
+                        inicio_rodada=inicio_rodada)
         finally:
             sessao_uso.liberar(DONO_TRAVA_SEQUENCIA)
 
@@ -1163,6 +1266,15 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
     # destinatário cai no nível padrão (1), sem travar o pipeline.
     caminho_niveis = config.get("complexidade_entrega", {}).get("planilha", "")
     mapa_niveis = carregar_niveis(caminho_niveis)
+
+    # Janela de horário do destinatário + início da rodada, pra data automática
+    # de pedido novo sem agendamento (pedido do Hugo, 02/11).
+    try:
+        mapa_horarios = carregar_horarios(caminho_niveis)
+        ajustes_manuais = carregar_ajustes_manuais()
+    except Exception as e:
+        logger.warning(f"Horários do destinatário indisponíveis para a data automática ({e}) — seguem vazios.")
+        mapa_horarios, ajustes_manuais = {}, {}
 
     # Cadastro de clientes (destinatário, por CNPJ/CPF) que exigem
     # agendamento real de entrega. Caminho configurável em config.yaml:
@@ -1228,7 +1340,8 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
                 id_stokki=id_stokki, codigo_ps=codigo, sess_stokki=sess_stokki, catalogo=catalogo, vuupt=vuupt,
                 anthropic_api_key=anthropic_key, modo_teste=modo_teste, google_maps_api_key=gmaps_key,
                 indice_xmls=indice_xmls, mapa_niveis=mapa_niveis, conjunto_agendamento=conjunto_agendamento,
-                config_email=config.get("email", {}), config_app=config),
+                config_email=config.get("email", {}), config_app=config,
+                mapa_horarios=mapa_horarios, ajustes_manuais=ajustes_manuais, inicio_rodada=inicio_rodada),
             modo_teste=modo_teste, buscar_servico=vuupt.buscar_servico_por_code)
 
     # Lista pedidos
@@ -1394,6 +1507,9 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
             conjunto_agendamento=conjunto_agendamento,
             config_email=config.get("email", {}),
             config_app=config,
+            mapa_horarios=mapa_horarios,
+            ajustes_manuais=ajustes_manuais,
+            inicio_rodada=inicio_rodada,
         )
         res["fonte_coleta"] = (
             linha.get("_fonte", "manual") if isinstance(linha, dict) else "manual"

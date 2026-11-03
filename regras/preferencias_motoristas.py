@@ -144,6 +144,7 @@ class MotoristaPreferencias:
     cpf: str | None = None  # coluna CPF_MOTORISTA -- só dígitos; identificação do motorista no marketplace de rotas (ver regras/ofertas_rota.py)
     apenas_carga_seca: bool = False  # coluna APENAS_CARGA_SECA -- só rota 100% seca confirmada (ver docstring do módulo)
     sem_app: bool = False  # coluna SEM_APP -- iPhone, sem app Vuupt (Hugo, 08/10): rota nao e devolvida as 15h45, baixa pela Torre
+    posicao: str = "ESPORADICO"  # coluna POSICAO -- FIXO ou ESPORADICO; vazio/desconhecido = ESPORADICO (Hugo, 30/10)
 
 
 def _normalizar_texto(s) -> str:
@@ -273,6 +274,7 @@ def _construir_motorista(registro: dict) -> "MotoristaPreferencias | None":
         cpf=cpf,
         apenas_carga_seca=_parse_bool(registro.get("APENAS_CARGA_SECA")),
         sem_app=_parse_bool(registro.get("SEM_APP")),
+        posicao="FIXO" if _normalizar_texto(_parse_texto_numerico(registro.get("POSICAO"))) == "FIXO" else "ESPORADICO",
     )
 
 

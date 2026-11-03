@@ -44,7 +44,7 @@
   .pendentes { margin-bottom: 24px; }
   .pendentes h2 { font-size: 16px; margin: 0 0 4px; }
   .pendentes-ajuda { font-size: 12.5px; color: var(--texto-suave); margin: 0 0 12px; }
-  .cartao-cadastro { background: var(--superficie); border: 1px solid var(--acento); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+  .cartao-cadastro, .cartao-link { background: var(--superficie); border: 1px solid var(--acento); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
   .cadastro-cab { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
   .cadastro-meta { font-size: 12px; color: var(--texto-suave); margin-top: 3px; }
   .cadastro-docs { display: flex; gap: 8px; white-space: nowrap; }
@@ -55,6 +55,21 @@
   .cadastro-acoes .botao-aprovar { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
   .cadastro-acoes .botao-aprovar:disabled { opacity: 0.5; cursor: not-allowed; }
   .cadastro-acoes .botao-recusar { background: var(--superficie); color: var(--erro); border: 1px solid var(--erro); }
+  /* Cadastros pelo link */
+  .cartao-link { border-color: var(--borda); }
+  .link-ficha { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 4px 16px; font-size: 12.5px; margin-bottom: 10px; }
+  .link-ficha span { color: var(--texto-suave); }
+  .link-etapas { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .etapa { font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--borda); }
+  .etapa-feito { border-color: var(--acento); color: var(--acento); }
+  .etapa-pendente { color: var(--texto-suave); }
+  .etapa-conflito { border-color: var(--erro); color: var(--erro); font-weight: 600; }
+  .link-erro { font-size: 12.5px; color: var(--erro); margin: 4px 0; }
+  .cadastro-docs img { height: 34px; border-radius: 4px; vertical-align: middle; }
+  .link-acoes { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 6px; }
+  .link-acoes input { width: 150px; padding: 7px 8px; }
+  .link-acoes button { padding: 8px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  .link-acoes button.principal { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
 </style>
 {% endblock %}
 
@@ -69,6 +84,81 @@
 {% if erro %}
 <div class="erro-caixa">Falha ao carregar motoristas: {{ erro }}</div>
 {% elif dados %}
+{% macro etapa(rotulo, estado) -%}<span class="etapa etapa-{{ 'feito' if estado == 'feito' else ('conflito' if estado == 'conflito' else 'pendente') }}">{{ rotulo }}: {{ estado }}</span>{%- endmacro %}
+{% if dados.cadastros_link %}
+<section class="pendentes" aria-labelledby="titulo-link">
+  <h2 id="titulo-link">Cadastros pelo link ({{ dados.cadastros_link | length }})</h2>
+  <p class="pendentes-ajuda">Motoristas que se cadastraram pelo link. O sistema cria o agente e o veículo na Vuupt e a linha na tabela sozinho; aqui ficam os que pararam num conflito ou num erro.</p>
+  {% for c in dados.cadastros_link %}
+  {% set aberto = c.conflito_agent_id and not c.conflito_resolvido %}
+  {% set bv = c.boas_vindas_situacao %}
+  {% set placa_em_conflito = aberto and (c.agent_id or c.conflito_tipo == "placa") %}
+  {% set desfeito = c.status == "RECUSADO" %}
+  {% set pode_desfazer = not desfeito or c.agente_criado or c.vehicle_criado %}
+  <article class="cartao-link" data-link-id="{{ c.id }}">
+    <div class="cadastro-cab">
+      <div>
+        <strong>{{ c.nome }}</strong>{% if pode_aprovar %} <span class="mono">CPF {{ c.cpf }}</span>{% endif %}
+        <div class="cadastro-meta">enviado em {{ c.enviado_em }} · {{ c.telefone }}{% if pode_aprovar and c.vuupt_email %} · {{ c.vuupt_email }}{% endif %}{% if desfeito %} · Desfeito por {{ c.revisado_por }}{% elif c.concluido_em %} · Concluído em {{ c.concluido_em[8:10] }}/{{ c.concluido_em[5:7] }} {{ c.concluido_em[11:16] }}{% endif %}</div>
+      </div>
+      {% if pode_aprovar %}
+      <div class="cadastro-docs">
+        {% for t, rot in (('selfie','Selfie'),('cnh','CNH'),('crlv','CRLV'),('antt','ANTT'),('residencia','Residência')) %}
+        {% if c['tem_' ~ t] %}<a href="{{ url_for('api_cadastro_documento', cadastro_id=c.id, tipo=t) }}" target="_blank" rel="noopener">{% if t == 'selfie' %}<img src="{{ url_for('api_cadastro_documento', cadastro_id=c.id, tipo=t) }}" alt="Selfie" loading="lazy">{% else %}{{ rot }}{% endif %}</a>{% else %}<span class="falta">sem {{ rot }}</span>{% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    <div class="link-ficha">
+      {% if pode_aprovar %}<div><span>Nascimento</span> {{ c.data_nascimento or "—" }}</div>{% endif %}
+      {% if pode_aprovar %}<div><span>Pix</span> {{ c.chave_pix or "—" }}</div>{% endif %}
+      <div><span>Emite NF</span> {{ "sim" if c.emite_nf else "não" }}</div>
+      <div><span>Posição</span> {{ "Pediu: Fixo" if c.posicao == "FIXO" else "Esporádico" }}</div>
+      <div><span>Celular</span> {{ c.celular or "—" }}</div>
+      <div><span>Dias</span> {{ c.dias | join(", ") or "—" }}</div>
+      <div><span>Zonas</span> {{ c.zonas | join(", ") or "—" }}</div>
+      <div><span>Veículo</span> {{ c.tipo_veiculo }} · {{ c.placa }} · {{ c.veiculo_modelo or "—" }} {{ c.veiculo_ano or "" }}</div>
+      <div><span>Refrigerado</span> {% if c.refrigerado %}sim{% if c.temp_min_c is not none %} (mín. {{ c.temp_min_c }} °C){% endif %}{% else %}não{% endif %}</div>
+      <div><span>Veículo é dele</span> {{ "sim" if c.dono_veiculo else "não" }}</div>
+    </div>
+    <div class="link-etapas">
+      {{ etapa("Agente", "feito" if c.agent_id else ("conflito" if aberto else "pendente")) }}
+      {{ etapa("Veículo", "feito" if c.vehicle_id else ("conflito" if placa_em_conflito else "pendente")) }}
+      {{ etapa("Tabela", "feito" if c.bd_motorista_id else "pendente") }}
+      {{ etapa("Aviso", "feito" if c.aviso_grupo_em else "pendente") }}
+      {{ etapa("Boas-vindas", {"enviado": "feito", "numero_sem_whatsapp": "não enviado (sem WhatsApp)", "desligado": "desligado", "modo_teste": "desligado", "agente_existente": "agente existente"}.get(bv, "pendente")) }}
+    </div>
+    {% if aberto %}
+    <div class="link-erro">{% if placa_em_conflito %}Placa {{ c.placa }} já é do veículo do agente {{ c.conflito_agent_id }} na Vuupt{% else %}Telefone já é do agente {{ c.conflito_agent_id }} na Vuupt{% endif %}</div>
+    {% endif %}
+    {% if pode_aprovar and c.ultimo_erro %}<div class="link-erro">{{ c.ultimo_erro }}</div>{% endif %}
+    {% if pode_aprovar and (not c.concluido_em or pode_desfazer) %}
+    <div class="link-acoes">
+      {% if c.concluido_em %}
+      {% elif aberto and c.agent_id %}
+      <button type="button" class="principal link-resolver" data-usar="">Reaproveitar o veículo da placa</button>
+      {% elif placa_em_conflito %}
+      <button type="button" class="principal link-resolver" data-usar="{{ c.conflito_agent_id }}">É o mesmo motorista: usar agente {{ c.conflito_agent_id }}</button>
+      <button type="button" class="link-resolver" data-usar="">É outra pessoa: criar agente novo e reaproveitar o veículo</button>
+      {% elif aberto %}
+      <button type="button" class="principal link-resolver" data-usar="{{ c.conflito_agent_id }}">É o mesmo: usar agente {{ c.conflito_agent_id }}</button>
+      <button type="button" class="link-resolver" data-usar="">É outra pessoa: criar agente novo</button>
+      {% else %}
+      {% if not c.agent_id %}
+      <input type="number" class="link-agent-id" placeholder="agent_id da Vuupt" min="1">
+      <button type="button" class="link-resolver link-usar-digitado">Usar este agente</button>
+      {% endif %}
+      <button type="button" class="principal link-tentar">Tentar de novo</button>
+      {% endif %}
+      {% if pode_desfazer %}
+      <button type="button" class="link-desfazer" data-apagavel="{{ '1' if (c.agente_criado or c.vehicle_criado) else '' }}">Desfazer (é falso/teste)</button>
+      {% endif %}
+    </div>
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
 {% if pode_aprovar and dados.cadastros_pendentes %}
 <section class="pendentes" aria-labelledby="titulo-pendentes">
   <h2 id="titulo-pendentes">Cadastros pelo app esperando aprovação ({{ dados.cadastros_pendentes | length }})</h2>
@@ -132,7 +222,7 @@
 <table class="tabela-motoristas">
   <thead>
     <tr>
-      <th>Nome</th><th>Agent ID</th><th>Ativo</th><th>Dias</th><th>Zonas</th><th>Veículo</th><th>Telefone</th><th>Placa</th><th title="Login do app: se vê o extrato (quem dirige carro de outro não vê)">App · Financeiro</th>{% if pode_editar %}<th></th>{% endif %}
+      <th>Nome</th><th>Agent ID</th><th>Ativo</th><th>Posição</th><th>Dias</th><th>Zonas</th><th>Veículo</th><th>Telefone</th><th>Placa</th><th title="Login do app: se vê o extrato (quem dirige carro de outro não vê)">App · Financeiro</th>{% if pode_editar %}<th></th>{% endif %}
     </tr>
   </thead>
   <tbody>
@@ -141,6 +231,7 @@
       <td>{{ m.nome }}</td>
       <td class="mono">{{ m.agent_id }}</td>
       <td>{% if m.ativo %}<span class="badge badge-sucesso">Ativo</span>{% else %}<span class="badge badge-erro">Inativo</span>{% endif %}</td>
+      <td>{{ "Fixo" if m.posicao == "FIXO" else "Esporádico" }}</td>
       <td>{{ m.dias_disponiveis or "—" }}</td>
       <td>{% for z in m.zonas_preferidas %}<span class="zona-chip">{{ z }}</span>{% else %}—{% endfor %}</td>
       <td>{{ m.tipo_veiculo or "—" }}</td>
@@ -249,6 +340,13 @@
     <div class="campo-motorista">
       <label><input type="checkbox" id="motorista-sem-app"> Sem app Vuupt (iPhone)</label>
     </div>
+    <div class="campo-motorista">
+      <label for="motorista-posicao">Posição</label>
+      <select id="motorista-posicao">
+        <option value="ESPORADICO">Esporádico</option>
+        <option value="FIXO">Fixo</option>
+      </select>
+    </div>
 
     <div class="acoes">
       <button type="button" class="cancelar" id="botao-cancelar-motorista">Cancelar</button>
@@ -313,6 +411,7 @@ const putJSON = (url, body) => postJSON(url, body, "PUT");
     document.getElementById("motorista-vehicle-id").value = d.vehicle_id ?? "";
     document.getElementById("motorista-carga-seca").checked = !!d.apenas_carga_seca;
     document.getElementById("motorista-sem-app").checked = !!d.sem_app;
+    document.getElementById("motorista-posicao").value = d.posicao || "ESPORADICO";
   }
 
   // Valores atuais do formulario (o que vai no payload).
@@ -333,6 +432,7 @@ const putJSON = (url, body) => postJSON(url, body, "PUT");
       vehicle_id: v("motorista-vehicle-id"),
       apenas_carga_seca: document.getElementById("motorista-carga-seca").checked,
       sem_app: document.getElementById("motorista-sem-app").checked,
+      posicao: v("motorista-posicao"),
     };
   }
   let camposOriginais = {};
@@ -464,6 +564,53 @@ const putJSON = (url, body) => postJSON(url, body, "PUT");
       } catch (e) {
         alert(`Falha ao recusar: ${e.message}`);
       }
+    });
+  }
+
+  // ── Cadastros pelo link: resolver conflito e tentar de novo ──
+  for (const cartao of document.querySelectorAll(".cartao-link")) {
+    const id = cartao.dataset.linkId;
+    const rodar = async (botao, url, corpo) => {
+      const texto = botao.textContent; botao.disabled = true; botao.textContent = "Processando...";
+      try {
+        const r = await postJSON(url, corpo);
+        alert(`Situação: ${r.resultado.situacao}${r.resultado.erro ? " — " + r.resultado.erro : ""}`);
+        location.reload();
+      } catch (e) {
+        alert(`Falha: ${e.message}`);
+        botao.disabled = false; botao.textContent = texto;
+      }
+    };
+    for (const botao of cartao.querySelectorAll(".link-resolver")) {
+      botao.addEventListener("click", async () => {
+        let usar = botao.dataset.usar ? Number(botao.dataset.usar) : null;
+        if (botao.classList.contains("link-usar-digitado")) {
+          usar = Number(cartao.querySelector(".link-agent-id").value);
+          if (!usar) { alert("Informe o agent_id do agente na Vuupt."); return; }
+        }
+        if (usar) {
+          // confere na Vuupt quem é antes de ligar o cadastro a esse agente
+          try {
+            const resp = await fetch(BASE_PATH + `/api/motoristas/cadastros-link/${id}/agente/${usar}`);
+            const a = await resp.json();
+            if (!resp.ok) { alert(a.erro || `Agente ${usar} não encontrado na Vuupt.`); return; }
+            if (!confirm(`Usar o agente ${usar} — ${a.nome || "sem nome"} (${a.telefone || "sem telefone"})?`)) return;
+          } catch (e) {
+            alert(`Falha ao consultar o agente: ${e.message}`);
+            return;
+          }
+        }
+        rodar(botao, `/api/motoristas/cadastros-link/${id}/resolver`, { usar_agent_id: usar });
+      });
+    }
+    const tentar = cartao.querySelector(".link-tentar");
+    if (tentar) tentar.addEventListener("click", () => rodar(tentar, `/api/motoristas/cadastros-link/${id}/tentar`, {}));
+    const desfazer = cartao.querySelector(".link-desfazer");
+    if (desfazer) desfazer.addEventListener("click", () => {
+      if (!confirm("Desfazer este cadastro (falso ou de teste)? A linha na tabela fica inativa e o CPF volta a poder se cadastrar.")) return;
+      const apagar = desfazer.dataset.apagavel === "1" &&
+        confirm("Apagar também na Vuupt o agente e o veículo que este cadastro criou?\n\nOK = apagar na Vuupt · Cancelar = manter lá");
+      rodar(desfazer, `/api/motoristas/cadastros-link/${id}/desfazer`, { apagar_na_vuupt: apagar });
     });
   }
 

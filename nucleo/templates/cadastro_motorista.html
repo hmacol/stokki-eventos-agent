@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cadastro de motorista - Fresh Log</title>
+<style>
+  :root { --verde:#1a7f45; --verde-esc:#17693a; --texto:#1c2420; --suave:#5b6660; --linha:#cfd6d2; --erro:#b3261e; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:#fff; color:var(--texto); font:18px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { background:var(--verde); color:#fff; padding:14px 16px; font-size:20px; font-weight:700; letter-spacing:.2px; }
+  main { max-width:560px; margin:0 auto; padding:16px; }
+  h1 { font-size:22px; margin:8px 0 4px; }
+  .passo { color:var(--suave); font-size:15px; margin:0 0 16px; }
+  .barra { height:6px; background:#e6ebe8; border-radius:3px; margin:0 0 16px; overflow:hidden; }
+  .barra i { display:block; height:100%; background:var(--verde); transform:scaleX(.33); transform-origin:left; transition:transform .2s; }
+  label.campo { display:block; font-weight:600; margin:16px 0 6px; }
+  .dica { display:block; font-weight:400; font-size:15px; color:var(--suave); }
+  input[type=text], input[type=tel], input[type=date], input[type=number], select {
+    width:100%; min-height:52px; padding:10px 12px; font:inherit; color:inherit; background:#fff;
+    border:2px solid var(--linha); border-radius:10px; }
+  input:focus, select:focus { outline:3px solid #9fd8b5; border-color:var(--verde); }
+  .opcoes { display:flex; flex-wrap:wrap; gap:8px; }
+  .opcoes label { flex:1 1 140px; display:flex; align-items:center; gap:10px; min-height:52px; padding:8px 12px;
+    border:2px solid var(--linha); border-radius:10px; cursor:pointer; font-weight:500; }
+  .opcoes label small { display:block; font-size:14px; color:var(--suave); line-height:1.25; }
+  .opcoes input { width:24px; height:24px; flex:none; accent-color:var(--verde); }
+  .opcoes label:has(input:checked) { border-color:var(--verde); background:#eaf6ee; }
+  .dias label { flex:1 1 90px; }
+  .zonas label { flex:1 1 100%; }
+  button { width:100%; min-height:56px; margin-top:24px; font:inherit; font-weight:700; color:#fff; background:var(--verde);
+    border:0; border-radius:12px; cursor:pointer; }
+  button:disabled { background:#66726b; cursor:default; }
+  button.volta { background:#fff; color:var(--verde-esc); border:2px solid var(--verde); margin-top:12px; }
+  .erro { display:none; margin:12px 0; padding:12px; border-radius:10px; background:#fdeceb; color:var(--erro); font-weight:600; }
+  .erro.on { display:block; }
+  .doc { border:2px solid var(--linha); border-radius:12px; padding:12px; margin:12px 0; }
+  .doc.ok { border-color:var(--verde); background:#eaf6ee; }
+  .doc b { display:block; }
+  .doc .est { font-size:15px; color:var(--suave); margin:2px 0 8px; }
+  .doc.ok .est { color:var(--verde-esc); font-weight:600; }
+  .doc .est.falha { color:var(--erro); font-weight:600; }
+  .doc input[type=file] { width:100%; font:inherit; }
+  .final { text-align:center; padding:32px 0; }
+  .final .ok { font-size:56px; color:var(--verde); }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<header>Fresh Log</header>
+<main>
+<div id="carregando" class="passo">Carregando...</div>
+
+<div id="tela-retomar" hidden>
+  <div class="erro on" id="retomar-msg" role="alert"></div>
+  <button type="button" id="retomar-btn">Tentar de novo</button>
+</div>
+
+<div id="tela-1" hidden>
+  <h1>Seus dados</h1>
+  <p class="passo">Passo 1 de 3</p>
+  <div class="barra"><i style="transform:scaleX(.33)"></i></div>
+  <div class="erro" id="erro-1" role="alert"></div>
+  <form id="f1" novalidate autocomplete="on">
+    <label class="campo" for="nome">Nome completo</label>
+    <input type="text" id="nome" name="nome" autocomplete="name" required>
+
+    <label class="campo" for="cpf">CPF</label>
+    <input type="tel" id="cpf" name="cpf" inputmode="numeric" maxlength="14" autocomplete="off" required>
+
+    <label class="campo" for="data_nascimento">Data de nascimento</label>
+    <input type="date" id="data_nascimento" name="data_nascimento" autocomplete="bday" required>
+
+    <label class="campo" for="telefone">Telefone / WhatsApp <span class="dica">Com DDD</span></label>
+    <input type="tel" id="telefone" name="telefone" inputmode="tel" autocomplete="tel" required>
+
+    <label class="campo" for="chave_pix">Chave Pix</label>
+    <input type="text" id="chave_pix" name="chave_pix" autocomplete="off" required>
+
+    <label class="campo">Você emite nota fiscal?</label>
+    <div class="opcoes">
+      <label><input type="radio" name="emite_nf" value="1"> Sim</label>
+      <label><input type="radio" name="emite_nf" value="0"> Não</label>
+    </div>
+
+    <label class="campo">Seu celular é Android ou iPhone?</label>
+    <div class="opcoes">
+      <label><input type="radio" name="celular" value="ANDROID"> Android</label>
+      <label><input type="radio" name="celular" value="IPHONE"> iPhone</label>
+    </div>
+
+    <label class="campo">Em quais dias você roda?</label>
+    <div class="opcoes dias">
+      {% for d in dias %}
+      <label><input type="checkbox" name="dias" value="{{ d }}"{% if d in ('SEGUNDA','TERCA','QUARTA','QUINTA','SEXTA') %} checked{% endif %}> {{ {'SEGUNDA':'Seg','TERCA':'Ter','QUARTA':'Qua','QUINTA':'Qui','SEXTA':'Sex','SABADO':'Sáb','DOMINGO':'Dom'}[d] }}</label>
+      {% endfor %}
+    </div>
+
+    <label class="campo">Quais regiões você atende?</label>
+    <div class="opcoes zonas">
+      {% for z in zonas %}
+      <label><input type="checkbox" name="zonas" value="{{ z }}"> {{ z }}</label>
+      {% endfor %}
+    </div>
+
+    <label class="campo">Como você quer rodar?</label>
+    <div class="opcoes">
+      <label><input type="radio" name="posicao" value="FIXO"><span>Fixo<small>roda com a gente todo dia que marcou</small></span></label>
+      <label><input type="radio" name="posicao" value="ESPORADICO"><span>Esporádico<small>roda quando tiver rota sobrando</small></span></label>
+    </div>
+
+    <button type="submit">Continuar</button>
+  </form>
+</div>
+
+<div id="tela-2" hidden>
+  <h1>Seu veículo</h1>
+  <p class="passo">Passo 2 de 3</p>
+  <div class="barra"><i style="transform:scaleX(.66)"></i></div>
+  <div class="erro" id="erro-2" role="alert"></div>
+  <form id="f2" novalidate autocomplete="off">
+    <label class="campo" for="tipo_veiculo">Tipo de veículo</label>
+    <select id="tipo_veiculo" name="tipo_veiculo" required>
+      <option value="">Escolha...</option>
+      {% for t in tipos %}
+      <option value="{{ t.codigo }}">{{ t.nome }}</option>
+      {% endfor %}
+    </select>
+
+    <label class="campo" for="placa">Placa</label>
+    <input type="text" id="placa" name="placa" maxlength="8" autocapitalize="characters" autocomplete="off" required>
+
+    <label class="campo" for="veiculo_modelo">Modelo</label>
+    <input type="text" id="veiculo_modelo" name="veiculo_modelo" maxlength="60" autocomplete="off" required>
+
+    <label class="campo" for="veiculo_ano">Ano</label>
+    <input type="number" id="veiculo_ano" name="veiculo_ano" inputmode="numeric" min="1980" max="2100" required>
+
+    <label class="campo">O veículo é refrigerado?</label>
+    <div class="opcoes">
+      <label><input type="radio" name="refrigerado" value="1"> Sim</label>
+      <label><input type="radio" name="refrigerado" value="0"> Não</label>
+    </div>
+
+    <div id="bloco-temp" hidden>
+      <label class="campo" for="temp_min_c">Menor temperatura que o veículo mantém (°C) <span class="dica">Pode ser negativa, por exemplo -18</span></label>
+      <input type="text" id="temp_min_c" name="temp_min_c" inputmode="text" autocomplete="off">
+    </div>
+
+    <label class="campo">O veículo é seu?</label>
+    <div class="opcoes">
+      <label><input type="radio" name="dono_veiculo" value="1"> Sim</label>
+      <label><input type="radio" name="dono_veiculo" value="0"> Não</label>
+    </div>
+
+    <button type="submit" id="enviar-2">Continuar</button>
+    <button type="button" class="volta" id="voltar-1">Voltar</button>
+  </form>
+</div>
+
+<div id="tela-3" hidden>
+  <h1>Seus documentos</h1>
+  <p class="passo">Passo 3 de 3. Tire a foto de cada um (ou escolha um PDF).</p>
+  <div class="barra"><i style="transform:scaleX(1)"></i></div>
+  <div class="erro" id="erro-3" role="alert"></div>
+  <div id="docs"></div>
+  <button type="button" id="concluir" disabled>Enviar cadastro</button>
+  <button type="button" class="volta" id="recomecar">Começar de novo</button>
+</div>
+
+<div id="tela-fim" hidden class="final">
+  <div class="ok">&#10003;</div>
+  <h1 id="msg-fim"></h1>
+</div>
+</main>
+
+<script>
+(function () {
+  'use strict';
+  var URL_NOVO = "{{ url_for('cadastro_link_novo') }}";
+  var URL_DOC = "{{ url_for('cadastro_documento', cadastro_id=0) }}";
+  var URL_SIT = "{{ url_for('cadastro_link_situacao', cadastro_id=0) }}";
+  var URL_FIM = "{{ url_for('cadastro_link_concluir', cadastro_id=0) }}";
+  var DOCS = [
+    ['selfie', 'Selfie', 'Uma foto do seu rosto, tirada agora.'],
+    ['cnh', 'CNH', 'Foto da carteira de motorista (frente e verso, se couber).'],
+    ['crlv', 'CRLV', 'Documento do veículo.'],
+    ['antt', 'ANTT', 'Registro de transportador (RNTRC).'],
+    ['residencia', 'Comprovante de residência', 'Conta de luz, água ou telefone.']
+  ];
+  var envio = null;          // {id, chave}
+  var enviados = {};         // tipo -> true
+
+  function $(id) { return document.getElementById(id); }
+  function url(base, id) { return base.replace('/0/', '/' + id + '/'); }
+
+  // localStorage pode faltar (janela anônima, dados bloqueados): tudo em try/catch.
+  function guardar(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  function ler(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function apagar(k) { try { localStorage.removeItem(k); } catch (e) {} }
+
+  function mostrar(qual) {
+    ['carregando', 'tela-retomar', 'tela-1', 'tela-2', 'tela-3', 'tela-fim'].forEach(function (t) { $(t).hidden = (t !== qual); });
+    window.scrollTo(0, 0);
+  }
+  function erro(n, texto) {
+    var e = $('erro-' + n);
+    e.textContent = texto || '';
+    e.classList.toggle('on', !!texto);
+    if (texto) { e.scrollIntoView({block: 'center'}); }
+  }
+
+  // JSON ou texto de erro simples; nunca lança.
+  function chamar(metodo, endereco, corpo) {
+    var op = {method: metodo, headers: {}};
+    if (corpo instanceof FormData) { op.body = corpo; }
+    else if (corpo) { op.headers['Content-Type'] = 'application/json'; op.body = JSON.stringify(corpo); }
+    return fetch(endereco, op).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) { return {ok: r.ok, status: r.status, j: j}; });
+    }).catch(function () {
+      return {ok: false, status: 0, j: {erro: 'Sem conexão. Confira o sinal e tente de novo.'}};
+    });
+  }
+  function textoErro(r) { return (r.j && r.j.erro) || 'Algo deu errado. Tente de novo.'; }
+
+  // ── campos digitados ficam no aparelho pra não perder se fechar a página ──
+  var CAMPOS = ['nome', 'cpf', 'data_nascimento', 'telefone', 'chave_pix', 'tipo_veiculo', 'placa',
+                'veiculo_modelo', 'veiculo_ano', 'temp_min_c'];
+  var RADIOS = ['emite_nf', 'celular', 'posicao', 'refrigerado', 'dono_veiculo'];
+  var CHECKS = ['dias', 'zonas'];
+
+  function radio(nome) {
+    var el = document.querySelector('input[name=' + nome + ']:checked');
+    return el ? el.value : null;
+  }
+  function marcados(nome) {
+    return Array.prototype.map.call(document.querySelectorAll('input[name=' + nome + ']:checked'), function (e) { return e.value; });
+  }
+  function salvarCampos() {
+    var o = {};
+    CAMPOS.forEach(function (c) { o[c] = $(c).value; });
+    RADIOS.forEach(function (c) { o[c] = radio(c); });
+    CHECKS.forEach(function (c) { o[c] = marcados(c); });
+    guardar('cm_campos', JSON.stringify(o));
+  }
+  function restaurarCampos() {
+    var o;
+    try { o = JSON.parse(ler('cm_campos') || 'null'); } catch (e) { o = null; }
+    if (!o) { return; }
+    CAMPOS.forEach(function (c) { if (o[c] != null) { $(c).value = o[c]; } });
+    RADIOS.forEach(function (c) {
+      Array.prototype.forEach.call(document.querySelectorAll('input[name=' + c + ']'), function (e) { e.checked = (e.value === o[c]); });
+    });
+    CHECKS.forEach(function (c) {
+      if (!o[c]) { return; }
+      Array.prototype.forEach.call(document.querySelectorAll('input[name=' + c + ']'), function (e) { e.checked = o[c].indexOf(e.value) >= 0; });
+    });
+    atualizarTemp();
+  }
+  function atualizarTemp() { $('bloco-temp').hidden = (radio('refrigerado') !== '1'); }
+
+  // ── passo 1 -> 2 ──
+  $('f1').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    erro(1, '');
+    var falta = ['nome', 'cpf', 'data_nascimento', 'telefone', 'chave_pix'].filter(function (c) { return !$(c).value.trim(); });
+    if (falta.length) { $(falta[0]).focus(); erro(1, 'Preencha todos os campos.'); return; }
+    if (radio('emite_nf') === null) { erro(1, 'Diga se você emite nota fiscal.'); return; }
+    if (radio('celular') === null) { erro(1, 'Diga se o seu celular é Android ou iPhone.'); return; }
+    if (!marcados('dias').length) { erro(1, 'Marque pelo menos um dia da semana.'); return; }
+    if (!marcados('zonas').length) { erro(1, 'Marque pelo menos uma região que você atende.'); return; }
+    if (radio('posicao') === null) { erro(1, 'Escolha Fixo ou Esporádico.'); return; }
+    salvarCampos();
+    mostrar('tela-2');
+  });
+  $('voltar-1').addEventListener('click', function () { erro(2, ''); mostrar('tela-1'); });
+  Array.prototype.forEach.call(document.querySelectorAll('input[name=refrigerado]'), function (e) {
+    e.addEventListener('change', atualizarTemp);
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('input, select'), function (e) {
+    e.addEventListener('change', salvarCampos);
+    e.addEventListener('input', salvarCampos);
+  });
+
+  // ── passo 2: cria o cadastro (passos 1 e 2 juntos) ──
+  $('f2').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    erro(2, '');
+    var falta = ['tipo_veiculo', 'placa', 'veiculo_modelo', 'veiculo_ano'].filter(function (c) { return !$(c).value.trim(); });
+    if (falta.length) { $(falta[0]).focus(); erro(2, 'Preencha todos os campos do veículo.'); return; }
+    if (radio('refrigerado') === null) { erro(2, 'Diga se o veículo é refrigerado.'); return; }
+    if (radio('refrigerado') === '1' && !$('temp_min_c').value.trim()) { $('temp_min_c').focus(); erro(2, 'Informe a menor temperatura que o veículo mantém.'); return; }
+    if (radio('dono_veiculo') === null) { erro(2, 'Diga se o veículo é seu.'); return; }
+    var btn = $('enviar-2');
+    btn.disabled = true;
+    var dados = {
+      nome: $('nome').value, cpf: $('cpf').value, data_nascimento: $('data_nascimento').value,
+      telefone: $('telefone').value, chave_pix: $('chave_pix').value, emite_nf: radio('emite_nf') === '1',
+      celular: radio('celular'), dias: marcados('dias'), zonas: marcados('zonas'), posicao: radio('posicao'),
+      tipo_veiculo: $('tipo_veiculo').value, placa: $('placa').value, veiculo_modelo: $('veiculo_modelo').value,
+      veiculo_ano: $('veiculo_ano').value, refrigerado: radio('refrigerado') === '1',
+      temp_min_c: radio('refrigerado') === '1' ? $('temp_min_c').value : null, dono_veiculo: radio('dono_veiculo') === '1'
+    };
+    chamar('POST', URL_NOVO, dados).then(function (r) {
+      btn.disabled = false;
+      if (!r.ok) { erro(2, textoErro(r)); return; }
+      envio = {id: r.j.id, chave: r.j.chave_envio};
+      guardar('cm_envio', JSON.stringify(envio));
+      enviados = {};
+      montarDocs();
+      mostrar('tela-3');
+    });
+  });
+
+  // ── passo 3: documentos ──
+  // Foto do celular vem com 3-5 MB: reduz no navegador (lado maior 1600 px, JPEG 0,8) antes de subir.
+  // PDF e imagem que o navegador nao decodifica (HEIC) sobem como vieram.
+  function reduzirImagem(arq) {
+    if (!arq || !arq.type || arq.type.indexOf('image/') !== 0) { return Promise.resolve(arq); }
+    return new Promise(function (ok) {
+      var u = URL.createObjectURL(arq), img = new Image();
+      img.onload = function () {
+        try {
+          var k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+          var c = document.createElement('canvas');
+          c.width = Math.max(1, Math.round(img.naturalWidth * k));
+          c.height = Math.max(1, Math.round(img.naturalHeight * k));
+          c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+          URL.revokeObjectURL(u);
+          c.toBlob(function (b) {
+            ok(b ? new File([b], (arq.name || 'foto').replace(/\.[^.]*$/, '') + '.jpg', {type: 'image/jpeg'}) : arq);
+          }, 'image/jpeg', 0.8);
+        } catch (e) { URL.revokeObjectURL(u); ok(arq); }
+      };
+      img.onerror = function () { URL.revokeObjectURL(u); ok(arq); };
+      img.src = u;
+    });
+  }
+
+  function montarDocs() {
+    var box = $('docs');
+    box.innerHTML = '';
+    DOCS.forEach(function (d) {
+      var tipo = d[0], div = document.createElement('div');
+      div.className = 'doc'; div.id = 'doc-' + tipo;
+      var t = document.createElement('b'); t.textContent = d[1];
+      var est = document.createElement('div'); est.className = 'est'; est.id = 'est-' + tipo;
+      var inp = document.createElement('input');
+      inp.type = 'file'; inp.id = 'arq-' + tipo;
+      if (tipo === 'selfie') { inp.accept = 'image/*'; inp.setAttribute('capture', 'user'); }
+      else { inp.accept = 'image/*,application/pdf'; }
+      inp.addEventListener('change', function () { subir(tipo, inp); });
+      div.appendChild(t); div.appendChild(est); div.appendChild(inp);
+      box.appendChild(div);
+      marcarDoc(tipo, !!enviados[tipo], d[2]);
+    });
+    atualizarConcluir();
+  }
+  function marcarDoc(tipo, feito, dica, falha) {
+    var est = $('est-' + tipo);
+    $('doc-' + tipo).classList.toggle('ok', !!feito);
+    est.classList.toggle('falha', !!falha);
+    est.textContent = feito ? 'Enviado. Se quiser trocar, escolha outra foto.' : (dica || '');
+  }
+
+  function subir(tipo, inp) {
+    var arq = inp.files && inp.files[0];
+    if (!arq) { return; }
+    $('est-' + tipo).classList.remove('falha');
+    $('est-' + tipo).textContent = 'Enviando...';
+    erro(3, '');
+    reduzirImagem(arq).then(function (f) {
+      if (f.size > 10 * 1024 * 1024) { return {ok: false, j: {erro: 'Arquivo grande demais (máximo 10 MB).'}}; }
+      var fd = new FormData();
+      fd.append('chave_envio', envio.chave);
+      fd.append('tipo', tipo);
+      fd.append('arquivo', f, f.name || (tipo + '.jpg'));
+      return chamar('POST', url(URL_DOC, envio.id), fd);
+    }).then(function (r) {
+      if (r.ok) { enviados[tipo] = true; marcarDoc(tipo, true); }
+      else {
+        enviados[tipo] = false;
+        marcarDoc(tipo, false, textoErro(r) + ' Escolha a foto de novo.', true);
+      }
+      inp.value = '';
+      atualizarConcluir();
+    });
+  }
+  function atualizarConcluir() {
+    $('concluir').disabled = !DOCS.every(function (d) { return enviados[d[0]]; });
+  }
+
+  $('concluir').addEventListener('click', function () {
+    var btn = $('concluir');
+    btn.disabled = true;
+    btn.textContent = 'Enviando...';
+    erro(3, '');
+    chamar('POST', url(URL_FIM, envio.id), {chave_envio: envio.chave}).then(function (r) {
+      btn.textContent = 'Enviar cadastro';
+      if (!r.ok) { erro(3, textoErro(r)); atualizarConcluir(); return; }
+      esperarResultado(envio, r.j.primeiro_nome);
+    });
+  });
+
+  // O cadastro é processado em segundo plano: pergunta a situação por até ~24 s.
+  // Sem resposta de "liberado" nesse tempo, vale "em avaliação" (Hugo, 02/11).
+  function esperarResultado(salvo, nome, tentativa) {
+    tentativa = tentativa || 0;
+    $('carregando').textContent = 'Finalizando seu cadastro...';
+    mostrar('carregando');
+    chamar('GET', url(URL_SIT, salvo.id) + '?chave_envio=' + encodeURIComponent(salvo.chave)).then(function (r) {
+      var res = r.ok ? r.j.resultado : null;
+      if (res === 'liberado' || res === 'em_avaliacao' || tentativa >= 11) {
+        fim(nome || (r.ok && r.j.primeiro_nome), res === 'liberado');
+        return;
+      }
+      setTimeout(function () { esperarResultado(salvo, nome, tentativa + 1); }, 2000);
+    });
+  }
+
+  // Volta ao passo 1 sem o cadastro guardado neste aparelho (os campos na tela ficam).
+  function recomecar(aviso) {
+    apagar('cm_envio'); apagar('cm_campos');
+    envio = null; enviados = {};
+    mostrar('tela-1');
+    erro(1, aviso || '');
+  }
+  $('recomecar').addEventListener('click', function () {
+    if (confirm('Começar o cadastro de novo? Os documentos enviados até agora serão descartados.')) { recomecar(); }
+  });
+
+  function fim(nome, liberado) {
+    apagar('cm_envio'); apagar('cm_campos');
+    $('msg-fim').textContent = liberado
+      ? 'Cadastro feito, ' + (nome || '') + '! Você já está liberado pra receber rotas. ' +
+        'Em instantes chega no seu WhatsApp o que fazer a seguir.'
+      : 'Cadastro recebido, ' + (nome || '') + '! Em avaliação do time da Fresh. ' +
+        'Em breve a gente te chama no WhatsApp.';
+    mostrar('tela-fim');
+  }
+
+  // ── abertura: retoma de onde parou, se este aparelho já começou ──
+  function retomar() {
+    var salvo;
+    try { salvo = JSON.parse(ler('cm_envio') || 'null'); } catch (e) { salvo = null; }
+    if (!(salvo && salvo.id && salvo.chave)) { mostrar('tela-1'); return; }
+    mostrar('carregando');
+    chamar('GET', url(URL_SIT, salvo.id) + '?chave_envio=' + encodeURIComponent(salvo.chave)).then(function (r) {
+      if (r.ok && (r.j.status === 'SUBSTITUIDO' || r.j.status === 'RECUSADO')) {
+        recomecar('Seu cadastro anterior foi encerrado. Comece de novo.');
+        return;
+      }
+      if (r.ok && r.j.enviado) { esperarResultado(salvo, r.j.primeiro_nome); return; }
+      if (r.ok) {
+        envio = salvo;
+        enviados = r.j.documentos || {};
+        montarDocs();
+        mostrar('tela-3');
+        return;
+      }
+      if (r.status === 404 || r.status === 409) { apagar('cm_envio'); mostrar('tela-1'); return; }
+      $('retomar-msg').textContent = textoErro(r);
+      mostrar('tela-retomar');
+    });
+  }
+  $('retomar-btn').addEventListener('click', retomar);
+  restaurarCampos();
+  retomar();
+})();
+</script>
+</body>
+</html>
