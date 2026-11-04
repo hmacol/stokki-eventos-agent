@@ -196,6 +196,48 @@ class ChecklistTest(unittest.TestCase):
         with self.assertRaises(vc.ChecklistNaoGravado):
             vc.preencher_checklist_entrega(vuupt_falso(s), SERV, {15086: b"j", 15349: b"j"})
 
+    def _finish_em_sequencia(self, s, respostas):
+        """put do finish devolve as respostas na ordem (a ultima se repete)."""
+        orig_put = s.put
+        finishes = []
+
+        def put(url, **kw):
+            if url.endswith("/finish"):
+                s.chamadas.append(("PUT", url, kw))
+                finishes.append(url)
+                return respostas[min(len(finishes), len(respostas)) - 1]
+            return orig_put(url, **kw)
+        s.put = put
+        return finishes
+
+    def test_finish_espera_a_vuupt_processar_a_foto(self):
+        # PS-42071-R1 (02/11): foto enviada, finish 3 s depois deu 409 "processed images (0)"
+        s = SessaoFalsa()
+        processando = Resp(409, {"message": "images_quantity (1) <> processed images (0)", "status_code": 409})
+        finishes = self._finish_em_sequencia(s, [processando, processando, Resp(200, {})])
+        with mock.patch("vuupt_checklist.time.sleep") as dorme:
+            cid = vc.preencher_checklist_entrega(vuupt_falso(s), SERV, {15086: b"jpg"})
+        self.assertEqual(cid, 777)
+        self.assertEqual(len(finishes), 3)
+        self.assertEqual([c.args[0] for c in dorme.call_args_list], list(vc.ESPERAS_PROCESSAMENTO[:2]))
+
+    def test_finish_desiste_se_a_vuupt_nunca_processa(self):
+        s = SessaoFalsa()
+        processando = Resp(409, {"message": "images_quantity (1) <> processed images (0)", "status_code": 409})
+        finishes = self._finish_em_sequencia(s, [processando])
+        with mock.patch("vuupt_checklist.time.sleep"):
+            with self.assertRaises(vc.ChecklistNaoGravado):
+                vc.preencher_checklist_entrega(vuupt_falso(s), SERV, {15086: b"jpg"})
+        self.assertEqual(len(finishes), 1 + len(vc.ESPERAS_PROCESSAMENTO))
+
+    def test_finish_409_com_foto_a_mais_nao_espera(self):
+        # processou mais do que declarou: esperar nao resolve
+        s = SessaoFalsa(finish_status=409)
+        with mock.patch("vuupt_checklist.time.sleep") as dorme:
+            with self.assertRaises(vc.ChecklistNaoGravado):
+                vc.preencher_checklist_entrega(vuupt_falso(s), SERV, {15086: b"jpg"})
+        dorme.assert_not_called()
+
     def test_sem_coordenada_usa_base(self):
         s = SessaoFalsa()
         vc.preencher_checklist_entrega(vuupt_falso(s), {"id": 5, "type": "delivery"}, {15086: b"jpg"})

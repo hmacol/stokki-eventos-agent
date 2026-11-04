@@ -13,6 +13,8 @@ Usado por VuuptClient.concluir_como_agente (entre o check-in e o check-out).
 """
 import io
 import logging
+import re
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -31,6 +33,10 @@ BASE_LNG = -46.660775
 
 FORMATOS_FOTO = ["JPEG", "PNG", "WEBP", "HEIF"]   # HEIF so existe com pillow_heif instalado
 LIMITE_ERRO_VUUPT = 200     # corpo de erro da Vuupt mostrado ao usuario (o completo vai pro log)
+# a Vuupt processa a foto depois do upload; finish cedo demais da 409 "processed images (0)"
+# (PS-42071-R1, 02/11): espera e repete o finish (segundos entre tentativas)
+ESPERAS_PROCESSAMENTO = (2, 4, 8)
+_RE_PROCESSANDO = re.compile(r"images_quantity \((\d+)\) <> processed images \((\d+)\)")
 
 
 class ChecklistNaoGravado(Exception):
@@ -121,6 +127,18 @@ def _erro(resp) -> str:
     return corpo[:LIMITE_ERRO_VUUPT]
 
 
+def _ainda_processando(resp) -> bool:
+    """409 do finish dizendo que a Vuupt processou menos fotos do que o checklist declara."""
+    if resp.status_code != 409:
+        return False
+    try:
+        msg = str((resp.json() or {}).get("message") or "")
+    except Exception:  # noqa: BLE001
+        return False
+    m = _RE_PROCESSANDO.search(msg)
+    return bool(m) and int(m.group(2)) < int(m.group(1))
+
+
 def preencher_checklist_entrega(vuupt, servico: dict, fotos: dict[int, bytes]) -> int:
     """Cria (ou reaproveita) o checklist de entrega do serviço, envia as fotos
     ({campo_id: jpeg}), finaliza e confere a releitura. Devolve o id do checklist."""
@@ -184,6 +202,12 @@ def preencher_checklist_entrega(vuupt, servico: dict, fotos: dict[int, bytes]) -
             raise ChecklistNaoGravado(f"Enviar foto {campo} ao checklist {cid}: status {resp.status_code}: {_erro(resp)}")
 
     resp = chamar_com_retry(vuupt.session.put, f"{base}/checklists/{cid}/finish", headers=sem_ct, timeout=30)
+    for espera in ESPERAS_PROCESSAMENTO:
+        if not _ainda_processando(resp):
+            break
+        logger.info(f"Checklist {cid}: Vuupt ainda processando as fotos; novo finish em {espera}s")
+        time.sleep(espera)
+        resp = chamar_com_retry(vuupt.session.put, f"{base}/checklists/{cid}/finish", headers=sem_ct, timeout=30)
     if not resp.ok:
         if reaproveitado and not enviou_algo:
             # checklist já completo de uma tentativa anterior (finish ok, check-out falhou):
