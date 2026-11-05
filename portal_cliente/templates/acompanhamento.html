@@ -78,6 +78,13 @@
   td .link { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; white-space: nowrap; }
   td .link svg { width: 13px; height: 13px; }
   td .falha { color: var(--st-falha); font-weight: 600; }
+  /* Uma linha por pedido (05/11): o selo abre as tentativas embaixo. */
+  .selo-tent { margin-left: 6px; border: 1px solid var(--borda); background: none; color: var(--texto-suave); border-radius: 100px; padding: 1px 8px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .selo-tent:hover, .selo-tent[aria-expanded="true"] { color: var(--acento); border-color: var(--acento); }
+  tr.tentativas td { background: var(--fundo); padding: 6px 10px 8px; }
+  tr.tentativas ul { list-style: none; margin: 0; padding: 0; }
+  tr.tentativas li { padding: 2px 0; font-size: 12px; }
+  tr.tentativas li b { display: inline-block; min-width: 44px; font-variant-numeric: tabular-nums; }
   .vazio { padding: 28px 18px; color: var(--texto-suave); text-align: center; font-size: 13px; }
   .rodape-tabela { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 18px; border-top: 1px solid var(--borda); color: var(--texto-suave); font-size: 12px; flex-wrap: wrap; }
   .filtros-ativos { display: flex; align-items: center; gap: 8px; padding: 10px 18px; border-bottom: 1px solid var(--borda); flex-wrap: wrap; }
@@ -459,7 +466,7 @@
     else if (aba === 'insucesso') lista = lista.filter(p => p.situacao === 'insucesso');
     if (filtroDia) lista = lista.filter(p => p.data === filtroDia);
     const q = busca.trim().toLowerCase();
-    if (q) lista = lista.filter(p => [p.codigo, p.nf, p.destinatario, p.endereco, p.motorista, p.rota, p.empresa, p.data_rotulo].join(' ').toLowerCase().includes(q));
+    if (q) lista = lista.filter(p => [p.codigo, p.codigo_servico, p.nf, p.destinatario, p.endereco, p.motorista, p.rota, p.empresa, p.data_rotulo].join(' ').toLowerCase().includes(q));
     return lista;
   }
 
@@ -479,17 +486,35 @@
       case 'nf': return `<td class="nw"><span class="mono num">${esc(p.nf) || '<span style="color:var(--texto-suave)">—</span>'}</span></td>`;
       case 'destinatario': return `<td class="col-dest"><div class="dest">${esc(p.destinatario)}</div><div class="end">${esc(p.endereco)}</div></td>`;
       case 'volumes': return `<td class="num nw" style="text-align:center;">${p.volumes}</td>`;
-      case 'situacao': return `<td class="nw"><span class="badge b-${p.situacao}"><span class="pt"></span>${esc(p.situacao_rotulo)}</span></td>`;
+      case 'situacao': {
+        const n = (p.tentativas || []).length;
+        const selo = n > 1 ? `<button type="button" class="selo-tent" data-tentativas="${esc(chaveTentativas(p))}" aria-expanded="${abertos.has(chaveTentativas(p))}">${n} tentativas ▾</button>` : '';
+        return `<td class="nw"><span class="badge b-${p.situacao}"><span class="pt"></span>${esc(p.situacao_rotulo)}</span>${selo}</td>`;
+      }
       case 'motorista': return `<td class="nw">${p.motorista ? esc(p.motorista) + (p.rota ? ' · ' + esc(p.rota) : '') : '<span style="color:var(--texto-suave)">—</span>'}</td>`;
       case 'detalhe': return `<td class="nw ${p.situacao === 'insucesso' ? 'falha' : ''}">${esc(p.detalhe)}</td>`;
       case 'comprovante':
         if (p.situacao === 'entregue') return `<td class="nw"><a class="link" href="${BASE}/api/canhoto/${p.service_id}" target="_blank" rel="noopener">${ICO_CAM}<span>Canhoto</span></a></td>`;
-        if (p.situacao === 'insucesso' && dados.atencao.some(g => g.codigos.includes(p.codigo))) return `<td class="nw"><a class="link falha" href="#atencao" data-ir-atencao="1">${ICO_ALERTA}<span>Responder</span></a></td>`;
+        if (p.situacao === 'insucesso' && dados.atencao.some(g => g.codigos.includes(p.codigo_servico || p.codigo))) return `<td class="nw"><a class="link falha" href="#atencao" data-ir-atencao="1">${ICO_ALERTA}<span>Responder</span></a></td>`;
         if (dados.alteracao_entrega && SITUACOES_ALTERAVEIS.includes(p.situacao)) return `<td class="nw"><a class="link" href="#" data-alterar="${p.service_id}">${ICO_EDITAR}<span>Pedir alteração</span></a></td>`;
         return `<td class="nw" style="color:var(--texto-suave)">—</td>`;
       case 'ordem': return `<td class="nw num">${p.ordem ? p.ordem + ' de ' + p.total_paradas : '—'}</td>`;
       default: return `<td>${esc(p[id]) || '<span style="color:var(--texto-suave)">—</span>'}</td>`;
     }
+  }
+
+  // Tentativas abertas (pelo selo) sobrevivem ao re-render da tabela.
+  const abertos = new Set();
+  function chaveTentativas(p) { return `${p.sender_id}|${p.codigo}`; }
+
+  function linhaTentativas(p, ncols) {
+    if (!abertos.has(chaveTentativas(p)) || (p.tentativas || []).length < 2) return '';
+    const itens = p.tentativas.map(t => {
+      const dia = (t.data || '').slice(5).split('-').reverse().join('/');
+      const partes = [t.situacao === 'entregue' && t.concluido_em ? `Entregue ${t.concluido_em}` : t.situacao_rotulo, t.motivo, t.rota].filter(Boolean);
+      return `<li><b>${esc(dia)}</b> <span class="${t.situacao === 'insucesso' ? 'falha' : ''}">${esc(partes[0])}</span>${partes.slice(1).map(x => ' · ' + esc(x)).join('')}</li>`;
+    }).join('');
+    return `<tr class="tentativas"><td colspan="${ncols}"><ul>${itens}</ul></td></tr>`;
   }
 
   function renderTabela() {
@@ -513,7 +538,7 @@
         const q = lista.filter(x => x.data === p.data).length;
         faixa = `<tr class="faixa-dia"><td colspan="${cols.length}"><b>${esc(rotuloDoDia(p.data, p.data_rotulo))}</b> <span class="qtd">· ${q} pedido${q > 1 ? 's' : ''}</span></td></tr>`;
       }
-      return faixa + `<tr>${cols.map(c => celula(p, c.id)).join('')}</tr>`;
+      return faixa + `<tr>${cols.map(c => celula(p, c.id)).join('')}</tr>` + linhaTentativas(p, cols.length);
     }).join('');
     $('tabela').querySelector('tbody').innerHTML = linhas;
 
@@ -855,6 +880,13 @@
   $('alt-fundo').addEventListener('click', e => { if (e.target === $('alt-fundo')) fecharAlteracao(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && alt) fecharAlteracao(); });
   $('tabela').addEventListener('click', e => {
+    const s = e.target.closest('[data-tentativas]');
+    if (s) {
+      const k = s.dataset.tentativas;
+      if (!abertos.delete(k)) abertos.add(k);
+      renderTabela();
+      return;
+    }
     const a = e.target.closest('[data-alterar]');
     if (!a) return;
     e.preventDefault();

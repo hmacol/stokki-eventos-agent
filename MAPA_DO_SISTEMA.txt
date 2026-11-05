@@ -1180,6 +1180,12 @@
                            só abre /completar-cadastro até informar tipo de
                            carga, e-mails e WhatsApp.
  dados_cliente.py          Monta o dia do embarcador (Vuupt + NF).
+                           Uma linha por pedido (05/11, unir_tentativas): original e
+                           -R1/-R2 viram uma linha com a última tentativa e o histórico
+                           (selo "N tentativas" na tela, coluna Tentativas no xlsx);
+                           "Não coletado" (5744) some pro cliente; só ele = Aguardando
+                           saída. `codigo` = código base, `codigo_servico` = o do serviço.
+                           E-mails 07h/20h ainda usam linhas_das_rotas sem unir.
  envio_pedidos.py          "Máscara de envio": valida XML/planilha, fila.
  endereco_entrega.py       Endereço de entrega escolhido na prévia: CEP com IBGE, última
                            entrega do destinatário (Vuupt/portal, por embarcador), <entrega>

@@ -1255,7 +1255,8 @@ def api_destinatarios_gravar():
 
 _COLUNAS_XLSX = [
     ("codigo", "Pedido"), ("nf", "NF"), ("destinatario", "Destinatário"), ("endereco_completo", "Endereço"),
-    ("volumes", "Volumes"), ("situacao_rotulo", "Situação"), ("motorista", "Motorista"), ("rota", "Rota"),
+    ("volumes", "Volumes"), ("situacao_rotulo", "Situação"), ("tentativas_texto", "Tentativas"),
+    ("motorista", "Motorista"), ("rota", "Rota"),
     ("ordem", "Parada"), ("detalhe", "Previsão / conclusão"), ("concluido_em", "Concluído às"),
     ("motivo", "Motivo do insucesso"), ("janela_atendimento", "Janela de atendimento"),
     ("telefone_destinatario", "Telefone do destinatário"), ("criado_em", "Data do pedido"), ("observacoes", "Observações"),

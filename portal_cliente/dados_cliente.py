@@ -279,7 +279,7 @@ def _linha(servico: dict, situacao: str, nfs: dict[str, str], **extra) -> dict:
         # ou o dia de hoje pra quem ainda não tem rota.
         "data": "", "data_rotulo": "",
         "motorista": "", "rota": "", "placa": "", "ordem": None, "total_paradas": None,
-        "detalhe": "", "concluido_em": "", "motivo": "", "comprovante": False,
+        "detalhe": "", "concluido_em": "", "motivo": "", "failed_reason_id": None, "comprovante": False,
         "reentrega": bool(re.search(r"-R\d+", codigo, re.IGNORECASE)),
         **extra,
     }
@@ -374,6 +374,7 @@ def linhas_das_rotas(rotas: list[dict], sender_id, motoristas: dict, nfs_cache: 
                 ordem=ordem, total_paradas=total, detalhe=detalhe,
                 concluido_em=_hora(s.get("completed_at")) if status == "done" else "",
                 motivo=texto_do_motivo(s.get("failed_reason_id")) if situacao == "insucesso" else "",
+                failed_reason_id=s.get("failed_reason_id") if situacao == "insucesso" else None,
                 comprovante=(situacao == "entregue"),
                 rota_iniciada_em=iniciada,
                 data=dia_rota.isoformat() if dia_rota else "",
@@ -577,6 +578,76 @@ def _carimbar_dia(linhas: list[dict], dia: date) -> list[dict]:
     return linhas
 
 
+# ── Uma linha por pedido (Hugo, 05/11) ─────────────────────────────────────────
+# Original e reentregas (#PS-1, #PS-1-R1, ...) viram uma linha só, com a
+# situação da última tentativa e o histórico. "Não coletado" é falha nossa
+# (o motorista nem pegou a carga no galpão): o cliente não vê.
+NAO_COLETADO = 5744
+# Empate no mesmo dia: a de peso maior é a mais recente. Entregue vence
+# sempre (tentativa depois da entrega é serviço duplicado na Vuupt).
+_PESO_TENTATIVA = {"programado": 0, "insucesso": 1, "aguardando_saida": 2, "em_rota": 3, "agendado": 4, "entregue": 5}
+
+
+def _tentativa(p: dict) -> dict:
+    return {k: p[k] for k in ("data", "data_rotulo", "situacao", "situacao_rotulo", "motivo", "concluido_em", "rota")}
+
+
+def _so_nao_coletado(p: dict, dia: date) -> dict:
+    """Todas as tentativas foram "não coletado": pro cliente o pedido ainda
+    não saiu."""
+    return {**p, "situacao": "aguardando_saida", "situacao_rotulo": ROTULOS["aguardando_saida"],
+            "detalhe": "Aguardando roteirização", "motorista": "", "rota": "", "placa": "", "ordem": None,
+            "total_paradas": None, "concluido_em": "", "motivo": "", "failed_reason_id": None,
+            "comprovante": False, "rota_iniciada_em": "",
+            "data": dia.isoformat(), "data_rotulo": f"{_dia_semana(dia)} {_ddmm(dia)}"}
+
+
+def unir_tentativas(linhas: list[dict], dia: date) -> list[dict]:
+    """Uma linha por pedido (empresa + códigos base). `codigo` passa a ser o
+    código base; o do serviço da última tentativa fica em `codigo_servico`
+    (é o que casa com os insucessos aguardando resposta). Só entram no
+    histórico as tentativas que terminaram e a atual: programado de rota
+    antiga e rota duplicada não são tentativa."""
+    grupos: dict[tuple, list[dict]] = {}
+    for p in linhas:
+        grupos.setdefault((p.get("sender_id"), tuple(codigos_base_lista(p["codigo"]))), []).append(p)
+
+    def recencia(p):
+        return p["data"], _PESO_TENTATIVA.get(p["situacao"], 0)
+
+    saida = []
+    for (_, bases), grupo in grupos.items():
+        validas = [p for p in grupo if not (p["situacao"] == "insucesso" and p.get("failed_reason_id") == NAO_COLETADO)]
+        if validas:
+            entregues = [p for p in validas if p["situacao"] == "entregue"]
+            final = dict(max(entregues or validas, key=recencia))
+        else:
+            final = _so_nao_coletado(max(grupo, key=recencia), dia)
+        tentativas = {}
+        for p in sorted(validas, key=recencia):
+            if p["situacao"] in ("entregue", "insucesso"):
+                tentativas.setdefault((p["data"], p["situacao"], p["motivo"]), _tentativa(p))
+        if final["situacao"] not in ("entregue", "insucesso"):
+            tentativas[None] = _tentativa(final)
+        final["tentativas"] = list(tentativas.values())
+        final["tentativas_texto"] = "; ".join(
+            " ".join(filter(None, (t["data"][8:10] + "/" + t["data"][5:7] if t["data"] else "", t["situacao_rotulo"])))
+            + (f" ({t['motivo']})" if t["motivo"] else "")
+            for t in final["tentativas"])
+        final["codigo_servico"] = final["codigo"]
+        final["codigo"] = "#" + ", ".join(bases) if bases else final["codigo"]
+        saida.append(final)
+    return saida
+
+
+def _unir_com_futuros(pedidos: list[dict], futuros: list[dict], dia: date) -> tuple[list[dict], list[dict]]:
+    """Os agendados pra frente entram na união (a reentrega agendada é a
+    última tentativa do pedido) e voltam pra lista deles."""
+    unidos = unir_tentativas(pedidos + futuros, dia)
+    return ([p for p in unidos if p["situacao"] != "agendado"],
+            [p for p in unidos if p["situacao"] == "agendado"])
+
+
 def _kpis(pedidos: list[dict], atencao: list[dict]) -> dict:
     contagem = defaultdict(int)
     for p in pedidos:
@@ -631,7 +702,7 @@ def _montar_dia(sender_id: tuple[int, ...], data_alvo: date, config: dict) -> di
         # pedido sem rota é "do dia" só olhando pra frente -- num dia passado
         # a lista é o que de fato rodou.
         sem_rota, futuros = _coletar_sem_rota(vuupt, sender_id, data_alvo, nfs)
-    pedidos = _carimbar_dia(linhas + sem_rota, data_alvo)
+    pedidos, futuros = _unir_com_futuros(_carimbar_dia(linhas + sem_rota, data_alvo), futuros, data_alvo)
 
     pedidos.sort(key=lambda p: (ORDEM_SITUACAO.get(p["situacao"], 9), p.get("rota") or "", p.get("ordem") or 0, p["codigo"]))
 
@@ -692,7 +763,7 @@ def _montar_janela(sender_id: tuple[int, ...], dias: int, config: dict, hoje: da
     # O que ainda não tem rota e o que está agendado pra frente são do
     # AGORA, não da janela -- mesma coleta da tela de um dia só.
     sem_rota, futuros = _coletar_sem_rota(vuupt, sender_id, hoje, nfs)
-    pedidos = _carimbar_dia(linhas + sem_rota, hoje)
+    pedidos, futuros = _unir_com_futuros(_carimbar_dia(linhas + sem_rota, hoje), futuros, hoje)
 
     # Mais recente primeiro; dentro do dia, a mesma ordem da tela do dia.
     # Dois sorts porque o de dentro é crescente e o de fora decrescente
