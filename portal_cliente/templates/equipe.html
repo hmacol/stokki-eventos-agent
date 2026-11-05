@@ -21,7 +21,7 @@
   <select id="cnpj" name="cnpj" required style="width:100%; padding:10px 12px; border:1px solid var(--borda); border-radius:7px; font-size:14px; margin-bottom:16px; font-family:inherit;">
     <option value="">— escolha —</option>
     {% for e in embarcadores %}
-    <option value="{{ e.cnpj }}" {% if e.cnpj == cnpj_atual %}selected{% endif %}>{{ e.nome }} · {{ e.cnpj }}</option>
+    <option value="{{ e.cnpj }}" {% if e.cnpj == cnpj_atual %}selected{% endif %}>{{ e.nome }}{% if e.empresas_grupo > 1 %} (grupo, {{ e.empresas_grupo }} empresas){% endif %} · {{ e.cnpj }}</option>
     {% endfor %}
   </select>
   <button type="submit" class="principal">Abrir o portal deste cliente</button>

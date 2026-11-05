@@ -313,7 +313,7 @@ def equipe_cliente():
         return redirect(url_for("equipe_login"))
     conn = auth.conectar()
     try:
-        embarcadores = auth.listar_embarcadores(conn)
+        embarcadores = auth.embarcadores_para_equipe(conn)
     finally:
         conn.close()
     if request.method == "POST":
