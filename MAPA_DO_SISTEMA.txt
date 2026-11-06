@@ -982,6 +982,13 @@
                            fecha na Vuupt por API (concluir_como_agente, sem
                            canhoto; expedição sai "sem comprovante"). Auditoria
                            em torre_entregas_manuais + tratativas ENTREGUE_MANUAL.
+                           "Sem sucesso" (06/11): mesmo modal (Entregue / Sem
+                           sucesso), também em massa no Planejamento; mesmo POST
+                           com resultado=sem_sucesso -> marcar_sem_sucesso_manual
+                           fecha como insucesso (motivo de MOTIVOS_FALHA +
+                           observação opcional), segue o fluxo normal de
+                           insucesso. Auditoria: colunas resultado/failed_reason_id
+                           + tratativas INSUCESSO_MANUAL.
                            Foto em massa (30/10): POST /api/torre/validar-lote-foto
                            (Planejamento chama antes do laço) e lote_referencia no
                            marcar-entregue; regra em mesmo_destino_para_foto (mesmo

@@ -114,6 +114,37 @@ class TestEndpoint(_Base):
         self.assertEqual(r.status_code, 400)
         self.assertEqual(r.get_json()["erro"], "sem motorista")
 
+    def test_api_sem_sucesso_vai_pra_funcao_do_insucesso(self):
+        self._logar("operador")
+        with mock.patch.object(painel_agentes.torre_controle, "marcar_sem_sucesso_manual",
+                               return_value={"ok": True, "codigo": "#PS-77"}) as fn,              mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual") as entregue:
+            r = self._post({"service_id": "77", "resultado": "sem_sucesso", "failed_reason_id": "8490",
+                            "observacao": "porteiro"})
+            self.assertEqual(r.status_code, 200, r.data)
+            fn.assert_called_once_with(77, "teste", "8490", "porteiro")
+            entregue.assert_not_called()
+            r = self._post({"service_id": "77", "resultado": "sem_sucesso", "failed_reason_id": "8490"})
+            self.assertEqual(fn.call_args.args, (77, "teste", "8490", None))
+
+    def test_api_sem_sucesso_erro_vira_400(self):
+        self._logar("total")
+        with mock.patch.object(painel_agentes.torre_controle, "marcar_sem_sucesso_manual",
+                               return_value={"ok": False, "erro": "Escolha o motivo da não entrega."}):
+            r = self._post({"service_id": "77", "resultado": "sem_sucesso"})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json()["erro"], "Escolha o motivo da não entrega.")
+
+    def test_api_sem_sucesso_exige_nivel_e_origem(self):
+        with mock.patch.object(painel_agentes.torre_controle, "marcar_sem_sucesso_manual") as fn:
+            self._logar("leitura")
+            r = self._post({"service_id": "77", "resultado": "sem_sucesso", "failed_reason_id": "8490"})
+            self.assertIn(r.status_code, (302, 403))
+            self._logar("operador")
+            r = self._post({"service_id": "77", "resultado": "sem_sucesso", "failed_reason_id": "8490"},
+                           origem=False)
+            self.assertEqual(r.status_code, 403)
+        fn.assert_not_called()
+
     def test_service_id_invalido_400_sem_chamar(self):
         self._logar("total")
         with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual") as fn:
@@ -214,7 +245,7 @@ class TestTemplates(_Base):
 
     def test_planejamento_tem_menu_e_modal(self):
         fonte = self._fonte("planejamento_rotas.html")
-        self.assertIn('rotulo: "Marcar como entregue"', fonte)
+        self.assertIn('rotulo: "Marcar entregue / sem sucesso"', fonte)
         self.assertIn('id="modal-entregue"', fonte)
         self.assertIn("url_for('api_torre_marcar_entregue')", fonte)
         # em massa (23/10): botao na barra de selecao das rotas
@@ -271,6 +302,33 @@ class TestModalFotoEJustificativa(_Base):
         self._confere_modal(r.get_data(as_text=True))
         # sem dados de teste o /planejamento cai no ramo de erro e nao renderiza o script principal
         self.assertIn('{% include "_reduzir_imagem.js.html" %}', self._fonte("planejamento_rotas.html"))
+
+    def _confere_sem_sucesso(self, html):
+        import re
+        from html import unescape
+        import torre_controle
+        self.assertIn('name="entregue-resultado" value="entregue" checked', html)
+        self.assertIn('name="entregue-resultado" value="sem_sucesso"', html)
+        self.assertRegex(html, r'id="entregue-bloco-sem-sucesso" hidden')
+        self.assertIn('id="entregue-observacao" maxlength="200"', html)
+        trecho = html.split('id="entregue-motivo"', 1)[1].split("</select>", 1)[0]
+        opcoes = [(int(v), unescape(t).strip()) for v, t in re.findall(r'<option value="(\d+)">([^<]*)</option>', trecho)]
+        self.assertEqual(opcoes, torre_controle.motivos_sem_sucesso())
+
+    def test_modal_tem_opcao_sem_sucesso(self):
+        self._logar("operador")
+        r = self.cliente.get("/torre")
+        self.assertEqual(r.status_code, 200)
+        html = r.get_data(as_text=True)
+        self._confere_sem_sucesso(html)
+        self.assertIn("Marcar entregue / sem sucesso", html)
+        self.assertIn('fd.append("resultado", "sem_sucesso")', html)
+        r = self.cliente.get("/planejamento")
+        self.assertEqual(r.status_code, 200)
+        self._confere_sem_sucesso(r.get_data(as_text=True))
+        fonte = self._fonte("planejamento_rotas.html")
+        self.assertIn("async function confirmarSemSucesso(botao, pendente)", fonte)
+        self.assertIn(">Entregue / sem sucesso</button>", fonte)
 
     def test_labels_nao_duplicados_nos_fontes(self):
         for nome in ("torre_controle.html", "planejamento_rotas.html"):

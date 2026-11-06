@@ -1060,6 +1060,7 @@ def planejamento():
         # equivalente no backend das rotas de mutação).
         pode_editar=g.nivel_acesso in ("total", "operador", "logistica") and data_alvo >= date.today(),
         justificativas=justificativas_sem_canhoto.JUSTIFICATIVAS,
+        motivos_sem_sucesso=torre_controle.motivos_sem_sucesso(),
     )
 
 
@@ -2439,6 +2440,7 @@ def torre():
         # do ponto de vista da operação (ainda aberta).
         pode_excluir_pedido=pode_editar,
         justificativas=justificativas_sem_canhoto.JUSTIFICATIVAS,
+        motivos_sem_sucesso=torre_controle.motivos_sem_sucesso(),
     )
 
 
@@ -2524,7 +2526,9 @@ def api_torre_marcar_entregue():
     hora, por API, sem passar pelo app do motorista (ver
     torre_controle.marcar_entregue_manual). Mesmo nivel do "Excluir da
     rota" -- muda o pedido na VUUPT. Multipart: service_id, foto_canhoto
-    e foto_nota_retorno (opcionais), justificativa e texto_outro."""
+    e foto_nota_retorno (opcionais), justificativa e texto_outro.
+    "Sem sucesso" (Hugo, 06/11): resultado=sem_sucesso, failed_reason_id e
+    observacao (opcional) -> torre_controle.marcar_sem_sucesso_manual."""
     from nucleo import canhotos_manuais
     # Recusa antes de ler: duas fotos de 15 MB no maximo (mesmo teto da baixa sem app).
     if (request.content_length or 0) > LIMITE_REQUISICAO_ENTREGUE:
@@ -2533,6 +2537,13 @@ def api_torre_marcar_entregue():
         service_id = int(request.form["service_id"])
     except (KeyError, TypeError, ValueError):
         return jsonify({"erro": "service_id ausente ou inválido."}), 400
+    if request.form.get("resultado") == "sem_sucesso":
+        resultado = torre_controle.marcar_sem_sucesso_manual(
+            service_id, session.get("usuario", ""), request.form.get("failed_reason_id"),
+            request.form.get("observacao") or None)
+        if not resultado.get("ok"):
+            return jsonify({"erro": resultado.get("erro", "Falha ao marcar sem sucesso.")}), 400
+        return jsonify(resultado)
     # lote do Planejamento com foto: os itens 2..N mandam o 1o como referencia (Hugo, 30/10)
     try:
         lote_referencia = int(request.form["lote_referencia"]) if request.form.get("lote_referencia") else None
