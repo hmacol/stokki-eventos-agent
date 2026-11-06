@@ -60,11 +60,6 @@ import redespacho_confirmacao
 import consulta_transportadora
 import transportadoras_cadastro
 from consulta_transportadora import config_consulta
-from retiradas.regras_retirada import config_retiradas, importar_retirada, montar_payload_retirada
-
-# Seção 'retiradas' do config.yaml, preenchida em main() -- processar_pedido
-# não recebe o config inteiro e tem assinatura usada por vários chamadores.
-config_retiradas_global: dict = {}
 
 # ── Configuração de logging ────────────────────────────────────────────────────
 if hasattr(sys.stdout, "reconfigure"):
@@ -635,8 +630,8 @@ def processar_pedido(
         # Serviço CANCELADO com o pedido ainda aberto na Stokki (28/09): não
         # entra no cache e segue até o desvio de RETIRADA -- é o caso do
         # reconciliar_pedidos_retirada.py, que cancela o serviço de entrega
-        # contando que o pipeline crie o avulso de retirada (antes o cache
-        # eterno impedia). Se for ENTREGA, para logo depois com ação própria.
+        # de quem virou retirada (aí sai como ignorado_retirada, sem pedir
+        # revisão). Se for ENTREGA, para logo depois com ação própria.
         cancelado_na_vuupt = status_vuupt == "canceled"
         if servico_existente and status_vuupt != vuupt.STATUS_ATUALIZAVEL and not cancelado_na_vuupt:
             marcar_atribuido(codigo_ps, status=status_vuupt)
@@ -675,32 +670,30 @@ def processar_pedido(
                 return resultado
 
         # Pedidos com transportadora RETIRADA (cliente retira / terceira
-        # coleta no galpão): SERVIÇO AVULSO na VUUPT, título "[RETIRADA]",
-        # atribuído ao agente fixo de retiradas -- nunca entra em rota
-        # (pedido do Hugo, 28/08; ver retiradas/regras_retirada.py). Sem
-        # retiradas.agent_id no config, mantém o comportamento antigo
-        # (ignora). Quem fecha/cancela depois é acompanhar_retiradas.py.
+        # coleta no galpão) NUNCA sobem pra VUUPT (Hugo, 06/11 -- de 28/08
+        # até aqui viravam serviço avulso "[RETIRADA]"; os que já estão lá
+        # o acompanhar_retiradas.py segue fechando). Se a entrega já estava
+        # na VUUPT e o pedido virou retirada depois, cancela enquanto ainda
+        # está not_assigned -- antes de entrar em rota (o reconciliar_
+        # pedidos_retirada.py faz o mesmo de 2 em 2 h, este é o atalho).
         if res_end.transportadora.get("tipo") == "RETIRADA":
-            cfg_ret = config_retiradas(config_retiradas_global or {})
-            if not cfg_ret["ativo"]:
-                logger.info(
-                    f"  {codigo_ps}: RETIRADA ({res_end.transportadora.get('nome')}) "
-                    f"— ignorado, nao importa no VUUPT (retiradas desativadas no config)."
-                )
-                resultado["acao"] = "ignorado_retirada"
-                return resultado
-            stkkc_id_final = stkkc_id_emb or detalhe.get("stkkc_id")
-            dados_banco = _buscar_dados_embarcador_banco(stkkc_id_final) if stkkc_id_final else {}
-            transp_bloco = detalhe.get("transportadora") or {}
-            transp_info = {"nome": res_end.transportadora.get("nome") or transp_bloco.get("nome", ""),
-                           "documento": transp_bloco.get("documento", "")}
-            payload_ret = montar_payload_retirada(
-                codigo_ps, referencia or detalhe.get("referencia", ""), detalhe,
-                transp_info, dados_banco, cfg_ret, data_saida=data_saida)
-            acao_ret, _ = importar_retirada(vuupt, payload_ret, cfg_ret, servico_existente, modo_teste)
-            resultado["acao"] = acao_ret
+            resultado["acao"] = "ignorado_retirada"
             resultado["fonte_endereco"] = "retirada_galpao"
-            resultado["observacao"] = f"Retirada no galpão via {transp_info['nome'] or 'cliente'} -- serviço avulso, sem rota."
+            nome_transp = res_end.transportadora.get("nome") or "cliente"
+            resultado["observacao"] = f"Retirada no galpão via {nome_transp} -- não sobe pra VUUPT."
+            if status_vuupt == vuupt.STATUS_ATUALIZAVEL:
+                if modo_teste:
+                    logger.info(f"  [TESTE] {codigo_ps}: RETIRADA -- cancelaria o serviço "
+                                f"{servico_existente['id']} (not_assigned) na VUUPT.")
+                else:
+                    try:
+                        vuupt.cancelar_servico_oficial(servico_existente["id"])
+                        resultado["observacao"] += f" Serviço {servico_existente['id']} cancelado na VUUPT."
+                    except Exception as e:
+                        resultado["requer_revisao"] = True
+                        resultado["observacao"] += (f" Falha ao cancelar o serviço {servico_existente['id']} "
+                                                    f"na VUUPT ({e}) -- cancelar à mão.")
+            logger.info(f"  {codigo_ps}: RETIRADA ({nome_transp}) -- ignorado. {resultado['observacao']}")
             return resultado
 
         if cancelado_na_vuupt:
@@ -1242,8 +1235,6 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
     )
 
     config           = _carregar_config()
-    global config_retiradas_global
-    config_retiradas_global = config
     anthropic_key    = config.get("anthropic", {}).get("api_key", "")
     vuupt_token      = config.get("vuupt_api", {}).get("token", "")
     gmaps_key        = config.get("google_maps", {}).get("api_key", "")

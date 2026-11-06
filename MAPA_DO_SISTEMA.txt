@@ -207,7 +207,8 @@
     (agendamento_confirmacao.py; pedido novo sem agendamento nasce com data
     automatica, corte 14h) e redespacho (redespacho_confirmacao.py),
     e cria/atualiza o SERVIÇO na Vuupt (vuupt_client.py). Grava em paralelo
-    em nucleo_pedidos. Retiradas viram serviço avulso (retiradas/).
+    em nucleo_pedidos. Retirada no galpão NUNCA sobe pra Vuupt (06/11): ignorada,
+    e a entrega not_assigned que virou retirada é cancelada.
  4) 16h: roteirizacao/criar_rotas_diarias.py --gerar-rascunho
     pool (nucleo/pool.py) -> dia fixo / dedicados / área não atendida ->
     partição por carga -> agrupamento + seleção de modelo + polimento ->
@@ -1338,8 +1339,11 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
 
  resposta_insucesso/       Página pública /insucesso/r/<token> (porta 8072).
 
- retiradas/                "Cliente Retira" vira serviço avulso na Vuupt
-                           (agente fixo) e é fechado conforme a Stokki.
+ retiradas/                "Cliente Retira" NÃO sobe pra Vuupt desde 06/11. De 28/08
+                           a 06/11 virava serviço avulso "[RETIRADA]" (agente fixo);
+                           acompanhar_retiradas fecha os que sobraram conforme a
+                           Stokki. Card "A retirar no galpão", e-mail "Retirado" e
+                           consulta da Expedição só enxergam esses antigos.
 
  print_agent/              Único componente local (Windows do escritório):
                            baixa romaneios do painel e imprime.
@@ -1587,8 +1591,8 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
    insucessos saem do vigia (pra não acusar com dado velho).
  - "Serviço cancelado na Vuupt" NÃO é recriado pelo pipeline se o pedido
    segue aberto na Stokki: sai como pulado_cancelado_vuupt no relatório
-   da importação (conferir à mão). Exceção: se virou RETIRADA, o pipeline
-   cria o serviço avulso de retirada.
+   da importação (conferir à mão). Exceção: se virou RETIRADA, sai como
+   ignorado_retirada (retirada nunca sobe pra Vuupt, 06/11).
  - documentos_pedido/selecionar_pedidos.py repete regra do pipeline.py.
  - O `niveis` do menu lateral precisa bater com o @requer_auth da rota.
  - Envio real para clientes/motoristas é desligado por padrão; ligar pela tela
