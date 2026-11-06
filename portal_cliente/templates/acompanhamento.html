@@ -836,10 +836,12 @@
     if (d.length !== 8) return;
     e.erro = ''; e.cidade = '';
     const info = () => { const el = $('alt-cep-info'); if (el) el.textContent = e.erro || e.cidade; };
+    let limite = '';
     try {
       const r = await altFetch(`${BASE}/api/envios/cep/${d}`);
       const j = await r.json();
       if (alt !== a || e.cep.replace(/\D/g, '') !== d) return;   // trocou o CEP/janela antes da resposta
+      if (r.status === 429) limite = j.erro;
       if (!r.ok) throw new Error(j.erro);
       if (j.logradouro) e.logradouro = j.logradouro;
       if (j.bairro) e.bairro = j.bairro;
@@ -850,7 +852,7 @@
       const foco = cx.querySelector(`[data-f="${e.logradouro ? 'numero' : 'logradouro'}"]`); if (foco) foco.focus();
     } catch (err) {
       if (alt !== a || e.cep.replace(/\D/g, '') !== d) return;
-      e.erro = 'CEP não encontrado';
+      e.erro = limite || 'CEP não encontrado';
     }
     info();
   }

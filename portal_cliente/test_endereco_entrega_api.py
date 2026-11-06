@@ -67,6 +67,7 @@ class Rotas(unittest.TestCase):
             mock.patch.object(ep, "_tipo_transportadora", return_value=None),
             mock.patch.object(app.auth, "sessao_valida", lambda c, cnpj, v: dict(CLIENTE)),
             mock.patch.object(app, "_CONFIG", self.config),
+            mock.patch.dict(app._CONSULTAS_CEP, clear=True),
         ]
         for p in patches:
             p.start()
@@ -118,6 +119,45 @@ class Rotas(unittest.TestCase):
             r = self.tc.get("/api/envios/cep/01414-001")
         self.assertEqual(r.status_code, 404)
         consultar.assert_not_called()
+
+    def test_cep_abre_com_pedir_alteracao_ativo(self):
+        """A janela 'Pedir alteracao' do acompanhamento usa esta rota: com a
+        chave do envio desligada e o piloto da alteracao ligado pro CNPJ, responde."""
+        self.config.clear()
+        self.config["portal_cliente"] = {"alteracao_entrega": {"ativo": False, "piloto_cnpjs": [CNPJ]}}
+        dados = {"cep": "01414-001", "logradouro": "Rua Haddock Lobo", "bairro": "Cerqueira César",
+                 "cidade": "São Paulo", "uf": "SP", "ibge": "3550308"}
+        with mock.patch.object(cotacao, "consultar_cep", return_value=dados):
+            self.assertEqual(self.tc.get("/api/envios/cep/01414-001").status_code, 200)
+        self.config["portal_cliente"]["alteracao_entrega"]["piloto_cnpjs"] = ["11222333000181"]
+        with mock.patch.object(cotacao, "consultar_cep") as consultar:
+            self.assertEqual(self.tc.get("/api/envios/cep/01414-001").status_code, 404)
+        consultar.assert_not_called()
+
+    def test_cep_limite_por_cliente(self):
+        """Revisao de seguranca 30/10, item 2: acima do teto por minuto vira 429
+        sem chamar ViaCEP/BrasilAPI; outro cliente nao e afetado."""
+        with mock.patch.object(cotacao, "consultar_cep", return_value=None) as consultar:
+            codigos = [self.tc.get(f"/api/envios/cep/0141400{i % 10}").status_code
+                       for i in range(self.app._MAX_CEP_POR_MINUTO)]
+            acima = self.tc.get("/api/envios/cep/01414001")
+            self.assertEqual(consultar.call_count, self.app._MAX_CEP_POR_MINUTO)
+            outro = dict(CLIENTE, cnpj="11222333000181")
+            with mock.patch.object(self.app.auth, "sessao_valida", lambda c, cnpj, v: outro):
+                livre = self.tc.get("/api/envios/cep/01414001")
+        self.assertEqual(set(codigos), {404})
+        self.assertEqual(acima.status_code, 429)
+        self.assertIn("Muitas consultas", acima.get_json()["erro"])
+        self.assertEqual(livre.status_code, 404)
+
+    def test_cep_limite_libera_depois_de_um_minuto(self):
+        with mock.patch.object(cotacao, "consultar_cep", return_value=None), \
+             mock.patch.object(self.app.time, "monotonic", return_value=1000.0) as relogio:
+            for _ in range(self.app._MAX_CEP_POR_MINUTO):
+                self.tc.get("/api/envios/cep/01414001")
+            self.assertEqual(self.tc.get("/api/envios/cep/01414001").status_code, 429)
+            relogio.return_value = 1061.0
+            self.assertEqual(self.tc.get("/api/envios/cep/01414001").status_code, 404)
 
     def test_confirmar_passa_sender_id_e_config(self):
         with mock.patch.object(ep, "confirmar_envios", return_value=[]) as conf, \

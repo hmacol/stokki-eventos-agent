@@ -159,6 +159,18 @@ class RevisaoFinal(unittest.TestCase):
             with mock.patch.object(cotacao, "_http_json", side_effect=lambda url: via if "viacep" in url else None):
                 self.assertEqual(cotacao.consultar_cep("01414001")["ibge"], "3550308")
 
+    def test_cache_cep_tem_teto(self):
+        """Revisao de seguranca 30/10, item 2: CEP inexistente tambem fica no
+        cache (None); sem teto o dicionario so cresce."""
+        from unittest import mock
+        import cotacao
+        with mock.patch.dict(cotacao._CACHE_CEP, clear=True), mock.patch.object(cotacao, "_MAX_CACHE_CEP", 5), \
+             mock.patch.object(cotacao, "_http_json", return_value={"erro": True}):
+            for i in range(12):
+                cotacao.consultar_cep(f"0141400{i % 10}" if i < 10 else f"014140{i}")
+            self.assertLessEqual(len(cotacao._CACHE_CEP), 5)
+            self.assertIn("01414011", cotacao._CACHE_CEP)
+
     def test_texto_acima_de_60_recusa_em_vez_de_cortar(self):
         for campo in ("complemento", "logradouro", "bairro", "numero"):
             with self.subTest(campo=campo):

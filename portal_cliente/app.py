@@ -25,6 +25,8 @@ import io
 import logging
 import os
 import sys
+import threading
+import time
 from datetime import date, datetime, timedelta
 from functools import wraps
 from pathlib import Path
@@ -100,6 +102,13 @@ ACOES_VALIDAS = ("manter", "reagendar", "cancelar")
 # IP e um grupo (ex.: Marchef) pode pedir link de vários CNPJs em sequência.
 _MAX_LINKS_POR_CNPJ_HORA = 3
 _MAX_PEDIDOS_LINK_POR_IP_HORA = 20
+# Consulta de CEP da prévia do envio (revisão de segurança 30/10, item 2):
+# cada CEP fora do cache vira até 2 chamadas HTTP síncronas e o ViaCEP
+# bloqueia IP que abusa. Teto por cliente, em memória (o waitress é um
+# processo só; reiniciar zera).
+_MAX_CEP_POR_MINUTO = 30
+_CONSULTAS_CEP: dict[str, list[float]] = {}
+_TRAVA_CEP = threading.Lock()
 # Níveis do painel interno que podem entrar no portal em nome de um
 # cliente (decisão do Hugo, 08/09, item 2: "os dois" sobem XML). Leitura
 # só olha.
@@ -1053,15 +1062,32 @@ def _casos_de_entrega(conn, itens: list[dict]) -> None:
         it["entrega"] = casos[chave]
 
 
+def _cep_acima_do_limite(chave: str) -> bool:
+    """Janela de 60 s por cliente; só a consulta liberada conta."""
+    agora = time.monotonic()
+    with _TRAVA_CEP:
+        recentes = [t for t in _CONSULTAS_CEP.get(chave, ()) if agora - t < 60]
+        acima = len(recentes) >= _MAX_CEP_POR_MINUTO
+        if not acima:
+            recentes.append(agora)
+        _CONSULTAS_CEP[chave] = recentes
+    return acima
+
+
 @app.route("/api/envios/cep/<cep>")
 @requer_cliente
 def api_envios_cep(cep):
-    """CEP do formulário de endereço de entrega da prévia (27/10). O confirmar
-    consulta de novo: isto só preenche a tela. Chave desligada: a rota não
-    existe (revisão de segurança 30/10 -- não abrir proxy de CEP sem uso)."""
-    if not endereco_entrega.entrega_ativa(_CONFIG):
+    """CEP do formulário de endereço de entrega da prévia (27/10) e da janela
+    'Pedir alteração' do acompanhamento. Quem grava consulta de novo: isto só
+    preenche a tela. Sem nenhuma das duas chaves pro login, a rota não existe
+    (revisão de segurança 30/10 -- não abrir proxy de CEP sem uso)."""
+    alteracao = any(alterar_entrega.ativa_para(_CONFIG, e["cnpj"]) for e in g.cliente["empresas"])
+    if not (endereco_entrega.entrega_ativa(_CONFIG) or alteracao):
         abort(404)
     _exige_pode_enviar()
+    if _cep_acima_do_limite(g.cliente["cnpj"]):
+        logger.warning(f"envios cep: limite por minuto cnpj={g.cliente['cnpj']}")
+        return jsonify({"erro": "Muitas consultas de CEP. Tente de novo em um minuto."}), 429
     achado = cotacao.consultar_cep(cotacao.normalizar_cep(cep))
     if not achado:
         return jsonify({"erro": "CEP não encontrado"}), 404
