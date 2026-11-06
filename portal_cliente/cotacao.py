@@ -241,6 +241,9 @@ def calcular(entrada: dict, regras: dict) -> dict:
 # ── Entrada: CEP, endereços, lista ───────────────────────────────────────────────
 
 _CACHE_CEP: dict[str, dict | None] = {}
+# CEP inexistente também fica (None): sem teto o dicionário só cresce
+# (revisão de segurança 30/10). Passou do teto, começa de novo.
+_MAX_CACHE_CEP = 5000
 
 
 def normalizar_cep(valor) -> str:
@@ -286,6 +289,8 @@ def consultar_cep(cep: str) -> dict | None:
         # só cacheia resposta definitiva (achou pelo ViaCEP, ou o ViaCEP disse
         # que não existe); a da BrasilAPI vem sem ibge e o endereço de entrega
         # precisa dele -- da próxima vez tenta o ViaCEP de novo
+        if len(_CACHE_CEP) >= _MAX_CACHE_CEP:
+            _CACHE_CEP.clear()
         _CACHE_CEP[d] = resultado
     return resultado
 
