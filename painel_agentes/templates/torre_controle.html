@@ -351,6 +351,8 @@
   .modal-excluir .acoes button { padding: 7px 14px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
   .modal-excluir .acoes button.confirmar { background: var(--erro); color: #fff; border: none; font-weight: 700; }
   .modal-excluir .acoes button.confirmar:hover { opacity: 0.88; }
+  .modal-excluir .opcoes-resultado { display: flex; gap: 18px; font-size: 13px; font-weight: 600; }
+  .modal-excluir .opcoes-resultado label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
   .modal-excluir .acoes button.confirmar.sucesso { background: var(--st-sucesso); color: #06170F; }
   .modal-excluir .acoes button.confirmar:disabled { opacity: 0.5; cursor: not-allowed; }
   .modal-excluir .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
@@ -641,11 +643,18 @@
 {# "Marcar como entregue" do chip (Hugo, 08/10): fecha o servico na VUUPT
    por API. Com foto do canhoto (e nota de retorno opcional) ela vai para o
    checklist da VUUPT; sem foto do canhoto, a justificativa da lista e
-   obrigatoria e vira auditoria (torre_entregas_manuais + tratativas). #}
+   obrigatoria e vira auditoria (torre_entregas_manuais + tratativas).
+   "Sem sucesso" (Hugo, 06/11): mesma tela, fecha como insucesso com o motivo
+   da lista da VUUPT e observacao opcional (fluxo normal de insucesso). #}
 <div class="modal-overlay-excluir" id="modal-entregue">
   <div class="modal-excluir" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-entregue">
     <h2 id="titulo-modal-entregue">Marcar pedido como entregue</h2>
     <p class="subtitulo" id="entregue-codigo">—</p>
+    <div class="campo opcoes-resultado" role="radiogroup" aria-label="Resultado">
+      <label><input type="radio" name="entregue-resultado" value="entregue" checked onchange="aoMudarResultadoEntregue()"> Entregue</label>
+      <label><input type="radio" name="entregue-resultado" value="sem_sucesso" onchange="aoMudarResultadoEntregue()"> Sem sucesso</label>
+    </div>
+    <div id="entregue-bloco-entregue">
     <p class="subtitulo">Fecha na VUUPT agora. Com foto, ela vai para o checklist da VUUPT.</p>
     <div class="campo">
       <label for="entregue-foto-canhoto">Foto do canhoto</label>
@@ -666,6 +675,22 @@
     <div class="campo" id="entregue-campo-outro" hidden>
       <label for="entregue-texto-outro">Descreva</label>
       <textarea id="entregue-texto-outro" maxlength="200" placeholder="De 5 a 200 caracteres"></textarea>
+    </div>
+    </div>
+    <div id="entregue-bloco-sem-sucesso" hidden>
+      <p class="subtitulo">Fecha na VUUPT agora como insucesso e segue o fluxo normal de insucesso.</p>
+      <div class="campo">
+        <label for="entregue-motivo">Motivo da não entrega</label>
+        <select id="entregue-motivo">
+          <option value="">Selecione...</option>
+          {% for codigo, rotulo in motivos_sem_sucesso %}<option value="{{ codigo }}">{{ rotulo }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="campo">
+        <label for="entregue-observacao">Observação (opcional)</label>
+        <textarea id="entregue-observacao" maxlength="200" placeholder="Até 200 caracteres"></textarea>
+      </div>
     </div>
     <div class="acoes">
       <button type="button" class="cancelar" onclick="fecharModalEntregue()">Cancelar</button>
@@ -1201,7 +1226,7 @@ function abrirMenuContextoChip(chip, x, y) {
   fecharMenuContextoChip();
   const menu = document.createElement("div");
   menu.className = "menu-contexto";
-  menu.innerHTML = '<button type="button" data-acao="entregue">Marcar como entregue</button>' +
+  menu.innerHTML = '<button type="button" data-acao="entregue">Marcar entregue / sem sucesso</button>' +
                    '<button type="button" data-acao="excluir">Excluir da Rota</button>';
   menu.addEventListener("click", (e) => {
     const botao = e.target.closest("button");
@@ -1292,9 +1317,28 @@ function abrirModalEntregue(chip) {
   document.getElementById("entregue-foto-nota").value = "";
   document.getElementById("entregue-justificativa").value = "";
   document.getElementById("entregue-texto-outro").value = "";
+  document.querySelector('input[name="entregue-resultado"][value="entregue"]').checked = true;
+  document.getElementById("entregue-motivo").value = "";
+  document.getElementById("entregue-observacao").value = "";
+  aoMudarResultadoEntregue();
   aoMudarFotoEntregue();
   document.getElementById("modal-entregue").classList.add("aberto");
   document.getElementById("entregue-foto-canhoto").focus();
+}
+
+// "Sem sucesso" (Hugo, 06/11): troca fotos/justificativa por motivo + observação.
+function resultadoEntregue() {
+  return document.querySelector('input[name="entregue-resultado"]:checked').value;
+}
+
+function aoMudarResultadoEntregue() {
+  const semSucesso = resultadoEntregue() === "sem_sucesso";
+  document.getElementById("entregue-bloco-entregue").hidden = semSucesso;
+  document.getElementById("entregue-bloco-sem-sucesso").hidden = !semSucesso;
+  document.getElementById("titulo-modal-entregue").textContent = semSucesso ? "Marcar pedido sem sucesso" : "Marcar pedido como entregue";
+  const botao = document.getElementById("botao-confirmar-entregue");
+  botao.textContent = semSucesso ? "Marcar sem sucesso" : "Marcar como entregue";
+  botao.classList.toggle("sucesso", !semSucesso);
 }
 
 // Com foto do canhoto a justificativa some; sem foto ela é obrigatória.
@@ -1326,6 +1370,7 @@ document.getElementById("modal-entregue").addEventListener("click", (e) => {
 
 async function confirmarEntregueChip(botao) {
   if (!chipPendenteEntregue) return;
+  if (resultadoEntregue() === "sem_sucesso") return confirmarSemSucessoChip(botao);
   const fotoCanhoto = document.getElementById("entregue-foto-canhoto").files[0] || null;
   const fotoNota = document.getElementById("entregue-foto-nota").files[0] || null;
   const justificativa = document.getElementById("entregue-justificativa").value;
@@ -1362,6 +1407,33 @@ async function confirmarEntregueChip(botao) {
     carregarDados();
   } catch (e) {
     alert(`Falha ao marcar como entregue: ${e.message}`);
+  } finally {
+    botao.disabled = false;
+    botao.textContent = original;
+  }
+}
+
+async function confirmarSemSucessoChip(botao) {
+  const motivo = document.getElementById("entregue-motivo").value;
+  const observacao = document.getElementById("entregue-observacao").value.trim();
+  if (!motivo) { alert("Escolha o motivo da não entrega."); return; }
+  const original = botao.textContent;
+  botao.disabled = true;
+  botao.textContent = "Fechando na VUUPT...";
+  try {
+    const fd = new FormData();
+    fd.append("service_id", chipPendenteEntregue.dataset.serviceId);
+    fd.append("resultado", "sem_sucesso");
+    fd.append("failed_reason_id", motivo);
+    if (observacao) fd.append("observacao", observacao);
+    const resp = await fetch(URL_TORRE_MARCAR_ENTREGUE, { method: "POST", body: fd });
+    const dados = await resp.json();
+    if (!resp.ok) throw new Error(dados.erro || "Falha ao marcar sem sucesso.");
+    fecharModalEntregue();
+    if (dados.ja_estava) alert(`${dados.codigo} já constava como sem sucesso na VUUPT.`);
+    carregarDados();
+  } catch (e) {
+    alert(`Falha ao marcar sem sucesso: ${e.message}`);
   } finally {
     botao.disabled = false;
     botao.textContent = original;
