@@ -112,9 +112,13 @@ STATUSES_EM_ABERTO              = [
     STATUS_PACK,
     STATUS_HOLD,
 ]
+# Pedidos dos embarcadores NÃO prioritários que também entram antes de
+# "Aguardando Transportador" (Hugo, 09/11) -- ver Fonte 4 em main().
+STATUSES_OUTROS_ANTES_DO_TRANSPORTADOR = [STATUS_ABERTO, STATUS_SEPARANDO, STATUS_PACK]
 
 # Embarcadores com regra especial: importa QUALQUER pedido em aberto,
-# não só "Aguardando Transportador".
+# não só "Aguardando Transportador" (os outros entram desde 09/11 também em
+# aberto/separação/conferência, mas não em "On hold").
 # O filtro 'cliente=' da listagem usa o ID NUMÉRICO do Stokki
 # (confirmado via outbound/select — nome como texto é ignorado).
 # Formato: {id_stokki: nome_legivel}
@@ -1436,6 +1440,29 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
             listagem_completa = False
             logger.warning(f"Erro ao buscar pedidos da Estação de Impressão: {e}")
         logger.info(f"Estação de Impressão: {len(linhas) - n_antes2} pedido(s) adicionados.")
+
+        # Fonte 4 (Hugo, 09/11): os outros embarcadores também entram na Vuupt em aberto, em separação e
+        # em conferência, pra poderem ser roteirizados antes do galpão terminar (só "Em espera" barra a rota,
+        # nucleo/prontidao_stokki.py). "On hold" continua de fora pra esses. Vem DEPOIS da Estação de
+        # Impressão: pedido que ela já trouxe fica com "Em espera" (barrado na rota), como antes.
+        n_antes = len(linhas)
+        for status in STATUSES_OUTROS_ANTES_DO_TRANSPORTADOR:
+            try:
+                for linha in stokki_pedidos.iterar_todos_pedidos(
+                    sess_stokki, status=status, pausa_entre_paginas=0.3
+                ):
+                    id_ = stokki_pedidos.extrair_id_da_linha(linha)
+                    if id_ and id_ not in linhas_ids_vistos and not _embarcador_prioritario(linha):
+                        linhas_ids_vistos.add(id_)
+                        if isinstance(linha, dict):
+                            linha["_fonte"] = "em_separacao"
+                            linha["_status_stokki"] = status
+                        linhas.append(linha)
+            except Exception as e:
+                listagem_completa = False
+                logger.warning(f"Erro ao buscar outros embarcadores status={status!r}: {e}")
+        logger.info(f"Em aberto/separação/conferência (outros embarcadores): "
+                    f"{len(linhas) - n_antes} pedido(s) adicionados.")
 
         logger.info(f"Total: {len(linhas)} pedido(s) a processar.")
 

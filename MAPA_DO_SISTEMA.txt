@@ -152,8 +152,10 @@
                                              3 dias úteis em 0 na fonte freshhub, aí fonte_pool: freshhub (Hugo).
    Prontidão na Stokki (plano 1.2) ......... nucleo/prontidao_stokki.py (retrato vigia_stokki_abertos; era de
                                              planejamento_rotas): rascunhos_rota.enviar_rascunho tira da rota a
-                                             parada ainda em separação/conferência/espera (volta ao pool) e
-                                             incrementar_rotas (22h) não encaixa pedido nessa situação.
+                                             parada EM ESPERA (On hold / fila da Estação; volta ao pool) e
+                                             incrementar_rotas (22h) não encaixa pedido nessa situação. Desde
+                                             09/11 (Hugo) em aberto/separação/conferência vão pra rota; o bloco
+                                             "Em separação na Stokki" do pool só informa.
    Eventos pro freshhub (plano 1.2) ........ nucleo/eventos_freshhub.py: roteirizado (lote de rascunho gravado,
                                              pedido posto em rota no incremento), nao_aprontou, rota_enviada;
                                              sombra: falha da API guarda em dados/eventos_freshhub_pendentes.jsonl
@@ -201,7 +203,9 @@
  2) Estação de Impressão: "Em espera" -> "Aguardando Transportador"
     (stokki/estacao_impressao.py, chamado por somente_impressao.py /
     executar_tudo.py).
- 3) pipeline.py lista os "Aguardando Transportador", resolve endereço
+ 3) pipeline.py lista os "Aguardando Transportador" e, desde 09/11, também os
+    em aberto/separação/conferência de todos os embarcadores (Quatro Estrelas,
+    Dourado e Padrão Puro entram em qualquer status, inclusive On hold), resolve endereço
     (regras/endereco.py), geocodifica (geocodificacao.py), pega telefone do
     XML (telefone_origem.py), calcula nível e tipo de carga, trata agendamento
     (agendamento_confirmacao.py; pedido novo sem agendamento nasce com data

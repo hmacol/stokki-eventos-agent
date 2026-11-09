@@ -2656,7 +2656,7 @@
          espera). Vem do retrato que o pipeline grava a cada rodada, não da
          Stokki ao vivo -- por isso a hora no título. Continua arrastável. #}
       <div class="secao-pool secao-pool-separacao" data-secao="separacao" id="secao-pool-separacao">
-        <div class="cabecalho-secao-pool" title="Pedidos que já estão na Vuupt mas a Stokki ainda não marcou 'Aguardando Transportador' (em aberto, em separação, em conferência ou em espera). A situação é a do último retrato do pipeline, não ao vivo. Dá pra arrastar pra rota mesmo assim.">
+        <div class="cabecalho-secao-pool" title="Pedidos que já estão na Vuupt mas a Stokki ainda não marcou 'Aguardando Transportador' (em aberto, em separação, em conferência ou em espera). A situação é a do último retrato do pipeline, não ao vivo. Pode ir pra rota; só os em espera saem dela no envio à Vuupt.">
           <span class="seta-secao">▾</span>
           <span class="titulo-secao-pool">Em separação na Stokki (<span id="contagem-secao-separacao">0</span>) <span class="retrato-stokki" id="retrato-stokki">{% if dados and dados.retrato_stokki_em %}· retrato de {{ dados.retrato_stokki_em }}{% endif %}</span></span>
           <button type="button" class="botao-mini botao-selecionar-secao" data-secao="separacao" title="Seleciona só os pedidos visíveis desta seção">Selecionar</button>
@@ -5884,12 +5884,12 @@
 
   function aplicarResultadoEnvio(resultado) {
     const statusEl = document.getElementById(`status-${resultado.rascunho_id}`);
-    // Pedido ainda em separação/conferência/espera na Stokki sai da rota antes do envio e volta pro pool
-    // (plano 1.2 do sistema novo); a tela SEMPRE diz quem saiu, inclusive quando a VUUPT falha depois
+    // Pedido em espera na Stokki sai da rota antes do envio e volta pro pool (plano 1.2 do sistema novo;
+    // desde 09/11 separação/conferência vão na rota); a tela SEMPRE diz quem saiu, inclusive quando a VUUPT falha depois
     // (revisão 25/10 -- mesma lição do 19/08: pedido nunca some sem aviso).
     const naoProntos = resultado.codigos_nao_prontos || [];
     const avisoNaoProntos = naoProntos.length
-      ? ` -- ${naoProntos.length} pedido(s) ainda em separação na Stokki (retrato de ${resultado.retrato_stokki_em || "?"}) voltaram pro pool, NÃO foram enviados: ${naoProntos.join(", ")}`
+      ? ` -- ${naoProntos.length} pedido(s) em espera na Stokki (retrato de ${resultado.retrato_stokki_em || "?"}) voltaram pro pool, NÃO foram enviados: ${naoProntos.join(", ")}`
       : "";
     if (resultado.ok) {
       let msg = `Enviada à VUUPT (rota #${resultado.vuupt_route_id})`;
@@ -5966,7 +5966,7 @@
         });
         alert(`Atenção: a VUUPT recusou ${comRemovidos.reduce((n, r) => n + r.codigos_removidos.length, 0)} pedido(s) por já constar(em) em outra rota (dado desatualizado) -- voltaram pro pool, NÃO foram enviados:\n${linhas.join("\n")}`);
       }
-      // idem pros pedidos ainda em separação na Stokki (plano 1.2): saem da rota antes do envio, ok ou não
+      // idem pros pedidos em espera na Stokki (plano 1.2): saem da rota antes do envio, ok ou não
       const comNaoProntos = resp.resultados.filter(r => r.codigos_nao_prontos && r.codigos_nao_prontos.length);
       if (comNaoProntos.length) {
         const linhas = comNaoProntos.map(r => {
@@ -5974,7 +5974,7 @@
           return `• ${nome}: ${r.codigos_nao_prontos.join(", ")}`;
         });
         const retrato = (comNaoProntos.find(r => r.retrato_stokki_em) || {}).retrato_stokki_em || "?";
-        alert(`Atenção: ${comNaoProntos.reduce((n, r) => n + r.codigos_nao_prontos.length, 0)} pedido(s) ainda em separação/conferência/espera na Stokki (retrato de ${retrato}) voltaram pro pool, NÃO foram enviados:\n${linhas.join("\n")}`);
+        alert(`Atenção: ${comNaoProntos.reduce((n, r) => n + r.codigos_nao_prontos.length, 0)} pedido(s) em espera na Stokki (retrato de ${retrato}) voltaram pro pool, NÃO foram enviados:\n${linhas.join("\n")}`);
       }
       // recarrega pra travar as rotas enviadas (some seus botões/drag) e refletir o pool atualizado
       location.reload();

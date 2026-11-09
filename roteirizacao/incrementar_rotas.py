@@ -635,15 +635,15 @@ def main(modo_teste: bool = False):
             logger.info(f"{len(ja_em_rascunho)} pedido(s) já estão em rascunho de {data_alvo_br} e ficam onde estão.")
         novos = [s for s in novos if s["id"] not in ids_em_rascunho]
 
-        # Corte da noite (plano 1.2 do sistema novo, spec 5.4): pedido que o retrato da Stokki ainda mostra
-        # em separacao/conferencia/espera nao entra em rota nem em rascunho; vira `nao_aprontou` no freshhub
+        # Corte da noite (plano 1.2 do sistema novo, spec 5.4): pedido que o retrato da Stokki mostra
+        # em espera (desde 09/11 so esse; separacao/conferencia entram) nao entra em rota nem em rascunho; vira `nao_aprontou` no freshhub
         # e volta ao pool da proxima rodada sozinho (continua not_assigned na Vuupt). So entre os NOVOS:
         # pedido que ja esta em rascunho continua not_assigned, mas o veredito dele e do envio do rascunho
         # (revisao 25/10: emitir aqui derrubaria o 'roteirizado' do novo todo dia).
         retrato_stokki, _ = prontidao_stokki.carregar_retrato_stokki()
         novos, nao_prontos = prontidao_stokki.separar_prontos(novos, retrato_stokki, chave="code")
         if nao_prontos:
-            logger.info(f"{len(nao_prontos)} pedido(s) ainda em separacao na Stokki ficam fora do incremento: "
+            logger.info(f"{len(nao_prontos)} pedido(s) em espera na Stokki ficam fora do incremento: "
                         + ", ".join(f"{p.get('code')} ({p['situacao_stokki']})" for p in nao_prontos))
             try:
                 eventos_freshhub.nao_aprontaram(
@@ -677,7 +677,7 @@ def main(modo_teste: bool = False):
         if not novos:
             detalhe = "Nenhum pedido novo pra alocar."
             if nao_prontos:
-                detalhe += f" {len(nao_prontos)} ainda em separação na Stokki (fora do incremento, voltam ao pool)."
+                detalhe += f" {len(nao_prontos)} ainda em espera na Stokki (fora do incremento, voltam ao pool)."
             resumo_etapas["Incremento de rotas"] = {"status": "ok", "detalhe": detalhe}
             return
 
@@ -1066,7 +1066,7 @@ def main(modo_teste: bool = False):
             "status": "ok",
             "detalhe": f"{prefixo_teste}{alocados} pedido(s) alocado(s) em rota existente, "
                       f"{alocados_rascunho} em rascunho"
-                      + (f", {len(nao_prontos)} ainda em separação na Stokki (fora do incremento, voltam ao pool)"
+                      + (f", {len(nao_prontos)} ainda em espera na Stokki (fora do incremento, voltam ao pool)"
                          if nao_prontos else "")
                       + (f", {len(orfaos)} pedido(s) sem rota com espaço/compatibilidade hoje "
                          f"(ficam pro rascunho do dia seguinte)." if orfaos else "."),

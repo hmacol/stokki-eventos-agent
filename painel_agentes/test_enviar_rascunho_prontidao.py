@@ -55,7 +55,7 @@ class EnviarRascunhoProntidaoTestCase(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.criar_rota = mock.Mock(side_effect=lambda token, nome, start_at, sublote, **kw: ({"id": 777}, list(sublote), []))
         self.registrar = mock.Mock(return_value={"aceitos": 1, "repetidos": 0, "desconhecidos": []})
-        self.retrato = ({"PS-2": "Ready to Pack", "PS-1": "Waiting for Carrier"}, "25/10 10:00")
+        self.retrato = ({"PS-2": "On hold", "PS-1": "Waiting for Carrier", "PS-3": "Separating"}, "25/10 10:00")
         patches = [
             mock.patch.object(rascunhos_rota, "DB_PATH", Path(self._tmp.name) / "dados.db"),
             mock.patch("rotas_client.criar_rota_removendo_conflitos", self.criar_rota),
@@ -84,14 +84,14 @@ class EnviarRascunhoProntidaoTestCase(unittest.TestCase):
         self.assertEqual(_paradas(rid), ["#PS-1", "#PS-3"])  # a parada voltou ao pool (saiu do rascunho)
         nao = self._eventos("nao_aprontou")
         self.assertEqual([e["codigo"] for e in nao], ["PS-2"])
-        self.assertEqual(nao[0]["dados"]["situacao_stokki"], "Em conferência")
+        self.assertEqual(nao[0]["dados"]["situacao_stokki"], "Em espera")
         self.assertEqual(nao[0]["dados"]["rascunho_id"], rid)
         enviadas = self._eventos("rota_enviada")
         self.assertEqual([e["codigo"] for e in enviadas], ["PS-1", "PS-3"])
         self.assertEqual(enviadas[0]["dados"]["vuupt_route_id"], 777)
 
     def test_todas_nao_prontas_nao_vai_na_vuupt(self):
-        self.retrato = ({"PS-1": "Open", "PS-2": "Separating", "PS-3": "On hold"}, "25/10 10:00")
+        self.retrato = ({"PS-1": "On hold", "PS-2": "Em espera", "PS-3": "On hold"}, "25/10 10:00")
         rid = _inserir_rascunho()
         resultado = rascunhos_rota.enviar_rascunho(rid, "token")
         self.assertFalse(resultado["ok"])
@@ -99,6 +99,16 @@ class EnviarRascunhoProntidaoTestCase(unittest.TestCase):
         self.criar_rota.assert_not_called()
         self.assertEqual(sorted(e["codigo"] for e in self._eventos("nao_aprontou")), ["PS-1", "PS-2", "PS-3"])
         self.assertEqual(_paradas(rid), [])
+
+    def test_em_aberto_separacao_e_conferencia_vao_na_rota(self):
+        # Hugo, 09/11: so "Em espera" tira a parada da rota
+        self.retrato = ({"PS-1": "Open", "PS-2": "Separating", "PS-3": "Ready to Pack"}, "25/10 10:00")
+        rid = _inserir_rascunho()
+        resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertTrue(resultado["ok"], resultado)
+        self.assertEqual(resultado["codigos_nao_prontos"], [])
+        self.assertEqual([s["id"] for s in self.criar_rota.call_args.args[3]], [101, 102, 103])
+        self.assertEqual(self._eventos("nao_aprontou"), [])
 
     def test_sem_retrato_todas_seguem_e_falha_da_api_nao_impede_o_envio(self):
         self.retrato = ({}, None)

@@ -41,7 +41,7 @@ def garantir_esquema(conn: sqlite3.Connection) -> None:
             id_stokki       INTEGER,
             embarcador      TEXT,
             status_stokki   TEXT,
-            fonte           TEXT,               -- prioritario | aguardando_transportador | estacao_impressao
+            fonte           TEXT,               -- prioritario | aguardando_transportador | estacao_impressao | em_separacao
             ultima_acao     TEXT,               -- acao do pipeline (criado, erro, aguardando_redespacho...)
             ultima_obs      TEXT,
             primeira_vez_em TEXT NOT NULL,

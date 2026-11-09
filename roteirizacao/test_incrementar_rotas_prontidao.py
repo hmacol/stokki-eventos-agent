@@ -22,7 +22,7 @@ from test_incrementar_rotas import TestMainComRascunho  # noqa: E402
 class TestProntidaoNoIncremento(TestMainComRascunho):
     def setUp(self):
         self.registrar = mock.Mock(return_value={"aceitos": 1, "repetidos": 0, "desconhecidos": []})
-        self.retrato = ({"PS-2": "Ready to Pack"}, "25/10 21:40")
+        self.retrato = ({"PS-2": "On hold"}, "25/10 21:40")
         for p in (mock.patch.object(inc.eventos_freshhub, "registrar", self.registrar),
                   mock.patch.object(inc.prontidao_stokki, "carregar_retrato_stokki",
                                     side_effect=lambda *a, **k: self.retrato)):
@@ -39,15 +39,22 @@ class TestProntidaoNoIncremento(TestMainComRascunho):
         self.assertEqual([p["service_id"] for p in paradas], [1])
         nao = self._eventos("nao_aprontou")
         self.assertEqual([e["codigo"] for e in nao], ["PS-2"])
-        self.assertEqual(nao[0]["dados"]["situacao_stokki"], "Em conferência")
+        self.assertEqual(nao[0]["dados"]["situacao_stokki"], "Em espera")
         self.assertEqual(nao[0]["dados"]["origem"], "incremento")
-        self.assertIn("1 ainda em separação na Stokki", resumo["detalhe"])
+        self.assertIn("1 ainda em espera na Stokki", resumo["detalhe"])
 
     def test_modo_teste_repassa_pro_registrar_que_nao_manda(self):
         # eventos_freshhub.registrar e quem segura em modo teste (nucleo/test_eventos_freshhub); aqui so a flag
         self._rodar([], [{"id": 7, "status": "RASCUNHO", "paradas": []}], modo_teste=True)
         self.assertTrue(self.registrar.call_args_list)
         self.assertTrue(all(c.kwargs.get("modo_teste") is True for c in self.registrar.call_args_list))
+
+    def test_em_separacao_entra_no_incremento(self):
+        # Hugo, 09/11: so "Em espera" fica fora
+        self.retrato = ({"PS-1": "Separating", "PS-2": "Ready to Pack"}, "25/10 21:40")
+        self._rodar([], [{"id": 7, "status": "RASCUNHO", "paradas": []}])
+        self.assertEqual([p["service_id"] for p in self.inc_rascunho.call_args[0][1]], [1, 2])
+        self.assertEqual(self._eventos("nao_aprontou"), [])
 
     def test_sem_retrato_ninguem_e_barrado(self):
         self.retrato = ({}, None)
@@ -78,7 +85,7 @@ class TestProntidaoSoDoQueOIncrementoAlocaria(TestMainComRascunho):
         self.registrar = mock.Mock(return_value={"aceitos": 1, "repetidos": 0, "desconhecidos": []})
         for p in (mock.patch.object(inc.eventos_freshhub, "registrar", self.registrar),
                   mock.patch.object(inc.prontidao_stokki, "carregar_retrato_stokki",
-                                    side_effect=lambda *a, **k: ({"PS-2": "Ready to Pack"}, "25/10 21:40"))):
+                                    side_effect=lambda *a, **k: ({"PS-2": "On hold"}, "25/10 21:40"))):
             p.start()
             self.addCleanup(p.stop)
 
@@ -88,7 +95,7 @@ class TestProntidaoSoDoQueOIncrementoAlocaria(TestMainComRascunho):
         self.assertEqual([p["service_id"] for p in self.inc_rascunho.call_args[0][1]], [1])
         eventos = [e for c in self.registrar.call_args_list for e in c.args[1] if e["tipo"] == "nao_aprontou"]
         self.assertEqual(eventos, [])
-        self.assertNotIn("em separação na Stokki", resumo["detalhe"])
+        self.assertNotIn("em espera na Stokki", resumo["detalhe"])
 
 
 if __name__ == "__main__":

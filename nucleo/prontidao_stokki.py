@@ -8,6 +8,8 @@ painel_agentes/planejamento_rotas.py (bloco "Em separação na Stokki" do pool, 
 no plano 1.2 do sistema novo, porque o envio do rascunho (rascunhos_rota.enviar_rascunho) e o corte das
 22h (roteirizacao/incrementar_rotas.py) passaram a usar a mesma regra: a rota só sai com pedido liberado
 pela Stokki; quem não aprontou volta ao pool e vira evento `nao_aprontou` no freshhub.
+Desde 09/11 (Hugo) só "Em espera" tira da rota: em aberto/separação/conferência podem ser roteirizados
+(o pool continua mostrando a situação no bloco "Em separação na Stokki").
 
 Chave = status_stokki como o pipeline grava (código da URL da Stokki; "Em espera" é literal da fonte
 estacao_impressao). "Waiting for Carrier" ou ausente do retrato = pronto.
@@ -28,6 +30,9 @@ SITUACAO_STOKKI_NAO_PRONTA = {
     "Em espera": "Em espera",
 }
 
+# Hugo, 09/11: o galpão ainda trabalhando não impede a rota; só a pausa (On hold / Em espera) impede.
+STATUS_STOKKI_BARRA_ROTA = {"On hold", "Em espera"}
+
 
 def _codigo_base(codigo: str) -> str:
     """'#PS-36327-R1' -> 'PS-36327': reentrega é o mesmo pedido na Stokki (mesma regra de
@@ -42,22 +47,24 @@ def codigos_base(codigo: str | None) -> list[str]:
     return [_codigo_base(c.strip()) for c in str(codigo or "").split(",") if c.strip()]
 
 
-def situacao_nao_pronta(codigo: str | None, retrato: dict[str, str]) -> str | None:
-    """Rótulo de SITUACAO_STOKKI_NAO_PRONTA quando o pedido ainda não está liberado; None quando está
-    "Waiting for Carrier" ou não aparece no retrato. Código combinado: basta um ainda não pronto."""
+def situacao_nao_pronta(codigo: str | None, retrato: dict[str, str],
+                        statuses=SITUACAO_STOKKI_NAO_PRONTA) -> str | None:
+    """Rótulo de SITUACAO_STOKKI_NAO_PRONTA quando o pedido está num dos `statuses`; None quando está
+    "Waiting for Carrier" ou não aparece no retrato. Código combinado: basta um."""
     if not retrato:
         return None
     return next((SITUACAO_STOKKI_NAO_PRONTA[retrato[c]] for c in codigos_base(codigo)
-                 if retrato.get(c) in SITUACAO_STOKKI_NAO_PRONTA), None)
+                 if retrato.get(c) in statuses), None)
 
 
 def separar_prontos(itens: list[dict], retrato: dict[str, str], chave: str = "codigo") -> tuple[list[dict], list[dict]]:
-    """(prontos, nao_prontos): os não prontos saem com `situacao_stokki` preenchido. `chave` é onde está o
-    código: 'codigo' (parada de rascunho) ou 'code' (serviço da Vuupt / item do pool)."""
+    """(prontos, nao_prontos): não pronto = em espera na Stokki (STATUS_STOKKI_BARRA_ROTA), sai com
+    `situacao_stokki` preenchido. `chave` é onde está o código: 'codigo' (parada de rascunho) ou 'code'
+    (serviço da Vuupt / item do pool)."""
     prontos: list[dict] = []
     nao_prontos: list[dict] = []
     for item in itens:
-        situacao = situacao_nao_pronta(item.get(chave), retrato)
+        situacao = situacao_nao_pronta(item.get(chave), retrato, STATUS_STOKKI_BARRA_ROTA)
         if situacao is None:
             prontos.append(item)
         else:
