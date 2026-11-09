@@ -530,6 +530,17 @@
     color: var(--rodando-texto);
   }
   .secao-pool-separacao .cabecalho-secao-pool { color: var(--rodando-texto); }
+  /* resumo da situação na Stokki no card da rota (Hugo, 09/11) */
+  .card-rota .situacao-stokki-rota:not(:empty) {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 100px;
+    margin: 3px 0;
+    background: var(--rodando-bg);
+    color: var(--rodando-texto);
+  }
   .secao-pool-separacao .retrato-stokki { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--texto-suave); }
   .item-parada .nf-pedido { font-size: 11px; color: var(--texto-suave); }
   /* checkbox de seleção múltipla dentro de uma rota (Hugo, 17/08) --
@@ -3202,6 +3213,30 @@
     return (badges || []).map(b => `<span class="badge-trava">${escaparHtml(b)}</span>`).join("");
   }
 
+  // Situação na Stokki das paradas de uma rota (Hugo, 09/11), lida dos cards: muda por arrasto sem
+  // recarregar. Ex.: "📦 Stokki: 2 em separação · 1 em conferência"; códigos no title.
+  function situacaoStokkiDasParadas(lis) {
+    return lis.filter(li => li.dataset.situacaoStokki).map(li => ({
+      codigo: (li.querySelector(".codigo")?.textContent || "").trim(), situacao: li.dataset.situacaoStokki }));
+  }
+
+  function textoContagemSituacoes(itens) {
+    const contagem = {};
+    itens.forEach(i => { contagem[i.situacao] = (contagem[i.situacao] || 0) + 1; });
+    return Object.entries(contagem).map(([s, n]) => `${n} ${s.toLowerCase()}`).join(" · ");
+  }
+
+  function atualizarSituacaoStokkiRota(ul, lis) {
+    const el = ul.closest(".card-rota")?.querySelector(".situacao-stokki-rota");
+    if (!el) return;
+    const itens = situacaoStokkiDasParadas(lis);
+    el.textContent = itens.length ? `📦 Stokki: ${textoContagemSituacoes(itens)}` : "";
+    el.title = itens.length
+      ? `Situação na Stokki no último retrato do pipeline (só "Em espera" sai da rota no envio):\n`
+        + itens.map(i => `${i.codigo}: ${i.situacao}`).join("\n")
+      : "";
+  }
+
   function renumerarRotaEl(ul, rascunhoId) {
     // numera as paradas na ordem atual da rota (mesmo número do marcador
     // no mapa, na cor da rota). No modo "digitando a posição", o badge
@@ -3209,6 +3244,7 @@
     const enviada = !!ul.closest(".card-rota.enviada");
     const lis = Array.from(ul.children);
     const corRota = coresPorRascunho[rascunhoId] || "#6B7280";
+    atualizarSituacaoStokkiRota(ul, lis);
     lis.forEach((li, i) => {
       li.dataset.numero = i + 1;
       const el = li.querySelector(".numero");
@@ -3335,6 +3371,7 @@
       <div class="metricas" id="metricas-${rascunho.id}">${metricasTexto(rascunho)}</div>
       <div class="capacidade" id="capacidade-${rascunho.id}">${capacidadeHtml(rascunho)}</div>
       <div id="badges-${rascunho.id}">${badgesHtml(rascunho.badges)}</div>
+      <div class="situacao-stokki-rota"></div>
       <div id="status-${rascunho.id}">${statusHtml(rascunho)}</div>
       <div id="confirmacao-${rascunho.id}">${confirmacaoMotoristaHtml(rascunho)}</div>
       <div id="oferta-${rascunho.id}">${ofertaHtml(rascunho)}</div>
@@ -3446,6 +3483,7 @@
       janelaFonte: li.dataset.janelaFonte || "",
       chegadaPrevista: li.dataset.chegadaPrevista || "",
       foraJanela: li.dataset.foraJanela === "1",
+      situacaoStokki: li.dataset.situacaoStokki || "",
     };
   }
 
@@ -3468,6 +3506,7 @@
     if (d.nivel) extras.push(`nível ${d.nivel}`);
     if (d.horarioInicio && d.horarioFim) extras.push(`atende ${d.horarioInicio}–${d.horarioFim}`);
     if (textoJanelaParada(d)) extras.push(textoJanelaParada(d));
+    if (d.situacaoStokki) extras.push(`Stokki: ${d.situacaoStokki}`);
     partes.push(`<div class="extras">${escaparHtml(extras.join(" — "))}</div>`);
     return partes.join("");
   }
@@ -3485,6 +3524,7 @@
     if (d.nivel) extras.push(`nível ${d.nivel}`);
     if (d.horarioInicio && d.horarioFim) extras.push(`atende ${d.horarioInicio}–${d.horarioFim}`);
     if (textoJanelaParada(d)) extras.push(textoJanelaParada(d));
+    if (d.situacaoStokki) extras.push(`Stokki: ${d.situacaoStokki}`);
     linhas.push(extras.join(" — "));
     return linhas.join("\n");
   }
@@ -5915,11 +5955,18 @@
     const comBadge = alvo.filter(r => (r.badges || []).length > 0);
     const isoladas = alvo.filter(r => (r.badges || []).some(b => b.startsWith("rota isolada")));
     const kmTotal = alvo.reduce((soma, r) => soma + (r.km_estimado || 0), 0);
+    // situação na Stokki pelos cards (Hugo, 09/11): em espera sai da rota no envio, o resto vai
+    const situacoes = alvo.flatMap(r => situacaoStokkiDasParadas(
+      Array.from(document.getElementById(`lista-parada-${r.id}`)?.children || [])));
+    const emEspera = situacoes.filter(i => i.situacao === "Em espera");
+    const noGalpao = situacoes.filter(i => i.situacao !== "Em espera");
     let html = `
       <div class="resumo-linha"><span>Rota(s) a enviar</span><span>${alvo.length}</span></div>
       <div class="resumo-linha${comBadge.length ? " alerta" : ""}"><span>Com aviso ativo (badge)</span><span>${comBadge.length}</span></div>
       <div class="resumo-linha${isoladas.length ? " alerta" : ""}"><span>Rota(s) isolada(s) (&le;2 paradas)</span><span>${isoladas.length}</span></div>
-      <div class="resumo-linha"><span>Km total do lote (estimado)</span><span>${kmTotal.toFixed(1)} km</span></div>`;
+      <div class="resumo-linha"><span>Km total do lote (estimado)</span><span>${kmTotal.toFixed(1)} km</span></div>
+      <div class="resumo-linha" title="${escaparHtml(noGalpao.map(i => `${i.codigo}: ${i.situacao}`).join("\n"))}"><span>Ainda no galpão (aberto/separação/conferência) -- vão na rota</span><span>${noGalpao.length}${noGalpao.length ? ` (${escaparHtml(textoContagemSituacoes(noGalpao))})` : ""}</span></div>
+      <div class="resumo-linha${emEspera.length ? " alerta" : ""}" title="${escaparHtml(emEspera.map(i => i.codigo).join("\n"))}"><span>Em espera na Stokki -- saem da rota no envio</span><span>${emEspera.length}</span></div>`;
     if (comBadge.length) {
       html += `<ul class="lista-rotas-alerta">${comBadge.map(r => `<li>${escaparHtml(r.nome)}: ${r.badges.map(escaparHtml).join("; ")}</li>`).join("")}</ul>`;
     }

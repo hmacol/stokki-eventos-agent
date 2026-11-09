@@ -162,6 +162,10 @@
                                              e reenvia na próxima; --modo-teste não manda.
    Bloco "Em separação na Stokki" (19/10) .. planejamento_rotas.carregar_retrato_stokki lê
                                              vigia_stokki_abertos (retrato do pipeline, não ao vivo)
+                                             09/11: o selo vale também na parada da rota; o card da
+                                             rota resume ("📦 Stokki: 2 em separação · ..."), o tooltip/
+                                             Copiar resumo diz "Stokki: <situação>" e o Confirmar e
+                                             enviar conta "ainda no galpão" e "em espera".
  Recebimento de retornos no galpão ......... painel_agentes/retornos.py + tela /retornos (retornos.html,
                                              mobile; link no app do galpão /wms): insucesso/parcial (menos
                                              Não coletado) de nucleo_paradas; foto da carga, avaria com foto,
