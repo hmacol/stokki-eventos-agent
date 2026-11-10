@@ -36,6 +36,14 @@ Idioma do projeto: português (código, comentários, commits, respostas). Comen
 5. `systemctl restart <serviço afetado>` só dos serviços que importam o módulo alterado. Módulos em lote (timers) pegam a versão nova sozinhos.
 6. Provar que funciona de verdade: chamar a rota/função alterada (curl na porta local, ou `venv/bin/python -c`), não só `systemctl is-active`.
 
+## Homologação (bancada do legado)
+
+- Cópia própria em `/opt/stokki-homolog` (usuário `homolog`, portas 8171/8174), em `homolog.freshhub.com.br/painel/` e `/cliente/`, com dados copiados da produção e config sem segredos. Código: `homologacao/` e `infra/homolog/`.
+- Subir um ramo (pushado): `py -3.11 .claude/scripts/vps_ops.py homolog subir <ramo>` (também `homolog ok`, `homolog trocar-senha`). É comando próprio: **"deploy" continua sendo produção**.
+- Regra: **nada sai** (e-mail/WhatsApp só registrados em `/homologacao/envios`; Stokki nunca, nem leitura; Vuupt só GET).
+- Não recopiar os dados (`homolog recopiar --confirmo-recopia`) sem pedido do Hugo.
+- A senha do Caddy fica só em `/root/homolog-senha-caddy.txt`: nunca no chat.
+
 ## Verificação antes de entregar
 
 - `py -3.11 -m py_compile <arquivos>` em tudo que editou (o hook faz isso automático em Edit/Write).

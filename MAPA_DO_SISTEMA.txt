@@ -199,6 +199,9 @@
  Preferências de e-mail do embarcador ...... preferencias_notificacao.py
  Trava de login da Stokki .................. stokki/sessao_uso.py
  Horários das rotinas ...................... infra/*.timer  (+ infra/sequencia_*.sh)
+ Homologação (bancada do legado) ........... homologacao/ (guarda só com FRESH_AMBIENTE=homolog,
+                                             gerar_config.py, vps/*.sh) + infra/homolog/
+                                             (units, Caddy, nft). Como usar: seção 16.
 
 
 ==============================================================================
@@ -271,13 +274,17 @@
  dashboard_embarcadores 8060   (interno, Basic Auth)            dashboard_embarcadores/
  Evolution API (docker) 8080   (só local)                       atendimento/infra/docker-compose.yml
  OpenWA (docker)        2785   (só local)                       /opt/openwa + infra/openwa/ (LEIAME.md)
+ homolog-painel         8171   homolog.freshhub.com.br/painel   cópia em /opt/stokki-homolog (usuário homolog)
+ homolog-portal         8174   homolog.freshhub.com.br/cliente  idem; senha do Caddy no host inteiro
+   (homologação: seção 16; units em infra/homolog/, Caddy em /etc/caddy/legado-homolog.caddy)
 
  Daemons sem porta:
    portal-cliente-envios   -> portal_cliente/enviar_stokki.py --loop  (fila de pedidos p/ Stokki)
    portal-cliente-chamados -> portal_cliente/chamados.py ler --loop   (IMAP dos chamados)
 
  Units: infra/*.service, painel_agentes/infra/, portal_cliente/infra/,
- resposta_insucesso/infra/, atendimento/infra/, confirmacao_motoristas/infra/.
+ resposta_insucesso/infra/, atendimento/infra/, confirmacao_motoristas/infra/,
+ infra/homolog/ (homologação: 2 serviços + homolog-nft.service, Caddy, nft).
  Blocos do Caddy: arquivos Caddyfile-* nessas mesmas pastas.
 
  Autenticação:
@@ -1587,6 +1594,22 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
  (git pull --no-rebase, chown, units, restart só do serviço afetado,
  provar chamando a rota/função de verdade).
 
+ Homologação (bancada do legado, homolog.freshhub.com.br/painel/ e /cliente/):
+   cópia própria em /opt/stokki-homolog (usuário homolog, venv próprio, config
+   gerado por homologacao/gerar_config.py sem segredos, dados copiados da
+   produção). Regra: NADA SAI (e-mail/WhatsApp só registrados em
+   /homologacao/envios; Stokki nunca, nem leitura; Vuupt só GET).
+   Comandos (rodam homologacao/vps/*.sh como root na VPS):
+     py -3.11 .claude/scripts/vps_ops.py homolog subir <ramo>   (ramo pushado;
+       checkout do ramo + merge de origin/master SÓ lá; prova /homologacao/saude)
+     ... homolog ok            (OK do Hugo no HOMOLOG_HISTORICO)
+     ... homolog recopiar --confirmo-recopia   (só com pedido do Hugo)
+     ... homolog trocar-senha  /  homolog criar (1 vez, exige o registro A)
+   Estado: dados/HOMOLOG_VERSAO (ramo, commit, master, quando, quem),
+   HOMOLOG_HISTORICO (SUBIU/OK), HOMOLOG_COPIA (data da cópia).
+   Senha do Caddy: só em /root/homolog-senha-caddy.txt, nunca no chat.
+   "Deploy" continua sendo produção; subir pra homologação é comando próprio.
+
 
 ==============================================================================
  17. ARMADILHAS CONHECIDAS
@@ -1669,6 +1692,14 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
  - Torre de Controle nunca recarrega o HTML: após deploy de JS, recarregue
    a aba.
  - .claude/worktrees/ pode conter cópias do repo; ignore em buscas.
+ - Homologação: homolog-painel/portal NÃO sobem sem a guarda (ExecStartPre
+   confere smtplib.SMTP == SMTPFalso) nem sem homolog-nft.service (Requires).
+   A regra de saída do usuário homolog fica em /etc/nftables.d/homolog.nft,
+   carregada por esse unit próprio: NÃO ligar o nftables.service (o
+   /etc/nftables.conf do Ubuntu faz flush ruleset e apaga as regras do Docker).
+   O .git de /opt/stokki-homolog é do root (700); git lá só como root com
+   -c safe.directory=/opt/stokki-homolog. Recópia troca o banco da
+   homologação inteiro (guarda 1 geração em dados/dados.db.anterior).
  - executor.py mata processos com taskkill (Windows); na VPS só o processo
    principal é encerrado.
  - Descrições desatualizadas em units: stokki-sequencia-tarde.service cita

@@ -1,0 +1,26 @@
+[Unit]
+Description=Homologacao do legado - portal do cliente (homolog.freshhub.com.br/cliente, porta 8174)
+After=network-online.target homolog-nft.service
+Wants=network-online.target
+# sem a regra de firewall do usuario homolog o servico nao sobe (falha fechada)
+Requires=homolog-nft.service
+
+[Service]
+Type=simple
+User=homolog
+Group=homolog
+UMask=0027
+WorkingDirectory=/opt/stokki-homolog/portal_cliente
+Environment=FRESH_AMBIENTE=homolog
+Environment=PYTHONPATH=/opt/stokki-homolog/homologacao/site
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
+# trava que nao depende do codigo do ramo: sem a guarda (SMTP falso) o servico nao sobe
+ExecStartPre=/opt/stokki-homolog/venv/bin/python -c "import smtplib, socket, sys; sys.exit(0 if smtplib.SMTP.__name__ == 'SMTPFalso' else 1)"
+ExecStart=/opt/stokki-homolog/venv/bin/waitress-serve --host=127.0.0.1 --port=8174 --threads=6 app:app
+Restart=on-failure
+RestartSec=5
+MemoryMax=600M
+
+[Install]
+WantedBy=multi-user.target

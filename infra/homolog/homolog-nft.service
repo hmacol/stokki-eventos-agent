@@ -1,0 +1,14 @@
+[Unit]
+Description=Homologacao do legado - regra nftables de saida do usuario homolog (tabela inet homolog)
+# Unit proprio em vez do nftables.service: o /etc/nftables.conf padrao do Ubuntu
+# comeca com "flush ruleset" e apagaria as regras do Docker no boot.
+After=network.target docker.service
+Before=homolog-painel.service homolog-portal.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/homolog.nft
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
