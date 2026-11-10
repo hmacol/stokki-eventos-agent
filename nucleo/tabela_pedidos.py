@@ -300,5 +300,13 @@ def exportar_csv(filtros: dict, chaves: list[str] | None = None, ordem: str | No
     escritor = csv.writer(saida, delimiter=";")
     escritor.writerow([c.rotulo for c in colunas])
     for r in rows:
-        escritor.writerow([formatar(c.chave, r[c.chave]) for c in colunas])
+        escritor.writerow([_celula_csv(c, formatar(c.chave, r[c.chave])) for c in colunas])
     return "﻿" + saida.getvalue()
+
+
+def _celula_csv(coluna: Coluna, texto: str) -> str:
+    """Texto livre (destinatário, observação, motivo...) que começa com =, +, -, @, tab ou CR o Excel
+    executa como fórmula: um apóstrofo na frente o mantém como texto (revisão de segurança, 09/11)."""
+    if coluna.formato == "texto" and texto[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + texto
+    return texto

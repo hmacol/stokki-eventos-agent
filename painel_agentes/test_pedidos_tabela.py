@@ -49,6 +49,8 @@ class TestTelaPedidos(unittest.TestCase):
         with self.cliente.session_transaction() as sess:
             sess["nivel_acesso"] = nivel
             sess["usuario"] = "teste"
+            # produção já teve "Derrubar todas as sessões": sessão de rodada antiga cai pro login
+            sess["rodada_sessoes"] = painel_agentes.acesso_telas.rodada_sessoes()["rodada"]
 
     def test_lista_com_filtro_de_coluna_e_ordenacao_preservada(self):
         self._logar("leitura")

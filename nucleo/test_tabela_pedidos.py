@@ -177,6 +177,14 @@ class TestOpcoesFormatoCsv(_Base):
         cabecalho = tp.exportar_csv({}, conn=self.conn).lstrip("﻿").splitlines()[0]
         self.assertEqual(cabecalho.count(";"), len(tp.COLUNAS) - 1)
 
+    def test_csv_neutraliza_formula_em_texto(self):
+        # revisão de segurança 09/11: texto livre começando com = vira fórmula no Excel
+        self._pedido("PS-1", destinatario='=HYPERLINK("http://x","clique")', caixas=3)
+        texto = tp.exportar_csv({}, ["destinatario", "caixas"], conn=self.conn)
+        linha = texto.lstrip("﻿").splitlines()[1]
+        self.assertTrue(linha.startswith("\"'=HYPERLINK("), linha)
+        self.assertTrue(linha.endswith(";3"), linha)
+
 
 if __name__ == "__main__":
     unittest.main()
