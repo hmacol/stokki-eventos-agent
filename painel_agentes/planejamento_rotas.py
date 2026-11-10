@@ -1103,6 +1103,18 @@ def _anotar_rota_enviada(rascunho: dict) -> None:
     })
 
 
+def _anotar_centro_expandido(rascunhos: list[dict]) -> None:
+    """Aviso de rodizio na troca de carro pelo card (editar rota enviada, 10/11):
+    `tem_centro_expandido` = alguma parada com coordenada dentro do Centro Expandido
+    (mesmo poligono da alocacao, roteirizacao/rodizio_sp). Parada sem coordenada nao conta."""
+    from rodizio_sp import em_area_rodizio
+    for r in rascunhos:
+        r["tem_centro_expandido"] = any(
+            p.get("latitude") is not None and p.get("longitude") is not None
+            and em_area_rodizio(float(p["latitude"]), float(p["longitude"]))
+            for p in r["paradas"])
+
+
 def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     """
     Retorna {"data_alvo", "rascunhos": [...], "pool": [...],
@@ -1200,6 +1212,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
 
     # motorista de verdade sai sempre com carro (spec 4): a tela mostra o aviso
     veiculos_regras.anotar_falta_carro(rascunhos, placas_veiculos_vuupt(config))
+    _anotar_centro_expandido(rascunhos)
 
     cfg_motoristas = config.get("motoristas", {})
     catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))

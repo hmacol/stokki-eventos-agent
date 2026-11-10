@@ -1063,6 +1063,10 @@ def planejamento():
         pode_editar=g.nivel_acesso in ("total", "operador", "logistica") and data_alvo >= date.today(),
         justificativas=justificativas_sem_canhoto.JUSTIFICATIVAS,
         motivos_sem_sucesso=torre_controle.motivos_sem_sucesso(),
+        # "Tirar da rota" no card da rota enviada (10/11): mesma lista da Torre
+        motivos_exclusao=MOTIVOS_EXCLUSAO,
+        # selo "sem carro" recalculado no card depois de trocar motorista/carro
+        agentes_sem_carro=sorted(veiculos_regras.AGENTES_SEM_CARRO),
     )
 
 

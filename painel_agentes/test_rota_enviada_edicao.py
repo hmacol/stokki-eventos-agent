@@ -452,5 +452,18 @@ class StatusVuuptCardTestCase(_Base):
         self.assertFalse(r["rota_iniciada"])
 
 
+class CentroExpandidoCardTestCase(unittest.TestCase):
+    """Aviso de rodizio na troca de carro: o card sabe se a rota passa no Centro Expandido
+    (poligono real de dados/centro_expandido_sp.json)."""
+
+    def test_marca_rota_com_parada_no_centro_expandido(self):
+        se = {"latitude": -23.5503, "longitude": -46.6339}          # Praca da Se
+        guarulhos = {"latitude": -23.4538, "longitude": -46.5333}
+        sem_coord = {"latitude": None, "longitude": None}
+        rascunhos = [{"paradas": [guarulhos, se]}, {"paradas": [guarulhos, sem_coord]}, {"paradas": []}]
+        planejamento_rotas._anotar_centro_expandido(rascunhos)
+        self.assertEqual([r["tem_centro_expandido"] for r in rascunhos], [True, False, False])
+
+
 if __name__ == "__main__":
     unittest.main()
