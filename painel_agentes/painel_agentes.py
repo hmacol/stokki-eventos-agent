@@ -30,6 +30,9 @@ _RAIZ = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ))
 sys.path.insert(0, str(Path(__file__).parent))
 
+from homologacao import ambiente as _ambiente
+_ambiente.exigir_coerencia(_RAIZ)
+
 (Path(__file__).parent / "dados").mkdir(parents=True, exist_ok=True)
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -335,6 +338,13 @@ def requer_auth(f=None, *, niveis=("total",)):
             return func(*args, **kwargs)
         return decorado
     return decorator
+
+
+# Homologacao (FRESH_AMBIENTE=homolog): faixa, erros amigaveis, saude e tela de envios.
+# Sem a variavel nada disso age.
+if _ambiente.homolog_ativo():
+    from homologacao import flask_homolog
+    flask_homolog.instalar(app, servico="painel", requer_auth=requer_auth)
 
 
 def exige_mesma_origem(f):

@@ -39,6 +39,9 @@ _AQUI = Path(__file__).parent
 sys.path.insert(0, str(_RAIZ))
 sys.path.insert(1, str(_RAIZ / "insucesso_entrega"))
 
+from homologacao import ambiente as _ambiente
+_ambiente.exigir_coerencia(_RAIZ)
+
 import yaml
 from flask import Flask, Response, abort, g, jsonify, redirect, render_template, request, send_file, session, url_for
 from jinja2 import ChoiceLoader, FileSystemLoader
@@ -95,6 +98,11 @@ app.config.update(
     # de NF-e (08/09) -- um lote de 100 XMLs zipados fica na casa de 1-2 MB.
     MAX_CONTENT_LENGTH=30 * 1024 * 1024,
 )
+
+# Homologacao (FRESH_AMBIENTE=homolog): faixa, erros amigaveis e /homologacao/saude.
+if _ambiente.homolog_ativo():
+    from homologacao import flask_homolog
+    flask_homolog.instalar(app, servico="portal")
 
 ACOES_VALIDAS = ("manter", "reagendar", "cancelar")
 # "Primeiro acesso / esqueci o PIN": teto de e-mails por CNPJ e de pedidos por
