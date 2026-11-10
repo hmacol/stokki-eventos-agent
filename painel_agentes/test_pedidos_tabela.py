@@ -30,9 +30,13 @@ class TestTelaPedidos(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self._tmp.cleanup)
-        p = mock.patch.object(banco, "DB_PATH", Path(self._tmp.name) / "dados.db")
-        p.start()
-        self.addCleanup(p.stop)
+        db = Path(self._tmp.name) / "dados.db"
+        # acessos/sessões também no banco temporário: o real (VPS) tem contas e rodada de sessões
+        for p in (mock.patch.object(banco, "DB_PATH", db),
+                  mock.patch.object(painel_agentes.acesso_telas, "DB_PATH", db),
+                  mock.patch.object(painel_agentes.contadores_menu, "contadores", return_value={})):
+            p.start()
+            self.addCleanup(p.stop)
         conn = banco.conectar()
         hoje = date.today().isoformat()
         for codigo, status, dest in (("PS-1", "ENTREGUE", "MERCADO CENTRAL"), ("PS-2", "INSUCESSO", "PADARIA")):
@@ -49,8 +53,6 @@ class TestTelaPedidos(unittest.TestCase):
         with self.cliente.session_transaction() as sess:
             sess["nivel_acesso"] = nivel
             sess["usuario"] = "teste"
-            # produção já teve "Derrubar todas as sessões": sessão de rodada antiga cai pro login
-            sess["rodada_sessoes"] = painel_agentes.acesso_telas.rodada_sessoes()["rodada"]
 
     def test_lista_com_filtro_de_coluna_e_ordenacao_preservada(self):
         self._logar("leitura")
