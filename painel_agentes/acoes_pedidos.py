@@ -10,6 +10,7 @@ import logging
 import re
 import sys
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 _AQUI = Path(__file__).parent
@@ -246,3 +247,50 @@ def cancelar_stokki(codigo: str, motivo: str, usuario: str, *, abrir_sessao=None
     falhas = [x for x in resultados if not x["ok"]]
     return {"ok": not falhas, "resultados": resultados,
             "erro": "; ".join(f"PS-{x['id_stokki']}: {x['erro']}" for x in falhas)}
+
+
+def _servico_vivo(service_id: int, vuupt):
+    """(servico, erro): relê o status na Vuupt; erro se sumiu ou não está mais vivo (done/insucesso/cancelado/excluído)."""
+    servico = (vuupt or _vuupt_padrao()).buscar_servico_por_id(service_id)
+    if not servico:
+        return None, "não achei o serviço na Vuupt agora, tente de novo."
+    if _terminal(servico):
+        return None, "pedido já finalizado ou cancelado na Vuupt: não dá pra alterar."
+    return servico, ""
+
+
+def alterar_endereco(service_id: int, endereco: str, usuario: str, *, vuupt=None) -> dict:
+    endereco = (endereco or "").strip()
+    if not endereco:
+        return {"ok": False, "erro": "Informe o novo endereço."}
+    servico, erro = _servico_vivo(service_id, vuupt)
+    if erro:
+        return {"ok": False, "erro": erro}
+    from roteirizacao import cancelar_servico
+    import planejamento_rotas
+    rascunho_id, _status = cancelar_servico.rascunho_do_servico(service_id)
+    r = planejamento_rotas.editar_endereco_pedido(service_id, endereco, rascunho_id)
+    if not r.get("ok"):
+        return {"ok": False, "erro": r.get("erro") or "Falha ao alterar o endereço."}
+    tratativas.registrar_evento(servico.get("code") or _codigo_do_servico(service_id), "PEDIDOS",
+                                "ENDERECO_ALTERADO", service_id=service_id,
+                                texto=f"{usuario}: endereço alterado para {endereco}")
+    return {"ok": True, "erro": ""}
+
+
+def agendar(service_id: int, data: str, hora_inicio: str, hora_fim: str, usuario: str, *, vuupt=None) -> dict:
+    try:
+        d = datetime.strptime(data or "", "%Y-%m-%d")
+    except ValueError:
+        return {"ok": False, "erro": "Data inválida (use AAAA-MM-DD)."}
+    servico, erro = _servico_vivo(service_id, vuupt)
+    if erro:
+        return {"ok": False, "erro": erro}
+    import planejamento_rotas
+    r = planejamento_rotas.reagendar_pedido(service_id, data, hora_inicio, hora_fim)
+    if not r.get("ok"):
+        return {"ok": False, "erro": r.get("erro") or "Falha ao agendar."}
+    tratativas.registrar_evento(servico.get("code") or _codigo_do_servico(service_id), "PEDIDOS", "REAGENDADO",
+                                service_id=service_id,
+                                texto=f"{usuario}: agendado {d:%d/%m} {hora_inicio}–{hora_fim}")
+    return {"ok": True, "erro": ""}

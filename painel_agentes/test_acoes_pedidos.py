@@ -322,5 +322,84 @@ class TestCancelarStokki(_BancoTemp):
         self.assertEqual(self.trat.call_count, 1)
 
 
+class TestEnderecoEAgendar(_BancoTemp):
+    def setUp(self):
+        super().setUp()
+        for alvo, ret in (("planejamento_rotas.editar_endereco_pedido", {"ok": True, "erro": ""}),
+                          ("planejamento_rotas.reagendar_pedido", {"ok": True, "erro": ""}),
+                          ("roteirizacao.cancelar_servico.rascunho_do_servico", (55, "RASCUNHO"))):
+            p = mock.patch(alvo, return_value=ret)
+            setattr(self, alvo.rsplit(".", 1)[1], p.start())
+            self.addCleanup(p.stop)
+
+    @staticmethod
+    def _vuupt(status, **extra):
+        return VuuptFalso({101: dict(id=101, code="#PS-1", status=status, **extra)})
+
+    def test_endereco_passa_rascunho_e_registra(self):
+        r = acoes_pedidos.alterar_endereco(101, "Rua X, 10", "hugo", vuupt=self._vuupt("not_assigned"))
+        self.assertTrue(r["ok"], r)
+        self.editar_endereco_pedido.assert_called_once_with(101, "Rua X, 10", 55)
+        args, kw = self.trat.call_args
+        self.assertEqual(args[:3], ("#PS-1", "PEDIDOS", "ENDERECO_ALTERADO"))
+        self.assertIn("hugo: ", kw["texto"])
+        self.assertIn("Rua X, 10", kw["texto"])
+
+    def test_endereco_recusa_entregue(self):
+        r = acoes_pedidos.alterar_endereco(101, "Rua X, 10", "hugo", vuupt=self._vuupt("done"))
+        self.assertFalse(r["ok"])
+        self.editar_endereco_pedido.assert_not_called()
+
+    def test_endereco_recusa_insucesso(self):
+        r = acoes_pedidos.alterar_endereco(101, "Rua X, 10", "hugo",
+                                           vuupt=self._vuupt("done", status_done="failed"))
+        self.assertFalse(r["ok"])
+        self.editar_endereco_pedido.assert_not_called()
+
+    def test_endereco_vazio(self):
+        r = acoes_pedidos.alterar_endereco(101, "  ", "hugo", vuupt=self._vuupt("not_assigned"))
+        self.assertFalse(r["ok"])
+        self.editar_endereco_pedido.assert_not_called()
+
+    def test_endereco_erro_da_funcao_nao_registra(self):
+        self.editar_endereco_pedido.return_value = {"ok": False, "erro": "Vuupt 500"}
+        r = acoes_pedidos.alterar_endereco(101, "Rua X, 10", "hugo", vuupt=self._vuupt("not_assigned"))
+        self.assertEqual((r["ok"], r["erro"]), (False, "Vuupt 500"))
+        self.trat.assert_not_called()
+
+    def test_agendar_registra_janela(self):
+        r = acoes_pedidos.agendar(101, "2026-11-12", "08:00", "12:00", "hugo", vuupt=self._vuupt("not_assigned"))
+        self.assertTrue(r["ok"], r)
+        self.reagendar_pedido.assert_called_once_with(101, "2026-11-12", "08:00", "12:00")
+        args, kw = self.trat.call_args
+        self.assertEqual(args[:3], ("#PS-1", "PEDIDOS", "REAGENDADO"))
+        self.assertEqual(kw["texto"], "hugo: agendado 12/11 08:00–12:00")
+
+    def test_agendar_recusa_cancelado(self):
+        r = acoes_pedidos.agendar(101, "2026-11-12", "08:00", "12:00", "hugo", vuupt=self._vuupt("canceled"))
+        self.assertFalse(r["ok"])
+        self.reagendar_pedido.assert_not_called()
+
+    def test_agendar_recusa_excluido(self):
+        r = acoes_pedidos.agendar(101, "2026-11-12", "08:00", "12:00", "hugo",
+                                  vuupt=self._vuupt("not_assigned", deleted_at="2026-11-01"))
+        self.assertFalse(r["ok"])
+        self.reagendar_pedido.assert_not_called()
+
+    def test_agendar_data_invalida(self):
+        r = acoes_pedidos.agendar(101, "12/11", "08:00", "12:00", "hugo", vuupt=self._vuupt("not_assigned"))
+        self.assertFalse(r["ok"])
+        self.reagendar_pedido.assert_not_called()
+
+    def test_servico_sumiu_nao_altera(self):
+        v = VuuptFalso({})
+        for r in (acoes_pedidos.alterar_endereco(101, "Rua X, 10", "hugo", vuupt=v),
+                  acoes_pedidos.agendar(101, "2026-11-12", "08:00", "12:00", "hugo", vuupt=v)):
+            self.assertFalse(r["ok"])
+            self.assertIn("não achei o serviço na Vuupt agora", r["erro"])
+        self.editar_endereco_pedido.assert_not_called()
+        self.reagendar_pedido.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

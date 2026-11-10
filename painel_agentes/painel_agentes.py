@@ -2776,6 +2776,65 @@ def api_pedidos_acao_cancelar_stokki():
     return jsonify(r)
 
 
+@app.route("/api/pedidos/acao/endereco", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_acao_endereco():
+    """Ação Alterar endereço da tela /pedidos (edita direto na Vuupt)."""
+    body = request.get_json(silent=True) or {}
+    service_id, erro = _service_id_do_corpo(body)
+    if erro:
+        return erro
+    try:
+        r = acoes_pedidos.alterar_endereco(service_id, str(body.get("endereco") or ""), session.get("usuario", ""))
+    except Exception as e:
+        logger.exception("alterar endereço pela tela Pedidos falhou")
+        return jsonify({"erro": f"Falha inesperada: {e}"}), 500
+    if not r.get("ok"):
+        return jsonify({"erro": r.get("erro") or "Falha ao alterar o endereço."}), 400
+    return jsonify(r)
+
+
+@app.route("/api/pedidos/acao/agendar", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_acao_agendar():
+    """Ação Agendar da tela /pedidos (nova data e janela na Vuupt)."""
+    body = request.get_json(silent=True) or {}
+    service_id, erro = _service_id_do_corpo(body)
+    if erro:
+        return erro
+    try:
+        r = acoes_pedidos.agendar(service_id, str(body.get("data") or ""), str(body.get("hora_inicio") or ""),
+                                  str(body.get("hora_fim") or ""), session.get("usuario", ""))
+    except Exception as e:
+        logger.exception("agendar pela tela Pedidos falhou")
+        return jsonify({"erro": f"Falha inesperada: {e}"}), 500
+    if not r.get("ok"):
+        return jsonify({"erro": r.get("erro") or "Falha ao agendar."}), 400
+    return jsonify(r)
+
+
+@app.route("/api/pedidos/acao/checar-dia-fixo", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_acao_checar_dia_fixo():
+    """Antes de Agendar na tela /pedidos: quais pedidos ficam fora do dia fixo da região. Só lê."""
+    body = request.get_json(silent=True) or {}
+    try:
+        service_ids = [int(s) for s in body.get("service_ids") or []]
+    except (TypeError, ValueError):
+        return jsonify({"erro": "service_ids inválidos."}), 400
+    try:
+        resultado = checar_reagendamento_dia_fixo(service_ids, str(body.get("data") or ""))
+    except Exception as e:
+        logger.exception("checar dia fixo pela tela Pedidos falhou")
+        return jsonify({"erro": f"Falha inesperada: {e}"}), 500
+    if not resultado["ok"]:
+        return jsonify({"erro": resultado["erro"]}), 400
+    return jsonify(resultado)
+
+
 @app.route("/api/torre/notificar-ocorrencia", methods=["POST"])
 @requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
