@@ -2928,16 +2928,23 @@ def api_fundir_rotas():
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_remover_parada():
+    """Rota ENVIADA (editar rota enviada, 10/11): exige `motivo` (expedicao.MOTIVOS_EXCLUSAO),
+    tira o pedido na Vuupt pela regra de status ao vivo e, com a rota iniciada, marca
+    Retornando (ver rascunhos_rota.remover_de_rota_enviada)."""
     body = request.get_json(force=True)
     try:
-        parada_removida = rascunhos_rota.remover_parada(body["rascunho_id"], body["service_id"])
-    except (KeyError, ValueError) as e:
+        rascunho_id = int(body["rascunho_id"])
+        service_id = int(body["service_id"])
+        rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
+        if rascunho and rascunho["status"] == rascunhos_rota.STATUS_ENVIADO:
+            resultado = rascunhos_rota.remover_de_rota_enviada(
+                rascunho_id, service_id, body.get("motivo"), (body.get("observacao") or "").strip(),
+                _carregar_config().get("vuupt_api", {}).get("token", ""), session.get("usuario", ""))
+        else:
+            resultado = {"parada_removida": rascunhos_rota.remover_parada(rascunho_id, service_id)}
+    except (KeyError, ValueError, TypeError) as e:
         return jsonify({"erro": str(e)}), 400
-    return jsonify({
-        "ok": True,
-        "rascunho": _rascunho_ou_404(body["rascunho_id"]),
-        "parada_removida": parada_removida,
-    })
+    return jsonify({**resultado, "ok": True, "rascunho": _rascunho_ou_404(rascunho_id)})
 
 
 @app.route("/api/planejamento/adicionar-parada", methods=["POST"])
@@ -2945,12 +2952,22 @@ def api_remover_parada():
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_adicionar_parada():
+    """Rota ENVIADA (10/11): inclui o pedido na Vuupt antes de gravar
+    (rascunhos_rota.adicionar_em_rota_enviada)."""
     body = request.get_json(force=True)
     try:
-        rascunhos_rota.adicionar_parada(body["rascunho_id"], body["parada"], body.get("ordem"))
-    except (KeyError, ValueError) as e:
+        rascunho_id = int(body["rascunho_id"])
+        parada = {**body["parada"], "service_id": int(body["parada"]["service_id"])}
+        rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
+        if rascunho and rascunho["status"] == rascunhos_rota.STATUS_ENVIADO:
+            rascunhos_rota.adicionar_em_rota_enviada(
+                rascunho_id, parada, _carregar_config().get("vuupt_api", {}).get("token", ""),
+                session.get("usuario", ""))
+        else:
+            rascunhos_rota.adicionar_parada(rascunho_id, parada, body.get("ordem"))
+    except (KeyError, ValueError, TypeError) as e:
         return jsonify({"erro": str(e)}), 400
-    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
+    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(rascunho_id)})
 
 
 @app.route("/api/planejamento/trocar-motorista", methods=["POST"])
@@ -2958,14 +2975,20 @@ def api_adicionar_parada():
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_trocar_motorista():
+    """Rota ENVIADA (10/11): a troca vai pra Vuupt antes de gravar; rota iniciada só troca
+    o carro. Ids viram int (edicao_rota compara agent_id com ==)."""
     body = request.get_json(force=True)
     try:
-        rascunhos_rota.trocar_motorista(
-            body["rascunho_id"], body.get("agent_id"), body.get("vehicle_id"), body.get("motorista_nome"),
-        )
-    except (KeyError, ValueError) as e:
+        rascunho_id = int(body["rascunho_id"])
+        agent_id = int(body["agent_id"]) if body.get("agent_id") not in (None, "") else None
+        vehicle_id = int(body["vehicle_id"]) if body.get("vehicle_id") not in (None, "") else None
+        rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
+        token = (_carregar_config().get("vuupt_api", {}).get("token", "")
+                 if rascunho and rascunho["status"] == rascunhos_rota.STATUS_ENVIADO else None)
+        rascunhos_rota.trocar_motorista(rascunho_id, agent_id, vehicle_id, body.get("motorista_nome"), token=token)
+    except (KeyError, ValueError, TypeError) as e:
         return jsonify({"erro": str(e)}), 400
-    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
+    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(rascunho_id)})
 
 
 @app.route("/api/planejamento/lalamove-veiculo", methods=["POST"])

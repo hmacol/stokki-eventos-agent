@@ -1061,6 +1061,20 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     }
 
 
+def _anotar_rota_enviada(rascunho: dict) -> None:
+    """Card da rota ENVIADA (editar rota enviada, 10/11): `status_vuupt` por parada e
+    `rota_iniciada`, lidos do espelho do nucleo (ate 15 min atrasado, so pra exibir --
+    a acao de tirar/trocar confere ao vivo na Vuupt)."""
+    import edicao_rota
+    espelho = rascunhos_rota.espelho_rota_enviada(rascunho["vuupt_route_id"])
+    for p in rascunho["paradas"]:
+        p["status_vuupt"] = espelho["paradas"].get(p["service_id"])
+    rascunho["rota_iniciada"] = edicao_rota.rota_iniciada({
+        "status": espelho["status_rota"],
+        "servicos": [{"status": p["status_vuupt"]} for p in rascunho["paradas"]],
+    })
+
+
 def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     """
     Retorna {"data_alvo", "rascunhos": [...], "pool": [...],
@@ -1153,6 +1167,8 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
             p["fora_janela"] = bool(sim and i in sim["fora_janela"])
         # selo "Em separação" etc. também na parada da rota (Hugo, 09/11), não só no pool
         anotar_situacao_stokki(r["paradas"], pool_e_agendados["retrato_stokki"])
+        if r["status"] == rascunhos_rota.STATUS_ENVIADO and r["vuupt_route_id"]:
+            _anotar_rota_enviada(r)
 
     cfg_motoristas = config.get("motoristas", {})
     catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))
@@ -1908,9 +1924,10 @@ def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:
       - Numa rota já enviada (rascunho ENVIADO, rota de verdade na
         VUUPT): rascunhos_rota.preparar_cancelamento_de_parada tira o
         serviço da rota de verdade primeiro (ou cancela a rota inteira,
-        se for a última parada) -- só quando ela ainda não iniciou
-        deslocamento (checado ao vivo); só então o serviço é cancelado
-        de fato.
+        se for a última parada e nada começou) -- só se o PEDIDO ainda
+        não começou (checado ao vivo; desde 10/11 vale com a rota já
+        rodando); só então o serviço é cancelado de fato. Não vira
+        Retornando.
 
     NÃO mexe em nada na Stokki -- só cancela na VUUPT (roteirização).
     Cancelar o pedido na Stokki de verdade continua manual, fora dessa

@@ -149,6 +149,13 @@ def _registrar_exclusao(data_alvo: date, rota_id: int, rota_nome: str, service_i
         conn.close()
 
 
+def registrar_exclusao(data_alvo: date, rota_id: int, rota_nome: str, service_id: int,
+                       codigo_pedido: str, motivo: str, observacao: str, usuario: str) -> None:
+    """Mesma auditoria do "Excluir da Rota", pra quem tira pedido de rota por outra tela
+    (card da rota enviada no Planejamento, 10/11)."""
+    _registrar_exclusao(data_alvo, rota_id, rota_nome, service_id, codigo_pedido, motivo, observacao, usuario)
+
+
 def _exclusoes_por_rota(data_alvo: date, rota_id: int) -> list[dict]:
     """Pedidos já excluídos dessa rota nesse dia, mais recente primeiro
     -- listar_rotas_do_dia usa isso pra continuar mostrando o chip
