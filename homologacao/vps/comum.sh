@@ -59,24 +59,32 @@ exigir_protecoes_kernel() {
 	done
 }
 
-# copiar_sem_link <origem> <destino> <dono[,dono...] aceito(s) da origem>
-# Arquivo entregue por outro usuario (www-data, homolog): abre sem seguir link, exige arquivo
-# comum, 1 link so e um dos donos aceitos, e COPIA o conteudo para um arquivo novo do root
-# (600, O_EXCL). O root nunca da chown/mv no arquivo que outro usuario entregou.
+# copiar_sem_link <origem> <destino> <dono[,dono...] aceito(s)> <pasta exigida>
+# Arquivo entregue por outro usuario (www-data, homolog):
+# - abre sem seguir link no ultimo nome e com O_NONBLOCK (FIFO plantado nao trava o root);
+# - fstat no descritor: arquivo comum, 1 link so, um dos donos aceitos;
+# - o caminho REAL do que foi aberto (/proc/self/fd/N) tem que estar dentro da pasta exigida:
+#   uma pasta do meio trocada por link (corrida entre conferir e abrir) leva para fora e recusa;
+# - COPIA o conteudo para um arquivo novo do root (600, O_EXCL).
+# O root nunca da chown/mv no arquivo que outro usuario entregou.
 copiar_sem_link() {
-	"$PY_SISTEMA" -I - "$1" "$2" "$3" <<'PY'
+	"$PY_SISTEMA" -I - "$1" "$2" "$3" "$4" <<'PY'
 import os
 import pwd
 import shutil
 import stat
 import sys
 
-origem, destino, donos = sys.argv[1:]
+origem, destino, donos, pasta = sys.argv[1:]
+pasta = os.path.realpath(pasta).rstrip("/") + "/"
 uids = {pwd.getpwnam(d).pw_uid for d in donos.split(",")}
-fd = os.open(origem, os.O_RDONLY | os.O_NOFOLLOW)
+fd = os.open(origem, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
 st = os.fstat(fd)
 if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_uid not in uids:
     sys.exit("erro: %s nao e arquivo comum de %s com 1 link so" % (origem, donos))
+real = os.readlink("/proc/self/fd/%d" % fd)
+if not real.startswith(pasta):
+    sys.exit("erro: %s nao esta dentro de %s" % (origem, pasta))
 saida = os.open(destino, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
 with os.fdopen(fd, "rb") as f, os.fdopen(saida, "wb") as g:
     shutil.copyfileobj(f, g, 1024 * 1024)

@@ -118,7 +118,7 @@ echo "== config da homologacao (sem segredos; imprime so nomes de chaves)"
 exigir_de_root "$HML/homologacao" "$HML/homologacao/gerar_config.py"
 TMPD=$(mktemp -d)
 trap 'rm -rf "$TMPD"' EXIT
-copiar_sem_link "$PROD/config.yaml" "$TMPD/prod.yaml" www-data,root
+copiar_sem_link "$PROD/config.yaml" "$TMPD/prod.yaml" www-data "$PROD"
 GCS_PROD=$(cd / && "$PROD/venv/bin/python" -I -B - "$TMPD/prod.yaml" <<'PY'
 import sys
 import yaml
@@ -137,7 +137,8 @@ if [ -n "$GCS_PROD" ]; then
 		"$PROD"/*) ;;
 		*) falha "conta de servico do GCS fora de $PROD ou inexistente" ;;
 	esac
-	copiar_sem_link "$GCS_REAL" "$TMPD/gcs.json" www-data,root
+	# readlink -f acima so da erro amigavel; quem garante e a conferencia do descritor aberto
+	copiar_sem_link "$GCS_REAL" "$TMPD/gcs.json" www-data "$PROD"
 	install -m 600 -o homolog -g homolog "$TMPD/gcs.json" "$GCS_HML"
 	unset GCS_REAL
 else

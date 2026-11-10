@@ -23,9 +23,13 @@ PADRAO_SEGREDO = re.compile(
 # Palavras curtas: so como pedaco inteiro do nome (separado por _, -, digito ou corcova do
 # camelCase), com plural. Dentro de outra palavra ("Pinheiros", "mapping", "passo") nao e
 # segredo, e sumir com a chave mudaria o comportamento.
-PEDACOS_SEGREDO = {"pin", "pins", "cpf", "cpfs", "pass", "passes"}
-_CORCOVAS = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+")
+PEDACO_SEGREDO = re.compile(r"^(?:pin|cpf|pass)(?:e?s)?$")
+# corcovas: sigla com plural ("PINs"), sigla, palavra ("user", "Pin")
+_CORCOVAS = re.compile(r"[A-Z]+s(?![a-z])|[A-Z]+(?![a-z])|[A-Z]?[a-z]+")
 _SEPARADORES = re.compile(r"[^A-Za-z]+")
+# rede extra: nome que TERMINA em pin/cpf (com plural) logo depois de separador ou corcova
+# (sem re.I de proposito: com ele a corcova [a-z]->[A-Z] casaria qualquer par de letras)
+_FINAL_SEGREDO = re.compile(r"(?:^|(?<=[^A-Za-z])|(?<=[a-z])(?=[A-Z]))(?:[Pp][Ii][Nn]|[Cc][Pp][Ff])[sS]?$")
 # nomes que casam com o padrao mas nao sao segredo
 NAO_SEGREDOS = {"max_tokens"}
 # valor com credencial embutida na URL (esquema://usuario[:senha]@...)
@@ -54,7 +58,9 @@ def _e_segredo(chave) -> bool:
     nome = str(chave)
     if nome.lower() in NAO_SEGREDOS:
         return False
-    return bool(PADRAO_SEGREDO.search(nome)) or not PEDACOS_SEGREDO.isdisjoint(_pedacos(nome))
+    return (bool(PADRAO_SEGREDO.search(nome))
+            or any(PEDACO_SEGREDO.match(p) for p in _pedacos(nome))
+            or bool(_FINAL_SEGREDO.search(nome)))
 
 
 def _url_com_credencial(valor) -> bool:

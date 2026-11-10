@@ -78,11 +78,11 @@ fi
 # banco entregue pelo www-data e .anterior do homolog: COPIA para arquivo novo do root (sem
 # seguir link, arquivo comum, 1 link so, dono certo). Na pasta nova so ha arquivo criado pelo
 # root, entao o chown -R abaixo nunca entrega um hardlink plantado por outro usuario.
-copiar_sem_link "$TMP" "$NOVO_D/dados.db" www-data
+copiar_sem_link "$TMP" "$NOVO_D/dados.db" www-data /var/tmp
 rm -f -- "$TMP"
 TMP=""
 if [ -e "$HML/dados/dados.db.anterior" ] || [ -L "$HML/dados/dados.db.anterior" ]; then
-	copiar_sem_link "$HML/dados/dados.db.anterior" "$NOVO_D/dados.db.anterior" homolog
+	copiar_sem_link "$HML/dados/dados.db.anterior" "$NOVO_D/dados.db.anterior" homolog "$HML/dados"
 fi
 chown -R -h homolog:homolog "$NOVO_D" "$NOVO_R"
 chmod 750 "$NOVO_D" "$NOVO_R"

@@ -61,7 +61,8 @@ class TestGerar(unittest.TestCase):
         self.assertEqual(removidas, [])
 
     def test_plural_e_camelcase_tambem_saem(self):
-        chaves = ["cpfs", "pins", "login_cpfs", "pinCode", "userPin", "motoristaCpf", "CPFs", "pin2"]
+        chaves = ["cpfs", "pins", "login_cpfs", "pinCode", "userPin", "motoristaCpf", "CPFs", "pin2",
+                  "userPINs", "motoristaCPFs"]
         cfg, removidas, _ = _gerar({"a": {c: "x" for c in chaves}})
         self.assertEqual(cfg["a"], {})
         self.assertEqual(sorted(removidas), sorted("a." + c for c in chaves))
