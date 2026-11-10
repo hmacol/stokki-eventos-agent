@@ -108,6 +108,37 @@ class TestTelaPedidos(unittest.TestCase):
         self.assertEqual(r.get_json()["novo_code"], "#PS-1-R1")
         self.assertEqual(m.call_args.args[:3], (1, "cliente pediu", "teste"))
 
+    def test_leitura_nao_ve_menu_de_acoes_nem_caixinhas(self):
+        self._logar("leitura")
+        html = self.cliente.get("/pedidos").get_data(as_text=True)
+        self.assertIn(">PS-1<", html)
+        self.assertNotIn('class="menu-acoes"', html)
+        self.assertNotIn('name="sel"', html)
+        self.assertNotIn('id="barra-lote"', html)
+
+    def test_quem_age_ve_menu_caixinhas_e_dados_da_linha(self):
+        conn = banco.conectar()
+        hoje = date.today().isoformat()
+        conn.execute("UPDATE nucleo_pedidos SET vuupt_service_id = 111 WHERE codigo = 'PS-1'")
+        # reentrega: a linha do pedido age sobre a tentativa principal (a mais recente)
+        for codigo, status, sid in (("PS-3", "INSUCESSO", 301), ("PS-3-R1", "EM_ROTA", 302)):
+            conn.execute("""INSERT INTO nucleo_pedidos (codigo, titulo, status, destinatario_nome, remetente_nome,
+                                                        sender_id, caixas, criado_em_provedor, vuupt_service_id)
+                            VALUES (?, ?, ?, 'LOJA', 'FRUTA FINA', 10, 4, ?, ?)""",
+                         (codigo, f"#{codigo} - NF3 / FF / LOJA", status, f"{hoje} 08:00:00", sid))
+        conn.commit()
+        conn.close()
+        self._logar("operador")
+        html = self.cliente.get("/pedidos").get_data(as_text=True)
+        self.assertEqual(html.count('class="menu-acoes"'), 3)
+        self.assertEqual(html.count('name="sel"'), 3)
+        self.assertIn('id="barra-lote"', html)
+        self.assertRegex(html, r'<tr[^>]*data-service-id="111"[^>]*data-codigo="PS-1"[^>]*data-status="ENTREGUE"')
+        self.assertRegex(html, r'<tr[^>]*data-service-id=""[^>]*data-codigo="PS-2"[^>]*data-status="INSUCESSO"')
+        self.assertRegex(html, r'<tr[^>]*data-service-id="302"[^>]*data-codigo="PS-3-R1"[^>]*data-status="EM_ROTA"')
+        # modal de baixa usa a lista fixa de justificativas
+        self.assertIn('value="canhoto_depois"', html)
+
     def test_niveis_sem_acesso_nao_entram(self):
         self._logar("galpao")
         self.assertNotEqual(self.cliente.get("/pedidos").status_code, 200)

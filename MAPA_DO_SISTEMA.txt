@@ -1160,7 +1160,12 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
    /historico-tratativas      historico_tratativas.html
    /consulta (+/rota, /pedido) consulta*.html
    /pedidos (+/exportar.csv)  pedidos_tabela.html (todos os pedidos em tabela, estilo
-                              Serviços da Vuupt; lê só o núcleo; colunas visíveis no localStorage)
+                              Serviços da Vuupt; lê só o núcleo; colunas visíveis no localStorage;
+                              uma linha por pedido, tentativas no selo "N tentativas";
+                              quem age (NIVEIS_ACAO, leitura não) tem caixinha + menu "⋯"
+                              por linha e barra de lote (um fetch por pedido em sequência,
+                              resumo das falhas por código) chamando /api/pedidos/acao/*;
+                              resultado vira selo na linha, sem recarregar)
    /atendimento (+/mobile)    atendimento*.html
    /wms, /wms/estoque         wms.html (PWA), wms_estoque.html
    /etiquetas/fila            fila_etiquetas.html (fila de impressão das etiquetas)

@@ -3990,7 +3990,9 @@ def pedidos_tabela():
                            ordem=ordem, direcao=direcao, url_com=url_com,
                            colunas=tabela_pedidos.COLUNAS, datas=tabela_pedidos.DATAS,
                            status=tabela_pedidos.STATUS, fluxos=tabela_pedidos.FLUXOS,
-                           formatar=tabela_pedidos.formatar)
+                           formatar=tabela_pedidos.formatar,
+                           pode_agir=session.get("nivel_acesso") in acoes_pedidos.NIVEIS_ACAO,
+                           justificativas=justificativas_sem_canhoto.JUSTIFICATIVAS)
 
 
 @app.route("/pedidos/exportar.csv")
