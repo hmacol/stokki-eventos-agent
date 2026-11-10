@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 
 import requests
 import requests.adapters
+from urllib3.util import parse_url
 
 from homologacao import registro
 
@@ -59,13 +60,24 @@ def _mensagem(alvo):
 # ---------------------------------------------------------------- regras
 
 def _alvo(url):
-    """(esquema, host, porta, caminho) normalizados; porta padrao 80/443 vira None."""
-    partes = urlsplit(url)
-    host = (partes.hostname or "").lower()
-    porta = partes.port  # ValueError em porta invalida
+    """(esquema, host, porta, caminho) normalizados; porta padrao 80/443 vira None.
+
+    Usa o parser do proprio urllib3 (o host em que o adapter conecta). Levanta ValueError
+    (-> bloqueia) para barra invertida, espaco ou controle na URL, ou se urlsplit e urllib3
+    discordarem do host/porta (truque de URL que engana um parser e nao o outro)."""
+    if any(c == "\\" or c.isspace() or ord(c) < 0x20 or ord(c) == 0x7f for c in url):
+        raise ValueError("url suspeita")
+    partes = parse_url(url)
+    host = (partes.host or "").lower()
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    porta = partes.port
+    outra = urlsplit(url)
+    if (outra.hostname or "").lower() != host or outra.port != porta:
+        raise ValueError("parsers discordam")
     if porta in (80, 443):
         porta = None
-    return partes.scheme.lower(), host, porta, partes.path or "/"
+    return (partes.scheme or "").lower(), host, porta, partes.path or "/"
 
 
 def _loopback(host):

@@ -84,6 +84,14 @@ class TestGuardaRede(unittest.TestCase):
             ("GET", "http://0.0.0.0:2785/x", "bloqueia"),
             ("GET", "http://127.0.0.1:2786/x", "bloqueia"),
             ("GET", "https://evil.example/x", "bloqueia"),
+            # parser do urllib3 (onde o adapter conecta) manda; truques de URL bloqueiam
+            ("GET", "http://evil.example\\@api.vuupt.com/x", "bloqueia"),
+            ("GET", "https://api.vuupt.com\\@evil.example/x", "bloqueia"),
+            ("GET", "https://api.vuupt.com /x", "bloqueia"),
+            ("GET", "https://api.vuupt.com\t/x", "bloqueia"),
+            ("GET", "https://api.vuupt.com\n.evil.example/x", "bloqueia"),
+            ("GET", "https://api.vuupt.com\x00/x", "bloqueia"),
+            ("GET", "https://api.vuupt.com:abc/x", "bloqueia"),
             ("GET", "nao e url", "bloqueia"),
             ("GET", "", "bloqueia"),
             ("GET", None, "bloqueia"),
@@ -198,6 +206,15 @@ class TestGuardaRede(unittest.TestCase):
             requests.get("https://viacep.com.br/ws/01001000/json/")
         self.assertEqual(self.send.call_count, 1)
         self.assertTrue(registro.listar_envios()[0]["destino"].startswith("https://evil.example"))
+
+    def test_url_com_barra_invertida_bloqueia_de_ponta_a_ponta(self):
+        # urlsplit ve api.vuupt.com, o urllib3 conectaria em evil.example
+        p = requests.Request("GET", "https://viacep.com.br/").prepare()
+        p.url = "http://evil.example\\@api.vuupt.com/x"
+        with self.assertRaises(guarda.EnvioBloqueadoHomolog):
+            requests.Session().send(p)
+        self.send.assert_not_called()
+        self.assertEqual(registro.listar_envios()[0]["destino"], p.url)
 
     def test_instalar_idempotente(self):
         guarda.instalar()
