@@ -441,6 +441,24 @@ def _ip(host):
         return None
 
 
+def _normalizar(ip):
+    """::ffff:a.b.c.d vira o IPv4. IPv4-compativel (::a.b.c.d), 6to4 e Teredo viram None (recusa)."""
+    if ip.version == 6:
+        if ip.ipv4_mapped is not None:
+            return ip.ipv4_mapped
+        if ip.sixtofour is not None or ip.teredo is not None:
+            return None
+        if int(ip) >> 32 == 0 and not (ip.is_unspecified or ip.is_loopback):
+            return None
+    return ip
+
+
+def _externo(ip):
+    """So endereco publico de verdade entra em _IPS_RESOLVIDOS."""
+    return ip.is_global and not (ip.is_loopback or ip.is_unspecified or ip.is_private or ip.is_link_local
+                                 or ip.is_multicast or ip.is_reserved)
+
+
 def _getaddrinfo_guardado(host, port, *a, **k):
     # IP literal e None (bind) passam: quem decide e o connect
     if host is None or _ip(host) is not None:
@@ -456,8 +474,9 @@ def _getaddrinfo_guardado(host, port, *a, **k):
                 ip = _ip(item[4][0])
             except Exception:
                 ip = None
-            if ip is not None:
-                _IPS_RESOLVIDOS.add(ip)
+            ip = _normalizar(ip) if ip is not None else None
+            if ip is not None and _externo(ip):
+                _IPS_RESOLVIDOS.add(ip)  # loopback/interno resolvido nunca vira liberacao
     return resultado
 
 
@@ -473,7 +492,10 @@ def _conexao_permitida(sock, endereco):
         return False
     if ip is None:
         return False  # nome direto no connect: nao passou pela resolucao guardada
-    if ip.is_loopback:
+    ip = _normalizar(ip)
+    if ip is None:
+        return False  # IPv4 embutido em tunel/compat: na duvida, bloqueia
+    if ip.is_loopback or ip.is_unspecified:  # 0.0.0.0 e :: chegam no localhost no Linux
         return porta == PORTA_FRESHHUB or getattr(_no_socketpair, "ativo", False)
     with _trava_ips:
         return ip in _IPS_RESOLVIDOS

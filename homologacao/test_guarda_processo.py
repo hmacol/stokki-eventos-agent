@@ -32,7 +32,7 @@ _CAMADAS = (["smtp", "imap", "requests"] + (["httpx"] if _TEM_HTTPX else [])
 
 _RAIZ = Path(__file__).resolve().parent.parent
 _SITE = _RAIZ / "homologacao" / "site"
-_IP_FALSO = "203.0.113.10"  # faixa de documentacao: nunca e conectado de verdade
+_IP_FALSO = "93.184.216.34"  # IP publico (so publico entra em _IPS_RESOLVIDOS); connect e mock, nunca conecta
 _CONNECT_REAL = socket.socket.connect
 
 
@@ -193,6 +193,36 @@ class TestGuardaProcesso(unittest.TestCase):
         socket.create_connection(("127.0.0.1", 8100)).close()
         self.assertEqual(self.connect.call_args.args[1], ("127.0.0.1", 8100))
         self.assertEqual(registro.listar_envios()[0]["canal"], "socket")
+
+    def test_socket_loopback_disfarcado(self):
+        casos = ((socket.AF_INET6, ("::ffff:127.0.0.1", 2785)), (socket.AF_INET, ("0.0.0.0", 2785)),
+                 (socket.AF_INET, ("0.0.0.0", 25)), (socket.AF_INET6, ("::", 2785)),
+                 (socket.AF_INET6, ("::127.0.0.1", 2785)), (socket.AF_INET6, ("2002:7f00:1::1", 2785)))
+        for familia, endereco in casos:
+            s = socket.socket(familia)
+            self.addCleanup(s.close)
+            with self.subTest(endereco=endereco), self.assertRaises(ConnectionRefusedError):
+                s.connect(endereco)
+        self.connect.assert_not_called()
+        s6 = socket.socket(socket.AF_INET6)
+        self.addCleanup(s6.close)
+        s6.connect(("::ffff:127.0.0.1", 8100))
+        self.assertEqual(self.connect.call_args.args[1], ("::ffff:127.0.0.1", 8100))
+
+    def test_socket_resolucao_para_endereco_interno_nao_libera(self):
+        for ip in ("0.0.0.0", "::ffff:127.0.0.1", "::", "10.0.0.5", "169.254.169.254", "224.0.0.1"):
+            self.resolver.side_effect = lambda host, port, *a, ip=ip, **k: _resolver_falso(ip, port)
+            socket.getaddrinfo("api.vuupt.com", 443)
+        self.assertEqual(guarda._IPS_RESOLVIDOS, set())
+        casos = ((socket.AF_INET, ("0.0.0.0", 2785)), (socket.AF_INET, ("0.0.0.0", 25)),
+                 (socket.AF_INET6, ("::ffff:127.0.0.1", 2785)), (socket.AF_INET, ("10.0.0.5", 443)),
+                 (socket.AF_INET, ("169.254.169.254", 80)))
+        for familia, endereco in casos:
+            s = socket.socket(familia)
+            self.addCleanup(s.close)
+            with self.subTest(endereco=endereco), self.assertRaises(ConnectionRefusedError):
+                s.connect(endereco)
+        self.connect.assert_not_called()
 
     def test_socket_ip_literal_nao_resolvido(self):
         s = socket.socket()
