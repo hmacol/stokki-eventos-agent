@@ -2728,6 +2728,35 @@ def api_pedidos_acao_reenvio():
     return jsonify(r)
 
 
+def _service_id_do_corpo(body):
+    try:
+        return int(body["service_id"]), None
+    except (KeyError, TypeError, ValueError):
+        return None, (jsonify({"erro": "service_id ausente ou inválido."}), 400)
+
+
+@app.route("/api/pedidos/acao/cancelar-vuupt", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_acao_cancelar_vuupt():
+    """Ação Cancelar Vuupt da tela /pedidos (só a Vuupt; a Stokki é outra ação)."""
+    service_id, erro = _service_id_do_corpo(request.get_json(silent=True) or {})
+    if erro:
+        return erro
+    try:
+        cfg = _carregar_config()
+        r = acoes_pedidos.cancelar_vuupt(
+            service_id, session.get("usuario", ""),
+            token=(cfg.get("vuupt_api") or {}).get("token", ""),
+            agent_lalamove=int((cfg.get("lalamove") or {}).get("agent_id_vuupt") or 0))
+    except Exception as e:
+        logger.exception("cancelar Vuupt pela tela Pedidos falhou")
+        return jsonify({"erro": f"Falha inesperada: {e}"}), 500
+    if not r.get("ok"):
+        return jsonify({"erro": r.get("erro") or "Falha ao cancelar."}), 400
+    return jsonify(r)
+
+
 @app.route("/api/torre/notificar-ocorrencia", methods=["POST"])
 @requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem

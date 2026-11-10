@@ -20,6 +20,7 @@ for _p in (_RAIZ, _AQUI):
 
 from nucleo import banco  # noqa: E402
 import torre_controle  # noqa: E402
+import tratativas  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -148,3 +149,44 @@ def reenviar(service_id: int, motivo: str, usuario: str, *, vuupt=None, stokki=s
     if not r.get("ok"):
         return _erro(r.get("erro") or "Falha ao criar a reentrega.")
     return {"ok": True, "novo_code": r.get("novo_code", ""), "erro": ""}
+
+
+def _codigo_do_servico(service_id: int) -> str:
+    conn = banco.conectar()
+    try:
+        r = conn.execute("SELECT codigo FROM nucleo_pedidos WHERE vuupt_service_id = ?", (service_id,)).fetchone()
+        return r["codigo"] if r else ""
+    finally:
+        conn.close()
+
+
+def _agente_da_ultima_rota(service_id: int):
+    conn = banco.conectar()
+    try:
+        r = conn.execute(
+            "SELECT r.agent_id FROM nucleo_paradas p JOIN nucleo_rotas r ON r.id = p.rota_id "
+            "WHERE p.service_id = ? ORDER BY r.data_rota DESC, r.id DESC LIMIT 1", (service_id,)).fetchone()
+        return r["agent_id"] if r else None
+    finally:
+        conn.close()
+
+
+def cancelar_vuupt(service_id: int, usuario: str, *, token: str, agent_lalamove: int = 0,
+                   cancelar=None) -> dict:
+    """Cancela o servico na Vuupt (tira a parada do rascunho/rota). Recusa motorista a caminho/no local."""
+    if cancelar is None:
+        from roteirizacao.cancelar_servico import cancelar_servico_completo as cancelar
+    r = cancelar(token, service_id)
+    if not r.get("ok"):
+        erro = r.get("erro") or "Falha ao cancelar na Vuupt."
+        if "on_route" in erro or "arrived" in erro:
+            erro = "motorista a caminho ou no local: fale com ele antes de cancelar"
+        return {"ok": False, "ja_estava": False, "erro": erro, "aviso": ""}
+    aviso = ""
+    if agent_lalamove and _agente_da_ultima_rota(service_id) == agent_lalamove:
+        aviso = "Pedido de rota Lalamove: cancelar aqui NÃO cancela na Lalamove, avise por lá."
+    if not r.get("ja_estava"):
+        tratativas.registrar_evento(_codigo_do_servico(service_id), "PEDIDOS", "CANCELADO_MANUAL",
+                                    service_id=service_id,
+                                    texto=f"{usuario}: cancelado na Vuupt pela tela Pedidos")
+    return {"ok": True, "ja_estava": bool(r.get("ja_estava")), "erro": "", "aviso": aviso}
