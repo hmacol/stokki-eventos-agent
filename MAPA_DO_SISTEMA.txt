@@ -91,6 +91,8 @@
  Tela de planejamento (HTML/JS) ............ painel_agentes/templates/planejamento_rotas.html
  Rascunhos de rota (tabelas) ............... painel_agentes/rascunhos_rota.py
  Torre de Controle ......................... painel_agentes/torre_controle.py
+Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/acoes_pedidos.py (rotas POST /api/pedidos/acao/reenvio, .../cancelar-vuupt, .../cancelar-stokki, .../endereco, .../agendar, .../checar-dia-fixo, .../marcar-entregue (multipart, helper _marcar_entregue_pelo_form da Torre), .../validar-lote-foto; GET .../comprovantes?codigo= + /pedidos/canhoto/vuupt/<checklist_id>.pdf + /pedidos/canhoto/manual/<PS-N>.pdf (leitura, canhoto Vuupt/manual/app);
+                                             confere Vuupt na hora, Stokki pela trava sessao_uso)
  Vigia de pedidos abertos (estado/prazo) ... vigia/ (regras.py = prazos; tela /vigia)
  Clientes que exigem agendamento (AGENDA) .. regras/clientes_agendamento.py; fila em
                                              marcar_clientes_agenda.py + tela /clientes-agenda
@@ -708,6 +710,8 @@
  cancelar.py          Cancela pedido de saída por HTTP (POST outbound/cancel +
                       poll cancel/status; motivo >= 15 caracteres). Sem Playwright;
                       só sob a trava de sessao_uso. Descoberto 06/10 (PS-39959).
+                      Parametro prefixo (montar_motivo/cancelar_pedido): quem chama troca o
+                      "Portal Fresh Hub" (tela /pedidos usa "Fresh Hub Pedidos (usuario)").
  trocar_nf.py         Troca o XML da NF de um pedido ("Informar Nota Fiscal":
                       POST outbound/nfe/store com order_id_nfe, action=invoice,
                       nfe=chave, file_nfe). Idempotente: confere chave + cProd do
@@ -924,7 +928,9 @@
  migrar_espelho_15_09.py   Migração única.
  consulta.py               Leitura para a tela /consulta.
  tabela_pedidos.py         Leitura para a tela /pedidos (todos os pedidos, colunas,
-                           filtros por coluna, CSV).
+                           filtros por coluna, CSV). Uma linha por pedido (original
+                           + reentregas); a principal é a reentrega viva com -R maior
+                           que a entregue, senão a entregue, senão a mais recente.
  relatorios_financeiro.py  Cópia dos relatórios Rotas/Serviços da Vuupt.
 
  App do motorista
@@ -1156,7 +1162,12 @@
    /historico-tratativas      historico_tratativas.html
    /consulta (+/rota, /pedido) consulta*.html
    /pedidos (+/exportar.csv)  pedidos_tabela.html (todos os pedidos em tabela, estilo
-                              Serviços da Vuupt; lê só o núcleo; colunas visíveis no localStorage)
+                              Serviços da Vuupt; lê só o núcleo; colunas visíveis no localStorage;
+                              uma linha por pedido, tentativas no selo "N tentativas";
+                              quem age (NIVEIS_ACAO, leitura não) tem caixinha + menu "⋯"
+                              por linha e barra de lote (um fetch por pedido em sequência,
+                              resumo das falhas por código) chamando /api/pedidos/acao/*;
+                              resultado vira selo na linha, sem recarregar)
    /atendimento (+/mobile)    atendimento*.html
    /wms, /wms/estoque         wms.html (PWA), wms_estoque.html
    /etiquetas/fila            fila_etiquetas.html (fila de impressão das etiquetas)

@@ -67,7 +67,8 @@ class Coluna:
 
 COLUNAS = [
     Coluna("data", "Data", "data_referencia", True, "data"),
-    Coluna("codigo", "Código", "codigo", True),
+    Coluna("codigo", "Código", "pedido_base", True),
+    Coluna("codigo_servico", "Código do serviço", "codigo"),
     Coluna("referencia", "Referência", _SQL_REFERENCIA, True),
     Coluna("status", "Status", "status", True, "status"),
     Coluna("status_vuupt", "Status Vuupt",
@@ -110,9 +111,18 @@ COLUNAS = [
 ]
 POR_CHAVE = {c.chave: c for c in COLUNAS}
 
+# Posição do primeiro "-R<dígito>" do código normalizado (reentrega); 9999 se não tem.
+_SQL_POS_R = "MIN(" + ", ".join(
+    f"COALESCE(NULLIF(instr(pe.c, '-R{d}'), 0), 9999)" for d in range(10)) + ")"
+
 # Última parada de cada pedido + a rota dela. ROW_NUMBER e não MAX():
 # quero a LINHA inteira da parada mais recente, não o máximo de cada campo.
-_SQL_BASE = """
+# base_raw é uma linha por SERVIÇO (original e cada reentrega); `base` é uma
+# linha por PEDIDO (Hugo, 10/11): original e reentregas (#PS-1, #PS-1-R1...)
+# viram uma linha só, a da tentativa mais recente -- mesma regra do portal
+# (portal_cliente/dados_cliente.unir_tentativas). A chave do grupo é
+# (empresa, código base): duas empresas com o mesmo código não se misturam.
+_SQL_CTES = f"""
 WITH ult AS (
     SELECT p.codigo AS u_codigo, p.ordem AS ordem, p.situacao AS situacao_parada,
            p.arrived_at AS chegada, p.completed_at AS conclusao, p.motivo_texto AS motivo,
@@ -122,14 +132,44 @@ WITH ult AS (
     FROM nucleo_paradas p JOIN nucleo_rotas r ON r.id = p.rota_id
     WHERE p.codigo IS NOT NULL
 ),
-base AS (
+norm AS (
+    SELECT pe.*, UPPER(LTRIM(pe.codigo, '# ')) AS c FROM nucleo_pedidos pe
+),
+base_raw AS (
     SELECT pe.*, u.*,
+           CASE WHEN {_SQL_POS_R} = 9999 THEN pe.c ELSE substr(pe.c, 1, {_SQL_POS_R} - 1) END AS pedido_base,
+           CASE WHEN {_SQL_POS_R} = 9999 THEN 0
+                ELSE CAST(substr(pe.c, {_SQL_POS_R} + 2) AS INTEGER) END AS sufixo_r,
+           CASE pe.status WHEN 'ENTREGUE' THEN 5 WHEN 'EM_ROTA' THEN 3 WHEN 'ABERTO' THEN 2
+                          WHEN 'INSUCESSO' THEN 1 ELSE 0 END AS peso,
            COALESCE(u.data_rota, date(pe.agendamento_inicio),
                     date(COALESCE(pe.criado_em_provedor, pe.criado_em))) AS data_referencia
-    FROM nucleo_pedidos pe LEFT JOIN ult u ON u.u_codigo = pe.codigo AND u.n = 1
+    FROM norm pe LEFT JOIN ult u ON u.u_codigo = pe.codigo AND u.n = 1
 )
 """
-
+# Linha principal do grupo: 1) reentrega VIVA (aberto/em rota) com -R maior que o da tentativa
+# entregue -- é um reenvio feito depois da entrega e não pode ficar escondido (revisão final, 10/11);
+# 2) entregue (vence tentativa fechada e tentativa mais antiga); depois a data, o peso do status
+# (empate no mesmo dia), o número da reentrega e o código.
+_SQL_BASE = _SQL_CTES + """,
+com_entregue AS (
+    SELECT base_raw.*,
+           MAX(CASE WHEN status = 'ENTREGUE' THEN sufixo_r END)
+               OVER (PARTITION BY COALESCE(sender_id, -1), pedido_base) AS sufixo_r_entregue
+    FROM base_raw
+),
+rank AS (
+    SELECT com_entregue.*,
+           ROW_NUMBER() OVER (PARTITION BY COALESCE(sender_id, -1), pedido_base
+                              ORDER BY COALESCE(status IN ('ABERTO', 'EM_ROTA')
+                                                AND sufixo_r > sufixo_r_entregue, 0) DESC,
+                                       (status = 'ENTREGUE') DESC, data_referencia DESC, peso DESC,
+                                       sufixo_r DESC, codigo) AS rn_grupo,
+           group_concat(codigo, ' ') OVER (PARTITION BY COALESCE(sender_id, -1), pedido_base) AS codigos_grupo
+    FROM com_entregue
+),
+base AS (SELECT * FROM rank WHERE rn_grupo = 1)
+"""
 _RE_DATA_BR = re.compile(r"^(\d{1,2})/(\d{1,2})(?:/(\d{4}))?$")
 
 
@@ -191,7 +231,7 @@ def _where(filtros: dict) -> tuple[str, list]:
     q = (filtros.get("q") or "").strip().lstrip("#").strip()
     if q:
         campos = ["codigo", "titulo", "destinatario_nome", "destinatario_codigo", "remetente_nome",
-                  "endereco", "zona", "motorista"]
+                  "endereco", "zona", "motorista", "codigos_grupo"]
         alvos = [f"%{q}%"]
         digitos = re.sub(r"\D", "", q)
         # CNPJ digitado com pontuação: o núcleo guarda só os dígitos.
@@ -220,7 +260,7 @@ def _order_by(ordem: str | None, direcao: str | None) -> str:
 
 def _select() -> str:
     campos = ", ".join(f"({c.sql}) AS {c.chave}" for c in COLUNAS)
-    return f"SELECT {campos}, rota_id FROM base"
+    return f"SELECT {campos}, rota_id, sender_id, pedido_base, vuupt_service_id FROM base"
 
 
 def listar(filtros: dict, pagina: int = 1, por_pagina: int = POR_PAGINA, ordem: str | None = None,
@@ -237,11 +277,58 @@ def listar(filtros: dict, pagina: int = 1, por_pagina: int = POR_PAGINA, ordem: 
         rows = conn.execute(f"{_SQL_BASE} {_select()}{where}{_order_by(ordem, direcao)} LIMIT ? OFFSET ?",
                             params + [por_pagina, (pagina - 1) * por_pagina]).fetchall()
         inicio, fim = periodo(filtros.get("de"), filtros.get("ate"))
-        return {"linhas": [dict(r) for r in rows], "total": total, "total_caixas": tot["cx"],
+        linhas = [dict(r) for r in rows]
+        hist = tentativas([(l["sender_id"], l["pedido_base"]) for l in linhas], conn)
+        for l in linhas:
+            l["historico"] = hist.get((l["sender_id"], l["pedido_base"]), [])
+        return {"linhas": linhas, "total": total, "total_caixas": tot["cx"],
                 "pagina": pagina, "paginas": paginas, "periodo": {"de": inicio, "ate": fim}}
     finally:
         if fechar:
             conn.close()
+
+
+def tentativas(chaves: list[tuple[int | None, str]], conn: sqlite3.Connection) -> dict:
+    """Histórico de cada pedido (chave = (sender_id, código base)): as paradas
+    que terminaram (entregue, parcial, insucesso -- "não coletado" entra como
+    qualquer insucesso; remanejo/cancelada não é tentativa) mais um item por
+    serviço aberto, em rota ou cancelado, que é o estado atual dele. Em ordem
+    de data."""
+    saida: dict = {}
+    chaves = list(dict.fromkeys((s, b) for s, b in chaves))
+    for i in range(0, len(chaves), 500):
+        bloco = chaves[i:i + 500]
+        alvo = ", ".join(["(?, ?)"] * len(bloco))
+        params = [x for s, b in bloco for x in (-1 if s is None else s, b)]
+        rows = conn.execute(f"""{_SQL_CTES.rstrip()},
+            alvo(sid, pb) AS (VALUES {alvo})
+            SELECT br.sender_id AS sender_id, br.pedido_base AS pedido_base, r.data_rota AS data,
+                   br.codigo AS codigo, p.situacao AS situacao, p.motivo_texto AS motivo,
+                   r.nome AS rota, r.id AS rota_id, r.motorista_nome AS motorista,
+                   p.completed_at AS conclusao
+            FROM base_raw br JOIN alvo ON alvo.sid = COALESCE(br.sender_id, -1) AND alvo.pb = br.pedido_base
+            JOIN nucleo_paradas p ON p.codigo = br.codigo
+            JOIN nucleo_rotas r ON r.id = p.rota_id
+            WHERE p.situacao IN ('ENTREGUE', 'PARCIAL', 'INSUCESSO')
+            UNION ALL
+            SELECT br.sender_id, br.pedido_base, br.data_referencia, br.codigo, br.status, NULL,
+                   CASE WHEN br.status = 'EM_ROTA' THEN br.rota_nome END,
+                   CASE WHEN br.status = 'EM_ROTA' THEN br.rota_id END,
+                   CASE WHEN br.status = 'EM_ROTA' THEN br.motorista END, NULL
+            FROM base_raw br JOIN alvo ON alvo.sid = COALESCE(br.sender_id, -1) AND alvo.pb = br.pedido_base
+            WHERE br.status IN ('ABERTO', 'EM_ROTA', 'CANCELADO')""", params).fetchall()
+        vistos = set()
+        for r in rows:
+            item = {k: r[k] for k in ("data", "codigo", "situacao", "motivo", "rota", "rota_id",
+                                      "motorista", "conclusao")}
+            chave = (r["sender_id"], r["pedido_base"])
+            dedup = (chave, item["data"], item["codigo"], item["situacao"], item["motivo"])
+            if dedup not in vistos:
+                vistos.add(dedup)
+                saida.setdefault(chave, []).append(item)
+    for lista in saida.values():
+        lista.sort(key=lambda t: t["data"] or "")
+    return saida
 
 
 def opcoes(conn: sqlite3.Connection | None = None) -> dict:
@@ -293,15 +380,27 @@ def exportar_csv(filtros: dict, chaves: list[str] | None = None, ordem: str | No
     try:
         where, params = _where(filtros)
         rows = conn.execute(f"{_SQL_BASE} {_select()}{where}{_order_by(ordem, direcao)}", params).fetchall()
+        hist = tentativas([(r["sender_id"], r["pedido_base"]) for r in rows], conn)
     finally:
         if fechar:
             conn.close()
     saida = io.StringIO()
     escritor = csv.writer(saida, delimiter=";")
-    escritor.writerow([c.rotulo for c in colunas])
+    escritor.writerow([c.rotulo for c in colunas] + ["Histórico de tentativas"])
+    texto_livre = Coluna("historico", "Histórico de tentativas", "")
     for r in rows:
-        escritor.writerow([_celula_csv(c, formatar(c.chave, r[c.chave])) for c in colunas])
+        itens = hist.get((r["sender_id"], r["pedido_base"]), [])
+        escritor.writerow([_celula_csv(c, formatar(c.chave, r[c.chave])) for c in colunas]
+                          + [_celula_csv(texto_livre, "; ".join(_texto_tentativa(t) for t in itens))])
     return "﻿" + saida.getvalue()
+
+
+def _texto_tentativa(t: dict) -> str:
+    """"dd/mm Situação (motivo)", o mesmo formato do xlsx do portal."""
+    dia = t["data"] or ""
+    texto = f"{dia[8:10]}/{dia[5:7]} " if len(dia) >= 10 else ""
+    texto += formatar("status", t["situacao"])
+    return texto + (f" ({t['motivo']})" if t["motivo"] else "")
 
 
 def _celula_csv(coluna: Coluna, texto: str) -> str:
