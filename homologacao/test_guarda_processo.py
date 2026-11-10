@@ -308,6 +308,47 @@ class TestGuardaProcesso(unittest.TestCase):
         self.assertEqual(guarda.CAMADAS, [])
 
 
+class TestPlaywrightFalhaFechada(unittest.TestCase):
+    """Pacote playwright presente e um submodulo que nao importa: instalar() levanta e desfaz tudo."""
+
+    def setUp(self):
+        self.addCleanup(guarda.desinstalar)
+        self.smtp_antes = smtplib.SMTP
+
+    def _instalar_com_falha_em(self, quebrado):
+        real = guarda.import_module
+
+        def importar(nome, *a, **k):
+            if nome == quebrado:
+                raise ImportError("quebrado no teste: %s" % nome)
+            return real(nome, *a, **k)
+
+        with mock.patch.object(guarda, "find_spec", return_value=object()), \
+                mock.patch.object(guarda, "import_module", side_effect=importar):
+            with self.assertRaises(RuntimeError) as cm:
+                guarda.instalar()
+        self.assertIn(quebrado, str(cm.exception))
+        self.assertFalse(guarda.INSTALADA)
+        self.assertEqual(guarda.CAMADAS, [])
+        self.assertIs(smtplib.SMTP, self.smtp_antes)
+
+    @unittest.skipUnless(_TEM_PLAYWRIGHT, "playwright ausente")
+    def test_sync_api_quebrado_aborta(self):
+        self._instalar_com_falha_em("playwright.sync_api")
+
+    @unittest.skipUnless(_TEM_PLAYWRIGHT, "playwright ausente")
+    def test_async_api_quebrado_aborta(self):
+        self._instalar_com_falha_em("playwright.async_api")
+        from playwright.sync_api import sync_playwright
+        self.assertEqual(sync_playwright.__module__, "playwright.sync_api")  # o sync trocado foi desfeito
+
+    def test_pacote_ausente_e_camada_opcional(self):
+        with mock.patch.object(guarda, "find_spec", return_value=None):
+            guarda.instalar()  # nada conecta: so troca funcoes, desfeitas no cleanup
+        self.assertTrue(guarda.INSTALADA)
+        self.assertNotIn("playwright", guarda.CAMADAS)
+
+
 class TestSitecustomize(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()

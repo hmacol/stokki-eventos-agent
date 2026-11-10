@@ -59,7 +59,18 @@ class TestGuardaRede(unittest.TestCase):
             ("POST", "http://127.0.0.2:2785/x", "falso_openwa"),
             ("POST", "http://[::1]:2785/x", "falso_openwa"),
             ("GET", "http://127.0.0.1:8100/api/pool", "passa"),
+            ("GET", "http://127.0.0.1:8100/api/pool?data=2026-11-10", "passa"),
+            ("GET", "http://localhost:8100/api/pool", "passa"),
             ("POST", "http://127.0.0.1:8100/api/eventos", "bloqueia"),
+            # GET que marca itens da fila de replica como enviados: consumiria a fila da producao
+            ("GET", "http://127.0.0.1:8100/api/replicacao/pendentes", "bloqueia"),
+            ("GET", "http://127.0.0.1:8100/api/replicacao/pendentes?destino=vuupt&limite=50", "bloqueia"),
+            ("GET", "http://127.0.0.1:8100/api/replicacao/abc/arquivo", "bloqueia"),
+            ("GET", "http://127.0.0.1:8100/api/eventos", "bloqueia"),
+            ("GET", "http://127.0.0.1:8100/", "bloqueia"),
+            ("GET", "http://127.0.0.1:8100/api/pool/", "bloqueia"),
+            ("GET", "http://127.0.0.1:8100/api/pool/../replicacao/pendentes", "bloqueia"),
+            ("GET", "http://127.0.0.1:8100/api/poolx", "bloqueia"),
             ("GET", "http://127.0.0.1:8101/api/pool", "bloqueia"),
             ("POST", "https://oauth2.googleapis.com/token", "passa"),
             ("POST", "https://oauth2.googleapis.com/outra", "bloqueia"),
@@ -199,6 +210,19 @@ class TestGuardaRede(unittest.TestCase):
                 requests.get("https://api.vuupt.com/api/v1/services")
         self.assertEqual(self.send.call_count, 3)
         self.assertGreaterEqual(sum(c.args[0] for c in dormir.call_args_list), 2.0)
+
+    def test_freshhub_so_o_pool_passa(self):
+        from nucleo.freshhub_client import ErroFreshhub, FreshhubClient
+        cli = FreshhubClient("http://127.0.0.1:8100", "fhs-teste")
+        with self.assertRaises(ErroFreshhub):
+            cli.pendentes("vuupt")
+        self.send.assert_not_called()
+        r = registro.listar_envios()[0]
+        self.assertEqual((r["canal"], r["metodo"]), ("freshhub", "GET"))
+        self.assertIn("/api/replicacao/pendentes", r["destino"])
+        self.assertEqual(cli.obter_pool(), {})  # o send 'original' e o mock: nada sai
+        self.assertEqual(self.send.call_count, 1)
+        self.assertTrue(self.send.call_args.args[1].url.startswith("http://127.0.0.1:8100/api/pool"))
 
     def test_redirecionamento_para_host_proibido_bloqueia(self):
         self.send.side_effect = lambda adapter, request, **kw: _resposta(

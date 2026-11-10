@@ -8,6 +8,8 @@ instalar() troca, no processo inteiro, os pontos por onde algo sairia:
 - playwright sync_playwright / async_playwright -> recusa (nenhum Chromium sobe)
 - socket (rede de seguranca) -> getaddrinfo so resolve NOMES_PERMITIDOS; connect/sendto so para
   IP vindo dessa resolucao, AF_UNIX ou loopback:8100. Segura urllib, http.client, urllib3 cru, LMTP, POP3.
+No 8100 (freshhub de producao) o requests so leva GET /api/pool: GET /api/replicacao/pendentes MARCA
+os itens como enviados e consumiria a fila de replica da producao.
 Cada bloqueio vai para registro.registrar_envio. Na duvida, bloqueia.
 Novas camadas entram em _INSTALADORES; _trocar() guarda o original para desinstalar().
 Camada opcional (httpx, playwright) cujo pacote nao existe devolve False e nao entra em CAMADAS.
@@ -16,6 +18,8 @@ import copy
 import email
 import errno
 import imaplib
+from importlib import import_module
+from importlib.util import find_spec
 import ipaddress
 import json
 import smtplib
@@ -49,6 +53,11 @@ _LIBERADOS = {
     "viacep.com.br": ({"GET"}, None),
     "brasilapi.com.br": ({"GET"}, None),
     "api.anthropic.com": (None, None),  # qualquer metodo
+}
+
+# loopback: porta -> (metodos liberados, caminho exigido); a 2785 (OpenWA) vira resposta falsa
+_LIBERADOS_LOOPBACK = {
+    PORTA_FRESHHUB: ({"GET"}, "/api/pool"),  # so o pool (query livre); replicacao/eventos bloqueiam
 }
 
 INTERVALO_VUUPT = 1.0
@@ -106,11 +115,10 @@ def decidir(metodo, url):
         if _loopback(host):
             if porta == PORTA_OPENWA:
                 return "falso_openwa"
-            if porta == PORTA_FRESHHUB and metodo == "GET":
-                return "passa"
-            return "bloqueia"
-        regra = _LIBERADOS.get(host)
-        if regra is None or porta is not None:
+            regra = _LIBERADOS_LOOPBACK.get(porta)
+        else:
+            regra = _LIBERADOS.get(host) if porta is None else None
+        if regra is None:
             return "bloqueia"
         metodos, caminho_exigido = regra
         if metodos is not None and metodo not in metodos:
@@ -401,14 +409,17 @@ def _playwright_recusado(nome):
 
 
 def _instalar_playwright():
-    # troca o atributo do modulo: quem faz `from playwright.sync_api import sync_playwright` depois leva o falso
-    try:
-        import playwright.async_api as async_api
-        import playwright.sync_api as sync_api
-    except ImportError:
+    # troca o atributo do modulo: quem faz `from playwright.sync_api import sync_playwright` depois leva o falso.
+    # Pacote ausente: camada opcional (False). Pacote presente e um submodulo que nao importa: levanta
+    # (instalar() desfaz tudo e o processo nao sobe); nunca segue com um trocado e o outro nao.
+    if find_spec("playwright") is None:
         return False
-    _trocar(sync_api, "sync_playwright", _playwright_recusado("sync_playwright"))
-    _trocar(async_api, "async_playwright", _playwright_recusado("async_playwright"))
+    for submodulo, nome in (("playwright.sync_api", "sync_playwright"), ("playwright.async_api", "async_playwright")):
+        try:
+            modulo = import_module(submodulo)
+        except Exception as erro:
+            raise RuntimeError("playwright instalado, mas %s nao importa: %s" % (submodulo, erro)) from erro
+        _trocar(modulo, nome, _playwright_recusado(nome))
 
 
 # ---------------------------------------------------------------- socket
