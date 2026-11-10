@@ -850,6 +850,23 @@ def remover_parada(rascunho_id: int, service_id: int) -> dict | None:
         conn.close()
 
 
+def _recusar_se_retornando(parada: dict) -> None:
+    """Pedido Retornando (no carro do motorista, editar rota enviada) nao entra em rascunho.
+    Falha ao ler a tabela nao barra (so loga)."""
+    import pedidos_retornando
+    try:
+        conn = pedidos_retornando.conectar(DB_PATH)
+        try:
+            ativo = parada.get("service_id") in pedidos_retornando.ativos(conn)
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        logger.warning(f"nao checou pedido retornando ({e}); seguindo")
+        return
+    if ativo:
+        raise ValueError("Pedido retornando ao galpão: só entra em rota depois do recebimento em /retornos.")
+
+
 def adicionar_parada(rascunho_id: int, parada: dict, ordem: int | None = None):
     """`parada` já vem no formato processado (mesmas chaves de
     _parada_de_servico/planejamento_rotas._servico_para_pool: service_id,
@@ -858,6 +875,7 @@ def adicionar_parada(rascunho_id: int, parada: dict, ordem: int | None = None):
     horario_atendimento_inicio, horario_atendimento_fim) -- o endpoint da
     tela repassa o item do pool tal como já foi carregado no GET
     /planejamento, sem precisar bater na VUUPT de novo."""
+    _recusar_se_retornando(parada)
     conn = _conectar()
     try:
         if ordem is None:

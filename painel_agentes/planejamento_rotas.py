@@ -962,6 +962,15 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     except Exception as e:
         logger.warning(f"Falha ao marcar segurados pro pool (tela segue sem essa marcação): {e}")
 
+    # Retornando (editar rota enviada, 10/11): pedido tirado de rota iniciada,
+    # no carro do motorista. Continua no pool com selo; o front bloqueia o arraste.
+    retornando_por_id: dict[int, dict] = {}
+    try:
+        import pedidos_retornando
+        retornando_por_id = pedidos_retornando.retornando_por_servico(servicos_brutos)
+    except Exception as e:
+        logger.warning(f"Falha ao marcar retornando pro pool (tela segue sem essa marcação): {e}")
+
     # Dia fixo fora do dia (Hugo, 23/09): só rotula; o aviso é do botão
     # "Roteirizar" no front. Vale pro pool e pras paradas já em rascunho.
     fora_dia_fixo: dict[int, str] = {}
@@ -991,6 +1000,9 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         for p in pool:
             p["fora_dia_fixo"] = fora_dia_fixo.get(p["service_id"])
             p["segurado"] = segurados_por_id.get(p["service_id"])
+            r = retornando_por_id.get(p["service_id"])
+            p["retornando"] = ({"motorista_nome": r.get("motorista_nome"), "motivo": r.get("motivo"),
+                                "criado_em": r.get("criado_em")} if r else None)
         marcar_pausados_cliente(pool, servicos_brutos)
         pool.sort(key=lambda p: p["codigo"])
     # Situação na Stokki (Hugo, 19/10): bloco "Em separação na Stokki" do pool
@@ -1252,6 +1264,12 @@ def roteirizar_selecionados(data_alvo: date, service_ids: list[int],
     # Data automática não é agendamento do cliente (marca; não anda a data aqui).
     from datas_automaticas import marcar_datas_automaticas
     marcar_datas_automaticas(selecionados)
+    # Retornando (editar rota enviada, 10/11): no carro do motorista, so entra em rota depois do /retornos.
+    import pedidos_retornando
+    selecionados, retornando = pedidos_retornando.separar_retornando(selecionados)
+    if retornando and not selecionados and not pausados:
+        raise ValueError("Os pedidos selecionados estão retornando ao galpão e só entram em rota "
+                         "depois do recebimento em /retornos.")
     if pausados and not selecionados:
         raise ValueError("Os pedidos selecionados estão em espera a pedido do cliente "
                          "e não entram em rota. Retome a espera antes de roteirizar.")
@@ -1293,6 +1311,7 @@ def roteirizar_selecionados(data_alvo: date, service_ids: list[int],
         "pedidos_roteirizados": sum(len(r["sublote"]) for r in rascunhos_novos),
         "pedidos_indisponiveis": indisponiveis,
         "pedidos_pausados": len(pausados),
+        "pedidos_retornando": len(retornando),
     }
 
 
@@ -1393,6 +1412,18 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict],
     ids_em_rascunho = {p["service_id"] for r in rascunhos for p in r["paradas"]}
     novos = [p for p in paradas if p.get("service_id") not in ids_em_rascunho]
     indisponiveis = len(paradas) - len(novos)
+    # Retornando (editar rota enviada, 10/11): volta como nao colocado, com o motivo.
+    import pedidos_retornando
+    retornando_ids = pedidos_retornando.retornando_por_servico([{"id": p.get("service_id")} for p in novos])
+    retornando_info = []
+    if retornando_ids:
+        retornando_info = [{"codigo": p.get("codigo", ""),
+                            "motivo": f"Retornando — no carro de {retornando_ids[p['service_id']].get('motorista_nome') or '?'}"}
+                           for p in novos if p.get("service_id") in retornando_ids]
+        novos = [p for p in novos if p.get("service_id") not in retornando_ids]
+    if not novos and retornando_info:
+        return {"alocados": [], "orfaos": [r["codigo"] for r in retornando_info], "retornando": retornando_info,
+                "pedidos_indisponiveis": indisponiveis, "rotas_afetadas": 0}
     if not novos:
         raise ValueError("Todos os pedidos selecionados já estão em algum rascunho. Atualize a página.")
 
@@ -1528,9 +1559,11 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict],
 
     if orfaos:
         logger.info(f"Incrementar rascunhos: {len(orfaos)} pedido(s) sem rascunho compatível: {orfaos}")
+    orfaos = orfaos + [r["codigo"] for r in retornando_info]
     return {
         "alocados": alocados,
         "orfaos": orfaos,
+        "retornando": retornando_info,
         "pedidos_indisponiveis": indisponiveis,
         "rotas_afetadas": len(rotas_afetadas),
     }

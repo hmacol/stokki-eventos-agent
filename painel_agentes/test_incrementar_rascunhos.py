@@ -99,6 +99,18 @@ class IncrementarRascunhosTestCase(unittest.TestCase):
         self.adicionar.assert_called_once_with(1, pedido, None)
         self.otimizar.assert_called_once_with(1)
 
+    def test_incrementar_selecionados_pula_retornando(self):
+        # Editar rota enviada (10/11): pedido no carro do motorista nao entra em rascunho
+        self.rascunhos = [_rascunho(1, "#1 Norte", [_parada(11, *ZONA_NORTE)])]
+        pedido = _parada(99, -23.47, -46.61)
+        ativo = {99: {"motorista_nome": "Joao", "motivo": "x", "criado_em": "2026-11-10 10:00:00"}}
+        with mock.patch("pedidos_retornando._ativos_ou_vazio", return_value=ativo):
+            r = pr.incrementar_rascunhos_com_selecionados(DATA, [pedido, _parada(98, -23.47, -46.61)])
+        self.assertEqual([a["codigo"] for a in r["alocados"]], ["#PS-98"])
+        self.assertEqual(r["orfaos"], ["#PS-99"])
+        self.assertEqual(r["retornando"], [{"codigo": "#PS-99", "motivo": "Retornando — no carro de Joao"}])
+        self.adicionar.assert_called_once()
+
     def test_modo_teste_decide_mas_nao_grava(self):
         # incrementar_rotas.py --modo-teste (05/10)
         self.rascunhos = [_rascunho(1, "#1 Norte", [_parada(11, *ZONA_NORTE)])]
@@ -204,6 +216,22 @@ class IncrementarRascunhosTestCase(unittest.TestCase):
         ]
         r = pr.incrementar_rascunhos_com_selecionados(DATA, [_parada(99, None, None)])
         self.assertEqual([a["rascunho_id"] for a in r["alocados"]], [2])
+
+
+class AdicionarParadaRetornandoTestCase(unittest.TestCase):
+    def test_adicionar_parada_recusa_retornando(self):
+        import tempfile
+        import pedidos_retornando
+        with tempfile.TemporaryDirectory() as d:
+            db = Path(d) / "t.db"
+            conn = pedidos_retornando.conectar(db)
+            pedidos_retornando.marcar(conn, service_id=99, codigo="#PS-99", vuupt_route_id=1, agent_id=2,
+                                      motorista_nome="Joao", motivo="x", observacao=None, usuario="t")
+            conn.close()
+            with mock.patch.object(rascunhos_rota, "DB_PATH", db):
+                with self.assertRaises(ValueError) as ctx:
+                    rascunhos_rota.adicionar_parada(1, _parada(99, -23.47, -46.61))
+        self.assertEqual(str(ctx.exception), "Pedido retornando ao galpão: só entra em rota depois do recebimento em /retornos.")
 
 
 if __name__ == "__main__":
