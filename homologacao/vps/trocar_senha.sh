@@ -3,6 +3,7 @@
 # Roda como root na VPS. A senha vai SO para /root/homolog-senha-caddy.txt (600);
 # este script nunca a imprime. No .caddy fica so o hash bcrypt.
 set -euo pipefail
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/comum.sh"
 
 CADDYFILE=/etc/caddy/Caddyfile
 ARQ_CADDY=/etc/caddy/legado-homolog.caddy

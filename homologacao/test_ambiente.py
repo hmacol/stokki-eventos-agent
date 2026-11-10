@@ -77,13 +77,15 @@ class TestAmbiente(unittest.TestCase):
                 self.assertEqual(ambiente.cnpjs_portal_permitidos(), {"12345678000195"})
 
     def test_informacao_versao_sem_arquivos_devolve_interrogacao(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HOMOLOG_ESTADO", None)
             info = ambiente.informacao_versao(Path(d))
         self.assertEqual(info, {"ramo": "?", "commit": "?", "master": "?",
                                 "quando": "?", "copia": "?"})
 
     def test_informacao_versao_le_arquivos(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HOMOLOG_ESTADO", None)
             (Path(d) / "dados").mkdir()
             (Path(d) / "dados" / "HOMOLOG_VERSAO").write_text(
                 '{"ramo": "r", "commit": "c"}', encoding="utf-8")
@@ -92,6 +94,20 @@ class TestAmbiente(unittest.TestCase):
         self.assertEqual(info["ramo"], "r")
         self.assertEqual(info["master"], "?")
         self.assertEqual(info["copia"], "10/11")
+
+    def test_informacao_versao_le_da_pasta_de_estado_quando_definida(self):
+        with tempfile.TemporaryDirectory() as raiz, tempfile.TemporaryDirectory() as estado:
+            (Path(raiz) / "dados").mkdir()
+            (Path(raiz) / "dados" / "HOMOLOG_VERSAO").write_text(
+                '{"ramo": "do-dados"}', encoding="utf-8")
+            (Path(estado) / "HOMOLOG_VERSAO").write_text(
+                '{"ramo": "do-estado", "commit": "c1"}', encoding="utf-8")
+            (Path(estado) / "HOMOLOG_COPIA").write_text("11/11 08:00\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"HOMOLOG_ESTADO": estado}):
+                info = ambiente.informacao_versao(Path(raiz))
+        self.assertEqual(info["ramo"], "do-estado")
+        self.assertEqual(info["commit"], "c1")
+        self.assertEqual(info["copia"], "11/11 08:00")
 
 
 if __name__ == "__main__":

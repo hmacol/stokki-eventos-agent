@@ -1605,8 +1605,9 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
      ... homolog ok            (OK do Hugo no HOMOLOG_HISTORICO)
      ... homolog recopiar --confirmo-recopia   (só com pedido do Hugo)
      ... homolog trocar-senha  /  homolog criar (1 vez, exige o registro A)
-   Estado: dados/HOMOLOG_VERSAO (ramo, commit, master, quando, quem),
-   HOMOLOG_HISTORICO (SUBIU/OK), HOMOLOG_COPIA (data da cópia).
+   Estado (só do root): /var/lib/stokki-homolog/HOMOLOG_VERSAO (ramo, commit,
+   master, quando, quem), HOMOLOG_HISTORICO (SUBIU/OK), HOMOLOG_COPIA (data da
+   cópia), HOMOLOG_REQ_SHA. Os units leem pela variável HOMOLOG_ESTADO.
    Senha do Caddy: só em /root/homolog-senha-caddy.txt, nunca no chat.
    "Deploy" continua sendo produção; subir pra homologação é comando próprio.
 
@@ -1697,9 +1698,14 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
    A regra de saída do usuário homolog fica em /etc/nftables.d/homolog.nft,
    carregada por esse unit próprio: NÃO ligar o nftables.service (o
    /etc/nftables.conf do Ubuntu faz flush ruleset e apaga as regras do Docker).
-   O .git de /opt/stokki-homolog é do root (700); git lá só como root com
-   -c safe.directory=/opt/stokki-homolog. Recópia troca o banco da
-   homologação inteiro (guarda 1 geração em dados/dados.db.anterior).
+   Fronteira de privilégio (homologacao/vps/comum.sh): código, venv e scripts
+   de /opt/stokki-homolog são do root (sem escrita p/ grupo/outros; .git 700);
+   só as pastas de dados (dados/, roteirizacao/dados/, painel_agentes/dados/...),
+   config.yaml e a conta de serviço são do homolog. O root nunca executa nem
+   grava através do que o homolog pode mudar (a cópia monta pasta nova e troca;
+   ajudantes com /usr/bin/python3 -I). Não dar chown -R homolog na árvore.
+   Recópia troca o banco da homologação inteiro (guarda 1 geração em
+   dados/dados.db.anterior).
  - executor.py mata processos com taskkill (Windows); na VPS só o processo
    principal é encerrado.
  - Descrições desatualizadas em units: stokki-sequencia-tarde.service cita

@@ -16,7 +16,16 @@ import sys
 
 import yaml
 
-PADRAO_SEGREDO = re.compile(r"senha|token|secret|api_key|api_secret|password|credenciais", re.I)
+# pin/cpf/pass so como palavra (inicio/fim ou separador): dentro de outra palavra
+# ("Pinheiros", "mapping", "passo") nao e segredo e sumir com a chave mudaria o comportamento.
+PADRAO_SEGREDO = re.compile(
+    r"senha|token|secret|api_key|api_secret|password|passwd|passphrase|credenciais|cookie|dsn"
+    r"|private|(?<![a-z])(?:pin|cpf|pass)(?![a-z])", re.I)
+# nomes que casam com o padrao mas nao sao segredo
+NAO_SEGREDOS = {"max_tokens"}
+# valor com credencial embutida na URL (esquema://usuario[:senha]@...)
+URL_COM_CREDENCIAL = re.compile(r"^[a-z][a-z0-9+.-]*://[^/?#\s@]+@", re.I)
+VALOR_REDIGIDO = "HOMOLOG-REMOVIDO"
 SEGREDOS_LIBERADOS = ["vuupt_api.token", "google_maps.api_key", "anthropic.api_key",
                       "freshhub_api.token", "gcs.credenciais_json"]
 URL_PRODUCAO = "https://app.freshhub.com.br/"
@@ -25,18 +34,34 @@ CHAVE_FALSA_OPENWA = "HOMOLOG-SEM-CHAVE"
 CNPJS_PERMITIDOS = ["00000000000191"]
 
 
+def _e_segredo(chave) -> bool:
+    nome = str(chave)
+    return nome.lower() not in NAO_SEGREDOS and bool(PADRAO_SEGREDO.search(nome))
+
+
+def _url_com_credencial(valor) -> bool:
+    return isinstance(valor, str) and bool(URL_COM_CREDENCIAL.match(valor.strip()))
+
+
 def _remover_segredos(no, caminho, removidas):
     if isinstance(no, dict):
         for chave in list(no):
             nome = f"{caminho}.{chave}" if caminho else str(chave)
-            if PADRAO_SEGREDO.search(str(chave)):
+            if _e_segredo(chave):
                 del no[chave]
+                removidas.append(nome)
+            elif _url_com_credencial(no[chave]):
+                no[chave] = VALOR_REDIGIDO
                 removidas.append(nome)
             else:
                 _remover_segredos(no[chave], nome, removidas)
     elif isinstance(no, list):
         for i, item in enumerate(no):
-            _remover_segredos(item, f"{caminho}[{i}]", removidas)
+            if _url_com_credencial(item):
+                no[i] = VALOR_REDIGIDO
+                removidas.append(f"{caminho}[{i}]")
+            else:
+                _remover_segredos(item, f"{caminho}[{i}]", removidas)
 
 
 def _trocar_url_base(no):

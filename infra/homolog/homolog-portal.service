@@ -13,6 +13,8 @@ UMask=0027
 WorkingDirectory=/opt/stokki-homolog/portal_cliente
 Environment=FRESH_AMBIENTE=homolog
 Environment=PYTHONPATH=/opt/stokki-homolog/homologacao/site
+# estado da bancada (ramo, commit, data da copia): pasta so do root
+Environment=HOMOLOG_ESTADO=/var/lib/stokki-homolog
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONIOENCODING=utf-8
 # trava que nao depende do codigo do ramo: sem a guarda (SMTP falso) o servico nao sobe

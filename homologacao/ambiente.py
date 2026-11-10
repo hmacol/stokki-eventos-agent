@@ -63,17 +63,24 @@ def cnpjs_portal_permitidos() -> set:
     return set(_cache_cnpjs)
 
 
+def _pasta_estado(raiz: Path) -> Path:
+    # Na VPS o estado da bancada fica numa pasta so do root (HOMOLOG_ESTADO, definido nos units)
+    estado = os.environ.get("HOMOLOG_ESTADO", "").strip()
+    return Path(estado) if estado else raiz / "dados"
+
+
 def informacao_versao(raiz: Path) -> dict:
     info = {"ramo": "?", "commit": "?", "master": "?", "quando": "?", "copia": "?"}
+    pasta = _pasta_estado(raiz)
     try:
-        dados = json.loads((raiz / "dados" / "HOMOLOG_VERSAO").read_text(encoding="utf-8"))
+        dados = json.loads((pasta / "HOMOLOG_VERSAO").read_text(encoding="utf-8"))
         for k in ("ramo", "commit", "master", "quando"):
             if dados.get(k):
                 info[k] = dados[k]
     except Exception:
         pass
     try:
-        texto = (raiz / "dados" / "HOMOLOG_COPIA").read_text(encoding="utf-8").strip()
+        texto = (pasta / "HOMOLOG_COPIA").read_text(encoding="utf-8").strip()
         if texto:
             info["copia"] = texto
     except Exception:

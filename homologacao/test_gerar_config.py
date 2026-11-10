@@ -39,6 +39,45 @@ class TestGerar(unittest.TestCase):
         self.assertEqual(cfg["contas"], [{"login": "a"}])
         self.assertIn("contas[0].password", removidas)
 
+    def test_remove_cpf_e_pin_do_freshhub(self):
+        prod = {"freshhub": {"cpf": "11122233344", "pin": "1234", "url": "https://x.supabase.co"}}
+        cfg, removidas, _ = _gerar(prod)
+        self.assertEqual(cfg["freshhub"], {"url": "https://x.supabase.co"})
+        self.assertIn("freshhub.cpf", removidas)
+        self.assertIn("freshhub.pin", removidas)
+
+    def test_remove_cookie_dsn_private_e_pass(self):
+        prod = {"a": {"cookie_sessao": "c", "sentry_dsn": "d", "private_key": "k",
+                      "smtp_pass": "p", "pin_padrao": "123456"}}
+        cfg, removidas, _ = _gerar(prod)
+        self.assertEqual(cfg["a"], {})
+        self.assertEqual(len(removidas), 5)
+
+    def test_nomes_curtos_so_casam_como_palavra(self):
+        # pin/cpf/pass dentro de outra palavra (bairro, mapping, passo) nao e segredo
+        prod = {"zonas": {"Pinheiros": 1, "mapping": 2, "passo": 3, "shipping": 4}}
+        cfg, removidas, _ = _gerar(prod)
+        self.assertEqual(cfg["zonas"], prod["zonas"])
+        self.assertEqual(removidas, [])
+
+    def test_max_tokens_nao_e_segredo(self):
+        prod = {"anthropic": {"api_key": "k", "max_tokens": 1024}}
+        cfg, removidas, _ = _gerar(prod)
+        self.assertEqual(cfg["anthropic"]["max_tokens"], 1024)
+        self.assertNotIn("anthropic.max_tokens", removidas)
+
+    def test_valor_url_com_credencial_e_redigido(self):
+        prod = {"x": {"url": "https://u:p@host/"}, "y": ["postgres://usr:pw@db:5432/n", "ok"],
+                "z": {"url": "https://host/caminho"}}
+        cfg, removidas, _ = _gerar(prod)
+        texto = yaml.safe_dump(cfg)
+        self.assertNotIn("u:p@", texto)
+        self.assertNotIn("usr:pw@", texto)
+        self.assertEqual(cfg["y"][1], "ok")
+        self.assertEqual(cfg["z"]["url"], "https://host/caminho")
+        self.assertIn("x.url", removidas)
+        self.assertIn("y[0]", removidas)
+
     def test_nao_altera_o_dicionario_de_producao(self):
         prod = {"email": {"senha_app": "x"}}
         _gerar(prod)

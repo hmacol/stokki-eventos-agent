@@ -4,22 +4,20 @@
 # homologacao em dados/dados.db.anterior (uma geracao so) e chama o copiar_dados.sh.
 set -euo pipefail
 
-HML=/opt/stokki-homolog
-DB="$HML/dados/dados.db"
-
 if [ "${1:-}" != "--confirmo-recopia" ]; then
-	echo "recusado: a recopia sobrescreve o banco da homologacao; rode com --confirmo-recopia (so com pedido do Hugo)" >&2
+	echo "recusado: a recopia substitui o banco da homologacao; rode com --confirmo-recopia (so com pedido do Hugo)" >&2
 	exit 2
 fi
-[ "$(id -u)" -eq 0 ] || { echo "erro: rode como root" >&2; exit 1; }
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/comum.sh"
+[ "$(id -u)" -eq 0 ] || erro "rode como root"
 
 echo "== parar os servicos da homologacao"
-systemctl stop homolog-painel homolog-portal
+systemctl stop "${UNITS[@]}"
 
-echo "== guardar o banco atual em dados.db.anterior"
-if [ -f "$DB" ]; then
-	# pela API de backup, como homolog (pega o que estiver no WAL; nao cria arquivo de root)
-	(cd / && sudo -u homolog "$HML/venv/bin/python" -I - "$DB" "$DB.anterior.novo" <<'PY'
+echo "== guardar o banco atual em dados.db.anterior (como homolog, dentro da pasta dele)"
+if [ -f "$HML/dados/dados.db" ]; then
+	# API de backup pega o que estiver no WAL; roda como homolog: o root nao grava em dados/
+	(cd / && sudo -u homolog "$PY_SISTEMA" -I - "$HML/dados/dados.db" "$HML/dados/dados.db.anterior.novo" <<'PY'
 import sqlite3
 import sys
 
@@ -30,9 +28,9 @@ destino.close()
 origem.close()
 PY
 )
-	mv -f "$DB.anterior.novo" "$DB.anterior"
+	(cd / && sudo -u homolog mv -f -T -- "$HML/dados/dados.db.anterior.novo" "$HML/dados/dados.db.anterior")
 else
 	echo "(sem banco atual)"
 fi
 
-bash "$HML/homologacao/vps/copiar_dados.sh"
+rodar_script copiar_dados.sh
