@@ -40,6 +40,11 @@ done
 [ -x /usr/sbin/nft ] || falha "/usr/sbin/nft nao existe (o homolog-nft.service usa esse caminho)"
 [ -x /usr/bin/python3 ] || falha "/usr/bin/python3 nao existe (ajudantes do root usam o python do sistema)"
 
+echo "== conferir protecoes do kernel (hardlink/symlink de outro usuario)"
+for chave in fs.protected_hardlinks fs.protected_symlinks; do
+	[ "$(sysctl -n "$chave" 2>/dev/null || true)" = 1 ] || falha "$chave precisa ser 1"
+done
+
 echo "== python 3.11+ para o venv"
 if [ -x /usr/bin/python3.11 ]; then
 	PYBASE=/usr/bin/python3.11
@@ -107,9 +112,14 @@ normalizar_donos
 gravar_estado HOMOLOG_REQ_SHA "$(sha256sum "$HML/requirements.txt" | cut -d' ' -f1)"
 
 echo "== config da homologacao (sem segredos; imprime so nomes de chaves)"
-# python do venv de PRODUCAO, isolado (-I -B), rodando o arquivo do checkout do root
+# python do venv de PRODUCAO, isolado (-I -B), rodando o arquivo do checkout do root.
+# O config e a conta de servico da producao (pasta do www-data) sao COPIADOS sem seguir link
+# para uma pasta temporaria do root; ninguem le direto o caminho que o www-data controla.
 exigir_de_root "$HML/homologacao" "$HML/homologacao/gerar_config.py"
-GCS_PROD=$(cd / && "$PROD/venv/bin/python" -I -B - "$PROD/config.yaml" <<'PY'
+TMPD=$(mktemp -d)
+trap 'rm -rf "$TMPD"' EXIT
+copiar_sem_link "$PROD/config.yaml" "$TMPD/prod.yaml" www-data,root
+GCS_PROD=$(cd / && "$PROD/venv/bin/python" -I -B - "$TMPD/prod.yaml" <<'PY'
 import sys
 import yaml
 
@@ -122,18 +132,22 @@ PY
 GCS_HML="$HML/gcs-service-account.json"
 if [ -n "$GCS_PROD" ]; then
 	case "$GCS_PROD" in /*) ;; *) GCS_PROD="$PROD/$GCS_PROD" ;; esac
-	[ -f "$GCS_PROD" ] || falha "arquivo da conta de servico do GCS nao encontrado"
-	install -m 600 -o homolog -g homolog "$GCS_PROD" "$GCS_HML"
+	GCS_REAL=$(readlink -f -- "$GCS_PROD" || true)
+	case "$GCS_REAL" in
+		"$PROD"/*) ;;
+		*) falha "conta de servico do GCS fora de $PROD ou inexistente" ;;
+	esac
+	copiar_sem_link "$GCS_REAL" "$TMPD/gcs.json" www-data,root
+	install -m 600 -o homolog -g homolog "$TMPD/gcs.json" "$GCS_HML"
+	unset GCS_REAL
 else
 	echo "(producao sem gcs.credenciais_json)"
 fi
 unset GCS_PROD
-CFG_TMP=$(mktemp)
-trap 'rm -f "$CFG_TMP"' EXIT
 (cd / && "$PROD/venv/bin/python" -I -B "$HML/homologacao/gerar_config.py" \
-	--origem "$PROD/config.yaml" --destino "$CFG_TMP" --caminho-gcs "$GCS_HML")
-install -m 600 -o homolog -g homolog "$CFG_TMP" "$HML/config.yaml"
-rm -f "$CFG_TMP"
+	--origem "$TMPD/prod.yaml" --destino "$TMPD/homolog.yaml" --caminho-gcs "$GCS_HML")
+install -m 600 -o homolog -g homolog "$TMPD/homolog.yaml" "$HML/config.yaml"
+rm -rf "$TMPD"
 
 echo "== copia dos dados"
 if [ -f "$HML/dados/dados.db" ]; then
@@ -174,7 +188,7 @@ desfazer_caddy() {
 }
 # qualquer saida antes do fim do passo (erro, exit de funcao, sinal) desfaz o Caddy
 CADDY_OK=0
-trap 'if [ "$CADDY_OK" = 0 ]; then desfazer_caddy; fi; rm -f "$CFG_TMP" "$VOLTA_CF" "$VOLTA_LH"' EXIT
+trap 'if [ "$CADDY_OK" = 0 ]; then desfazer_caddy; fi; rm -f "$VOLTA_CF" "$VOLTA_LH"' EXIT
 
 echo "== Caddy: $ARQ_CADDY e import no fim do Caddyfile"
 install -m 644 -o root -g root "$HML/infra/homolog/legado-homolog.caddy" "$ARQ_CADDY"

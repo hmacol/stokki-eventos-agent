@@ -16,11 +16,16 @@ import sys
 
 import yaml
 
-# pin/cpf/pass so como palavra (inicio/fim ou separador): dentro de outra palavra
-# ("Pinheiros", "mapping", "passo") nao e segredo e sumir com a chave mudaria o comportamento.
+# Palavras longas: basta aparecer em qualquer parte do nome.
 PADRAO_SEGREDO = re.compile(
     r"senha|token|secret|api_key|api_secret|password|passwd|passphrase|credenciais|cookie|dsn"
-    r"|private|(?<![a-z])(?:pin|cpf|pass)(?![a-z])", re.I)
+    r"|private", re.I)
+# Palavras curtas: so como pedaco inteiro do nome (separado por _, -, digito ou corcova do
+# camelCase), com plural. Dentro de outra palavra ("Pinheiros", "mapping", "passo") nao e
+# segredo, e sumir com a chave mudaria o comportamento.
+PEDACOS_SEGREDO = {"pin", "pins", "cpf", "cpfs", "pass", "passes"}
+_CORCOVAS = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+")
+_SEPARADORES = re.compile(r"[^A-Za-z]+")
 # nomes que casam com o padrao mas nao sao segredo
 NAO_SEGREDOS = {"max_tokens"}
 # valor com credencial embutida na URL (esquema://usuario[:senha]@...)
@@ -34,9 +39,22 @@ CHAVE_FALSA_OPENWA = "HOMOLOG-SEM-CHAVE"
 CNPJS_PERMITIDOS = ["00000000000191"]
 
 
+def _pedacos(nome: str) -> set:
+    # duas leituras, para falhar fechado: so pelos separadores ("CPFs" -> cpfs) e
+    # tambem pelas corcovas do camelCase ("userPin" -> user, pin)
+    pedacos = set()
+    for parte in _SEPARADORES.split(nome):
+        if parte:
+            pedacos.add(parte.lower())
+            pedacos.update(p.lower() for p in _CORCOVAS.findall(parte))
+    return pedacos
+
+
 def _e_segredo(chave) -> bool:
     nome = str(chave)
-    return nome.lower() not in NAO_SEGREDOS and bool(PADRAO_SEGREDO.search(nome))
+    if nome.lower() in NAO_SEGREDOS:
+        return False
+    return bool(PADRAO_SEGREDO.search(nome)) or not PEDACOS_SEGREDO.isdisjoint(_pedacos(nome))
 
 
 def _url_com_credencial(valor) -> bool:

@@ -60,6 +60,19 @@ class TestGerar(unittest.TestCase):
         self.assertEqual(cfg["zonas"], prod["zonas"])
         self.assertEqual(removidas, [])
 
+    def test_plural_e_camelcase_tambem_saem(self):
+        chaves = ["cpfs", "pins", "login_cpfs", "pinCode", "userPin", "motoristaCpf", "CPFs", "pin2"]
+        cfg, removidas, _ = _gerar({"a": {c: "x" for c in chaves}})
+        self.assertEqual(cfg["a"], {})
+        self.assertEqual(sorted(removidas), sorted("a." + c for c in chaves))
+
+    def test_palavras_que_contem_pin_cpf_pass_ficam(self):
+        prod = {"z": {"Pinheiros": 1, "mapping": 2, "shipping": 3, "passo": 4, "max_tokens": 5,
+                      "spinner": 6, "passageiro": 7}}
+        cfg, removidas, _ = _gerar(prod)
+        self.assertEqual(cfg["z"], prod["z"])
+        self.assertEqual(removidas, [])
+
     def test_max_tokens_nao_e_segredo(self):
         prod = {"anthropic": {"api_key": "k", "max_tokens": 1024}}
         cfg, removidas, _ = _gerar(prod)

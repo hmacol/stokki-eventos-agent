@@ -15,6 +15,7 @@ set -euo pipefail
 [ "$(id -u)" -eq 0 ] || erro "rode como root"
 id -u homolog >/dev/null 2>&1 || erro "usuario homolog nao existe (rode o criar.sh)"
 [ -d "$HML/.git" ] || erro "$HML nao existe (rode o criar.sh)"
+exigir_protecoes_kernel
 preparar_estado
 
 units_instalados() {
@@ -55,7 +56,6 @@ if not ok:
 sys.exit(0 if ok else 1)
 PY
 )
-[ -f "$TMP" ] && [ ! -L "$TMP" ] || erro "copia do banco sumiu ou virou link"
 
 echo "== montar dados/ e roteirizacao/dados/ novos (pasta do root; sem banco, logs, sessoes, contas de servico, backups)"
 EXCLUI=(
@@ -75,12 +75,14 @@ if [ -d "$PROD/roteirizacao/dados" ]; then
 else
 	echo "(producao sem roteirizacao/dados)"
 fi
-mv -T -- "$TMP" "$NOVO_D/dados.db"
+# banco entregue pelo www-data e .anterior do homolog: COPIA para arquivo novo do root (sem
+# seguir link, arquivo comum, 1 link so, dono certo). Na pasta nova so ha arquivo criado pelo
+# root, entao o chown -R abaixo nunca entrega um hardlink plantado por outro usuario.
+copiar_sem_link "$TMP" "$NOVO_D/dados.db" www-data
+rm -f -- "$TMP"
 TMP=""
-chmod 600 "$NOVO_D/dados.db"
-# a geracao guardada pelo recopiar.sh passa para a pasta nova (mv do item, nunca atraves dele)
-if [ -f "$HML/dados/dados.db.anterior" ] && [ ! -L "$HML/dados/dados.db.anterior" ]; then
-	mv -T -- "$HML/dados/dados.db.anterior" "$NOVO_D/dados.db.anterior"
+if [ -e "$HML/dados/dados.db.anterior" ] || [ -L "$HML/dados/dados.db.anterior" ]; then
+	copiar_sem_link "$HML/dados/dados.db.anterior" "$NOVO_D/dados.db.anterior" homolog
 fi
 chown -R -h homolog:homolog "$NOVO_D" "$NOVO_R"
 chmod 750 "$NOVO_D" "$NOVO_R"

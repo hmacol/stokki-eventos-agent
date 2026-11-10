@@ -51,6 +51,40 @@ rodar_script() {
 	bash "$script" "$@"
 }
 
+# O kernel precisa barrar hardlink/symlink de outro usuario em pasta compartilhada.
+exigir_protecoes_kernel() {
+	local chave
+	for chave in fs.protected_hardlinks fs.protected_symlinks; do
+		[ "$(sysctl -n "$chave" 2>/dev/null || true)" = 1 ] || erro "$chave precisa ser 1"
+	done
+}
+
+# copiar_sem_link <origem> <destino> <dono[,dono...] aceito(s) da origem>
+# Arquivo entregue por outro usuario (www-data, homolog): abre sem seguir link, exige arquivo
+# comum, 1 link so e um dos donos aceitos, e COPIA o conteudo para um arquivo novo do root
+# (600, O_EXCL). O root nunca da chown/mv no arquivo que outro usuario entregou.
+copiar_sem_link() {
+	"$PY_SISTEMA" -I - "$1" "$2" "$3" <<'PY'
+import os
+import pwd
+import shutil
+import stat
+import sys
+
+origem, destino, donos = sys.argv[1:]
+uids = {pwd.getpwnam(d).pw_uid for d in donos.split(",")}
+fd = os.open(origem, os.O_RDONLY | os.O_NOFOLLOW)
+st = os.fstat(fd)
+if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_uid not in uids:
+    sys.exit("erro: %s nao e arquivo comum de %s com 1 link so" % (origem, donos))
+saida = os.open(destino, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+with os.fdopen(fd, "rb") as f, os.fdopen(saida, "wb") as g:
+    shutil.copyfileobj(f, g, 1024 * 1024)
+    g.flush()
+    os.fsync(g.fileno())
+PY
+}
+
 preparar_estado() {
 	[ ! -L "$ESTADO" ] || erro "$ESTADO e link simbolico"
 	mkdir -p "$ESTADO"

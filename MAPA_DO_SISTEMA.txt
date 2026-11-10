@@ -1606,8 +1606,10 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
      ... homolog recopiar --confirmo-recopia   (só com pedido do Hugo)
      ... homolog trocar-senha  /  homolog criar (1 vez, exige o registro A)
    Estado (só do root): /var/lib/stokki-homolog/HOMOLOG_VERSAO (ramo, commit,
-   master, quando, quem), HOMOLOG_HISTORICO (SUBIU/OK), HOMOLOG_COPIA (data da
-   cópia), HOMOLOG_REQ_SHA. Os units leem pela variável HOMOLOG_ESTADO.
+   master, checkout = HEAD depois da mescla, quando, quem), HOMOLOG_HISTORICO
+   (SUBIU/OK), HOMOLOG_COPIA (data da cópia), HOMOLOG_REQ_SHA e EM_TROCA (subida
+   em andamento ou que falhou: o "ok" recusa). Os units leem pela variável
+   HOMOLOG_ESTADO.
    Senha do Caddy: só em /root/homolog-senha-caddy.txt, nunca no chat.
    "Deploy" continua sendo produção; subir pra homologação é comando próprio.
 

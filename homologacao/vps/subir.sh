@@ -5,6 +5,8 @@
 # Saidas: 0 ok; 1 erro; 3 bancada ocupada por outro ramo (o vps_ops pergunta e chama de
 # novo com --trocar); 4 conflito ao mesclar origin/master; 5 checkout sem a guarda;
 # 6 servico nao subiu ou saude sem "guarda": "ativa" (VERSAO/historico NAO mudam).
+# Em 4/5/6 (e qualquer erro depois do checkout) fica a marca EM_TROCA no estado: o ok.sh
+# recusa ate uma subida terminar.
 # Nunca e pushado: o merge com origin/master existe so neste checkout.
 set -euo pipefail
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/comum.sh"
@@ -37,6 +39,14 @@ if [ -s "$VERSAO" ]; then
 else
 	echo "(vazia)"
 fi
+if [ -e "$ESTADO/EM_TROCA" ]; then
+	echo "(subida anterior nao terminou: $(cat "$ESTADO/EM_TROCA"))"
+fi
+
+# Marca de troca: do primeiro toque no checkout ate a VERSAO nova gravada. Enquanto existir,
+# o ok.sh recusa (checkout e servicos podem estar num ramo que a VERSAO nao descreve).
+echo "== marcar a bancada como em troca"
+gravar_estado EM_TROCA "$RAMO $(date '+%d/%m/%Y %H:%M') $QUEM"
 
 echo "== buscar origin"
 "${G[@]}" fetch --quiet --prune origin
@@ -55,6 +65,10 @@ if ! "${G[@]}" -c user.name=homolog -c user.email=homolog@localhost merge --quie
 	echo "erro: conflito com origin/master; atualize o ramo $RAMO e suba de novo" >&2
 	exit 4
 fi
+# HEAD do checkout depois da mescla (merge, fast-forward ou "ja atualizado"): vai para a
+# VERSAO como "checkout"; o ok.sh exige HEAD == checkout e "commit" ancestral do HEAD.
+CHECKOUT=$("${G[@]}" rev-parse HEAD)
+[[ "$CHECKOUT" =~ $RE_COMMIT ]] || erro "rev-parse HEAD inesperado"
 
 echo "== donos: codigo e venv do root, pastas de dados do homolog"
 normalizar_donos
@@ -106,10 +120,12 @@ done
 echo "== registrar versao e historico (so depois da saude ok)"
 QUANDO=$(date '+%d/%m/%Y %H:%M')
 JSON=$("$PY_SISTEMA" -I -c 'import json, sys
-chaves = ("ramo", "commit", "master", "quando", "quem")
-print(json.dumps(dict(zip(chaves, sys.argv[1:])), ensure_ascii=False))' "$RAMO" "$COMMIT" "$MASTER" "$QUANDO" "$QUEM")
+chaves = ("ramo", "commit", "master", "checkout", "quando", "quem")
+print(json.dumps(dict(zip(chaves, sys.argv[1:])), ensure_ascii=False))' \
+	"$RAMO" "$COMMIT" "$MASTER" "$CHECKOUT" "$QUANDO" "$QUEM")
 gravar_estado HOMOLOG_VERSAO "$JSON"
 acrescentar_estado HOMOLOG_HISTORICO "SUBIU $RAMO $COMMIT $QUANDO $QUEM"
+rm -f -- "$ESTADO/EM_TROCA"
 
 echo "== endereco publico (espera 401: senha do Caddy)"
 echo "HTTP $(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 https://homolog.freshhub.com.br/painel/ || true)"
