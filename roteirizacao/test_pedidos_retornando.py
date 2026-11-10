@@ -3,6 +3,7 @@
 Tabela pedidos_retornando (pedido tirado de rota iniciada fica retido ate o galpao receber).
 Rodar (da raiz): py -3.11 -m unittest roteirizacao.test_pedidos_retornando -v
 """
+import logging
 import sys
 import tempfile
 import unittest
@@ -21,6 +22,10 @@ class TestPedidosRetornando(unittest.TestCase):
         self.db = Path(self.tmp.name) / "t.db"
         self.conn = pr.conectar(self.db)
         self.addCleanup(self.conn.close)
+        # warnings esperados nao poluem o stderr; testes de log usam assertLogs
+        nivel = pr.logger.level
+        pr.logger.setLevel(logging.ERROR)
+        self.addCleanup(pr.logger.setLevel, nivel)
 
     def _marcar(self, service_id=5, codigo="#PS-1", route_id=99):
         return pr.marcar(self.conn, service_id=service_id, codigo=codigo, vuupt_route_id=route_id,
@@ -86,9 +91,51 @@ class TestPedidosRetornando(unittest.TestCase):
     def test_banco_com_erro_nao_derruba_rodada(self):
         servicos = [{"id": 5, "code": "#PS-1"}]
         invalido = Path(self.tmp.name) / "nao_existe" / "x.db"
-        ficam, retornando = pr.separar_retornando(servicos, invalido)
+        with self.assertLogs(pr.logger, level="WARNING"):
+            ficam, retornando = pr.separar_retornando(servicos, invalido)
         self.assertEqual((ficam, retornando), (servicos, []))
-        self.assertEqual(pr.retornando_por_servico(servicos, invalido), {})
+        with self.assertLogs(pr.logger, level="WARNING"):
+            self.assertEqual(pr.retornando_por_servico(servicos, invalido), {})
+
+    def test_sem_tabelas_do_nucleo_loga_aviso(self):
+        with self.assertLogs(pr.logger, level="WARNING") as cm:
+            self.assertIsNone(pr.resolver_parada_id(self.conn, 99, 5))
+        self.assertIn("nao resolveu parada", cm.output[0])
+
+    def test_marcar_sem_parada_loga_aviso(self):
+        with self.assertLogs(pr.logger, level="WARNING") as cm:
+            self._marcar()
+        self.assertTrue(any("resolver_pendentes" in m for m in cm.output))
+
+    def test_resolver_pendentes_preenche_parada_depois(self):
+        self._marcar()
+        self.assertIsNone(pr.ativos(self.conn)[5]["parada_id"])
+        self._nucleo()
+        self.conn.execute("INSERT INTO nucleo_rotas VALUES (1, 99)")
+        self.conn.execute("INSERT INTO nucleo_paradas VALUES (10, 1, 5)")
+        self.conn.commit()
+        self.assertEqual(pr.resolver_pendentes(self.conn), 1)
+        self.assertEqual(pr.ativos(self.conn)[5]["parada_id"], 10)
+        pr.marcar_recebidos(self.conn, [10], 3)
+        self.conn.commit()
+        self.assertNotIn(5, pr.ativos(self.conn))
+
+    def test_resolver_pendentes_sem_nucleo_nao_quebra(self):
+        self._marcar()
+        self.assertEqual(pr.resolver_pendentes(self.conn), 0)
+        self.assertIn(5, pr.ativos(self.conn))
+
+    def test_marcar_recebidos_nao_comita_e_lista_vazia_e_noop(self):
+        self._nucleo()
+        self.conn.execute("INSERT INTO nucleo_rotas VALUES (1, 99)")
+        self.conn.execute("INSERT INTO nucleo_paradas VALUES (10, 1, 5)")
+        self.conn.commit()
+        self._marcar()
+        pr.marcar_recebidos(self.conn, [], 7)
+        self.assertIn(5, pr.ativos(self.conn))
+        pr.marcar_recebidos(self.conn, [10], 7)
+        self.conn.rollback()
+        self.assertIn(5, pr.ativos(self.conn))
 
 
 if __name__ == "__main__":

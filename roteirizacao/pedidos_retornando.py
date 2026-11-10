@@ -27,6 +27,8 @@ DB_PATH = _RAIZ / "dados" / "dados.db"
 
 
 def garantir_tabela(conn: sqlite3.Connection) -> None:
+    """Cria tabela e indice (idempotente). executescript faz COMMIT de qualquer
+    transacao aberta: chamar fora de transacao aberta."""
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS pedidos_retornando (
             id INTEGER PRIMARY KEY,
@@ -63,7 +65,8 @@ def resolver_parada_id(conn: sqlite3.Connection, vuupt_route_id, service_id) -> 
             "SELECT p.id FROM nucleo_paradas p JOIN nucleo_rotas r ON r.id = p.rota_id "
             "WHERE r.vuupt_route_id = ? AND p.service_id = ? ORDER BY p.id DESC LIMIT 1",
             (vuupt_route_id, service_id)).fetchone()
-    except sqlite3.OperationalError:
+    except sqlite3.OperationalError as e:
+        logger.warning(f"nao resolveu parada do nucleo ({e})")
         return None
     return row[0] if row else None
 
@@ -72,6 +75,9 @@ def marcar(conn: sqlite3.Connection, *, service_id, codigo, vuupt_route_id, agen
            motorista_nome, motivo, observacao, usuario) -> int | None:
     """Grava e comita. Pedido que ja esta Retornando ativo devolve None."""
     parada_id = resolver_parada_id(conn, vuupt_route_id, service_id)
+    if parada_id is None:
+        logger.warning(f"servico {service_id}: parada do nucleo ainda nao existe; "
+                       "resolver_pendentes completa depois")
     cur = conn.execute(
         "INSERT OR IGNORE INTO pedidos_retornando (service_id, codigo, vuupt_route_id, parada_id, "
         "agent_id, motorista_nome, motivo, observacao, usuario, criado_em) "
@@ -80,6 +86,21 @@ def marcar(conn: sqlite3.Connection, *, service_id, codigo, vuupt_route_id, agen
          observacao, usuario, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     conn.commit()
     return cur.lastrowid if cur.rowcount else None
+
+
+def resolver_pendentes(conn: sqlite3.Connection) -> int:
+    """Preenche parada_id dos Retornando ativos que ficaram sem (nucleo ainda nao
+    tinha a parada). Comita. Devolve quantos foram resolvidos."""
+    rows = conn.execute("SELECT id, vuupt_route_id, service_id FROM pedidos_retornando "
+                        "WHERE recebido_em IS NULL AND parada_id IS NULL").fetchall()
+    resolvidos = 0
+    for r in rows:
+        parada_id = resolver_parada_id(conn, r["vuupt_route_id"], r["service_id"])
+        if parada_id is not None:
+            conn.execute("UPDATE pedidos_retornando SET parada_id = ? WHERE id = ?", (parada_id, r["id"]))
+            resolvidos += 1
+    conn.commit()
+    return resolvidos
 
 
 def ativos(conn: sqlite3.Connection) -> dict[int, dict]:
