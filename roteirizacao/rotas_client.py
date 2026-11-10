@@ -258,6 +258,27 @@ def adicionar_atividades(token: str, route_id: int, service_ids: list[int],
     return resp.json()
 
 
+def remover_servico_da_rota(token: str, route_id: int, service_id: int) -> dict:
+    """DELETE /routes/{id}/services/{service_id} -- tira um servico da rota
+    sem mexer nos outros (aceito pela Vuupt mesmo com a rota em andamento;
+    o servico volta ao pool). Devolve o JSON da resposta."""
+    resp = chamar_com_retry(requests.delete, f"{API_BASE}/routes/{route_id}/services/{service_id}",
+                            headers=_headers(token), timeout=30)
+    _verificar_resposta(resp)
+    return resp.json()
+
+
+def atualizar_motorista_veiculo(token: str, route_id: int, agent_id: int | None,
+                                vehicle_id: int | None) -> dict:
+    """PUT /routes/{id} so com agent_id/vehicle_id, SEM 'activities' (assim as
+    paradas e a ordem ficam intactas). None vai como null."""
+    payload = {"agent_id": agent_id, "vehicle_id": vehicle_id}
+    resp = chamar_com_retry(requests.put, f"{API_BASE}/routes/{route_id}", json=payload,
+                            headers=_headers(token), timeout=30)
+    _verificar_resposta(resp)
+    return resp.json()["route"]
+
+
 def cancelar_rota(token: str, route_id: int, services_action: str = "keep") -> dict | None:
     """DELETE /routes/{id}/cancel. services_action: "keep" (mantém status
     dos serviços), "unassign" (desatribui), "cancel" (cancela os
