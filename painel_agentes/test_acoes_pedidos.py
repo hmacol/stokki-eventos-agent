@@ -23,7 +23,11 @@ import acoes_pedidos  # noqa: E402
 class VuuptFalso:
     def __init__(self, servicos):
         self.servicos = servicos
+        self.por_code = {}
         self.chamadas = []
+
+    def buscar_servico_por_code(self, code):
+        return self.por_code.get(code.lstrip("#"))
 
     def buscar_servico_por_id(self, sid):
         self.chamadas.append(sid)
@@ -53,8 +57,15 @@ class TestReenvio(unittest.TestCase):
                      "VALUES (?, ?, ?, ?, ?)", (codigo, codigo, status, sender, sid))
 
     def _vuupt(self, **status_por_id):
-        return VuuptFalso({int(k[1:]): {"id": int(k[1:]), "code": "#PS-1", "status": v}
-                           for k, v in status_por_id.items()})
+        """s101="done" / "failed" (insucesso = done + status_done failed) / outro status cru."""
+        def serv(k, v):
+            d = {"id": int(k[1:]), "code": "#PS-1", "title": "#PS-1 - NF1"}
+            if v == "failed":
+                d.update(status="done", status_done="failed")
+            else:
+                d["status"] = v
+            return d
+        return VuuptFalso({int(k[1:]): serv(k, v) for k, v in status_por_id.items()})
 
     def test_reenvio_de_entregue_cria_e_registra_motivo(self):
         v = self._vuupt(s101="done")
@@ -74,6 +85,41 @@ class TestReenvio(unittest.TestCase):
                                    stokki=self.stokki)
         self.assertTrue(r["ok"], r)
         self.assertTrue(self.dup.call_args.kwargs["marcar_tratado"])
+
+    def test_recusa_tentativa_viva_que_o_nucleo_nao_conhece(self):
+        v = self._vuupt(s101="done")
+        v.por_code["PS-1-R2"] = {"id": 777, "code": "#PS-1-R2", "status": "on_route"}
+        v.por_code["PS-1-R1"] = {"id": 776, "code": "#PS-1-R1", "status": "done"}
+        r = acoes_pedidos.reenviar(101, "motivo ok", "hugo", vuupt=v, stokki=self.stokki)
+        self.assertFalse(r["ok"])
+        self.assertIn("PS-1-R2", r["erro"])
+        self.dup.assert_not_called()
+
+    def test_servico_excluido_conta_como_morto(self):
+        v = self._vuupt(s101="done")
+        v.por_code["PS-1-R1"] = {"id": 776, "code": "#PS-1-R1", "status": "not_assigned", "deleted_at": "2026-11-01"}
+        self.assertTrue(acoes_pedidos.reenviar(101, "motivo ok", "hugo", vuupt=v, stokki=self.stokki)["ok"])
+
+    def test_membro_excluido_do_nucleo_que_sumiu_da_vuupt_nao_bloqueia(self):
+        conn = banco.conectar()
+        self._linha(conn, "PS-1-R1", 102, 10, "CANCELADO")
+        conn.execute("UPDATE nucleo_pedidos SET excluido_em = '2026-11-01' WHERE vuupt_service_id = 102")
+        conn.commit()
+        conn.close()
+        self.assertTrue(acoes_pedidos.reenviar(101, "motivo ok", "hugo", vuupt=self._vuupt(s101="done"),
+                                               stokki=self.stokki)["ok"])
+
+    def test_entregue_nao_marca_tratado(self):
+        acoes_pedidos.reenviar(101, "motivo ok", "hugo", vuupt=self._vuupt(s101="done"), stokki=self.stokki)
+        self.assertFalse(self.dup.call_args.kwargs["marcar_tratado"])
+
+    def test_recusa_retirada(self):
+        v = self._vuupt(s101="done")
+        v.servicos[101]["title"] = "[RETIRADA] #PS-1 - NF1"
+        r = acoes_pedidos.reenviar(101, "motivo ok", "hugo", vuupt=v, stokki=self.stokki)
+        self.assertFalse(r["ok"])
+        self.assertIn("retirada não vai pra Vuupt", r["erro"])
+        self.dup.assert_not_called()
 
     def test_recusa_pedido_aberto(self):
         r = acoes_pedidos.reenviar(101, "motivo ok", "hugo", vuupt=self._vuupt(s101="not_assigned"),

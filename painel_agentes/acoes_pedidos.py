@@ -9,6 +9,7 @@ Hoje: Reenvio (novo servico #PS-N-R<k> copiado do existente).
 import logging
 import re
 import sys
+import uuid
 from pathlib import Path
 
 _AQUI = Path(__file__).parent
@@ -24,7 +25,8 @@ logger = logging.getLogger(__name__)
 
 NIVEIS_ACAO = ("total", "operador", "logistica", "atendimento")
 # Status da Vuupt em que o servico nao esta mais vivo.
-VIVOS_VUUPT_FIM = ("done", "failed", "canceled")
+VIVOS_VUUPT_FIM = ("done", "failed", "canceled", "cancelled")
+_MAX_TENTATIVAS_VUUPT = 20
 
 _RE_REENTREGA = re.compile(r"-R\d.*$")
 
@@ -42,7 +44,7 @@ def servicos_do_grupo(conn, service_id: int) -> list[dict]:
         return []
     base = _codigo_base(atual["codigo"])
     linhas = conn.execute(
-        "SELECT codigo, status, vuupt_service_id, sender_id, reentrega_de_codigo FROM nucleo_pedidos "
+        "SELECT codigo, status, vuupt_service_id, sender_id, reentrega_de_codigo, excluido_em FROM nucleo_pedidos "
         "WHERE COALESCE(sender_id, -1) = COALESCE(?, -1) AND UPPER(codigo) LIKE ?",
         (atual["sender_id"], f"%{base}%")).fetchall()
     return [dict(l) for l in linhas if _codigo_base(l["codigo"]) == base]
@@ -55,7 +57,7 @@ def situacao_stokki(codigo: str) -> str | None:
     m = re.search(r"PS-(\d+)", codigo or "", re.I)
     if not m:
         return None
-    dono = "painel-pedidos-acao"
+    dono = f"painel-pedidos-acao-{uuid.uuid4().hex[:8]}"  # dono unico: o mesmo dono nao trava a si mesmo
     conta = sessao_uso.adquirir(dono, ttl_segundos=300, esperar_segundos=60, alternativa=True)
     if not conta:
         return None
@@ -76,6 +78,11 @@ def _vuupt_padrao():
     return VuuptClient(torre_controle._carregar_config().get("vuupt_api", {}).get("token", ""))
 
 
+def _terminal(servico: dict) -> bool:
+    """Servico que nao esta mais vivo na Vuupt: excluido, concluido ou cancelado."""
+    return bool(servico.get("deleted_at")) or servico.get("status") in VIVOS_VUUPT_FIM
+
+
 def _erro(msg: str) -> dict:
     return {"ok": False, "novo_code": "", "erro": msg}
 
@@ -89,9 +96,13 @@ def reenviar(service_id: int, motivo: str, usuario: str, *, vuupt=None, stokki=s
     servico = vuupt.buscar_servico_por_id(service_id)
     if not servico:
         return _erro("não achei o serviço na Vuupt agora, tente de novo.")
-    status = servico.get("status")
-    if status not in VIVOS_VUUPT_FIM:
+    if not _terminal(servico):
         return _erro("pedido ainda aberto: já existe um serviço vivo na Vuupt.")
+    codigo = servico.get("code") or ""
+    if (servico.get("title") or "").lstrip("# ").upper().startswith("[RETIRADA]"):
+        return _erro("retirada não vai pra Vuupt: reenvio não se aplica.")
+    # insucesso = done com status_done failed (a Vuupt nao tem status top-level failed)
+    insucesso = servico.get("status") == "done" and servico.get("status_done") == "failed"
 
     conn = banco.conectar()
     try:
@@ -104,11 +115,26 @@ def reenviar(service_id: int, motivo: str, usuario: str, *, vuupt=None, stokki=s
             continue
         outro = vuupt.buscar_servico_por_id(sid)
         if not outro:
+            if g.get("excluido_em"):
+                continue  # apagado na Vuupt: morto
             return _erro("não achei o serviço na Vuupt agora, tente de novo.")
-        if outro.get("status") not in VIVOS_VUUPT_FIM:
+        if not _terminal(outro):
             return _erro(f"a tentativa {g['codigo']} ainda está aberta na Vuupt.")
 
-    codigo = servico.get("code") or ""
+    # Pergunta direto a Vuupt por todas as tentativas (o nucleo pode nao conhecer alguma):
+    # o codigo base, depois -R1, -R2... (mesmo laco de duplicar_servico_por_insucesso).
+    base = _codigo_base(codigo)
+    candidatos = [base] + [f"#{base}-R{k}" for k in range(1, _MAX_TENTATIVAS_VUUPT + 1)]
+    for i, cand in enumerate(candidatos):
+        achado = vuupt.buscar_servico_por_code(cand)
+        if not achado:
+            if i == 0:
+                continue  # sem o base na Vuupt, ainda pode haver -R1
+            break
+        if achado.get("id") == service_id:
+            continue
+        if not _terminal(achado):
+            return _erro(f"a tentativa {achado.get('code') or cand} ainda está aberta na Vuupt.")
     situacao = stokki(codigo)
     if situacao is None:
         return _erro("não deu pra conferir a Stokki, tente de novo.")
@@ -118,7 +144,7 @@ def reenviar(service_id: int, motivo: str, usuario: str, *, vuupt=None, stokki=s
     r = torre_controle.duplicar_pedido_manual(
         service_id, codigo, origem="PEDIDOS", servico_original=servico,
         texto=f"{usuario}: Reenvio pela tela Pedidos → {{novo}}: {motivo}",
-        marcar_tratado=(status == "failed"))
+        marcar_tratado=insucesso)
     if not r.get("ok"):
         return _erro(r.get("erro") or "Falha ao criar a reentrega.")
     return {"ok": True, "novo_code": r.get("novo_code", ""), "erro": ""}
