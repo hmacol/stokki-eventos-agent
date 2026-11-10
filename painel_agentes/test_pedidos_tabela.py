@@ -95,6 +95,19 @@ class TestTelaPedidos(unittest.TestCase):
         self.assertIn("2 tentativas", html)
         self.assertIn('class="tentativas"', html)
 
+    def test_rota_reenvio_so_para_quem_age(self):
+        corpo = {"service_id": 1, "motivo": "cliente pediu"}
+        self._logar("leitura")
+        r = self.cliente.post("/api/pedidos/acao/reenvio", json=corpo, headers={"Origin": "http://localhost"})
+        self.assertNotEqual(r.status_code, 200)
+        self._logar("atendimento")
+        with mock.patch("acoes_pedidos.reenviar",
+                        return_value={"ok": True, "novo_code": "#PS-1-R1", "erro": ""}) as m:
+            r = self.cliente.post("/api/pedidos/acao/reenvio", json=corpo, headers={"Origin": "http://localhost"})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(r.get_json()["novo_code"], "#PS-1-R1")
+        self.assertEqual(m.call_args.args[:3], (1, "cliente pediu", "teste"))
+
     def test_niveis_sem_acesso_nao_entram(self):
         self._logar("galpao")
         self.assertNotEqual(self.cliente.get("/pedidos").status_code, 200)

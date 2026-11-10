@@ -90,6 +90,7 @@ from nucleo import justificativas_sem_canhoto
 import tratativas
 import pedidos_parados_triagem
 import consulta_expedicao
+import acoes_pedidos
 import contadores_menu
 import pagina_inicial
 import wms
@@ -2705,6 +2706,26 @@ def api_torre_duplicar():
     if not resultado.get("ok"):
         return jsonify({"erro": resultado.get("erro", "Falha ao duplicar.")}), 400
     return jsonify(resultado)
+
+
+@app.route("/api/pedidos/acao/reenvio", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_acao_reenvio():
+    """Ação Reenvio da tela /pedidos: novo serviço #PS-N-R<k> na Vuupt, com motivo."""
+    body = request.get_json(silent=True) or {}
+    try:
+        service_id = int(body["service_id"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"erro": "service_id ausente ou inválido."}), 400
+    try:
+        r = acoes_pedidos.reenviar(service_id, str(body.get("motivo") or ""), session.get("usuario", ""))
+    except Exception as e:
+        logger.exception("reenvio pela tela Pedidos falhou")
+        return jsonify({"erro": f"Falha inesperada: {e}"}), 500
+    if not r.get("ok"):
+        return jsonify({"erro": r.get("erro") or "Falha ao reenviar."}), 400
+    return jsonify(r)
 
 
 @app.route("/api/torre/notificar-ocorrencia", methods=["POST"])

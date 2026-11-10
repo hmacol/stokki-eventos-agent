@@ -91,6 +91,8 @@
  Tela de planejamento (HTML/JS) ............ painel_agentes/templates/planejamento_rotas.html
  Rascunhos de rota (tabelas) ............... painel_agentes/rascunhos_rota.py
  Torre de Controle ......................... painel_agentes/torre_controle.py
+Acoes da tela /pedidos (Reenvio...) ......... painel_agentes/acoes_pedidos.py (rota POST /api/pedidos/acao/reenvio;
+                                             confere Vuupt na hora, Stokki pela trava sessao_uso)
  Vigia de pedidos abertos (estado/prazo) ... vigia/ (regras.py = prazos; tela /vigia)
  Clientes que exigem agendamento (AGENDA) .. regras/clientes_agendamento.py; fila em
                                              marcar_clientes_agenda.py + tela /clientes-agenda
