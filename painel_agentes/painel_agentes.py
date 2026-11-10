@@ -2732,7 +2732,7 @@ def api_pedidos_acao_reenvio():
     try:
         r = acoes_pedidos.reenviar(service_id, str(body.get("motivo") or ""), session.get("usuario", ""))
     except Exception as e:
-        logger.exception("reenvio pela tela Pedidos falhou")
+        logging.getLogger(__name__).exception("reenvio pela tela Pedidos falhou")
         return jsonify({"erro": f"Falha inesperada: {e}"}), 500
     if not r.get("ok"):
         return jsonify({"erro": r.get("erro") or "Falha ao reenviar."}), 400
@@ -2774,7 +2774,7 @@ def api_pedidos_acao_cancelar_vuupt():
             token=(cfg.get("vuupt_api") or {}).get("token", ""),
             agent_lalamove=int((cfg.get("lalamove") or {}).get("agent_id_vuupt") or 0))
     except Exception as e:
-        logger.exception("cancelar Vuupt pela tela Pedidos falhou")
+        logging.getLogger(__name__).exception("cancelar Vuupt pela tela Pedidos falhou")
         return jsonify({"erro": f"Falha inesperada: {e}"}), 500
     if not r.get("ok"):
         return jsonify({"erro": r.get("erro") or "Falha ao cancelar."}), 400
@@ -2795,7 +2795,7 @@ def api_pedidos_acao_cancelar_stokki():
     try:
         r = acoes_pedidos.cancelar_stokki(codigo, str(body.get("motivo") or ""), session.get("usuario", ""))
     except Exception as e:
-        logger.exception("cancelar Stokki pela tela Pedidos falhou")
+        logging.getLogger(__name__).exception("cancelar Stokki pela tela Pedidos falhou")
         return jsonify({"erro": f"Falha inesperada: {e}"}), 500
     if not r.get("ok"):
         return jsonify({"erro": r.get("erro") or "Falha ao cancelar na Stokki.", "resultados": r.get("resultados", [])}), 400
@@ -2816,7 +2816,7 @@ def api_pedidos_acao_endereco():
     try:
         r = acoes_pedidos.alterar_endereco(service_id, str(body.get("endereco") or ""), session.get("usuario", ""))
     except Exception as e:
-        logger.exception("alterar endereço pela tela Pedidos falhou")
+        logging.getLogger(__name__).exception("alterar endereço pela tela Pedidos falhou")
         return jsonify({"erro": f"Falha inesperada: {e}"}), 500
     if not r.get("ok"):
         return jsonify({"erro": r.get("erro") or "Falha ao alterar o endereço."}), 400
@@ -2838,7 +2838,7 @@ def api_pedidos_acao_agendar():
         r = acoes_pedidos.agendar(service_id, str(body.get("data") or ""), str(body.get("hora_inicio") or ""),
                                   str(body.get("hora_fim") or ""), session.get("usuario", ""))
     except Exception as e:
-        logger.exception("agendar pela tela Pedidos falhou")
+        logging.getLogger(__name__).exception("agendar pela tela Pedidos falhou")
         return jsonify({"erro": f"Falha inesperada: {e}"}), 500
     if not r.get("ok"):
         return jsonify({"erro": r.get("erro") or "Falha ao agendar."}), 400
@@ -2934,7 +2934,7 @@ def api_pedidos_acao_checar_dia_fixo():
     try:
         resultado = checar_reagendamento_dia_fixo(service_ids, str(body.get("data") or ""))
     except Exception as e:
-        logger.exception("checar dia fixo pela tela Pedidos falhou")
+        logging.getLogger(__name__).exception("checar dia fixo pela tela Pedidos falhou")
         return jsonify({"erro": f"Falha inesperada: {e}"}), 500
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400

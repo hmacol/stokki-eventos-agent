@@ -617,6 +617,29 @@ class TestRotasCorpoInvalido(unittest.TestCase):
             sess["nivel_acesso"] = "operador"
             sess["usuario"] = "teste"
 
+    def test_excecao_na_acao_da_500_json(self):
+        casos = (
+            ("reenvio", mock.patch.object(painel_agentes.acoes_pedidos, "reenviar", side_effect=RuntimeError("x")),
+             {"service_id": 1, "motivo": "m"}),
+            ("cancelar-vuupt", mock.patch.object(painel_agentes.acoes_pedidos, "cancelar_vuupt",
+                                                 side_effect=RuntimeError("x")), {"service_id": 1}),
+            ("cancelar-stokki", mock.patch.object(painel_agentes.acoes_pedidos, "cancelar_stokki",
+                                                  side_effect=RuntimeError("x")), {"codigo": "PS-1", "motivo": "m"}),
+            ("endereco", mock.patch.object(painel_agentes.acoes_pedidos, "alterar_endereco",
+                                           side_effect=RuntimeError("x")), {"service_id": 1, "endereco": "e"}),
+            ("agendar", mock.patch.object(painel_agentes.acoes_pedidos, "agendar", side_effect=RuntimeError("x")),
+             {"service_id": 1, "data": "2026-11-11"}),
+            ("checar-dia-fixo", mock.patch.object(painel_agentes, "checar_reagendamento_dia_fixo",
+                                                  side_effect=RuntimeError("x")),
+             {"service_ids": [1], "data": "2026-11-11"}),
+        )
+        for rota, patch, corpo in casos:
+            with patch:
+                r = self.cliente.post(f"/api/pedidos/acao/{rota}", json=corpo, headers={"Origin": "http://localhost"})
+            self.assertEqual(r.status_code, 500, rota)
+            self.assertTrue(r.is_json, rota)
+            self.assertIn("erro", r.get_json(), rota)
+
     def test_corpo_nao_objeto_da_400_json(self):
         for rota in ("cancelar-stokki", "cancelar-vuupt", "reenvio", "endereco", "agendar", "checar-dia-fixo"):
             for corpo in ([1], "texto"):
