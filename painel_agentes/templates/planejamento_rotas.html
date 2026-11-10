@@ -2343,7 +2343,8 @@
   function escaparHtmlAgentes(texto) {
     const div = document.createElement('div');
     div.textContent = texto == null ? '' : String(texto);
-    return div.innerHTML;
+    // aspas também: o resultado vai pra dentro de atributo (title="...", data-x="...")
+    return div.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
 
   async function postJSONAgentesPlanejamento(url, body) {
@@ -2895,6 +2896,7 @@
   // primeiro, com rodizio_no_dia) -- carregado depois que a tela monta; null
   // = ainda carregando ou falhou (o select mostra só o carro atual)
   let VEICULOS = null;
+  let VEICULOS_FALHOU = false;  // lista não carregou: o select avisa pra recarregar
   const TIPO_CARGA_PADRAO = "Seco";
   const PADRAO_SUFIXO_REENTREGA = /-R\d+$/;
   // Paleta SEM nenhum tom de vermelho/rosa/coral de propósito (Hugo,
@@ -2931,7 +2933,8 @@
   function escaparHtml(texto) {
     const div = document.createElement('div');
     div.textContent = texto == null ? '' : String(texto);
-    return div.innerHTML;
+    // aspas também: o resultado vai pra dentro de atributo (title="...", data-x="...")
+    return div.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
 
   function iconeNumerado(numero, cor) {
@@ -3024,7 +3027,7 @@
     // motorista -- só volta a ser roteirizável depois que /retornos receber
     if (p.retornando) {
       const motivo = p.retornando.motivo ? ` Motivo: ${p.retornando.motivo}.` : "";
-      partes.push(`<span class="badge-retornando" title="Tirado de rota já iniciada: não entra em rota até o galpão receber em Retornos.${escaparHtml(motivo).replace(/"/g, "&quot;")}">↩ Retornando — no carro de ${escaparHtml(p.retornando.motorista_nome || "?")}</span>`);
+      partes.push(`<span class="badge-retornando" title="Tirado de rota já iniciada: não entra em rota até o galpão receber em Retornos.${escaparHtml(motivo)}">↩ Retornando — no carro de ${escaparHtml(p.retornando.motorista_nome || "?")}</span>`);
     }
     // dedicado (Hugo, 23/09): transporte cotado à parte, fora da rota automática
     if (p.dedicado) {
@@ -3206,15 +3209,18 @@
       const rotulo = VEICULOS ? `Carro ${atual} (genérico ou fora da lista)` : `Carro ${atual}`;
       opcoes.push(`<option value="${atual}" selected>${escaparHtml(rotulo)}</option>`);
     }
+    if (VEICULOS_FALHOU) opcoes.push('<option value="" disabled>Lista de carros indisponível — recarregue a página</option>');
     return opcoes.join("");
   }
 
   // mesma regra de regras/veiculos.falta_carro: motorista de verdade sem
-  // vehicle_id, ou com carro genérico (fora da lista do seletor)
+  // vehicle_id, ou com placa genérica (começa com "."). Carro que só não
+  // está na lista do seletor não conta como "sem carro".
   function rascunhoSemCarro(rascunho) {
     if (!rascunho.agent_id || AGENTES_SEM_CARRO.has(rascunho.agent_id)) return false;
     if (!rascunho.vehicle_id) return true;
-    return !!VEICULOS && !VEICULOS.some(v => v.vehicle_id === rascunho.vehicle_id);
+    const veiculo = (VEICULOS || []).find(v => v.vehicle_id === rascunho.vehicle_id);
+    return !!veiculo && (veiculo.placa || "").trim().startsWith(".");
   }
 
   function seloSemCarroHtml(rascunho) {
@@ -7142,6 +7148,16 @@
     }
   }
 
+  // placa no rodízio do dia + rota com parada no Centro Expandido: pede
+  // confirmação (não bloqueia -- a troca à mão é decisão de quem opera).
+  // true = pode seguir com a troca.
+  function confirmarRodizio(r, vehicleId) {
+    if (!vehicleId || vehicleId === r.vehicle_id) return true;
+    const veiculo = (VEICULOS || []).find(v => v.vehicle_id === vehicleId);
+    if (!veiculo || !veiculo.rodizio_no_dia || !r.tem_centro_expandido) return true;
+    return confirm(`A placa ${veiculo.placa} está no rodízio neste dia e a rota tem parada no Centro Expandido. Trocar o carro mesmo assim?`);
+  }
+
   // seletor de carro + selo "sem carro" do card, depois de mudar motorista/carro
   function atualizarCarroNoCard(r) {
     const selVeiculo = document.querySelector(`.select-veiculo[data-rascunho-id="${r.id}"]`);
@@ -7164,7 +7180,7 @@
       VEICULOS = dados.veiculos || [];
     } catch (e) {
       console.warn("Lista de carros indisponível:", e);
-      return;
+      VEICULOS_FALHOU = true;
     }
     document.querySelectorAll(".select-veiculo").forEach(sel => {
       const r = RASCUNHOS.find(x => x.id === Number(sel.dataset.rascunhoId));
@@ -8030,9 +8046,7 @@
         const r = RASCUNHOS.find(x => x.id === rascunhoId);
         if (!r) return;
         const vehicleId = e.target.value ? Number(e.target.value) : null;
-        const veiculo = (VEICULOS || []).find(v => v.vehicle_id === vehicleId);
-        if (veiculo && veiculo.rodizio_no_dia && r.tem_centro_expandido
-            && !confirm(`A placa ${veiculo.placa} está no rodízio neste dia e a rota tem parada no Centro Expandido. Trocar o carro mesmo assim?`)) {
+        if (!confirmarRodizio(r, vehicleId)) {
           e.target.value = r.vehicle_id ? String(r.vehicle_id) : "";
           return;
         }
@@ -8043,7 +8057,14 @@
       const rascunhoId = Number(e.target.dataset.rascunhoId);
       const agentId = e.target.value ? Number(e.target.value) : null;
       const motorista = MOTORISTAS.find(m => m.agent_id === agentId);
-      // trocar o motorista põe o carro do cadastro dele (o seletor de carro ajusta depois)
+      // trocar o motorista põe o carro do cadastro dele (o seletor de carro ajusta depois);
+      // o carro novo passa pelo mesmo aviso de rodízio da troca de carro
+      const rAtual = RASCUNHOS.find(x => x.id === rascunhoId);
+      if (rAtual && !confirmarRodizio(rAtual, motorista ? motorista.vehicle_id : null)) {
+        e.target.value = rAtual.agent_id ? String(rAtual.agent_id) : "";
+        atualizarCarroNoCard(rAtual);
+        return;
+      }
       const ok = await trocarMotoristaCarro(rascunhoId, agentId,
         motorista ? motorista.vehicle_id : null, motorista ? motorista.nome : null);
       if (ok) {
