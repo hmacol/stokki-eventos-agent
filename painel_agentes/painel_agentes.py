@@ -73,7 +73,7 @@ from planejamento_rotas import (
     marcar_dedicados, remover_dedicados,
     salvar_disponibilidade_dia, marcar_disponibilidade_periodo, limpar_disponibilidade_dia,
     publicar_oferta_rascunho, publicar_ofertas_em_lote, despublicar_oferta_rascunho, despublicar_ofertas_em_lote,
-    ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento,
+    ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento, SITUACAO_STOKKI_NAO_PRONTA,
 )
 from avisar_motoristas_rotas import notificar_oferta_motoristas, push_ofertas_vps
 from motoristas import dados_pagina_motoristas, listar_agentes_vuupt_nao_cadastrados, cadastrar_motorista, editar_motorista, MotoristaNaoEncontrado
@@ -2754,6 +2754,11 @@ def api_pool():
         "pool": resultado["pool"],
         "pool_retiradas": resultado.get("pool_retiradas", []),
         "retrato_stokki_em": resultado.get("retrato_stokki_em"),
+        # {codigo base: "Em separação"...} pras paradas já em rota (o selo da rota, Hugo 09/11): o
+        # pool já volta anotado, as rotas da tela são atualizadas pelo front com isto.
+        "situacoes_stokki": {c: SITUACAO_STOKKI_NAO_PRONTA[st]
+                             for c, st in (resultado.get("retrato_stokki") or {}).items()
+                             if st in SITUACAO_STOKKI_NAO_PRONTA},
         "resumo_html": render_template("_resumo_agendados.html", resumo_agendados=resultado["resumo_agendados"]),
         "aviso": aviso,
     })

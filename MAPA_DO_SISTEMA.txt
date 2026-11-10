@@ -166,6 +166,9 @@
                                              rota resume ("📦 Stokki: 2 em separação · ..."), o tooltip/
                                              Copiar resumo diz "Stokki: <situação>" e o Confirmar e
                                              enviar conta "ainda no galpão" e "em espera".
+                                             Pílula "Status Stokki" da barra de agentes (09/11, agente
+                                             atualizar_status_stokki = pipeline.py --so-status): relê o
+                                             retrato na hora e o Atualizar do pool refaz pool + rotas.
  Recebimento de retornos no galpão ......... painel_agentes/retornos.py + tela /retornos (retornos.html,
                                              mobile; link no app do galpão /wms): insucesso/parcial (menos
                                              Não coletado) de nucleo_paradas; foto da carga, avaria com foto,
@@ -447,6 +450,9 @@
                          --fila-freshhub (plano 1.2 do novo: atende a fila de réplica
                          destino vuupt pelo nucleo/freshhub_client, mesmo processar_pedido,
                          devolve vuupt_service_id + espelho; --modo-teste não devolve).
+                         --so-status (09/11): só coletar_abertos (as 4 fontes) + retrato
+                         vigia_stokki_abertos, mantendo a ultima_acao; nada na Vuupt;
+                         trava pipeline-status, espera a Stokki até 30 min.
  historico.py            Auditoria das execuções do pipeline; regenera
                          STATUS_IMPORTACAO.md (gerado, não editar à mão).
  somente_impressao.py    Só a Estação de Impressão.
