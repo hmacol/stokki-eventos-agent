@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from homologacao import ambiente as _ambiente
 _ambiente.exigir_coerencia(_RAIZ)
+from homologacao.guarda import EnvioBloqueadoHomolog as _EnvioBloqueadoHomolog
 
 (Path(__file__).parent / "dados").mkdir(parents=True, exist_ok=True)
 
@@ -855,6 +856,8 @@ def api_solicitacoes_portal_executar(solicitacao_id):
             resultado = solicitacoes_execucao.executar(conn, solicitacao_id, deps)
         finally:
             conn.close()
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 503 amigavel
     except Exception:
         logging.getLogger(__name__).exception(f"[solicitacoes-portal] Falha ao executar {solicitacao_id}")
         return jsonify({"ok": False, "mensagem": "Erro inesperado ao executar. Veja o log do painel."}), 500
@@ -2395,6 +2398,8 @@ def api_pedidos_parados_verificar_stokki():
         )
     except RuntimeError as e:
         return jsonify({"erro": str(e)}), 409
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 503 amigavel
     except Exception as e:
         logging.getLogger(__name__).exception("Falha ao verificar pedidos parados na Stokki")
         return jsonify({"erro": str(e)}), 500
@@ -2782,6 +2787,8 @@ def api_planejamento_sem_rota_hoje():
     load da página numa consulta ao vivo à VUUPT."""
     try:
         return jsonify(torre_controle.contar_sem_rota(date.today()))
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 503 amigavel
     except Exception as e:
         logging.getLogger(__name__).exception("Falha ao contar sem rota de hoje")
         return jsonify({"erro": str(e)}), 500
