@@ -2713,11 +2713,12 @@ def api_torre_duplicar():
 @exige_mesma_origem
 def api_pedidos_acao_reenvio():
     """Ação Reenvio da tela /pedidos: novo serviço #PS-N-R<k> na Vuupt, com motivo."""
-    body = request.get_json(silent=True) or {}
-    try:
-        service_id = int(body["service_id"])
-    except (KeyError, TypeError, ValueError):
-        return jsonify({"erro": "service_id ausente ou inválido."}), 400
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    service_id, erro = _service_id_do_corpo(body)
+    if erro:
+        return erro
     try:
         r = acoes_pedidos.reenviar(service_id, str(body.get("motivo") or ""), session.get("usuario", ""))
     except Exception as e:
@@ -2726,6 +2727,16 @@ def api_pedidos_acao_reenvio():
     if not r.get("ok"):
         return jsonify({"erro": r.get("erro") or "Falha ao reenviar."}), 400
     return jsonify(r)
+
+
+def _corpo_json():
+    """(body, erro): corpo JSON das rotas /api/pedidos/acao/*; erro e uma resposta 400 se nao for um objeto."""
+    body = request.get_json(silent=True)
+    if body is None:
+        body = {}
+    if not isinstance(body, dict):
+        return None, (jsonify({"erro": "Corpo da requisição inválido (esperado um objeto JSON)."}), 400)
+    return body, None
 
 
 def _service_id_do_corpo(body):
@@ -2740,7 +2751,10 @@ def _service_id_do_corpo(body):
 @exige_mesma_origem
 def api_pedidos_acao_cancelar_vuupt():
     """Ação Cancelar Vuupt da tela /pedidos (só a Vuupt; a Stokki é outra ação)."""
-    service_id, erro = _service_id_do_corpo(request.get_json(silent=True) or {})
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    service_id, erro = _service_id_do_corpo(body)
     if erro:
         return erro
     try:
@@ -2762,7 +2776,9 @@ def api_pedidos_acao_cancelar_vuupt():
 @exige_mesma_origem
 def api_pedidos_acao_cancelar_stokki():
     """Ação Cancelar Stokki da tela /pedidos (só a Stokki; a Vuupt é outra ação). Pode levar ~30 s por pedido."""
-    body = request.get_json(silent=True) or {}
+    body, erro = _corpo_json()
+    if erro:
+        return erro
     codigo = str(body.get("codigo") or "").strip()
     if not codigo:
         return jsonify({"erro": "codigo ausente."}), 400
@@ -2781,7 +2797,9 @@ def api_pedidos_acao_cancelar_stokki():
 @exige_mesma_origem
 def api_pedidos_acao_endereco():
     """Ação Alterar endereço da tela /pedidos (edita direto na Vuupt)."""
-    body = request.get_json(silent=True) or {}
+    body, erro = _corpo_json()
+    if erro:
+        return erro
     service_id, erro = _service_id_do_corpo(body)
     if erro:
         return erro
@@ -2800,7 +2818,9 @@ def api_pedidos_acao_endereco():
 @exige_mesma_origem
 def api_pedidos_acao_agendar():
     """Ação Agendar da tela /pedidos (nova data e janela na Vuupt)."""
-    body = request.get_json(silent=True) or {}
+    body, erro = _corpo_json()
+    if erro:
+        return erro
     service_id, erro = _service_id_do_corpo(body)
     if erro:
         return erro
@@ -2820,7 +2840,9 @@ def api_pedidos_acao_agendar():
 @exige_mesma_origem
 def api_pedidos_acao_checar_dia_fixo():
     """Antes de Agendar na tela /pedidos: quais pedidos ficam fora do dia fixo da região. Só lê."""
-    body = request.get_json(silent=True) or {}
+    body, erro = _corpo_json()
+    if erro:
+        return erro
     try:
         service_ids = [int(s) for s in body.get("service_ids") or []]
     except (TypeError, ValueError):

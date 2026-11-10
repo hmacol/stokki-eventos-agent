@@ -20,6 +20,12 @@ for _p in (_RAIZ, _AQUI):
 from nucleo import banco  # noqa: E402
 import acoes_pedidos  # noqa: E402
 
+import importlib.util  # noqa: E402
+_spec = importlib.util.spec_from_file_location("painel_agentes_app", _AQUI / "painel_agentes.py")
+painel_agentes = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = painel_agentes  # o Flask acha a pasta templates/ pelo modulo registrado
+_spec.loader.exec_module(painel_agentes)
+
 
 class VuuptFalso:
     def __init__(self, servicos):
@@ -202,6 +208,10 @@ class _BancoTemp(unittest.TestCase):
 
 
 class TestCancelarVuupt(_BancoTemp):
+    @staticmethod
+    def _v(status="not_assigned"):
+        return VuuptFalso({101: {"id": 101, "code": "#PS-1", "status": status}})
+
     def _rota_com_agente(self, agent_id):
         conn = banco.conectar()
         cur = conn.execute("INSERT INTO nucleo_rotas (data_rota, agent_id) VALUES ('2026-11-10', ?)", (agent_id,))
@@ -211,31 +221,57 @@ class TestCancelarVuupt(_BancoTemp):
 
     def test_cancela_e_registra(self):
         canc = mock.Mock(return_value={"ok": True, "ja_estava": False, "erro": ""})
-        r = acoes_pedidos.cancelar_vuupt(101, "hugo", token="t", cancelar=canc)
+        r = acoes_pedidos.cancelar_vuupt(101, "hugo", token="t", cancelar=canc, vuupt=self._v())
         self.assertTrue(r["ok"], r)
-        canc.assert_called_once_with("t", 101)
+        canc.assert_called_once()
         args, kw = self.trat.call_args
         self.assertEqual(args[:3], ("#PS-1", "PEDIDOS", "CANCELADO_MANUAL"))
         self.assertIn("hugo: ", kw["texto"])
         self.assertEqual(kw["service_id"], 101)
 
+    def test_servico_nao_lido_nao_cancela(self):
+        canc = mock.Mock()
+        r = acoes_pedidos.cancelar_vuupt(101, "hugo", token="t", cancelar=canc, vuupt=VuuptFalso({}))
+        self.assertFalse(r["ok"])
+        self.assertIn("não achei o serviço na Vuupt agora", r["erro"])
+        canc.assert_not_called()
+
+    def test_on_route_ao_vivo_recusa_sem_cancelar(self):
+        for st in ("on_route", "arrived"):
+            canc = mock.Mock()
+            r = acoes_pedidos.cancelar_vuupt(101, "hugo", token="t", cancelar=canc, vuupt=self._v(st))
+            self.assertEqual(r["erro"], "motorista a caminho ou no local: fale com ele antes de cancelar")
+            canc.assert_not_called()
+
+    def test_done_recusa_em_portugues(self):
+        canc = mock.Mock()
+        r = acoes_pedidos.cancelar_vuupt(101, "hugo", token="t", cancelar=canc, vuupt=self._v("done"))
+        self.assertEqual(r["erro"], "pedido já finalizado na Vuupt: não dá pra cancelar")
+        canc.assert_not_called()
+
+    def test_repassa_o_mesmo_cliente_vuupt(self):
+        canc = mock.Mock(return_value={"ok": True, "ja_estava": False, "erro": ""})
+        v = self._v()
+        acoes_pedidos.cancelar_vuupt(101, "hugo", token="t", cancelar=canc, vuupt=v)
+        canc.assert_called_once_with("t", 101, vuupt=v)
+
     def test_motorista_a_caminho_repassa_recusa(self):
         canc = mock.Mock(return_value={"ok": False, "ja_estava": False,
                                        "erro": "servico 101 esta 'on_route' na Vuupt: nao cancela sozinho"})
-        r = acoes_pedidos.cancelar_vuupt(101, "hugo", token="t", cancelar=canc)
+        r = acoes_pedidos.cancelar_vuupt(101, "hugo", token="t", cancelar=canc, vuupt=self._v())
         self.assertFalse(r["ok"])
         self.assertEqual(r["erro"], "motorista a caminho ou no local: fale com ele antes de cancelar")
         self.trat.assert_not_called()
 
     def test_outro_erro_passa_direto(self):
         canc = mock.Mock(return_value={"ok": False, "ja_estava": False, "erro": "Vuupt: 500"})
-        r = acoes_pedidos.cancelar_vuupt(101, "hugo", token="t", cancelar=canc)
+        r = acoes_pedidos.cancelar_vuupt(101, "hugo", token="t", cancelar=canc, vuupt=self._v())
         self.assertFalse(r["ok"])
         self.assertEqual(r["erro"], "Vuupt: 500")
 
     def test_ja_cancelado_nao_registra(self):
         canc = mock.Mock(return_value={"ok": True, "ja_estava": True, "erro": ""})
-        r = acoes_pedidos.cancelar_vuupt(101, "hugo", token="t", cancelar=canc)
+        r = acoes_pedidos.cancelar_vuupt(101, "hugo", token="t", cancelar=canc, vuupt=self._v())
         self.assertTrue(r["ok"])
         self.assertTrue(r["ja_estava"])
         self.trat.assert_not_called()
@@ -243,14 +279,14 @@ class TestCancelarVuupt(_BancoTemp):
     def test_lalamove_avisa(self):
         self._rota_com_agente(555)
         canc = mock.Mock(return_value={"ok": True, "ja_estava": False, "erro": ""})
-        r = acoes_pedidos.cancelar_vuupt(101, "hugo", token="t", agent_lalamove=555, cancelar=canc)
+        r = acoes_pedidos.cancelar_vuupt(101, "hugo", token="t", agent_lalamove=555, cancelar=canc, vuupt=self._v())
         self.assertTrue(r["ok"])
         self.assertIn("Lalamove", r["aviso"])
 
     def test_sem_lalamove_sem_aviso(self):
         self._rota_com_agente(777)
         canc = mock.Mock(return_value={"ok": True, "ja_estava": False, "erro": ""})
-        r = acoes_pedidos.cancelar_vuupt(101, "hugo", token="t", agent_lalamove=555, cancelar=canc)
+        r = acoes_pedidos.cancelar_vuupt(101, "hugo", token="t", agent_lalamove=555, cancelar=canc, vuupt=self._v())
         self.assertEqual(r["aviso"], "")
 
 
@@ -267,6 +303,7 @@ class TestCancelarStokki(_BancoTemp):
         self.abrir = abrir
         c = mock.patch("stokki.cancelar.cancelar_pedido",
                        side_effect=lambda s, i, m, prefixo=None: {"ok": True, "situacao": "Cancelado",
+                                                                  "situacao_antes": "Aguardando Transportador",
                                                                   "ja_estava": False, "erro": ""})
         self.canc = c.start()
         self.addCleanup(c.stop)
@@ -307,7 +344,7 @@ class TestCancelarStokki(_BancoTemp):
         acoes_pedidos.cancelar_stokki("PS-1", "cliente desistiu do pedido", "hugo", abrir_sessao=self.abrir)
         args, kw = self.trat.call_args
         self.assertEqual(args[1:3], ("PEDIDOS", "CANCELADO_STOKKI"))
-        for trecho in ("hugo: ", "cliente desistiu do pedido", "Cancelado"):
+        for trecho in ("hugo: ", "cliente desistiu do pedido", "Aguardando Transportador → Cancelado"):
             self.assertIn(trecho, kw["texto"])
 
     def test_falha_de_um_nao_para_os_outros_e_nao_registra_o_que_falhou(self):
@@ -399,6 +436,34 @@ class TestEnderecoEAgendar(_BancoTemp):
             self.assertIn("não achei o serviço na Vuupt agora", r["erro"])
         self.editar_endereco_pedido.assert_not_called()
         self.reagendar_pedido.assert_not_called()
+
+
+class TestRotasCorpoInvalido(unittest.TestCase):
+    """Rotas /api/pedidos/acao/*: corpo JSON que nao e objeto vira 400 JSON, nunca HTML 500."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self._tmp.cleanup)
+        db = Path(self._tmp.name) / "dados.db"
+        for p in (mock.patch.object(banco, "DB_PATH", db),
+                  mock.patch.object(painel_agentes.acesso_telas, "DB_PATH", db),
+                  mock.patch.object(painel_agentes.contadores_menu, "contadores", return_value={})):
+            p.start()
+            self.addCleanup(p.stop)
+        painel_agentes.app.config["TESTING"] = True
+        self.cliente = painel_agentes.app.test_client()
+        with self.cliente.session_transaction() as sess:
+            sess["nivel_acesso"] = "operador"
+            sess["usuario"] = "teste"
+
+    def test_corpo_nao_objeto_da_400_json(self):
+        for rota in ("cancelar-stokki", "cancelar-vuupt", "reenvio", "endereco", "agendar", "checar-dia-fixo"):
+            for corpo in ([1], "texto"):
+                r = self.cliente.post(f"/api/pedidos/acao/{rota}", json=corpo,
+                                      headers={"Origin": "http://localhost"})
+                self.assertEqual(r.status_code, 400, (rota, corpo))
+                self.assertTrue(r.is_json, (rota, corpo))
+                self.assertIn("erro", r.get_json())
 
 
 if __name__ == "__main__":

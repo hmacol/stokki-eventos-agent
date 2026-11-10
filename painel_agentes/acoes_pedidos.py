@@ -173,15 +173,29 @@ def _agente_da_ultima_rota(service_id: int):
 
 
 def cancelar_vuupt(service_id: int, usuario: str, *, token: str, agent_lalamove: int = 0,
-                   cancelar=None) -> dict:
-    """Cancela o servico na Vuupt (tira a parada do rascunho/rota). Recusa motorista a caminho/no local."""
+                   cancelar=None, vuupt=None) -> dict:
+    """Cancela o servico na Vuupt (tira a parada do rascunho/rota). Recusa motorista a caminho/no local.
+    Le o status antes: buscar_servico_por_id devolve None em qualquer falha e o cancelar_servico_completo
+    pularia a guarda de andamento."""
     if cancelar is None:
         from roteirizacao.cancelar_servico import cancelar_servico_completo as cancelar
-    r = cancelar(token, service_id)
+    vuupt = vuupt or _vuupt_padrao()
+    atual = vuupt.buscar_servico_por_id(service_id)
+    if not atual:
+        return {"ok": False, "ja_estava": False, "erro": "não achei o serviço na Vuupt agora, tente de novo.", "aviso": ""}
+    if atual.get("status") in ("on_route", "arrived"):
+        return {"ok": False, "ja_estava": False, "aviso": "",
+                "erro": "motorista a caminho ou no local: fale com ele antes de cancelar"}
+    if atual.get("status") == "done":
+        return {"ok": False, "ja_estava": False, "aviso": "",
+                "erro": "pedido já finalizado na Vuupt: não dá pra cancelar"}
+    r = cancelar(token, service_id, vuupt=vuupt)
     if not r.get("ok"):
         erro = r.get("erro") or "Falha ao cancelar na Vuupt."
         if "on_route" in erro or "arrived" in erro:
             erro = "motorista a caminho ou no local: fale com ele antes de cancelar"
+        elif "'done'" in erro:
+            erro = "pedido já finalizado na Vuupt: não dá pra cancelar"
         return {"ok": False, "ja_estava": False, "erro": erro, "aviso": ""}
     aviso = ""
     if agent_lalamove and _agente_da_ultima_rota(service_id) == agent_lalamove:
@@ -238,8 +252,8 @@ def cancelar_stokki(codigo: str, motivo: str, usuario: str, *, abrir_sessao=None
                 if r.get("ok") and not r.get("ja_estava"):
                     tratativas.registrar_evento(
                         codigo.strip(), "PEDIDOS", "CANCELADO_STOKKI",
-                        texto=f"{usuario}: cancelado na Stokki (PS-{id_stokki}, situação depois: "
-                              f"{r.get('situacao') or '?'}): {motivo}")
+                        texto=f"{usuario}: cancelado na Stokki (PS-{id_stokki}, situação: "
+                              f"{r.get('situacao_antes') or '?'} → {r.get('situacao') or '?'}): {motivo}")
     except RuntimeError as e:
         if not resultados:
             return {"ok": False, "resultados": [], "erro": f"{e}, tente em alguns minutos."}

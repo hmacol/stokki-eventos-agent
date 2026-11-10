@@ -55,6 +55,7 @@ class CancelarPedido(unittest.TestCase):
                     post=_Resp(200, "", {"success": True, "processing": True}))
         r = cancelar.cancelar_pedido(s, 39959, "Portal Fresh Hub: cliente desistiu", dormir=lambda n: None)
         self.assertEqual((r["ok"], r["situacao"], r["ja_estava"]), (True, "Cancelado", False))
+        self.assertEqual(r["situacao_antes"], "Aguardando Transportador")
         url, kw = s.posts[0]
         self.assertTrue(url.endswith("/inventory/outbound/cancel"))
         self.assertEqual(kw["files"]["_token"], (None, "TOKEN123"))
@@ -66,6 +67,7 @@ class CancelarPedido(unittest.TestCase):
         s = _Sessao([_Resp(200, _pagina("Cancelado"))])
         r = cancelar.cancelar_pedido(s, 39959, "Portal Fresh Hub: cliente desistiu")
         self.assertEqual((r["ok"], r["ja_estava"], s.posts), (True, True, []))
+        self.assertEqual(r["situacao_antes"], "Cancelado")
 
     def test_expedido_nao_cancela(self):
         s = _Sessao([_Resp(200, _pagina("Enviado"))])

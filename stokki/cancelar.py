@@ -64,11 +64,11 @@ def cancelar_pedido(sessao, id_stokki: int, motivo: str, dormir=time.sleep,
     situacao, token = situacao_e_token(sessao, id_stokki)
     sit = situacao.lower()
     if "cancel" in sit:
-        return {"ok": True, "situacao": situacao, "ja_estava": True, "erro": ""}
+        return {"ok": True, "situacao": situacao, "situacao_antes": situacao, "ja_estava": True, "erro": ""}
     if any(p in sit for p in ("enviado", "sent", "expedido")):
-        return {"ok": False, "situacao": situacao, "ja_estava": False, "erro": f"pedido ja expedido na Stokki ({situacao})"}
+        return {"ok": False, "situacao": situacao, "situacao_antes": situacao, "ja_estava": False, "erro": f"pedido ja expedido na Stokki ({situacao})"}
     if not token:
-        return {"ok": False, "situacao": situacao, "ja_estava": False, "erro": "formulario de cancelamento nao encontrado na pagina"}
+        return {"ok": False, "situacao": situacao, "situacao_antes": situacao, "ja_estava": False, "erro": "formulario de cancelamento nao encontrado na pagina"}
 
     resp = sessao.post(
         URL_CANCEL,
@@ -82,7 +82,7 @@ def cancelar_pedido(sessao, id_stokki: int, motivo: str, dormir=time.sleep,
         corpo = {}
     if resp.status_code != 200 or not corpo.get("success", True):
         erros = corpo.get("errors") or corpo.get("message") or resp.text[:200]
-        return {"ok": False, "situacao": situacao, "ja_estava": False, "erro": f"Stokki {resp.status_code}: {erros}"}
+        return {"ok": False, "situacao": situacao, "situacao_antes": situacao, "ja_estava": False, "erro": f"Stokki {resp.status_code}: {erros}"}
 
     if corpo.get("processing"):
         concluiu = False
@@ -96,11 +96,11 @@ def cancelar_pedido(sessao, id_stokki: int, motivo: str, dormir=time.sleep,
             except ValueError:
                 pass
         if not concluiu:
-            return {"ok": False, "situacao": situacao, "ja_estava": False,
+            return {"ok": False, "situacao": situacao, "situacao_antes": situacao, "ja_estava": False,
                     "erro": f"cancelamento ainda em processamento depois de {TENTATIVAS_POLL * INTERVALO_POLL}s"}
 
     depois, _ = situacao_e_token(sessao, id_stokki)
     ok = "cancel" in depois.lower()
     logger.info(f"Stokki: pedido {id_stokki} -> {depois!r} ({'ok' if ok else 'NAO cancelou'})")
-    return {"ok": ok, "situacao": depois, "ja_estava": False,
+    return {"ok": ok, "situacao": depois, "situacao_antes": situacao, "ja_estava": False,
             "erro": "" if ok else f"Stokki aceitou mas a situacao ficou {depois!r}"}
