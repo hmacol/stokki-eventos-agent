@@ -4,6 +4,7 @@ Tela /pedidos: todos os pedidos em tabela (Hugo, 09/11).
 
     py -3.11 -m unittest test_pedidos_tabela   (de dentro de painel_agentes/)
 """
+import re
 import sys
 import tempfile
 import unittest
@@ -138,6 +139,17 @@ class TestTelaPedidos(unittest.TestCase):
         self.assertRegex(html, r'<tr[^>]*data-service-id="302"[^>]*data-codigo="PS-3-R1"[^>]*data-status="EM_ROTA"')
         # modal de baixa usa a lista fixa de justificativas
         self.assertIn('value="canhoto_depois"', html)
+
+    def test_linha_leva_embarcador_e_destinatario_para_o_lote(self):
+        # Endereço em lote só com o mesmo embarcador e destinatário: a tela compara pelos data-* da linha
+        self._logar("operador")
+        html = self.cliente.get("/pedidos").get_data(as_text=True)
+        linhas = re.findall(r"<tr data-service-id=[^>]*>", html)
+        self.assertEqual(len(linhas), 2)
+        for tr in linhas:
+            self.assertIn('data-sender-id="10"', tr)
+        self.assertRegex(html, r'<tr[^>]*data-codigo="PS-1"[^>]*data-sender-id="10"[^>]*data-destinatario="MERCADO CENTRAL"')
+        self.assertRegex(html, r'<tr[^>]*data-codigo="PS-2"[^>]*data-sender-id="10"[^>]*data-destinatario="PADARIA"')
 
     def test_niveis_sem_acesso_nao_entram(self):
         self._logar("galpao")

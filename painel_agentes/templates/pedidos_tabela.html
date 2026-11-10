@@ -225,7 +225,7 @@
     </thead>
     <tbody>
       {% for l in r.linhas %}
-      <tr data-service-id="{{ l.vuupt_service_id or '' }}" data-codigo="{{ l.codigo_servico or l.codigo }}" data-status="{{ l.status or '' }}" data-destinatario="{{ l.destinatario or '' }}">
+      <tr data-service-id="{{ l.vuupt_service_id or '' }}" data-codigo="{{ l.codigo_servico or l.codigo }}" data-status="{{ l.status or '' }}" data-sender-id="{{ l.sender_id if l.sender_id is not none else '' }}" data-destinatario="{{ l.destinatario or '' }}" data-embarcador="{{ l.embarcador or '' }}">
         {% if pode_agir %}<td class="col-acoes"><input type="checkbox" name="sel" aria-label="Selecionar {{ l.codigo }}"><button type="button" class="menu-acoes" aria-haspopup="menu" aria-expanded="false" aria-label="Ações de {{ l.codigo }}" title="Ações">⋯</button></td>{% endif %}
         {% for c in colunas %}
         {% set v = l[c.chave] %}
@@ -430,6 +430,7 @@
         </div>
       </div>
       <div data-secao="endereco" hidden>
+        <ul class="avisos" id="endereco-recusa" hidden></ul>
         <div class="campo">
           <label for="endereco-novo">Novo endereço</label>
           <input type="text" id="endereco-novo" placeholder="Rua, número, bairro, cidade">
@@ -517,7 +518,8 @@
   function rotuloStatus(s) { return ROTULO_STATUS[s] || s || "sem status"; }
   function linha(tr) {
     return { tr, serviceId: tr.dataset.serviceId || "", codigo: tr.dataset.codigo || "",
-             status: tr.dataset.status || "", destinatario: tr.dataset.destinatario || "" };
+             status: tr.dataset.status || "", destinatario: tr.dataset.destinatario || "",
+             senderId: tr.dataset.senderId || "", embarcador: tr.dataset.embarcador || "" };
   }
   function psDoCodigo(codigo) {
     const ids = (codigo || "").toUpperCase().match(/PS-\d+/g) || [];
@@ -706,6 +708,9 @@
     $("agendar-fim").value = "18:00";
     $("agendar-aviso").hidden = true;
     limparFilhos($("agendar-aviso"));
+    $("endereco-recusa").hidden = true;
+    limparFilhos($("endereco-recusa"));
+    $("endereco-novo").disabled = false;
     $("baixa-foto-canhoto").value = "";
     $("baixa-foto-nota").value = "";
     $("baixa-foto-nota").disabled = true;
@@ -728,6 +733,30 @@
     if (itens.some((it) => it.serviceId && VIVOS.indexOf(it.status) >= 0)) {
       ul.appendChild(li("A Vuupt continua com o pedido; use Cancelar Vuupt se for o caso."));
     }
+  }
+
+  // Endereço em lote grava o MESMO texto em todos: só com o mesmo embarcador e o mesmo
+  // destinatário (nome sem diferença de caixa/espaços). Devolve true se pode; senão mostra quem difere.
+  function chaveDestino(it) { return `${it.senderId}|${it.destinatario.trim().toUpperCase()}`; }
+  function recusarEnderecoLote(itens) {
+    const grupos = {};
+    itens.forEach((it) => { (grupos[chaveDestino(it)] = grupos[chaveDestino(it)] || []).push(it); });
+    const chaves = Object.keys(grupos);
+    const semDados = itens.some((it) => !it.senderId || !it.destinatario.trim());
+    if (chaves.length === 1 && !semDados) return true;
+    const ul = $("endereco-recusa");
+    limparFilhos(ul);
+    ul.appendChild(li("Endereço em lote só para pedidos do mesmo embarcador e do mesmo destinatário."));
+    chaves.forEach((k) => {
+      const g = grupos[k];
+      const dest = g[0].destinatario.trim() || "(sem destinatário)";
+      const emb = g[0].embarcador.trim() || (g[0].senderId ? `embarcador ${g[0].senderId}` : "sem embarcador");
+      ul.appendChild(li(`${dest} (${emb}): ${listaCodigos(g)}`));
+    });
+    ul.appendChild(li("Selecione só os de um destinatário, ou altere um a um."));
+    ul.hidden = false;
+    $("endereco-novo").disabled = true;
+    return false;
   }
 
   async function carregarCanhotos(l) {
@@ -788,6 +817,9 @@
     if (!itens.length) {
       $("modal-form").hidden = true;
       mostrarResumo([], [], [], pulados);
+    } else if (acao === "endereco" && lote && !recusarEnderecoLote(itens)) {
+      atual.bloqueado = true;
+      botaoConfirmar.disabled = true;
     } else if (acao === "cancelar_stokki") {
       avisosStokki(itens);
     } else if (acao === "canhoto") {
@@ -795,7 +827,8 @@
     }
     modal.hidden = false;
     const foco = modal.querySelector(`[data-secao="${acao}"]:not([hidden]) textarea, [data-secao="${acao}"]:not([hidden]) input`);
-    (foco && !$("modal-form").hidden ? foco : (botaoConfirmar.hidden ? botaoFechar : botaoConfirmar)).focus();
+    (foco && !foco.disabled && !$("modal-form").hidden ? foco
+      : (botaoConfirmar.hidden || botaoConfirmar.disabled ? botaoFechar : botaoConfirmar)).focus();
   }
 
   function fecharModal() {
@@ -981,7 +1014,7 @@
   }
 
   botaoConfirmar.addEventListener("click", async () => {
-    if (!atual || atual.rodando || atual.terminou) return;
+    if (!atual || atual.rodando || atual.terminou || atual.bloqueado) return;
     const acao = atual.acao;
     const p = lerFormulario(acao);
     if (p.erro) { mostrarErro(p.erro); return; }
