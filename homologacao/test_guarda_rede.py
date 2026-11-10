@@ -122,7 +122,8 @@ class TestGuardaRede(unittest.TestCase):
 
     def test_camadas_instaladas(self):
         self.assertTrue(guarda.INSTALADA)
-        self.assertEqual(guarda.CAMADAS, ["smtp", "imap", "requests"])
+        # httpx, playwright e socket vem depois; conferidos em test_guarda_processo
+        self.assertEqual(guarda.CAMADAS[:3], ["smtp", "imap", "requests"])
 
     def test_smtp_registra_e_finge_sucesso(self):
         ok = email_utils.enviar_email(["a@b.com"], "Assunto X", "<p>oi</p>", {"remetente": "x@y.com"})
@@ -217,8 +218,9 @@ class TestGuardaRede(unittest.TestCase):
         self.assertEqual(registro.listar_envios()[0]["destino"], p.url)
 
     def test_instalar_idempotente(self):
+        antes = list(guarda.CAMADAS)
         guarda.instalar()
-        self.assertEqual(guarda.CAMADAS, ["smtp", "imap", "requests"])
+        self.assertEqual(guarda.CAMADAS, antes)
         guarda.desinstalar()
         self.assertIs(smtplib.SMTP, _SMTP_ORIGINAL)
 

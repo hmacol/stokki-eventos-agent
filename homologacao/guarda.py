@@ -4,15 +4,22 @@ instalar() troca, no processo inteiro, os pontos por onde algo sairia:
 - smtplib.SMTP / SMTP_SSL -> SMTPFalso (registra a mensagem e finge sucesso)
 - imaplib.IMAP4 / IMAP4_SSL -> recusa (registra e levanta)
 - requests.adapters.HTTPAdapter.send -> decide por host e metodo (ve cada salto de redirecionamento)
+- httpx (HTTPTransport / AsyncHTTPTransport) -> so api.anthropic.com
+- playwright sync_playwright / async_playwright -> recusa (nenhum Chromium sobe)
+- socket (rede de seguranca) -> getaddrinfo so resolve NOMES_PERMITIDOS; connect/sendto so para
+  IP vindo dessa resolucao, AF_UNIX ou loopback:8100. Segura urllib, http.client, urllib3 cru, LMTP, POP3.
 Cada bloqueio vai para registro.registrar_envio. Na duvida, bloqueia.
 Novas camadas entram em _INSTALADORES; _trocar() guarda o original para desinstalar().
+Camada opcional (httpx, playwright) cujo pacote nao existe devolve False e nao entra em CAMADAS.
 """
 import copy
 import email
+import errno
 import imaplib
 import ipaddress
 import json
 import smtplib
+import socket
 import threading
 import time
 from urllib.parse import urlsplit
@@ -331,6 +338,207 @@ def _instalar_requests():
     _trocar(requests.adapters.HTTPAdapter, "send", _send_guardado)
 
 
+# ---------------------------------------------------------------- httpx
+
+_handle_original = None
+_handle_async_original = None
+
+
+def _httpx_barrar(request):
+    """Volta se o destino for api.anthropic.com; senao registra e levanta httpx.ConnectError."""
+    import httpx
+    url = str(request.url)
+    metodo = (request.method or "").upper()
+    try:
+        host = _alvo(url)[1]
+    except Exception:
+        host = ""
+    if host == "api.anthropic.com" and decidir(metodo, url) == "passa":
+        return
+    try:
+        corpo = request.content
+    except Exception:
+        corpo = None  # corpo em streaming ainda nao lido
+    registro.registrar_envio(canal_de(url), metodo, url, None, corpo)
+    try:
+        partes = urlsplit(url)
+        alvo = "%s://%s%s" % (partes.scheme, partes.netloc.rpartition("@")[2], partes.path)  # sem query
+    except Exception:
+        alvo = metodo
+    raise httpx.ConnectError(_mensagem(alvo), request=request)
+
+
+def _handle_guardado(self, request):
+    _httpx_barrar(request)
+    return _handle_original(self, request)
+
+
+async def _handle_async_guardado(self, request):
+    _httpx_barrar(request)
+    return await _handle_async_original(self, request)
+
+
+def _instalar_httpx():
+    global _handle_original, _handle_async_original
+    try:
+        import httpx
+    except ImportError:
+        return False  # sem httpx no ambiente, nada a trocar
+    _handle_original = httpx.HTTPTransport.handle_request
+    _handle_async_original = httpx.AsyncHTTPTransport.handle_async_request
+    _trocar(httpx.HTTPTransport, "handle_request", _handle_guardado)
+    _trocar(httpx.AsyncHTTPTransport, "handle_async_request", _handle_async_guardado)
+
+
+# ---------------------------------------------------------------- playwright
+
+def _playwright_recusado(nome):
+    def recusar(*a, **k):
+        registro.registrar_envio("playwright", None, nome, None, None)
+        raise EnvioBloqueadoHomolog(_mensagem("Playwright (%s)" % nome))
+    recusar.__name__ = recusar.__qualname__ = nome
+    return recusar
+
+
+def _instalar_playwright():
+    # troca o atributo do modulo: quem faz `from playwright.sync_api import sync_playwright` depois leva o falso
+    try:
+        import playwright.async_api as async_api
+        import playwright.sync_api as sync_api
+    except ImportError:
+        return False
+    _trocar(sync_api, "sync_playwright", _playwright_recusado("sync_playwright"))
+    _trocar(async_api, "async_playwright", _playwright_recusado("async_playwright"))
+
+
+# ---------------------------------------------------------------- socket
+
+NOMES_PERMITIDOS = {"api.vuupt.com", "maps.googleapis.com", "storage.googleapis.com", "oauth2.googleapis.com",
+                    "api.anthropic.com", "viacep.com.br", "brasilapi.com.br", "localhost"}
+
+_IPS_RESOLVIDOS = set()  # ipaddress dos nomes permitidos ja resolvidos neste processo
+_trava_ips = threading.Lock()
+_AF_UNIX = getattr(socket, "AF_UNIX", None)
+_no_socketpair = threading.local()  # socketpair do Windows conecta no proprio listener de loopback
+
+_getaddrinfo_original = None
+_connect_original = None
+_connect_ex_original = None
+_sendto_original = None
+_sendmsg_original = None
+_socketpair_original = None
+
+
+def _ip(host):
+    """ipaddress do host (str/bytes) ou None se nao for IP literal."""
+    try:
+        if isinstance(host, (bytes, bytearray)):
+            host = bytes(host).decode("ascii")
+        if not isinstance(host, str):
+            return None
+        return ipaddress.ip_address(host)
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
+def _getaddrinfo_guardado(host, port, *a, **k):
+    # IP literal e None (bind) passam: quem decide e o connect
+    if host is None or _ip(host) is not None:
+        return _getaddrinfo_original(host, port, *a, **k)
+    nome = bytes(host).decode("ascii", "replace") if isinstance(host, (bytes, bytearray)) else str(host)
+    if nome.lower().rstrip(".") not in NOMES_PERMITIDOS:
+        registro.registrar_envio("socket", "getaddrinfo", "%s:%s" % (nome, port), None, None)
+        raise socket.gaierror(socket.EAI_NONAME, _mensagem(nome))
+    resultado = _getaddrinfo_original(host, port, *a, **k)
+    with _trava_ips:
+        for item in resultado:
+            try:
+                ip = _ip(item[4][0])
+            except Exception:
+                ip = None
+            if ip is not None:
+                _IPS_RESOLVIDOS.add(ip)
+    return resultado
+
+
+def _conexao_permitida(sock, endereco):
+    familia = sock.family
+    if _AF_UNIX is not None and familia == _AF_UNIX:
+        return True
+    if familia not in (socket.AF_INET, socket.AF_INET6):
+        return False
+    try:
+        ip, porta = _ip(endereco[0]), endereco[1]
+    except Exception:
+        return False
+    if ip is None:
+        return False  # nome direto no connect: nao passou pela resolucao guardada
+    if ip.is_loopback:
+        return porta == PORTA_FRESHHUB or getattr(_no_socketpair, "ativo", False)
+    with _trava_ips:
+        return ip in _IPS_RESOLVIDOS
+
+
+def _barrar_conexao(sock, endereco, metodo):
+    if _conexao_permitida(sock, endereco):
+        return
+    try:
+        host, porta = endereco[0], endereco[1]
+        destino = ("[%s]:%s" if ":" in str(host) else "%s:%s") % (host, porta)
+    except Exception:
+        destino = repr(endereco)
+    registro.registrar_envio("socket", metodo, destino, None, None)
+    raise ConnectionRefusedError(errno.ECONNREFUSED, _mensagem(destino))
+
+
+def _connect_guardado(self, endereco):
+    _barrar_conexao(self, endereco, "connect")
+    return _connect_original(self, endereco)
+
+
+def _connect_ex_guardado(self, endereco):
+    _barrar_conexao(self, endereco, "connect")
+    return _connect_ex_original(self, endereco)
+
+
+def _sendto_guardado(self, dados, *resto):
+    # UDP nao passa pelo connect: sendto(dados, endereco) ou sendto(dados, flags, endereco)
+    _barrar_conexao(self, resto[-1] if resto else None, "sendto")
+    return _sendto_original(self, dados, *resto)
+
+
+def _sendmsg_guardado(self, *args):
+    if len(args) >= 4:  # sendmsg(buffers, ancdata, flags, endereco)
+        _barrar_conexao(self, args[3], "sendto")
+    return _sendmsg_original(self, *args)
+
+
+def _socketpair_guardado(*a, **k):
+    _no_socketpair.ativo = True
+    try:
+        return _socketpair_original(*a, **k)
+    finally:
+        _no_socketpair.ativo = False
+
+
+def _instalar_socket():
+    global _getaddrinfo_original, _connect_original, _connect_ex_original
+    global _sendto_original, _sendmsg_original, _socketpair_original
+    _getaddrinfo_original = socket.getaddrinfo
+    _connect_original = socket.socket.connect
+    _connect_ex_original = socket.socket.connect_ex
+    _sendto_original = socket.socket.sendto
+    _socketpair_original = socket.socketpair
+    _trocar(socket, "getaddrinfo", _getaddrinfo_guardado)
+    _trocar(socket.socket, "connect", _connect_guardado)
+    _trocar(socket.socket, "connect_ex", _connect_ex_guardado)
+    _trocar(socket.socket, "sendto", _sendto_guardado)
+    if hasattr(socket.socket, "sendmsg"):
+        _sendmsg_original = socket.socket.sendmsg
+        _trocar(socket.socket, "sendmsg", _sendmsg_guardado)
+    _trocar(socket, "socketpair", _socketpair_guardado)
+
+
 # ---------------------------------------------------------------- instalar
 
 def _trocar(objeto, atributo, novo):
@@ -342,6 +550,9 @@ _INSTALADORES = [
     ("smtp", _instalar_smtp),
     ("imap", _instalar_imap),
     ("requests", _instalar_requests),
+    ("httpx", _instalar_httpx),
+    ("playwright", _instalar_playwright),
+    ("socket", _instalar_socket),
 ]
 
 
@@ -353,8 +564,8 @@ def instalar():
             return
         try:
             for nome, instalador in _INSTALADORES:
-                instalador()
-                CAMADAS.append(nome)
+                if instalador() is not False:  # False = pacote opcional ausente
+                    CAMADAS.append(nome)
         except Exception:
             desinstalar()
             raise
@@ -363,7 +574,9 @@ def instalar():
 
 def desinstalar():
     """Restaura os originais. So para testes."""
-    global INSTALADA, _send_original, _ultimo_vuupt
+    global INSTALADA, _send_original, _ultimo_vuupt, _handle_original, _handle_async_original
+    global _getaddrinfo_original, _connect_original, _connect_ex_original
+    global _sendto_original, _sendmsg_original, _socketpair_original
     with _trava_instalar:
         while _ORIGINAIS:
             objeto, atributo, valor = _ORIGINAIS.pop()
@@ -371,4 +584,9 @@ def desinstalar():
         CAMADAS.clear()
         _send_original = None
         _ultimo_vuupt = None
+        _handle_original = _handle_async_original = None
+        _getaddrinfo_original = _connect_original = _connect_ex_original = None
+        _sendto_original = _sendmsg_original = _socketpair_original = None
+        with _trava_ips:
+            _IPS_RESOLVIDOS.clear()
         INSTALADA = False
