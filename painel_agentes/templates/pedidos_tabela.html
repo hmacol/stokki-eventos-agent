@@ -59,6 +59,14 @@
   .chip { display: inline-block; padding: 1px 8px; border-radius: 100px; border: 1px solid var(--borda); font-size: 11.5px; }
   .chip.ok { border-color: var(--acento); color: var(--acento); }
   .chip.ruim { border-color: var(--erro); color: var(--erro); }
+  /* Uma linha por pedido: o selo abre as tentativas embaixo (igual ao portal). */
+  .selo-tent { margin-left: 6px; border: 1px solid var(--borda); background: none; color: var(--texto-suave); border-radius: 100px; padding: 1px 8px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .selo-tent:hover, .selo-tent[aria-expanded="true"] { color: var(--acento); border-color: var(--acento); }
+  table.tab-pedidos tr.tentativas td { background: var(--fundo); padding: 6px 10px 8px; white-space: normal; max-width: none; position: static; }
+  table.tab-pedidos tr.tentativas ul { list-style: none; margin: 0; padding: 0; }
+  table.tab-pedidos tr.tentativas li { padding: 2px 0; font-size: 12px; }
+  table.tab-pedidos tr.tentativas li b { display: inline-block; min-width: 44px; font-variant-numeric: tabular-nums; }
+  table.tab-pedidos tr.tentativas .falha { color: var(--erro); }
   .vazio { padding: 28px; text-align: center; color: var(--texto-suave); font-size: 13px; }
   .paginacao { display: flex; gap: 6px; align-items: center; justify-content: flex-end; margin-top: 10px; font-size: 12.5px; color: var(--texto-suave); flex-wrap: wrap; }
   .paginacao a, .paginacao span.desligado { padding: 5px 11px; border: 1px solid var(--borda); border-radius: 6px; text-decoration: none; color: var(--texto); background: var(--superficie); }
@@ -179,12 +187,28 @@
             <a class="link-linha" href="{{ url_for('consulta_rota', rota_id=l.rota_id) }}">{{ v or ('#' ~ l.rota_id) }}</a>
           {%- elif c.chave == 'status' and v -%}
             <span class="chip{% if v == 'ENTREGUE' %} ok{% elif v in ('INSUCESSO', 'CANCELADO') %} ruim{% endif %}">{{ formatar(c.chave, v) }}</span>
+            {%- if l.historico|length > 1 -%}
+            <button type="button" class="selo-tent" data-tentativas="{{ l.sender_id }}|{{ l.pedido_base }}" aria-expanded="false">{{ l.historico|length }} tentativas ▾</button>
+            {%- endif -%}
           {%- else -%}
             {{ formatar(c.chave, v) }}
           {%- endif -%}
         </td>
         {% endfor %}
       </tr>
+      {% if l.historico|length > 1 %}
+      <tr class="tentativas" data-de="{{ l.sender_id }}|{{ l.pedido_base }}" hidden><td colspan="{{ colunas|length }}"><ul>
+        {%- for t in l.historico %}
+        <li><b>{{ t.data[8:10] ~ '/' ~ t.data[5:7] if t.data else '' }}</b>
+          <a class="link-linha" href="{{ url_for('consulta_pedido', codigo=t.codigo) }}">{{ t.codigo }}</a> ·
+          <span{% if t.situacao == 'INSUCESSO' %} class="falha"{% endif %}>{{ formatar('status', t.situacao) }}</span>
+          {%- if t.motivo %} · {{ t.motivo }}{% endif %}
+          {%- if t.rota %} · {% if t.rota_id %}<a class="link-linha" href="{{ url_for('consulta_rota', rota_id=t.rota_id) }}">{{ t.rota }}</a>{% else %}{{ t.rota }}{% endif %}{% endif %}
+          {%- if t.motorista %} · {{ t.motorista }}{% endif %}
+          {%- if t.conclusao %} · {{ t.conclusao[11:16] }}{% endif %}</li>
+        {%- endfor %}
+      </ul></td></tr>
+      {% endif %}
       {% else %}
       <tr><td colspan="{{ colunas|length }}" class="vazio" style="position:static;">Nenhum pedido com esses filtros entre {{ formatar('data', r.periodo.de) }} e {{ formatar('data', r.periodo.ate) }}.</td></tr>
       {% endfor %}
@@ -249,6 +273,35 @@
   document.getElementById("colunas-fechar").addEventListener("click", function () { abrir(false); });
   document.addEventListener("keydown", function (e) { if (e.key === "Escape") abrir(false); });
   document.addEventListener("click", function (e) { if (!painel.contains(e.target) && e.target !== botao) abrir(false); });
+
+  // Selo "N tentativas": abre/fecha o histórico do pedido; as chaves abertas
+  // sobrevivem a paginar e filtrar (sessionStorage).
+  var CHAVE_TENT = "pedidos.tentativas.abertas";
+  function lerAbertas() {
+    try { var v = JSON.parse(sessionStorage.getItem(CHAVE_TENT) || "[]"); if (Array.isArray(v)) return v; } catch (e) {}
+    return [];
+  }
+  function salvarAbertas(lista) { try { sessionStorage.setItem(CHAVE_TENT, JSON.stringify(lista)); } catch (e) {} }
+  function linhaDe(chave) {
+    return Array.prototype.filter.call(document.querySelectorAll("tr.tentativas"), function (tr) { return tr.dataset.de === chave; })[0];
+  }
+  function mostrar(selo, sim) {
+    var tr = linhaDe(selo.dataset.tentativas);
+    if (tr) tr.hidden = !sim;
+    selo.setAttribute("aria-expanded", sim ? "true" : "false");
+  }
+  var abertas = lerAbertas();
+  Array.prototype.forEach.call(document.querySelectorAll(".selo-tent"), function (selo) {
+    var chave = selo.dataset.tentativas;
+    if (abertas.indexOf(chave) >= 0) mostrar(selo, true);
+    selo.addEventListener("click", function () {
+      var sim = selo.getAttribute("aria-expanded") !== "true";
+      mostrar(selo, sim);
+      var lista = lerAbertas().filter(function (k) { return k !== chave; });
+      if (sim) lista.push(chave);
+      salvarAbertas(lista);
+    });
+  });
 
   // A linha de filtros gruda logo abaixo da de títulos, seja qual for a altura dela.
   var tabela = document.querySelector(".tab-pedidos");

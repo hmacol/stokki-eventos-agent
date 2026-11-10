@@ -74,6 +74,27 @@ class TestTelaPedidos(unittest.TestCase):
         self.assertEqual(linhas, ["Código;Referência;Status;Histórico de tentativas",
                                   "PS-1;NF9;Entregue;", "PS-2;NF9;Insucesso;"])
 
+    def test_selo_de_tentativas_abre_historico_do_pedido(self):
+        conn = banco.conectar()
+        hoje = date.today().isoformat()
+        for codigo, status in (("PS-3", "INSUCESSO"), ("PS-3-R1", "ABERTO")):
+            conn.execute("""INSERT INTO nucleo_pedidos (codigo, titulo, status, destinatario_nome, remetente_nome,
+                                                        sender_id, caixas, criado_em_provedor)
+                            VALUES (?, ?, ?, 'LOJA', 'FRUTA FINA', 10, 4, ?)""",
+                         (codigo, f"#{codigo} - NF3 / FF / LOJA", status, f"{hoje} 08:00:00"))
+        # a tentativa que falhou é a parada da rota (insucesso); a reentrega ainda está aberta
+        rota = conn.execute("""INSERT INTO nucleo_rotas (data_rota, nome, agent_id, motorista_nome, status)
+                               VALUES (?, 'Rota 7', 501, 'JOAO', 'CONCLUIDA')""", (hoje,)).lastrowid
+        conn.execute("""INSERT INTO nucleo_paradas (rota_id, ordem, codigo, situacao, motivo_texto)
+                        VALUES (?, 1, 'PS-3', 'INSUCESSO', 'Ausente')""", (rota,))
+        conn.commit()
+        conn.close()
+        self._logar("leitura")
+        html = self.cliente.get("/pedidos?q=PS-3").get_data(as_text=True)
+        self.assertEqual(html.count('data-tentativas="10|PS-3"'), 1)
+        self.assertIn("2 tentativas", html)
+        self.assertIn('class="tentativas"', html)
+
     def test_niveis_sem_acesso_nao_entram(self):
         self._logar("galpao")
         self.assertNotEqual(self.cliente.get("/pedidos").status_code, 200)
