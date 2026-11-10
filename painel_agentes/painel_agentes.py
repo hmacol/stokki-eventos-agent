@@ -74,7 +74,9 @@ from planejamento_rotas import (
     salvar_disponibilidade_dia, marcar_disponibilidade_periodo, limpar_disponibilidade_dia,
     publicar_oferta_rascunho, publicar_ofertas_em_lote, despublicar_oferta_rascunho, despublicar_ofertas_em_lote,
     ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento, SITUACAO_STOKKI_NAO_PRONTA,
+    placas_veiculos_vuupt, seletor_veiculos,
 )
+from regras import veiculos as veiculos_regras
 from avisar_motoristas_rotas import notificar_oferta_motoristas, push_ofertas_vps
 from motoristas import dados_pagina_motoristas, listar_agentes_vuupt_nao_cadastrados, cadastrar_motorista, editar_motorista, MotoristaNaoEncontrado
 from expedicao import listar_rotas_do_dia, gerar_romaneio_rota, excluir_pedido_da_rota, MOTIVOS_EXCLUSAO
@@ -4008,9 +4010,34 @@ def api_confirmar_envio():
     except KeyError as e:
         return jsonify({"erro": str(e)}), 400
 
-    token = _carregar_config().get("vuupt_api", {}).get("token", "")
-    resultados = [rascunhos_rota.enviar_rascunho(rid, token) for rid in rascunho_ids]
+    config = _carregar_config()
+    token = config.get("vuupt_api", {}).get("token", "")
+    # motorista de verdade sai sempre com carro: barra por rascunho, os outros seguem
+    placas = placas_veiculos_vuupt(config)
+    resultados = []
+    for rid in rascunho_ids:
+        erro_carro = veiculos_regras.verificar_carro(rascunhos_rota.buscar_rascunho(rid) or {}, placas)
+        if erro_carro:
+            resultados.append({"ok": False, "rascunho_id": rid, "erro": erro_carro})
+        else:
+            resultados.append(rascunhos_rota.enviar_rascunho(rid, token))
     return jsonify({"ok": True, "resultados": resultados})
+
+
+@app.route("/api/planejamento/veiculos")
+@requer_auth(niveis=("total", "operador", "logistica"))
+def api_planejamento_veiculos():
+    """Carros pro seletor do card (sem generico/excluido, dono primeiro, com
+    rodizio_no_dia). Lista da Vuupt com cache de 10 min."""
+    try:
+        data_alvo = date.fromisoformat(request.args.get("data") or date.today().isoformat())
+    except ValueError:
+        return jsonify({"erro": "data invalida (use AAAA-MM-DD)"}), 400
+    try:
+        return jsonify({"veiculos": seletor_veiculos(_carregar_config(), data_alvo)})
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao listar veiculos da Vuupt")
+        return jsonify({"erro": str(e)}), 502
 
 
 @app.route("/api/planejamento/cancelar-rota", methods=["POST"])

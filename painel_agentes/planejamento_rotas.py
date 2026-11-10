@@ -62,6 +62,7 @@ from regras.tipo_carga_embarcador import (
 from regras.tipo_veiculo import tipo_por_codigo, TIPOS_VEICULO
 from regras.prioridade_ofertas import carregar_historico_justica
 from regras import feriados
+from regras import veiculos as veiculos_regras
 from retiradas.regras_retirada import (PREFIXO_TITULO, STATUSES_ABERTOS, config_retiradas,
                                        data_prevista_do_servico, eh_servico_retirada)
 # regras.ofertas_rota / regras.resumo_oferta (marketplace de rotas, Hugo
@@ -273,6 +274,33 @@ MINIMO_ROTAS_PARA_MEDIANA = 3  # com menos rotas no lote, "2x fora da mediana" n
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+
+def listar_veiculos_vuupt(config: dict) -> list[dict]:
+    """Veiculos da Vuupt com cache de 10 min (regras.veiculos). Levanta se a
+    Vuupt falhar; quem so precisa da placa usa placas_veiculos_vuupt."""
+    from nucleo.vuupt_agentes import VuuptAgentes
+    return veiculos_regras.listar_veiculos_cacheado(
+        lambda: VuuptAgentes(config.get("vuupt_api", {}).get("token", "")).listar_veiculos())
+
+
+def placas_veiculos_vuupt(config: dict) -> dict | None:
+    """{vehicle_id: placa}, ou None se a lista nao carregou (so vehicle_id vazio
+    conta como 'sem carro' nesse caso). Usado pela tela e pelo envio manual."""
+    try:
+        return veiculos_regras.placas_por_id(listar_veiculos_vuupt(config))
+    except Exception as e:
+        logger.warning(f"Lista de veiculos da Vuupt indisponivel, checando so o vehicle_id: {e}")
+        return None
+
+
+def seletor_veiculos(config: dict, data_alvo: date) -> list[dict]:
+    """Carros do seletor do card: sem generico/excluido, dono primeiro, com
+    rodizio_no_dia. Levanta se a Vuupt falhar."""
+    cfg = config.get("motoristas", {})
+    catalogo = CatalogoMotoristas.carregar(cfg.get("planilha", ""), cfg.get("json_fallback", ""))
+    motoristas = [{"vehicle_id": m.vehicle_id, "nome": m.nome} for m in catalogo.motoristas]
+    return veiculos_regras.listar_para_seletor(listar_veiculos_vuupt(config), motoristas, data_alvo)
 
 
 def _ressincronizar(vuupt: VuuptClient, service_ids: list[int]) -> None:
@@ -1169,6 +1197,9 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
         anotar_situacao_stokki(r["paradas"], pool_e_agendados["retrato_stokki"])
         if r["status"] == rascunhos_rota.STATUS_ENVIADO and r["vuupt_route_id"]:
             _anotar_rota_enviada(r)
+
+    # motorista de verdade sai sempre com carro (spec 4): a tela mostra o aviso
+    veiculos_regras.anotar_falta_carro(rascunhos, placas_veiculos_vuupt(config))
 
     cfg_motoristas = config.get("motoristas", {})
     catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))
