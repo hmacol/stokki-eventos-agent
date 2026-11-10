@@ -26,7 +26,13 @@ def _html_do_email(conteudo: str):
         msg = email.message_from_string(conteudo or "")
         for parte in msg.walk():
             if parte.get_content_type() == "text/html":
-                carga = parte.get_payload(decode=False)
+                # a guarda grava a parte ja decodificada (8bit); se vier ainda
+                # em base64/quoted-printable, decodifica pelo charset da parte
+                if (parte.get("Content-Transfer-Encoding") or "").strip().lower() in ("base64", "quoted-printable"):
+                    carga = (parte.get_payload(decode=True) or b"").decode(
+                        parte.get_content_charset() or "utf-8", errors="replace")
+                else:
+                    carga = parte.get_payload(decode=False)
                 if isinstance(carga, str) and carga.strip():
                     return carga
     except Exception:

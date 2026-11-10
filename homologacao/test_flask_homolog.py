@@ -105,5 +105,42 @@ class TestFlaskHomolog(unittest.TestCase):
         self.assertEqual(c.get("/homologacao/envios/9999").status_code, 404)
 
 
+
+class TestEmailDeVerdade(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        p = mock.patch.object(registro, "CAMINHO_BANCO", Path(self.dir.name) / "d.db")
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_html_com_acento_do_enviar_email_real_sai_legivel(self):
+        import email_utils
+        guarda.instalar()
+        self.addCleanup(guarda.desinstalar)
+        texto = "Atenção: pedido não entregue — ação"
+        self.assertTrue(email_utils.enviar_email(["a@b.com"], "Aviso", "<p>%s</p>" % texto,
+                                                 {"remetente": "x@y.com"}))
+        row = registro.listar_envios("email")[0]
+        self.assertIn(texto, flask_homolog._html_do_email(row["conteudo"]))
+
+    def test_html_ainda_codificado_tambem_e_lido(self):
+        import email.message
+        texto = "Atenção — ação"
+        for cte in ("base64", "quoted-printable"):
+            m = email.message.EmailMessage()
+            m.set_content("x")
+            m.add_alternative("<p>%s</p>" % texto, subtype="html", cte=cte)
+            with self.subTest(cte=cte):
+                self.assertIn(texto, flask_homolog._html_do_email(m.as_string()))
+
+    def test_lista_escapa_html_do_registro(self):
+        registro.registrar_envio("email", "SMTP", "<script>d()</script>", "<script>r()</script>", "c")
+        c = _app(requer_auth=lambda **kw: (lambda g: g)).test_client()
+        corpo = c.get("/homologacao/envios").get_data(as_text=True)
+        self.assertNotIn("<script>", corpo)
+        self.assertIn("&lt;script&gt;r()", corpo)
+
+
 if __name__ == "__main__":
     unittest.main()
