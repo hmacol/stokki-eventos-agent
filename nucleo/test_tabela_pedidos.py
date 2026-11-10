@@ -159,8 +159,25 @@ class TestListar(_Base):
                          [("PS-1", "PS-1-R1", "EM_ROTA")])
 
     def test_entregue_vence_mesmo_mais_antigo(self):
+        # Regra de 10/11 (revisão final): entregue vence tentativa FECHADA mais nova e tentativa
+        # viva mais antiga que ele; só reentrega viva DEPOIS da entrega passa na frente (teste abaixo).
         self._pedido("PS-1", status="ENTREGUE"); self._parada(self._rota(_dia(-3)), "PS-1")
-        self._pedido("PS-1-R1", status="ABERTO", criado_provedor=f"{_dia(-1)} 09:00:00")
+        self._pedido("PS-1-R1", status="INSUCESSO", reentrega_de="PS-1")
+        self._parada(self._rota(_dia(-1)), "PS-1-R1", situacao="INSUCESSO")
+        self.assertEqual([l["codigo_servico"] for l in tp.listar({}, conn=self.conn)["linhas"]], ["PS-1"])
+        self.conn.execute("DELETE FROM nucleo_pedidos")
+        self._pedido("PS-1", status="ABERTO", criado_provedor=f"{_dia(-1)} 09:00:00")
+        self._pedido("PS-1-R1", status="ENTREGUE"); self._parada(self._rota(_dia(-3)), "PS-1-R1")
+        self.assertEqual([l["codigo_servico"] for l in tp.listar({}, conn=self.conn)["linhas"]], ["PS-1-R1"])
+
+    def test_reentrega_viva_depois_da_entrega_vira_a_linha(self):
+        self._pedido("PS-1", status="ENTREGUE"); self._parada(self._rota(_dia(-3)), "PS-1")
+        self._pedido("PS-1-R1", status="ABERTO", reentrega_de="PS-1", criado_provedor=f"{_dia(-1)} 09:00:00")
+        self.assertEqual([l["codigo_servico"] for l in tp.listar({}, conn=self.conn)["linhas"]], ["PS-1-R1"])
+
+    def test_reentrega_cancelada_depois_da_entrega_nao_esconde_a_entrega(self):
+        self._pedido("PS-1", status="ENTREGUE"); self._parada(self._rota(_dia(-3)), "PS-1")
+        self._pedido("PS-1-R1", status="CANCELADO", reentrega_de="PS-1", criado_provedor=f"{_dia(-1)} 09:00:00")
         self.assertEqual([l["codigo_servico"] for l in tp.listar({}, conn=self.conn)["linhas"]], ["PS-1"])
 
     def test_mesmo_dia_reentrega_aberta_vence_insucesso(self):

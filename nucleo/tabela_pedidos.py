@@ -147,16 +147,26 @@ base_raw AS (
     FROM norm pe LEFT JOIN ult u ON u.u_codigo = pe.codigo AND u.n = 1
 )
 """
-# Entregue vence sempre (tentativa depois da entrega é serviço duplicado); depois a data, o peso
-# do status (empate no mesmo dia) e o número da reentrega.
+# Linha principal do grupo: 1) reentrega VIVA (aberto/em rota) com -R maior que o da tentativa
+# entregue -- é um reenvio feito depois da entrega e não pode ficar escondido (revisão final, 10/11);
+# 2) entregue (vence tentativa fechada e tentativa mais antiga); depois a data, o peso do status
+# (empate no mesmo dia), o número da reentrega e o código.
 _SQL_BASE = _SQL_CTES + """,
-rank AS (
+com_entregue AS (
     SELECT base_raw.*,
-           ROW_NUMBER() OVER (PARTITION BY COALESCE(sender_id, -1), pedido_base
-                              ORDER BY (status = 'ENTREGUE') DESC, data_referencia DESC, peso DESC,
-                                       sufixo_r DESC) AS rn_grupo,
-           group_concat(codigo, ' ') OVER (PARTITION BY COALESCE(sender_id, -1), pedido_base) AS codigos_grupo
+           MAX(CASE WHEN status = 'ENTREGUE' THEN sufixo_r END)
+               OVER (PARTITION BY COALESCE(sender_id, -1), pedido_base) AS sufixo_r_entregue
     FROM base_raw
+),
+rank AS (
+    SELECT com_entregue.*,
+           ROW_NUMBER() OVER (PARTITION BY COALESCE(sender_id, -1), pedido_base
+                              ORDER BY COALESCE(status IN ('ABERTO', 'EM_ROTA')
+                                                AND sufixo_r > sufixo_r_entregue, 0) DESC,
+                                       (status = 'ENTREGUE') DESC, data_referencia DESC, peso DESC,
+                                       sufixo_r DESC, codigo) AS rn_grupo,
+           group_concat(codigo, ' ') OVER (PARTITION BY COALESCE(sender_id, -1), pedido_base) AS codigos_grupo
+    FROM com_entregue
 ),
 base AS (SELECT * FROM rank WHERE rn_grupo = 1)
 """
@@ -270,7 +280,6 @@ def listar(filtros: dict, pagina: int = 1, por_pagina: int = POR_PAGINA, ordem: 
         linhas = [dict(r) for r in rows]
         hist = tentativas([(l["sender_id"], l["pedido_base"]) for l in linhas], conn)
         for l in linhas:
-            l["service_status"] = l["status"]
             l["historico"] = hist.get((l["sender_id"], l["pedido_base"]), [])
         return {"linhas": linhas, "total": total, "total_caixas": tot["cx"],
                 "pagina": pagina, "paginas": paginas, "periodo": {"de": inicio, "ate": fim}}

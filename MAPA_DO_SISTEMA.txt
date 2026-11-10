@@ -928,7 +928,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  migrar_espelho_15_09.py   Migração única.
  consulta.py               Leitura para a tela /consulta.
  tabela_pedidos.py         Leitura para a tela /pedidos (todos os pedidos, colunas,
-                           filtros por coluna, CSV).
+                           filtros por coluna, CSV). Uma linha por pedido (original
+                           + reentregas); a principal é a reentrega viva com -R maior
+                           que a entregue, senão a entregue, senão a mais recente.
  relatorios_financeiro.py  Cópia dos relatórios Rotas/Serviços da Vuupt.
 
  App do motorista
