@@ -9,8 +9,9 @@ Hoje: Reenvio (novo servico #PS-N-R<k> copiado do existente).
 import logging
 import re
 import sys
+import threading
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 _AQUI = Path(__file__).parent
@@ -29,8 +30,20 @@ NIVEIS_ACAO = ("total", "operador", "logistica", "atendimento")
 # Status da Vuupt em que o servico nao esta mais vivo.
 VIVOS_VUUPT_FIM = ("done", "failed", "canceled", "cancelled")
 _MAX_TENTATIVAS_VUUPT = 20
+_FALTAS_SEGUIDAS_VUUPT = 3   # -Rk que nao existe: so para depois de 3 seguidos (R1 apagado, R2 vivo)
+_MAX_PS_STOKKI = 5           # cada PS leva ~30 s na Stokki
 
 _RE_REENTREGA = re.compile(r"-R\d.*$")
+
+# Um reenvio por pedido por vez (revisao final, 10/11): dois cliques ao mesmo tempo passavam os dois
+# pelas conferencias. Uma trava por (sender_id, codigo base); a do registro so protege o dicionario.
+_TRAVA_REGISTRO = threading.Lock()
+_TRAVAS_REENVIO: dict = {}
+
+
+def _trava_reenvio(chave) -> threading.Lock:
+    with _TRAVA_REGISTRO:
+        return _TRAVAS_REENVIO.setdefault(chave, threading.Lock())
 
 
 def _codigo_base(codigo: str) -> str:
@@ -111,6 +124,16 @@ def reenviar(service_id: int, motivo: str, usuario: str, *, vuupt=None, stokki=s
         grupo = servicos_do_grupo(conn, service_id)
     finally:
         conn.close()
+    base = _codigo_base(codigo)
+    sender_id = grupo[0]["sender_id"] if grupo else None
+    # Conferir e criar sob a trava do pedido: o segundo clique so entra depois que o primeiro criou
+    # (e o duplicar_pedido_manual, aqui dentro, confere o fingerprint ja_duplicado).
+    with _trava_reenvio((sender_id, base)):
+        return _conferir_e_criar(service_id, codigo, base, servico, grupo, insucesso, motivo, usuario,
+                                 vuupt, stokki)
+
+
+def _conferir_e_criar(service_id, codigo, base, servico, grupo, insucesso, motivo, usuario, vuupt, stokki) -> dict:
     for g in grupo:
         sid = g["vuupt_service_id"]
         if not sid or sid == service_id:
@@ -124,15 +147,18 @@ def reenviar(service_id: int, motivo: str, usuario: str, *, vuupt=None, stokki=s
             return _erro(f"a tentativa {g['codigo']} ainda está aberta na Vuupt.")
 
     # Pergunta direto a Vuupt por todas as tentativas (o nucleo pode nao conhecer alguma):
-    # o codigo base, depois -R1, -R2... (mesmo laco de duplicar_servico_por_insucesso).
-    base = _codigo_base(codigo)
+    # o codigo base, depois -R1, -R2... Um -Rk que falta nao encerra a busca (R1 apagado, R2 vivo):
+    # so para depois de _FALTAS_SEGUIDAS_VUUPT faltas seguidas.
     candidatos = [base] + [f"#{base}-R{k}" for k in range(1, _MAX_TENTATIVAS_VUUPT + 1)]
-    for i, cand in enumerate(candidatos):
+    faltas = 0
+    for cand in candidatos:
         achado = vuupt.buscar_servico_por_code(cand)
         if not achado:
-            if i == 0:
-                continue  # sem o base na Vuupt, ainda pode haver -R1
-            break
+            faltas += 1
+            if faltas >= _FALTAS_SEGUIDAS_VUUPT:
+                break
+            continue
+        faltas = 0
         if achado.get("id") == service_id:
             continue
         if not _terminal(achado):
@@ -235,6 +261,8 @@ def cancelar_stokki(codigo: str, motivo: str, usuario: str, *, abrir_sessao=None
     ids = list(dict.fromkeys(int(i) for i in re.findall(r"PS-(\d+)", (codigo or "").upper())))
     if not ids:
         return {"ok": False, "resultados": [], "erro": "código sem PS-<número>: não dá pra achar o pedido na Stokki."}
+    if len(ids) > _MAX_PS_STOKKI:
+        return {"ok": False, "resultados": [], "erro": f"no máximo {_MAX_PS_STOKKI} pedidos por vez."}
     from stokki import cancelar
     abrir_sessao = abrir_sessao or _abrir_sessao_stokki
     resultados = []
@@ -249,7 +277,12 @@ def cancelar_stokki(codigo: str, motivo: str, usuario: str, *, abrir_sessao=None
                     r = {"ok": False, "situacao": "", "erro": f"falha ao falar com a Stokki: {e}"}
                 resultados.append({"id_stokki": id_stokki, "ok": bool(r.get("ok")),
                                    "situacao": r.get("situacao") or "", "erro": r.get("erro") or ""})
-                if r.get("ok") and not r.get("ja_estava"):
+                if r.get("ok") and r.get("ja_estava"):
+                    # repetir depois de um poll perdido: a tratativa ainda guarda quem pediu
+                    tratativas.registrar_evento(
+                        codigo.strip(), "PEDIDOS", "CANCELADO_STOKKI",
+                        texto=f"{usuario}: cancelado na Stokki (PS-{id_stokki}, já estava cancelado): {motivo}")
+                elif r.get("ok"):
                     tratativas.registrar_evento(
                         codigo.strip(), "PEDIDOS", "CANCELADO_STOKKI",
                         texto=f"{usuario}: cancelado na Stokki (PS-{id_stokki}, situação: "
@@ -297,6 +330,8 @@ def agendar(service_id: int, data: str, hora_inicio: str, hora_fim: str, usuario
         d = datetime.strptime(data or "", "%Y-%m-%d")
     except ValueError:
         return {"ok": False, "erro": "Data inválida (use AAAA-MM-DD)."}
+    if d.date() < date.today():   # o painel roda em America/Sao_Paulo
+        return {"ok": False, "erro": "data no passado: escolha hoje ou um dia depois."}
     servico, erro = _servico_vivo(service_id, vuupt)
     if erro:
         return {"ok": False, "erro": erro}
@@ -336,7 +371,9 @@ def comprovantes(codigo_servico: str, *, token: str, conn) -> list[dict]:
             cid = _checklist_id(servico)
             if cid and cid not in vistos:
                 vistos.add(cid)
-                itens.append({"origem": "VUUPT", "rotulo": "Canhoto da Vuupt (PDF)",
+                insucesso = servico.get("status_done") == "failed"
+                itens.append({"origem": "VUUPT",
+                              "rotulo": "Foto do insucesso (Vuupt)" if insucesso else "Canhoto da Vuupt (PDF)",
                               "url": url_for("pedidos_canhoto_vuupt", checklist_id=int(cid), codigo=codigo)})
     except Exception as e:  # noqa: BLE001
         logger.warning("comprovantes %s: Vuupt indisponivel: %s", codigo, e)

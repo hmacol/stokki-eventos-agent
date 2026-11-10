@@ -2718,6 +2718,15 @@ def api_torre_duplicar():
     return jsonify(resultado)
 
 
+# Rotas /api/pedidos/acao/*: o detalhe da excecao fica so no log (revisao final, 10/11).
+_FALHA_ACAO_PEDIDOS = "Falha inesperada; o erro ficou no log do painel."
+
+
+def _autor_acao_pedidos() -> str:
+    """Quem assina a tratativa: login nominal, senao o nivel (nunca vazio, senao o texto comeca com ': ')."""
+    return session.get("usuario") or getattr(g, "nivel_acesso", "")
+
+
 @app.route("/api/pedidos/acao/reenvio", methods=["POST"])
 @requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
 @exige_mesma_origem
@@ -2730,10 +2739,10 @@ def api_pedidos_acao_reenvio():
     if erro:
         return erro
     try:
-        r = acoes_pedidos.reenviar(service_id, str(body.get("motivo") or ""), session.get("usuario", ""))
-    except Exception as e:
+        r = acoes_pedidos.reenviar(service_id, str(body.get("motivo") or ""), _autor_acao_pedidos())
+    except Exception:
         logging.getLogger(__name__).exception("reenvio pela tela Pedidos falhou")
-        return jsonify({"erro": f"Falha inesperada: {e}"}), 500
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
     if not r.get("ok"):
         return jsonify({"erro": r.get("erro") or "Falha ao reenviar."}), 400
     return jsonify(r)
@@ -2770,12 +2779,12 @@ def api_pedidos_acao_cancelar_vuupt():
     try:
         cfg = _carregar_config()
         r = acoes_pedidos.cancelar_vuupt(
-            service_id, session.get("usuario", ""),
+            service_id, _autor_acao_pedidos(),
             token=(cfg.get("vuupt_api") or {}).get("token", ""),
             agent_lalamove=int((cfg.get("lalamove") or {}).get("agent_id_vuupt") or 0))
-    except Exception as e:
+    except Exception:
         logging.getLogger(__name__).exception("cancelar Vuupt pela tela Pedidos falhou")
-        return jsonify({"erro": f"Falha inesperada: {e}"}), 500
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
     if not r.get("ok"):
         return jsonify({"erro": r.get("erro") or "Falha ao cancelar."}), 400
     return jsonify(r)
@@ -2793,10 +2802,10 @@ def api_pedidos_acao_cancelar_stokki():
     if not codigo:
         return jsonify({"erro": "codigo ausente."}), 400
     try:
-        r = acoes_pedidos.cancelar_stokki(codigo, str(body.get("motivo") or ""), session.get("usuario", ""))
-    except Exception as e:
+        r = acoes_pedidos.cancelar_stokki(codigo, str(body.get("motivo") or ""), _autor_acao_pedidos())
+    except Exception:
         logging.getLogger(__name__).exception("cancelar Stokki pela tela Pedidos falhou")
-        return jsonify({"erro": f"Falha inesperada: {e}"}), 500
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
     if not r.get("ok"):
         return jsonify({"erro": r.get("erro") or "Falha ao cancelar na Stokki.", "resultados": r.get("resultados", [])}), 400
     return jsonify(r)
@@ -2814,10 +2823,10 @@ def api_pedidos_acao_endereco():
     if erro:
         return erro
     try:
-        r = acoes_pedidos.alterar_endereco(service_id, str(body.get("endereco") or ""), session.get("usuario", ""))
-    except Exception as e:
+        r = acoes_pedidos.alterar_endereco(service_id, str(body.get("endereco") or ""), _autor_acao_pedidos())
+    except Exception:
         logging.getLogger(__name__).exception("alterar endereço pela tela Pedidos falhou")
-        return jsonify({"erro": f"Falha inesperada: {e}"}), 500
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
     if not r.get("ok"):
         return jsonify({"erro": r.get("erro") or "Falha ao alterar o endereço."}), 400
     return jsonify(r)
@@ -2836,10 +2845,10 @@ def api_pedidos_acao_agendar():
         return erro
     try:
         r = acoes_pedidos.agendar(service_id, str(body.get("data") or ""), str(body.get("hora_inicio") or ""),
-                                  str(body.get("hora_fim") or ""), session.get("usuario", ""))
-    except Exception as e:
+                                  str(body.get("hora_fim") or ""), _autor_acao_pedidos())
+    except Exception:
         logging.getLogger(__name__).exception("agendar pela tela Pedidos falhou")
-        return jsonify({"erro": f"Falha inesperada: {e}"}), 500
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
     if not r.get("ok"):
         return jsonify({"erro": r.get("erro") or "Falha ao agendar."}), 400
     return jsonify(r)
@@ -2849,12 +2858,15 @@ def api_pedidos_acao_agendar():
 @requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
 @exige_mesma_origem
 def api_pedidos_acao_marcar_entregue():
-    """Dar baixa com canhoto pela tela /pedidos: mesmo corpo (multipart) da Torre, nivel das acoes de pedido."""
+    """Dar baixa com canhoto pela tela /pedidos: mesmo corpo (multipart) da Torre, nivel das acoes de pedido.
+    Sem sucesso fica so na Torre (o nivel atendimento entra aqui e nao la)."""
+    if request.form.get("resultado") == "sem_sucesso":
+        return jsonify({"erro": "Sem sucesso não é feito pela tela Pedidos."}), 400
     try:
         return _marcar_entregue_pelo_form()
-    except Exception as e:
+    except Exception:
         logging.getLogger(__name__).exception("marcar entregue pela tela Pedidos falhou")
-        return jsonify({"erro": f"Falha inesperada: {e}"}), 500
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
 
 
 @app.route("/api/pedidos/acao/validar-lote-foto", methods=["POST"])
@@ -2864,13 +2876,13 @@ def api_pedidos_acao_validar_lote_foto():
     """Foto em massa na tela /pedidos: mesma validacao da Torre."""
     try:
         return _validar_lote_foto_do_json()
-    except Exception as e:
+    except Exception:
         logging.getLogger(__name__).exception("validar lote de foto pela tela Pedidos falhou")
-        return jsonify({"erro": f"Falha inesperada: {e}"}), 500
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
 
 
 _NIVEIS_LEITURA_CANHOTO = acoes_pedidos.NIVEIS_ACAO + ("leitura",)
-_RE_CODIGO_CANHOTO = re.compile(r"^PS-\d+(-[RC]\d+)?$")
+_RE_CODIGO_CANHOTO = re.compile(r"PS-\d+(-[RC]\d+)?")  # sempre com fullmatch ($ aceita "\n" no fim)
 
 
 @app.route("/api/pedidos/acao/comprovantes", methods=["GET"])
@@ -2878,7 +2890,7 @@ _RE_CODIGO_CANHOTO = re.compile(r"^PS-\d+(-[RC]\d+)?$")
 def api_pedidos_acao_comprovantes():
     """Canhotos de um pedido (Vuupt, manual, app), so leitura."""
     codigo = (request.args.get("codigo") or "").strip().lstrip("#").upper()
-    if not _RE_CODIGO_CANHOTO.match(codigo):
+    if not _RE_CODIGO_CANHOTO.fullmatch(codigo):
         return jsonify({"erro": "codigo ausente ou inválido."}), 400
     from nucleo import banco as nucleo_banco
     try:
@@ -2888,9 +2900,9 @@ def api_pedidos_acao_comprovantes():
                 codigo, token=_carregar_config().get("vuupt_api", {}).get("token", ""), conn=conn)
         finally:
             conn.close()
-    except Exception as e:
+    except Exception:
         logging.getLogger(__name__).exception("comprovantes pela tela Pedidos falhou")
-        return jsonify({"erro": f"Falha inesperada: {e}"}), 500
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
     return jsonify({"ok": True, "comprovantes": itens})
 
 
@@ -2901,7 +2913,7 @@ def pedidos_canhoto_vuupt(checklist_id):
     cache e por checklist (canhoto_<codigo>_<id>.pdf): nunca grava no canhoto_<codigo>.pdf que o portal,
     o e-mail de entrega e a expedicao leem."""
     codigo = (request.args.get("codigo") or "").strip().lstrip("#").upper()
-    if not _RE_CODIGO_CANHOTO.match(codigo):
+    if not _RE_CODIGO_CANHOTO.fullmatch(codigo):
         abort(404)
     from notificacao_entregas import vuupt_entregas
     token = _carregar_config().get("vuupt_api", {}).get("token", "")
@@ -2922,7 +2934,7 @@ def pedidos_canhoto_vuupt(checklist_id):
 @requer_auth(niveis=_NIVEIS_LEITURA_CANHOTO)
 def pedidos_canhoto_manual(codigo):
     """PDF do canhoto manual. Codigo validado ANTES de montar caminho (vem da URL)."""
-    if not _RE_CODIGO_CANHOTO.match(codigo):
+    if not _RE_CODIGO_CANHOTO.fullmatch(codigo):
         abort(404)
     from nucleo import canhotos_manuais
     caminho = canhotos_manuais.caminho_canhoto_manual(codigo)
@@ -2945,9 +2957,9 @@ def api_pedidos_acao_checar_dia_fixo():
         return jsonify({"erro": "service_ids inválidos."}), 400
     try:
         resultado = checar_reagendamento_dia_fixo(service_ids, str(body.get("data") or ""))
-    except Exception as e:
+    except Exception:
         logging.getLogger(__name__).exception("checar dia fixo pela tela Pedidos falhou")
-        return jsonify({"erro": f"Falha inesperada: {e}"}), 500
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400
     return jsonify(resultado)
@@ -3991,7 +4003,7 @@ def pedidos_tabela():
                            colunas=tabela_pedidos.COLUNAS, datas=tabela_pedidos.DATAS,
                            status=tabela_pedidos.STATUS, fluxos=tabela_pedidos.FLUXOS,
                            formatar=tabela_pedidos.formatar,
-                           pode_agir=session.get("nivel_acesso") in acoes_pedidos.NIVEIS_ACAO,
+                           pode_agir=getattr(g, "nivel_acesso", session.get("nivel_acesso")) in acoes_pedidos.NIVEIS_ACAO,
                            justificativas=justificativas_sem_canhoto.JUSTIFICATIVAS)
 
 

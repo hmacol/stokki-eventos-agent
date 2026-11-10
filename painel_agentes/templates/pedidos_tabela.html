@@ -532,6 +532,7 @@
     if (acao === "trocar_canhoto" || acao === "nota_fiscal") return "em breve";
     if (acao === "canhoto") return "";
     if (acao === "cancelar_stokki") {
+      if (l.status === "ENTREGUE") return "pedido já entregue";
       return psDoCodigo(l.codigo).length ? "" : "Código sem PS-<número>: não dá pra achar o pedido na Stokki.";
     }
     if (!l.serviceId) return "Pedido sem serviço na Vuupt.";

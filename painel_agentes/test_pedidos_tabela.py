@@ -151,6 +151,27 @@ class TestTelaPedidos(unittest.TestCase):
         self.assertRegex(html, r'<tr[^>]*data-codigo="PS-1"[^>]*data-sender-id="10"[^>]*data-destinatario="MERCADO CENTRAL"')
         self.assertRegex(html, r'<tr[^>]*data-codigo="PS-2"[^>]*data-sender-id="10"[^>]*data-destinatario="PADARIA"')
 
+    def test_acesso_personalizado_com_a_tela_ve_as_acoes(self):
+        # Conta com lista de telas age como "total" dentro delas (requer_auth poe em g.nivel_acesso);
+        # o nivel gravado na sessao segue "leitura".
+        acesso = painel_agentes.acesso_telas
+        conn = acesso.conectar()
+        acesso.criar(conn, "ana", "Ana", "leitura", "senha-123", "teste", (), equipe="Logística")
+        conn.execute("UPDATE painel_usuarios SET trocar_senha = 0 WHERE usuario = 'ana'")
+        conn.commit()
+        acesso.salvar(conn, "ana", ["pedidos_tabela"], "teste")
+        conn.close()
+        with self.cliente.session_transaction() as sess:
+            sess["nivel_acesso"] = "leitura"
+            sess["usuario"] = "ana"
+        html = self.cliente.get("/pedidos").get_data(as_text=True)
+        self.assertIn('class="menu-acoes"', html)
+
+    def test_cancelar_stokki_bloqueado_em_pedido_entregue(self):
+        self._logar("operador")
+        html = self.cliente.get("/pedidos").get_data(as_text=True)
+        self.assertRegex(html, r'acao === "cancelar_stokki"\) \{\s*if \(l\.status === "ENTREGUE"\) return "pedido já entregue";')
+
     def test_niveis_sem_acesso_nao_entram(self):
         self._logar("galpao")
         self.assertNotEqual(self.cliente.get("/pedidos").status_code, 200)

@@ -7,7 +7,10 @@ Acoes da tela /pedidos (Hugo, 10/11): Reenvio.
 import contextlib
 import sys
 import tempfile
+import threading
+import time
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -39,6 +42,9 @@ class VuuptFalso:
     def buscar_servico_por_id(self, sid):
         self.chamadas.append(sid)
         return self.servicos.get(sid)
+
+
+FALHA_FIXA = "Falha inesperada; o erro ficou no log do painel."
 
 
 class TestReenvio(unittest.TestCase):
@@ -180,6 +186,39 @@ class TestReenvio(unittest.TestCase):
         self.assertFalse(r["ok"])
         self.assertIn("não achei o serviço na Vuupt", r["erro"])
         self.dup.assert_not_called()
+
+    def test_r1_ausente_nao_para_a_busca_e_r2_vivo_recusa(self):
+        v = self._vuupt(s101="done")
+        v.por_code["PS-1-R2"] = {"id": 777, "code": "#PS-1-R2", "status": "on_route"}
+        r = acoes_pedidos.reenviar(101, "motivo ok", "hugo", vuupt=v, stokki=self.stokki)
+        self.assertFalse(r["ok"])
+        self.assertIn("PS-1-R2", r["erro"])
+        self.dup.assert_not_called()
+
+    def test_reenvios_simultaneos_criam_um_so(self):
+        feitos, criados = set(), []
+
+        def duplicar_lento(service_id, codigo, **kw):
+            # como o real: confere o fingerprint, cria, marca -- sem trava propria
+            if service_id in feitos:
+                return {"ok": False, "erro": "Esse pedido já foi duplicado antes (→ PS-1-R1)."}
+            time.sleep(0.3)
+            criados.append(service_id)
+            feitos.add(service_id)
+            return {"ok": True, "novo_code": "#PS-1-R1"}
+        self.dup.side_effect = duplicar_lento
+        v = self._vuupt(s101="done")
+        resultados = []
+
+        def clicar():
+            resultados.append(acoes_pedidos.reenviar(101, "motivo ok", "hugo", vuupt=v, stokki=self.stokki))
+        threads = [threading.Thread(target=clicar) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(10)
+        self.assertEqual(criados, [101])
+        self.assertEqual(sorted(r["ok"] for r in resultados), [False, True])
 
     def test_segundo_clique_ja_duplicado(self):
         self.dup.return_value = {"ok": False, "erro": "Esse pedido já foi duplicado antes (→ PS-1-R1)."}
@@ -347,6 +386,28 @@ class TestCancelarStokki(_BancoTemp):
         for trecho in ("hugo: ", "cliente desistiu do pedido", "Aguardando Transportador → Cancelado"):
             self.assertIn(trecho, kw["texto"])
 
+    def test_ja_estava_cancelado_registra_com_nota(self):
+        # repetir depois de um poll perdido: a tratativa guarda o autor mesmo assim
+        self.canc.side_effect = lambda s, i, m, prefixo=None: {"ok": True, "situacao": "Cancelado",
+                                                               "situacao_antes": "Cancelado", "ja_estava": True,
+                                                               "erro": ""}
+        r = acoes_pedidos.cancelar_stokki("PS-1", "cliente desistiu do pedido", "hugo", abrir_sessao=self.abrir)
+        self.assertTrue(r["ok"], r)
+        args, kw = self.trat.call_args
+        self.assertEqual(args[1:3], ("PEDIDOS", "CANCELADO_STOKKI"))
+        for trecho in ("hugo: ", "já estava cancelado", "cliente desistiu do pedido"):
+            self.assertIn(trecho, kw["texto"])
+
+    def test_mais_de_5_ps_recusa_sem_abrir_a_stokki(self):
+        r = acoes_pedidos.cancelar_stokki("PS-1 PS-2 PS-3 PS-4 PS-5 PS-6", "cliente desistiu do pedido", "hugo",
+                                          abrir_sessao=self.abrir)
+        self.assertFalse(r["ok"])
+        self.assertIn("no máximo 5 pedidos por vez", r["erro"])
+        self.assertEqual(self.aberturas, 0)
+        r = acoes_pedidos.cancelar_stokki("PS-1 PS-2 PS-3 PS-4 PS-5", "cliente desistiu do pedido", "hugo",
+                                          abrir_sessao=self.abrir)
+        self.assertTrue(r["ok"], r)
+
     def test_falha_de_um_nao_para_os_outros_e_nao_registra_o_que_falhou(self):
         def lado(s, i, m, prefixo=None):
             if i == 1:
@@ -357,6 +418,9 @@ class TestCancelarStokki(_BancoTemp):
         self.assertFalse(r["ok"])
         self.assertEqual([x["ok"] for x in r["resultados"]], [False, True])
         self.assertEqual(self.trat.call_count, 1)
+
+
+DEPOIS = (date.today() + timedelta(days=2)).isoformat()   # agendar recusa data no passado
 
 
 class TestEnderecoEAgendar(_BancoTemp):
@@ -405,20 +469,30 @@ class TestEnderecoEAgendar(_BancoTemp):
         self.trat.assert_not_called()
 
     def test_agendar_registra_janela(self):
-        r = acoes_pedidos.agendar(101, "2026-11-12", "08:00", "12:00", "hugo", vuupt=self._vuupt("not_assigned"))
+        r = acoes_pedidos.agendar(101, DEPOIS, "08:00", "12:00", "hugo", vuupt=self._vuupt("not_assigned"))
         self.assertTrue(r["ok"], r)
-        self.reagendar_pedido.assert_called_once_with(101, "2026-11-12", "08:00", "12:00")
+        self.reagendar_pedido.assert_called_once_with(101, DEPOIS, "08:00", "12:00")
         args, kw = self.trat.call_args
         self.assertEqual(args[:3], ("#PS-1", "PEDIDOS", "REAGENDADO"))
-        self.assertEqual(kw["texto"], "hugo: agendado 12/11 08:00–12:00")
+        self.assertEqual(kw["texto"], f"hugo: agendado {DEPOIS[8:10]}/{DEPOIS[5:7]} 08:00–12:00")
+
+    def test_agendar_recusa_data_no_passado_e_aceita_hoje(self):
+        ontem = (date.today() - timedelta(days=1)).isoformat()
+        r = acoes_pedidos.agendar(101, ontem, "08:00", "12:00", "hugo", vuupt=self._vuupt("not_assigned"))
+        self.assertFalse(r["ok"])
+        self.assertIn("data no passado", r["erro"])
+        self.reagendar_pedido.assert_not_called()
+        r = acoes_pedidos.agendar(101, date.today().isoformat(), "08:00", "12:00", "hugo",
+                                  vuupt=self._vuupt("not_assigned"))
+        self.assertTrue(r["ok"], r)
 
     def test_agendar_recusa_cancelado(self):
-        r = acoes_pedidos.agendar(101, "2026-11-12", "08:00", "12:00", "hugo", vuupt=self._vuupt("canceled"))
+        r = acoes_pedidos.agendar(101, DEPOIS, "08:00", "12:00", "hugo", vuupt=self._vuupt("canceled"))
         self.assertFalse(r["ok"])
         self.reagendar_pedido.assert_not_called()
 
     def test_agendar_recusa_excluido(self):
-        r = acoes_pedidos.agendar(101, "2026-11-12", "08:00", "12:00", "hugo",
+        r = acoes_pedidos.agendar(101, DEPOIS, "08:00", "12:00", "hugo",
                                   vuupt=self._vuupt("not_assigned", deleted_at="2026-11-01"))
         self.assertFalse(r["ok"])
         self.reagendar_pedido.assert_not_called()
@@ -431,7 +505,7 @@ class TestEnderecoEAgendar(_BancoTemp):
     def test_servico_sumiu_nao_altera(self):
         v = VuuptFalso({})
         for r in (acoes_pedidos.alterar_endereco(101, "Rua X, 10", "hugo", vuupt=v),
-                  acoes_pedidos.agendar(101, "2026-11-12", "08:00", "12:00", "hugo", vuupt=v)):
+                  acoes_pedidos.agendar(101, DEPOIS, "08:00", "12:00", "hugo", vuupt=v)):
             self.assertFalse(r["ok"])
             self.assertIn("não achei o serviço na Vuupt agora", r["erro"])
         self.editar_endereco_pedido.assert_not_called()
@@ -464,6 +538,18 @@ class TestComprovantes(_BancoTemp):
         self.assertTrue(itens[0]["url"].endswith("/pedidos/canhoto/vuupt/555.pdf?codigo=PS-7"))
         self.assertTrue(itens[1]["url"].endswith("/pedidos/canhoto/manual/PS-7.pdf"))
         self.assertTrue(itens[2]["url"].endswith("/canhotos/9/foto"))
+
+    def test_foto_de_insucesso_tem_rotulo_proprio(self):
+        servicos = [{"id": 70, "status": "done", "status_done": "failed",
+                     "checklistAnswers": {"data": [{"id": 554, "images_quantity": 1}]}},
+                    {"id": 71, "status": "done", "status_done": "success",
+                     "checklistAnswers": {"data": [{"id": 555, "images_quantity": 1}]}}]
+        conn = banco.conectar()
+        with mock.patch("notificacao_entregas.vuupt_entregas.buscar_por_codigo", return_value=servicos), \
+                painel_agentes.app.test_request_context():
+            itens = acoes_pedidos.comprovantes("PS-7", token="tok", conn=conn)
+        conn.close()
+        self.assertEqual([i["rotulo"] for i in itens], ["Foto do insucesso (Vuupt)", "Canhoto da Vuupt (PDF)"])
 
     def test_sem_canhoto_lista_vazia(self):
         conn = banco.conectar()
@@ -506,6 +592,13 @@ class TestRotasCanhoto(unittest.TestCase):
         for url in ("/pedidos/canhoto/manual/..%2Fconfig.pdf", "/pedidos/canhoto/manual/ps-1.pdf",
                     "/pedidos/canhoto/manual/PS-1-X1.pdf"):
             self.assertEqual(self.cliente.get(url).status_code, 404, url)
+
+    def test_canhoto_manual_recusa_quebra_de_linha_no_fim(self):
+        # re.match com $ aceitava "PS-1\n"; fullmatch nao
+        self._logar("leitura")
+        with mock.patch("nucleo.canhotos_manuais.caminho_canhoto_manual") as m:
+            self.assertEqual(self.cliente.get("/pedidos/canhoto/manual/PS-1%0A.pdf").status_code, 404)
+        m.assert_not_called()
 
     def test_canhoto_manual_serve_o_pdf(self):
         from nucleo import canhotos_manuais
@@ -556,6 +649,21 @@ class TestRotasCanhoto(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
         self.assertEqual(m.call_args.args[:2], (70, "teste"))
 
+    def test_sem_sucesso_pela_tela_pedidos_e_recusado(self):
+        self._logar("atendimento")
+        corpo = {"service_id": "70", "resultado": "sem_sucesso", "failed_reason_id": "1"}
+        with mock.patch.object(painel_agentes.torre_controle, "marcar_sem_sucesso_manual",
+                               return_value={"ok": True, "codigo": "#PS-70"}) as fn:
+            r = self.cliente.post("/api/pedidos/acao/marcar-entregue", data=corpo, headers=self.origem)
+            self.assertEqual(r.status_code, 400)
+            self.assertEqual(r.get_json(), {"erro": "Sem sucesso não é feito pela tela Pedidos."})
+            fn.assert_not_called()
+            # a Torre continua fazendo
+            self._logar("operador")
+            r = self.cliente.post("/api/torre/marcar-entregue", data=corpo, headers=self.origem)
+            self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+            fn.assert_called_once()
+
     def test_marcar_entregue_sem_service_id_json_400(self):
         self._logar("atendimento")
         r = self.cliente.post("/api/pedidos/acao/marcar-entregue", data={}, headers=self.origem)
@@ -585,11 +693,16 @@ class TestRotasCanhoto(unittest.TestCase):
             r = self.cliente.post("/api/pedidos/acao/marcar-entregue", data={"service_id": "70"},
                                   headers=self.origem)
         self.assertEqual(r.status_code, 500)
-        self.assertIn("erro", r.get_json())
+        self.assertEqual(r.get_json(), {"erro": FALHA_FIXA})
         with mock.patch.object(painel_agentes.acoes_pedidos, "comprovantes", side_effect=RuntimeError("x")):
             r = self.cliente.get("/api/pedidos/acao/comprovantes?codigo=PS-1")
         self.assertEqual(r.status_code, 500)
-        self.assertIn("erro", r.get_json())
+        self.assertEqual(r.get_json(), {"erro": FALHA_FIXA})
+        with mock.patch.object(painel_agentes.torre_controle, "validar_lote_foto", side_effect=RuntimeError("x")):
+            r = self.cliente.post("/api/pedidos/acao/validar-lote-foto", json={"service_ids": [1]},
+                                  headers=self.origem)
+        self.assertEqual(r.status_code, 500)
+        self.assertEqual(r.get_json(), {"erro": FALHA_FIXA})
 
     def test_validar_lote_foto_pela_tela(self):
         self._logar("atendimento")
@@ -648,7 +761,22 @@ class TestRotasCorpoInvalido(unittest.TestCase):
                 r = self.cliente.post(f"/api/pedidos/acao/{rota}", json=corpo, headers={"Origin": "http://localhost"})
             self.assertEqual(r.status_code, 500, rota)
             self.assertTrue(r.is_json, rota)
-            self.assertIn("erro", r.get_json(), rota)
+            self.assertEqual(r.get_json(), {"erro": FALHA_FIXA}, rota)   # sem o texto da excecao
+
+    def test_autor_cai_no_nivel_sem_usuario_na_sessao(self):
+        # login por nivel (sem "usuario"): a tratativa nao pode comecar com ": "
+        with self.cliente.session_transaction() as sess:
+            sess.pop("usuario", None)
+        casos = (("reenvio", "reenviar", {"service_id": 1, "motivo": "motivo ok"}, 2),
+                 ("cancelar-vuupt", "cancelar_vuupt", {"service_id": 1}, 1),
+                 ("cancelar-stokki", "cancelar_stokki", {"codigo": "PS-1", "motivo": "m"}, 2),
+                 ("endereco", "alterar_endereco", {"service_id": 1, "endereco": "e"}, 2),
+                 ("agendar", "agendar", {"service_id": 1, "data": "2026-12-01"}, 4))
+        for rota, funcao, corpo, pos in casos:
+            with mock.patch.object(painel_agentes.acoes_pedidos, funcao, return_value={"ok": True}) as m:
+                r = self.cliente.post(f"/api/pedidos/acao/{rota}", json=corpo, headers={"Origin": "http://localhost"})
+            self.assertEqual(r.status_code, 200, (rota, r.get_data(as_text=True)))
+            self.assertEqual(m.call_args.args[pos], "operador", rota)
 
     def test_corpo_nao_objeto_da_400_json(self):
         for rota in ("cancelar-stokki", "cancelar-vuupt", "reenvio", "endereco", "agendar", "checar-dia-fixo"):
