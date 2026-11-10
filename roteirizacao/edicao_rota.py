@@ -18,7 +18,8 @@ import rotas_client
 STATUS_PODE_SAIR = frozenset({"not_assigned", "assigned", "accepted"})
 STATUS_COMECADO = frozenset({"on_route", "arrived", "done"})
 _STATUS_ROTA_COMECADA = frozenset({"started", "finished"})
-_STATUS_ROTA_ENCERRADA = frozenset({"finished", "canceled"})
+STATUS_ROTA_ENCERRADA = frozenset({"finished", "canceled"})
+_STATUS_ROTA_ENCERRADA = STATUS_ROTA_ENCERRADA
 
 
 class ErroEdicao(Exception):
@@ -106,7 +107,8 @@ def tirar_pedido(token: str, route_id: int, service_id: int) -> dict:
 
     alvo = next((s for s in rota["servicos"] if s["id"] == service_id), None)
     if alvo is None:
-        return {"ok": False, "erro": f"Pedido {service_id} não está mais nessa rota."}
+        # fora_da_rota: o card esta velho (outra tela ja tirou); quem chama atualiza o local
+        return {"ok": False, "fora_da_rota": True, "erro": f"Pedido {service_id} não está mais nessa rota."}
     if alvo["status"] not in STATUS_PODE_SAIR:
         return {"ok": False, "erro": _erro_status_servico(alvo)}
 

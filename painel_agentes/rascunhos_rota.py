@@ -939,6 +939,13 @@ def trocar_motorista(rascunho_id: int, agent_id: int | None, vehicle_id: int | N
         conn.commit()
     finally:
         conn.close()
+    if rascunho and rascunho["status"] == STATUS_ENVIADO:
+        # romaneio leva motorista/placa: refaz em segundo plano (best-effort)
+        try:
+            from documentacao_rota import agendar as _agendar_documentacao
+            _agendar_documentacao(rascunho["vuupt_route_id"], rascunho["data_alvo"], motivo="motorista/carro trocado")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Romaneio da rota {rascunho['vuupt_route_id']} nao reagendado: {e}")
 
 
 def publicar_oferta(rascunho_id: int):
@@ -1759,6 +1766,11 @@ def preparar_cancelamento_de_parada(rascunho_id: int, service_id: int, token: st
     # Pedido cancelado sai da operacao: nao vira Retornando.
     import edicao_rota
     resultado = edicao_rota.tirar_pedido(token, route_id, service_id)
+    if not resultado["ok"] and resultado.get("fora_da_rota"):
+        # o pedido ja saiu da rota por outra tela: so atualiza o card e segue pro cancelamento
+        # (o PUT /cancel recusa servico comecado/entregue, e esse erro chega na tela)
+        remover_parada(rascunho_id, service_id)
+        return {"ok": True}
     if not resultado["ok"]:
         return {"ok": False, "erro": resultado["erro"]}
     if resultado["rota_cancelada"]:
@@ -1827,7 +1839,7 @@ def adicionar_em_rota_enviada(rascunho_id: int, parada: dict, token: str, usuari
         rota = edicao_rota.ler_rota(token, route_id)
     except edicao_rota.ErroEdicao as e:
         raise ValueError(str(e))
-    if rota["status"] in ("finished", "canceled"):
+    if rota["status"] in edicao_rota.STATUS_ROTA_ENCERRADA:
         raise ValueError(f"Rota #{route_id} já foi encerrada — não dá pra incluir pedido.")
 
     resultado = edicao_rota.adicionar_pedidos(token, route_id, [service_id], position="end")
@@ -1882,14 +1894,22 @@ def remover_de_rota_enviada(rascunho_id: int, service_id: int, motivo: str, obse
 
     route_id = rascunho["vuupt_route_id"]
     resultado = edicao_rota.tirar_pedido(token, route_id, service_id)
+    if not resultado["ok"] and resultado.get("fora_da_rota"):
+        # card velho: outra tela ja tirou o pedido da rota na Vuupt -- so atualiza o local
+        parada_removida = remover_parada(rascunho_id, service_id)
+        logger.info(f"Rota {route_id} (rascunho {rascunho_id}): servico {service_id} ja estava fora da rota "
+                    f"na Vuupt; parada local removida")
+        return {"ok": True, "ja_fora_da_rota": True, "rota_cancelada": False, "rota_iniciada": False,
+                "retornando": False, "parada_removida": parada_removida,
+                "mensagem": "O pedido já tinha saído dessa rota na Vuupt — card atualizado."}
     if not resultado["ok"]:
         raise ValueError(resultado["erro"])
 
     local = next((p for p in rascunho["paradas"] if p["service_id"] == service_id), None)
     codigo = (local or {}).get("codigo") or resultado["servico"].get("code") or ""
-    expedicao.registrar_exclusao(date.today(), route_id, rascunho["nome"], service_id, codigo,
-                                 motivo, observacao, usuario)
 
+    # Ordem depois do ok da Vuupt: Retornando primeiro (e a trava que tira o pedido do pool),
+    # depois o card, depois auditoria e romaneio (best-effort).
     retornando = False
     if resultado["rota_iniciada"]:
         conn = pedidos_retornando.conectar(DB_PATH)
@@ -1902,6 +1922,21 @@ def remover_de_rota_enviada(rascunho_id: int, service_id: int, motivo: str, obse
         retornando = True
 
     parada_removida = remover_parada(rascunho_id, service_id)
+
+    try:
+        expedicao.registrar_exclusao(date.fromisoformat(rascunho["data_alvo"]), route_id, rascunho["nome"],
+                                     service_id, codigo, motivo, observacao, usuario)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Auditoria da retirada do pedido {codigo} (rota {route_id}) nao gravada: {e}")
+
+    if not retornando:
+        # rota nao iniciada: o pedido volta ao pool do nucleo na hora (sem esperar a sincronizacao)
+        try:
+            from nucleo.pedidos import marcar_aberto_por_service_ids
+            marcar_aberto_por_service_ids([service_id])
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Pedido {service_id} nao voltou ABERTO no nucleo: {e}")
+
     if resultado["rota_cancelada"]:
         # reverter_para_rascunho tambem descarta o romaneio da rota que deixou de existir
         reverter_para_rascunho(rascunho_id)

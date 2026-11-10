@@ -28,6 +28,7 @@ import planejamento_rotas  # noqa: E402
 import pedidos_retornando  # noqa: E402
 
 ROTA_ID = 900
+DATA_ROTA = "2026-11-12"  # dia da rota != hoje: a auditoria tem que levar o dia da rota
 AGENTE, AGENTE_NOVO = 47084, 51111
 
 
@@ -89,6 +90,7 @@ class _Base(unittest.TestCase):
         self.rota_enviada = mock.Mock()
         self.marcar_alocado = mock.Mock()
         self.marcar_em_rota = mock.Mock()
+        self.marcar_aberto = mock.Mock(return_value=1)
         patches = [
             mock.patch.object(rascunhos_rota, "DB_PATH", self.db),
             mock.patch.object(expedicao, "_DB_PATH", self.db),
@@ -104,6 +106,7 @@ class _Base(unittest.TestCase):
             mock.patch("documentacao_rota.descartar", self.descartar_doc),
             mock.patch("fingerprint_rotas.marcar_alocado", self.marcar_alocado),
             mock.patch("nucleo.pedidos.marcar_em_rota_por_service_ids", self.marcar_em_rota),
+            mock.patch("nucleo.pedidos.marcar_aberto_por_service_ids", self.marcar_aberto),
             mock.patch.object(rascunhos_rota.eventos_freshhub, "rota_enviada", self.rota_enviada),
             mock.patch.object(rascunhos_rota.prontidao_stokki, "carregar_retrato_stokki",
                               side_effect=lambda *a, **k: self.retrato),
@@ -122,9 +125,9 @@ class _Base(unittest.TestCase):
             cur = conn.execute(
                 "INSERT INTO rascunhos_rota (data_alvo, lote_id, nome, agent_id, vehicle_id, motorista_nome, "
                 "start_location_base_id, end_location_base_id, start_at, status, vuupt_route_id, lalamove_order_id) "
-                "VALUES ('2026-11-10', 'lote-teste', 'Planejamento - 10/11/2026 - #3', ?, 1, 'Vinicius', "
-                "6950, 6950, '2026-11-10T09:00:00Z', ?, ?, ?)",
-                (agent_id, status, ROTA_ID if status == "ENVIADO" else None, lalamove_order_id))
+                "VALUES (?, 'lote-teste', 'Planejamento - 12/11/2026 - #3', ?, 1, 'Vinicius', "
+                "6950, 6950, '2026-11-12T09:00:00Z', ?, ?, ?)",
+                (DATA_ROTA, agent_id, status, ROTA_ID if status == "ENVIADO" else None, lalamove_order_id))
             rid = cur.lastrowid
             for ordem, p in enumerate(paradas):
                 rascunhos_rota._inserir_parada(conn, rid, ordem, p)
@@ -146,7 +149,7 @@ class _Base(unittest.TestCase):
     def _exclusoes(self):
         conn = sqlite3.connect(self.db)
         try:
-            return conn.execute("SELECT rota_id, service_id, codigo_pedido, motivo, observacao, usuario "
+            return conn.execute("SELECT data_alvo, rota_id, service_id, codigo_pedido, motivo, observacao, usuario "
                                 "FROM expedicao_exclusoes").fetchall()
         except sqlite3.OperationalError:
             return []
@@ -162,6 +165,7 @@ class TrocarMotoristaTestCase(_Base):
         self.assertEqual(self.vuupt.escritas(), [("PUT", AGENTE_NOVO, 77)])
         r = self._rascunho(rid)
         self.assertEqual((r["agent_id"], r["vehicle_id"], r["motorista_nome"]), (AGENTE_NOVO, 77, "Caio"))
+        self.agendar.assert_called_once_with(ROTA_ID, DATA_ROTA, motivo="motorista/carro trocado")
 
     def test_troca_motorista_enviada_erro_nao_grava(self):
         # rota iniciada: motorista nao muda (so o carro)
@@ -171,6 +175,7 @@ class TrocarMotoristaTestCase(_Base):
         with self.assertRaisesRegex(ValueError, "Rota já começou: só o carro pode mudar."):
             rascunhos_rota.trocar_motorista(rid, AGENTE_NOVO, 77, "Caio", token="tk")
         self.assertEqual(self.vuupt.escritas(), [])
+        self.agendar.assert_not_called()
         r = self._rascunho(rid)
         self.assertEqual((r["agent_id"], r["vehicle_id"], r["motorista_nome"]), (AGENTE, 1, "Vinicius"))
 
@@ -199,7 +204,7 @@ class AdicionarTestCase(_Base):
         self.assertEqual([p["service_id"] for p in self._rascunho(rid)["paradas"]], [101, 105])
         self.marcar_alocado.assert_called_once_with(105, ROTA_ID)
         self.marcar_em_rota.assert_called_once_with([105], ROTA_ID)
-        self.agendar.assert_called_once_with(ROTA_ID, "2026-11-10", motivo="pedido incluido na rota")
+        self.agendar.assert_called_once_with(ROTA_ID, DATA_ROTA, motivo="pedido incluido na rota")
         self.rota_enviada.assert_called_once()
         paradas_evento = self.rota_enviada.call_args.args[1]
         self.assertEqual([p["service_id"] for p in paradas_evento], [105])
@@ -268,8 +273,9 @@ class RemoverTestCase(_Base):
         self.assertEqual((ativos[102]["vuupt_route_id"], ativos[102]["agent_id"], ativos[102]["motorista_nome"],
                           ativos[102]["motivo"], ativos[102]["usuario"]),
                          (ROTA_ID, AGENTE, "Vinicius", "Não coube", "hugo"))
-        self.assertEqual(self._exclusoes(), [(ROTA_ID, 102, "#PS-2", "Não coube", "sem espaco", "hugo")])
+        self.assertEqual(self._exclusoes(), [(DATA_ROTA, ROTA_ID, 102, "#PS-2", "Não coube", "sem espaco", "hugo")])
         self.agendar.assert_called_once()
+        self.marcar_aberto.assert_not_called()  # Retornando nao volta ao pool
         self.assertEqual(self._rascunho(rid)["status"], "ENVIADO")
 
     def test_remover_em_rota_nao_iniciada_nao_marca_retornando(self):
@@ -281,8 +287,9 @@ class RemoverTestCase(_Base):
         self.assertFalse(resultado["retornando"])
         self.assertEqual(self.vuupt.escritas(), [("DELETE", 102)])
         self.assertEqual(self._retornando(), {})
-        self.assertEqual(len(self._exclusoes()), 1)
+        self.assertEqual([e[:3] for e in self._exclusoes()], [(DATA_ROTA, ROTA_ID, 102)])
         self.assertEqual(resultado["parada_removida"]["service_id"], 102)
+        self.marcar_aberto.assert_called_once_with([102])
 
     def test_remover_ultimo_pedido_de_rota_nao_iniciada_cancela_e_volta_rascunho(self):
         rid = self._inserir_rascunho([_parada(101, "#PS-1")])
@@ -294,6 +301,30 @@ class RemoverTestCase(_Base):
         self.assertEqual((r["status"], r["vuupt_route_id"], r["paradas"]), ("RASCUNHO", None, []))
         self.descartar_doc.assert_called_once()
         self.agendar.assert_not_called()
+        self.marcar_aberto.assert_called_once_with([101])
+
+    def test_remover_quando_ja_saiu_da_rota_atualiza_card(self):
+        # card velho: a Torre ja tirou o 102 da rota na Vuupt
+        rid = self._inserir_rascunho([_parada(101, "#PS-1"), _parada(102, "#PS-2")])
+        self._rota_viva("started", [{"id": 101, "code": "#PS-1", "status": "done"}])
+        resultado = rascunhos_rota.remover_de_rota_enviada(rid, 102, "Outros", "", "tk", "hugo")
+        self.assertTrue(resultado["ok"])
+        self.assertTrue(resultado["ja_fora_da_rota"])
+        self.assertEqual(resultado["mensagem"], "O pedido já tinha saído dessa rota na Vuupt — card atualizado.")
+        self.assertEqual([p["service_id"] for p in self._rascunho(rid)["paradas"]], [101])
+        self.assertEqual(self.vuupt.escritas(), [])
+        self.assertEqual(self._retornando(), {})
+        self.assertEqual(self._rascunho(rid)["status"], "ENVIADO")
+
+    def test_falha_na_auditoria_nao_impede_retornando(self):
+        rid = self._inserir_rascunho([_parada(101, "#PS-1"), _parada(102, "#PS-2")])
+        self._rota_viva("started", [{"id": 101, "code": "#PS-1", "status": "done"},
+                                    {"id": 102, "code": "#PS-2", "status": "assigned"}])
+        with mock.patch.object(expedicao, "registrar_exclusao", side_effect=sqlite3.OperationalError("locked")):
+            resultado = rascunhos_rota.remover_de_rota_enviada(rid, 102, "Outros", "", "tk", "hugo")
+        self.assertTrue(resultado["ok"])
+        self.assertEqual(list(self._retornando()), [102])
+        self.assertEqual([p["service_id"] for p in self._rascunho(rid)["paradas"]], [101])
 
     def test_remover_sem_motivo_valido_recusa(self):
         rid = self._inserir_rascunho([_parada(101, "#PS-1"), _parada(102, "#PS-2")])
@@ -362,6 +393,16 @@ class CancelarPedidoTestCase(_Base):
         self.assertEqual(self.vuupt.escritas(), [("DELETE", 102)])
         self.vuupt_client.cancelar_servico_oficial.assert_called_once_with(102)
         self.assertEqual([p["service_id"] for p in self._rascunho(rid)["paradas"]], [101, 103])
+
+    def test_cancelar_quando_ja_saiu_da_rota_segue_cancelando(self):
+        rid = self._inserir_rascunho([_parada(101, "#PS-1"), _parada(102, "#PS-2")])
+        self._rota_viva("started", [{"id": 101, "code": "#PS-1", "status": "done"}])
+        resultado = planejamento_rotas.cancelar_pedido(102, rid)
+        self.assertTrue(resultado["ok"], resultado)
+        self.assertEqual(self.vuupt.escritas(), [])
+        self.vuupt_client.cancelar_servico_oficial.assert_called_once_with(102)
+        self.assertEqual([p["service_id"] for p in self._rascunho(rid)["paradas"]], [101])
+        self.assertEqual(self._retornando(), {})
 
 
 class RascunhoPorRotaTestCase(_Base):

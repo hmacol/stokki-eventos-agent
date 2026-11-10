@@ -124,7 +124,7 @@ class TestEdicaoRota(unittest.TestCase):
     def test_pedido_fora_da_rota(self):
         self._com(_Rotas(_corpo([_servico(1)])))
         res = edicao_rota.tirar_pedido("t", 7, 99)
-        self.assertEqual(res, {"ok": False, "erro": "Pedido 99 não está mais nessa rota."})
+        self.assertEqual(res, {"ok": False, "fora_da_rota": True, "erro": "Pedido 99 não está mais nessa rota."})
 
     def test_rota_encerrada_recusa(self):
         for st in ("finished", "canceled"):
