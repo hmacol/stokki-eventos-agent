@@ -850,20 +850,20 @@ def remover_parada(rascunho_id: int, service_id: int) -> dict | None:
         conn.close()
 
 
-def _recusar_se_retornando(parada: dict) -> None:
+def _recusar_se_retornando(service_ids) -> None:
     """Pedido Retornando (no carro do motorista, editar rota enviada) nao entra em rascunho.
-    Falha ao ler a tabela nao barra (so loga)."""
+    Le o conjunto ativo uma vez so. Falha ao ler a tabela nao barra (so loga)."""
     import pedidos_retornando
     try:
         conn = pedidos_retornando.conectar(DB_PATH)
         try:
-            ativo = parada.get("service_id") in pedidos_retornando.ativos(conn)
+            ativos = pedidos_retornando.ativos(conn)
         finally:
             conn.close()
     except sqlite3.Error as e:
         logger.warning(f"nao checou pedido retornando ({e}); seguindo")
         return
-    if ativo:
+    if any(sid in ativos for sid in service_ids):
         raise ValueError("Pedido retornando ao galpão: só entra em rota depois do recebimento em /retornos.")
 
 
@@ -875,7 +875,7 @@ def adicionar_parada(rascunho_id: int, parada: dict, ordem: int | None = None):
     horario_atendimento_inicio, horario_atendimento_fim) -- o endpoint da
     tela repassa o item do pool tal como já foi carregado no GET
     /planejamento, sem precisar bater na VUUPT de novo."""
-    _recusar_se_retornando(parada)
+    _recusar_se_retornando([parada.get("service_id")])
     conn = _conectar()
     try:
         if ordem is None:
@@ -1070,6 +1070,7 @@ def criar_rascunho_com_paradas(data_alvo: date, lote_id: str, particao: str, tip
     selecionar vários cards e virar rascunho direto, sem criar rota
     vazia e arrastar um por um. `paradas` no mesmo formato processado
     de adicionar_parada (itens do pool, tal como carregados no GET)."""
+    _recusar_se_retornando([p.get("service_id") for p in paradas])
     conn = _conectar()
     try:
         nome = f"Planejamento - {data_alvo.strftime('%d/%m/%Y')} - #{_proximo_numero_ordem(conn, data_alvo)}"

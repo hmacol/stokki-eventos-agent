@@ -233,6 +233,45 @@ class AdicionarParadaRetornandoTestCase(unittest.TestCase):
                     rascunhos_rota.adicionar_parada(1, _parada(99, -23.47, -46.61))
         self.assertEqual(str(ctx.exception), "Pedido retornando ao galpão: só entra em rota depois do recebimento em /retornos.")
 
+    def test_criar_rascunho_com_paradas_recusa_retornando(self):
+        import sqlite3
+        import tempfile
+        import pedidos_retornando
+        with tempfile.TemporaryDirectory() as d:
+            db = Path(d) / "t.db"
+            conn = pedidos_retornando.conectar(db)
+            pedidos_retornando.marcar(conn, service_id=99, codigo="#PS-99", vuupt_route_id=1, agent_id=2,
+                                      motorista_nome="Joao", motivo="x", observacao=None, usuario="t")
+            conn.close()
+            with mock.patch.object(rascunhos_rota, "DB_PATH", db):
+                with self.assertRaises(ValueError) as ctx:
+                    rascunhos_rota.criar_rascunho_com_paradas(
+                        DATA, "lote", "Seco", "NORMAL", 1, None, "2026-09-11T08:00:00",
+                        [_parada(98, -23.47, -46.61), _parada(99, -23.47, -46.61)])
+            c = sqlite3.connect(db)
+            try:
+                tabelas = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                criados = c.execute("SELECT COUNT(*) FROM rascunhos_rota").fetchone()[0] \
+                    if "rascunhos_rota" in tabelas else 0
+            finally:
+                c.close()
+        self.assertEqual(str(ctx.exception), "Pedido retornando ao galpão: só entra em rota depois do recebimento em /retornos.")
+        self.assertEqual(criados, 0)
+
+    def test_roteirizar_selecionados_pula_retornando(self):
+        servicos = [{"id": 99, "code": "#PS-99"}]
+        ativo = {99: {"motorista_nome": "Joao", "motivo": "x", "criado_em": "2026-11-10 10:00:00"}}
+        with mock.patch.object(pr, "_carregar_config", return_value={"vuupt_api": {"token": "t"}}), \
+                mock.patch.object(pr, "VuuptClient"), \
+                mock.patch.object(pr, "listar_pool_not_assigned", return_value=servicos), \
+                mock.patch.object(rascunhos_rota, "listar_rascunhos_do_dia", return_value=[]), \
+                mock.patch("pedidos_pausados_cliente.separar_pausados", side_effect=lambda s: (s, [])), \
+                mock.patch("datas_automaticas.marcar_datas_automaticas"), \
+                mock.patch("pedidos_retornando._ativos_ou_vazio", return_value=ativo):
+            with self.assertRaises(ValueError) as ctx:
+                pr.roteirizar_selecionados(DATA, [99])
+        self.assertIn("retornando ao galpão", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
