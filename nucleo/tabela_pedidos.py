@@ -271,7 +271,7 @@ def listar(filtros: dict, pagina: int = 1, por_pagina: int = POR_PAGINA, ordem: 
         hist = tentativas([(l["sender_id"], l["pedido_base"]) for l in linhas], conn)
         for l in linhas:
             l["service_status"] = l["status"]
-            l["tentativas"] = hist.get((l["sender_id"], l["pedido_base"]), [])
+            l["historico"] = hist.get((l["sender_id"], l["pedido_base"]), [])
         return {"linhas": linhas, "total": total, "total_caixas": tot["cx"],
                 "pagina": pagina, "paginas": paginas, "periodo": {"de": inicio, "ate": fim}}
     finally:

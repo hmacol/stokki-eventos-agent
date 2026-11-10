@@ -186,7 +186,9 @@ class TestListar(_Base):
         self._parada(self._rota(_dia(-2), nome="A"), "PS-1", situacao="INSUCESSO", motivo="Ausente")
         self._parada(self._rota(_dia(-2), nome="B"), "PS-1", situacao="CANCELADA")   # remanejo: não conta
         self._pedido("PS-1-R1", status="ABERTO")
-        t = tp.listar({}, conn=self.conn)["linhas"][0]["tentativas"]
+        linha = tp.listar({}, conn=self.conn)["linhas"][0]
+        t = linha["historico"]
+        self.assertIsInstance(linha["tentativas"], (int, type(None)))   # coluna numerica intacta
         self.assertEqual([(x["codigo"], x["situacao"], x["motivo"]) for x in t],
                          [("PS-1", "INSUCESSO", "Ausente"), ("PS-1-R1", "ABERTO", None)])
 
