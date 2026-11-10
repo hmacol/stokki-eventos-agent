@@ -40,6 +40,12 @@ class TestRegistro(unittest.TestCase):
         eid = registro.registrar_envio("email", None, None, None, "x")
         self.assertRegex(registro.buscar_envio(eid)["origem"], r"test_registro\.py:\d+$")
 
+    def test_origem_falhando_nao_perde_registro(self):
+        with mock.patch.object(registro, "_origem", side_effect=ValueError("x")):
+            eid = registro.registrar_envio("email", None, None, None, "x")
+        self.assertIsNotNone(eid)
+        self.assertEqual(registro.buscar_envio(eid)["origem"], "?")
+
     def test_banco_travado_cai_no_jsonl(self):
         registro.registrar_envio("email", None, None, None, "primeiro")
         trava = sqlite3.connect(str(self.banco), isolation_level=None)

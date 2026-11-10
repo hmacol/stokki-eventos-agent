@@ -18,7 +18,7 @@ _DDL = ("CREATE TABLE IF NOT EXISTS homolog_envios("
 
 
 def _origem() -> str:
-    # primeiro frame fora de homologacao/ (modulos de teste do pacote contam como fora)
+    # primeiro frame fora de homologacao/; test_*.py do pacote contam como chamadores (testes afirmam origem)
     f = sys._getframe(1)
     while f is not None:
         arq = Path(f.f_code.co_filename).resolve()
@@ -36,7 +36,10 @@ def registrar_envio(canal, metodo, destino, resumo, conteudo, origem=None):
         if conteudo is not None:
             conteudo = str(conteudo)[:LIMITE_CONTEUDO]
         if origem is None:
-            origem = _origem()
+            try:
+                origem = _origem()
+            except Exception:
+                origem = "?"  # nunca perder o registro por causa da origem
         quando = datetime.now().isoformat(timespec="seconds")
         linha = (quando, canal, metodo, destino, resumo, conteudo, origem, os.getpid())
         banco = Path(CAMINHO_BANCO)

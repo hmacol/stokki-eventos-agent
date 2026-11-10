@@ -29,12 +29,10 @@ class TestAmbiente(unittest.TestCase):
                 ambiente.exigir_coerencia(Path("qualquer"))
 
     def test_coerencia_aborta_sem_guarda(self):
-        with mock.patch.dict(os.environ, {ambiente.VARIAVEL: "homolog"}):
+        with mock.patch.dict(os.environ, {ambiente.VARIAVEL: "homolog"}),                 mock.patch.dict(sys.modules):
             sys.modules.pop("homologacao.guarda", None)
-            with mock.patch.dict(sys.modules, {}):
-                sys.modules.pop("homologacao.guarda", None)
-                with self.assertRaises(SystemExit):
-                    ambiente.exigir_coerencia(Path("/tmp/outra"))
+            with self.assertRaises(SystemExit):
+                ambiente.exigir_coerencia(Path("/tmp/outra"))
         guarda = mock.Mock(INSTALADA=False)
         with mock.patch.dict(os.environ, {ambiente.VARIAVEL: "homolog"}), \
                 mock.patch.dict(sys.modules, {"homologacao.guarda": guarda}):
