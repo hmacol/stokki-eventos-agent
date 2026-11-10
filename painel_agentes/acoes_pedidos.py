@@ -337,12 +337,12 @@ def comprovantes(codigo_servico: str, *, token: str, conn) -> list[dict]:
             if cid and cid not in vistos:
                 vistos.add(cid)
                 itens.append({"origem": "VUUPT", "rotulo": "Canhoto da Vuupt (PDF)",
-                              "url": f"/pedidos/canhoto/vuupt/{int(cid)}.pdf?codigo={codigo}"})
+                              "url": url_for("pedidos_canhoto_vuupt", checklist_id=int(cid), codigo=codigo)})
     except Exception as e:  # noqa: BLE001
         logger.warning("comprovantes %s: Vuupt indisponivel: %s", codigo, e)
     if canhotos_manuais.caminho_canhoto_manual(codigo):
         itens.append({"origem": "MANUAL", "rotulo": "Canhoto manual (PDF)",
-                      "url": f"/pedidos/canhoto/manual/{codigo}.pdf"})
+                      "url": url_for("pedidos_canhoto_manual", codigo=codigo)})
     linhas = conn.execute(
         """SELECT c.id, c.tipo FROM nucleo_comprovantes c JOIN nucleo_paradas p ON p.id = c.parada_id
            WHERE UPPER(REPLACE(p.codigo, '#', '')) = ? AND c.caminho_local IS NOT NULL AND c.caminho_local != ''

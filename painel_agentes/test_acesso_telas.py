@@ -59,6 +59,11 @@ class TestCatalogo(unittest.TestCase):
         self.assertFalse(acesso_telas.caminho_liberado("/api/cadastro-embarcador/123/aprovar", ["inicio"]))
         self.assertTrue(acesso_telas.caminho_liberado("/api/cadastro-embarcador/123/aprovar", ["aprovar_embarcadores"]))
 
+    def test_pedidos_tabela_abre_canhotos(self):
+        for caminho in ("/pedidos/canhoto/manual/PS-1.pdf", "/pedidos/canhoto/vuupt/5.pdf",
+                        "/api/pedidos/acao/comprovantes", "/canhotos/5/foto"):
+            self.assertTrue(acesso_telas.caminho_liberado(caminho, ["pedidos_tabela"]), caminho)
+
     def test_planejamento_valida_foto_em_massa(self):
         # o modal do Planejamento chama a validacao do lote antes do marcar-entregue (30/10)
         self.assertTrue(acesso_telas.caminho_liberado("/api/torre/validar-lote-foto", ["planejamento"]))

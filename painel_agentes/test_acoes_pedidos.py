@@ -461,8 +461,8 @@ class TestComprovantes(_BancoTemp):
         conn.close()
         m.assert_called_once_with("tok", "PS-7")
         self.assertEqual([i["origem"] for i in itens], ["VUUPT", "MANUAL", "APP"])
-        self.assertEqual(itens[0]["url"], "/pedidos/canhoto/vuupt/555.pdf?codigo=PS-7")
-        self.assertEqual(itens[1]["url"], "/pedidos/canhoto/manual/PS-7.pdf")
+        self.assertTrue(itens[0]["url"].endswith("/pedidos/canhoto/vuupt/555.pdf?codigo=PS-7"))
+        self.assertTrue(itens[1]["url"].endswith("/pedidos/canhoto/manual/PS-7.pdf"))
         self.assertTrue(itens[2]["url"].endswith("/canhotos/9/foto"))
 
     def test_sem_canhoto_lista_vazia(self):
@@ -518,16 +518,26 @@ class TestRotasCanhoto(unittest.TestCase):
         self.assertTrue(r.get_data().startswith(b"%PDF"))
         self.assertEqual(self.cliente.get("/pedidos/canhoto/manual/PS-10.pdf").status_code, 404)
 
-    def test_canhoto_vuupt_baixa_e_serve(self):
+    def test_canhoto_vuupt_baixa_com_cache_por_checklist(self):
         arq = Path(self._tmp.name) / "c.pdf"
         arq.write_bytes(b"%PDF-1.4 v")
+        servico = {"id": 70, "status": "done", "checklistAnswers": {"data": [{"id": 555, "images_quantity": 1}]}}
         self._logar("leitura")
-        with mock.patch("notificacao_entregas.vuupt_entregas.baixar_canhoto_pdf", return_value=arq) as m:
+        with mock.patch("notificacao_entregas.vuupt_entregas.buscar_por_codigo", return_value=[servico]),                 mock.patch("notificacao_entregas.vuupt_entregas.baixar_canhoto_pdf", return_value=arq) as m:
             r = self.cliente.get("/pedidos/canhoto/vuupt/555.pdf?codigo=PS-7")
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(m.call_args.args[1:], (555, "PS-7"))
-        with mock.patch("notificacao_entregas.vuupt_entregas.baixar_canhoto_pdf", return_value=None):
+        self.assertEqual(m.call_args.args[1:], (555, "PS-7_555"))
+        with mock.patch("notificacao_entregas.vuupt_entregas.buscar_por_codigo", return_value=[servico]),                 mock.patch("notificacao_entregas.vuupt_entregas.baixar_canhoto_pdf", return_value=None):
             self.assertEqual(self.cliente.get("/pedidos/canhoto/vuupt/555.pdf?codigo=PS-7").status_code, 404)
+
+    def test_canhoto_vuupt_checklist_de_outro_pedido_da_404_sem_baixar(self):
+        servico = {"id": 70, "status": "done", "checklistAnswers": {"data": [{"id": 555, "images_quantity": 1}]}}
+        self._logar("leitura")
+        with mock.patch("notificacao_entregas.vuupt_entregas.buscar_por_codigo", return_value=[servico]),                 mock.patch("notificacao_entregas.vuupt_entregas.baixar_canhoto_pdf") as m:
+            self.assertEqual(self.cliente.get("/pedidos/canhoto/vuupt/999.pdf?codigo=PS-7").status_code, 404)
+            self.assertEqual(self.cliente.get("/pedidos/canhoto/vuupt/555.pdf?codigo=..%2Fx").status_code, 404)
+            self.assertEqual(self.cliente.get("/pedidos/canhoto/vuupt/555.pdf").status_code, 404)
+        m.assert_not_called()
 
     def test_rota_comprovantes_json(self):
         self._logar("leitura")

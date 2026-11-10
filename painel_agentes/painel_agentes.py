@@ -2897,10 +2897,22 @@ def api_pedidos_acao_comprovantes():
 @app.route("/pedidos/canhoto/vuupt/<int:checklist_id>.pdf")
 @requer_auth(niveis=_NIVEIS_LEITURA_CANHOTO)
 def pedidos_canhoto_vuupt(checklist_id):
-    """PDF do checklist da Vuupt; ?codigo= so vira nome do arquivo em cache (baixar_canhoto_pdf sanitiza)."""
+    """PDF do checklist da Vuupt. O checklist precisa pertencer a um servico done do codigo (senao 404) e o
+    cache e por checklist (canhoto_<codigo>_<id>.pdf): nunca grava no canhoto_<codigo>.pdf que o portal,
+    o e-mail de entrega e a expedicao leem."""
+    codigo = (request.args.get("codigo") or "").strip().lstrip("#").upper()
+    if not _RE_CODIGO_CANHOTO.match(codigo):
+        abort(404)
     from notificacao_entregas import vuupt_entregas
     token = _carregar_config().get("vuupt_api", {}).get("token", "")
-    caminho = vuupt_entregas.baixar_canhoto_pdf(token, checklist_id, request.args.get("codigo", ""))
+    try:
+        servicos = vuupt_entregas.buscar_por_codigo(token, codigo)
+    except Exception:
+        logging.getLogger(__name__).exception("canhoto Vuupt: busca de %s falhou", codigo)
+        abort(404)
+    if checklist_id not in {acoes_pedidos._checklist_id(s) for s in servicos}:
+        abort(404)
+    caminho = vuupt_entregas.baixar_canhoto_pdf(token, checklist_id, f"{codigo}_{checklist_id}")
     if not caminho:
         abort(404)
     return send_file(caminho, mimetype="application/pdf")
