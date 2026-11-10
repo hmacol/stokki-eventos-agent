@@ -48,16 +48,17 @@ def situacao_e_token(sessao, id_stokki: int) -> tuple[str, str]:
     return (_limpar(m.group(1)) if m else "", t.group(1) if t else "")
 
 
-def montar_motivo(motivo_cliente: str) -> str:
+def montar_motivo(motivo_cliente: str, prefixo: str = PREFIXO_MOTIVO) -> str:
     texto = (motivo_cliente or "").strip()
     if not texto:
         return MOTIVO_PADRAO
-    if not texto.startswith(PREFIXO_MOTIVO):
-        texto = f"{PREFIXO_MOTIVO}: {texto}"
+    if not texto.startswith(prefixo):
+        texto = f"{prefixo}: {texto}"
     return texto[:200]
 
 
-def cancelar_pedido(sessao, id_stokki: int, motivo: str, dormir=time.sleep) -> dict:
+def cancelar_pedido(sessao, id_stokki: int, motivo: str, dormir=time.sleep,
+                    prefixo: str = PREFIXO_MOTIVO) -> dict:
     """Devolve {"ok", "situacao", "ja_estava", "erro"}. Nunca levanta por
     resposta da Stokki (so por falha de rede do requests)."""
     situacao, token = situacao_e_token(sessao, id_stokki)
@@ -71,7 +72,7 @@ def cancelar_pedido(sessao, id_stokki: int, motivo: str, dormir=time.sleep) -> d
 
     resp = sessao.post(
         URL_CANCEL,
-        files={"_token": (None, token), "reason": (None, montar_motivo(motivo)),
+        files={"_token": (None, token), "reason": (None, montar_motivo(motivo, prefixo)),
                "provider_outbound_id": (None, str(id_stokki)), "page": (None, "show")},
         headers={"X-Requested-With": "XMLHttpRequest", "Referer": URL_SHOW.format(id=id_stokki)},
     )

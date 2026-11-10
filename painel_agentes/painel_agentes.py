@@ -2757,6 +2757,25 @@ def api_pedidos_acao_cancelar_vuupt():
     return jsonify(r)
 
 
+@app.route("/api/pedidos/acao/cancelar-stokki", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_acao_cancelar_stokki():
+    """Ação Cancelar Stokki da tela /pedidos (só a Stokki; a Vuupt é outra ação). Pode levar ~30 s por pedido."""
+    body = request.get_json(silent=True) or {}
+    codigo = str(body.get("codigo") or "").strip()
+    if not codigo:
+        return jsonify({"erro": "codigo ausente."}), 400
+    try:
+        r = acoes_pedidos.cancelar_stokki(codigo, str(body.get("motivo") or ""), session.get("usuario", ""))
+    except Exception as e:
+        logger.exception("cancelar Stokki pela tela Pedidos falhou")
+        return jsonify({"erro": f"Falha inesperada: {e}"}), 500
+    if not r.get("ok"):
+        return jsonify({"erro": r.get("erro") or "Falha ao cancelar na Stokki.", "resultados": r.get("resultados", [])}), 400
+    return jsonify(r)
+
+
 @app.route("/api/torre/notificar-ocorrencia", methods=["POST"])
 @requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem

@@ -190,3 +190,59 @@ def cancelar_vuupt(service_id: int, usuario: str, *, token: str, agent_lalamove:
                                     service_id=service_id,
                                     texto=f"{usuario}: cancelado na Vuupt pela tela Pedidos")
     return {"ok": True, "ja_estava": bool(r.get("ja_estava")), "erro": "", "aviso": aviso}
+
+
+def _abrir_sessao_stokki():
+    """Gerenciador de contexto: pega a trava da Stokki (dono unico por chamada, ate 60 s de espera,
+    conta principal ou reserva) e entrega a StokkiSession. RuntimeError se ocupada."""
+    import contextlib
+    from stokki import sessao_uso
+
+    @contextlib.contextmanager
+    def _ctx():
+        dono = f"painel-pedidos-acao-{uuid.uuid4().hex[:8]}"
+        conta = sessao_uso.adquirir(dono, ttl_segundos=300, esperar_segundos=60, alternativa=True)
+        if not conta:
+            raise RuntimeError("Stokki ocupada por outra rotina")
+        try:
+            from stokki.auth import StokkiSession
+            yield StokkiSession(torre_controle._carregar_config(), conta=conta)
+        finally:
+            sessao_uso.liberar(dono)
+    return _ctx()
+
+
+def cancelar_stokki(codigo: str, motivo: str, usuario: str, *, abrir_sessao=None) -> dict:
+    """Cancela na Stokki os pedidos PS-<id> do codigo (so a Stokki; a Vuupt e outra acao)."""
+    motivo = (motivo or "").strip()
+    if len(motivo) < 15:
+        return {"ok": False, "resultados": [], "erro": "Informe o motivo do cancelamento (mínimo de 15 caracteres)."}
+    ids = list(dict.fromkeys(int(i) for i in re.findall(r"PS-(\d+)", (codigo or "").upper())))
+    if not ids:
+        return {"ok": False, "resultados": [], "erro": "código sem PS-<número>: não dá pra achar o pedido na Stokki."}
+    from stokki import cancelar
+    abrir_sessao = abrir_sessao or _abrir_sessao_stokki
+    resultados = []
+    try:
+        with abrir_sessao() as sessao:
+            for id_stokki in ids:
+                try:
+                    r = cancelar.cancelar_pedido(sessao, id_stokki, motivo,
+                                                 prefixo=f"Fresh Hub Pedidos ({usuario})")
+                except Exception as e:
+                    logger.warning(f"[acoes_pedidos] cancelar PS-{id_stokki} na Stokki falhou: {e}")
+                    r = {"ok": False, "situacao": "", "erro": f"falha ao falar com a Stokki: {e}"}
+                resultados.append({"id_stokki": id_stokki, "ok": bool(r.get("ok")),
+                                   "situacao": r.get("situacao") or "", "erro": r.get("erro") or ""})
+                if r.get("ok") and not r.get("ja_estava"):
+                    tratativas.registrar_evento(
+                        codigo.strip(), "PEDIDOS", "CANCELADO_STOKKI",
+                        texto=f"{usuario}: cancelado na Stokki (PS-{id_stokki}, situação depois: "
+                              f"{r.get('situacao') or '?'}): {motivo}")
+    except RuntimeError as e:
+        if not resultados:
+            return {"ok": False, "resultados": [], "erro": f"{e}, tente em alguns minutos."}
+        raise
+    falhas = [x for x in resultados if not x["ok"]]
+    return {"ok": not falhas, "resultados": resultados,
+            "erro": "; ".join(f"PS-{x['id_stokki']}: {x['erro']}" for x in falhas)}
