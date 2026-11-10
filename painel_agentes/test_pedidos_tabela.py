@@ -71,7 +71,8 @@ class TestTelaPedidos(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertIn("attachment", r.headers["Content-Disposition"])
         linhas = r.get_data(as_text=True).lstrip("﻿").splitlines()
-        self.assertEqual(linhas, ["Código;Referência;Status", "PS-1;NF9;Entregue", "PS-2;NF9;Insucesso"])
+        self.assertEqual(linhas, ["Código;Referência;Status;Histórico de tentativas",
+                                  "PS-1;NF9;Entregue;", "PS-2;NF9;Insucesso;"])
 
     def test_niveis_sem_acesso_nao_entram(self):
         self._logar("galpao")

@@ -371,15 +371,27 @@ def exportar_csv(filtros: dict, chaves: list[str] | None = None, ordem: str | No
     try:
         where, params = _where(filtros)
         rows = conn.execute(f"{_SQL_BASE} {_select()}{where}{_order_by(ordem, direcao)}", params).fetchall()
+        hist = tentativas([(r["sender_id"], r["pedido_base"]) for r in rows], conn)
     finally:
         if fechar:
             conn.close()
     saida = io.StringIO()
     escritor = csv.writer(saida, delimiter=";")
-    escritor.writerow([c.rotulo for c in colunas])
+    escritor.writerow([c.rotulo for c in colunas] + ["Histórico de tentativas"])
+    texto_livre = Coluna("historico", "Histórico de tentativas", "")
     for r in rows:
-        escritor.writerow([_celula_csv(c, formatar(c.chave, r[c.chave])) for c in colunas])
+        itens = hist.get((r["sender_id"], r["pedido_base"]), [])
+        escritor.writerow([_celula_csv(c, formatar(c.chave, r[c.chave])) for c in colunas]
+                          + [_celula_csv(texto_livre, "; ".join(_texto_tentativa(t) for t in itens))])
     return "﻿" + saida.getvalue()
+
+
+def _texto_tentativa(t: dict) -> str:
+    """"dd/mm Situação (motivo)", o mesmo formato do xlsx do portal."""
+    dia = t["data"] or ""
+    texto = f"{dia[8:10]}/{dia[5:7]} " if len(dia) >= 10 else ""
+    texto += formatar("status", t["situacao"])
+    return texto + (f" ({t['motivo']})" if t["motivo"] else "")
 
 
 def _celula_csv(coluna: Coluna, texto: str) -> str:

@@ -216,9 +216,20 @@ class TestOpcoesFormatoCsv(_Base):
                                 conn=self.conn)
         self.assertTrue(texto.startswith("﻿"))
         linhas = texto.lstrip("﻿").splitlines()
-        self.assertEqual(linhas, ["Código;Status", "PS-1;Entregue", "PS-2;Entregue", "PS-3;Entregue"])
+        self.assertEqual(linhas, ["Código;Status;Histórico de tentativas", "PS-1;Entregue;", "PS-2;Entregue;",
+                                  "PS-3;Entregue;"])
         cabecalho = tp.exportar_csv({}, conn=self.conn).lstrip("﻿").splitlines()[0]
-        self.assertEqual(cabecalho.count(";"), len(tp.COLUNAS) - 1)
+        self.assertEqual(cabecalho.count(";"), len(tp.COLUNAS))
+
+    def test_csv_tem_historico_de_tentativas(self):
+        self._pedido("PS-1", status="INSUCESSO")
+        self._parada(self._rota(_dia(-1)), "PS-1", situacao="INSUCESSO", motivo="Ausente")
+        self._pedido("PS-1-R1", status="ENTREGUE")
+        self._parada(self._rota(_dia(0)), "PS-1-R1", situacao="ENTREGUE")
+        linhas = tp.exportar_csv({}, ["codigo"], conn=self.conn).lstrip("﻿").splitlines()
+        ontem, hoje = (HOJE - timedelta(days=1)).strftime("%d/%m"), HOJE.strftime("%d/%m")
+        self.assertEqual(linhas, ["Código;Histórico de tentativas",
+                                  f'PS-1;"{ontem} Insucesso (Ausente); {hoje} Entregue"'])
 
     def test_csv_neutraliza_formula_em_texto(self):
         # revisão de segurança 09/11: texto livre começando com = vira fórmula no Excel
@@ -226,7 +237,7 @@ class TestOpcoesFormatoCsv(_Base):
         texto = tp.exportar_csv({}, ["destinatario", "caixas"], conn=self.conn)
         linha = texto.lstrip("﻿").splitlines()[1]
         self.assertTrue(linha.startswith("\"'=HYPERLINK("), linha)
-        self.assertTrue(linha.endswith(";3"), linha)
+        self.assertTrue(linha.endswith(";3;"), linha)
 
 
 if __name__ == "__main__":
