@@ -170,6 +170,7 @@
         <div class="cartao pedido" id="ped-${p.parada_id}">
           <div class="linha-topo"><span class="cod">${esc(p.codigo)}</span>
             <span class="num">${p.parcial ? "Parcial" : (p.caixas_esperadas ?? "?") + " cx"}</span></div>
+          ${p.tipo === "RETIRADO" ? '<span class="selo parcial">Retirado da rota</span>' : ""}
           <div style="font-size:14px">${esc(p.destinatario)}</div>
           <div class="nota">${esc(p.embarcador)} · baixa ${dataBr(p.baixa_em)}</div>
           ${p.parcial ? '<span class="selo parcial">Parcial: conte as caixas que voltaram</span>' : ""}

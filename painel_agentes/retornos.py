@@ -27,6 +27,7 @@ import json
 import logging
 import shutil
 import sqlite3
+import sys
 import unicodedata
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -34,6 +35,12 @@ from pathlib import Path
 import grupos_equipe
 from insucesso_entrega.motivos_falha import MOTIVOS_FALHA
 from nucleo.normalizacao import normalizar_codigo
+
+_RAIZ = Path(__file__).parent.parent
+for _p in (_RAIZ, _RAIZ / "roteirizacao"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+import pedidos_retornando  # noqa: E402
 
 logger = logging.getLogger("painel.retornos")
 
@@ -102,6 +109,7 @@ def conectar(caminho=None) -> sqlite3.Connection:
     conn.execute("INSERT OR IGNORE INTO retornos_config (chave, valor) VALUES ('inicio', ?)",
                  (date.today().isoformat(),))
     conn.commit()
+    pedidos_retornando.garantir_tabela(conn)  # fora de transacao aberta (executescript comita)
     return conn
 
 
@@ -166,24 +174,30 @@ _SQL_RETORNOS = """
     SELECT p.id AS parada_id, p.rota_id, p.service_id, p.codigo, p.destinatario_nome, p.remetente_nome,
            p.volume_caixas, p.situacao, p.motivo_id, p.motivo_texto, p.failed_reason_id, p.completed_at,
            r.motorista_nome, r.motorista_cpf, r.nome AS rota_nome, r.agent_id,
-           COALESCE(substr(p.completed_at, 1, 10), r.data_rota) AS dia_insucesso
+           CASE WHEN pr.id IS NOT NULL THEN substr(pr.criado_em, 1, 10)
+                ELSE COALESCE(substr(p.completed_at, 1, 10), r.data_rota) END AS dia_insucesso,
+           pr.id IS NOT NULL AS retirado, pr.motivo AS retirado_motivo
     FROM nucleo_paradas p
     JOIN nucleo_rotas r ON r.id = p.rota_id
     LEFT JOIN retornos_recebidos rr ON rr.parada_id = p.id
-    WHERE p.situacao IN ('INSUCESSO', 'PARCIAL')
+    LEFT JOIN pedidos_retornando pr ON pr.parada_id = p.id AND pr.recebido_em IS NULL
+    WHERE (p.situacao IN ('INSUCESSO', 'PARCIAL') OR pr.id IS NOT NULL)
 """
 
 
 def _pedido(row, nomes_agentes: dict[int, str]) -> dict:
-    parcial = row["situacao"] == "PARCIAL"
+    retirado = bool(row["retirado"])  # tirado de rota iniciada: esta no carro (pedidos_retornando)
+    parcial = row["situacao"] == "PARCIAL" and not retirado
+    tipo = "RETIRADO" if retirado else ("PARCIAL" if parcial else "INSUCESSO")
     agente = row["agent_id"]
     nome = (row["motorista_nome"] or nomes_agentes.get(agente)
             or (f"Agente {agente}" if agente else "Sem motorista"))
     return {"parada_id": row["parada_id"], "rota_id": row["rota_id"], "service_id": row["service_id"],
             "codigo": row["codigo"], "destinatario": row["destinatario_nome"] or "",
-            "embarcador": row["remetente_nome"] or "", "parcial": parcial,
+            "embarcador": row["remetente_nome"] or "", "parcial": parcial, "tipo": tipo,
             "caixas_esperadas": None if parcial else row["volume_caixas"],
-            "motivo": row["motivo_texto"] or "", "baixa_em": row["completed_at"] or "",
+            "motivo": (f"Retirado da rota: {row['retirado_motivo'] or ''}".strip() if retirado
+                       else row["motivo_texto"] or ""), "baixa_em": row["completed_at"] or "",
             "dia_insucesso": row["dia_insucesso"], "rota_nome": row["rota_nome"] or "",
             "motorista_nome": nome, "motorista_cpf": row["motorista_cpf"] or "", "agent_id": agente}
 
@@ -214,13 +228,14 @@ def _eh_lalamove(row, agent_ids_excluir) -> bool:
 
 
 def _retornos_pendentes(conn, hoje: date, dias: int, agent_ids_excluir=frozenset()) -> list[dict]:
+    pedidos_retornando.resolver_pendentes(conn)  # parada que o nucleo espelhou depois da retirada
     ids_nc = _ids_nao_coletado(conn)
     nomes = _nomes_agentes(conn)
     desde = max((hoje - timedelta(days=dias)).isoformat(), inicio(conn))
     rows = conn.execute(_SQL_RETORNOS + " AND rr.id IS NULL").fetchall()
     return [_pedido(r, nomes) for r in rows
             if r["dia_insucesso"] and desde <= r["dia_insucesso"] <= hoje.isoformat()
-            and not eh_nao_coletado(r["failed_reason_id"], r["motivo_id"], r["motivo_texto"], ids_nc)
+            and (r["retirado"] or not eh_nao_coletado(r["failed_reason_id"], r["motivo_id"], r["motivo_texto"], ids_nc))
             and not _eh_lalamove(r, agent_ids_excluir)]
 
 
@@ -296,7 +311,7 @@ def _paradas_por_id(conn, ids: list[int]) -> dict[int, sqlite3.Row]:
     if not ids:
         return {}
     marcas = ",".join("?" * len(ids))
-    sql = _SQL_RETORNOS.replace("WHERE p.situacao", f"WHERE p.id IN ({marcas}) AND p.situacao")
+    sql = _SQL_RETORNOS.replace("WHERE (p.situacao", f"WHERE p.id IN ({marcas}) AND (p.situacao")
     sql = sql.replace("SELECT p.id AS parada_id", "SELECT rr.id AS recebido_id, p.id AS parada_id")
     return {r["parada_id"]: r for r in conn.execute(sql, ids)}
 
@@ -325,7 +340,8 @@ def registrar_descarga(conn, *, descarga_id: int, itens: list[dict], recebedor: 
     linhas, motoristas = [], set()
     for item in itens:
         row = paradas.get(int(item["parada_id"]))
-        if row is None or eh_nao_coletado(row["failed_reason_id"], row["motivo_id"], row["motivo_texto"], ids_nc):
+        if row is None or (not row["retirado"] and eh_nao_coletado(
+                row["failed_reason_id"], row["motivo_id"], row["motivo_texto"], ids_nc)):
             raise ErroRetorno("Pedido não está na lista de retornos.")
         p = _pedido(row, nomes)
         if row["recebido_id"] is not None:
@@ -366,6 +382,7 @@ def registrar_descarga(conn, *, descarga_id: int, itens: list[dict], recebedor: 
                   int(x["parcial"]), x["caixas_esperadas"], x["caixas_recebidas"], int(x["avaria"]),
                   json.dumps(x["fotos_avaria"]), x["motivo"], x["motivo_confirmado"], int(x["motivo_corrigido"]),
                   x["observacao"], int(x["divergente"])))
+        pedidos_retornando.marcar_recebidos(conn, ids, descarga_id)
         conn.execute("""
             UPDATE retornos_descargas SET motorista_nome = ?, motorista_cpf = ?, recebedor = ?, usuario = ?,
                 recebido_em = ?, fotos_carga = ?, assinatura = ?, tem_divergencia = ?
