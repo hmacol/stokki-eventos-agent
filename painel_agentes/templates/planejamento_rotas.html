@@ -6194,6 +6194,11 @@
         const retrato = (comNaoProntos.find(r => r.retrato_stokki_em) || {}).retrato_stokki_em || "?";
         alert(`Atenção: ${comNaoProntos.reduce((n, r) => n + r.codigos_nao_prontos.length, 0)} pedido(s) em espera na Stokki (retrato de ${retrato}) voltaram pro pool, NÃO foram enviados:\n${linhas.join("\n")}`);
       }
+      // trava de carro desligada (planejamento.trava_sem_carro): rota saiu sem carro, só avisa
+      const semCarro = resp.resultados.filter(r => r.ok && r.aviso);
+      if (semCarro.length) {
+        alert(`Atenção: ${semCarro.length} rota(s) enviada(s) sem carro:\n${semCarro.map(r => `• ${r.aviso}`).join("\n")}`);
+      }
       // recarrega pra travar as rotas enviadas (some seus botões/drag) e refletir o pool atualizado
       location.reload();
     } catch (e) {
@@ -7134,6 +7139,8 @@
         if (resp.rascunho) mesclarRascunho(rascunhoId, resp.rascunho);
         else { Object.assign(r, { agent_id: agentId, vehicle_id: vehicleId, motorista_nome: motoristaNome }); r.falta_carro = rascunhoSemCarro(r); }
       }
+      // trava de carro desligada (planejamento.trava_sem_carro): trocou, mas avisa
+      if (resp.aviso) alert(resp.aviso);
       return true;
     } catch (err) {
       alert(`Falha ao trocar motorista/carro: ${err.message}`);

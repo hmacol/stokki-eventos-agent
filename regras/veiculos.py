@@ -9,8 +9,9 @@ import time
 
 AGENTES_SEM_CARRO = frozenset({50258, 50259})  # Lalamove, Retirada
 TTL_CACHE_SEG = 600
+TTL_FALHA_SEG = 60
 
-_cache = {"em": None, "dados": None}
+_cache = {"em": None, "dados": None, "falha": None, "falha_em": None}
 _trava = threading.Lock()
 
 
@@ -70,16 +71,33 @@ def listar_para_seletor(veiculos_vuupt, motoristas, data=None):
 
 def listar_veiculos_cacheado(carregar, agora=time.monotonic):
     """Lista de veiculos da Vuupt com cache em memoria de 10 min (compartilhado
-    pelo seletor, pela tela e pela trava de envio). carregar() faz a chamada."""
+    pelo seletor, pela tela e pela trava de envio). carregar() faz a chamada.
+    Falha fica 60 s no cache (levanta de novo sem chamar a Vuupt) e a chamada
+    roda fora da trava: uma Vuupt lenta nao enfileira as outras requisicoes."""
     with _trava:
         t = agora()
         if _cache["dados"] is not None and t - _cache["em"] < TTL_CACHE_SEG:
             return _cache["dados"]
+        if _cache["falha"] is not None and t - _cache["falha_em"] < TTL_FALHA_SEG:
+            raise RuntimeError(f"lista de veiculos da Vuupt falhou ha pouco: {_cache['falha']}")
+    try:
         dados = carregar()
-        _cache["dados"], _cache["em"] = dados, t
-        return dados
+    except Exception as e:
+        with _trava:
+            _cache["falha"], _cache["falha_em"] = str(e) or type(e).__name__, agora()
+        raise
+    with _trava:
+        _cache.update(dados=dados, em=agora(), falha=None, falha_em=None)
+    return dados
 
 
 def limpar_cache():
     with _trava:
-        _cache["dados"], _cache["em"] = None, None
+        _cache.update(dados=None, em=None, falha=None, falha_em=None)
+
+
+def trava_sem_carro_ligada(config) -> bool:
+    """planejamento.trava_sem_carro (padrao desligada, spec secao 4: so liga depois que a
+    lista de motoristas/carros estiver acertada). Desligada: o envio manual e a troca de
+    motorista nao recusam, so avisam; o selo "sem carro" do card aparece do mesmo jeito."""
+    return bool(((config or {}).get("planejamento") or {}).get("trava_sem_carro", False))

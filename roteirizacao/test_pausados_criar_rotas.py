@@ -119,5 +119,27 @@ class TestDataAutomaticaNoRascunho(_RodarCriador, unittest.TestCase):
         self.assertTrue(all(s.get("_data_automatica") for s in vistos))
 
 
+class TestRetornandoNoCriadorDiario(_RodarCriador, unittest.TestCase):
+    """Editar rota enviada (10/11): pedido Retornando (no carro, ainda nao recebido em /retornos)
+    nao volta pra rodada do criador diario."""
+
+    def test_retornando_fica_fora_da_rodada(self):
+        import functools
+        import pedidos_retornando
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        db = Path(tmp.name) / "r.db"
+        conn = pedidos_retornando.conectar(db)
+        pedidos_retornando.marcar(conn, service_id=1, codigo="#PS-1", vuupt_route_id=9, agent_id=3,
+                                  motorista_nome="Joao", motivo="Outros", observacao="", usuario="x")
+        conn.close()
+        area = mock.Mock(return_value=[])
+        self._rodar([_servico(1), _servico(2)], extras=[
+            mock.patch.object(pedidos_retornando, "separar_retornando",
+                              functools.partial(pedidos_retornando.separar_retornando, db_path=db)),
+            mock.patch.object(crd, "identificar_area_nao_atendida", area)])
+        self.assertEqual([s["id"] for s in area.call_args[0][0]], [2])
+
+
 if __name__ == "__main__":
     unittest.main()

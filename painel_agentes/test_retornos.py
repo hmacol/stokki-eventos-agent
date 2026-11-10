@@ -403,6 +403,66 @@ class Retirado(Base):
         self.conn.commit()
         self.assertEqual(len(retornos.listar_pendentes(self.conn, HOJE)), 1)
 
+    # --- revisao final: Retornando nao pode ficar preso sem saida na tela ---
+
+    def test_retirado_antigo_nao_some_pela_janela(self):
+        self.retirar("João", "PS-1", dia=HOJE - timedelta(days=10))
+        p = retornos.listar_pendentes(self.conn, HOJE)[0]["pedidos"][0]
+        self.assertEqual(p["codigo"], "PS-1")
+
+    def test_retirado_de_rota_lalamove_aparece(self):
+        self.retirar("LALAMOVE", "PS-1")
+        self.conn.execute("UPDATE nucleo_rotas SET agent_id = 77")
+        self.conn.commit()
+        grupos = retornos.listar_pendentes(self.conn, HOJE, agent_ids_excluir={77})
+        self.assertEqual([p["codigo"] for g in grupos for p in g["pedidos"]], ["PS-1"])
+
+    def _retornando_sem_parada(self, codigo="PS-9", service_id=5555):
+        cur = self.conn.execute(
+            "INSERT INTO pedidos_retornando (service_id, codigo, vuupt_route_id, parada_id, agent_id, motorista_nome, "
+            "motivo, criado_em) VALUES (?, ?, 4242, NULL, 31, 'Pedro', 'Cliente cancelou', ?)",
+            (service_id, codigo, f"{HOJE.isoformat()} 09:00:00"))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def test_retornando_sem_parada_no_nucleo_aparece_na_lista(self):
+        rid = self._retornando_sem_parada()
+        p = retornos.listar_pendentes(self.conn, HOJE)[0]["pedidos"][0]
+        self.assertIsNone(p["parada_id"])
+        self.assertEqual((p["retornando_id"], p["chave"], p["tipo"]), (rid, f"r{rid}", "RETIRADO"))
+        self.assertEqual(p["motorista_nome"], "Pedro")
+        # sem chave de "ja cobrado", fica fora da cobranca das 07h (so na lista)
+        self.assertEqual(retornos.pendentes_atrasados(self.conn, HOJE + timedelta(days=1)), [])
+
+    def test_receber_retornando_sem_parada_baixa_sem_linha_em_recebidos(self):
+        rid = self._retornando_sem_parada()
+        res = self.receber([{"parada_id": None, "retornando_id": rid, "caixas_recebidas": 3, "avaria": False,
+                             "motivo": "Retirado da rota: Cliente cancelou", "observacao": ""}])
+        row = self.conn.execute("SELECT recebido_em, descarga_id FROM pedidos_retornando WHERE id = ?",
+                                (rid,)).fetchone()
+        self.assertEqual(row["descarga_id"], res["descarga_id"])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM retornos_recebidos").fetchone()[0], 0)
+        self.assertEqual(retornos.listar_pendentes(self.conn, HOJE), [])
+        texto = retornos.texto_alerta_descarga(res, "Carlos")
+        self.assertIn("PS-9", texto)
+        self.assertIn("sem registro em Recebidos", texto)
+        with self.assertRaises(retornos.ErroRetorno):  # segunda vez: ja baixado
+            self.receber([{"parada_id": None, "retornando_id": rid, "caixas_recebidas": 3}])
+
+    def test_receber_retornando_resolve_parada_na_hora(self):
+        rid = self._retornando_sem_parada(codigo="PS-1")
+        # o nucleo espelhou a parada depois da listagem
+        pid = self.parada("Pedro", "PS-1", situacao="CANCELADA", caixas=4, motivo="", failed_reason_id=None)
+        self.conn.execute("UPDATE nucleo_rotas SET vuupt_route_id = 4242")
+        self.conn.execute("UPDATE nucleo_paradas SET service_id = 5555 WHERE id = ?", (pid,))
+        self.conn.commit()
+        res = self.receber([{"parada_id": None, "retornando_id": rid, "caixas_recebidas": 4,
+                             "motivo": "Retirado da rota: Cliente cancelou"}])
+        self.assertEqual(res["sem_parada"], [])
+        self.assertEqual(self.conn.execute("SELECT parada_id FROM retornos_recebidos").fetchone()[0], pid)
+        self.assertIsNotNone(self.conn.execute("SELECT recebido_em FROM pedidos_retornando WHERE id = ?",
+                                               (rid,)).fetchone()[0])
+
 
 if __name__ == "__main__":
     unittest.main()

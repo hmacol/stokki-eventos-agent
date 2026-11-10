@@ -81,6 +81,22 @@ class TorreExcluirTest(_Base):
         self.assertEqual([p["service_id"] for p in self._rascunho(rid)["paradas"]], [2])
         self.marcar_aberto.assert_not_called()
 
+    def test_torre_sem_rascunho_tira_nome_do_motorista_do_nucleo(self):
+        import sqlite3
+        conn = sqlite3.connect(self.db)
+        conn.execute("CREATE TABLE nucleo_rotas (id INTEGER PRIMARY KEY, vuupt_route_id INTEGER, motorista_nome TEXT)")
+        conn.execute("INSERT INTO nucleo_rotas (vuupt_route_id, motorista_nome) VALUES (?, 'Joana')", (ROTA_ID,))
+        conn.commit()
+        conn.close()
+        self._rota_viva("started", [_sv(1, "assigned"), _sv(2, "on_route")])
+        self.assertTrue(self._excluir(1)["ok"])
+        conn = pedidos_retornando.conectar(self.db)
+        try:
+            nome = conn.execute("SELECT motorista_nome FROM pedidos_retornando WHERE service_id = 1").fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(nome, "Joana")
+
     def test_expedicao_mantem_trava_de_rota_nao_iniciada(self):
         self._rota_viva("started", [_sv(1, "assigned"), _sv(2, "assigned")])
         r = self._excluir(1, permitir=False)

@@ -782,7 +782,10 @@
  veiculos.py                Carro do motorista (10/11): veiculo generico (placa comecando
                             com ".") nao conta como carro; seletor do card; cache 10 min;
                             trava do envio MANUAL sem carro ("Motorista {nome} sem carro
-                            cadastrado: ..."); envio automatico so alerta no grupo Alertas.
+                            cadastrado: ...") so com planejamento.trava_sem_carro: true
+                            (padrao DESLIGADA: envio manual e troca de motorista so avisam;
+                            selo "sem carro" no card aparece sempre); envio automatico so
+                            alerta no grupo Alertas, com ou sem a trava.
                             Agentes virtuais fora da trava: Lalamove 50258, Retirada 50259.
  motoristas_banco.py        Fonte única dos motoristas (tabela bd_motoristas + histórico
                             bd_motoristas_alteracoes). Espelho dados/BD_MOTORISTAS.xlsx
@@ -889,9 +892,8 @@
                            DELETE /routes/{id}/services/{sid}; ultimo pendente com entregue
                            na rota NAO cancela a rota), trocar_motorista_veiculo (PUT sem
                            activities; rota iniciada: so o carro, "Rota já começou: só o
-                           carro pode mudar."), adicionar_pedidos. Lalamove com corrida
-                           lancada recusa. Rota iniciada = algum servico on_route/arrived/
-                           done ou rota started/finished.
+                           carro pode mudar."), adicionar_pedidos. Rota iniciada = algum
+                           servico on_route/arrived/done ou rota started/finished.
  pedidos_retornando.py     Tabela pedidos_retornando: pedido tirado de rota INICIADA fica
                            retido (selo "Retornando — no carro de {motorista}" no pool) ate
                            a /retornos receber; pool, rascunho e incremento pulam. Chave =
@@ -1044,7 +1046,12 @@
                            pedido, tirar com motivo (trocar-motorista, adicionar-parada,
                            remover-parada); GET /api/planejamento/veiculos = lista do
                            seletor (regras/veiculos.listar_para_seletor, cache 10 min).
-                           Torre "Excluir da Rota" usa a mesma regra (edicao_rota).
+                           Lalamove com corrida lancada recusa a edicao
+                           (_recusar_se_lalamove_com_corrida). Incluir confere o pedido ao
+                           vivo (so not_assigned sem route_id). Troca de motorista/carro em
+                           rota enviada passa pela trava de carro (planejamento.trava_sem_carro).
+                           Torre "Excluir da Rota" (painel_agentes/expedicao.py,
+                           excluir_pedido_da_rota) usa a mesma regra (edicao_rota).
                            nucleo.pedidos.marcar_aberto_por_service_ids devolve o pedido a
                            Aberto no nucleo apos a remocao.
  aviso_rota_cancelada.py   Botão "Cancelar e notificar" do card (27/10, POST
@@ -1095,6 +1102,10 @@
                            galpao/expedicao; atendimento e leitura só veem.
                            Tipo "Retirado da rota" (10/11): pedido tirado de rota iniciada
                            (pedidos_retornando) entra na lista; recebimento baixa o Retornando.
+                           Retirado nao sai pela janela de 7 dias nem pelo filtro Lalamove;
+                           Retornando sem parada no nucleo aparece com chave "r<id>"
+                           (retornando_id) e o recebimento so baixa o Retornando (sem linha
+                           em retornos_recebidos; o alerta do grupo avisa).
  demandas.py               Demandas (25/10): tarefas pra uma equipe e, opcional, uma
                            pessoa. Cria: total e líderes. Vê: o que é seu, das suas
                            equipes e o que criou (total vê tudo; login fixo vê as

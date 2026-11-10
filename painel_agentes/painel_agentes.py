@@ -74,7 +74,7 @@ from planejamento_rotas import (
     salvar_disponibilidade_dia, marcar_disponibilidade_periodo, limpar_disponibilidade_dia,
     publicar_oferta_rascunho, publicar_ofertas_em_lote, despublicar_oferta_rascunho, despublicar_ofertas_em_lote,
     ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento, SITUACAO_STOKKI_NAO_PRONTA,
-    placas_veiculos_vuupt, seletor_veiculos,
+    placas_veiculos_vuupt, seletor_veiculos, confirmar_envio_rascunhos,
 )
 from regras import veiculos as veiculos_regras
 from avisar_motoristas_rotas import notificar_oferta_motoristas, push_ofertas_vps
@@ -1515,9 +1515,11 @@ def api_retornos_descarga():
         assinatura = request.files.get("assinatura")
         nome_assinatura = retornos.salvar_arquivo(descarga_id, "assinatura", assinatura.read()) if assinatura else ""
         for item in itens:
+            # chave da tela: parada_id, ou "r<retornando_id>" pro Retornando sem parada no núcleo
             pid = item.get("parada_id")
-            item["fotos_avaria"] = [retornos.salvar_arquivo(descarga_id, f"avaria_{int(pid)}", f.read())
-                                    for f in request.files.getlist(f"foto_avaria_{pid}")]
+            chave = str(int(pid)) if pid not in (None, "") else f"r{int(item.get('retornando_id'))}"
+            item["fotos_avaria"] = [retornos.salvar_arquivo(descarga_id, f"avaria_{chave}", f.read())
+                                    for f in request.files.getlist(f"foto_avaria_{chave}")]
         resultado = retornos.registrar_descarga(
             conn, descarga_id=descarga_id, itens=itens, recebedor=dados.get("recebedor") or "",
             usuario=session.get("usuario") or g.nivel_acesso, fotos_carga=fotos_carga, assinatura=nome_assinatura)
@@ -2989,12 +2991,20 @@ def api_trocar_motorista():
         agent_id = int(body["agent_id"]) if body.get("agent_id") not in (None, "") else None
         vehicle_id = int(body["vehicle_id"]) if body.get("vehicle_id") not in (None, "") else None
         rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
-        token = (_carregar_config().get("vuupt_api", {}).get("token", "")
-                 if rascunho and rascunho["status"] == rascunhos_rota.STATUS_ENVIADO else None)
-        rascunhos_rota.trocar_motorista(rascunho_id, agent_id, vehicle_id, body.get("motorista_nome"), token=token)
+        enviado = bool(rascunho and rascunho["status"] == rascunhos_rota.STATUS_ENVIADO)
+        config = _carregar_config() if enviado else {}
+        # ENVIADO: motorista de verdade sem carro recusa (planejamento.trava_sem_carro) ou só avisa
+        resultado = rascunhos_rota.trocar_motorista(
+            rascunho_id, agent_id, vehicle_id, body.get("motorista_nome"),
+            token=config.get("vuupt_api", {}).get("token", "") if enviado else None,
+            placas=placas_veiculos_vuupt(config) if enviado else None,
+            trava_sem_carro=veiculos_regras.trava_sem_carro_ligada(config))
     except (KeyError, ValueError, TypeError) as e:
         return jsonify({"erro": str(e)}), 400
-    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(rascunho_id)})
+    resposta = {"ok": True, "rascunho": _rascunho_ou_404(rascunho_id)}
+    if resultado.get("aviso"):
+        resposta["aviso"] = resultado["aviso"]
+    return jsonify(resposta)
 
 
 @app.route("/api/planejamento/lalamove-veiculo", methods=["POST"])
@@ -4014,18 +4024,7 @@ def api_confirmar_envio():
     except KeyError as e:
         return jsonify({"erro": str(e)}), 400
 
-    config = _carregar_config()
-    token = config.get("vuupt_api", {}).get("token", "")
-    # motorista de verdade sai sempre com carro: barra por rascunho, os outros seguem
-    placas = placas_veiculos_vuupt(config)
-    resultados = []
-    for rid in rascunho_ids:
-        erro_carro = veiculos_regras.verificar_carro(rascunhos_rota.buscar_rascunho(rid) or {}, placas)
-        if erro_carro:
-            resultados.append({"ok": False, "rascunho_id": rid, "erro": erro_carro})
-        else:
-            resultados.append(rascunhos_rota.enviar_rascunho(rid, token))
-    return jsonify({"ok": True, "resultados": resultados})
+    return jsonify({"ok": True, "resultados": confirmar_envio_rascunhos(rascunho_ids, _carregar_config())})
 
 
 @app.route("/api/planejamento/veiculos")
@@ -4112,9 +4111,9 @@ def api_cancelar_pedido():
     rascunho_id = body.get("rascunho_id")
     rascunho_id = int(rascunho_id) if rascunho_id is not None else None
 
-    resultado = cancelar_pedido(service_id, rascunho_id)
+    resultado = cancelar_pedido(service_id, rascunho_id, usuario=session.get("usuario") or g.nivel_acesso)
     if not resultado["ok"]:
-        return jsonify({"erro": resultado["erro"]}), 400
+        return jsonify({k: v for k, v in resultado.items() if k in ("erro", "aviso")}), 400
     return jsonify({"ok": True})
 
 

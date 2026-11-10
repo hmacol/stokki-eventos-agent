@@ -916,36 +916,57 @@ def renomear_rascunho(rascunho_id: int, novo_nome: str):
 
 
 def trocar_motorista(rascunho_id: int, agent_id: int | None, vehicle_id: int | None, motorista_nome: str | None,
-                     token: str | None = None):
+                     token: str | None = None, placas: dict | None = None,
+                     trava_sem_carro: bool = False) -> dict:
     """Em rota ENVIADA (editar rota enviada, 10/11) a troca vai primeiro pra Vuupt
     (edicao_rota.trocar_motorista_veiculo: rota iniciada so troca o carro) e so grava
-    aqui depois do ok. Recusa vira ValueError. Fora de ENVIADO so mexe no banco local."""
+    aqui depois do ok. Recusa vira ValueError. Fora de ENVIADO so mexe no banco local.
+    Em ENVIADO, motorista de verdade sem carro (regras.veiculos, placas = {vehicle_id: placa}
+    ou None) e recusado com trava_sem_carro ligada; desligada passa e volta {"aviso": texto}.
+    "Sem motorista" (agent_id None) sempre passa."""
     rascunho = buscar_rascunho(rascunho_id)
-    if rascunho and rascunho["status"] == STATUS_ENVIADO:
+    retorno = {}
+    enviado = bool(rascunho and rascunho["status"] == STATUS_ENVIADO)
+    if enviado:
         import edicao_rota
+        from regras import veiculos as veiculos_regras
         _recusar_se_lalamove_com_corrida(rascunho)
+        erro_carro = veiculos_regras.verificar_carro(
+            {"agent_id": agent_id, "vehicle_id": vehicle_id, "motorista_nome": motorista_nome}, placas)
+        if erro_carro and trava_sem_carro:
+            raise ValueError(erro_carro)
+        if erro_carro:
+            retorno["aviso"] = erro_carro
         resultado = edicao_rota.trocar_motorista_veiculo(token, rascunho["vuupt_route_id"], agent_id, vehicle_id)
         if not resultado["ok"]:
             raise ValueError(resultado["erro"])
         logger.info(f"Rota {rascunho['vuupt_route_id']} (rascunho {rascunho_id}): motorista/carro "
                     f"{rascunho['agent_id']}/{rascunho['vehicle_id']} -> {agent_id}/{vehicle_id}")
-    conn = _conectar()
     try:
-        conn.execute(
-            "UPDATE rascunhos_rota SET agent_id = ?, vehicle_id = ?, motorista_nome = ? WHERE id = ?",
-            (agent_id, vehicle_id, motorista_nome, rascunho_id),
-        )
-        _tocar(conn, rascunho_id)
-        conn.commit()
-    finally:
-        conn.close()
-    if rascunho and rascunho["status"] == STATUS_ENVIADO:
+        conn = _conectar()
+        try:
+            conn.execute(
+                "UPDATE rascunhos_rota SET agent_id = ?, vehicle_id = ?, motorista_nome = ? WHERE id = ?",
+                (agent_id, vehicle_id, motorista_nome, rascunho_id),
+            )
+            _tocar(conn, rascunho_id)
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        if enviado:
+            # a Vuupt ja trocou: card e Vuupt divergem ate alguem corrigir
+            logger.error(f"Rota {rascunho['vuupt_route_id']} (rascunho {rascunho_id}): Vuupt trocou para "
+                         f"agent {agent_id} / vehicle {vehicle_id}, mas o rascunho local NAO foi gravado")
+        raise
+    if enviado:
         # romaneio leva motorista/placa: refaz em segundo plano (best-effort)
         try:
             from documentacao_rota import agendar as _agendar_documentacao
             _agendar_documentacao(rascunho["vuupt_route_id"], rascunho["data_alvo"], motivo="motorista/carro trocado")
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Romaneio da rota {rascunho['vuupt_route_id']} nao reagendado: {e}")
+    return retorno
 
 
 def publicar_oferta(rascunho_id: int):
@@ -1777,8 +1798,13 @@ def preparar_cancelamento_de_parada(rascunho_id: int, service_id: int, token: st
         descartar_rascunho(rascunho_id, permitir_enviado=True)
         return {"ok": True}
 
+    local = next((p for p in rascunho["paradas"] if p["service_id"] == service_id), None)
     remover_parada(rascunho_id, service_id)
-    return {"ok": True}
+    # rota_iniciada: se o cancelamento que vem depois falhar, quem chama marca Retornando
+    # (retornando_se_cancelamento_falhou) -- o pedido saiu da rota mas segue no carro
+    return {"ok": True, "rota_iniciada": resultado["rota_iniciada"], "vuupt_route_id": route_id,
+            "codigo": (local or {}).get("codigo") or (resultado.get("servico") or {}).get("code") or "",
+            "agent_id": rascunho["agent_id"], "motorista_nome": rascunho["motorista_nome"]}
 
 
 # ---------------------------------------------------------------------------
@@ -1842,10 +1868,21 @@ def adicionar_em_rota_enviada(rascunho_id: int, parada: dict, token: str, usuari
     if rota["status"] in edicao_rota.STATUS_ROTA_ENCERRADA:
         raise ValueError(f"Rota #{route_id} já foi encerrada — não dá pra incluir pedido.")
 
+    # pedido AO VIVO: o pool pode estar velho e a Vuupt nao recusa sempre um pedido que ja
+    # esta em outra rota -- so entra quem esta sem rota (not_assigned e sem route_id)
+    from vuupt_client import VuuptClient
+    servico = VuuptClient(token).buscar_servico_por_id(service_id)
+    if not servico:
+        raise ValueError(f"Não deu pra conferir o pedido {parada.get('codigo')} na Vuupt agora. Tente de novo.")
+    if servico.get("status") != "not_assigned" or servico.get("route_id"):
+        raise ValueError(f"Pedido {parada.get('codigo')} não está livre na Vuupt "
+                         f"(status {servico.get('status')}, rota {servico.get('route_id') or '-'}): "
+                         f"atualize o pool antes de incluir.")
+
     resultado = edicao_rota.adicionar_pedidos(token, route_id, [service_id], position="end")
     if not resultado["ok"]:
         raise ValueError(resultado["erro"])
-    if service_id in resultado["falharam"]:
+    if resultado["falharam"]:  # qualquer recusa (mesmo item sem id) conta
         raise ValueError(f"A Vuupt recusou incluir o pedido {parada.get('codigo')} na rota #{route_id} "
                          f"(já está em outra rota ou o status não permite).")
 
@@ -1864,18 +1901,72 @@ def adicionar_em_rota_enviada(rascunho_id: int, parada: dict, token: str, usuari
     logger.info(f"Rota {route_id} (rascunho {rascunho_id}): pedido {parada.get('codigo')} incluido por {usuario}")
 
     # mesmos efeitos do envio, so pra essa parada (best-effort: o pedido ja esta na rota)
-    marcar_alocado(service_id, route_id)
+    try:
+        marcar_alocado(service_id, route_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Pedido {service_id} nao marcado como alocado na rota {route_id}: {e}")
     try:
         from nucleo.pedidos import marcar_em_rota_por_service_ids
         marcar_em_rota_por_service_ids([service_id], route_id)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Pedido {service_id} nao marcado EM_ROTA no nucleo: {e}")
-    from documentacao_rota import agendar as _agendar_documentacao
-    _agendar_documentacao(route_id, rascunho["data_alvo"], motivo="pedido incluido na rota")
+    try:
+        from documentacao_rota import agendar as _agendar_documentacao
+        _agendar_documentacao(route_id, rascunho["data_alvo"], motivo="pedido incluido na rota")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Romaneio da rota {route_id} nao reagendado apos incluir o pedido {service_id}: {e}")
     _avisar_freshhub("rota_enviada", lambda: eventos_freshhub.rota_enviada(
         _carregar_config(), [parada], vuupt_route_id=route_id, rascunho_id=rascunho_id,
         rota_nome=rascunho["nome"]))
     return {"ok": True, "rascunho_id": rascunho_id, "vuupt_route_id": route_id, "service_id": service_id}
+
+
+def _marcar_retornando_com_retry(*, service_id: int, codigo: str, vuupt_route_id: int, agent_id,
+                                 motorista_nome, motivo: str, observacao: str, usuario: str) -> bool:
+    """Grava o Retornando (pedido no carro). Sem ele o pedido fica roteavel no pool: 1 nova
+    tentativa e, se falhar de novo, erro no log (quem chama avisa quem clicou). Nunca levanta."""
+    import pedidos_retornando
+
+    for tentativa in (1, 2):
+        try:
+            conn = pedidos_retornando.conectar(DB_PATH)
+            try:
+                pedidos_retornando.marcar(conn, service_id=service_id, codigo=codigo,
+                                          vuupt_route_id=vuupt_route_id, agent_id=agent_id,
+                                          motorista_nome=motorista_nome, motivo=motivo,
+                                          observacao=observacao, usuario=usuario)
+            finally:
+                conn.close()
+            return True
+        except Exception as e:  # noqa: BLE001
+            if tentativa == 1:
+                logger.warning(f"Retornando do pedido {codigo} (rota {vuupt_route_id}) falhou, "
+                               f"tentando de novo: {e}")
+            else:
+                logger.error(f"Retornando do pedido {codigo} (rota {vuupt_route_id}) NAO gravado "
+                             f"apos 2 tentativas: {e}")
+    return False
+
+
+def _aviso_retornando_nao_gravado(codigo: str, motorista_nome) -> str:
+    return (f"ATENÇÃO: {codigo} está no carro de {motorista_nome or 'motorista'} mas NÃO ficou "
+            f"como Retornando. Não coloque em rota até receber em /retornos e avise o time.")
+
+
+def retornando_se_cancelamento_falhou(preparo: dict, service_id: int, erro: str, usuario: str) -> str | None:
+    """preparar_cancelamento_de_parada ja tirou o pedido de rota INICIADA, mas o cancelamento
+    do servico falhou: o pedido segue vivo e esta no carro -- vira Retornando (mesmo retry e
+    aviso da remocao). Devolve o texto pra quem clicou, ou None se nao havia o que marcar."""
+    if not preparo.get("rota_iniciada"):
+        return None
+    codigo = preparo.get("codigo") or str(service_id)
+    if _marcar_retornando_com_retry(
+            service_id=service_id, codigo=codigo, vuupt_route_id=preparo["vuupt_route_id"],
+            agent_id=preparo.get("agent_id"), motorista_nome=preparo.get("motorista_nome"),
+            motivo="Cancelamento falhou na Vuupt", observacao=(erro or "")[:300], usuario=usuario):
+        return (f"{codigo} saiu da rota mas o cancelamento falhou: ficou como Retornando "
+                f"(está no carro); receba em /retornos.")
+    return _aviso_retornando_nao_gravado(codigo, preparo.get("motorista_nome"))
 
 
 def aplicar_efeitos_pos_remocao(*, rascunho: dict | None, resultado: dict, vuupt_route_id: int,
@@ -1888,35 +1979,15 @@ def aplicar_efeitos_pos_remocao(*, rascunho: dict | None, resultado: dict, vuupt
     RASCUNHO) -> auditoria -> pool do nucleo (rota nao iniciada) -> romaneio.
     Devolve {"retornando": bool, "parada_removida": dict | None}."""
     import expedicao
-    import pedidos_retornando
 
     retornando = False
     aviso = None
     if resultado["rota_iniciada"]:
-        # sem Retornando o pedido (fisicamente no carro) fica roteavel no pool: 1 nova tentativa e,
-        # se falhar de novo, erro no log e aviso pra quem clicou
-        for tentativa in (1, 2):
-            try:
-                conn = pedidos_retornando.conectar(DB_PATH)
-                try:
-                    pedidos_retornando.marcar(conn, service_id=service_id, codigo=codigo,
-                                              vuupt_route_id=vuupt_route_id, agent_id=agent_id,
-                                              motorista_nome=motorista_nome, motivo=motivo,
-                                              observacao=observacao, usuario=usuario)
-                finally:
-                    conn.close()
-                retornando = True
-                break
-            except Exception as e:  # noqa: BLE001
-                if tentativa == 1:
-                    logger.warning(f"Retornando do pedido {codigo} (rota {vuupt_route_id}) falhou, "
-                                   f"tentando de novo: {e}")
-                else:
-                    logger.error(f"Retornando do pedido {codigo} (rota {vuupt_route_id}) NAO gravado "
-                                 f"apos 2 tentativas: {e}")
+        retornando = _marcar_retornando_com_retry(
+            service_id=service_id, codigo=codigo, vuupt_route_id=vuupt_route_id, agent_id=agent_id,
+            motorista_nome=motorista_nome, motivo=motivo, observacao=observacao, usuario=usuario)
         if not retornando:
-            aviso = (f"ATENÇÃO: {codigo} está no carro de {motorista_nome or 'motorista'} mas NÃO ficou "
-                     f"como Retornando. Não coloque em rota até receber em /retornos e avise o time.")
+            aviso = _aviso_retornando_nao_gravado(codigo, motorista_nome)
 
     parada_removida = None
     if rascunho:

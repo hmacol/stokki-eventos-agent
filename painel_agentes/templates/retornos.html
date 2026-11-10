@@ -93,7 +93,7 @@
   const rodape = document.getElementById("rodape");
   const btnConfirmar = document.getElementById("btn-confirmar");
   let dados = { motoristas: [], motivos: [] };
-  let conf = null;  // conferência aberta: {grupo, itens: {parada_id: {...}}, fotosCarga: [Blob]}
+  let conf = null;  // conferência aberta: {grupo, itens: {chave (parada_id ou "r"+retornando_id): {...}}, fotosCarga: [Blob]}
   let timerVolta = null;  // volta pra lista depois de confirmar; trocar de aba cancela
 
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
@@ -160,37 +160,37 @@
 
   function abrirConferencia(grupo) {
     conf = { grupo, fotosCarga: [], itens: {} };
-    grupo.pedidos.forEach(p => conf.itens[p.parada_id] = {
+    grupo.pedidos.forEach(p => conf.itens[p.chave] = {
       veio: true, caixas: p.parcial ? "" : p.caixas_esperadas ?? "", avaria: false, fotos: [], motivo: p.motivo, obs: "" });
     const motivos = dados.motivos;
     tela.innerHTML = `<button type="button" class="voltar" id="voltar">‹ Motoristas</button>
       <div class="nome" style="margin-bottom:4px">${esc(grupo.motorista_nome)}</div>
       <p class="nota" style="margin-top:0">Desmarque o que não veio nesta descarga: continua pendente.</p>
       ${grupo.pedidos.map(p => `
-        <div class="cartao pedido" id="ped-${p.parada_id}">
+        <div class="cartao pedido" id="ped-${p.chave}">
           <div class="linha-topo"><span class="cod">${esc(p.codigo)}</span>
             <span class="num">${p.parcial ? "Parcial" : (p.caixas_esperadas ?? "?") + " cx"}</span></div>
           ${p.tipo === "RETIRADO" ? '<span class="selo parcial">Retirado da rota</span>' : ""}
           <div style="font-size:14px">${esc(p.destinatario)}</div>
           <div class="nota">${esc(p.embarcador)} · baixa ${dataBr(p.baixa_em)}</div>
           ${p.parcial ? '<span class="selo parcial">Parcial: conte as caixas que voltaram</span>' : ""}
-          <label class="veio"><input type="checkbox" data-veio="${p.parada_id}" checked ${PODE_CONFIRMAR ? "" : "disabled"}> Veio nesta descarga</label>
-          <div class="campos" data-campos="${p.parada_id}">
+          <label class="veio"><input type="checkbox" data-veio="${p.chave}" checked ${PODE_CONFIRMAR ? "" : "disabled"}> Veio nesta descarga</label>
+          <div class="campos" data-campos="${p.chave}">
             <div><label>Caixas recebidas</label>
-              <div class="contador"><button type="button" data-menos="${p.parada_id}">−</button>
-                <input type="number" inputmode="numeric" min="0" data-caixas="${p.parada_id}" value="${p.parcial ? "" : p.caixas_esperadas ?? ""}" placeholder="quantas?">
-                <button type="button" data-mais="${p.parada_id}">+</button></div></div>
+              <div class="contador"><button type="button" data-menos="${p.chave}">−</button>
+                <input type="number" inputmode="numeric" min="0" data-caixas="${p.chave}" value="${p.parcial ? "" : p.caixas_esperadas ?? ""}" placeholder="quantas?">
+                <button type="button" data-mais="${p.chave}">+</button></div></div>
             <div><label>Avaria</label>
-              <div class="sim-nao"><button type="button" class="on" data-avaria="${p.parada_id}" data-v="0">Não</button>
-                <button type="button" class="perigo" data-avaria="${p.parada_id}" data-v="1">Sim</button></div>
-              <div class="fotos oculto" data-fotos-avaria="${p.parada_id}" style="margin-top:8px">
-                <label class="btn-foto">📷 Foto da avaria<input type="file" accept="image/*" data-arq-avaria="${p.parada_id}"></label></div></div>
+              <div class="sim-nao"><button type="button" class="on" data-avaria="${p.chave}" data-v="0">Não</button>
+                <button type="button" class="perigo" data-avaria="${p.chave}" data-v="1">Sim</button></div>
+              <div class="fotos oculto" data-fotos-avaria="${p.chave}" style="margin-top:8px">
+                <label class="btn-foto">📷 Foto da avaria<input type="file" accept="image/*" data-arq-avaria="${p.chave}"></label></div></div>
             <div><label>Motivo do retorno</label>
-              <select data-motivo="${p.parada_id}">
+              <select data-motivo="${p.chave}">
                 ${motivos.includes(p.motivo) ? "" : `<option value="${esc(p.motivo)}">${esc(p.motivo)} (motorista)</option>`}
                 ${motivos.map(m => `<option value="${esc(m)}" ${m === p.motivo ? "selected" : ""}>${esc(m)}${m === p.motivo ? " (motorista)" : ""}</option>`).join("")}
               </select></div>
-            <div><label>Observação</label><textarea data-obs="${p.parada_id}" placeholder="Opcional"></textarea></div>
+            <div><label>Observação</label><textarea data-obs="${p.chave}" placeholder="Opcional"></textarea></div>
           </div>
         </div>`).join("")}
       <div class="bloco cartao"><label class="rot">Foto da carga (pallet)</label>
@@ -291,11 +291,11 @@
     const recebedor = document.getElementById("recebedor").value.trim();
     const itens = [];
     for (const p of conf.grupo.pedidos) {
-      const it = conf.itens[p.parada_id];
+      const it = conf.itens[p.chave];
       if (!it.veio) continue;
       if (it.caixas === "" || it.caixas == null) return mostrarErro(`Informe quantas caixas de ${p.codigo} voltaram.`);
       if (it.avaria && !it.fotos.length) return mostrarErro(`Tire a foto da avaria de ${p.codigo}.`);
-      itens.push({ parada_id: p.parada_id, caixas_recebidas: parseInt(it.caixas, 10), avaria: it.avaria,
+      itens.push({ parada_id: p.parada_id, retornando_id: p.retornando_id, chave: p.chave, caixas_recebidas: parseInt(it.caixas, 10), avaria: it.avaria,
                    motivo: it.motivo, observacao: it.obs });
     }
     if (!itens.length) return mostrarErro("Marque pelo menos um pedido que veio nesta descarga.");
@@ -307,7 +307,7 @@
     const fd = new FormData();
     fd.append("dados", JSON.stringify({ recebedor, itens }));
     conf.fotosCarga.forEach((b, i) => fd.append("foto_carga", b, `carga${i}.jpg`));
-    for (const it of itens) conf.itens[it.parada_id].fotos.forEach((b, i) => fd.append(`foto_avaria_${it.parada_id}`, b, `avaria${i}.jpg`));
+    for (const it of itens) conf.itens[it.chave].fotos.forEach((b, i) => fd.append(`foto_avaria_${it.chave}`, b, `avaria${i}.jpg`));
     const assinatura = await new Promise(r => conf.canvas.toBlob(r, "image/png"));
     fd.append("assinatura", assinatura, "assinatura.png");
 

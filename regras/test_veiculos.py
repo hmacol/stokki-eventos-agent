@@ -87,6 +87,45 @@ class TestVeiculos(unittest.TestCase):
         v.listar_veiculos_cacheado(carregar, agora)
         self.assertEqual(len(chamadas), 2)
 
+    def test_falha_fica_60s_no_cache(self):
+        chamadas = []
+        relogio = [0.0]
+        falhar = [True]
+
+        def carregar():
+            chamadas.append(1)
+            if falhar[0]:
+                raise ConnectionError("Vuupt fora")
+            return [{"id": 1}]
+
+        def agora():
+            return relogio[0]
+
+        with self.assertRaises(ConnectionError):
+            v.listar_veiculos_cacheado(carregar, agora)
+        relogio[0] = 59
+        with self.assertRaisesRegex(RuntimeError, "Vuupt fora"):
+            v.listar_veiculos_cacheado(carregar, agora)
+        self.assertEqual(len(chamadas), 1)  # nao chamou a Vuupt de novo
+        relogio[0] = 61
+        falhar[0] = False
+        self.assertEqual(v.listar_veiculos_cacheado(carregar, agora), [{"id": 1}])
+        self.assertEqual(len(chamadas), 2)
+
+    def test_chamada_roda_fora_da_trava(self):
+        def carregar():
+            self.assertTrue(v._trava.acquire(blocking=False))  # outra thread conseguiria entrar
+            v._trava.release()
+            return []
+
+        v.listar_veiculos_cacheado(carregar)
+
+    def test_trava_sem_carro_padrao_desligada(self):
+        self.assertFalse(v.trava_sem_carro_ligada({}))
+        self.assertFalse(v.trava_sem_carro_ligada(None))
+        self.assertFalse(v.trava_sem_carro_ligada({"planejamento": {"fonte_pool": "vuupt"}}))
+        self.assertTrue(v.trava_sem_carro_ligada({"planejamento": {"trava_sem_carro": True}}))
+
 
 if __name__ == "__main__":
     unittest.main()

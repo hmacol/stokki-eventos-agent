@@ -375,6 +375,23 @@ def gerar_romaneio_rota(data_alvo: date, rota_id: int) -> Path:
     return caminho_saida
 
 
+def _motorista_nome_nucleo(vuupt_route_id: int) -> str | None:
+    """Nome do motorista da rota no espelho do nucleo (rota sem rascunho, ex. criada fora do
+    Planejamento) -- so pro Retornando nao nascer sem nome. Falha = None."""
+    try:
+        conn = sqlite3.connect(_DB_PATH, timeout=10)
+        try:
+            row = conn.execute("SELECT motorista_nome FROM nucleo_rotas WHERE vuupt_route_id = ? "
+                               "AND motorista_nome IS NOT NULL ORDER BY id DESC LIMIT 1",
+                               (vuupt_route_id,)).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        logging.getLogger(__name__).warning(f"Motorista da rota {vuupt_route_id} nao lido do nucleo: {e}")
+        return None
+    return row[0] if row else None
+
+
 def excluir_pedido_da_rota(data_alvo: date, rota_id: int, service_id: int,
                            motivo: str, observacao: str, usuario: str,
                            permitir_rota_em_andamento: bool = False) -> dict:
@@ -465,8 +482,8 @@ def excluir_pedido_da_rota(data_alvo: date, rota_id: int, service_id: int,
     efeitos = rascunhos_rota.aplicar_efeitos_pos_remocao(
         rascunho=rascunho, resultado=resultado, vuupt_route_id=rota_id, service_id=service_id,
         codigo=resultado["servico"].get("code") or "", agent_id=rota_viva.get("agent_id"),
-        motorista_nome=(rascunho or {}).get("motorista_nome"), motivo=motivo, observacao=observacao,
-        usuario=usuario, data_auditoria=data_alvo, rota_nome=rota_nome)
+        motorista_nome=(rascunho or {}).get("motorista_nome") or _motorista_nome_nucleo(rota_id),
+        motivo=motivo, observacao=observacao, usuario=usuario, data_auditoria=data_alvo, rota_nome=rota_nome)
     retorno = {"ok": True, "rota_cancelada": resultado["rota_cancelada"], "retornando": efeitos["retornando"]}
     if efeitos.get("aviso"):
         retorno["aviso"] = efeitos["aviso"]

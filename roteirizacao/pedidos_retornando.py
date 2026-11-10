@@ -120,6 +120,19 @@ def marcar_recebidos(conn: sqlite3.Connection, parada_ids: list[int], descarga_i
         (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), descarga_id, *parada_ids))
 
 
+def marcar_recebidos_por_ids(conn: sqlite3.Connection, retornando_ids: list[int], descarga_id: int) -> int:
+    """Baixa por pedidos_retornando.id (Retornando sem parada no nucleo).
+    NAO comita. Devolve quantas linhas ativas baixou."""
+    if not retornando_ids:
+        return 0
+    marcas = ",".join("?" * len(retornando_ids))
+    cur = conn.execute(
+        f"UPDATE pedidos_retornando SET recebido_em = ?, descarga_id = ? "
+        f"WHERE recebido_em IS NULL AND id IN ({marcas})",
+        (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), descarga_id, *retornando_ids))
+    return cur.rowcount
+
+
 def _ativos_ou_vazio(db_path) -> dict[int, dict]:
     try:
         conn = conectar(db_path)

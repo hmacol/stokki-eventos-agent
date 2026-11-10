@@ -48,6 +48,11 @@ class _VuuptFalsa:
                      "services": [dict(s) for s in (servicos or [])]}
         self.chamadas = []
         self.recusar_add = []
+        self.servicos_vivos = {}  # GET /services/{id}; ausente = livre no pool
+        self.failed_sem_id = False
+
+    def buscar_servico_por_id(self, service_id):
+        return self.servicos_vivos.get(service_id, {"id": service_id, "status": "not_assigned", "route_id": None})
 
     def buscar_rota(self, token, route_id, include=None):
         return {"route": copy.deepcopy(self.rota)}
@@ -72,6 +77,8 @@ class _VuuptFalsa:
         falhas = [sid for sid in service_ids if sid in self.recusar_add]
         self.rota["services"] += [{"id": sid, "code": f"#PS-{sid}", "status": "assigned"}
                                   for sid in service_ids if sid not in falhas]
+        if self.failed_sem_id:
+            return {"data": {"info": {"failed": [{"message": "already in route"}]}}}
         return {"data": {"info": {"failed": [{"id": sid} for sid in falhas]}}}
 
     def escritas(self):
@@ -101,6 +108,7 @@ class _Base(unittest.TestCase):
             mock.patch("rotas_client.cancelar_rota", self.vuupt.cancelar_rota),
             mock.patch("rotas_client.atualizar_motorista_veiculo", self.vuupt.atualizar_motorista_veiculo),
             mock.patch("rotas_client.adicionar_atividades", self.vuupt.adicionar_atividades),
+            mock.patch("vuupt_client.VuuptClient", return_value=self.vuupt),
             mock.patch("rotas_client.atualizar_rota", side_effect=AssertionError("PUT com lista nao deve ser usado")),
             mock.patch("documentacao_rota.agendar", self.agendar),
             mock.patch("documentacao_rota.descartar", self.descartar_doc),
@@ -186,6 +194,46 @@ class TrocarMotoristaTestCase(_Base):
         self.assertEqual(self.vuupt.escritas(), [("PUT", AGENTE, 77)])
         self.assertEqual(self._rascunho(rid)["vehicle_id"], 77)
 
+    def test_troca_para_motorista_sem_carro_trava_ligada_recusa(self):
+        rid = self._inserir_rascunho([_parada(101, "#PS-1")])
+        self._rota_viva("assigned", [{"id": 101, "code": "#PS-1", "status": "assigned"}])
+        placas = {5: ".Seco", 77: "ABC1D23"}
+        texto = "Motorista Caio sem carro cadastrado: escolha o carro no card ou cadastre o veículo dele."
+        for vehicle_id in (5, None):  # placa generica ou sem carro
+            with self.assertRaises(ValueError) as ctx:
+                rascunhos_rota.trocar_motorista(rid, AGENTE_NOVO, vehicle_id, "Caio", token="tk",
+                                                placas=placas, trava_sem_carro=True)
+            self.assertEqual(str(ctx.exception), texto)
+        self.assertEqual(self.vuupt.escritas(), [])
+        self.assertEqual(self._rascunho(rid)["agent_id"], AGENTE)
+        # "sem motorista" e agente virtual passam mesmo com a trava
+        rascunhos_rota.trocar_motorista(rid, None, None, None, token="tk", placas=placas, trava_sem_carro=True)
+        rascunhos_rota.trocar_motorista(rid, 50258, None, "LALAMOVE", token="tk", placas=placas,
+                                        trava_sem_carro=True)
+        self.assertEqual(self.vuupt.escritas(), [("PUT", None, None), ("PUT", 50258, None)])
+
+    def test_troca_para_motorista_sem_carro_trava_desligada_avisa(self):
+        rid = self._inserir_rascunho([_parada(101, "#PS-1")])
+        self._rota_viva("assigned", [{"id": 101, "code": "#PS-1", "status": "assigned"}])
+        resultado = rascunhos_rota.trocar_motorista(rid, AGENTE_NOVO, 5, "Caio", token="tk",
+                                                    placas={5: ".Seco"}, trava_sem_carro=False)
+        self.assertIn("Motorista Caio sem carro cadastrado", resultado["aviso"])
+        self.assertEqual(self.vuupt.escritas(), [("PUT", AGENTE_NOVO, 5)])
+        self.assertEqual(self._rascunho(rid)["agent_id"], AGENTE_NOVO)
+        # com carro de verdade nao ha aviso
+        self.assertEqual(rascunhos_rota.trocar_motorista(rid, AGENTE_NOVO, 77, "Caio", token="tk",
+                                                         placas={77: "ABC1D23"}), {})
+
+    def test_falha_local_depois_da_vuupt_loga_erro(self):
+        rid = self._inserir_rascunho([_parada(101, "#PS-1")])
+        self._rota_viva("assigned", [{"id": 101, "code": "#PS-1", "status": "assigned"}])
+        with mock.patch.object(rascunhos_rota, "_tocar", side_effect=sqlite3.OperationalError("locked")), \
+                self.assertLogs(rascunhos_rota.logger, level="ERROR") as logs, \
+                self.assertRaises(sqlite3.OperationalError):
+            rascunhos_rota.trocar_motorista(rid, AGENTE_NOVO, 77, "Caio", token="tk")
+        self.assertIn(f"rascunho {rid}", logs.output[0])
+        self.assertIn(str(AGENTE_NOVO), logs.output[0])
+
     def test_troca_em_rascunho_nao_chama_vuupt(self):
         rid = self._inserir_rascunho([_parada(101, "#PS-1")], status="RASCUNHO")
         rascunhos_rota.trocar_motorista(rid, AGENTE_NOVO, 77, "Caio")
@@ -255,6 +303,39 @@ class AdicionarTestCase(_Base):
             rascunhos_rota.adicionar_em_rota_enviada(rid, _parada(105, "#PS-5"), "tk", "hugo")
         self.assertEqual([p["service_id"] for p in self._rascunho(rid)["paradas"]], [101])
         self.agendar.assert_not_called()
+
+    def test_adicionar_recusa_pedido_que_ja_esta_em_outra_rota(self):
+        # revisao final: confere o servico AO VIVO antes do POST (nao depende do info.failed)
+        rid = self._inserir_rascunho([_parada(101, "#PS-1")])
+        self._rota_viva("assigned", [{"id": 101, "code": "#PS-1", "status": "assigned"}])
+        for vivo in ({"id": 105, "status": "assigned", "route_id": 777},
+                     {"id": 105, "status": "not_assigned", "route_id": 777},
+                     {"id": 105, "status": "canceled", "route_id": None}):
+            self.vuupt.servicos_vivos[105] = vivo
+            with self.assertRaisesRegex(ValueError, "não está livre na Vuupt"):
+                rascunhos_rota.adicionar_em_rota_enviada(rid, _parada(105, "#PS-5"), "tk", "hugo")
+        self.vuupt.servicos_vivos[105] = None  # GET falhou
+        with self.assertRaisesRegex(ValueError, "Não deu pra conferir"):
+            rascunhos_rota.adicionar_em_rota_enviada(rid, _parada(105, "#PS-5"), "tk", "hugo")
+        self.assertEqual(self.vuupt.escritas(), [])
+        self.assertEqual([p["service_id"] for p in self._rascunho(rid)["paradas"]], [101])
+
+    def test_adicionar_failed_sem_id_conta_como_recusa(self):
+        rid = self._inserir_rascunho([_parada(101, "#PS-1")])
+        self._rota_viva("assigned", [{"id": 101, "code": "#PS-1", "status": "assigned"}])
+        self.vuupt.failed_sem_id = True
+        with self.assertRaisesRegex(ValueError, "A Vuupt recusou"):
+            rascunhos_rota.adicionar_em_rota_enviada(rid, _parada(105, "#PS-5"), "tk", "hugo")
+        self.assertEqual([p["service_id"] for p in self._rascunho(rid)["paradas"]], [101])
+
+    def test_adicionar_efeitos_locais_que_falham_nao_derrubam(self):
+        rid = self._inserir_rascunho([_parada(101, "#PS-1")])
+        self._rota_viva("assigned", [{"id": 101, "code": "#PS-1", "status": "assigned"}])
+        self.marcar_alocado.side_effect = sqlite3.OperationalError("locked")
+        self.agendar.side_effect = RuntimeError("fila cheia")
+        resultado = rascunhos_rota.adicionar_em_rota_enviada(rid, _parada(105, "#PS-5"), "tk", "hugo")
+        self.assertTrue(resultado["ok"])
+        self.assertEqual([p["service_id"] for p in self._rascunho(rid)["paradas"]], [101, 105])
 
 
 class RemoverTestCase(_Base):
@@ -394,6 +475,29 @@ class CancelarPedidoTestCase(_Base):
         self.vuupt_client.cancelar_servico_oficial.assert_called_once_with(102)
         self.assertEqual([p["service_id"] for p in self._rascunho(rid)["paradas"]], [101, 103])
 
+    def test_cancelamento_que_falha_em_rota_iniciada_vira_retornando(self):
+        # revisao final: o DELETE tirou o pedido da rota rodando, mas o PUT /cancel falhou --
+        # o pedido segue vivo e no carro: vira Retornando e a resposta avisa
+        rid = self._inserir_rascunho([_parada(101, "#PS-1"), _parada(102, "#PS-2")])
+        self._rota_viva("started", [{"id": 101, "code": "#PS-1", "status": "done"},
+                                    {"id": 102, "code": "#PS-2", "status": "assigned"}])
+        self.vuupt_client.cancelar_servico_oficial.side_effect = planejamento_rotas.VuuptAPIError("500 da Vuupt")
+        resultado = planejamento_rotas.cancelar_pedido(102, rid, usuario="hugo")
+        self.assertFalse(resultado["ok"])
+        self.assertIn("500 da Vuupt", resultado["erro"])
+        self.assertIn("Retornando", resultado["aviso"])
+        ativo = self._retornando()[102]
+        self.assertEqual((ativo["vuupt_route_id"], ativo["codigo"], ativo["usuario"]), (ROTA_ID, "#PS-2", "hugo"))
+
+    def test_cancelamento_que_falha_em_rota_nao_iniciada_nao_vira_retornando(self):
+        rid = self._inserir_rascunho([_parada(101, "#PS-1"), _parada(102, "#PS-2")])
+        self._rota_viva("assigned", [{"id": 101, "code": "#PS-1", "status": "assigned"},
+                                     {"id": 102, "code": "#PS-2", "status": "assigned"}])
+        self.vuupt_client.cancelar_servico_oficial.side_effect = planejamento_rotas.VuuptAPIError("500 da Vuupt")
+        resultado = planejamento_rotas.cancelar_pedido(102, rid)
+        self.assertEqual(resultado, {"ok": False, "erro": "500 da Vuupt"})
+        self.assertEqual(self._retornando(), {})
+
     def test_cancelar_quando_ja_saiu_da_rota_segue_cancelando(self):
         rid = self._inserir_rascunho([_parada(101, "#PS-1"), _parada(102, "#PS-2")])
         self._rota_viva("started", [{"id": 101, "code": "#PS-1", "status": "done"}])
@@ -403,6 +507,44 @@ class CancelarPedidoTestCase(_Base):
         self.vuupt_client.cancelar_servico_oficial.assert_called_once_with(102)
         self.assertEqual([p["service_id"] for p in self._rascunho(rid)["paradas"]], [101])
         self.assertEqual(self._retornando(), {})
+
+
+class ConfirmarEnvioTravaCarroTestCase(_Base):
+    """planejamento.trava_sem_carro: ligada barra o rascunho sem carro; desligada (padrao) envia
+    e devolve aviso. Os outros rascunhos seguem nos dois casos."""
+
+    def setUp(self):
+        super().setUp()
+        self.sem_carro = self._inserir_rascunho([_parada(101, "#PS-1")], status="RASCUNHO")
+        self.com_carro = self._inserir_rascunho([_parada(102, "#PS-2")], status="RASCUNHO")
+        conn = rascunhos_rota._conectar()
+        conn.execute("UPDATE rascunhos_rota SET vehicle_id = 5 WHERE id = ?", (self.sem_carro,))
+        conn.execute("UPDATE rascunhos_rota SET vehicle_id = 6 WHERE id = ?", (self.com_carro,))
+        conn.commit()
+        conn.close()
+        self.enviar = mock.Mock(side_effect=lambda rid, token: {"ok": True, "rascunho_id": rid})
+        for p in (mock.patch.object(planejamento_rotas, "placas_veiculos_vuupt",
+                                    return_value={5: ".Seco", 6: "ABC1D23"}),
+                  mock.patch.object(rascunhos_rota, "enviar_rascunho", self.enviar)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_trava_desligada_envia_e_avisa(self):
+        for config in ({}, {"planejamento": {"trava_sem_carro": False}}):
+            self.enviar.reset_mock()
+            res = planejamento_rotas.confirmar_envio_rascunhos([self.sem_carro, self.com_carro], config)
+            self.assertEqual([r["ok"] for r in res], [True, True])
+            self.assertIn("Motorista Vinicius sem carro cadastrado", res[0]["aviso"])
+            self.assertNotIn("aviso", res[1])
+            self.assertEqual(self.enviar.call_count, 2)
+
+    def test_trava_ligada_barra_so_o_sem_carro(self):
+        res = planejamento_rotas.confirmar_envio_rascunhos(
+            [self.sem_carro, self.com_carro], {"planejamento": {"trava_sem_carro": True}})
+        self.assertEqual([r["ok"] for r in res], [False, True])
+        self.assertEqual(res[0]["erro"], "Motorista Vinicius sem carro cadastrado: escolha o carro no card "
+                                         "ou cadastre o veículo dele.")
+        self.enviar.assert_called_once_with(self.com_carro, "")
 
 
 class RascunhoPorRotaTestCase(_Base):
