@@ -10,6 +10,8 @@
 # - Estado da bancada (VERSAO, HISTORICO, COPIA, REQ_SHA) em /var/lib/stokki-homolog, so do
 #   root, gravado atomicamente (temporario na mesma pasta + mv).
 # - Ajudantes do lado do root rodam com /usr/bin/python3 -I (sistema, isolado).
+# - O venv tem o homolog-guarda.pth (do root): todo processo dele nasce com a guarda; o pip do
+#   root passa por pip_do_venv.
 
 umask 022
 
@@ -126,6 +128,31 @@ campo_versao() {
 	"$PY_SISTEMA" -I -c 'import json, sys
 d = json.load(open(sys.argv[1], encoding="utf-8"))
 print(d.get(sys.argv[2]) or "?")' "$ESTADO/HOMOLOG_VERSAO" "$1"
+}
+
+# pip do venv da homologacao. O homolog-guarda.pth poe a guarda em todo processo do venv, e o pip
+# precisa do PyPI: HOMOLOG_PIP_SEM_GUARDA=1 so vale para o root (ver homologacao/pth_guarda.py).
+pip_do_venv() {
+	HOMOLOG_PIP_SEM_GUARDA=1 "$HML/venv/bin/pip" install --quiet --disable-pip-version-check -r "$HML/requirements.txt"
+}
+
+# Instala o infra/homolog/homolog-guarda.pth (do root, 644) no site-packages do venv: todo processo
+# do venv nasce com a guarda, ate script rodado a mao sem os units (so -S pula; o nft segura).
+# Prova como homolog, sem ambiente nenhum e com -I. Devolve 1 se algo falhar (quem chama decide a saida).
+instalar_pth_guarda() {
+	local sites
+	sites=("$HML"/venv/lib/python3*/site-packages)
+	if [ "${#sites[@]}" -ne 1 ] || [ ! -d "${sites[0]}" ] || [ -L "${sites[0]}" ]; then
+		echo "erro: site-packages do venv nao achado (ou mais de um) em $HML/venv/lib" >&2
+		return 1
+	fi
+	install -m 644 -o root -g root "$HML/infra/homolog/homolog-guarda.pth" "${sites[0]}/homolog-guarda.pth" || return 1
+	if ! (cd / && sudo -u homolog env -i "$HML/venv/bin/python" -I -c 'import os, smtplib, sys
+sys.exit(0 if smtplib.SMTP.__name__ == "SMTPFalso" and os.environ.get("FRESH_AMBIENTE") == "homolog" else 1)'); then
+		echo "erro: venv/bin/python -I como homolog nao carregou a guarda pelo homolog-guarda.pth" >&2
+		return 1
+	fi
+	echo "(homolog-guarda.pth em ${sites[0]}; guarda provada com -I)"
 }
 
 # Codigo e venv do root (sem escrita para grupo/outros); pastas de dados do homolog.

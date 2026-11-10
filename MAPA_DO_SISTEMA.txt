@@ -200,8 +200,8 @@
  Trava de login da Stokki .................. stokki/sessao_uso.py
  Horários das rotinas ...................... infra/*.timer  (+ infra/sequencia_*.sh)
  Homologação (bancada do legado) ........... homologacao/ (guarda só com FRESH_AMBIENTE=homolog,
-                                             gerar_config.py, vps/*.sh) + infra/homolog/
-                                             (units, Caddy, nft). Como usar: seção 16.
+                                             pth_guarda.py, gerar_config.py, vps/*.sh) + infra/homolog/
+                                             (units, Caddy, nft, homolog-guarda.pth). Como usar: seção 16.
 
 
 ==============================================================================
@@ -1708,6 +1708,17 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
    ajudantes com /usr/bin/python3 -I). Não dar chown -R homolog na árvore.
    Recópia troca o banco da homologação inteiro (guarda 1 geração em
    dados/dados.db.anterior).
+   Guarda em todo processo do venv da homologação: infra/homolog/homolog-guarda.pth
+   (do root, no site-packages; chama homologacao/pth_guarda.py) além do
+   homologacao/site/sitecustomize.py dos units. Vale com -E/-I; só -S pula (resta
+   o nft). Mesmo assim: NUNCA rodar script à mão em /opt/stokki-homolog (o config
+   tem os tokens de produção da Vuupt e do freshhub). O pip do root usa
+   HOMOLOG_PIP_SEM_GUARDA=1 (comum.sh pip_do_venv; só vale para root).
+   No freshhub (127.0.0.1:8100) a guarda só deixa GET /api/pool: GET
+   /api/replicacao/pendentes marca itens como enviados (comeria a fila da produção).
+   nft do homolog: DNS só para 127.0.0.53; descarta IP da própria máquina
+   (fib local), redes privadas/link-local e e-mail. criar.sh com ramo no ar só
+   com --refazer (grava EM_TROCA).
  - executor.py mata processos com taskkill (Windows); na VPS só o processo
    principal é encerrado.
  - Descrições desatualizadas em units: stokki-sequencia-tarde.service cita

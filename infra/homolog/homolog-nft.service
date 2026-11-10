@@ -2,7 +2,8 @@
 Description=Homologacao do legado - regra nftables de saida do usuario homolog (tabela inet homolog)
 # Unit proprio em vez do nftables.service: o /etc/nftables.conf padrao do Ubuntu
 # comeca com "flush ruleset" e apagaria as regras do Docker no boot.
-After=network.target docker.service
+# depois do nftables.service (se alguem ligar): o flush ruleset dele nao apaga esta tabela
+After=network.target docker.service nftables.service
 Before=homolog-painel.service homolog-portal.service
 
 [Service]

@@ -4,7 +4,8 @@
 #
 # Saidas: 0 ok; 1 erro; 3 bancada ocupada por outro ramo (o vps_ops pergunta e chama de
 # novo com --trocar); 4 conflito ao mesclar origin/master; 5 checkout sem a guarda;
-# 6 servico nao subiu ou saude sem "guarda": "ativa" (VERSAO/historico NAO mudam).
+# 5 tambem se o homolog-guarda.pth nao carregar a guarda no venv;
+# 6 servico nao subiu ou saude sem "guarda": "ativa" com todas as camadas (VERSAO/historico NAO mudam).
 # Em 4/5/6 (e qualquer erro depois do checkout) fica a marca EM_TROCA no estado: o ok.sh
 # recusa ate uma subida terminar.
 # Nunca e pushado: o merge com origin/master existe so neste checkout.
@@ -74,17 +75,24 @@ echo "== donos: codigo e venv do root, pastas de dados do homolog"
 normalizar_donos
 
 echo "== conferir a guarda no checkout"
-[ -f "$HML/homologacao/site/sitecustomize.py" ] \
-	|| { echo "erro: checkout sem homologacao/site/sitecustomize.py; servicos nao reiniciados" >&2; exit 5; }
+for arq in homologacao/site/sitecustomize.py homologacao/pth_guarda.py infra/homolog/homolog-guarda.pth; do
+	[ -f "$HML/$arq" ] || { echo "erro: checkout sem $arq; servicos nao reiniciados" >&2; exit 5; }
+done
 
 echo "== dependencias (venv do root)"
 SHA_NOVO=$(sha256sum "$HML/requirements.txt" | cut -d' ' -f1)
 if [ -f "$REQ_SHA" ] && [ "$(cat "$REQ_SHA")" = "$SHA_NOVO" ]; then
 	echo "(requirements.txt igual, sem pip)"
 else
-	"$HML/venv/bin/pip" install --quiet --disable-pip-version-check -r "$HML/requirements.txt"
+	pip_do_venv
 	find "$HML/venv" -xdev ! -type l -exec chmod go-w {} +
 	gravar_estado HOMOLOG_REQ_SHA "$SHA_NOVO"
+fi
+
+echo "== guarda em todo processo do venv (homolog-guarda.pth)"
+if ! instalar_pth_guarda; then
+	echo "erro: guarda do venv nao provada; servicos nao reiniciados" >&2
+	exit 5
 fi
 
 echo "== esvaziar eventos pendentes do freshhub (como homolog)"
@@ -97,6 +105,8 @@ if ! systemctl restart "${UNITS[@]}"; then
 fi
 
 echo "== provar a guarda (saude direto no waitress)"
+# o venv da homologacao tem httpx e playwright: toda camada tem que estar instalada
+CAMADAS_ESPERADAS="smtp,imap,requests,httpx,playwright,socket"
 for porta in 8171 8174; do
 	RESPOSTA=""
 	for _ in $(seq 1 30); do
@@ -111,8 +121,11 @@ for porta in 8171 8174; do
 		exit 6
 	fi
 	echo "$porta: $RESPOSTA"
-	if ! printf '%s' "$RESPOSTA" | "$PY_SISTEMA" -I -c 'import json, sys; sys.exit(0 if json.load(sys.stdin).get("guarda") == "ativa" else 1)'; then
-		echo "erro: porta $porta sem \"guarda\": \"ativa\"" >&2
+	if ! printf '%s' "$RESPOSTA" | "$PY_SISTEMA" -I -c 'import json, sys
+d = json.load(sys.stdin)
+camadas = d.get("camadas") if isinstance(d.get("camadas"), list) else []
+sys.exit(0 if d.get("guarda") == "ativa" and set(sys.argv[1].split(",")) <= set(camadas) else 1)' "$CAMADAS_ESPERADAS"; then
+		echo "erro: porta $porta sem \"guarda\": \"ativa\" com as camadas $CAMADAS_ESPERADAS" >&2
 		exit 6
 	fi
 done

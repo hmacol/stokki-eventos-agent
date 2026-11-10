@@ -42,6 +42,7 @@ Idioma do projeto: português (código, comentários, commits, respostas). Comen
 - Subir um ramo (pushado): `py -3.11 .claude/scripts/vps_ops.py homolog subir <ramo>` (também `homolog ok`, `homolog trocar-senha`). É comando próprio: **"deploy" continua sendo produção**.
 - Regra: **nada sai** (e-mail/WhatsApp só registrados em `/homologacao/envios`; Stokki nunca, nem leitura; Vuupt só GET).
 - Não recopiar os dados (`homolog recopiar --confirmo-recopia`) sem pedido do Hugo.
+- **Nunca rodar script à mão em `/opt/stokki-homolog`** (`pipeline.py`, `nucleo/*`, jobs): o config de lá tem os tokens de produção da Vuupt e do freshhub. O `homolog-guarda.pth` do venv põe a guarda em todo processo (mesmo com `-E`/`-I`; só `-S` pula, e aí resta o nft), mas a bancada é só painel/portal.
 - A senha do Caddy fica só em `/root/homolog-senha-caddy.txt`: nunca no chat.
 
 ## Verificação antes de entregar

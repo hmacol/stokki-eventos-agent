@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Homologacao do legado: cria a bancada na VPS (1 vez; idempotente, pode rodar de novo).
+# Homologacao do legado: cria a bancada na VPS (1 vez; idempotente, pode rodar de novo ate o
+# primeiro subir.sh; com ramo no ar, so com --refazer).
 # Roda como root, a partir de uma copia scp deste arquivo (o checkout ainda nao existe).
-# Uso: criar.sh [ramo]    (padrao: master; o ramo precisa ter homologacao/ e infra/homolog/)
+# Uso: criar.sh [ramo] [--refazer]    (padrao: master; o ramo precisa ter homologacao/ e infra/homolog/)
+# Com ramo no ar (/var/lib/stokki-homolog/HOMOLOG_VERSAO) recusa, salvo --refazer: ai grava a marca
+# EM_TROCA antes de tocar no checkout (o ok.sh recusa ate o proximo subir.sh terminar).
 #
 # Usuario homolog, clone em /opt/stokki-homolog, firewall do usuario, venv proprio,
 # config sem segredos, copia dos dados, units, Caddy com senha. Nao sobe ramo: depois
@@ -19,15 +22,40 @@ CADDYFILE=/etc/caddy/Caddyfile
 ARQ_CADDY=/etc/caddy/legado-homolog.caddy
 ARQ_SENHA=/root/homolog-senha-caddy.txt
 IMPORT="import $ARQ_CADDY"
-RAMO=${1:-master}
+ESTADO=/var/lib/stokki-homolog
 
 falha() {
 	echo "erro: $*" >&2
 	exit 1
 }
 
+RAMO=""
+REFAZER=0
+for arg in "$@"; do
+	case "$arg" in
+		--refazer) REFAZER=1 ;;
+		*) [ -z "$RAMO" ] || falha "uso: criar.sh [ramo] [--refazer]"; RAMO=$arg ;;
+	esac
+done
+RAMO=${RAMO:-master}
+
 [ "$(id -u)" -eq 0 ] || falha "rode como root"
 [[ "$RAMO" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || falha "nome de ramo invalido"
+
+echo "== bancada ja tem ramo no ar?"
+[ ! -L "$ESTADO" ] || falha "$ESTADO e link simbolico"
+if [ -e "$ESTADO/HOMOLOG_VERSAO" ]; then
+	[ "$REFAZER" = 1 ] || falha "a bancada ja tem ramo no ar ($ESTADO/HOMOLOG_VERSAO). Refazer por cima: criar.sh $RAMO --refazer (depois subir.sh <ramo> <quem>)"
+	# mesma marca do subir.sh, antes de tocar no checkout: o ok.sh recusa ate uma subida terminar
+	TMP_TROCA=$(mktemp "$ESTADO/.EM_TROCA.XXXXXX")
+	printf '%s\n' "$RAMO $(date '+%d/%m/%Y %H:%M') criar.sh--refazer" > "$TMP_TROCA"
+	chmod 644 "$TMP_TROCA"
+	mv -f -- "$TMP_TROCA" "$ESTADO/EM_TROCA"
+	unset TMP_TROCA
+	echo "(--refazer: marca EM_TROCA gravada)"
+else
+	echo "(nao)"
+fi
 
 echo "== conferir o DNS de $HOST"
 IPS=$(getent ahostsv4 "$HOST" | awk '{print $1}' | sort -u || true)
@@ -79,6 +107,7 @@ fi
 "${G[@]}" rev-parse --verify --quiet "origin/$RAMO^{commit}" >/dev/null || falha "origin/$RAMO nao existe"
 "${G[@]}" checkout --quiet --detach --force "origin/$RAMO"
 for arq in homologacao/vps/comum.sh homologacao/site/sitecustomize.py homologacao/gerar_config.py \
+		homologacao/pth_guarda.py infra/homolog/homolog-guarda.pth \
 		homologacao/vps/copiar_dados.sh homologacao/vps/trocar_senha.sh infra/homolog/homolog.nft \
 		infra/homolog/homolog-nft.service infra/homolog/homolog-painel.service \
 		infra/homolog/homolog-portal.service infra/homolog/legado-homolog.caddy; do
@@ -107,9 +136,12 @@ nft list table inet homolog >/dev/null
 
 echo "== venv proprio, do root (sem playwright install: nenhum browser na homologacao)"
 [ -x "$HML/venv/bin/python" ] || "$PYBASE" -m venv "$HML/venv"
-"$HML/venv/bin/pip" install --quiet --disable-pip-version-check -r "$HML/requirements.txt"
+pip_do_venv
 normalizar_donos
 gravar_estado HOMOLOG_REQ_SHA "$(sha256sum "$HML/requirements.txt" | cut -d' ' -f1)"
+
+echo "== guarda em todo processo do venv (homolog-guarda.pth, do root)"
+instalar_pth_guarda || falha "guarda do venv nao provada (homolog-guarda.pth)"
 
 echo "== config da homologacao (sem segredos; imprime so nomes de chaves)"
 # python do venv de PRODUCAO, isolado (-I -B), rodando o arquivo do checkout do root.
@@ -214,3 +246,6 @@ CADDY_OK=1
 echo "== pronto"
 echo "senha do Caddy (usuario homolog): em $ARQ_SENHA, ler por SSH, nunca colar no chat"
 echo "proximo passo: bash $HML/homologacao/vps/subir.sh <ramo> <quem>"
+if [ -e "$ESTADO/EM_TROCA" ]; then
+	echo "marca EM_TROCA ativa: o ok.sh recusa ate o subir.sh terminar"
+fi

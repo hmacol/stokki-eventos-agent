@@ -106,7 +106,8 @@ Dois units novos em `infra/homolog/`, cópias dos de produção com:
 - `homolog-painel.service`: `waitress-serve --host=127.0.0.1 --port=8171 painel_agentes:app`, `WorkingDirectory=/opt/stokki-homolog/painel_agentes`
 - `homolog-portal.service`: porta 8174, `WorkingDirectory=/opt/stokki-homolog/portal_cliente`
 - Ambos: `User=homolog`, `UMask=0027`, `Environment=FRESH_AMBIENTE=homolog`,
-  `Environment=PYTHONPATH=/opt/stokki-homolog/homologacao` (carrega o `sitecustomize` da guarda, D4),
+  `Environment=PYTHONPATH=/opt/stokki-homolog/homologacao/site` (carrega o `sitecustomize` da guarda, D4),
+  `Environment=HOMOLOG_ESTADO=/var/lib/stokki-homolog` (de onde o painel lê ramo/commit/cópia),
   `MemoryMax=600M` (proteção da produção), `Restart=on-failure`.
 - Nenhum timer e nenhum daemon (`*-envios`, `*-chamados`).
 
@@ -114,8 +115,12 @@ Dois units novos em `infra/homolog/`, cópias dos de produção com:
 
 Pasta nova `homologacao/` no repo. Fica inerte em produção: só age com `FRESH_AMBIENTE=homolog`.
 
-**Como liga:** `homologacao/sitecustomize.py` (via `PYTHONPATH` do unit) chama `guarda.instalar()` antes de qualquer
-import do projeto. Como os processos filhos herdam o ambiente, todo `python` disparado pelo painel também nasce com a
+**Como liga:** `homologacao/site/sitecustomize.py` (via `PYTHONPATH` do unit) chama `guarda.instalar()` antes de qualquer
+import do projeto. Além dele, o `infra/homolog/homolog-guarda.pth` (do root, 644, instalado pelo `criar.sh`/`subir.sh`
+no site-packages do venv da homologação) chama `homologacao/pth_guarda.py:ativar()` em **todo** processo do venv,
+inclusive script rodado à mão sem o ambiente dos units e com `-E`/`-I`: força `FRESH_AMBIENTE=homolog`, instala a guarda
+e, se falhar, derruba o processo (`os._exit(1)`). Só `-S` (sem o módulo `site`) pula o `.pth`; aí resta o nft. O pip
+do root passa com `HOMOLOG_PIP_SEM_GUARDA=1`, que só vale para euid 0. Como os processos filhos herdam o ambiente, todo `python` disparado pelo painel também nasce com a
 guarda. Além disso, `homologacao/ambiente.py:exigir_coerencia()` roda no topo de `painel_agentes.py` e de
 `portal_cliente/app.py` e **aborta a subida** quando:
 - `FRESH_AMBIENTE=homolog`, mas a raiz do código é `/opt/stokki-eventos`; ou
@@ -127,7 +132,9 @@ guarda. Além disso, `homologacao/ambiente.py:exigir_coerencia()` roda no topo d
 |---|---|---|
 | `smtplib.SMTP` / `SMTP_SSL` | classe falsa | `sendmail`/`send_message` **registram a mensagem inteira e devolvem sucesso**. O fluxo segue como se tivesse enviado. Cobre `email_utils` e qualquer SMTP solto (`expedir_pedidos.py` etc.). |
 | `imaplib.IMAP4` / `IMAP4_SSL` | recusa | registra e levanta erro. |
-| `requests.Session.request` (pega `requests.get/post`, `chamar_com_retry`, google-auth) | lista do que passa, por host e método | **Passa (só leitura):** `api.vuupt.com` GET/HEAD, com limite próprio de ≤ 1 req/s para não gerar 429 na conta usada pela produção (P2); `maps.googleapis.com` GET (P3); `storage.googleapis.com` GET/HEAD (download e metadados; upload é POST/PUT e fica bloqueado) e `oauth2.googleapis.com` **só** `POST /token` (troca da conta de serviço por token de acesso; sem isso a leitura do GCS não funciona) (P3); `127.0.0.1:8100` (API do freshhub de produção) **só GET** (o pool; os POST de `eventos_freshhub` ficam bloqueados) (P3); `viacep.com.br` e `brasilapi.com.br` GET (públicos, sem chave). **OpenWA (`127.0.0.1:2785`, `POST .../sendText`): registra destino e texto e devolve uma resposta 200 falsa**, no formato que `integracao_openwa.py:44` espera. **Todo o resto** (Stokki, escrita na Vuupt, Lalamove, upload no GCS, Sheets, Supabase, POST no freshhub, freshhub hml 8101 etc.): **registra e levanta `EnvioBloqueadoHomolog`** (subclasse de `requests.ConnectionError`, para cair no tratamento de "serviço fora" que já existe). |
+| `requests.Session.request` (pega `requests.get/post`, `chamar_com_retry`, google-auth) | lista do que passa, por host e método | **Passa (só leitura):** `api.vuupt.com` GET/HEAD, com limite próprio de ≤ 1 req/s para não gerar 429 na conta usada pela produção (P2); `maps.googleapis.com` GET (P3); `storage.googleapis.com` GET/HEAD (download e metadados; upload é POST/PUT e fica bloqueado) e `oauth2.googleapis.com` **só** `POST /token` (troca da conta de serviço por token de acesso; sem isso a leitura do GCS não funciona) (P3); `127.0.0.1:8100` (API do freshhub de produção) **só `GET /api/pool`** (query livre; os POST de `eventos_freshhub` e
+qualquer outro GET ficam bloqueados: `GET /api/replicacao/pendentes` marca os itens como enviados e consumiria a fila
+de réplica da produção) (P3); `viacep.com.br` e `brasilapi.com.br` GET (públicos, sem chave). **OpenWA (`127.0.0.1:2785`, `POST .../sendText`): registra destino e texto e devolve uma resposta 200 falsa**, no formato que `integracao_openwa.py:44` espera. **Todo o resto** (Stokki, escrita na Vuupt, Lalamove, upload no GCS, Sheets, Supabase, POST no freshhub, freshhub hml 8101 etc.): **registra e levanta `EnvioBloqueadoHomolog`** (subclasse de `requests.ConnectionError`, para cair no tratamento de "serviço fora" que já existe). |
 | `httpx.Client.send` / `AsyncClient.send` | mesma lista | hoje é só o SDK da Anthropic: **`api.anthropic.com` passa** (P3). É uma chamada ao modelo, não um envio a terceiros. As *ações* que o assistente do portal dispara continuam passando pelas outras camadas, e a validação de foto continua com a própria chave de liga/desliga copiada do config (hoje desligada). Qualquer outro host via httpx fica bloqueado. |
 | `playwright.sync_api.sync_playwright` / `async_api.async_playwright` | recusa | registra e levanta erro. Nenhum Chromium sobe. |
 | `socket` (rede de segurança) | `getaddrinfo` + `connect` | só resolve nomes da lista acima; conexão com IP literal só se veio dessa resolução; **loopback proibido, com uma exceção: `127.0.0.1:8100`** (freshhub, P3). OpenWA, Evolution, freshhub hml e Postgres ficam inalcançáveis mesmo por código que fuja das camadas de cima. |
@@ -150,10 +157,24 @@ Google Maps, Anthropic, conta de serviço do GCS) e o token do freshhub **podem 
 real que precisa aparecer em "Envios bloqueados".
 
 **Terceira camada: firewall por usuário.** Regra `nftables` numa tabela própria (`inet homolog`), que vale só para o
-usuário `homolog`: aceita `ct state established,related` (as respostas ao Caddy), DNS e `127.0.0.1:8100` (freshhub);
-**descarta a saída TCP para as portas 25/465/587/143/993 (e-mail) e para qualquer outra porta em 127.0.0.0/8**. Cobre
+usuário `homolog`: aceita `ct state established,related` (as respostas ao Caddy), DNS **só para o resolvedor local
+`127.0.0.53`** e `127.0.0.1:8100` (freshhub); **descarta a saída TCP para as portas 25/465/587/143/993 (e-mail), para
+qualquer outra porta em 127.0.0.0/8, para qualquer endereço da própria máquina (`fib daddr type local`: IP público,
+gateways do Docker), para redes privadas e link-local (10/8, 172.16/12, 192.168/16, 169.254/16, fc00::/7, fe80::/10)
+e o DNS para qualquer outro destino**. O `homolog-nft.service` roda depois do `nftables.service`. Cobre
 subprocesso, Chromium e qualquer coisa fora do Python. Persistida em `/etc/nftables.d/homolog.nft`. *(Decisão do Claude. Mexe no firewall da VPS, então
 o OK deste desenho cobre isso. A tabela é própria e não toca nas cadeias do Docker.)*
+
+**Ajustes da revisão final (10/11, decisões do Claude):**
+- Estado da bancada (`HOMOLOG_VERSAO`, `HOMOLOG_HISTORICO`, `HOMOLOG_COPIA`, `HOMOLOG_REQ_SHA`, `EM_TROCA`) em
+  `/var/lib/stokki-homolog`, só do root, gravado atomicamente; o painel lê pela variável `HOMOLOG_ESTADO` (D3).
+- `homolog-guarda.pth` no venv (ver "Como liga"): a guarda vale também para script rodado à mão; ainda assim, a regra
+  é nunca rodar script à mão em `/opt/stokki-homolog`.
+- No 8100 só `GET /api/pool` (tabela acima).
+- Playwright presente com submódulo que não importa: a instalação da guarda falha (processo não sobe). O `subir.sh`
+  exige na saúde as 6 camadas (`smtp`, `imap`, `requests`, `httpx`, `playwright`, `socket`).
+- `criar.sh` recusa com ramo no ar (`HOMOLOG_VERSAO`), salvo `--refazer`, que grava `EM_TROCA` antes de tocar no
+  checkout.
 
 **Impressão de etiquetas (galpão):** a fila `wms_fila_impressao` da homologação nunca é lida por estação nenhuma. As
 etiquetas ficam visíveis na tela da fila, e nada imprime. Pela regra "nada sai", não há exceção. *(Decisão do Claude.)*
@@ -169,8 +190,8 @@ etiquetas ficam visíveis na tela da fila, e nada imprime. Pela regra "nada sai"
 Um `after_request` em cada app (painel e portal), ativo só no ambiente de homologação, injeta logo depois do `<body>`
 de toda resposta `text/html` uma faixa fixa no topo (laranja, por cima de tudo, sem cobrir botões; empurra o conteúdo).
 O texto é `HOMOLOGAÇÃO · <ramo> @ <commit curto> · dados de <dd/mm hh:mm>`, e o `<title>` ganha o prefixo
-`[HOMOLOG]`. Nenhum template é editado. Ramo e commit vêm de `dados/HOMOLOG_VERSAO` (D8); a data, de
-`dados/HOMOLOG_COPIA` (D7).
+`[HOMOLOG]`. Nenhum template é editado. Ramo e commit vêm de `HOMOLOG_VERSAO` (D8); a data, de
+`HOMOLOG_COPIA` (D7), ambos na pasta de estado `/var/lib/stokki-homolog` (variável `HOMOLOG_ESTADO`).
 
 ### D6. Config da homologação *(decisão do Claude)*
 
@@ -207,8 +228,8 @@ valendo, e é por ela que o Hugo vê o portal de qualquer cliente.
    produção (o backup é incremental, em páginas).
 3. `rsync` do resto de `dados/` e de `roteirizacao/dados/`, **excluindo** `dados.db*`, `*.log`, `logs/`,
    `sessao_*.json`, contas de serviço, `*.bak*` e `eventos_freshhub_pendentes.jsonl`.
-4. Move o resultado para `/opt/stokki-homolog/`, faz `chown -R homolog:homolog`, grava `dados/HOMOLOG_COPIA`
-   (data e hora) e sobe os serviços.
+4. Monta `dados/` e `roteirizacao/dados/` numa pasta nova, entrega ao `homolog` e troca cada uma inteira (o root nunca
+   grava dentro de uma pasta do `homolog`), grava `/var/lib/stokki-homolog/HOMOLOG_COPIA` (data e hora) e sobe os serviços.
 
 **Recópia:** mesmo script, mas antes guarda o banco atual da homologação em `dados/dados.db.anterior` (uma geração só).
 **Só roda com pedido explícito do Hugo.** O subcomando exige `--confirmo-recopia`, e a skill diz que Claude nunca o
@@ -237,8 +258,9 @@ py -3.11 .claude/scripts/vps_ops.py homolog criar             # 1 vez: usuário,
    **`git merge --no-edit origin/master`** só no checkout da homologação (nunca é pushado). Assim o que se testa é o
    ramo como ele vai ficar depois do merge. Se der conflito, aborta e avisa que o ramo precisa ser atualizado.
    Depois, `pip install -r requirements.txt` se ele mudou desde a última subida. *(Decisão do Claude.)*
-4. Grava `dados/HOMOLOG_VERSAO` (ramo, commit da ponta do ramo, commit do master usado, quando) e acrescenta uma
-   linha em `dados/HOMOLOG_HISTORICO`.
+4. Grava `/var/lib/stokki-homolog/HOMOLOG_VERSAO` (ramo, commit da ponta do ramo, commit do master usado, quando) e
+   acrescenta uma linha em `/var/lib/stokki-homolog/HOMOLOG_HISTORICO`. A pasta de estado é só do root, gravada
+   atomicamente; o painel a lê pela variável `HOMOLOG_ESTADO` dos units (sem ela, cai em `dados/`).
 4. `systemctl restart homolog-painel homolog-portal`.
 5. **Prova:** `curl` em `127.0.0.1:8171/homologacao/saude` e `8174/homologacao/saude` → JSON com
    `{ambiente: homolog, guarda: ativa, ramo, commit, camadas: [...]}`. A rota existe só na homologação. Depois um
@@ -290,8 +312,8 @@ Ordenados por canal. "Guarda" = D4. "Sem segredo" = D6. "nft" = terceira camada.
 | Lalamove | `lalamove_client.py:73` | Torre/Planejamento (`lalamove_integracao`) | Guarda, sem chave |
 | GCS (upload) | `documentos_pedido/storage_gcs.py:82` | Demandas (`demandas.py:961`), Retornos (`painel_agentes.py:1527`), canhotos manuais | Guarda (POST/PUT no `storage.googleapis.com`). O arquivo fica só no disco da homologação. |
 | GCS (leitura) | `documentos_pedido/storage_gcs.py` (download, URL assinada) | canhoto/foto já na nuvem | **Permitido** (GET + `POST oauth2/token`), conta de serviço copiada (P3) |
-| freshhub API (escrita) | `nucleo/freshhub_client.py:49` (8100), POST de `nucleo/eventos_freshhub.py` | eventos `roteirizado`/`nao_aprontou`/`rota_enviada` | Guarda (só GET no 8100); acumulam no `.jsonl` da homologação |
-| freshhub API (leitura) | `nucleo/freshhub_client.py` (`GET /api/pool`) | pool do planejamento (`nucleo/pool.py`) | **Permitido** (GET), token copiado (P3); exceção de loopback no socket e no nft |
+| freshhub API (escrita) | `nucleo/freshhub_client.py:49` (8100), POST de `nucleo/eventos_freshhub.py` | eventos `roteirizado`/`nao_aprontou`/`rota_enviada` | Guarda (só `GET /api/pool` no 8100); acumulam no `.jsonl` da homologação |
+| freshhub API (leitura) | `nucleo/freshhub_client.py` (`GET /api/pool`) | pool do planejamento (`nucleo/pool.py`) | **Permitido** (só `GET /api/pool`), token copiado (P3); exceção de loopback no socket e no nft. A fila de réplica (`GET /api/replicacao/pendentes`, que marca itens como enviados) fica bloqueada |
 | Fresh Hub SPA (Supabase) | `lovable/auth.py:177,223` | importado por `pedidos_parados_triagem` (hoje só `normalizar_order_number`) | Guarda |
 | Anthropic | `portal_cliente/assistente.py:60`, `nucleo/assistente_motorista.py:94`, `nucleo/validacao_fotos.py` (httpx) | assistente do portal, validação de foto | **Permitido** `api.anthropic.com` (P3); as ações do assistente passam pela guarda; validação de foto segue a chave de liga/desliga do config |
 | Google Maps | `geocodificacao.py:136` | endereço/geocodificação no portal e painel | **Permitido** GET (P3), chave copiada |
