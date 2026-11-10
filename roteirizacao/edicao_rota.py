@@ -57,6 +57,7 @@ def ler_rota(token: str, route_id: int) -> dict:
     rota = _rota_do_corpo(corpo)
     return {
         "id": rota.get("id", route_id),
+        "name": rota.get("name"),
         "status": rota.get("status"),
         "agent_id": rota.get("agent_id"),
         "vehicle_id": rota.get("vehicle_id"),

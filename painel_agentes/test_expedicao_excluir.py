@@ -93,6 +93,41 @@ class TorreExcluirTest(_Base):
         self.assertTrue(r["ok"])
         self.assertEqual(self.vuupt.escritas(), [("DELETE", 1)])
 
+    def test_auditoria_leva_nome_da_rota_viva_sem_rascunho(self):
+        self.vuupt.rota["name"] = "Planejamento - 12/11 - #3"
+        self._rota_viva("assigned", [_sv(1, "assigned"), _sv(2, "assigned")])
+        self.assertTrue(self._excluir(1)["ok"])
+        ex = expedicao._exclusoes_por_rota(date.today(), ROTA_ID)
+        self.assertEqual(len(ex), 1)
+        conn = expedicao._conectar_db()
+        try:
+            nome = conn.execute("SELECT rota_nome FROM expedicao_exclusoes").fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(nome, "Planejamento - 12/11 - #3")
+
+    def test_torre_ultimo_pedido_cancela_rota_e_reverte_rascunho(self):
+        rid = self._inserir_rascunho([_parada(1, "#PS-1")])
+        self._rota_viva("assigned", [_sv(1, "assigned")])
+        r = self._excluir(1)
+        self.assertTrue(r["ok"])
+        self.assertTrue(r["rota_cancelada"])
+        self.assertEqual(self.vuupt.escritas(), [("CANCELAR", "unassign")])
+        rasc = self._rascunho(rid)
+        self.assertEqual(rasc["status"], "RASCUNHO")
+        self.assertIsNone(rasc["vuupt_route_id"])
+        self.assertEqual(rasc["paradas"], [])
+
+    def test_retornando_falhando_ainda_devolve_ok(self):
+        rid = self._inserir_rascunho([_parada(1, "#PS-1"), _parada(2, "#PS-2")])
+        self._rota_viva("started", [_sv(1, "assigned"), _sv(2, "on_route")])
+        with mock.patch.object(pedidos_retornando, "marcar", side_effect=RuntimeError("banco travado")):
+            r = self._excluir(1)
+        self.assertTrue(r["ok"])
+        self.assertFalse(r["retornando"])
+        self.assertEqual([p["service_id"] for p in self._rascunho(rid)["paradas"]], [2])
+        self.marcar_aberto.assert_not_called()
+
     def test_fora_da_rota_devolve_erro_mas_tira_parada_local(self):
         rid = self._inserir_rascunho([_parada(1, "#PS-1"), _parada(2, "#PS-2")])
         self._rota_viva("assigned", [_sv(2, "assigned")])

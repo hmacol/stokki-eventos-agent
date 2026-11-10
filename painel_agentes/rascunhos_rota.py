@@ -1878,6 +1878,70 @@ def adicionar_em_rota_enviada(rascunho_id: int, parada: dict, token: str, usuari
     return {"ok": True, "rascunho_id": rascunho_id, "vuupt_route_id": route_id, "service_id": service_id}
 
 
+def aplicar_efeitos_pos_remocao(*, rascunho: dict | None, resultado: dict, vuupt_route_id: int,
+                                service_id: int, codigo: str, agent_id, motorista_nome,
+                                motivo: str, observacao: str, usuario: str,
+                                data_auditoria: date, rota_nome: str) -> dict:
+    """Efeitos locais depois que a Vuupt aceitou tirar o pedido (edicao_rota.tirar_pedido ok), comuns
+    ao card do Planejamento e a Excluir da Rota da Torre. Cada passo e best-effort (a Vuupt ja
+    mudou): Retornando (rota iniciada) -> card (remove a parada; rota cancelada volta o rascunho a
+    RASCUNHO) -> auditoria -> pool do nucleo (rota nao iniciada) -> romaneio.
+    Devolve {"retornando": bool, "parada_removida": dict | None}."""
+    import expedicao
+    import pedidos_retornando
+
+    retornando = False
+    if resultado["rota_iniciada"]:
+        try:
+            conn = pedidos_retornando.conectar(DB_PATH)
+            try:
+                pedidos_retornando.marcar(conn, service_id=service_id, codigo=codigo,
+                                          vuupt_route_id=vuupt_route_id, agent_id=agent_id,
+                                          motorista_nome=motorista_nome, motivo=motivo,
+                                          observacao=observacao, usuario=usuario)
+            finally:
+                conn.close()
+            retornando = True
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Retornando do pedido {codigo} (rota {vuupt_route_id}) nao gravado: {e}")
+
+    parada_removida = None
+    if rascunho:
+        try:
+            parada_removida = remover_parada(rascunho["id"], service_id)
+            if resultado["rota_cancelada"]:
+                # tambem descarta o romaneio da rota que deixou de existir
+                reverter_para_rascunho(rascunho["id"])
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Rascunho {rascunho['id']} nao atualizado apos tirar o pedido {codigo}: {e}")
+
+    try:
+        expedicao.registrar_exclusao(data_auditoria, vuupt_route_id, rota_nome, service_id, codigo,
+                                     motivo, observacao, usuario)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Auditoria da retirada do pedido {codigo} (rota {vuupt_route_id}) nao gravada: {e}")
+
+    if not resultado["rota_iniciada"]:
+        # rota nao iniciada: o pedido volta ao pool do nucleo na hora (sem esperar a sincronizacao)
+        try:
+            from nucleo.pedidos import marcar_aberto_por_service_ids
+            marcar_aberto_por_service_ids([service_id])
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Pedido {service_id} nao voltou ABERTO no nucleo: {e}")
+
+    data_doc = rascunho["data_alvo"] if rascunho else data_auditoria
+    try:
+        import documentacao_rota
+        if resultado["rota_cancelada"]:
+            if not rascunho:  # com rascunho, reverter_para_rascunho ja descartou
+                documentacao_rota.descartar(vuupt_route_id, data_doc)
+        else:
+            documentacao_rota.agendar(vuupt_route_id, data_doc, motivo="pedido excluido da rota")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Romaneio da rota {vuupt_route_id} nao atualizado: {e}")
+    return {"retornando": retornando, "parada_removida": parada_removida}
+
+
 def remover_de_rota_enviada(rascunho_id: int, service_id: int, motivo: str, observacao: str,
                             token: str, usuario: str) -> dict:
     """Tira um pedido nao comecado de rota ja enviada (status ao vivo, DELETE; nunca cancela o
@@ -1886,7 +1950,6 @@ def remover_de_rota_enviada(rascunho_id: int, service_id: int, motivo: str, obse
     Recusa vira ValueError."""
     import edicao_rota
     import expedicao
-    import pedidos_retornando
 
     rascunho = _rascunho_enviado(rascunho_id)
     if motivo not in expedicao.MOTIVOS_EXCLUSAO:
@@ -1908,48 +1971,15 @@ def remover_de_rota_enviada(rascunho_id: int, service_id: int, motivo: str, obse
     local = next((p for p in rascunho["paradas"] if p["service_id"] == service_id), None)
     codigo = (local or {}).get("codigo") or resultado["servico"].get("code") or ""
 
-    # Ordem depois do ok da Vuupt: Retornando primeiro (e a trava que tira o pedido do pool),
-    # depois o card, depois auditoria e romaneio (best-effort).
-    retornando = False
-    if resultado["rota_iniciada"]:
-        conn = pedidos_retornando.conectar(DB_PATH)
-        try:
-            pedidos_retornando.marcar(conn, service_id=service_id, codigo=codigo, vuupt_route_id=route_id,
-                                      agent_id=rascunho["agent_id"], motorista_nome=rascunho["motorista_nome"],
-                                      motivo=motivo, observacao=observacao, usuario=usuario)
-        finally:
-            conn.close()
-        retornando = True
-
-    parada_removida = remover_parada(rascunho_id, service_id)
-
-    try:
-        expedicao.registrar_exclusao(date.fromisoformat(rascunho["data_alvo"]), route_id, rascunho["nome"],
-                                     service_id, codigo, motivo, observacao, usuario)
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"Auditoria da retirada do pedido {codigo} (rota {route_id}) nao gravada: {e}")
-
-    if not retornando:
-        # rota nao iniciada: o pedido volta ao pool do nucleo na hora (sem esperar a sincronizacao)
-        try:
-            from nucleo.pedidos import marcar_aberto_por_service_ids
-            marcar_aberto_por_service_ids([service_id])
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"Pedido {service_id} nao voltou ABERTO no nucleo: {e}")
-
-    if resultado["rota_cancelada"]:
-        # reverter_para_rascunho tambem descarta o romaneio da rota que deixou de existir
-        reverter_para_rascunho(rascunho_id)
-    else:
-        try:
-            from documentacao_rota import agendar as _agendar_documentacao
-            _agendar_documentacao(route_id, rascunho["data_alvo"], motivo="pedido excluido da rota")
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"Romaneio da rota {route_id} nao reagendado: {e}")
+    efeitos = aplicar_efeitos_pos_remocao(
+        rascunho=rascunho, resultado=resultado, vuupt_route_id=route_id, service_id=service_id,
+        codigo=codigo, agent_id=rascunho["agent_id"], motorista_nome=rascunho["motorista_nome"],
+        motivo=motivo, observacao=observacao, usuario=usuario,
+        data_auditoria=date.fromisoformat(rascunho["data_alvo"]), rota_nome=rascunho["nome"])
     logger.info(f"Rota {route_id} (rascunho {rascunho_id}): pedido {codigo} tirado por {usuario} "
-                f"({motivo}); retornando={retornando} rota_cancelada={resultado['rota_cancelada']}")
+                f"({motivo}); retornando={efeitos['retornando']} rota_cancelada={resultado['rota_cancelada']}")
     return {"ok": True, "rota_cancelada": resultado["rota_cancelada"], "rota_iniciada": resultado["rota_iniciada"],
-            "retornando": retornando, "parada_removida": parada_removida}
+            "retornando": efeitos["retornando"], "parada_removida": efeitos["parada_removida"]}
 
 
 def espelho_rota_enviada(vuupt_route_id: int) -> dict:

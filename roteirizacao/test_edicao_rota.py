@@ -65,7 +65,7 @@ class TestEdicaoRota(unittest.TestCase):
     def test_ler_rota_formato(self):
         r = self._com(_Rotas(_corpo([_servico(1)])))
         rota = edicao_rota.ler_rota("t", 7)
-        self.assertEqual(rota, {"id": 7, "status": "not_started", "agent_id": 10, "vehicle_id": 20,
+        self.assertEqual(rota, {"id": 7, "name": None, "status": "not_started", "agent_id": 10, "vehicle_id": 20,
                                 "servicos": [{"id": 1, "code": "#PS-1", "status": "assigned",
                                               "dimension_3": 1.5}]})
 

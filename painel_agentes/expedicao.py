@@ -427,7 +427,6 @@ def excluir_pedido_da_rota(data_alvo: date, rota_id: int, service_id: int,
     token = config.get("vuupt_api", {}).get("token", "")
 
     import edicao_rota
-    import pedidos_retornando
     import rascunhos_rota
     log = logging.getLogger(__name__)
 
@@ -460,55 +459,12 @@ def excluir_pedido_da_rota(data_alvo: date, rota_id: int, service_id: int,
                 log.warning(f"Parada {service_id} não removida do rascunho {rascunho['id']}: {e}")
         return {"ok": False, "erro": resultado["erro"]}
 
-    servico_alvo = resultado["servico"]
-    codigo = servico_alvo.get("code") or ""
-    rota_nome = (rascunho or {}).get("nome") or ""
-    retornando = False
-
-    # Depois do ok da Vuupt, tudo local é best-effort. Ordem: Retornando (trava do pool), card,
-    # auditoria, nucleo, romaneio.
-    if resultado["rota_iniciada"]:
-        try:
-            conn = pedidos_retornando.conectar(rascunhos_rota.DB_PATH)
-            try:
-                pedidos_retornando.marcar(
-                    conn, service_id=service_id, codigo=codigo, vuupt_route_id=rota_id,
-                    agent_id=rota_viva.get("agent_id"),
-                    motorista_nome=(rascunho or {}).get("motorista_nome"),
-                    motivo=motivo, observacao=observacao, usuario=usuario)
-            finally:
-                conn.close()
-            retornando = True
-        except Exception as e:
-            log.warning(f"Retornando do pedido {codigo} (rota {rota_id}) não gravado: {e}")
-
-    if rascunho:
-        try:
-            rascunhos_rota.remover_parada(rascunho["id"], service_id)
-        except Exception as e:
-            log.warning(f"Parada {service_id} não removida do rascunho {rascunho['id']}: {e}")
-
-    try:
-        _registrar_exclusao(data_alvo, rota_id, rota_nome, service_id, codigo, motivo, observacao, usuario)
-    except Exception as e:
-        log.warning(f"Auditoria da exclusão do pedido {codigo} (rota {rota_id}) não gravada: {e}")
-
-    if not resultado["rota_iniciada"]:
-        try:
-            from nucleo.pedidos import marcar_aberto_por_service_ids
-            marcar_aberto_por_service_ids([service_id])
-        except Exception as e:
-            log.warning(f"Pedido {service_id} não voltou ABERTO no nucleo: {e}")
-
-    # Romaneio preparado em segundo plano (documentacao_rota, Hugo 09/09):
-    # rota que perdeu parada é regenerada; rota que sumiu tem o PDF
-    # descartado. Best-effort, a exclusão já aconteceu na VUUPT.
-    try:
-        import documentacao_rota
-        if resultado["rota_cancelada"]:
-            documentacao_rota.descartar(rota_id, data_alvo)
-        else:
-            documentacao_rota.agendar(rota_id, data_alvo, motivo="pedido excluído da rota")
-    except Exception as e:
-        log.warning(f"Documentação da rota {rota_id} não atualizada: {e}")
-    return {"ok": True, "rota_cancelada": resultado["rota_cancelada"], "retornando": retornando}
+    # Efeitos locais iguais aos do card do Planejamento (rascunhos_rota.aplicar_efeitos_pos_remocao);
+    # a auditoria leva a data que o endpoint passa (e como a Torre le de volta).
+    rota_nome = rota_viva.get("name") or (rascunho or {}).get("nome") or ""
+    efeitos = rascunhos_rota.aplicar_efeitos_pos_remocao(
+        rascunho=rascunho, resultado=resultado, vuupt_route_id=rota_id, service_id=service_id,
+        codigo=resultado["servico"].get("code") or "", agent_id=rota_viva.get("agent_id"),
+        motorista_nome=(rascunho or {}).get("motorista_nome"), motivo=motivo, observacao=observacao,
+        usuario=usuario, data_auditoria=data_alvo, rota_nome=rota_nome)
+    return {"ok": True, "rota_cancelada": resultado["rota_cancelada"], "retornando": efeitos["retornando"]}
