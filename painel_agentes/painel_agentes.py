@@ -2522,6 +2522,11 @@ LIMITE_REQUISICAO_ENTREGUE = 32 * 1024 * 1024  # canhoto + nota de retorno, 15 M
 @requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_torre_marcar_entregue():
+    """"Marcar como entregue" do menu de contexto do chip da Torre (detalhes em _marcar_entregue_pelo_form)."""
+    return _marcar_entregue_pelo_form()
+
+
+def _marcar_entregue_pelo_form():
     """"Marcar como entregue" do menu de contexto do chip da Torre e da
     parada do Planejamento (Hugo, 08/10): fecha o servico na VUUPT na
     hora, por API, sem passar pelo app do motorista (ver
@@ -2566,14 +2571,8 @@ def api_torre_marcar_entregue():
     return jsonify(resultado)
 
 
-@app.route("/api/torre/validar-lote-foto", methods=["POST"])
-@requer_auth(niveis=("total", "operador", "logistica"))
-@exige_mesma_origem
-def api_torre_validar_lote_foto():
-    """Foto em massa no Planejamento (Hugo, 30/10): so para pedidos do mesmo
-    embarcador e do mesmo destinatario ou local de entrega
-    (torre_controle.mesmo_destino_para_foto). A tela chama uma vez antes do
-    laco de marcar-entregue; sem foto o lote segue livre. JSON {service_ids}."""
+def _validar_lote_foto_do_json():
+    """Corpo da rota de foto em massa (Torre e tela /pedidos): JSON {service_ids}."""
     ids = (request.get_json(silent=True) or {}).get("service_ids")
     try:
         if not isinstance(ids, list) or not ids:
@@ -2585,6 +2584,17 @@ def api_torre_validar_lote_foto():
     if not resultado.get("ok"):
         return jsonify({"erro": resultado["erro"], "fora": resultado.get("fora", [])}), 400
     return jsonify({"ok": True})
+
+
+@app.route("/api/torre/validar-lote-foto", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+def api_torre_validar_lote_foto():
+    """Foto em massa no Planejamento (Hugo, 30/10): so para pedidos do mesmo
+    embarcador e do mesmo destinatario ou local de entrega
+    (torre_controle.mesmo_destino_para_foto). A tela chama uma vez antes do
+    laco de marcar-entregue; sem foto o lote segue livre. JSON {service_ids}."""
+    return _validar_lote_foto_do_json()
 
 
 @app.route("/api/torre/encerrar-rota", methods=["POST"])
@@ -2833,6 +2843,80 @@ def api_pedidos_acao_agendar():
     if not r.get("ok"):
         return jsonify({"erro": r.get("erro") or "Falha ao agendar."}), 400
     return jsonify(r)
+
+
+@app.route("/api/pedidos/acao/marcar-entregue", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_acao_marcar_entregue():
+    """Dar baixa com canhoto pela tela /pedidos: mesmo corpo (multipart) da Torre, nivel das acoes de pedido."""
+    try:
+        return _marcar_entregue_pelo_form()
+    except Exception as e:
+        logging.getLogger(__name__).exception("marcar entregue pela tela Pedidos falhou")
+        return jsonify({"erro": f"Falha inesperada: {e}"}), 500
+
+
+@app.route("/api/pedidos/acao/validar-lote-foto", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_acao_validar_lote_foto():
+    """Foto em massa na tela /pedidos: mesma validacao da Torre."""
+    try:
+        return _validar_lote_foto_do_json()
+    except Exception as e:
+        logging.getLogger(__name__).exception("validar lote de foto pela tela Pedidos falhou")
+        return jsonify({"erro": f"Falha inesperada: {e}"}), 500
+
+
+_NIVEIS_LEITURA_CANHOTO = acoes_pedidos.NIVEIS_ACAO + ("leitura",)
+_RE_CODIGO_CANHOTO = re.compile(r"^PS-\d+(-[RC]\d+)?$")
+
+
+@app.route("/api/pedidos/acao/comprovantes", methods=["GET"])
+@requer_auth(niveis=_NIVEIS_LEITURA_CANHOTO)
+def api_pedidos_acao_comprovantes():
+    """Canhotos de um pedido (Vuupt, manual, app), so leitura."""
+    codigo = (request.args.get("codigo") or "").strip().lstrip("#").upper()
+    if not _RE_CODIGO_CANHOTO.match(codigo):
+        return jsonify({"erro": "codigo ausente ou inválido."}), 400
+    from nucleo import banco as nucleo_banco
+    try:
+        conn = nucleo_banco.conectar()
+        try:
+            itens = acoes_pedidos.comprovantes(
+                codigo, token=_carregar_config().get("vuupt_api", {}).get("token", ""), conn=conn)
+        finally:
+            conn.close()
+    except Exception as e:
+        logging.getLogger(__name__).exception("comprovantes pela tela Pedidos falhou")
+        return jsonify({"erro": f"Falha inesperada: {e}"}), 500
+    return jsonify({"ok": True, "comprovantes": itens})
+
+
+@app.route("/pedidos/canhoto/vuupt/<int:checklist_id>.pdf")
+@requer_auth(niveis=_NIVEIS_LEITURA_CANHOTO)
+def pedidos_canhoto_vuupt(checklist_id):
+    """PDF do checklist da Vuupt; ?codigo= so vira nome do arquivo em cache (baixar_canhoto_pdf sanitiza)."""
+    from notificacao_entregas import vuupt_entregas
+    token = _carregar_config().get("vuupt_api", {}).get("token", "")
+    caminho = vuupt_entregas.baixar_canhoto_pdf(token, checklist_id, request.args.get("codigo", ""))
+    if not caminho:
+        abort(404)
+    return send_file(caminho, mimetype="application/pdf")
+
+
+@app.route("/pedidos/canhoto/manual/<codigo>.pdf")
+@requer_auth(niveis=_NIVEIS_LEITURA_CANHOTO)
+def pedidos_canhoto_manual(codigo):
+    """PDF do canhoto manual. Codigo validado ANTES de montar caminho (vem da URL)."""
+    if not _RE_CODIGO_CANHOTO.match(codigo):
+        abort(404)
+    from nucleo import canhotos_manuais
+    caminho = canhotos_manuais.caminho_canhoto_manual(codigo)
+    if not caminho:
+        abort(404)
+    return send_file(caminho, mimetype="application/pdf")
 
 
 @app.route("/api/pedidos/acao/checar-dia-fixo", methods=["POST"])

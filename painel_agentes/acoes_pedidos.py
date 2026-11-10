@@ -308,3 +308,46 @@ def agendar(service_id: int, data: str, hora_inicio: str, hora_fim: str, usuario
                                 service_id=service_id,
                                 texto=f"{usuario}: agendado {d:%d/%m} {hora_inicio}–{hora_fim}")
     return {"ok": True, "erro": ""}
+
+
+def _checklist_id(servico: dict):
+    """Copia de portal_cliente.dados_cliente.checklist_id_do_servico (importar o portal puxa o app dele)."""
+    w = (servico or {}).get("checklistAnswers")
+    lista = w.get("data") if isinstance(w, dict) else w
+    if not lista:
+        return None
+    cl = lista[0] or {}
+    if int(cl.get("images_quantity") or 0) <= 0:
+        return None
+    return cl.get("id")
+
+
+def comprovantes(codigo_servico: str, *, token: str, conn) -> list[dict]:
+    """Canhotos do pedido, em ordem VUUPT, MANUAL, APP: [{origem, rotulo, url}]. Precisa de contexto de request (url_for).
+    Vuupt fora do ar nao derruba as outras origens."""
+    from flask import url_for
+    from nucleo import canhotos_manuais
+    codigo = canhotos_manuais.normalizar(codigo_servico)
+    itens: list[dict] = []
+    try:
+        from notificacao_entregas import vuupt_entregas
+        vistos = set()
+        for servico in vuupt_entregas.buscar_por_codigo(token, codigo):
+            cid = _checklist_id(servico)
+            if cid and cid not in vistos:
+                vistos.add(cid)
+                itens.append({"origem": "VUUPT", "rotulo": "Canhoto da Vuupt (PDF)",
+                              "url": f"/pedidos/canhoto/vuupt/{int(cid)}.pdf?codigo={codigo}"})
+    except Exception as e:  # noqa: BLE001
+        logger.warning("comprovantes %s: Vuupt indisponivel: %s", codigo, e)
+    if canhotos_manuais.caminho_canhoto_manual(codigo):
+        itens.append({"origem": "MANUAL", "rotulo": "Canhoto manual (PDF)",
+                      "url": f"/pedidos/canhoto/manual/{codigo}.pdf"})
+    linhas = conn.execute(
+        """SELECT c.id, c.tipo FROM nucleo_comprovantes c JOIN nucleo_paradas p ON p.id = c.parada_id
+           WHERE UPPER(REPLACE(p.codigo, '#', '')) = ? AND c.caminho_local IS NOT NULL AND c.caminho_local != ''
+           ORDER BY c.id""", (codigo,)).fetchall()
+    for r in linhas:
+        itens.append({"origem": "APP", "rotulo": f"Foto do app ({(r['tipo'] or '').lower()})",
+                      "url": url_for("canhoto_foto", comprovante_id=r["id"])})
+    return itens

@@ -438,6 +438,167 @@ class TestEnderecoEAgendar(_BancoTemp):
         self.reagendar_pedido.assert_not_called()
 
 
+class TestComprovantes(_BancoTemp):
+    def _preparar_app_e_manual(self, codigo="PS-7"):
+        from nucleo import canhotos_manuais
+        conn = banco.conectar()
+        canhotos_manuais.salvar(conn, codigo, 70, b"%PDF-1.4 teste", "teste")
+        conn.execute("INSERT INTO nucleo_rotas (id, data_rota) VALUES (1, '2026-11-10')")
+        conn.execute("INSERT INTO nucleo_paradas (id, rota_id, ordem, service_id, codigo) VALUES (5, 1, 1, 70, ?)",
+                     (f"#{codigo}",))
+        conn.execute("INSERT INTO nucleo_comprovantes (id, parada_id, tipo, caminho_local) VALUES (9, 5, 'CANHOTO', 'x.jpg')")
+        conn.commit()
+        conn.close()
+
+    def test_comprovantes_junta_as_tres_origens(self):
+        self._preparar_app_e_manual()
+        servico = {"id": 70, "status": "done",
+                   "checklistAnswers": {"data": [{"id": 555, "images_quantity": 1}]}}
+        conn = banco.conectar()
+        with mock.patch("notificacao_entregas.vuupt_entregas.buscar_por_codigo", return_value=[servico]) as m, \
+                painel_agentes.app.test_request_context():
+            itens = acoes_pedidos.comprovantes("PS-7", token="tok", conn=conn)
+        conn.close()
+        m.assert_called_once_with("tok", "PS-7")
+        self.assertEqual([i["origem"] for i in itens], ["VUUPT", "MANUAL", "APP"])
+        self.assertEqual(itens[0]["url"], "/pedidos/canhoto/vuupt/555.pdf?codigo=PS-7")
+        self.assertEqual(itens[1]["url"], "/pedidos/canhoto/manual/PS-7.pdf")
+        self.assertTrue(itens[2]["url"].endswith("/canhotos/9/foto"))
+
+    def test_sem_canhoto_lista_vazia(self):
+        conn = banco.conectar()
+        with mock.patch("notificacao_entregas.vuupt_entregas.buscar_por_codigo", return_value=[]), \
+                painel_agentes.app.test_request_context():
+            self.assertEqual(acoes_pedidos.comprovantes("PS-8", token="tok", conn=conn), [])
+        conn.close()
+
+    def test_vuupt_fora_do_ar_nao_derruba_as_outras_origens(self):
+        self._preparar_app_e_manual()
+        conn = banco.conectar()
+        with mock.patch("notificacao_entregas.vuupt_entregas.buscar_por_codigo", side_effect=RuntimeError("x")), \
+                painel_agentes.app.test_request_context():
+            itens = acoes_pedidos.comprovantes("PS-7", token="tok", conn=conn)
+        conn.close()
+        self.assertEqual([i["origem"] for i in itens], ["MANUAL", "APP"])
+
+
+class TestRotasCanhoto(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self._tmp.cleanup)
+        db = Path(self._tmp.name) / "dados.db"
+        for p in (mock.patch.object(banco, "DB_PATH", db),
+                  mock.patch.object(painel_agentes.acesso_telas, "DB_PATH", db),
+                  mock.patch.object(painel_agentes.contadores_menu, "contadores", return_value={})):
+            p.start()
+            self.addCleanup(p.stop)
+        painel_agentes.app.config["TESTING"] = True
+        self.cliente = painel_agentes.app.test_client()
+        self.origem = {"Origin": "http://localhost"}
+
+    def _logar(self, nivel):
+        with self.cliente.session_transaction() as sess:
+            sess["nivel_acesso"] = nivel
+            sess["usuario"] = "teste"
+
+    def test_canhoto_manual_rejeita_codigo_estranho(self):
+        self._logar("leitura")
+        for url in ("/pedidos/canhoto/manual/..%2Fconfig.pdf", "/pedidos/canhoto/manual/ps-1.pdf",
+                    "/pedidos/canhoto/manual/PS-1-X1.pdf"):
+            self.assertEqual(self.cliente.get(url).status_code, 404, url)
+
+    def test_canhoto_manual_serve_o_pdf(self):
+        from nucleo import canhotos_manuais
+        conn = banco.conectar()
+        canhotos_manuais.salvar(conn, "PS-9", 90, b"%PDF-1.4 abc", "teste")
+        conn.close()
+        self._logar("leitura")
+        r = self.cliente.get("/pedidos/canhoto/manual/PS-9.pdf")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_data().startswith(b"%PDF"))
+        self.assertEqual(self.cliente.get("/pedidos/canhoto/manual/PS-10.pdf").status_code, 404)
+
+    def test_canhoto_vuupt_baixa_e_serve(self):
+        arq = Path(self._tmp.name) / "c.pdf"
+        arq.write_bytes(b"%PDF-1.4 v")
+        self._logar("leitura")
+        with mock.patch("notificacao_entregas.vuupt_entregas.baixar_canhoto_pdf", return_value=arq) as m:
+            r = self.cliente.get("/pedidos/canhoto/vuupt/555.pdf?codigo=PS-7")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(m.call_args.args[1:], (555, "PS-7"))
+        with mock.patch("notificacao_entregas.vuupt_entregas.baixar_canhoto_pdf", return_value=None):
+            self.assertEqual(self.cliente.get("/pedidos/canhoto/vuupt/555.pdf?codigo=PS-7").status_code, 404)
+
+    def test_rota_comprovantes_json(self):
+        self._logar("leitura")
+        with mock.patch("notificacao_entregas.vuupt_entregas.buscar_por_codigo", return_value=[]):
+            r = self.cliente.get("/api/pedidos/acao/comprovantes?codigo=PS-1")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json(), {"ok": True, "comprovantes": []})
+        self.assertEqual(self.cliente.get("/api/pedidos/acao/comprovantes?codigo=").status_code, 400)
+
+    def test_marcar_entregue_pela_tela_chama_a_torre(self):
+        self._logar("atendimento")
+        with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual",
+                               return_value={"ok": True}) as m:
+            r = self.cliente.post("/api/pedidos/acao/marcar-entregue", data={"service_id": "70"},
+                                  headers=self.origem)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(m.call_args.args[:2], (70, "teste"))
+
+    def test_marcar_entregue_sem_service_id_json_400(self):
+        self._logar("atendimento")
+        r = self.cliente.post("/api/pedidos/acao/marcar-entregue", data={}, headers=self.origem)
+        self.assertEqual(r.status_code, 400)
+        self.assertTrue(r.is_json)
+
+    def test_marcar_entregue_leitura_recusado(self):
+        self._logar("leitura")
+        r = self.cliente.post("/api/pedidos/acao/marcar-entregue", data={"service_id": "70"},
+                              headers=self.origem)
+        self.assertIn(r.status_code, (302, 401, 403))
+
+    def test_torre_continua_igual(self):
+        with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual",
+                               return_value={"ok": True}):
+            self._logar("logistica")
+            r = self.cliente.post("/api/torre/marcar-entregue", data={"service_id": "70"}, headers=self.origem)
+            self.assertEqual(r.status_code, 200)
+            self.assertEqual(r.get_json(), {"ok": True})
+            self._logar("atendimento")
+            r = self.cliente.post("/api/torre/marcar-entregue", data={"service_id": "70"}, headers=self.origem)
+            self.assertNotEqual(r.status_code, 200)
+
+    def test_falha_inesperada_vira_json_500(self):
+        self._logar("atendimento")
+        with mock.patch.object(painel_agentes.torre_controle, "marcar_entregue_manual", side_effect=RuntimeError("x")):
+            r = self.cliente.post("/api/pedidos/acao/marcar-entregue", data={"service_id": "70"},
+                                  headers=self.origem)
+        self.assertEqual(r.status_code, 500)
+        self.assertIn("erro", r.get_json())
+        with mock.patch.object(painel_agentes.acoes_pedidos, "comprovantes", side_effect=RuntimeError("x")):
+            r = self.cliente.get("/api/pedidos/acao/comprovantes?codigo=PS-1")
+        self.assertEqual(r.status_code, 500)
+        self.assertIn("erro", r.get_json())
+
+    def test_validar_lote_foto_pela_tela(self):
+        self._logar("atendimento")
+        with mock.patch.object(painel_agentes.torre_controle, "validar_lote_foto",
+                               return_value={"ok": False, "erro": "mistura", "fora": [2]}) as m:
+            r = self.cliente.post("/api/pedidos/acao/validar-lote-foto", json={"service_ids": [1, 2]},
+                                  headers=self.origem)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json(), {"erro": "mistura", "fora": [2]})
+        m.assert_called_once_with([1, 2])
+        with mock.patch.object(painel_agentes.torre_controle, "validar_lote_foto", return_value={"ok": True}):
+            r = self.cliente.post("/api/pedidos/acao/validar-lote-foto", json={"service_ids": [1]},
+                                  headers=self.origem)
+        self.assertEqual(r.get_json(), {"ok": True})
+        r = self.cliente.post("/api/pedidos/acao/validar-lote-foto", json={"service_ids": "x"},
+                              headers=self.origem)
+        self.assertEqual(r.status_code, 400)
+
+
 class TestRotasCorpoInvalido(unittest.TestCase):
     """Rotas /api/pedidos/acao/*: corpo JSON que nao e objeto vira 400 JSON, nunca HTML 500."""
 
