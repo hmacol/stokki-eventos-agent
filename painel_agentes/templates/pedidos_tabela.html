@@ -1,0 +1,274 @@
+{% extends "base.html" %}
+{% block titulo %}Pedidos{% endblock %}
+{#
+  Todos os pedidos em tabela, no estilo da tela de Serviços da Vuupt
+  (Hugo, 09/11). Lê só o núcleo -- quem monta colunas, filtros e
+  formatação é nucleo/tabela_pedidos.py; aqui é só a casca.
+
+  Filtro de coluna: caixinha embaixo de cada cabeçalho (Enter aplica).
+  Colunas visíveis: escolha de cada um, guardada no navegador
+  (localStorage "pedidos.colunas"); o CSV leva só as visíveis.
+#}
+{% block estilo_extra %}
+<style>
+  .cabecalho-pagina { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 14px; flex-wrap: wrap; gap: 10px; }
+  .cabecalho-pagina h1 { font-size: 20px; margin: 0; }
+  .cabecalho-pagina p { margin: 4px 0 0; color: var(--texto-suave); font-size: 12.5px; }
+  .acoes-topo { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; position: relative; }
+  .totais { font-size: 13px; color: var(--texto-suave); margin-right: 6px; }
+  .totais strong { color: var(--texto); font-variant-numeric: tabular-nums; }
+  .botao { padding: 8px 14px; border: 1px solid var(--borda); border-radius: 8px; background: var(--superficie); color: var(--texto); font-size: 13px; cursor: pointer; text-decoration: none; }
+  .botao:hover { background: var(--fundo); }
+  .botao.primario { background: var(--acento); color: #06170F; border-color: var(--acento); font-weight: 700; }
+  form.filtros { background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
+  .linha-busca { display: flex; gap: 8px; flex-wrap: wrap; }
+  .linha-busca input[type=search] { flex: 1 1 320px; min-width: 200px; padding: 9px 12px; border: 1px solid var(--borda); border-radius: 8px; font-size: 14px; background: var(--fundo); color: var(--texto); }
+  .linha-filtros { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-top: 10px; }
+  .campo-filtro { display: flex; flex-direction: column; gap: 4px; }
+  .campo-filtro label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); font-weight: 600; }
+  .campo-filtro input, .campo-filtro select { padding: 7px 9px; border: 1px solid var(--borda); border-radius: 6px; font-size: 12.5px; background: var(--fundo); color: var(--texto); max-width: 230px; }
+  .limpar-filtros { font-size: 12.5px; color: var(--texto-suave); text-decoration: none; padding-bottom: 8px; }
+  .limpar-filtros:hover { color: var(--texto); }
+  .filtros-coluna-ativos { font-size: 12px; color: var(--texto-suave); margin: 0 0 10px; }
+  .filtros-coluna-ativos span { display: inline-block; margin-right: 6px; padding: 2px 8px; border-radius: 100px; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); }
+
+  .painel-colunas { display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; width: min(560px, 92vw); background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+  .painel-colunas.aberto { display: block; }
+  .painel-colunas .grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); gap: 4px 12px; margin: 8px 0; }
+  .painel-colunas label { font-size: 12.5px; display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  .painel-colunas .rodape { display: flex; gap: 8px; justify-content: flex-end; }
+
+  .tabela-rolagem { overflow: auto; max-height: calc(100vh - 290px); min-height: 240px; border: 1px solid var(--borda); border-radius: 8px; background: var(--superficie); }
+  table.tab-pedidos { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; }
+  table.tab-pedidos th, table.tab-pedidos td { padding: 7px 10px; text-align: left; font-size: 12.5px; border-bottom: 1px solid var(--borda); white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+  table.tab-pedidos thead th { position: sticky; z-index: 2; background: var(--fundo); }
+  table.tab-pedidos thead tr.titulos th { top: 0; color: var(--texto-suave); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  table.tab-pedidos thead tr.filtros-col th { top: var(--altura-titulos, 31px); padding: 4px 6px; }
+  table.tab-pedidos thead tr.filtros-col input { width: 100%; min-width: 70px; padding: 4px 6px; border: 1px solid var(--borda); border-radius: 5px; font-size: 12px; background: var(--superficie); color: var(--texto); }
+  table.tab-pedidos thead tr.filtros-col input.ativo { border-color: var(--acento); }
+  table.tab-pedidos th a.ordenar { color: inherit; text-decoration: none; }
+  table.tab-pedidos th a.ordenar:hover { color: var(--texto); }
+  table.tab-pedidos th a.ordenar.ativo { color: var(--texto); }
+  /* Código fica parado ao rolar pro lado */
+  table.tab-pedidos [data-col="codigo"] { position: sticky; left: 0; z-index: 1; background: var(--superficie); }
+  table.tab-pedidos thead [data-col="codigo"] { z-index: 3; background: var(--fundo); }
+  table.tab-pedidos tbody tr:hover td { background: var(--fundo); }
+  table.tab-pedidos td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.tab-pedidos a.link-linha { color: var(--texto); font-weight: 600; text-decoration: none; }
+  table.tab-pedidos a.link-linha:hover { text-decoration: underline; }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 100px; border: 1px solid var(--borda); font-size: 11.5px; }
+  .chip.ok { border-color: var(--acento); color: var(--acento); }
+  .chip.ruim { border-color: var(--erro); color: var(--erro); }
+  .vazio { padding: 28px; text-align: center; color: var(--texto-suave); font-size: 13px; }
+  .paginacao { display: flex; gap: 6px; align-items: center; justify-content: flex-end; margin-top: 10px; font-size: 12.5px; color: var(--texto-suave); flex-wrap: wrap; }
+  .paginacao a, .paginacao span.desligado { padding: 5px 11px; border: 1px solid var(--borda); border-radius: 6px; text-decoration: none; color: var(--texto); background: var(--superficie); }
+  .paginacao span.desligado { opacity: .45; }
+</style>
+<style id="estilo-colunas"></style>
+{% endblock %}
+
+{% block conteudo %}
+{% set ativos = filtros.colunas %}
+<div class="cabecalho-pagina">
+  <div>
+    <h1>Pedidos</h1>
+    <p>Todos os pedidos do núcleo, espelho da Vuupt (pode estar até ~15 min atrás). Rota e motorista são os da última rota do pedido.</p>
+  </div>
+  <div class="acoes-topo">
+    <span class="totais"><strong>{{ "{:,}".format(r.total).replace(",", ".") }}</strong> pedidos · <strong>{{ "{:,}".format(r.total_caixas).replace(",", ".") }}</strong> caixas</span>
+    <button type="button" class="botao" id="btn-colunas" aria-expanded="false" aria-controls="painel-colunas">Colunas</button>
+    <a class="botao primario" id="btn-exportar" href="{{ url_for('pedidos_tabela_csv') }}">Exportar CSV</a>
+    <div class="painel-colunas" id="painel-colunas" role="dialog" aria-label="Escolher colunas">
+      <strong style="font-size:13px;">Colunas visíveis</strong>
+      <div class="grade">
+        {% for c in colunas %}
+        <label><input type="checkbox" value="{{ c.chave }}" data-padrao="{{ 1 if c.visivel else 0 }}"{% if c.chave == 'codigo' %} disabled checked{% endif %}> {{ c.rotulo }}</label>
+        {% endfor %}
+      </div>
+      <div class="rodape">
+        <button type="button" class="botao" id="colunas-todas">Todas</button>
+        <button type="button" class="botao" id="colunas-padrao">Padrão</button>
+        <button type="button" class="botao primario" id="colunas-fechar">Pronto</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<form class="filtros" id="form-pedidos" method="get" action="{{ url_for('pedidos_tabela') }}">
+  <input type="hidden" name="ordem" value="{{ ordem }}">
+  <input type="hidden" name="direcao" value="{{ direcao }}">
+  <div class="linha-busca">
+    <input type="search" name="q" value="{{ filtros.q }}" placeholder="Buscar código, destinatário, CNPJ, endereço, embarcador, motorista…" aria-label="Busca livre">
+    <button type="submit" class="botao primario">Filtrar</button>
+  </div>
+  <div class="linha-filtros">
+    <div class="campo-filtro">
+      <label for="f-data-tipo">Período por</label>
+      <select id="f-data-tipo" name="data_tipo">
+        {% for chave, (rotulo, _) in datas.items() %}<option value="{{ chave }}"{% if filtros.data_tipo == chave %} selected{% endif %}>{{ rotulo }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="campo-filtro"><label for="f-de">De</label><input type="date" id="f-de" name="de" value="{{ r.periodo.de }}"></div>
+    <div class="campo-filtro"><label for="f-ate">Até</label><input type="date" id="f-ate" name="ate" value="{{ r.periodo.ate }}"></div>
+    <div class="campo-filtro">
+      <label for="f-status">Status</label>
+      <select id="f-status" name="status"><option value="">Todos</option>
+        {% for s in status %}<option value="{{ s }}"{% if filtros.status == s %} selected{% endif %}>{{ formatar('status', s) }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="campo-filtro">
+      <label for="f-fluxo">Fluxo</label>
+      <select id="f-fluxo" name="fluxo"><option value="">Todos</option>
+        {% for f in fluxos %}<option value="{{ f }}"{% if filtros.fluxo == f %} selected{% endif %}>{{ formatar('status', f) }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="campo-filtro">
+      <label for="f-embarcador">Embarcador</label>
+      <select id="f-embarcador" name="embarcador"><option value="">Todos</option>
+        {% for e in opcoes.embarcadores %}<option value="{{ e.sender_id }}"{% if filtros.sender_id|string == e.sender_id|string %} selected{% endif %}>{{ e.nome }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="campo-filtro">
+      <label for="f-motorista">Motorista</label>
+      <select id="f-motorista" name="motorista"><option value="">Todos</option>
+        {% for m in opcoes.motoristas %}<option value="{{ m.agent_id }}"{% if filtros.agent_id|string == m.agent_id|string %} selected{% endif %}>{{ m.nome }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="campo-filtro">
+      <label for="f-zona">Zona</label>
+      <select id="f-zona" name="zona"><option value="">Todas</option>
+        {% for z in opcoes.zonas %}<option value="{{ z }}"{% if filtros.zona == z %} selected{% endif %}>{{ z }}</option>{% endfor %}
+      </select>
+    </div>
+    <a class="limpar-filtros" href="{{ url_for('pedidos_tabela') }}">Limpar tudo</a>
+  </div>
+</form>
+
+{% if ativos %}
+<p class="filtros-coluna-ativos">Filtro por coluna:
+  {% for c in colunas if c.chave in ativos %}<span>{{ c.rotulo }}: “{{ ativos[c.chave] }}”</span>{% endfor %}
+</p>
+{% endif %}
+
+<div class="tabela-rolagem">
+  <table class="tab-pedidos">
+    <thead>
+      <tr class="titulos">
+        {% for c in colunas %}
+        {% set ativo = ordem == c.chave %}
+        <th data-col="{{ c.chave }}" scope="col"{% if ativo %} aria-sort="{{ 'ascending' if direcao == 'asc' else 'descending' }}"{% endif %}>
+          <a class="ordenar{% if ativo %} ativo{% endif %}" href="{{ url_com(ordem=c.chave, direcao=('asc' if ativo and direcao == 'desc' else 'desc'), pagina=None) }}">{{ c.rotulo }}{% if ativo %} {{ '▲' if direcao == 'asc' else '▼' }}{% endif %}</a>
+        </th>
+        {% endfor %}
+      </tr>
+      <tr class="filtros-col">
+        {% for c in colunas %}
+        <th data-col="{{ c.chave }}"><input form="form-pedidos" name="f_{{ c.chave }}" value="{{ ativos.get(c.chave, '') }}" aria-label="Filtrar {{ c.rotulo }}" placeholder="filtrar"{% if c.chave in ativos %} class="ativo"{% endif %}></th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for l in r.linhas %}
+      <tr>
+        {% for c in colunas %}
+        {% set v = l[c.chave] %}
+        <td data-col="{{ c.chave }}"{% if c.formato == 'numero' %} class="num"{% endif %} title="{{ formatar(c.chave, v) }}">
+          {%- if c.chave == 'codigo' -%}
+            <a class="link-linha" href="{{ url_for('consulta_pedido', codigo=v) }}">{{ v }}</a>
+          {%- elif c.chave == 'rota' and l.rota_id -%}
+            <a class="link-linha" href="{{ url_for('consulta_rota', rota_id=l.rota_id) }}">{{ v or ('#' ~ l.rota_id) }}</a>
+          {%- elif c.chave == 'status' and v -%}
+            <span class="chip{% if v == 'ENTREGUE' %} ok{% elif v in ('INSUCESSO', 'CANCELADO') %} ruim{% endif %}">{{ formatar(c.chave, v) }}</span>
+          {%- else -%}
+            {{ formatar(c.chave, v) }}
+          {%- endif -%}
+        </td>
+        {% endfor %}
+      </tr>
+      {% else %}
+      <tr><td colspan="{{ colunas|length }}" class="vazio" style="position:static;">Nenhum pedido com esses filtros entre {{ formatar('data', r.periodo.de) }} e {{ formatar('data', r.periodo.ate) }}.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<nav class="paginacao" aria-label="Páginas">
+  <span>Página {{ r.pagina }} de {{ r.paginas }}</span>
+  {% if r.pagina > 1 %}<a href="{{ url_com(pagina=1) }}">« Primeira</a><a href="{{ url_com(pagina=r.pagina - 1) }}">‹ Anterior</a>
+  {% else %}<span class="desligado">« Primeira</span><span class="desligado">‹ Anterior</span>{% endif %}
+  {% if r.pagina < r.paginas %}<a href="{{ url_com(pagina=r.pagina + 1) }}">Próxima ›</a><a href="{{ url_com(pagina=r.paginas) }}">Última »</a>
+  {% else %}<span class="desligado">Próxima ›</span><span class="desligado">Última »</span>{% endif %}
+</nav>
+
+<script>
+(function () {
+  var CHAVE = "pedidos.colunas";
+  var caixas = Array.prototype.slice.call(document.querySelectorAll("#painel-colunas input[type=checkbox]"));
+  var estilo = document.getElementById("estilo-colunas");
+  var exportar = document.getElementById("btn-exportar");
+  var baseCsv = exportar.getAttribute("href");
+
+  function padrao() { return caixas.filter(function (c) { return c.dataset.padrao === "1"; }).map(function (c) { return c.value; }); }
+  function lerEscolha() {
+    try { var v = JSON.parse(localStorage.getItem(CHAVE) || "null"); if (Array.isArray(v) && v.length) return v; } catch (e) {}
+    return padrao();
+  }
+  function salvar(lista) { try { localStorage.setItem(CHAVE, JSON.stringify(lista)); } catch (e) {} }
+
+  function aplicar(lista) {
+    if (lista.indexOf("codigo") < 0) lista.unshift("codigo");
+    caixas.forEach(function (c) { c.checked = lista.indexOf(c.value) >= 0; });
+    estilo.textContent = caixas.filter(function (c) { return !c.checked; })
+      .map(function (c) { return '.tab-pedidos [data-col="' + c.value + '"]'; }).join(",") + (lista.length < caixas.length ? "{display:none}" : "");
+    // CSV: tudo que está filtrado, nas colunas visíveis, na ordem da tela.
+    var q = new URLSearchParams(location.search);
+    q.delete("pagina");
+    q.set("colunas", caixas.filter(function (c) { return c.checked; }).map(function (c) { return c.value; }).join(","));
+    exportar.setAttribute("href", baseCsv + "?" + q.toString());
+  }
+
+  aplicar(lerEscolha());
+  caixas.forEach(function (c) {
+    c.addEventListener("change", function () {
+      var lista = caixas.filter(function (x) { return x.checked; }).map(function (x) { return x.value; });
+      salvar(lista); aplicar(lista);
+    });
+  });
+  document.getElementById("colunas-todas").addEventListener("click", function () {
+    var lista = caixas.map(function (c) { return c.value; }); salvar(lista); aplicar(lista);
+  });
+  document.getElementById("colunas-padrao").addEventListener("click", function () {
+    try { localStorage.removeItem(CHAVE); } catch (e) {}
+    aplicar(padrao());
+  });
+
+  var painel = document.getElementById("painel-colunas");
+  var botao = document.getElementById("btn-colunas");
+  function abrir(sim) { painel.classList.toggle("aberto", sim); botao.setAttribute("aria-expanded", sim ? "true" : "false"); }
+  botao.addEventListener("click", function () { abrir(!painel.classList.contains("aberto")); });
+  document.getElementById("colunas-fechar").addEventListener("click", function () { abrir(false); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") abrir(false); });
+  document.addEventListener("click", function (e) { if (!painel.contains(e.target) && e.target !== botao) abrir(false); });
+
+  // A linha de filtros gruda logo abaixo da de títulos, seja qual for a altura dela.
+  var tabela = document.querySelector(".tab-pedidos");
+  tabela.style.setProperty("--altura-titulos", tabela.querySelector("tr.titulos").offsetHeight + "px");
+
+  // Caixas de seleção aplicam na hora; texto aplica no Enter. Campo vazio
+  // não vai pra URL (são ~40 filtros de coluna).
+  var form = document.getElementById("form-pedidos");
+  form.addEventListener("submit", function () {
+    Array.prototype.forEach.call(document.querySelectorAll('[form="form-pedidos"], #form-pedidos [name]'), function (el) {
+      if (el.name && el.value === "") el.disabled = true;
+    });
+  });
+  // Voltar pelo navegador traz a página do cache com os campos ainda desligados.
+  window.addEventListener("pageshow", function () {
+    Array.prototype.forEach.call(document.querySelectorAll('[form="form-pedidos"], #form-pedidos [name]'), function (el) { el.disabled = false; });
+  });
+  Array.prototype.forEach.call(form.querySelectorAll("select"), function (s) {
+    s.addEventListener("change", function () { form.requestSubmit ? form.requestSubmit() : form.submit(); });
+  });
+})();
+</script>
+{% endblock %}

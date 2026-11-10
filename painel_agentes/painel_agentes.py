@@ -3691,6 +3691,69 @@ def consulta_pedido(codigo):
     return render_template("consulta_pedido.html", d=detalhe, no_galpao=no_galpao)
 
 
+# ── Pedidos: tabela de todos, estilo Serviços da Vuupt (Hugo, 09/11) ─────────
+# A /consulta procura UM pedido; aqui é a lista inteira com filtro em
+# qualquer coluna e CSV. Toda a regra está em nucleo/tabela_pedidos.py.
+
+def _filtros_tabela_pedidos() -> dict:
+    from nucleo import tabela_pedidos
+    return {
+        "de": _arg_data("de"), "ate": _arg_data("ate"),
+        "data_tipo": request.args.get("data_tipo") or "referencia",
+        "status": (request.args.get("status") or "").strip().upper(),
+        "fluxo": (request.args.get("fluxo") or "").strip().upper(),
+        "sender_id": request.args.get("embarcador") or "",
+        "agent_id": request.args.get("motorista") or "",
+        "zona": (request.args.get("zona") or "").strip(),
+        "q": (request.args.get("q") or "").strip(),
+        "colunas": {c.chave: request.args.get(f"f_{c.chave}", "").strip()
+                    for c in tabela_pedidos.COLUNAS if request.args.get(f"f_{c.chave}", "").strip()},
+    }
+
+
+@app.route("/pedidos")
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
+def pedidos_tabela():
+    from nucleo import banco as nucleo_banco, tabela_pedidos
+    filtros = _filtros_tabela_pedidos()
+    ordem, direcao = request.args.get("ordem") or "data", request.args.get("direcao") or "desc"
+    try:
+        pagina = int(request.args.get("pagina") or 1)
+    except ValueError:
+        pagina = 1
+    conn = nucleo_banco.conectar()
+    try:
+        r = tabela_pedidos.listar(filtros, pagina=pagina, ordem=ordem, direcao=direcao, conn=conn)
+        opcoes = tabela_pedidos.opcoes(conn=conn)
+    finally:
+        conn.close()
+
+    def url_com(**mudancas):
+        # Mantém tudo que está no query string e troca só o que mudou
+        # (ordenar e paginar não podem perder os filtros).
+        args = {k: v for k, v in request.args.items() if v != ""}
+        args.update({k: v for k, v in mudancas.items()})
+        return url_for("pedidos_tabela", **{k: v for k, v in args.items() if v not in ("", None)})
+
+    return render_template("pedidos_tabela.html", r=r, filtros=filtros, opcoes=opcoes,
+                           ordem=ordem, direcao=direcao, url_com=url_com,
+                           colunas=tabela_pedidos.COLUNAS, datas=tabela_pedidos.DATAS,
+                           status=tabela_pedidos.STATUS, fluxos=tabela_pedidos.FLUXOS,
+                           formatar=tabela_pedidos.formatar)
+
+
+@app.route("/pedidos/exportar.csv")
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
+def pedidos_tabela_csv():
+    from nucleo import tabela_pedidos
+    chaves = [c for c in (request.args.get("colunas") or "").split(",") if c]
+    texto = tabela_pedidos.exportar_csv(_filtros_tabela_pedidos(), chaves,
+                                        ordem=request.args.get("ordem"), direcao=request.args.get("direcao"))
+    nome = f"pedidos_{date.today().strftime('%Y%m%d')}.csv"
+    return Response(texto, mimetype="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{nome}"'})
+
+
 @app.route("/api/motoristas/vuupt-disponiveis")
 @requer_auth(niveis=("total", "operador", "logistica"))
 def api_motoristas_vuupt_disponiveis():
