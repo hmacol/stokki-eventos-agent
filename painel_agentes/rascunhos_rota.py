@@ -1891,19 +1891,32 @@ def aplicar_efeitos_pos_remocao(*, rascunho: dict | None, resultado: dict, vuupt
     import pedidos_retornando
 
     retornando = False
+    aviso = None
     if resultado["rota_iniciada"]:
-        try:
-            conn = pedidos_retornando.conectar(DB_PATH)
+        # sem Retornando o pedido (fisicamente no carro) fica roteavel no pool: 1 nova tentativa e,
+        # se falhar de novo, erro no log e aviso pra quem clicou
+        for tentativa in (1, 2):
             try:
-                pedidos_retornando.marcar(conn, service_id=service_id, codigo=codigo,
-                                          vuupt_route_id=vuupt_route_id, agent_id=agent_id,
-                                          motorista_nome=motorista_nome, motivo=motivo,
-                                          observacao=observacao, usuario=usuario)
-            finally:
-                conn.close()
-            retornando = True
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"Retornando do pedido {codigo} (rota {vuupt_route_id}) nao gravado: {e}")
+                conn = pedidos_retornando.conectar(DB_PATH)
+                try:
+                    pedidos_retornando.marcar(conn, service_id=service_id, codigo=codigo,
+                                              vuupt_route_id=vuupt_route_id, agent_id=agent_id,
+                                              motorista_nome=motorista_nome, motivo=motivo,
+                                              observacao=observacao, usuario=usuario)
+                finally:
+                    conn.close()
+                retornando = True
+                break
+            except Exception as e:  # noqa: BLE001
+                if tentativa == 1:
+                    logger.warning(f"Retornando do pedido {codigo} (rota {vuupt_route_id}) falhou, "
+                                   f"tentando de novo: {e}")
+                else:
+                    logger.error(f"Retornando do pedido {codigo} (rota {vuupt_route_id}) NAO gravado "
+                                 f"apos 2 tentativas: {e}")
+        if not retornando:
+            aviso = (f"ATENÇÃO: {codigo} está no carro de {motorista_nome or 'motorista'} mas NÃO ficou "
+                     f"como Retornando. Não coloque em rota até receber em /retornos e avise o time.")
 
     parada_removida = None
     if rascunho:
@@ -1939,7 +1952,10 @@ def aplicar_efeitos_pos_remocao(*, rascunho: dict | None, resultado: dict, vuupt
             documentacao_rota.agendar(vuupt_route_id, data_doc, motivo="pedido excluido da rota")
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Romaneio da rota {vuupt_route_id} nao atualizado: {e}")
-    return {"retornando": retornando, "parada_removida": parada_removida}
+    efeitos = {"retornando": retornando, "parada_removida": parada_removida}
+    if aviso:
+        efeitos["aviso"] = aviso
+    return efeitos
 
 
 def remover_de_rota_enviada(rascunho_id: int, service_id: int, motivo: str, observacao: str,
@@ -1978,8 +1994,11 @@ def remover_de_rota_enviada(rascunho_id: int, service_id: int, motivo: str, obse
         data_auditoria=date.fromisoformat(rascunho["data_alvo"]), rota_nome=rascunho["nome"])
     logger.info(f"Rota {route_id} (rascunho {rascunho_id}): pedido {codigo} tirado por {usuario} "
                 f"({motivo}); retornando={efeitos['retornando']} rota_cancelada={resultado['rota_cancelada']}")
-    return {"ok": True, "rota_cancelada": resultado["rota_cancelada"], "rota_iniciada": resultado["rota_iniciada"],
-            "retornando": efeitos["retornando"], "parada_removida": efeitos["parada_removida"]}
+    retorno = {"ok": True, "rota_cancelada": resultado["rota_cancelada"], "rota_iniciada": resultado["rota_iniciada"],
+               "retornando": efeitos["retornando"], "parada_removida": efeitos["parada_removida"]}
+    if efeitos.get("aviso"):
+        retorno["aviso"] = efeitos["aviso"]
+    return retorno
 
 
 def espelho_rota_enviada(vuupt_route_id: int) -> dict:

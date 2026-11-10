@@ -467,4 +467,7 @@ def excluir_pedido_da_rota(data_alvo: date, rota_id: int, service_id: int,
         codigo=resultado["servico"].get("code") or "", agent_id=rota_viva.get("agent_id"),
         motorista_nome=(rascunho or {}).get("motorista_nome"), motivo=motivo, observacao=observacao,
         usuario=usuario, data_auditoria=data_alvo, rota_nome=rota_nome)
-    return {"ok": True, "rota_cancelada": resultado["rota_cancelada"], "retornando": efeitos["retornando"]}
+    retorno = {"ok": True, "rota_cancelada": resultado["rota_cancelada"], "retornando": efeitos["retornando"]}
+    if efeitos.get("aviso"):
+        retorno["aviso"] = efeitos["aviso"]
+    return retorno

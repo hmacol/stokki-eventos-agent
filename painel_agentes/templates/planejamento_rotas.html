@@ -7082,6 +7082,7 @@
       botao.textContent = original;
     }
     fecharModalTirarDaRota();
+    if (resp.aviso) alert(resp.aviso);
     if (resp.rota_cancelada) {
       // era o último pedido e ninguém tinha saído: a rota volta a ser rascunho
       alert("Era o último pedido da rota: a rota foi cancelada na VUUPT e voltou a ser rascunho. O pedido volta pro pool.");

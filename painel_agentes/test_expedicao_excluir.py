@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import expedicao  # noqa: E402
 import pedidos_retornando  # noqa: E402
+import rascunhos_rota  # noqa: E402
 from test_rota_enviada_edicao import _Base, _parada, ROTA_ID  # noqa: E402
 
 MOTIVO = "Não coube"
@@ -121,12 +122,45 @@ class TorreExcluirTest(_Base):
     def test_retornando_falhando_ainda_devolve_ok(self):
         rid = self._inserir_rascunho([_parada(1, "#PS-1"), _parada(2, "#PS-2")])
         self._rota_viva("started", [_sv(1, "assigned"), _sv(2, "on_route")])
-        with mock.patch.object(pedidos_retornando, "marcar", side_effect=RuntimeError("banco travado")):
-            r = self._excluir(1)
+        with mock.patch.object(pedidos_retornando, "marcar", side_effect=RuntimeError("banco travado")) as m:
+            with self.assertLogs("rascunhos_rota", level="ERROR"):
+                r = self._excluir(1)
+        self.assertEqual(m.call_count, 2)
         self.assertTrue(r["ok"])
         self.assertFalse(r["retornando"])
+        self.assertIn("#PS-1", r["aviso"])
+        self.assertIn("Vinicius", r["aviso"])
+        self.assertIn("NÃO ficou como Retornando", r["aviso"])
         self.assertEqual([p["service_id"] for p in self._rascunho(rid)["paradas"]], [2])
         self.marcar_aberto.assert_not_called()
+
+    def test_retornando_falha_uma_vez_e_repete_sem_aviso(self):
+        self._inserir_rascunho([_parada(1, "#PS-1"), _parada(2, "#PS-2")])
+        self._rota_viva("started", [_sv(1, "assigned"), _sv(2, "on_route")])
+        original = pedidos_retornando.marcar
+        chamadas = []
+
+        def falha_uma_vez(*a, **k):
+            chamadas.append(1)
+            if len(chamadas) == 1:
+                raise RuntimeError("banco travado")
+            return original(*a, **k)
+
+        with mock.patch.object(pedidos_retornando, "marcar", side_effect=falha_uma_vez):
+            r = self._excluir(1)
+        self.assertTrue(r["ok"])
+        self.assertTrue(r["retornando"])
+        self.assertNotIn("aviso", r)
+        self.assertEqual(self._retornando(), [(1,)])
+
+    def test_planejamento_tambem_devolve_aviso(self):
+        rid = self._inserir_rascunho([_parada(1, "#PS-1"), _parada(2, "#PS-2")])
+        self._rota_viva("started", [_sv(1, "assigned"), _sv(2, "on_route")])
+        with mock.patch.object(pedidos_retornando, "marcar", side_effect=RuntimeError("banco travado")):
+            with self.assertLogs("rascunhos_rota", level="ERROR"):
+                r = rascunhos_rota.remover_de_rota_enviada(rid, 1, MOTIVO, "", "tk", "hugo")
+        self.assertTrue(r["ok"])
+        self.assertIn("#PS-1", r["aviso"])
 
     def test_fora_da_rota_devolve_erro_mas_tira_parada_local(self):
         rid = self._inserir_rascunho([_parada(1, "#PS-1"), _parada(2, "#PS-2")])
