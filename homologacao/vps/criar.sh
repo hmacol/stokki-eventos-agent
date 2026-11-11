@@ -92,17 +92,23 @@ fi
 
 echo "== clone do repositorio (mesma origem da producao; tudo do root)"
 G=(git -c safe.directory="$HML" -C "$HML")
+# origem e chave de deploy fixas aqui (do root), nunca lidas do .git/config da producao (do
+# www-data): o root nao roda comando que outro usuario escolhe (visto no 1o criar, 10/11)
+ORIGEM=git@github.com:hmacol/stokki-eventos-agent.git
+CHAVE_DEPLOY=/root/.ssh/deploy_stokki_eventos
+[ -f "$CHAVE_DEPLOY" ] || falha "falta a chave de deploy $CHAVE_DEPLOY"
+SSH_GIT="ssh -i $CHAVE_DEPLOY -o IdentitiesOnly=yes"
 if [ -d "$HML/.git" ]; then
 	echo "(ja clonado)"
 else
 	[ ! -e "$HML" ] || falha "$HML existe e nao e um clone; confira a mao"
-	# a URL pode ter credencial: nunca imprimir
-	ORIGEM=$(git -c safe.directory="$PROD" -C "$PROD" remote get-url origin)
-	git clone --quiet --no-checkout "$ORIGEM" "$HML"
-	unset ORIGEM
+	git -c core.sshCommand="$SSH_GIT" clone --quiet --no-checkout "$ORIGEM" "$HML"
 fi
 [ "$(stat -c %u "$HML")" = 0 ] && [ "$(stat -c %u "$HML/.git")" = 0 ] \
 	|| falha "$HML ou $HML/.git nao e do root (layout antigo?); confira a mao"
+# o fetch do subir.sh usa a mesma chave pelo config do clone (do root)
+"${G[@]}" config core.sshCommand "$SSH_GIT"
+"${G[@]}" remote set-url origin "$ORIGEM"
 "${G[@]}" fetch --quiet --prune origin
 "${G[@]}" rev-parse --verify --quiet "origin/$RAMO^{commit}" >/dev/null || falha "origin/$RAMO nao existe"
 "${G[@]}" checkout --quiet --detach --force "origin/$RAMO"
