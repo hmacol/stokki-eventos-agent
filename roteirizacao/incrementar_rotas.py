@@ -11,8 +11,9 @@ nunca têm -- a ordem final não importa de qualquer forma, o bloco de
 resequenciamento mais abaixo reordena tudo por distância da base
 depois).
 
-05/10 (Hugo): rascunho às 16h, incremento automático às 18h e às 22h
-(infra/sequencia_incremento.sh e sequencia_noite.sh). Pedido que não
+05/10 (Hugo): rascunho às 16h, incremento automático às 18h e às 22h;
+09/11 (Hugo): o das 18h foi desligado, fica só o das 22h
+(infra/sequencia_noite.sh). Pedido que não
 cabe em rota já enviada vai pro RASCUNHO ainda não confirmado mais
 próximo (planejamento_rotas.incrementar_rascunhos_com_selecionados, o
 mesmo do botão "Incrementar" do pool); pedido já em rascunho não é

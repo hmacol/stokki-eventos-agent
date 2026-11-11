@@ -224,7 +224,7 @@
  5) Operador revisa no /planejamento e clica "Confirmar e Enviar"
     -> rotas_client.criar_rota (POST /routes na Vuupt)
     -> nucleo/rotas.registrar_rota_enviada.
-    Desde 05/10, 18h e 22h: incrementar_rotas.py encaixa pedido novo
+    22h (18h desligado em 09/11): incrementar_rotas.py encaixa pedido novo
     (corte 22h) na rota já enviada ou, se não couber, no rascunho ainda
     não confirmado. Nada envia rascunho esquecido sozinho
     (enviar_rascunhos_pendentes.py não é chamado por ninguém): rascunho
@@ -417,10 +417,10 @@
    roteirizacao/criar_rotas_diarias.py --gerar-rascunho (antes do rascunho anda a
    data automatica de quem nao saiu) ->
    documentos_pedido/processar_documentos.py
- infra/sequencia_incremento.sh (18h, para no 1º erro):
+ infra/sequencia_incremento.sh (18h, para no 1º erro; sem incrementar_rotas
+ desde 09/11, o nome ficou):
    executar_tudo.py -> verificar_pedidos_duplicados_vuupt.py ->
-   atualizar_agendamentos_confirmados.py -> marcar_clientes_agenda.py ->
-   roteirizacao/incrementar_rotas.py
+   atualizar_agendamentos_confirmados.py -> marcar_clientes_agenda.py
  infra/sequencia_noite.sh (22h, continua mesmo com erro):
    somente_impressao.py -> pipeline.py --fila-freshhub ->
    atualizar_agendamentos_confirmados.py -> marcar_clientes_agenda.py ->
