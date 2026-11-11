@@ -4,7 +4,7 @@ instalar() troca, no processo inteiro, os pontos por onde algo sairia:
 - smtplib.SMTP / SMTP_SSL -> SMTPFalso (registra a mensagem e finge sucesso)
 - imaplib.IMAP4 / IMAP4_SSL -> recusa (registra e levanta)
 - requests.adapters.HTTPAdapter.send -> decide por host e metodo (ve cada salto de redirecionamento)
-- httpx (HTTPTransport / AsyncHTTPTransport) -> so api.anthropic.com
+- httpx e httpx2 (HTTPTransport / AsyncHTTPTransport) -> so api.anthropic.com (o SDK 1.x usa o httpx2)
 - playwright sync_playwright / async_playwright -> recusa (nenhum Chromium sobe)
 - socket (rede de seguranca) -> getaddrinfo so resolve NOMES_PERMITIDOS; connect/sendto so para
   IP vindo dessa resolucao, AF_UNIX ou loopback:8100. Segura urllib, http.client, urllib3 cru, LMTP, POP3.
@@ -348,13 +348,12 @@ def _instalar_requests():
 
 # ---------------------------------------------------------------- httpx
 
-_handle_original = None
-_handle_async_original = None
+# o SDK da Anthropic 1.x usa o httpx2 (fork com a mesma API), nao o httpx: os dois sao trocados
+_PACOTES_HTTPX = ("httpx", "httpx2")
 
 
-def _httpx_barrar(request):
-    """Volta se o destino for api.anthropic.com; senao registra e levanta httpx.ConnectError."""
-    import httpx
+def _httpx_barrar(request, modulo):
+    """Volta se o destino for api.anthropic.com; senao registra e levanta <modulo>.ConnectError."""
     url = str(request.url)
     metodo = (request.method or "").upper()
     try:
@@ -373,29 +372,36 @@ def _httpx_barrar(request):
         alvo = "%s://%s%s" % (partes.scheme, partes.netloc.rpartition("@")[2], partes.path)  # sem query
     except Exception:
         alvo = metodo
-    raise httpx.ConnectError(_mensagem(alvo), request=request)
+    raise modulo.ConnectError(_mensagem(alvo), request=request)
 
 
-def _handle_guardado(self, request):
-    _httpx_barrar(request)
-    return _handle_original(self, request)
+def _trocar_transporte(modulo):
+    """Troca HTTPTransport/AsyncHTTPTransport de um pacote httpx/httpx2 (originais guardados por pacote)."""
+    original = modulo.HTTPTransport.handle_request
+    original_async = modulo.AsyncHTTPTransport.handle_async_request
 
+    def handle_guardado(self, request):
+        _httpx_barrar(request, modulo)
+        return original(self, request)
 
-async def _handle_async_guardado(self, request):
-    _httpx_barrar(request)
-    return await _handle_async_original(self, request)
+    async def handle_async_guardado(self, request):
+        _httpx_barrar(request, modulo)
+        return await original_async(self, request)
+
+    _trocar(modulo.HTTPTransport, "handle_request", handle_guardado)
+    _trocar(modulo.AsyncHTTPTransport, "handle_async_request", handle_async_guardado)
 
 
 def _instalar_httpx():
-    global _handle_original, _handle_async_original
-    try:
-        import httpx
-    except ImportError:
-        return False  # sem httpx no ambiente, nada a trocar
-    _handle_original = httpx.HTTPTransport.handle_request
-    _handle_async_original = httpx.AsyncHTTPTransport.handle_async_request
-    _trocar(httpx.HTTPTransport, "handle_request", _handle_guardado)
-    _trocar(httpx.AsyncHTTPTransport, "handle_async_request", _handle_async_guardado)
+    achou = False
+    for nome in _PACOTES_HTTPX:
+        try:
+            modulo = import_module(nome)
+        except ImportError:
+            continue  # pacote ausente no ambiente, nada a trocar
+        _trocar_transporte(modulo)
+        achou = True
+    return True if achou else False
 
 
 # ---------------------------------------------------------------- playwright
@@ -607,7 +613,7 @@ def instalar():
 
 def desinstalar():
     """Restaura os originais. So para testes."""
-    global INSTALADA, _send_original, _ultimo_vuupt, _handle_original, _handle_async_original
+    global INSTALADA, _send_original, _ultimo_vuupt
     global _getaddrinfo_original, _connect_original, _connect_ex_original
     global _sendto_original, _sendmsg_original, _socketpair_original
     with _trava_instalar:
@@ -617,7 +623,6 @@ def desinstalar():
         CAMADAS.clear()
         _send_original = None
         _ultimo_vuupt = None
-        _handle_original = _handle_async_original = None
         _getaddrinfo_original = _connect_original = _connect_ex_original = None
         _sendto_original = _sendmsg_original = _socketpair_original = None
         with _trava_ips:

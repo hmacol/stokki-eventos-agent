@@ -27,7 +27,8 @@ _TEM_PLAYWRIGHT = importlib.util.find_spec("playwright") is not None
 if _TEM_HTTPX:
     import httpx
 
-_CAMADAS = (["smtp", "imap", "requests"] + (["httpx"] if _TEM_HTTPX else [])
+_TEM_ALGUM_HTTPX = _TEM_HTTPX or importlib.util.find_spec("httpx2") is not None
+_CAMADAS = (["smtp", "imap", "requests"] + (["httpx"] if _TEM_ALGUM_HTTPX else [])
             + (["playwright"] if _TEM_PLAYWRIGHT else []) + ["socket"])
 
 _RAIZ = Path(__file__).resolve().parent.parent
@@ -128,6 +129,43 @@ class TestGuardaProcesso(unittest.TestCase):
         self.handle.assert_not_called()
         self.assertEqual(registro.listar_envios()[-1]["canal"], "stokki")
         self.assertEqual(registro.listar_envios()[-1]["conteudo"], "corpo")
+
+    def test_httpx2_do_sdk_da_anthropic(self):
+        """O anthropic 1.x usa o httpx2 (mesma API): a guarda troca o transporte dele tambem."""
+        class ConnectError(Exception):
+            def __init__(self, msg, request=None):
+                super().__init__(msg)
+
+        class HTTPTransport:
+            def handle_request(self, request):
+                return "resposta"
+
+        class AsyncHTTPTransport:
+            async def handle_async_request(self, request):
+                return "resposta"
+
+        class Pedido:
+            def __init__(self, metodo, url):
+                self.method, self.url, self.content = metodo, url, b"corpo"
+
+        falso = type(sys)("httpx2")
+        falso.ConnectError, falso.HTTPTransport, falso.AsyncHTTPTransport = \
+            ConnectError, HTTPTransport, AsyncHTTPTransport
+        guarda.desinstalar()
+        with mock.patch.dict(sys.modules, {"httpx2": falso}):
+            guarda.instalar()
+            self.assertIn("httpx", guarda.CAMADAS)
+            with self.assertRaises(ConnectError) as cm:
+                HTTPTransport().handle_request(Pedido("POST", "https://api.vuupt.com/api/v1/services"))
+            self.assertTrue(str(cm.exception).startswith("indisponível na homologação:"))
+            self.assertEqual(registro.listar_envios()[-1]["canal"], "vuupt")
+            with self.assertRaises(ConnectError):
+                asyncio.run(AsyncHTTPTransport().handle_async_request(Pedido("GET", "https://example.com")))
+            self.assertEqual(HTTPTransport().handle_request(
+                Pedido("POST", "https://api.anthropic.com/v1/messages")), "resposta")
+            guarda.desinstalar()
+        # desinstalar devolve o transporte original
+        self.assertEqual(HTTPTransport().handle_request(Pedido("POST", "https://example.com")), "resposta")
 
     @unittest.skipUnless(_TEM_HTTPX, "httpx ausente")
     def test_httpx_async(self):

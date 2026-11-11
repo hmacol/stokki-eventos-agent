@@ -105,7 +105,7 @@ if ! systemctl restart "${UNITS[@]}"; then
 fi
 
 echo "== provar a guarda (saude direto no waitress)"
-# o venv da homologacao tem httpx e playwright: toda camada tem que estar instalada
+# o venv da homologacao tem httpx2 (do SDK da Anthropic; camada "httpx") e playwright: toda camada tem que estar instalada
 CAMADAS_ESPERADAS="smtp,imap,requests,httpx,playwright,socket"
 for porta in 8171 8174; do
 	RESPOSTA=""
