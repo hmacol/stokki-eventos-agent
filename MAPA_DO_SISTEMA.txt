@@ -91,6 +91,8 @@
  Tela de planejamento (HTML/JS) ............ painel_agentes/templates/planejamento_rotas.html
  Rascunhos de rota (tabelas) ............... painel_agentes/rascunhos_rota.py
  Torre de Controle ......................... painel_agentes/torre_controle.py
+Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/acoes_pedidos.py (rotas POST /api/pedidos/acao/reenvio, .../cancelar-vuupt, .../cancelar-stokki, .../endereco, .../agendar, .../checar-dia-fixo, .../marcar-entregue (multipart, helper _marcar_entregue_pelo_form da Torre), .../validar-lote-foto; GET .../comprovantes?codigo= + /pedidos/canhoto/vuupt/<checklist_id>.pdf + /pedidos/canhoto/manual/<PS-N>.pdf (leitura, canhoto Vuupt/manual/app);
+                                             confere Vuupt na hora, Stokki pela trava sessao_uso)
  Vigia de pedidos abertos (estado/prazo) ... vigia/ (regras.py = prazos; tela /vigia)
  Clientes que exigem agendamento (AGENDA) .. regras/clientes_agendamento.py; fila em
                                              marcar_clientes_agenda.py + tela /clientes-agenda
@@ -166,6 +168,9 @@
                                              rota resume ("📦 Stokki: 2 em separação · ..."), o tooltip/
                                              Copiar resumo diz "Stokki: <situação>" e o Confirmar e
                                              enviar conta "ainda no galpão" e "em espera".
+                                             Pílula "Status Stokki" da barra de agentes (09/11, agente
+                                             atualizar_status_stokki = pipeline.py --so-status): relê o
+                                             retrato na hora e o Atualizar do pool refaz pool + rotas.
  Recebimento de retornos no galpão ......... painel_agentes/retornos.py + tela /retornos (retornos.html,
                                              mobile; link no app do galpão /wms): insucesso/parcial (menos
                                              Não coletado) de nucleo_paradas; foto da carga, avaria com foto,
@@ -196,6 +201,9 @@
  Preferências de e-mail do embarcador ...... preferencias_notificacao.py
  Trava de login da Stokki .................. stokki/sessao_uso.py
  Horários das rotinas ...................... infra/*.timer  (+ infra/sequencia_*.sh)
+ Homologação (bancada do legado) ........... homologacao/ (guarda só com FRESH_AMBIENTE=homolog,
+                                             pth_guarda.py, gerar_config.py, vps/*.sh) + infra/homolog/
+                                             (units, Caddy, nft, homolog-guarda.pth). Como usar: seção 16.
 
 
 ==============================================================================
@@ -268,13 +276,17 @@
  dashboard_embarcadores 8060   (interno, Basic Auth)            dashboard_embarcadores/
  Evolution API (docker) 8080   (só local)                       atendimento/infra/docker-compose.yml
  OpenWA (docker)        2785   (só local)                       /opt/openwa + infra/openwa/ (LEIAME.md)
+ homolog-painel         8171   homolog.freshhub.com.br/painel   cópia em /opt/stokki-homolog (usuário homolog)
+ homolog-portal         8174   homolog.freshhub.com.br/cliente  idem; senha do Caddy no host inteiro
+   (homologação: seção 16; units em infra/homolog/, Caddy em /etc/caddy/legado-homolog.caddy)
 
  Daemons sem porta:
    portal-cliente-envios   -> portal_cliente/enviar_stokki.py --loop  (fila de pedidos p/ Stokki)
    portal-cliente-chamados -> portal_cliente/chamados.py ler --loop   (IMAP dos chamados)
 
  Units: infra/*.service, painel_agentes/infra/, portal_cliente/infra/,
- resposta_insucesso/infra/, atendimento/infra/, confirmacao_motoristas/infra/.
+ resposta_insucesso/infra/, atendimento/infra/, confirmacao_motoristas/infra/,
+ infra/homolog/ (homologação: 2 serviços + homolog-nft.service, Caddy, nft).
  Blocos do Caddy: arquivos Caddyfile-* nessas mesmas pastas.
 
  Autenticação:
@@ -447,6 +459,9 @@
                          --fila-freshhub (plano 1.2 do novo: atende a fila de réplica
                          destino vuupt pelo nucleo/freshhub_client, mesmo processar_pedido,
                          devolve vuupt_service_id + espelho; --modo-teste não devolve).
+                         --so-status (09/11): só coletar_abertos (as 4 fontes) + retrato
+                         vigia_stokki_abertos, mantendo a ultima_acao; nada na Vuupt;
+                         trava pipeline-status, espera a Stokki até 30 min.
  historico.py            Auditoria das execuções do pipeline; regenera
                          STATUS_IMPORTACAO.md (gerado, não editar à mão).
  somente_impressao.py    Só a Estação de Impressão.
@@ -702,6 +717,8 @@
  cancelar.py          Cancela pedido de saída por HTTP (POST outbound/cancel +
                       poll cancel/status; motivo >= 15 caracteres). Sem Playwright;
                       só sob a trava de sessao_uso. Descoberto 06/10 (PS-39959).
+                      Parametro prefixo (montar_motivo/cancelar_pedido): quem chama troca o
+                      "Portal Fresh Hub" (tela /pedidos usa "Fresh Hub Pedidos (usuario)").
  trocar_nf.py         Troca o XML da NF de um pedido ("Informar Nota Fiscal":
                       POST outbound/nfe/store com order_id_nfe, action=invoice,
                       nfe=chave, file_nfe). Idempotente: confere chave + cProd do
@@ -917,6 +934,10 @@
  exportar_historico_vuupt.py  Exporta histórico da Vuupt para o GCS.
  migrar_espelho_15_09.py   Migração única.
  consulta.py               Leitura para a tela /consulta.
+ tabela_pedidos.py         Leitura para a tela /pedidos (todos os pedidos, colunas,
+                           filtros por coluna, CSV). Uma linha por pedido (original
+                           + reentregas); a principal é a reentrega viva com -R maior
+                           que a entregue, senão a entregue, senão a mais recente.
  relatorios_financeiro.py  Cópia dos relatórios Rotas/Serviços da Vuupt.
 
  App do motorista
@@ -1147,6 +1168,13 @@
                               /registros-hoje, /registro/apagar, /pedidos-parados/foto/<id>
    /historico-tratativas      historico_tratativas.html
    /consulta (+/rota, /pedido) consulta*.html
+   /pedidos (+/exportar.csv)  pedidos_tabela.html (todos os pedidos em tabela, estilo
+                              Serviços da Vuupt; lê só o núcleo; colunas visíveis no localStorage;
+                              uma linha por pedido, tentativas no selo "N tentativas";
+                              quem age (NIVEIS_ACAO, leitura não) tem caixinha + menu "⋯"
+                              por linha e barra de lote (um fetch por pedido em sequência,
+                              resumo das falhas por código) chamando /api/pedidos/acao/*;
+                              resultado vira selo na linha, sem recarregar)
    /atendimento (+/mobile)    atendimento*.html
    /wms, /wms/estoque         wms.html (PWA), wms_estoque.html
    /etiquetas/fila            fila_etiquetas.html (fila de impressão das etiquetas)
@@ -1577,6 +1605,25 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
  (git pull --no-rebase, chown, units, restart só do serviço afetado,
  provar chamando a rota/função de verdade).
 
+ Homologação (bancada do legado, homolog.freshhub.com.br/painel/ e /cliente/):
+   cópia própria em /opt/stokki-homolog (usuário homolog, venv próprio, config
+   gerado por homologacao/gerar_config.py sem segredos, dados copiados da
+   produção). Regra: NADA SAI (e-mail/WhatsApp só registrados em
+   /homologacao/envios; Stokki nunca, nem leitura; Vuupt só GET).
+   Comandos (rodam homologacao/vps/*.sh como root na VPS):
+     py -3.11 .claude/scripts/vps_ops.py homolog subir <ramo>   (ramo pushado;
+       checkout do ramo + merge de origin/master SÓ lá; prova /homologacao/saude)
+     ... homolog ok            (OK do Hugo no HOMOLOG_HISTORICO)
+     ... homolog recopiar --confirmo-recopia   (só com pedido do Hugo)
+     ... homolog trocar-senha  /  homolog criar (1 vez, exige o registro A)
+   Estado (só do root): /var/lib/stokki-homolog/HOMOLOG_VERSAO (ramo, commit,
+   master, checkout = HEAD depois da mescla, quando, quem), HOMOLOG_HISTORICO
+   (SUBIU/OK), HOMOLOG_COPIA (data da cópia), HOMOLOG_REQ_SHA e EM_TROCA (subida
+   em andamento ou que falhou: o "ok" recusa). Os units leem pela variável
+   HOMOLOG_ESTADO.
+   Senha do Caddy: só em /root/homolog-senha-caddy.txt, nunca no chat.
+   "Deploy" continua sendo produção; subir pra homologação é comando próprio.
+
 
 ==============================================================================
  17. ARMADILHAS CONHECIDAS
@@ -1659,6 +1706,30 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
  - Torre de Controle nunca recarrega o HTML: após deploy de JS, recarregue
    a aba.
  - .claude/worktrees/ pode conter cópias do repo; ignore em buscas.
+ - Homologação: homolog-painel/portal NÃO sobem sem a guarda (ExecStartPre
+   confere smtplib.SMTP == SMTPFalso) nem sem homolog-nft.service (Requires).
+   A regra de saída do usuário homolog fica em /etc/nftables.d/homolog.nft,
+   carregada por esse unit próprio: NÃO ligar o nftables.service (o
+   /etc/nftables.conf do Ubuntu faz flush ruleset e apaga as regras do Docker).
+   Fronteira de privilégio (homologacao/vps/comum.sh): código, venv e scripts
+   de /opt/stokki-homolog são do root (sem escrita p/ grupo/outros; .git 700);
+   só as pastas de dados (dados/, roteirizacao/dados/, painel_agentes/dados/...),
+   config.yaml e a conta de serviço são do homolog. O root nunca executa nem
+   grava através do que o homolog pode mudar (a cópia monta pasta nova e troca;
+   ajudantes com /usr/bin/python3 -I). Não dar chown -R homolog na árvore.
+   Recópia troca o banco da homologação inteiro (guarda 1 geração em
+   dados/dados.db.anterior).
+   Guarda em todo processo do venv da homologação: infra/homolog/homolog-guarda.pth
+   (do root, no site-packages; chama homologacao/pth_guarda.py) além do
+   homologacao/site/sitecustomize.py dos units. Vale com -E/-I; só -S pula (resta
+   o nft). Mesmo assim: NUNCA rodar script à mão em /opt/stokki-homolog (o config
+   tem os tokens de produção da Vuupt e do freshhub). O pip do root usa
+   HOMOLOG_PIP_SEM_GUARDA=1 (comum.sh pip_do_venv; só vale para root).
+   No freshhub (127.0.0.1:8100) a guarda só deixa GET /api/pool: GET
+   /api/replicacao/pendentes marca itens como enviados (comeria a fila da produção).
+   nft do homolog: DNS só para 127.0.0.53; descarta IP da própria máquina
+   (fib local), redes privadas/link-local e e-mail. criar.sh com ramo no ar só
+   com --refazer (grava EM_TROCA).
  - executor.py mata processos com taskkill (Windows); na VPS só o processo
    principal é encerrado.
  - Descrições desatualizadas em units: stokki-sequencia-tarde.service cita

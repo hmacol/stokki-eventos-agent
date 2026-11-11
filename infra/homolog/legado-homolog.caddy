@@ -1,0 +1,32 @@
+# Homologacao do legado (homolog.freshhub.com.br). Copia em /etc/caddy/legado-homolog.caddy,
+# importada no FIM do /etc/caddy/Caddyfile (mesmo padrao do freshhub-hml.caddy).
+#
+# Senha no host inteiro: usuario homolog; aqui fica so o hash bcrypt. A linha com o hash
+# e preenchida pelo homologacao/vps/criar.sh e trocada pelo trocar_senha.sh (a senha em si
+# fica so em /root/homolog-senha-caddy.txt, 600; nunca no chat).
+#
+# Direto no waitress nao ha prefixo: handle_path tira /painel e /cliente e o
+# X-Forwarded-Prefix + ProxyFix(x_prefix=1) faz o url_for() voltar com ele.
+
+homolog.freshhub.com.br {
+	basic_auth {
+		homolog __HASH_SENHA__
+	}
+
+	header X-Robots-Tag "noindex"
+
+	redir /painel /painel/ permanent
+	redir /cliente /cliente/ permanent
+
+	handle_path /painel/* {
+		reverse_proxy 127.0.0.1:8171 {
+			header_up X-Forwarded-Prefix /painel
+		}
+	}
+
+	handle_path /cliente/* {
+		reverse_proxy 127.0.0.1:8174 {
+			header_up X-Forwarded-Prefix /cliente
+		}
+	}
+}

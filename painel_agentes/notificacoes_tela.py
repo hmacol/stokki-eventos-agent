@@ -18,6 +18,7 @@ from pathlib import Path
 
 import controle_notificacoes as cn
 import preferencias_notificacao as pn
+from homologacao import ambiente as _ambiente
 from regras.transportadoras import CatalogoTransportadoras
 
 logger = logging.getLogger(__name__)
@@ -398,6 +399,7 @@ def iniciar_disparo(conn: sqlite3.Connection, tipo: str, alvo: str, sender_id: i
     """Grava a linha e roda a rotina numa thread. RuntimeError se ja ha disparo
     do mesmo tipo rodando (iniciado ha menos de 30 min e sem terminado_em);
     ValueError se o pedido nao vale."""
+    _ambiente.recusar_na_homologacao("Disparo de notificação")
     cmd = montar_comando(tipo, alvo, sender_id, reenviar)
     destino = None
     if alvo == "um":

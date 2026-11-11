@@ -55,6 +55,7 @@ class CancelarPedido(unittest.TestCase):
                     post=_Resp(200, "", {"success": True, "processing": True}))
         r = cancelar.cancelar_pedido(s, 39959, "Portal Fresh Hub: cliente desistiu", dormir=lambda n: None)
         self.assertEqual((r["ok"], r["situacao"], r["ja_estava"]), (True, "Cancelado", False))
+        self.assertEqual(r["situacao_antes"], "Aguardando Transportador")
         url, kw = s.posts[0]
         self.assertTrue(url.endswith("/inventory/outbound/cancel"))
         self.assertEqual(kw["files"]["_token"], (None, "TOKEN123"))
@@ -66,6 +67,7 @@ class CancelarPedido(unittest.TestCase):
         s = _Sessao([_Resp(200, _pagina("Cancelado"))])
         r = cancelar.cancelar_pedido(s, 39959, "Portal Fresh Hub: cliente desistiu")
         self.assertEqual((r["ok"], r["ja_estava"], s.posts), (True, True, []))
+        self.assertEqual(r["situacao_antes"], "Cancelado")
 
     def test_expedido_nao_cancela(self):
         s = _Sessao([_Resp(200, _pagina("Enviado"))])
@@ -99,6 +101,17 @@ class CancelarPedido(unittest.TestCase):
         r = cancelar.cancelar_pedido(s, 39959, "Portal Fresh Hub: cliente desistiu", dormir=lambda n: None)
         self.assertFalse(r["ok"])
         self.assertIn("processamento", r["erro"])
+
+    def test_montar_motivo_com_prefixo_proprio(self):
+        self.assertEqual(cancelar.montar_motivo("teste de motivo longo", prefixo="Fresh Hub Pedidos (hugo)"),
+                         "Fresh Hub Pedidos (hugo): teste de motivo longo")
+        self.assertEqual(cancelar.montar_motivo("teste de motivo longo"), "Portal Fresh Hub: teste de motivo longo")
+
+    def test_cancelar_pedido_usa_prefixo(self):
+        s = _Sessao([_Resp(200, _pagina("Aguardando Transportador")), _Resp(200, _pagina("Cancelado"))],
+                    post=_Resp(200, "", {"success": True}))
+        cancelar.cancelar_pedido(s, 39959, "cliente desistiu do pedido", prefixo="Fresh Hub Pedidos (hugo)")
+        self.assertEqual(s.posts[0][1]["files"]["reason"], (None, "Fresh Hub Pedidos (hugo): cliente desistiu do pedido"))
 
 
 if __name__ == "__main__":

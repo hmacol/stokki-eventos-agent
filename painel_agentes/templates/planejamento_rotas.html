@@ -2328,6 +2328,8 @@
         ? "abrirPainelImportacao()"
         : e.agente_id === "somente_expedicao"
         ? "abrirPainelExpedicao()"
+        : e.agente_id === "atualizar_status_stokki"
+        ? "rodarStatusStokki()"
         : e.agente_id === "gerar_romaneios"
         ? "abrirPainelRomaneios()"
         : `rodarAgentePlanejamento('${e.agente_id}', '${escaparHtmlAgentes(e.titulo)}')`;
@@ -2420,6 +2422,19 @@
     algumaEtapaAgentePlanejamentoRodando = true;
     // feedback imediato na barra, sem esperar o próximo ciclo
     fetch(`${BASE_PATH}/api/planejamento/agentes/etapas`).then(r => r.json()).then(j => renderAgentesPlanejamento(j.etapas));
+  }
+
+  // Status Stokki (Hugo, 09/11): relê a situação na Stokki e, quando termina, atualiza o pool e o
+  // selo das rotas com o retrato novo (mesmo Atualizar do pool).
+  async function rodarStatusStokki() {
+    if (!confirm("Reler agora na Stokki quem está em aberto, separação, conferência ou espera?\n(Não importa nada pra VUUPT.)")) return;
+    try {
+      await iniciarExecucaoAgentePlanejamento("atualizar_status_stokki");
+    } catch (e) {
+      alert(`Falha ao iniciar: ${e.message}`);
+      return;
+    }
+    aguardarExpedicaoEAtualizarPool("atualizar_status_stokki");
   }
 
   async function rodarAgentePlanejamento(agenteId, titulo) {
@@ -4385,14 +4400,14 @@
   // expedir_pedidos fecha o serviço na VUUPT na hora, então o refresh
   // já volta sem os expedidos). Polling barato no /agentes/etapas
   // (SQLite), 5s; para sozinho em 30 min se algo ficar pendurado.
-  async function aguardarExpedicaoEAtualizarPool() {
+  async function aguardarExpedicaoEAtualizarPool(agenteId = "somente_expedicao") {
     const inicio = Date.now();
     while (Date.now() - inicio < 30 * 60 * 1000) {
       await new Promise(r => setTimeout(r, 5000));
       try {
         const resp = await fetch(`${BASE_PATH}/api/planejamento/agentes/etapas`);
         if (!resp.ok) continue;
-        const etapa = ((await resp.json()).etapas || []).find(e => e.agente_id === "somente_expedicao");
+        const etapa = ((await resp.json()).etapas || []).find(e => e.agente_id === agenteId);
         // o POST de disparo já deixou a execução RODANDO/NA_FILA antes
         // deste polling começar -- "não ativa" aqui significa "terminou"
         if (!etapa || (!etapa.rodando && !etapa.na_fila)) break;
@@ -7096,6 +7111,23 @@
           if (li) li.remove();
         }
       });
+
+      // paradas já em rota: situação do mesmo retrato, pelo código base (Hugo, 09/11)
+      if (dados.situacoes_stokki) {
+        document.querySelectorAll(".card-rota .lista-paradas").forEach(ul => {
+          const lis = Array.from(ul.children);
+          lis.forEach(li => {
+            const codigos = (li.querySelector(".codigo")?.textContent || "").split(",")
+              .map(c => c.trim().replace(/^#/, "").toUpperCase().replace(/-R\d+$/, "")).filter(Boolean);
+            const situacao = codigos.map(c => dados.situacoes_stokki[c]).find(Boolean) || "";
+            if ((li.dataset.situacaoStokki || "") === situacao) return;
+            li.dataset.situacaoStokki = situacao;
+            li.querySelector(".badge-separacao")?.remove();
+            if (situacao) li.insertAdjacentHTML("beforeend", " " + badgeSeparacaoHtml({ situacao_stokki: situacao }));
+          });
+          atualizarSituacaoStokkiRota(ul, lis);
+        });
+      }
 
       document.getElementById("contagem-pool").textContent = Object.keys(POOL_BY_ID).length;
       document.getElementById("busca-pool").dispatchEvent(new Event("input"));  // reaplica filtro de busca ativo
