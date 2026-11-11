@@ -102,6 +102,7 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                             equipe = lista fixa EQUIPES, obrigatória desde 25/10, só informativa)
  Reentrega automática de insucesso (12h) ... expedir_pedidos.py (reentregar_insucessos_sem_resposta)
  Pedido preso em rota de dia anterior ...... roteirizacao/cancelar_rotas_sem_motorista.py (só avisa, 28/10)
+ Rota entregue que ficou aberta na Vuupt ... roteirizacao/finalizar_rotas_entregues.py (timer 23h30, 11/11)
  Botões "agentes" do painel ................ painel_agentes/agentes.py (lista AGENTES)
  Menu lateral do painel .................... painel_agentes/templates/_menu_lateral_nav.html
  Aviso de pendências no topo (faixas) ...... painel_agentes/templates/_aviso_pendencias.html (incluído no <main> de base.html/base_mobile.html;
@@ -887,6 +888,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            parada, km acumulado e 9h
                            (otimizacao_rotas.pedido_cabe_no_trajeto).
  cancelar_rotas_sem_motorista.py  15h45; só avisa rotas passadas sem baixa (28/10), não devolve.
+ finalizar_rotas_entregues.py  23h30; finaliza na Vuupt (PUT /routes/{id}/finish) a rota iniciada
+                           pelo motorista com tudo entregue (11/11). Rota nunca iniciada a
+                           Vuupt não deixa fechar pela conta: só sai no log.
  cancelar_servico.py       Cancela 1 serviço na Vuupt onde estiver (pool, rascunho,
                            rota enviada) fora do painel; sempre PUT /cancel. Usado
                            pelo portal. O Planejamento NÃO usa (escopo B, 06/10).
