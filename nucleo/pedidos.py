@@ -147,6 +147,30 @@ def marcar_em_rota_por_service_ids(service_ids, vuupt_route_id: int, conn: sqlit
             conn.close()
 
 
+def marcar_aberto_por_service_ids(service_ids, conn: sqlite3.Connection | None = None) -> int:
+    """Inverso de marcar_em_rota_por_service_ids (editar rota enviada, 10/11):
+    pedido tirado de rota nao iniciada (ou da rota cancelada) volta ABERTO
+    na hora, sem esperar a sincronizacao de 15 min, senao o pool lido do
+    nucleo nao o mostraria. So mexe em quem estava EM_ROTA. Devolve quantos
+    mudaram."""
+    ids = [int(i) for i in (service_ids or []) if i]
+    if not ids:
+        return 0
+    fechar = conn is None
+    conn = conn or banco.conectar()
+    try:
+        marcadores = ",".join("?" * len(ids))
+        cur = conn.execute(f"""UPDATE nucleo_pedidos SET status = ?, status_provedor = 'not_assigned',
+                                      vuupt_route_id = NULL, atualizado_em = ?
+                               WHERE vuupt_service_id IN ({marcadores}) AND status = ?""",
+                           (banco.PEDIDO_ABERTO, banco.agora(), *ids, banco.PEDIDO_EM_ROTA))
+        conn.commit()
+        return cur.rowcount
+    finally:
+        if fechar:
+            conn.close()
+
+
 def registrar_importacao(payload: dict, resposta, acao: str, conn: sqlite3.Connection | None = None):
     """
     Gancho do pipeline.py (dual-write). `acao` é o retorno de

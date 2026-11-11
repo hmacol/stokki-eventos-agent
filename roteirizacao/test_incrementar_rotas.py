@@ -252,5 +252,17 @@ class TestMainComRascunho(unittest.TestCase):
         self.assertTrue(all(s.get("_data_automatica") for s in vistos))
 
 
+class TestRetornandoNoIncremento(unittest.TestCase):
+    """Editar rota enviada (10/11): pedido Retornando (no carro do motorista) nao e encaixado.
+    Classe propria (reusa o _rodar) pra nao ser herdada pelas subclasses de TestMainComRascunho."""
+    _rodar = TestMainComRascunho._rodar
+
+    def test_incremento_pula_retornando(self):
+        ativos = {1: {"motorista_nome": "Joao", "motivo": "x", "criado_em": "2026-11-10 10:00:00"}}
+        with mock.patch("pedidos_retornando._ativos_ou_vazio", return_value=ativos):
+            self._rodar([], [{"id": 7, "status": "RASCUNHO", "paradas": []}])
+        self.assertEqual([p["service_id"] for p in self.inc_rascunho.call_args[0][1]], [2])
+
+
 if __name__ == "__main__":
     unittest.main()

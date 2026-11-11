@@ -355,6 +355,20 @@ class TestMarcarEmRotaNoEnvio(_Base):
         self.assertEqual(self._pedido("PS-30")["status"], "ENTREGUE")
         self.assertEqual(pedidos.marcar_em_rota_por_service_ids([], 777, self.conn), 0)
 
+    def test_tirado_da_rota_volta_aberto_sem_ir_na_vuupt(self):
+        """Editar rota enviada (10/11): inverso do envio, so pra quem estava EM_ROTA."""
+        sinc.sincronizar_servicos([_servico(service_id=1, code="#PS-10"), _servico(service_id=2, code="#PS-20"),
+                                   _servico(service_id=3, code="#PS-30", status="done", status_done="success")],
+                                  self.conn)
+        pedidos.marcar_em_rota_por_service_ids([1, 2], 777, self.conn)
+        n = pedidos.marcar_aberto_por_service_ids([1, 3, None], self.conn)
+        self.assertEqual(n, 1)
+        p = self._pedido("PS-10")
+        self.assertEqual((p["status"], p["status_provedor"], p["vuupt_route_id"]), ("ABERTO", "not_assigned", None))
+        self.assertEqual(self._pedido("PS-20")["status"], "EM_ROTA")
+        self.assertEqual(self._pedido("PS-30")["status"], "ENTREGUE")
+        self.assertEqual(pedidos.marcar_aberto_por_service_ids([], self.conn), 0)
+
 
 class TestExecutar(_Base):
     def test_executar_roda_incremental_e_pool_e_grava_cursor(self):

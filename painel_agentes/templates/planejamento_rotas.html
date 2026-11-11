@@ -530,6 +530,32 @@
     color: var(--rodando-texto);
   }
   .secao-pool-separacao .cabecalho-secao-pool { color: var(--rodando-texto); }
+  /* Retornando (10/11): tirado de rota iniciada, no carro do motorista --
+     mesmo formato do chip de área; no pool não seleciona nem arrasta */
+  .item-parada .badge-retornando {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 100px;
+    margin-top: 3px;
+    background: rgba(255,92,80,0.18);
+    color: var(--erro-texto);
+  }
+  #lista-pool .item-parada.retornando { cursor: default; opacity: 0.8; }
+  /* status da parada na VUUPT no card da rota enviada (10/11): neutro
+     enquanto o pedido pode sair da rota, em negrito quando já começou */
+  .item-parada .badge-status-vuupt {
+    display: inline-block;
+    font-size: 10.5px;
+    padding: 0 6px;
+    border-radius: 100px;
+    border: 1px solid var(--borda);
+    color: var(--texto-suave);
+  }
+  .item-parada .badge-status-vuupt.comecado { font-weight: 700; color: var(--texto); }
   /* resumo da situação na Stokki no card da rota (Hugo, 09/11) */
   .card-rota .situacao-stokki-rota:not(:empty) {
     display: inline-block;
@@ -657,6 +683,9 @@
   .capacidade .fill-cap { height: 100%; border-radius: 4px; background: var(--acento); }
   .capacidade .fill-cap.alerta { background: var(--rodando); }
   .capacidade .fill-cap.estouro { background: var(--erro); }
+  /* motorista e carro lado a lado (carro da rota, 10/11) */
+  .card-rota .linha-motorista-veiculo { display: flex; gap: 6px; }
+  .card-rota .linha-motorista-veiculo select { flex: 1 1 0; min-width: 0; }
   .card-rota select {
     width: 100%;
     font-size: 12px;
@@ -749,6 +778,7 @@
   }
   .card-rota.colapsada .lista-paradas,
   .card-rota.colapsada .select-motorista,
+  .card-rota.colapsada .linha-motorista-veiculo,
   .card-rota.colapsada .lalamove-box,
   .card-rota.colapsada .acoes { display: none !important; }
   /* Caixa Lalamove do card: veículo + opcionais da corrida (Hugo, 30/08) */
@@ -858,6 +888,8 @@
   body.cards-numeros .item-parada .badge-caixas,
   body.cards-numeros .item-parada .badge-fora-area,
   body.cards-numeros .item-parada .badge-dedicado,
+  body.cards-numeros .item-parada .badge-retornando,
+  body.cards-numeros .item-parada .badge-status-vuupt,
   body.cards-numeros .item-parada .janela,
   body.cards-numeros .item-parada .nf-pedido { display: none; }
   body.cards-numeros .item-parada .numero {
@@ -2210,6 +2242,28 @@
   </div>
 </div>
 
+{# Tirar da rota enviada (10/11): mesma lista de motivo da Torre
+   (expedicao.MOTIVOS_EXCLUSAO, preenchida pelo JS). Na VUUPT o pedido fica
+   sem rota, nunca é cancelado. #}
+<div class="modal-overlay-editar-endereco" id="modal-tirar-da-rota">
+  <div class="modal-editar-endereco" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-tirar-da-rota">
+    <h2 id="titulo-modal-tirar-da-rota">Tirar da rota</h2>
+    <p class="subtitulo">Pedido <strong id="tirar-da-rota-codigo"></strong> — sai da rota na VUUPT sem ser cancelado. Se o motorista ainda não saiu, volta pro pool; se a rota já começou, fica Retornando até o galpão receber.</p>
+    <div class="campo-reagendar">
+      <label for="tirar-da-rota-motivo">Motivo</label>
+      <select id="tirar-da-rota-motivo"><option value="">Selecione...</option></select>
+    </div>
+    <div class="campo-reagendar">
+      <label for="tirar-da-rota-observacao">Observação (opcional)</label>
+      <textarea id="tirar-da-rota-observacao" maxlength="200" placeholder="Detalhe o motivo, se precisar..."></textarea>
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" onclick="fecharModalTirarDaRota()">Cancelar</button>
+      <button type="button" class="confirmar" onclick="confirmarTirarDaRota(this)">Tirar da rota</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay-nivel-horario" id="modal-nivel-horario">
   <div class="modal-nivel-horario" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-nivel-horario">
     <h2 id="titulo-modal-nivel-horario">Nível / horário de atendimento</h2>
@@ -2289,7 +2343,8 @@
   function escaparHtmlAgentes(texto) {
     const div = document.createElement('div');
     div.textContent = texto == null ? '' : String(texto);
-    return div.innerHTML;
+    // aspas também: o resultado vai pra dentro de atributo (title="...", data-x="...")
+    return div.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
 
   async function postJSONAgentesPlanejamento(url, body) {
@@ -2825,6 +2880,23 @@
   const LIMITE_ALERTA_CAIXAS = {{ dados.limite_alerta_caixas | tojson }};
   const TRAVAS = {{ dados.travas | tojson }};
   const TIPOS_CARGA_POR_SENDER = {{ dados.tipos_carga_por_sender | tojson }};
+  // Editar rota enviada (10/11): motivo do "Tirar da rota" (mesma lista da
+  // Torre, expedicao.MOTIVOS_EXCLUSAO), status da Vuupt em que o pedido ainda
+  // pode sair (o servidor confere ao vivo de novo) e agentes virtuais que
+  // nunca "faltam carro" (regras/veiculos.AGENTES_SEM_CARRO)
+  const MOTIVOS_EXCLUSAO = {{ (motivos_exclusao or []) | tojson }};
+  const AGENTES_SEM_CARRO = new Set({{ (agentes_sem_carro or []) | tojson }});
+  const STATUS_PODE_SAIR = new Set(["not_assigned", "assigned", "accepted"]);
+  const ROTULO_STATUS_VUUPT = {
+    not_assigned: "sem motorista", assigned: "atribuído", accepted: "aceito",
+    on_route: "a caminho", arrived: "no local", done: "finalizado", canceled: "cancelado",
+  };
+  const TEXTO_TRAVA_MOTORISTA = "Rota já começou: só o carro pode mudar.";
+  // carros do seletor do card (/api/planejamento/veiculos, sem genérico, dono
+  // primeiro, com rodizio_no_dia) -- carregado depois que a tela monta; null
+  // = ainda carregando ou falhou (o select mostra só o carro atual)
+  let VEICULOS = null;
+  let VEICULOS_FALHOU = false;  // lista não carregou: o select avisa pra recarregar
   const TIPO_CARGA_PADRAO = "Seco";
   const PADRAO_SUFIXO_REENTREGA = /-R\d+$/;
   // Paleta SEM nenhum tom de vermelho/rosa/coral de propósito (Hugo,
@@ -2861,7 +2933,8 @@
   function escaparHtml(texto) {
     const div = document.createElement('div');
     div.textContent = texto == null ? '' : String(texto);
-    return div.innerHTML;
+    // aspas também: o resultado vai pra dentro de atributo (title="...", data-x="...")
+    return div.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
 
   function iconeNumerado(numero, cor) {
@@ -2950,6 +3023,12 @@
   function badgesPedidoHtml(p) {
     // agendamento + alerta de pedido grande (> LIMITE_ALERTA_CAIXAS caixas)
     const partes = [];
+    // Retornando (10/11): tirado de rota já iniciada, ainda no carro do
+    // motorista -- só volta a ser roteirizável depois que /retornos receber
+    if (p.retornando) {
+      const motivo = p.retornando.motivo ? ` Motivo: ${p.retornando.motivo}.` : "";
+      partes.push(`<span class="badge-retornando" title="Tirado de rota já iniciada: não entra em rota até o galpão receber em Retornos.${escaparHtml(motivo)}">↩ Retornando — no carro de ${escaparHtml(p.retornando.motorista_nome || "?")}</span>`);
+    }
     // dedicado (Hugo, 23/09): transporte cotado à parte, fora da rota automática
     if (p.dedicado) {
       const brl = v => Number(v).toFixed(2).replace(".", ",");
@@ -3020,9 +3099,21 @@
     const nf = p.numero_nf ? ` <span class="nf-pedido">NF ${escaparHtml(p.numero_nf)}</span>` : "";
     // cancela o pedido de verdade na VUUPT (Hugo, 15/08) -- leitura não
     // recebe o botão (mesma trava dos demais controles de ação)
-    const botaoCancelar = PODE_EDITAR
+    let botaoCancelar = PODE_EDITAR
       ? `<button type="button" class="botao-cancelar-pedido" title="Cancelar esse pedido na VUUPT -- não pode ser desfeito">×</button>`
       : "";
+    // rota já enviada (10/11): o "×" vira "Tirar da rota" (pede o motivo,
+    // não cancela na VUUPT) e só aparece em pedido que o motorista não
+    // começou -- status sem espelho ainda (null) também mostra, o servidor
+    // confere ao vivo. Cancelar o pedido continua no menu de contexto.
+    let statusVuupt = "";
+    if (opts.enviada) {
+      const st = p.status_vuupt || null;
+      botaoCancelar = (opts.edicaoEnviada && (st === null || STATUS_PODE_SAIR.has(st)))
+        ? `<button type="button" class="botao-cancelar-pedido botao-tirar-da-rota" title="Tirar da rota (pede o motivo; o pedido não é cancelado na VUUPT)">×</button>`
+        : "";
+      if (st) statusVuupt = ` <span class="badge-status-vuupt${STATUS_PODE_SAIR.has(st) ? "" : " comecado"}" title="Status na VUUPT (espelho de até 15 min; tirar da rota confere ao vivo)">VUUPT: ${escaparHtml(ROTULO_STATUS_VUUPT[st] || st)}</span>`;
+    }
     // checkbox de seleção múltipla pra "Mover selecionados" -- só dentro
     // de rota editável (nunca no pool, que já tem o próprio mecanismo de
     // seleção por clique; ver opts.emRota em criarLiParada/criarCardRota)
@@ -3031,7 +3122,7 @@
       : "";
     // .numero é preenchido por renumerarPool/renumerarRotaEl (posição
     // no pool ou ordem na rota -- o MESMO número do ponto no mapa)
-    return `${checkSelecao}${botaoCancelar}<span class="numero"></span><span class="codigo">${escaparHtml(p.codigo)}</span>${nf}<br>
+    return `${checkSelecao}${botaoCancelar}<span class="numero"></span><span class="codigo">${escaparHtml(p.codigo)}</span>${nf}${statusVuupt}<br>
       <span class="remetente">${escaparHtml(p.remetente_nome || p.remetente)}</span>${destinatario}<br>
       <span class="endereco">${escaparHtml(p.endereco)}</span>${badgesPedidoHtml(p)}`;
   }
@@ -3060,6 +3151,9 @@
     li.dataset.situacaoStokki = p.situacao_stokki || "";  // "Em separação" etc. (Hugo, 19/10)
     li.dataset.dedicado = p.dedicado ? "1" : "";
     li.dataset.foraDiaFixo = p.fora_dia_fixo || "";  // "Americana: só Quartas" (Hugo, 23/09)
+    // Retornando (10/11): pedido no carro do motorista -- no pool fica sem
+    // seleção e sem arraste (o filtro do Sortable pega a classe)
+    if (p.retornando) { li.dataset.retornando = "1"; li.classList.add("retornando"); }
     // nível de dificuldade / horário de atendimento do CLIENTE (Hugo,
     // 22/08 -- editável pelo menu de contexto, ver abrirModalNivelHorario)
     li.dataset.nivelDificuldade = p.nivel_dificuldade || "1";
@@ -3097,6 +3191,42 @@
       [...MOTORISTAS].sort((a, b) => (a.nome || "").localeCompare(b.nome || "", "pt-BR", { sensitivity: "base" })).map(m => `<option value="${m.agent_id}" ${m.agent_id === rascunho.agent_id ? "selected" : ""}>${escaparHtml(m.nome)}</option>`)
     );
     return opcoes.join("");
+  }
+
+  // Seletor de carro do card (10/11): o valor é o vehicle_id do rascunho;
+  // trocar aqui vale só pra essa rota (o cadastro do motorista não muda)
+  function montarSelectVeiculo(rascunho) {
+    const atual = rascunho.vehicle_id || null;
+    const opcoes = ['<option value="">Sem carro</option>'];
+    const lista = VEICULOS || [];
+    lista.forEach(v => {
+      const dono = v.dono ? ` — ${v.dono}` : "";
+      const rodizio = v.rodizio_no_dia ? " (rodízio no dia)" : "";
+      opcoes.push(`<option value="${v.vehicle_id}" ${v.vehicle_id === atual ? "selected" : ""}>${escaparHtml(v.placa || `Carro ${v.vehicle_id}`)}${escaparHtml(dono)}${rodizio}</option>`);
+    });
+    // carro atual fora da lista (genérico, excluído ou lista ainda carregando)
+    if (atual && !lista.some(v => v.vehicle_id === atual)) {
+      const rotulo = VEICULOS ? `Carro ${atual} (genérico ou fora da lista)` : `Carro ${atual}`;
+      opcoes.push(`<option value="${atual}" selected>${escaparHtml(rotulo)}</option>`);
+    }
+    if (VEICULOS_FALHOU) opcoes.push('<option value="" disabled>Lista de carros indisponível — recarregue a página</option>');
+    return opcoes.join("");
+  }
+
+  // mesma regra de regras/veiculos.falta_carro: motorista de verdade sem
+  // vehicle_id, ou com placa genérica (começa com "."). Carro que só não
+  // está na lista do seletor não conta como "sem carro".
+  function rascunhoSemCarro(rascunho) {
+    if (!rascunho.agent_id || AGENTES_SEM_CARRO.has(rascunho.agent_id)) return false;
+    if (!rascunho.vehicle_id) return true;
+    const veiculo = (VEICULOS || []).find(v => v.vehicle_id === rascunho.vehicle_id);
+    return !!veiculo && (veiculo.placa || "").trim().startsWith(".");
+  }
+
+  function seloSemCarroHtml(rascunho) {
+    if (!rascunho.falta_carro) return "";
+    const nome = rascunho.motorista_nome || `Motorista ${rascunho.agent_id}`;
+    return `<span class="badge-trava" title="Motorista ${escaparHtml(nome)} sem carro cadastrado: escolha o carro no card ou cadastre o veículo dele.">sem carro</span>`;
   }
 
   function rotaEhLalamove(rascunho) {
@@ -3364,7 +3494,15 @@
   function criarCardRota(rascunho, cor) {
     const enviada = rascunho.status === "ENVIADO";
     const ofertada = rascunho.status === "OFERTADA";
-    const bloqueada = enviada || ofertada; // sem edição enquanto publicada, mesmo padrão de enviada
+    const bloqueada = enviada || ofertada; // ações de rascunho (otimizar, enviar, fundir...) somem nas duas
+    // rota enviada (10/11): motorista, carro, "×" e drop do pool voltam a
+    // funcionar -- só OFERTADA trava tudo. Rota iniciada só troca o carro;
+    // Lalamove com corrida lançada não se edita (o carro é o da corrida).
+    const lalamoveComCorrida = enviada && !!rascunho.lalamove_order_id;
+    const edicaoEnviada = enviada && PODE_EDITAR && !lalamoveComCorrida;
+    const travaMotorista = ofertada || !PODE_EDITAR || lalamoveComCorrida || (enviada && !!rascunho.rota_iniciada);
+    const tituloTravaMotorista = lalamoveComCorrida ? "Rota da Lalamove com corrida lançada: não dá pra editar por aqui."
+      : (enviada && rascunho.rota_iniciada ? TEXTO_TRAVA_MOTORISTA : "");
     const colapsada = rotasColapsadas.has(rascunho.id);
     const div = document.createElement("div");
     div.className = "card-rota" + (enviada ? " enviada" : "") + (ofertada ? " ofertada" : "") + (colapsada ? " colapsada" : "") + (rotaEhLalamove(rascunho) ? " lalamove" : "");
@@ -3380,6 +3518,7 @@
           ${(bloqueada || !PODE_EDITAR) ? "" : `<button type="button" class="botao-editar-nome" data-rascunho-id="${rascunho.id}" title="Renomear rota">✎</button>`}
           ${rascunho.tipo_veiculo && TRAVAS.tipos_veiculo[rascunho.tipo_veiculo] ? `<span class="badge-trava" title="Classificada como veículo grande pelo volume/nº de endereços do lote (ver regras/tipo_veiculo.py)">${escaparHtml(TRAVAS.tipos_veiculo[rascunho.tipo_veiculo].nome)}</span>` : ""}
           ${rascunho.selo_tarde ? `<span class="selo-tarde" title="Rota da tarde: sai da base neste horário, perto da janela tardia">${escaparHtml(rascunho.selo_tarde)}</span>` : ""}
+          <span id="sem-carro-${rascunho.id}">${seloSemCarroHtml(rascunho)}</span>
         </span>
         <button type="button" class="botao-colapsar">${colapsada ? "▸" : "▾"}</button>
       </div>
@@ -3390,7 +3529,11 @@
       <div id="status-${rascunho.id}">${statusHtml(rascunho)}</div>
       <div id="confirmacao-${rascunho.id}">${confirmacaoMotoristaHtml(rascunho)}</div>
       <div id="oferta-${rascunho.id}">${ofertaHtml(rascunho)}</div>
-      <select data-rascunho-id="${rascunho.id}" class="select-motorista" ${(bloqueada || !PODE_EDITAR) ? "disabled" : ""}>${montarSelectMotorista(rascunho)}</select>
+      ${/* title também no contêiner: select desligado pode não mostrar o próprio */""}
+      <div class="linha-motorista-veiculo" ${tituloTravaMotorista ? `title="${escaparHtml(tituloTravaMotorista)}"` : ""}>
+        <select data-rascunho-id="${rascunho.id}" class="select-motorista" aria-label="Motorista" ${travaMotorista ? "disabled" : ""} ${tituloTravaMotorista ? `title="${escaparHtml(tituloTravaMotorista)}"` : ""}>${montarSelectMotorista(rascunho)}</select>
+        <select data-rascunho-id="${rascunho.id}" class="select-veiculo" aria-label="Carro desta rota" title="Carro desta rota (o cadastro do motorista não muda)" ${ofertada ? "disabled" : ""} ${(rotaEhLalamove(rascunho) || !PODE_EDITAR) ? "hidden" : ""}>${montarSelectVeiculo(rascunho)}</select>
+      </div>
       ${/* veículo/opcionais editáveis até a corrida existir: o lançamento
            agora é um botão separado do envio (Hugo, 30/08) */""}
       ${lalamoveBoxHtml(rascunho, PODE_EDITAR && !ofertada && !(enviada && rascunho.lalamove_order_id))}
@@ -3410,7 +3553,7 @@
       </div>
       ${(bloqueada || !PODE_EDITAR) ? "" : selectFundirHtml(rascunho)}`;
     const ul = div.querySelector(".lista-paradas");
-    rascunho.paradas.forEach(p => ul.appendChild(criarLiParada(p, { emRota: !bloqueada && PODE_EDITAR })));
+    rascunho.paradas.forEach(p => ul.appendChild(criarLiParada(p, { emRota: !bloqueada && PODE_EDITAR, enviada, edicaoEnviada })));
     renumerarRotaEl(ul, rascunho.id);
     return div;
   }
@@ -3618,7 +3761,7 @@
     if (!rascunho) return;
     const metricasEl = document.getElementById(`metricas-${rascunho.id}`);
     if (metricasEl) {
-      metricasEl.textContent = metricasTexto(rascunho);
+      metricasEl.innerHTML = metricasTexto(rascunho);  // metricasTexto devolve HTML (spans de km)
     }
     const capacidadeEl = document.getElementById(`capacidade-${rascunho.id}`);
     if (capacidadeEl) capacidadeEl.innerHTML = capacidadeHtml(rascunho);
@@ -4144,7 +4287,7 @@
 
   function alternarSelecao(serviceId) {
     const li = document.querySelector(`#lista-pool .item-parada[data-service-id="${serviceId}"]`);
-    if (!li) return;
+    if (!li || li.dataset.retornando) return;  // Retornando (10/11): no carro do motorista, sem seleção
     if (SELECIONADOS.has(serviceId)) SELECIONADOS.delete(serviceId);
     else SELECIONADOS.add(serviceId);
     li.classList.toggle("selecionada", SELECIONADOS.has(serviceId));
@@ -4154,7 +4297,7 @@
 
   function selecionarVisiveis() {
     document.querySelectorAll("#lista-pool .item-parada").forEach(li => {
-      if (!liVisivelNoPool(li)) return;
+      if (!liVisivelNoPool(li) || li.dataset.retornando) return;  // Retornando não entra em rota
       SELECIONADOS.add(Number(li.dataset.serviceId));
       li.classList.add("selecionada");
     });
@@ -4181,7 +4324,7 @@
     // escopado à seção: no bloco "Pra rotear hoje" nunca pega agendamento
     // futuro, porque esses pedidos nem estão nesse bloco.
     secaoEl.querySelectorAll(".item-parada").forEach(li => {
-      if (!liVisivelNoPool(li)) return;
+      if (!liVisivelNoPool(li) || li.dataset.retornando) return;
       SELECIONADOS.add(Number(li.dataset.serviceId));
       li.classList.add("selecionada");
     });
@@ -4608,7 +4751,7 @@
     document.querySelectorAll("#lista-pool .item-parada").forEach(li => {
       const lat = parseFloat(li.dataset.lat), lng = parseFloat(li.dataset.lng);
       if (isNaN(lat) || isNaN(lng) || !marcadoresPreview[Number(li.dataset.serviceId)]) return;
-      if (!dentroDoPoligono(lat, lng, vertices)) return;
+      if (!dentroDoPoligono(lat, lng, vertices) || li.dataset.retornando) return;
       SELECIONADOS.add(Number(li.dataset.serviceId));
       li.classList.add("selecionada");
     });
@@ -5329,7 +5472,9 @@
         return;
       }
 
-      if (fromId === "pool") {
+      if (fromId === "pool" && rascunhoEnviado(Number(toId))) {
+        await adicionarEmRotaEnviada(Number(toId), serviceId, evt.item);
+      } else if (fromId === "pool") {
         const parada = POOL_BY_ID[serviceId];
         const resp = await postJSON("/api/planejamento/adicionar-parada", { rascunho_id: Number(toId), parada, ordem: evt.newIndex });
         delete POOL_BY_ID[serviceId];
@@ -5370,14 +5515,21 @@
   // levantada quando ele chega.
   let dragRecente = false;
 
-  function iniciarSortable(ul) {
+  function iniciarSortable(ul, { soRecebe = false } = {}) {
     if (!PODE_EDITAR) return;  // leitura: sem arrastar-e-soltar
     new Sortable(ul, {
-      group: "paradas", animation: 150,
+      // rota já enviada (10/11): só recebe pedido do pool -- a parada dela
+      // não sai arrastando (tirar pede motivo) nem muda de ordem por aqui
+      group: soRecebe
+        ? { name: "paradas", pull: false, put: (_para, de) => de.el.dataset.listId === "pool" }
+        : "paradas",
+      animation: 150,
+      sort: !soRecebe,
       // clicar no campo de posição (modo "digitando a posição") ou no
       // "x" de cancelar não pode iniciar um drag -- preventOnFilter:false
-      // deixa o clique neles funcionar normalmente
-      filter: "input, .botao-cancelar-pedido, .botao-menu-parada", preventOnFilter: false,
+      // deixa o clique neles funcionar normalmente. Pedido Retornando
+      // (10/11) não arrasta; na rota enviada nenhuma parada arrasta.
+      filter: soRecebe ? ".item-parada" : "input, .botao-cancelar-pedido, .botao-menu-parada, .retornando", preventOnFilter: false,
       // touch: segurar 250ms pra começar a arrastar (senão não dá pra
       // rolar a lista); no mouse continua imediato
       delay: 250, delayOnTouchOnly: true, touchStartThreshold: 5,
@@ -5665,7 +5817,11 @@
         const select = document.querySelector(`.select-motorista[data-rascunho-id="${a.rascunho_id}"]`);
         if (select) select.value = String(a.agent_id);
         const r = RASCUNHOS.find(x => x.id === a.rascunho_id);
-        if (r) { r.agent_id = a.agent_id; r.vehicle_id = a.vehicle_id; r.motorista_nome = a.motorista_nome; }
+        if (r) {
+          r.agent_id = a.agent_id; r.vehicle_id = a.vehicle_id; r.motorista_nome = a.motorista_nome;
+          r.falta_carro = rascunhoSemCarro(r);
+          atualizarCarroNoCard(r);
+        }
       });
       const linhas = [];
       if (resp.alocados && resp.alocados.length) {
@@ -5701,7 +5857,7 @@
         const select = document.querySelector(`.select-motorista[data-rascunho-id="${d.rascunho_id}"]`);
         if (select) select.value = "";
         const r = RASCUNHOS.find(x => x.id === d.rascunho_id);
-        if (r) { r.agent_id = null; r.vehicle_id = null; r.motorista_nome = null; }
+        if (r) { r.agent_id = null; r.vehicle_id = null; r.motorista_nome = null; r.falta_carro = false; atualizarCarroNoCard(r); }
       });
       const linhas = [];
       if (resp.desalocados && resp.desalocados.length) {
@@ -6037,6 +6193,11 @@
         });
         const retrato = (comNaoProntos.find(r => r.retrato_stokki_em) || {}).retrato_stokki_em || "?";
         alert(`Atenção: ${comNaoProntos.reduce((n, r) => n + r.codigos_nao_prontos.length, 0)} pedido(s) em espera na Stokki (retrato de ${retrato}) voltaram pro pool, NÃO foram enviados:\n${linhas.join("\n")}`);
+      }
+      // trava de carro desligada (planejamento.trava_sem_carro): rota saiu sem carro, só avisa
+      const semCarro = resp.resultados.filter(r => r.ok && r.aviso);
+      if (semCarro.length) {
+        alert(`Atenção: ${semCarro.length} rota(s) enviada(s) sem carro:\n${semCarro.map(r => `• ${r.aviso}`).join("\n")}`);
       }
       // recarrega pra travar as rotas enviadas (some seus botões/drag) e refletir o pool atualizado
       location.reload();
@@ -6845,6 +7006,196 @@
     atualizarContagensTotais();
   }
 
+  // ---- Rota já enviada (10/11): incluir, tirar e trocar motorista/carro ----
+  // O servidor fala com a VUUPT antes de gravar; recusa volta como erro e a
+  // tela desfaz o gesto. A resposta traz o rascunho cru (buscar_rascunho):
+  // mesclarRascunho mantém o que só a carga da tela calcula (status da
+  // VUUPT e selos por parada, rota_iniciada, tem_centro_expandido).
+  function rascunhoEnviado(rascunhoId) {
+    const r = RASCUNHOS.find(x => x.id === rascunhoId);
+    return !!r && r.status === "ENVIADO";
+  }
+
+  function mesclarRascunho(rascunhoId, novo, extrasPorServico = {}) {
+    const r = RASCUNHOS.find(x => x.id === rascunhoId);
+    if (!r || !novo) return novo;
+    const antigas = {};
+    (r.paradas || []).forEach(p => { antigas[p.service_id] = p; });
+    const paradas = (novo.paradas || []).map(p => ({ ...(extrasPorServico[p.service_id] || {}), ...(antigas[p.service_id] || {}), ...p }));
+    Object.assign(r, novo, { paradas });
+    r.falta_carro = rascunhoSemCarro(r);
+    return r;
+  }
+
+  async function adicionarEmRotaEnviada(rascunhoId, serviceId, li) {
+    const parada = POOL_BY_ID[serviceId];
+    const ul = document.getElementById(`lista-parada-${rascunhoId}`);
+    li.style.opacity = "0.5";
+    try {
+      const resp = await postJSON("/api/planejamento/adicionar-parada", { rascunho_id: rascunhoId, parada });
+      delete POOL_BY_ID[serviceId];
+      SELECIONADOS.delete(serviceId);
+      document.getElementById("contagem-pool").textContent = Object.keys(POOL_BY_ID).length;
+      // a VUUPT põe o pedido no fim da rota (nunca antes de um já começado)
+      const novaParada = { ...parada, status_vuupt: null };
+      const r = mesclarRascunho(rascunhoId, resp.rascunho, { [serviceId]: novaParada });
+      li.remove();
+      if (ul) ul.appendChild(criarLiParada(novaParada, { enviada: true, edicaoEnviada: true }));
+      atualizarCardComResposta(r);
+      mostrarToastPlanejamento(`${parada.codigo || "Pedido"} incluído na rota.`);
+    } catch (e) {
+      // recusa (em espera na Stokki, Retornando, rota encerrada...): volta pro pool
+      li.style.opacity = "";
+      reencaixarNaSecaoCorreta(li);
+      alert(`Não deu pra incluir o pedido na rota: ${e.message}`);
+    }
+  }
+
+  let tirarDaRotaPendente = null;  // { rascunhoId, serviceId, li }
+
+  function abrirModalTirarDaRota(li, serviceId, rascunhoId) {
+    tirarDaRotaPendente = { rascunhoId, serviceId, li };
+    document.getElementById("tirar-da-rota-codigo").textContent = li.querySelector(".codigo")?.textContent.trim() || `#${serviceId}`;
+    document.getElementById("tirar-da-rota-motivo").innerHTML = '<option value="">Selecione...</option>'
+      + MOTIVOS_EXCLUSAO.map(m => `<option>${escaparHtml(m)}</option>`).join("");
+    document.getElementById("tirar-da-rota-observacao").value = "";
+    document.getElementById("modal-tirar-da-rota").classList.add("aberto");
+  }
+
+  function fecharModalTirarDaRota() {
+    document.getElementById("modal-tirar-da-rota").classList.remove("aberto");
+    tirarDaRotaPendente = null;
+  }
+
+  async function confirmarTirarDaRota(botao) {
+    if (!tirarDaRotaPendente) return;
+    const motivo = document.getElementById("tirar-da-rota-motivo").value;
+    if (!motivo) { alert("Escolha o motivo."); return; }
+    const observacao = document.getElementById("tirar-da-rota-observacao").value.trim();
+    const { rascunhoId, serviceId, li } = tirarDaRotaPendente;
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Tirando...";
+    let resp;
+    try {
+      resp = await postJSON("/api/planejamento/remover-parada", { rascunho_id: rascunhoId, service_id: serviceId, motivo, observacao });
+    } catch (e) {
+      alert(`Não deu pra tirar o pedido da rota: ${e.message}`);
+      return;
+    } finally {
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+    fecharModalTirarDaRota();
+    if (resp.aviso) alert(resp.aviso);
+    if (resp.rota_cancelada) {
+      // era o último pedido e ninguém tinha saído: a rota volta a ser rascunho
+      alert("Era o último pedido da rota: a rota foi cancelada na VUUPT e voltou a ser rascunho. O pedido volta pro pool.");
+      location.reload();
+      return;
+    }
+    const r = RASCUNHOS.find(x => x.id === rascunhoId);
+    const antiga = (r && r.paradas.find(p => p.service_id === serviceId)) || {};
+    li.remove();
+    if (SELECIONADOS_ROTA.delete(serviceId)) atualizarBarraSelecaoRotas();
+    if (resp.ja_fora_da_rota) {
+      mostrarToastPlanejamento(resp.mensagem || "O pedido já tinha saído dessa rota na VUUPT — card atualizado.");
+    } else {
+      // volta pro pool (na VUUPT ele fica sem rota, nunca cancelado); tirado
+      // de rota iniciada fica Retornando, no carro do motorista
+      const p = { ...antiga, ...(resp.parada_removida || {}) };
+      delete p.status_vuupt;
+      p.retornando = resp.retornando ? { motorista_nome: motoristaDaRota(r), motivo, criado_em: null } : null;
+      POOL_BY_ID[serviceId] = p;
+      const novoLi = criarLiParada(p);
+      secaoDoItem(novoLi).appendChild(novoLi);
+      document.getElementById("contagem-pool").textContent = Object.keys(POOL_BY_ID).length;
+      mostrarToastPlanejamento(resp.retornando
+        ? `${p.codigo || "Pedido"} tirado da rota: fica Retornando até o galpão receber.`
+        : `${p.codigo || "Pedido"} tirado da rota e de volta ao pool.`);
+    }
+    atualizarCardComResposta(mesclarRascunho(rascunhoId, resp.rascunho));
+    aplicarFiltroFlag();
+    aplicarFiltroCep();
+    aplicarFiltroCaixas();
+    atualizarContagensSecoesPool();
+    atualizarBarraSelecao();
+    atualizarContagensTotais();
+  }
+
+  // Troca de motorista e/ou carro (rascunho ou rota enviada). Recusa da
+  // VUUPT (ex.: rota já começou) desfaz a escolha nos selects.
+  async function trocarMotoristaCarro(rascunhoId, agentId, vehicleId, motoristaNome) {
+    const r = RASCUNHOS.find(x => x.id === rascunhoId);
+    const selMotorista = document.querySelector(`.select-motorista[data-rascunho-id="${rascunhoId}"]`);
+    const selVeiculo = document.querySelector(`.select-veiculo[data-rascunho-id="${rascunhoId}"]`);
+    const travados = [selMotorista && selMotorista.disabled, selVeiculo && selVeiculo.disabled];
+    [selMotorista, selVeiculo].forEach(s => { if (s) s.disabled = true; });
+    try {
+      const resp = await postJSON("/api/planejamento/trocar-motorista", {
+        rascunho_id: rascunhoId, agent_id: agentId, vehicle_id: vehicleId, motorista_nome: motoristaNome,
+      });
+      if (r) {
+        if (resp.rascunho) mesclarRascunho(rascunhoId, resp.rascunho);
+        else { Object.assign(r, { agent_id: agentId, vehicle_id: vehicleId, motorista_nome: motoristaNome }); r.falta_carro = rascunhoSemCarro(r); }
+      }
+      // trava de carro desligada (planejamento.trava_sem_carro): trocou, mas avisa
+      if (resp.aviso) alert(resp.aviso);
+      return true;
+    } catch (err) {
+      alert(`Falha ao trocar motorista/carro: ${err.message}`);
+      return false;
+    } finally {
+      // selects e selo refletem o que ficou gravado (o novo, ou o antigo na recusa)
+      if (r) {
+        if (selMotorista) selMotorista.value = r.agent_id ? String(r.agent_id) : "";
+        atualizarCarroNoCard(r);
+      }
+      if (selMotorista) selMotorista.disabled = travados[0];
+      if (selVeiculo) selVeiculo.disabled = travados[1];
+    }
+  }
+
+  // placa no rodízio do dia + rota com parada no Centro Expandido: pede
+  // confirmação (não bloqueia -- a troca à mão é decisão de quem opera).
+  // true = pode seguir com a troca.
+  function confirmarRodizio(r, vehicleId) {
+    if (!vehicleId || vehicleId === r.vehicle_id) return true;
+    const veiculo = (VEICULOS || []).find(v => v.vehicle_id === vehicleId);
+    if (!veiculo || !veiculo.rodizio_no_dia || !r.tem_centro_expandido) return true;
+    return confirm(`A placa ${veiculo.placa} está no rodízio neste dia e a rota tem parada no Centro Expandido. Trocar o carro mesmo assim?`);
+  }
+
+  // seletor de carro + selo "sem carro" do card, depois de mudar motorista/carro
+  function atualizarCarroNoCard(r) {
+    const selVeiculo = document.querySelector(`.select-veiculo[data-rascunho-id="${r.id}"]`);
+    if (selVeiculo) {
+      selVeiculo.innerHTML = montarSelectVeiculo(r);
+      selVeiculo.hidden = rotaEhLalamove(r);
+    }
+    const selo = document.getElementById(`sem-carro-${r.id}`);
+    if (selo) selo.innerHTML = seloSemCarroHtml(r);
+  }
+
+  // carros do seletor: uma chamada só por carga da tela (o servidor guarda
+  // a lista da VUUPT por 10 min); falha deixa o select só com o carro atual
+  async function carregarVeiculos() {
+    if (!PODE_EDITAR) return;
+    try {
+      const resp = await fetch(`${BASE_PATH}/api/planejamento/veiculos?data=${encodeURIComponent(DATA_ALVO_ISO)}`);
+      const dados = await resp.json();
+      if (!resp.ok) throw new Error(dados.erro || `HTTP ${resp.status}`);
+      VEICULOS = dados.veiculos || [];
+    } catch (e) {
+      console.warn("Lista de carros indisponível:", e);
+      VEICULOS_FALHOU = true;
+    }
+    document.querySelectorAll(".select-veiculo").forEach(sel => {
+      const r = RASCUNHOS.find(x => x.id === Number(sel.dataset.rascunhoId));
+      if (r) sel.innerHTML = montarSelectVeiculo(r);
+    });
+  }
+
   function copiarCodigoParada(li) {
     const codigo = li.querySelector(".codigo")?.textContent.trim() || "";
     if (!codigo) return;
@@ -7000,8 +7351,8 @@
     const serviceId = Number(li.dataset.serviceId);
     const ul = li.closest(".lista-paradas");
     const rascunhoId = ul && ul.dataset.listId !== "pool" ? Number(ul.dataset.listId) : null;
-    // rota já ENVIADA não aceita tirar parada por aqui -- mesma trava do
-    // drag-and-drop (Sortable nem é criado pra ela, ver initMap)
+    // rota já ENVIADA não usa o "Remover da rota" do rascunho: tirar pede
+    // motivo e passa pela VUUPT ("Tirar da rota…", 10/11)
     const cardRota = rascunhoId !== null ? document.getElementById(`card-rota-${rascunhoId}`) : null;
     const rotaTravada = !!cardRota && cardRota.classList.contains("enviada");
 
@@ -7029,6 +7380,10 @@
     }
     if (PODE_EDITAR && rascunhoId !== null && !rotaTravada) {
       itens.push({ rotulo: "Remover da rota", acao: () => removerDaRota(serviceId, rascunhoId, li) });
+    }
+    // rota enviada (10/11): mesmo "Tirar da rota" do "×" (que some no modo só número)
+    if (rotaTravada && li.querySelector(".botao-tirar-da-rota")) {
+      itens.push({ rotulo: "Tirar da rota…", acao: () => abrirModalTirarDaRota(li, serviceId, rascunhoId) });
     }
     // rota já enviada à VUUPT: dá pra fechar o pedido como entregue por
     // aqui (Hugo, 08/10) -- mesmo endpoint do chip da Torre
@@ -7076,6 +7431,17 @@
       let novos = 0;
       dados.pool.forEach(p => {
         const existente = POOL_BY_ID[p.service_id];
+        if (existente && !!existente.retornando !== !!p.retornando) {
+          // virou ou deixou de ser Retornando (10/11: /retornos recebeu o
+          // pedido): recria o card, que muda selo, seleção e arraste
+          const liAntigo = listaPool.querySelector(`.item-parada[data-service-id="${p.service_id}"]`);
+          if (liAntigo) liAntigo.remove();
+          SELECIONADOS.delete(p.service_id);
+          POOL_BY_ID[p.service_id] = p;
+          const li = criarLiParada(p);
+          secaoDoItem(li).appendChild(li);
+          return;
+        }
         if (existente) {
           // já estava no pool: só a situação Stokki pode ter mudado no
           // retrato (galpão liberou → sai de "Em separação" pra "hoje")
@@ -7458,17 +7824,19 @@
       itens.forEach(rascunho => {
         const card = criarCardRota(rascunho, coresPorRascunho[rascunho.id]);
         listaRotas.appendChild(card);
-        // rota já ENVIADA não recebe Sortable -- fica travada, sem
-        // aceitar arrastar pra dentro/fora dela (já virou rota de
-        // verdade na VUUPT, editar aqui só mudaria o rascunho local)
+        // rota já ENVIADA (10/11): só recebe pedido do pool (o servidor
+        // inclui na VUUPT antes de gravar); Lalamove com corrida não edita
         if (rascunho.status !== "ENVIADO") {
           iniciarSortable(card.querySelector(".lista-paradas"));
+        } else if (!rascunho.lalamove_order_id) {
+          iniciarSortable(card.querySelector(".lista-paradas"), { soRecebe: true });
         }
         redesenharRota(rascunho.id);
       });
     });
 
     atualizarBotaoColapsarTodas();
+    carregarVeiculos();  // seletor de carro dos cards (10/11), sem segurar a tela
     document.getElementById("botao-colapsar-todas").addEventListener("click", () => {
       const cards = Array.from(document.querySelectorAll("#lista-rotas .card-rota"));
       const colapsar = cards.some(c => !c.classList.contains("colapsada"));
@@ -7558,6 +7926,13 @@
       }
       if (e.target.classList.contains("input-nome-rota")) {
         return;  // clique dentro do campo só posiciona o cursor -- não colapsa o card
+      }
+      if (e.target.classList.contains("botao-tirar-da-rota")) {
+        // rota enviada (10/11): o "×" tira da rota com motivo, não cancela
+        const li = e.target.closest(".item-parada");
+        const ul = e.target.closest(".lista-paradas");
+        if (li && ul) abrirModalTirarDaRota(li, Number(li.dataset.serviceId), Number(ul.dataset.listId));
+        return;
       }
       if (e.target.classList.contains("botao-cancelar-pedido")) {
         const li = e.target.closest(".item-parada");
@@ -7671,22 +8046,38 @@
         }
         return;
       }
+      if (e.target.classList.contains("select-veiculo")) {
+        // carro só dessa rota (10/11): o motorista fica o mesmo. Placa no
+        // rodízio do dia com parada no Centro Expandido pede confirmação
+        // (não bloqueia -- a troca à mão é decisão de quem opera)
+        const rascunhoId = Number(e.target.dataset.rascunhoId);
+        const r = RASCUNHOS.find(x => x.id === rascunhoId);
+        if (!r) return;
+        const vehicleId = e.target.value ? Number(e.target.value) : null;
+        if (!confirmarRodizio(r, vehicleId)) {
+          e.target.value = r.vehicle_id ? String(r.vehicle_id) : "";
+          return;
+        }
+        await trocarMotoristaCarro(rascunhoId, r.agent_id, vehicleId, r.motorista_nome);
+        return;
+      }
       if (!e.target.classList.contains("select-motorista")) return;
       const rascunhoId = Number(e.target.dataset.rascunhoId);
       const agentId = e.target.value ? Number(e.target.value) : null;
       const motorista = MOTORISTAS.find(m => m.agent_id === agentId);
-      try {
-        await postJSON("/api/planejamento/trocar-motorista", {
-          rascunho_id: rascunhoId, agent_id: agentId,
-          vehicle_id: motorista ? motorista.vehicle_id : null,
-          motorista_nome: motorista ? motorista.nome : null,
-        });
-        const r = RASCUNHOS.find(x => x.id === rascunhoId);
-        if (r) { r.agent_id = agentId; r.motorista_nome = motorista ? motorista.nome : null; }
+      // trocar o motorista põe o carro do cadastro dele (o seletor de carro ajusta depois);
+      // o carro novo passa pelo mesmo aviso de rodízio da troca de carro
+      const rAtual = RASCUNHOS.find(x => x.id === rascunhoId);
+      if (rAtual && !confirmarRodizio(rAtual, motorista ? motorista.vehicle_id : null)) {
+        e.target.value = rAtual.agent_id ? String(rAtual.agent_id) : "";
+        atualizarCarroNoCard(rAtual);
+        return;
+      }
+      const ok = await trocarMotoristaCarro(rascunhoId, agentId,
+        motorista ? motorista.vehicle_id : null, motorista ? motorista.nome : null);
+      if (ok) {
         const boxLala2 = document.querySelector(`.lalamove-box[data-rascunho-id="${rascunhoId}"]`);
         if (boxLala2) boxLala2.style.display = (LALAMOVE.agent_id && agentId === LALAMOVE.agent_id) ? "" : "none";
-      } catch (err) {
-        alert(`Falha ao trocar motorista: ${err.message}`);
       }
     });
 

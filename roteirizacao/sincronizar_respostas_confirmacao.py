@@ -42,7 +42,8 @@ import requests
 import yaml
 
 from regras import confirmacao_rotas, ofertas_rota
-from rascunhos_rota import aplicar_escolha_motorista, trocar_motorista, buscar_rascunho
+from rascunhos_rota import (aplicar_escolha_motorista, trocar_motorista, buscar_rascunho,
+                            STATUS_RASCUNHO, STATUS_OFERTADA)
 
 
 def _carregar_config() -> dict:
@@ -177,11 +178,20 @@ def _reconciliar_escolhas_revertidas(url_base: str, sync_secret: str):
 
         rascunho = buscar_rascunho(rascunho_id)
         if rascunho and rascunho.get("agent_id") == aplicada["escolhido_por"]:
-            trocar_motorista(rascunho_id, None, None, None)
-            logger.warning(
-                f"Rascunho {rascunho_id} ({rascunho['nome']}): motorista {aplicada['escolhido_por']} "
-                f"desistiu da escolha depois de já aplicada -- desalocado, precisa de nova decisão."
-            )
+            if rascunho["status"] not in (STATUS_RASCUNHO, STATUS_OFERTADA):
+                # rota ja enviada (ou descartada): desalocar aqui iria pra Vuupt sem token
+                # (trocar_motorista em ENVIADO). Fica pra equipe trocar pela tela.
+                logger.warning(
+                    f"Rascunho {rascunho_id} ({rascunho['nome']}) já está {rascunho['status']}: motorista "
+                    f"{aplicada['escolhido_por']} desistiu da escolha, mas a rota NÃO foi desalocada -- "
+                    f"trocar o motorista pela tela."
+                )
+            else:
+                trocar_motorista(rascunho_id, None, None, None)
+                logger.warning(
+                    f"Rascunho {rascunho_id} ({rascunho['nome']}): motorista {aplicada['escolhido_por']} "
+                    f"desistiu da escolha depois de já aplicada -- desalocado, precisa de nova decisão."
+                )
         ofertas_rota.marcar_revertida(rascunho_id)
         revertidas += 1
 

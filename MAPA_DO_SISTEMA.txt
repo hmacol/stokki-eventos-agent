@@ -790,6 +790,14 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                             novo; importar daqui. Visita de dia fixo em
                             feriado vale no dia útil seguinte (Hugo, 07/10/2026).
  tipo_veiculo.py            Catálogo de veículos e quando vira veículo grande.
+ veiculos.py                Carro do motorista (10/11): veiculo generico (placa comecando
+                            com ".") nao conta como carro; seletor do card; cache 10 min;
+                            trava do envio MANUAL sem carro ("Motorista {nome} sem carro
+                            cadastrado: ...") so com planejamento.trava_sem_carro: true
+                            (padrao DESLIGADA: envio manual e troca de motorista so avisam;
+                            selo "sem carro" no card aparece sempre); envio automatico so
+                            alerta no grupo Alertas, com ou sem a trava.
+                            Agentes virtuais fora da trava: Lalamove 50258, Retirada 50259.
  motoristas_banco.py        Fonte única dos motoristas (tabela bd_motoristas + histórico
                             bd_motoristas_alteracoes). Espelho dados/BD_MOTORISTAS.xlsx
                             só-leitura. CLI: py -3.11 -m regras.motoristas_banco
@@ -890,6 +898,17 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  cancelar_servico.py       Cancela 1 serviço na Vuupt onde estiver (pool, rascunho,
                            rota enviada) fora do painel; sempre PUT /cancel. Usado
                            pelo portal. O Planejamento NÃO usa (escopo B, 06/10).
+ edicao_rota.py            Regra unica de editar rota ENVIADA (10/11): le a rota ao vivo
+                           (nunca o card), tirar_pedido (so not_assigned/assigned/accepted;
+                           DELETE /routes/{id}/services/{sid}; ultimo pendente com entregue
+                           na rota NAO cancela a rota), trocar_motorista_veiculo (PUT sem
+                           activities; rota iniciada: so o carro, "Rota já começou: só o
+                           carro pode mudar."), adicionar_pedidos. Rota iniciada = algum
+                           servico on_route/arrived/done ou rota started/finished.
+ pedidos_retornando.py     Tabela pedidos_retornando: pedido tirado de rota INICIADA fica
+                           retido (selo "Retornando — no carro de {motorista}" no pool) ate
+                           a /retornos receber; pool, rascunho e incremento pulam. Chave =
+                           service_id (codigo pode ser combinado). Marcar 2x mantem 1 ativo.
  reprocessar_rotas.py      Desfaz rotas sem motorista para reprocessar.
  fingerprint_rotas.py      Evita incluir o mesmo pedido duas vezes.
 
@@ -1033,6 +1052,21 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            /api/planejamento/checar-dia-fixo, valor da
                            calculadora).
  rascunhos_rota.py         Tabelas dos rascunhos de rota.
+                           aplicar_efeitos_pos_remocao: helper unico dos efeitos de tirar
+                           pedido de rota enviada (Planejamento e Torre); rascunho volta a
+                           RASCUNHO se a rota cancela.
+                           Card da rota enviada editavel (10/11): motorista/carro, incluir
+                           pedido, tirar com motivo (trocar-motorista, adicionar-parada,
+                           remover-parada); GET /api/planejamento/veiculos = lista do
+                           seletor (regras/veiculos.listar_para_seletor, cache 10 min).
+                           Lalamove com corrida lancada recusa a edicao
+                           (_recusar_se_lalamove_com_corrida). Incluir confere o pedido ao
+                           vivo (so not_assigned sem route_id). Troca de motorista/carro em
+                           rota enviada passa pela trava de carro (planejamento.trava_sem_carro).
+                           Torre "Excluir da Rota" (painel_agentes/expedicao.py,
+                           excluir_pedido_da_rota) usa a mesma regra (edicao_rota).
+                           nucleo.pedidos.marcar_aberto_por_service_ids devolve o pedido a
+                           Aberto no nucleo apos a remocao.
  aviso_rota_cancelada.py   Botão "Cancelar e notificar" do card (27/10, POST
                            /api/planejamento/cancelar-e-notificar): cancela igual
                            ao "Cancelar rota" e, se cancelou, posta no grupo
@@ -1079,6 +1113,12 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            dia do 1º uso: insucesso anterior não entra, já foi
                            lançado no Lovable). Lalamove fica de fora. Confirmar: total/operador/logistica/
                            galpao/expedicao; atendimento e leitura só veem.
+                           Tipo "Retirado da rota" (10/11): pedido tirado de rota iniciada
+                           (pedidos_retornando) entra na lista; recebimento baixa o Retornando.
+                           Retirado nao sai pela janela de 7 dias nem pelo filtro Lalamove;
+                           Retornando sem parada no nucleo aparece com chave "r<id>"
+                           (retornando_id) e o recebimento so baixa o Retornando (sem linha
+                           em retornos_recebidos; o alerta do grupo avisa).
  demandas.py               Demandas (25/10): tarefas pra uma equipe e, opcional, uma
                            pessoa. Cria: total e líderes. Vê: o que é seu, das suas
                            equipes e o que criou (total vê tudo; login fixo vê as
@@ -1544,6 +1584,8 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
                              lidos pelo freshhub via snapshot -- nao apagar a pasta)
    retornos_descargas, retornos_recebidos, retornos_alertas_atraso
                              painel_agentes/retornos.py (tela /retornos)
+   pedidos_retornando        roteirizacao/pedidos_retornando.py (pedido tirado de rota
+                             iniciada, retido ate o recebimento em /retornos)
    expedicoes_*              fingerprint_expedicao.py
    notificacoes_entrega      notificacao_entregas/
    notificacoes_controle, notificacoes_controle_excecao, notificacoes_controle_param,
@@ -1646,6 +1688,8 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
    Desde 24/10 só importa se religar as Demandas (pedidos parados já não
    consultam o Lovable).
  - Existem duas cópias de expedir_pedidos.py; a de produção é a da raiz.
+ - Vuupt: DELETE /routes/{id}/services/{sid} aceita o servico ate em done; a trava
+   de "pode sair da rota" e NOSSA (roteirizacao/edicao_rota.py, status ao vivo).
  - BD_TRANSPORTADORAS.xlsx é histórico desde a migração, não editar (a fonte é
    a tabela `transportadoras`; só migrar_transportadoras_planilha.py lê o xlsx).
  - O vigia depende do retrato da Stokki que o PIPELINE grava no fim de cada

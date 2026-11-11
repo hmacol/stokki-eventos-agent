@@ -78,7 +78,9 @@ from planejamento_rotas import (
     salvar_disponibilidade_dia, marcar_disponibilidade_periodo, limpar_disponibilidade_dia,
     publicar_oferta_rascunho, publicar_ofertas_em_lote, despublicar_oferta_rascunho, despublicar_ofertas_em_lote,
     ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento, SITUACAO_STOKKI_NAO_PRONTA,
+    placas_veiculos_vuupt, seletor_veiculos, confirmar_envio_rascunhos,
 )
+from regras import veiculos as veiculos_regras
 from avisar_motoristas_rotas import notificar_oferta_motoristas, push_ofertas_vps
 from motoristas import dados_pagina_motoristas, listar_agentes_vuupt_nao_cadastrados, cadastrar_motorista, editar_motorista, MotoristaNaoEncontrado
 from expedicao import listar_rotas_do_dia, gerar_romaneio_rota, excluir_pedido_da_rota, MOTIVOS_EXCLUSAO
@@ -1075,6 +1077,10 @@ def planejamento():
         pode_editar=g.nivel_acesso in ("total", "operador", "logistica") and data_alvo >= date.today(),
         justificativas=justificativas_sem_canhoto.JUSTIFICATIVAS,
         motivos_sem_sucesso=torre_controle.motivos_sem_sucesso(),
+        # "Tirar da rota" no card da rota enviada (10/11): mesma lista da Torre
+        motivos_exclusao=MOTIVOS_EXCLUSAO,
+        # selo "sem carro" recalculado no card depois de trocar motorista/carro
+        agentes_sem_carro=sorted(veiculos_regras.AGENTES_SEM_CARRO),
     )
 
 
@@ -1523,9 +1529,11 @@ def api_retornos_descarga():
         assinatura = request.files.get("assinatura")
         nome_assinatura = retornos.salvar_arquivo(descarga_id, "assinatura", assinatura.read()) if assinatura else ""
         for item in itens:
+            # chave da tela: parada_id, ou "r<retornando_id>" pro Retornando sem parada no núcleo
             pid = item.get("parada_id")
-            item["fotos_avaria"] = [retornos.salvar_arquivo(descarga_id, f"avaria_{int(pid)}", f.read())
-                                    for f in request.files.getlist(f"foto_avaria_{pid}")]
+            chave = str(int(pid)) if pid not in (None, "") else f"r{int(item.get('retornando_id'))}"
+            item["fotos_avaria"] = [retornos.salvar_arquivo(descarga_id, f"avaria_{chave}", f.read())
+                                    for f in request.files.getlist(f"foto_avaria_{chave}")]
         resultado = retornos.registrar_descarga(
             conn, descarga_id=descarga_id, itens=itens, recebedor=dados.get("recebedor") or "",
             usuario=session.get("usuario") or g.nivel_acesso, fotos_carga=fotos_carga, assinatura=nome_assinatura)
@@ -3217,16 +3225,23 @@ def api_fundir_rotas():
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_remover_parada():
+    """Rota ENVIADA (editar rota enviada, 10/11): exige `motivo` (expedicao.MOTIVOS_EXCLUSAO),
+    tira o pedido na Vuupt pela regra de status ao vivo e, com a rota iniciada, marca
+    Retornando (ver rascunhos_rota.remover_de_rota_enviada)."""
     body = request.get_json(force=True)
     try:
-        parada_removida = rascunhos_rota.remover_parada(body["rascunho_id"], body["service_id"])
-    except (KeyError, ValueError) as e:
+        rascunho_id = int(body["rascunho_id"])
+        service_id = int(body["service_id"])
+        rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
+        if rascunho and rascunho["status"] == rascunhos_rota.STATUS_ENVIADO:
+            resultado = rascunhos_rota.remover_de_rota_enviada(
+                rascunho_id, service_id, body.get("motivo"), (body.get("observacao") or "").strip(),
+                _carregar_config().get("vuupt_api", {}).get("token", ""), session.get("usuario", ""))
+        else:
+            resultado = {"parada_removida": rascunhos_rota.remover_parada(rascunho_id, service_id)}
+    except (KeyError, ValueError, TypeError) as e:
         return jsonify({"erro": str(e)}), 400
-    return jsonify({
-        "ok": True,
-        "rascunho": _rascunho_ou_404(body["rascunho_id"]),
-        "parada_removida": parada_removida,
-    })
+    return jsonify({**resultado, "ok": True, "rascunho": _rascunho_ou_404(rascunho_id)})
 
 
 @app.route("/api/planejamento/adicionar-parada", methods=["POST"])
@@ -3234,12 +3249,22 @@ def api_remover_parada():
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_adicionar_parada():
+    """Rota ENVIADA (10/11): inclui o pedido na Vuupt antes de gravar
+    (rascunhos_rota.adicionar_em_rota_enviada)."""
     body = request.get_json(force=True)
     try:
-        rascunhos_rota.adicionar_parada(body["rascunho_id"], body["parada"], body.get("ordem"))
-    except (KeyError, ValueError) as e:
+        rascunho_id = int(body["rascunho_id"])
+        parada = {**body["parada"], "service_id": int(body["parada"]["service_id"])}
+        rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
+        if rascunho and rascunho["status"] == rascunhos_rota.STATUS_ENVIADO:
+            rascunhos_rota.adicionar_em_rota_enviada(
+                rascunho_id, parada, _carregar_config().get("vuupt_api", {}).get("token", ""),
+                session.get("usuario", ""))
+        else:
+            rascunhos_rota.adicionar_parada(rascunho_id, parada, body.get("ordem"))
+    except (KeyError, ValueError, TypeError) as e:
         return jsonify({"erro": str(e)}), 400
-    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
+    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(rascunho_id)})
 
 
 @app.route("/api/planejamento/trocar-motorista", methods=["POST"])
@@ -3247,14 +3272,28 @@ def api_adicionar_parada():
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_trocar_motorista():
+    """Rota ENVIADA (10/11): a troca vai pra Vuupt antes de gravar; rota iniciada só troca
+    o carro. Ids viram int (edicao_rota compara agent_id com ==)."""
     body = request.get_json(force=True)
     try:
-        rascunhos_rota.trocar_motorista(
-            body["rascunho_id"], body.get("agent_id"), body.get("vehicle_id"), body.get("motorista_nome"),
-        )
-    except (KeyError, ValueError) as e:
+        rascunho_id = int(body["rascunho_id"])
+        agent_id = int(body["agent_id"]) if body.get("agent_id") not in (None, "") else None
+        vehicle_id = int(body["vehicle_id"]) if body.get("vehicle_id") not in (None, "") else None
+        rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
+        enviado = bool(rascunho and rascunho["status"] == rascunhos_rota.STATUS_ENVIADO)
+        config = _carregar_config() if enviado else {}
+        # ENVIADO: motorista de verdade sem carro recusa (planejamento.trava_sem_carro) ou só avisa
+        resultado = rascunhos_rota.trocar_motorista(
+            rascunho_id, agent_id, vehicle_id, body.get("motorista_nome"),
+            token=config.get("vuupt_api", {}).get("token", "") if enviado else None,
+            placas=placas_veiculos_vuupt(config) if enviado else None,
+            trava_sem_carro=veiculos_regras.trava_sem_carro_ligada(config))
+    except (KeyError, ValueError, TypeError) as e:
         return jsonify({"erro": str(e)}), 400
-    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
+    resposta = {"ok": True, "rascunho": _rascunho_ou_404(rascunho_id)}
+    if resultado.get("aviso"):
+        resposta["aviso"] = resultado["aviso"]
+    return jsonify(resposta)
 
 
 @app.route("/api/planejamento/lalamove-veiculo", methods=["POST"])
@@ -4276,9 +4315,23 @@ def api_confirmar_envio():
     except KeyError as e:
         return jsonify({"erro": str(e)}), 400
 
-    token = _carregar_config().get("vuupt_api", {}).get("token", "")
-    resultados = [rascunhos_rota.enviar_rascunho(rid, token) for rid in rascunho_ids]
-    return jsonify({"ok": True, "resultados": resultados})
+    return jsonify({"ok": True, "resultados": confirmar_envio_rascunhos(rascunho_ids, _carregar_config())})
+
+
+@app.route("/api/planejamento/veiculos")
+@requer_auth(niveis=("total", "operador", "logistica"))
+def api_planejamento_veiculos():
+    """Carros pro seletor do card (sem generico/excluido, dono primeiro, com
+    rodizio_no_dia). Lista da Vuupt com cache de 10 min."""
+    try:
+        data_alvo = date.fromisoformat(request.args.get("data") or date.today().isoformat())
+    except ValueError:
+        return jsonify({"erro": "data invalida (use AAAA-MM-DD)"}), 400
+    try:
+        return jsonify({"veiculos": seletor_veiculos(_carregar_config(), data_alvo)})
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao listar veiculos da Vuupt")
+        return jsonify({"erro": str(e)}), 502
 
 
 @app.route("/api/planejamento/cancelar-rota", methods=["POST"])
@@ -4349,9 +4402,9 @@ def api_cancelar_pedido():
     rascunho_id = body.get("rascunho_id")
     rascunho_id = int(rascunho_id) if rascunho_id is not None else None
 
-    resultado = cancelar_pedido(service_id, rascunho_id)
+    resultado = cancelar_pedido(service_id, rascunho_id, usuario=session.get("usuario") or g.nivel_acesso)
     if not resultado["ok"]:
-        return jsonify({"erro": resultado["erro"]}), 400
+        return jsonify({k: v for k, v in resultado.items() if k in ("erro", "aviso")}), 400
     return jsonify({"ok": True})
 
 
