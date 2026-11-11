@@ -1,5 +1,5 @@
 [Unit]
-Description=Stokki Eventos - Sequencia das 18h (ExecutarTudo, VerificarDuplicados, Agendamentos, IncrementarRotas)
+Description=Stokki Eventos - Sequencia das 18h (ExecutarTudo, VerificarDuplicados, Agendamentos, MarcarAgenda)
 OnFailure=stokki-alerta-falha@%n.service
 
 [Service]

@@ -30,6 +30,8 @@ from pathlib import Path
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from homologacao import ambiente as _ambiente
+
 _RAIZ = Path(__file__).parent.parent
 DB_PATH = _RAIZ / "dados" / "dados.db"
 
@@ -337,6 +339,8 @@ def definir_ativo(conn: sqlite3.Connection, cnpj: str, ativo: bool) -> bool:
 def autenticar(conn: sqlite3.Connection, cnpj: str, pin: str) -> dict:
     """CNPJ + PIN com trava de tentativas. Mensagem sempre genérica."""
     generico = "CNPJ ou PIN incorretos."
+    if _ambiente.homolog_ativo() and normalizar_cnpj(cnpj) not in _ambiente.cnpjs_portal_permitidos():
+        raise AutenticacaoInvalida("Este CNPJ não tem acesso à homologação.", 403)
     conta = buscar_conta(conn, cnpj)
     if not conta or not conta.get("ativo") or not conta.get("pin_hash"):
         raise AutenticacaoInvalida(generico)

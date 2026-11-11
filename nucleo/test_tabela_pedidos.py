@@ -39,14 +39,14 @@ class _Base(unittest.TestCase):
 
     def _pedido(self, codigo, titulo=None, status="ENTREGUE", sender_id=10, remetente="FRUTA FINA",
                 destinatario="MERCADO CENTRAL", cnpj="69016970000181", caixas=5, agendamento=None,
-                criado_provedor=None, fluxo="ENTREGA", zona="CENTRO"):
+                criado_provedor=None, fluxo="ENTREGA", zona="CENTRO", reentrega_de=None):
         self.conn.execute("""
             INSERT INTO nucleo_pedidos (codigo, titulo, status, sender_id, remetente_nome, destinatario_nome,
                                         destinatario_codigo, endereco, caixas, agendamento_inicio,
-                                        criado_em_provedor, fluxo, zona)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'RUA DAS FLORES, 100', ?, ?, ?, ?, ?)
+                                        criado_em_provedor, fluxo, zona, reentrega_de_codigo)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'RUA DAS FLORES, 100', ?, ?, ?, ?, ?, ?)
         """, (codigo, titulo or f"#{codigo} - NF1 / FF / {destinatario}", status, sender_id, remetente,
-              destinatario, cnpj, caixas, agendamento, criado_provedor or f"{_dia(0)} 08:00:00", fluxo, zona))
+              destinatario, cnpj, caixas, agendamento, criado_provedor or f"{_dia(0)} 08:00:00", fluxo, zona, reentrega_de))
         self.conn.commit()
 
     def _rota(self, data_rota, nome="Rota 1", agent_id=501, motorista="JOAO DA SILVA"):
@@ -56,10 +56,10 @@ class _Base(unittest.TestCase):
         self.conn.commit()
         return cur.lastrowid
 
-    def _parada(self, rota_id, codigo, ordem=1, completed_at=None, motivo=None):
+    def _parada(self, rota_id, codigo, ordem=1, completed_at=None, motivo=None, situacao="ENTREGUE"):
         self.conn.execute("""
             INSERT INTO nucleo_paradas (rota_id, ordem, codigo, situacao, completed_at, motivo_texto)
-            VALUES (?, ?, ?, 'ENTREGUE', ?, ?)""", (rota_id, ordem, codigo, completed_at, motivo))
+            VALUES (?, ?, ?, ?, ?, ?)""", (rota_id, ordem, codigo, situacao, completed_at, motivo))
         self.conn.commit()
 
     def _codigos(self, filtros=None, **kw):
@@ -149,6 +149,66 @@ class TestListar(_Base):
         self.assertEqual(self._codigos({"data_tipo": "criacao"}), [])
         self.assertEqual(self._codigos({"data_tipo": "criacao", "de": _dia(-31), "ate": _dia(-29)}), ["PS-1"])
 
+    def test_reentrega_vira_uma_linha_com_a_tentativa_mais_recente(self):
+        self._pedido("PS-1", status="INSUCESSO")
+        self._parada(self._rota(_dia(-2)), "PS-1", situacao="INSUCESSO")
+        self._pedido("PS-1-R1", status="EM_ROTA", reentrega_de="PS-1")
+        self._parada(self._rota(_dia(-1), nome="Rota R1"), "PS-1-R1")
+        linhas = tp.listar({}, conn=self.conn)["linhas"]
+        self.assertEqual([(l["codigo"], l["codigo_servico"], l["status"]) for l in linhas],
+                         [("PS-1", "PS-1-R1", "EM_ROTA")])
+
+    def test_entregue_vence_mesmo_mais_antigo(self):
+        # Regra de 10/11 (revisão final): entregue vence tentativa FECHADA mais nova e tentativa
+        # viva mais antiga que ele; só reentrega viva DEPOIS da entrega passa na frente (teste abaixo).
+        self._pedido("PS-1", status="ENTREGUE"); self._parada(self._rota(_dia(-3)), "PS-1")
+        self._pedido("PS-1-R1", status="INSUCESSO", reentrega_de="PS-1")
+        self._parada(self._rota(_dia(-1)), "PS-1-R1", situacao="INSUCESSO")
+        self.assertEqual([l["codigo_servico"] for l in tp.listar({}, conn=self.conn)["linhas"]], ["PS-1"])
+        self.conn.execute("DELETE FROM nucleo_pedidos")
+        self._pedido("PS-1", status="ABERTO", criado_provedor=f"{_dia(-1)} 09:00:00")
+        self._pedido("PS-1-R1", status="ENTREGUE"); self._parada(self._rota(_dia(-3)), "PS-1-R1")
+        self.assertEqual([l["codigo_servico"] for l in tp.listar({}, conn=self.conn)["linhas"]], ["PS-1-R1"])
+
+    def test_reentrega_viva_depois_da_entrega_vira_a_linha(self):
+        self._pedido("PS-1", status="ENTREGUE"); self._parada(self._rota(_dia(-3)), "PS-1")
+        self._pedido("PS-1-R1", status="ABERTO", reentrega_de="PS-1", criado_provedor=f"{_dia(-1)} 09:00:00")
+        self.assertEqual([l["codigo_servico"] for l in tp.listar({}, conn=self.conn)["linhas"]], ["PS-1-R1"])
+
+    def test_reentrega_cancelada_depois_da_entrega_nao_esconde_a_entrega(self):
+        self._pedido("PS-1", status="ENTREGUE"); self._parada(self._rota(_dia(-3)), "PS-1")
+        self._pedido("PS-1-R1", status="CANCELADO", reentrega_de="PS-1", criado_provedor=f"{_dia(-1)} 09:00:00")
+        self.assertEqual([l["codigo_servico"] for l in tp.listar({}, conn=self.conn)["linhas"]], ["PS-1"])
+
+    def test_mesmo_dia_reentrega_aberta_vence_insucesso(self):
+        self._pedido("PS-1", status="INSUCESSO", criado_provedor=f"{_dia(0)} 07:00:00")
+        self._pedido("PS-1-R1", status="ABERTO", criado_provedor=f"{_dia(0)} 15:00:00")
+        self.assertEqual([l["codigo_servico"] for l in tp.listar({}, conn=self.conn)["linhas"]], ["PS-1-R1"])
+
+    def test_empresas_diferentes_com_mesmo_codigo_nao_se_misturam(self):
+        self._pedido("PS-1", sender_id=10); self._pedido("PS-1-R1", sender_id=20)
+        self.assertEqual(len(tp.listar({}, conn=self.conn)["linhas"]), 2)
+
+    def test_busca_por_codigo_da_reentrega_acha_o_grupo(self):
+        self._pedido("PS-1", status="INSUCESSO"); self._pedido("PS-1-R1", status="ABERTO")
+        self.assertEqual(self._codigos({"q": "PS-1-R1"}), ["PS-1"])
+
+    def test_total_e_caixas_contam_pedidos(self):
+        self._pedido("PS-1", status="INSUCESSO", caixas=4); self._pedido("PS-1-R1", status="ABERTO", caixas=4)
+        r = tp.listar({}, conn=self.conn)
+        self.assertEqual((r["total"], r["total_caixas"]), (1, 4))
+
+    def test_tentativas_do_grupo(self):
+        self._pedido("PS-1", status="INSUCESSO")
+        self._parada(self._rota(_dia(-2), nome="A"), "PS-1", situacao="INSUCESSO", motivo="Ausente")
+        self._parada(self._rota(_dia(-2), nome="B"), "PS-1", situacao="CANCELADA")   # remanejo: não conta
+        self._pedido("PS-1-R1", status="ABERTO")
+        linha = tp.listar({}, conn=self.conn)["linhas"][0]
+        t = linha["historico"]
+        self.assertIsInstance(linha["tentativas"], (int, type(None)))   # coluna numerica intacta
+        self.assertEqual([(x["codigo"], x["situacao"], x["motivo"]) for x in t],
+                         [("PS-1", "INSUCESSO", "Ausente"), ("PS-1-R1", "ABERTO", None)])
+
 
 class TestOpcoesFormatoCsv(_Base):
     def test_opcoes(self):
@@ -173,9 +233,20 @@ class TestOpcoesFormatoCsv(_Base):
                                 conn=self.conn)
         self.assertTrue(texto.startswith("﻿"))
         linhas = texto.lstrip("﻿").splitlines()
-        self.assertEqual(linhas, ["Código;Status", "PS-1;Entregue", "PS-2;Entregue", "PS-3;Entregue"])
+        self.assertEqual(linhas, ["Código;Status;Histórico de tentativas", "PS-1;Entregue;", "PS-2;Entregue;",
+                                  "PS-3;Entregue;"])
         cabecalho = tp.exportar_csv({}, conn=self.conn).lstrip("﻿").splitlines()[0]
-        self.assertEqual(cabecalho.count(";"), len(tp.COLUNAS) - 1)
+        self.assertEqual(cabecalho.count(";"), len(tp.COLUNAS))
+
+    def test_csv_tem_historico_de_tentativas(self):
+        self._pedido("PS-1", status="INSUCESSO")
+        self._parada(self._rota(_dia(-1)), "PS-1", situacao="INSUCESSO", motivo="Ausente")
+        self._pedido("PS-1-R1", status="ENTREGUE")
+        self._parada(self._rota(_dia(0)), "PS-1-R1", situacao="ENTREGUE")
+        linhas = tp.exportar_csv({}, ["codigo"], conn=self.conn).lstrip("﻿").splitlines()
+        ontem, hoje = (HOJE - timedelta(days=1)).strftime("%d/%m"), HOJE.strftime("%d/%m")
+        self.assertEqual(linhas, ["Código;Histórico de tentativas",
+                                  f'PS-1;"{ontem} Insucesso (Ausente); {hoje} Entregue"'])
 
     def test_csv_neutraliza_formula_em_texto(self):
         # revisão de segurança 09/11: texto livre começando com = vira fórmula no Excel
@@ -183,7 +254,7 @@ class TestOpcoesFormatoCsv(_Base):
         texto = tp.exportar_csv({}, ["destinatario", "caixas"], conn=self.conn)
         linha = texto.lstrip("﻿").splitlines()[1]
         self.assertTrue(linha.startswith("\"'=HYPERLINK("), linha)
-        self.assertTrue(linha.endswith(";3"), linha)
+        self.assertTrue(linha.endswith(";3;"), linha)
 
 
 if __name__ == "__main__":
