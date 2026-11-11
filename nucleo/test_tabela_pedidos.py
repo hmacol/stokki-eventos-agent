@@ -198,6 +198,16 @@ class TestListar(_Base):
         r = tp.listar({}, conn=self.conn)
         self.assertEqual((r["total"], r["total_caixas"]), (1, 4))
 
+    def test_contagem_por_status_conta_pedidos_e_ignora_o_filtro_de_status(self):
+        # Abas do celular (11/11): uma por status, todas com os mesmos filtros.
+        self._pedido("PS-1", status="INSUCESSO"); self._pedido("PS-1-R1", status="ABERTO")   # 1 pedido, ABERTO
+        self._pedido("PS-2", status="ENTREGUE")
+        self._pedido("PS-3", status="ENTREGUE", sender_id=20, remetente="OUTRO")
+        self._pedido("PS-4", status="CANCELADO", criado_provedor=f"{_dia(-30)} 08:00:00")   # fora do período
+        c = tp.contar_por_status({"status": "ENTREGUE"}, conn=self.conn)
+        self.assertEqual(c, {"ABERTO": 1, "EM_ROTA": 0, "ENTREGUE": 2, "INSUCESSO": 0, "CANCELADO": 0, "total": 3})
+        self.assertEqual(tp.contar_por_status({"sender_id": "20"}, conn=self.conn)["total"], 1)
+
     def test_tentativas_do_grupo(self):
         self._pedido("PS-1", status="INSUCESSO")
         self._parada(self._rota(_dia(-2), nome="A"), "PS-1", situacao="INSUCESSO", motivo="Ausente")

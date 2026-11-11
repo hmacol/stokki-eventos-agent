@@ -938,6 +938,7 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            filtros por coluna, CSV). Uma linha por pedido (original
                            + reentregas); a principal é a reentrega viva com -R maior
                            que a entregue, senão a entregue, senão a mais recente.
+                           contar_por_status = abas do celular (filtros sem o status).
  relatorios_financeiro.py  Cópia dos relatórios Rotas/Serviços da Vuupt.
 
  App do motorista
@@ -1174,7 +1175,13 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                               quem age (NIVEIS_ACAO, leitura não) tem caixinha + menu "⋯"
                               por linha e barra de lote (um fetch por pedido em sequência,
                               resumo das falhas por código) chamando /api/pedidos/acao/*;
-                              resultado vira selo na linha, sem recarregar)
+                              resultado vira selo na linha, sem recarregar).
+                              Celular (11/11): tela <= 760px ou ?modo=mobile (?modo=desktop
+                              força a tabela) troca pela lista compacta no MESMO template:
+                              abas por status (contagem em GET /api/pedidos/contagem, só no
+                              celular), tela do pedido (JSON pedidos_celular, voltar do
+                              Android fecha), lote com caixinhas sel-m, filtros em tela cheia.
+                              Ações = mesmo menu/modais (window.PedidosAcoes).
    /atendimento (+/mobile)    atendimento*.html
    /wms, /wms/estoque         wms.html (PWA), wms_estoque.html
    /etiquetas/fila            fila_etiquetas.html (fila de impressão das etiquetas)

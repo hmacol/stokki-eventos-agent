@@ -288,6 +288,26 @@ def listar(filtros: dict, pagina: int = 1, por_pagina: int = POR_PAGINA, ordem: 
             conn.close()
 
 
+def contar_por_status(filtros: dict, conn: sqlite3.Connection | None = None) -> dict:
+    """Abas da tela no celular (Hugo, 11/11): quantos pedidos em cada status
+    com os mesmos filtros da tela, menos o de status (a aba é o status)."""
+    fechar = conn is None
+    conn = conn or banco.conectar()
+    try:
+        where, params = _where({**filtros, "status": ""})
+        rows = conn.execute(f"{_SQL_BASE} SELECT status, COUNT(*) n FROM base{where} GROUP BY status",
+                            params).fetchall()
+    finally:
+        if fechar:
+            conn.close()
+    saida = {s: 0 for s in STATUS}
+    for r in rows:
+        if r["status"] in saida:
+            saida[r["status"]] = r["n"]
+    saida["total"] = sum(r["n"] for r in rows)
+    return saida
+
+
 def tentativas(chaves: list[tuple[int | None, str]], conn: sqlite3.Connection) -> dict:
     """Histórico de cada pedido (chave = (sender_id, código base)): as paradas
     que terminaram (entregue, parcial, insucesso -- "não coletado" entra como
