@@ -236,6 +236,16 @@ def listar_grupos(conn: sqlite3.Connection) -> dict[str, list[str]]:
     return grupos
 
 
+def embarcadores_para_equipe(conn: sqlite3.Connection) -> list[dict]:
+    """Opções da tela /equipe/cliente: membro de grupo some (entra-se pelo
+    login do grupo, que já mostra todas as empresas) e o login traz
+    `empresas_grupo` (1 = sem grupo)."""
+    grupos = listar_grupos(conn)
+    membros = {m for lista in grupos.values() for m in lista}
+    return [{**e, "empresas_grupo": 1 + len(grupos.get(e["cnpj"], []))}
+            for e in listar_embarcadores(conn) if e["cnpj"] not in membros]
+
+
 def montar_cliente(conn: sqlite3.Connection, cnpj: str, versao: str) -> dict | None:
     """O `g.cliente` do portal: a empresa do login + as do grupo. `sender_id`
     e `cnpj` são sempre os do login; `sender_ids`/`empresas` cobrem o grupo."""

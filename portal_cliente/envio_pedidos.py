@@ -941,6 +941,21 @@ def _caminho_definitivo_planilha(cnpj_embarcador: str, nome_original: str) -> Pa
 
 # ── Validações (item 9: NF-e válida, chave já enviada, emitente = cliente) ─────
 
+def _pedido_cancelado(conn: sqlite3.Connection, codigo: str | None) -> bool:
+    """Pedido cancelado fora do portal (equipe na Stokki/Vuupt) deixa o envio
+    CRIADO: a NF pode voltar se o pedido e as reentregas (-R1, -C1...) estão
+    todos CANCELADO no núcleo (Hugo, 04/11). Se a Stokki ainda tiver o pedido
+    ativo, ela recusa a chave e o envio volta a DUPLICADO."""
+    if not codigo:
+        return False
+    try:
+        rows = conn.execute("SELECT status FROM nucleo_pedidos WHERE codigo = ? OR codigo LIKE ? OR codigo LIKE ?",
+                            (codigo, f"{codigo}-R%", f"{codigo}-C%")).fetchall()
+    except sqlite3.OperationalError:
+        return False
+    return bool(rows) and all(r["status"] == "CANCELADO" for r in rows)
+
+
 def validar_item(conn: sqlite3.Connection, item: dict, cnpj_cliente: str,
                  outras_empresas: dict[str, str] | None = None) -> dict:
     """Devolve {ok, erros[], avisos[], envio_existente} pro item lido.
@@ -959,7 +974,9 @@ def validar_item(conn: sqlite3.Connection, item: dict, cnpj_cliente: str,
         else:
             erros.append(f"O CNPJ emitente da nota ({formatar_documento(item['emitente_cnpj'])} · {item['emitente_nome']}) "
                          f"não é o da sua empresa.")
-    if existente and existente["status"] not in (STATUS_ERRO, STATUS_CANCELADO):
+    if existente and existente["status"] in (STATUS_CRIADO, STATUS_DUPLICADO) and _pedido_cancelado(conn, existente["codigo_pedido"]):
+        avisos.append(f"O pedido {existente['codigo_pedido']} desta nota foi cancelado -- será reenviado.")
+    elif existente and existente["status"] not in (STATUS_ERRO, STATUS_CANCELADO):
         quando = (existente["criado_em"] or "")[:16].replace("-", "/")
         if quando:
             quando = f"{quando[8:10]}/{quando[5:7]}/{quando[:4]} {quando[11:16]}"
