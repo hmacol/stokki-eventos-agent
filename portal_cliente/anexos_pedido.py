@@ -207,11 +207,13 @@ def anexar(conn: sqlite3.Connection, envio: dict, anexos: list[dict], por: str) 
         vistos.add(info["hash"])
         outro = conn.execute(
             "SELECT e.* FROM portal_envios_anexos a JOIN portal_envios e ON e.id = a.envio_id "
-            "WHERE a.hash_conteudo = ? ORDER BY a.cnpj_embarcador = ? DESC", (info["hash"], emb)).fetchone()
+            "WHERE a.hash_conteudo = ? AND a.cnpj_embarcador = ?", (info["hash"], emb)).fetchone()
+        # So entre os pedidos do PROPRIO embarcador: responder diferente pra arquivo
+        # de outro cliente viraria um jeito de sondar o que os outros anexaram
+        # (revisao de seguranca, 11/11). Colisao entre clientes e resolvida em
+        # registrar_no_romaneio, sem avisar quem enviou.
         if outro:
-            # de outro embarcador: recusa sem dizer de quem e
-            onde = ("neste pedido" if outro["id"] == envio["id"]
-                    else f"no pedido {ep.rotulo_envio(dict(outro))}" if outro["cnpj_embarcador"] == emb else "em outro pedido")
+            onde = "neste pedido" if outro["id"] == envio["id"] else f"no pedido {ep.rotulo_envio(dict(outro))}"
             raise ep.ErroEnvio(f"{info['nome']}: este documento já está {onde}.")
     _pasta().mkdir(parents=True, exist_ok=True)
     gravados = []
@@ -260,13 +262,12 @@ def registrar_no_romaneio(conn: sqlite3.Connection, envio_id: int) -> int:
         aid, arquivo, hash_, tipo, numero_nf, parcela, total, cnpj = a
         existente = conn.execute("SELECT origem, status, codigo_pedido FROM documentos_processados WHERE hash_conteudo = ?",
                                  (hash_,)).fetchone()
-        # O hash e a chave da tabela: um arquivo identico que ja esta ENVIADO (da
-        # Stokki, de e-mail ou de outro pedido/cliente) fica como esta -- o portal
-        # nunca toma o documento de outro dono (revisao de seguranca, 11/11). So
-        # assume a linha que ainda nao casou com ninguem (REVISAO_MANUAL) ou a
-        # propria (mesmo pedido, origem portal).
-        dono_alheio = existente and existente[1] == "ENVIADO" and not (
-            existente[0] == ORIGEM_DOCUMENTO and existente[2] == codigo)
+        # O hash e a chave da tabela: o portal nunca toma o documento de outro
+        # dono (revisao de seguranca, 11/11). So grava quando nao ha linha, ou
+        # quando a linha nao e da Stokki e ainda nao tem pedido (nao casou com
+        # ninguem) ou ja e deste mesmo pedido. Qualquer outra -- de outro
+        # pedido ou cliente, em qualquer status -- fica como esta.
+        dono_alheio = existente and (existente[0] == "stokki" or existente[2] not in (None, "", codigo))
         if dono_alheio:
             logger.warning(f"anexo {arquivo} (envio {envio_id}): arquivo identico ja registrado em {existente[2]} "
                            f"({existente[0]}); nao registrado pro romaneio de {codigo}")
