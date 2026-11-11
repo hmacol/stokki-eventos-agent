@@ -80,8 +80,10 @@ PERMITIDOS = {
     "roteirizacao/incrementar_rotas.py",
     "roteirizacao/otimizacao_client.py",
     "roteirizacao/reprocessar_rotas.py",
+    "roteirizacao/edicao_rota.py",  # 10/11: editar rota viva (status ao vivo, DELETE/PUT/POST na rota); o núcleo não grava rota
     "roteirizacao/rotas_client.py",
     "roteirizacao/test_conflito_rota.py",  # 28/09: teste do rotas_client (mocka criar_rota)
+    "roteirizacao/test_rotas_client_edicao.py",  # 10/11: teste do rotas_client (remover servico, trocar motorista/carro)
     # roteirizacao/roteirizacao_dados.py saiu da lista: só cita a Vuupt em
     # comentário, recebe o serviço pronto de quem chamou (não é acoplamento).
     "roteirizacao/roteirizar.py",
