@@ -112,6 +112,11 @@ ETAPAS_AGENTES_PLANEJAMENTO = [
      "detalhe": "Em espera → Aguardando Transportador (Stokki)"},
     {"agente_id": "somente_importacao",            "titulo": "Importação",
      "detalhe": "Stokki → VUUPT (todos, ou filtrado por pedido/embarcador)"},
+    # Hugo, 09/11: relê só a situação na Stokki (pool, selo da rota, envio do rascunho) sem esperar a
+    # importação; fora do "Executar tudo" porque a Importação já regrava o mesmo retrato.
+    {"agente_id": "atualizar_status_stokki",       "titulo": "Status Stokki",
+     "detalhe": "relê na Stokki quem está em aberto/separação/conferência/espera (não importa nada)",
+     "incluir_executar_tudo": False},
     {"agente_id": "criar_rotas_diarias_rascunho",  "titulo": "Criar Rotas Diárias (Rascunho)",
      "detalhe": "gera rascunhos locais pra revisão nessa tela"},
     {"agente_id": "incrementar_rotas",             "titulo": "Incrementar Rotas",
@@ -1035,6 +1040,7 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         "pool": pool,
         "pool_retiradas": pool_retiradas,
         "retrato_stokki_em": retrato_stokki_em,
+        "retrato_stokki": retrato_stokki,
         "resumo_agendados": _resumo_pedidos_agendados(servicos_resumo),
         "agendamentos_por_service_id": agendamentos_por_service_id,
         "tipos_area_por_service_id": tipos_area,
@@ -1133,6 +1139,8 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
             )))
             p["chegada_prevista"] = _horas_para_hhmm(sim["chegadas"][i]) if sim else None
             p["fora_janela"] = bool(sim and i in sim["fora_janela"])
+        # selo "Em separação" etc. também na parada da rota (Hugo, 09/11), não só no pool
+        anotar_situacao_stokki(r["paradas"], pool_e_agendados["retrato_stokki"])
 
     cfg_motoristas = config.get("motoristas", {})
     catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))

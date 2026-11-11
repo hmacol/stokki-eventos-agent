@@ -81,6 +81,11 @@ class GruposTest(_BancoTemporario):
         auth.definir_grupo(self.conn, PRINCIPAL, [MEMBRO_A])
         self.assertEqual(auth.listar_grupos(self.conn), {PRINCIPAL: [MEMBRO_A]})
 
+    def test_escolha_da_equipe_esconde_os_membros_e_marca_o_grupo(self):
+        auth.definir_grupo(self.conn, PRINCIPAL, [MEMBRO_A, MEMBRO_B])
+        lista = auth.embarcadores_para_equipe(self.conn)
+        self.assertEqual({e["cnpj"]: e["empresas_grupo"] for e in lista}, {PRINCIPAL: 3, AVULSO: 1})
+
     def test_sessao_valida_carrega_as_empresas_do_grupo(self):
         auth.definir_grupo(self.conn, PRINCIPAL, [MEMBRO_A])
         conta = auth.definir_pin(self.conn, PRINCIPAL, "123456")

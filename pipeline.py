@@ -60,11 +60,6 @@ import redespacho_confirmacao
 import consulta_transportadora
 import transportadoras_cadastro
 from consulta_transportadora import config_consulta
-from retiradas.regras_retirada import config_retiradas, importar_retirada, montar_payload_retirada
-
-# Seção 'retiradas' do config.yaml, preenchida em main() -- processar_pedido
-# não recebe o config inteiro e tem assinatura usada por vários chamadores.
-config_retiradas_global: dict = {}
 
 # ── Configuração de logging ────────────────────────────────────────────────────
 if hasattr(sys.stdout, "reconfigure"):
@@ -117,9 +112,13 @@ STATUSES_EM_ABERTO              = [
     STATUS_PACK,
     STATUS_HOLD,
 ]
+# Pedidos dos embarcadores NÃO prioritários que também entram antes de
+# "Aguardando Transportador" (Hugo, 09/11) -- ver Fonte 4 em main().
+STATUSES_OUTROS_ANTES_DO_TRANSPORTADOR = [STATUS_ABERTO, STATUS_SEPARANDO, STATUS_PACK]
 
 # Embarcadores com regra especial: importa QUALQUER pedido em aberto,
-# não só "Aguardando Transportador".
+# não só "Aguardando Transportador" (os outros entram desde 09/11 também em
+# aberto/separação/conferência, mas não em "On hold").
 # O filtro 'cliente=' da listagem usa o ID NUMÉRICO do Stokki
 # (confirmado via outbound/select — nome como texto é ignorado).
 # Formato: {id_stokki: nome_legivel}
@@ -635,8 +634,8 @@ def processar_pedido(
         # Serviço CANCELADO com o pedido ainda aberto na Stokki (28/09): não
         # entra no cache e segue até o desvio de RETIRADA -- é o caso do
         # reconciliar_pedidos_retirada.py, que cancela o serviço de entrega
-        # contando que o pipeline crie o avulso de retirada (antes o cache
-        # eterno impedia). Se for ENTREGA, para logo depois com ação própria.
+        # de quem virou retirada (aí sai como ignorado_retirada, sem pedir
+        # revisão). Se for ENTREGA, para logo depois com ação própria.
         cancelado_na_vuupt = status_vuupt == "canceled"
         if servico_existente and status_vuupt != vuupt.STATUS_ATUALIZAVEL and not cancelado_na_vuupt:
             marcar_atribuido(codigo_ps, status=status_vuupt)
@@ -675,32 +674,30 @@ def processar_pedido(
                 return resultado
 
         # Pedidos com transportadora RETIRADA (cliente retira / terceira
-        # coleta no galpão): SERVIÇO AVULSO na VUUPT, título "[RETIRADA]",
-        # atribuído ao agente fixo de retiradas -- nunca entra em rota
-        # (pedido do Hugo, 28/08; ver retiradas/regras_retirada.py). Sem
-        # retiradas.agent_id no config, mantém o comportamento antigo
-        # (ignora). Quem fecha/cancela depois é acompanhar_retiradas.py.
+        # coleta no galpão) NUNCA sobem pra VUUPT (Hugo, 06/11 -- de 28/08
+        # até aqui viravam serviço avulso "[RETIRADA]"; os que já estão lá
+        # o acompanhar_retiradas.py segue fechando). Se a entrega já estava
+        # na VUUPT e o pedido virou retirada depois, cancela enquanto ainda
+        # está not_assigned -- antes de entrar em rota (o reconciliar_
+        # pedidos_retirada.py faz o mesmo de 2 em 2 h, este é o atalho).
         if res_end.transportadora.get("tipo") == "RETIRADA":
-            cfg_ret = config_retiradas(config_retiradas_global or {})
-            if not cfg_ret["ativo"]:
-                logger.info(
-                    f"  {codigo_ps}: RETIRADA ({res_end.transportadora.get('nome')}) "
-                    f"— ignorado, nao importa no VUUPT (retiradas desativadas no config)."
-                )
-                resultado["acao"] = "ignorado_retirada"
-                return resultado
-            stkkc_id_final = stkkc_id_emb or detalhe.get("stkkc_id")
-            dados_banco = _buscar_dados_embarcador_banco(stkkc_id_final) if stkkc_id_final else {}
-            transp_bloco = detalhe.get("transportadora") or {}
-            transp_info = {"nome": res_end.transportadora.get("nome") or transp_bloco.get("nome", ""),
-                           "documento": transp_bloco.get("documento", "")}
-            payload_ret = montar_payload_retirada(
-                codigo_ps, referencia or detalhe.get("referencia", ""), detalhe,
-                transp_info, dados_banco, cfg_ret, data_saida=data_saida)
-            acao_ret, _ = importar_retirada(vuupt, payload_ret, cfg_ret, servico_existente, modo_teste)
-            resultado["acao"] = acao_ret
+            resultado["acao"] = "ignorado_retirada"
             resultado["fonte_endereco"] = "retirada_galpao"
-            resultado["observacao"] = f"Retirada no galpão via {transp_info['nome'] or 'cliente'} -- serviço avulso, sem rota."
+            nome_transp = res_end.transportadora.get("nome") or "cliente"
+            resultado["observacao"] = f"Retirada no galpão via {nome_transp} -- não sobe pra VUUPT."
+            if status_vuupt == vuupt.STATUS_ATUALIZAVEL:
+                if modo_teste:
+                    logger.info(f"  [TESTE] {codigo_ps}: RETIRADA -- cancelaria o serviço "
+                                f"{servico_existente['id']} (not_assigned) na VUUPT.")
+                else:
+                    try:
+                        vuupt.cancelar_servico_oficial(servico_existente["id"])
+                        resultado["observacao"] += f" Serviço {servico_existente['id']} cancelado na VUUPT."
+                    except Exception as e:
+                        resultado["requer_revisao"] = True
+                        resultado["observacao"] += (f" Falha ao cancelar o serviço {servico_existente['id']} "
+                                                    f"na VUUPT ({e}) -- cancelar à mão.")
+            logger.info(f"  {codigo_ps}: RETIRADA ({nome_transp}) -- ignorado. {resultado['observacao']}")
             return resultado
 
         if cancelado_na_vuupt:
@@ -1120,8 +1117,103 @@ def atender_fila_freshhub(cliente, processar, *, modo_teste: bool, limite: int =
 
 # ── Orquestrador principal ─────────────────────────────────────────────────────
 
-def _registrar_retrato_vigia(linhas: list, resultados: list[dict], completa: bool) -> None:
-    """Best-effort: falha aqui nunca derruba a importação."""
+def coletar_abertos(sess_stokki, config: dict) -> tuple[list, bool]:
+    """Pedidos abertos na Stokki das 4 fontes da rodada sem filtro (prioritários em qualquer status
+    aberto, Aguardando Transportador, Estação de Impressão, em aberto/separação/conferência dos
+    outros). Devolve (linhas, completa): completa=False se alguma fonte falhou. Usada pela importação
+    e pelo --so-status (botão "Status Stokki" do planejamento, Hugo 09/11)."""
+    completa = True
+    linhas_ids_vistos: set[int] = set()
+    linhas: list = []
+
+    # Fonte 1: embarcadores prioritários — todos os pedidos abertos
+    for id_emb, nome_emb in EMBARCADORES_IMPORTAR_ABERTOS.items():
+        for status in STATUSES_EM_ABERTO:
+            try:
+                for linha in stokki_pedidos.iterar_todos_pedidos(
+                    sess_stokki, status=status, cliente=id_emb, pausa_entre_paginas=0.3
+                ):
+                    id_ = stokki_pedidos.extrair_id_da_linha(linha)
+                    if id_ and id_ not in linhas_ids_vistos:
+                        linhas_ids_vistos.add(id_)
+                        if isinstance(linha, dict):
+                            linha["_fonte"] = "prioritario"
+                            linha["_status_stokki"] = status
+                        linhas.append(linha)
+            except Exception as e:
+                completa = False
+                logger.warning(f"Erro ao buscar {nome_emb!r} status={status!r}: {e}")
+    logger.info(f"Embarcadores prioritários: {len(linhas)} pedido(s) coletado(s).")
+
+    # Fonte 2: todos os outros — apenas Aguardando Transportador
+    n_antes = len(linhas)
+    for linha in stokki_pedidos.iterar_todos_pedidos(
+        sess_stokki, status=STATUS_AGUARDANDO_TRANSPORTADOR
+    ):
+        id_ = stokki_pedidos.extrair_id_da_linha(linha)
+        if id_ and id_ not in linhas_ids_vistos:
+            # Passa a linha inteira: o filtro decide pelo #stkkc-NN
+            # do campo 'client' (achado 28/09, nome parecido caía fora).
+            if not _embarcador_prioritario(linha):
+                linhas_ids_vistos.add(id_)
+                if isinstance(linha, dict):
+                    linha["_fonte"] = "aguardando_transportador"
+                    linha["_status_stokki"] = STATUS_AGUARDANDO_TRANSPORTADOR
+                linhas.append(linha)
+    logger.info(f"Aguardando Transportador (outros embarcadores): "
+                f"{len(linhas) - n_antes} pedido(s) adicionados.")
+
+    # Fonte 3: Estação de Impressão — pedidos em espera
+    n_antes2 = len(linhas)
+    try:
+        em_espera = listar_pedidos_em_espera(config)
+        for p in em_espera:
+            id_ = p["id_stokki"]
+            if id_ and id_ not in linhas_ids_vistos:
+                linhas_ids_vistos.add(id_)
+                # Converte para o formato de linha esperado pelo pipeline
+                linhas.append({
+                    "id": f'<a href="/show/{id_}">{id_}</a>',
+                    "client": p["cliente"],
+                    "carrier": "",
+                    "destination": "",
+                    "_codigo_ps": p["codigo_ps"].lstrip("#"),
+                    "_fonte": "estacao_impressao",
+                    "_status_stokki": "Em espera",
+                })
+    except Exception as e:
+        completa = False
+        logger.warning(f"Erro ao buscar pedidos da Estação de Impressão: {e}")
+    logger.info(f"Estação de Impressão: {len(linhas) - n_antes2} pedido(s) adicionados.")
+
+    # Fonte 4 (Hugo, 09/11): os outros embarcadores também entram na Vuupt em aberto, em separação e
+    # em conferência, pra poderem ser roteirizados antes do galpão terminar (só "Em espera" barra a rota,
+    # nucleo/prontidao_stokki.py). "On hold" continua de fora pra esses. Vem DEPOIS da Estação de
+    # Impressão: pedido que ela já trouxe fica com "Em espera" (barrado na rota), como antes.
+    n_antes = len(linhas)
+    for status in STATUSES_OUTROS_ANTES_DO_TRANSPORTADOR:
+        try:
+            for linha in stokki_pedidos.iterar_todos_pedidos(
+                sess_stokki, status=status, pausa_entre_paginas=0.3
+            ):
+                id_ = stokki_pedidos.extrair_id_da_linha(linha)
+                if id_ and id_ not in linhas_ids_vistos and not _embarcador_prioritario(linha):
+                    linhas_ids_vistos.add(id_)
+                    if isinstance(linha, dict):
+                        linha["_fonte"] = "em_separacao"
+                        linha["_status_stokki"] = status
+                    linhas.append(linha)
+        except Exception as e:
+            completa = False
+            logger.warning(f"Erro ao buscar outros embarcadores status={status!r}: {e}")
+    logger.info(f"Em aberto/separação/conferência (outros embarcadores): "
+                f"{len(linhas) - n_antes} pedido(s) adicionados.")
+    return linhas, completa
+
+
+def _registrar_retrato_vigia(linhas: list, resultados: list[dict], completa: bool,
+                             preservar_acao: bool = False) -> bool:
+    """Best-effort: falha aqui nunca derruba a importação (devolve False)."""
     try:
         from vigia.banco import registrar_listagem_stokki
         por_codigo = {(r.get("codigo_ps") or "").lstrip("#").upper(): r for r in resultados}
@@ -1142,11 +1234,13 @@ def _registrar_retrato_vigia(linhas: list, resultados: list[dict], completa: boo
                 "acao": "erro" if r.get("erro") else r.get("acao"),
                 "observacao": r.get("erro") or r.get("observacao"),
             })
-        registrar_listagem_stokki(itens, completa)
+        registrar_listagem_stokki(itens, completa, preservar_acao=preservar_acao)
         logger.info(f"Vigia: retrato de {len(itens)} pedido(s) aberto(s) gravado "
                     f"({'completo' if completa else 'INCOMPLETO -- alguma fonte falhou'}).")
+        return True
     except Exception as e:
         logger.warning(f"Vigia: retrato dos pedidos abertos não gravado: {e}")
+        return False
 
 
 # Rodada de hora em hora durante o dia (Hugo, 28/09, "com o cuidado da
@@ -1208,6 +1302,40 @@ def main_horario(modo_teste: bool = False, fila_freshhub: bool = False) -> None:
         sessao_uso.liberar(DONO_TRAVA_HORARIO)
 
 
+DONO_TRAVA_STATUS = "pipeline-status"
+ESPERA_TRAVA_STATUS_S = 30 * 60
+
+
+def main_status(modo_teste: bool = False) -> None:
+    """--so-status (botão "Status Stokki" do planejamento, Hugo 09/11): relê na Stokki só a situação
+    dos pedidos abertos (as mesmas 4 fontes da importação) e regrava o retrato vigia_stokki_abertos,
+    que o pool, o selo da rota e o envio do rascunho leem. Não cria nem altera nada na Vuupt nem na
+    Stokki. Espera a vez na sessão até 30 min; modo teste só lista."""
+    from stokki import sessao_uso
+    if not sessao_uso.adquirir(DONO_TRAVA_STATUS, ttl_segundos=TTL_TRAVA_HORARIO_S,
+                               esperar_segundos=ESPERA_TRAVA_STATUS_S, alternativa=True):
+        raise RuntimeError(f"Stokki ocupada por '{sessao_uso.em_uso()}' há mais de "
+                           f"{ESPERA_TRAVA_STATUS_S // 60} min -- status não atualizado.")
+    try:
+        inicio = time.monotonic()
+        config = _carregar_config()
+        linhas, completa = coletar_abertos(StokkiSession(config), config)
+        contagem: dict[str, int] = {}
+        for linha in linhas:
+            status = (linha.get("_status_stokki") if isinstance(linha, dict) else None) or "?"
+            contagem[status] = contagem.get(status, 0) + 1
+        logger.info(f"Status Stokki: {len(linhas)} pedido(s) aberto(s) -- "
+                    + ", ".join(f"{k}: {v}" for k, v in sorted(contagem.items()))
+                    + ("" if completa else " [alguma fonte falhou: ninguém sai do retrato]"))
+        if modo_teste:
+            logger.info("[MODO TESTE] retrato não gravado.")
+        elif not _registrar_retrato_vigia(linhas, [], completa, preservar_acao=True):
+            raise RuntimeError("Retrato da Stokki não gravado (ver aviso acima).")
+        logger.info(f"Status Stokki concluído em {time.monotonic() - inicio:.0f}s.")
+    finally:
+        sessao_uso.liberar(DONO_TRAVA_STATUS)
+
+
 def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: str = "",
          filtro_statuses: list[str] | None = None, dono_trava: str | None = None,
          fila_freshhub: bool = False, inicio_rodada: datetime | None = None):
@@ -1242,8 +1370,6 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
     )
 
     config           = _carregar_config()
-    global config_retiradas_global
-    config_retiradas_global = config
     anthropic_key    = config.get("anthropic", {}).get("api_key", "")
     vuupt_token      = config.get("vuupt_api", {}).get("token", "")
     gmaps_key        = config.get("google_maps", {}).get("api_key", "")
@@ -1383,69 +1509,8 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
             f"Embarcador stkkc_id={filtro_stkkc_id}: {len(linhas)} pedido(s) em aberto."
         )
     else:
-        linhas_ids_vistos: set[int] = set()
-        linhas: list = []
-
-        # Fonte 1: embarcadores prioritários — todos os pedidos abertos
-        for id_emb, nome_emb in EMBARCADORES_IMPORTAR_ABERTOS.items():
-            for status in STATUSES_EM_ABERTO:
-                try:
-                    for linha in stokki_pedidos.iterar_todos_pedidos(
-                        sess_stokki, status=status, cliente=id_emb, pausa_entre_paginas=0.3
-                    ):
-                        id_ = stokki_pedidos.extrair_id_da_linha(linha)
-                        if id_ and id_ not in linhas_ids_vistos:
-                            linhas_ids_vistos.add(id_)
-                            if isinstance(linha, dict):
-                                linha["_fonte"] = "prioritario"
-                                linha["_status_stokki"] = status
-                            linhas.append(linha)
-                except Exception as e:
-                    listagem_completa = False
-                    logger.warning(f"Erro ao buscar {nome_emb!r} status={status!r}: {e}")
-        logger.info(f"Embarcadores prioritários: {len(linhas)} pedido(s) coletado(s).")
-
-        # Fonte 2: todos os outros — apenas Aguardando Transportador
-        n_antes = len(linhas)
-        for linha in stokki_pedidos.iterar_todos_pedidos(
-            sess_stokki, status=STATUS_AGUARDANDO_TRANSPORTADOR
-        ):
-            id_ = stokki_pedidos.extrair_id_da_linha(linha)
-            if id_ and id_ not in linhas_ids_vistos:
-                # Passa a linha inteira: o filtro decide pelo #stkkc-NN
-                # do campo 'client' (achado 28/09, nome parecido caía fora).
-                if not _embarcador_prioritario(linha):
-                    linhas_ids_vistos.add(id_)
-                    if isinstance(linha, dict):
-                        linha["_fonte"] = "aguardando_transportador"
-                        linha["_status_stokki"] = STATUS_AGUARDANDO_TRANSPORTADOR
-                    linhas.append(linha)
-        logger.info(f"Aguardando Transportador (outros embarcadores): "
-                    f"{len(linhas) - n_antes} pedido(s) adicionados.")
-
-        # Fonte 3: Estação de Impressão — pedidos em espera
-        n_antes2 = len(linhas)
-        try:
-            em_espera = listar_pedidos_em_espera(config)
-            for p in em_espera:
-                id_ = p["id_stokki"]
-                if id_ and id_ not in linhas_ids_vistos:
-                    linhas_ids_vistos.add(id_)
-                    # Converte para o formato de linha esperado pelo pipeline
-                    linhas.append({
-                        "id": f'<a href="/show/{id_}">{id_}</a>',
-                        "client": p["cliente"],
-                        "carrier": "",
-                        "destination": "",
-                        "_codigo_ps": p["codigo_ps"].lstrip("#"),
-                        "_fonte": "estacao_impressao",
-                        "_status_stokki": "Em espera",
-                    })
-        except Exception as e:
-            listagem_completa = False
-            logger.warning(f"Erro ao buscar pedidos da Estação de Impressão: {e}")
-        logger.info(f"Estação de Impressão: {len(linhas) - n_antes2} pedido(s) adicionados.")
-
+        linhas, completa_fontes = coletar_abertos(sess_stokki, config)
+        listagem_completa = listagem_completa and completa_fontes
         logger.info(f"Total: {len(linhas)} pedido(s) a processar.")
 
     if not linhas:
@@ -1603,13 +1668,18 @@ if __name__ == "__main__":
     parser.add_argument("--horario", action="store_true",
                         help="Rodada horária do timer: espera a vez na sessão da Stokki e desiste "
                              "se continuar ocupada (a próxima é em 1h).")
+    parser.add_argument("--so-status", action="store_true",
+                        help="Só relê a situação dos pedidos abertos na Stokki e regrava o retrato "
+                             "(vigia_stokki_abertos); não importa nada pra Vuupt.")
     parser.add_argument("--fila-freshhub", action="store_true",
                         help="Depois dos pedidos da Stokki, atende a fila de replica do sistema novo "
                              "(destino vuupt): cria o serviço na Vuupt pelo id da Stokki e devolve o id. "
                              "Precisa de freshhub_api.url/token no config.yaml.")
     args = parser.parse_args()
 
-    if args.horario:
+    if args.so_status:
+        main_status(modo_teste=args.modo_teste)
+    elif args.horario:
         main_horario(modo_teste=args.modo_teste, fila_freshhub=args.fila_freshhub)
     else:
         main(modo_teste=args.modo_teste, filtro_pedido=args.pedido or "",

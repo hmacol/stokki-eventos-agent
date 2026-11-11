@@ -36,14 +36,24 @@ class TestSituacao(unittest.TestCase):
         self.assertIsNone(ps.situacao_nao_pronta(None, {}))
 
     def test_separar_prontos_por_chave(self):
-        itens = [{"code": "#PS-40006"}, {"code": "#PS-40003"}, {"code": "#PS-7"}]
+        itens = [{"code": "#PS-40006"}, {"code": "#PS-40004"}, {"code": "#PS-7"}]
         prontos, nao = ps.separar_prontos(itens, RETRATO, chave="code")
         self.assertEqual([p["code"] for p in prontos], ["#PS-40006", "#PS-7"])
-        self.assertEqual(nao, [{"code": "#PS-40003", "situacao_stokki": "Em conferência"}])
-        paradas = [{"codigo": "#PS-40001", "service_id": 1}]
-        self.assertEqual(ps.separar_prontos(paradas, RETRATO), ([], [{"codigo": "#PS-40001", "service_id": 1,
-                                                                        "situacao_stokki": "Em aberto"}]))
+        self.assertEqual(nao, [{"code": "#PS-40004", "situacao_stokki": "Em espera"}])
+        paradas = [{"codigo": "#PS-40005", "service_id": 1}]
+        self.assertEqual(ps.separar_prontos(paradas, RETRATO), ([], [{"codigo": "#PS-40005", "service_id": 1,
+                                                                        "situacao_stokki": "Em espera"}]))
         self.assertEqual(ps.separar_prontos(itens, {}, chave="code"), (itens, []))
+
+    def test_separacao_conferencia_e_aberto_vao_pra_rota(self):
+        # Hugo, 09/11: so "Em espera" (pausa) tira da rota; galpao ainda trabalhando nao impede
+        itens = [{"code": "#PS-40001"}, {"code": "#PS-40002"}, {"code": "#PS-40003"}]
+        self.assertEqual(ps.separar_prontos(itens, RETRATO, chave="code"), (itens, []))
+
+    def test_codigo_combinado_com_um_em_espera_sai_da_rota(self):
+        retrato = {"PS-41011": "Separating", "PS-41012": "On hold"}
+        prontos, nao = ps.separar_prontos([{"code": "#PS-41011, #PS-41012"}], retrato, chave="code")
+        self.assertEqual((prontos, [n["situacao_stokki"] for n in nao]), ([], ["Em espera"]))
 
     def test_anotar_situacao_no_pool(self):
         pool = [{"codigo": "#PS-40003"}, {"codigo": "#PS-40006"}]

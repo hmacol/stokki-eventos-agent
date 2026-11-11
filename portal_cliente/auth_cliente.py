@@ -30,6 +30,8 @@ from pathlib import Path
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from homologacao import ambiente as _ambiente
+
 _RAIZ = Path(__file__).parent.parent
 DB_PATH = _RAIZ / "dados" / "dados.db"
 
@@ -236,6 +238,16 @@ def listar_grupos(conn: sqlite3.Connection) -> dict[str, list[str]]:
     return grupos
 
 
+def embarcadores_para_equipe(conn: sqlite3.Connection) -> list[dict]:
+    """Opções da tela /equipe/cliente: membro de grupo some (entra-se pelo
+    login do grupo, que já mostra todas as empresas) e o login traz
+    `empresas_grupo` (1 = sem grupo)."""
+    grupos = listar_grupos(conn)
+    membros = {m for lista in grupos.values() for m in lista}
+    return [{**e, "empresas_grupo": 1 + len(grupos.get(e["cnpj"], []))}
+            for e in listar_embarcadores(conn) if e["cnpj"] not in membros]
+
+
 def montar_cliente(conn: sqlite3.Connection, cnpj: str, versao: str) -> dict | None:
     """O `g.cliente` do portal: a empresa do login + as do grupo. `sender_id`
     e `cnpj` são sempre os do login; `sender_ids`/`empresas` cobrem o grupo."""
@@ -327,6 +339,8 @@ def definir_ativo(conn: sqlite3.Connection, cnpj: str, ativo: bool) -> bool:
 def autenticar(conn: sqlite3.Connection, cnpj: str, pin: str) -> dict:
     """CNPJ + PIN com trava de tentativas. Mensagem sempre genérica."""
     generico = "CNPJ ou PIN incorretos."
+    if _ambiente.homolog_ativo() and normalizar_cnpj(cnpj) not in _ambiente.cnpjs_portal_permitidos():
+        raise AutenticacaoInvalida("Este CNPJ não tem acesso à homologação.", 403)
     conta = buscar_conta(conn, cnpj)
     if not conta or not conta.get("ativo") or not conta.get("pin_hash"):
         raise AutenticacaoInvalida(generico)

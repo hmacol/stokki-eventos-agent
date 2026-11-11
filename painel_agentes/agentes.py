@@ -67,6 +67,18 @@ AGENTES = [
         "categoria": "Pipeline principal",
     },
     {
+        "id": "atualizar_status_stokki",
+        "nome": "Atualizar Status Stokki",
+        "descricao": "Relê na Stokki a situação dos pedidos abertos (em aberto, separação, conferência, espera) "
+                     "e atualiza o retrato que o planejamento usa. Não importa nada pra VUUPT.",
+        "script": "pipeline.py",
+        "cwd": ".",
+        "suporta_teste": True,
+        "flag_teste": "--modo-teste",
+        "args_fixos": ["--so-status"],
+        "categoria": "Pipeline principal",
+    },
+    {
         "id": "somente_expedicao",
         "nome": "Somente Expedição",
         "descricao": "Só a etapa de expedição: entregues com canhoto validado expedem na Stokki, insucessos são tratados à parte.",

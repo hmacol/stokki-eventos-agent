@@ -48,30 +48,31 @@ def situacao_e_token(sessao, id_stokki: int) -> tuple[str, str]:
     return (_limpar(m.group(1)) if m else "", t.group(1) if t else "")
 
 
-def montar_motivo(motivo_cliente: str) -> str:
+def montar_motivo(motivo_cliente: str, prefixo: str = PREFIXO_MOTIVO) -> str:
     texto = (motivo_cliente or "").strip()
     if not texto:
         return MOTIVO_PADRAO
-    if not texto.startswith(PREFIXO_MOTIVO):
-        texto = f"{PREFIXO_MOTIVO}: {texto}"
+    if not texto.startswith(prefixo):
+        texto = f"{prefixo}: {texto}"
     return texto[:200]
 
 
-def cancelar_pedido(sessao, id_stokki: int, motivo: str, dormir=time.sleep) -> dict:
+def cancelar_pedido(sessao, id_stokki: int, motivo: str, dormir=time.sleep,
+                    prefixo: str = PREFIXO_MOTIVO) -> dict:
     """Devolve {"ok", "situacao", "ja_estava", "erro"}. Nunca levanta por
     resposta da Stokki (so por falha de rede do requests)."""
     situacao, token = situacao_e_token(sessao, id_stokki)
     sit = situacao.lower()
     if "cancel" in sit:
-        return {"ok": True, "situacao": situacao, "ja_estava": True, "erro": ""}
+        return {"ok": True, "situacao": situacao, "situacao_antes": situacao, "ja_estava": True, "erro": ""}
     if any(p in sit for p in ("enviado", "sent", "expedido")):
-        return {"ok": False, "situacao": situacao, "ja_estava": False, "erro": f"pedido ja expedido na Stokki ({situacao})"}
+        return {"ok": False, "situacao": situacao, "situacao_antes": situacao, "ja_estava": False, "erro": f"pedido ja expedido na Stokki ({situacao})"}
     if not token:
-        return {"ok": False, "situacao": situacao, "ja_estava": False, "erro": "formulario de cancelamento nao encontrado na pagina"}
+        return {"ok": False, "situacao": situacao, "situacao_antes": situacao, "ja_estava": False, "erro": "formulario de cancelamento nao encontrado na pagina"}
 
     resp = sessao.post(
         URL_CANCEL,
-        files={"_token": (None, token), "reason": (None, montar_motivo(motivo)),
+        files={"_token": (None, token), "reason": (None, montar_motivo(motivo, prefixo)),
                "provider_outbound_id": (None, str(id_stokki)), "page": (None, "show")},
         headers={"X-Requested-With": "XMLHttpRequest", "Referer": URL_SHOW.format(id=id_stokki)},
     )
@@ -81,7 +82,7 @@ def cancelar_pedido(sessao, id_stokki: int, motivo: str, dormir=time.sleep) -> d
         corpo = {}
     if resp.status_code != 200 or not corpo.get("success", True):
         erros = corpo.get("errors") or corpo.get("message") or resp.text[:200]
-        return {"ok": False, "situacao": situacao, "ja_estava": False, "erro": f"Stokki {resp.status_code}: {erros}"}
+        return {"ok": False, "situacao": situacao, "situacao_antes": situacao, "ja_estava": False, "erro": f"Stokki {resp.status_code}: {erros}"}
 
     if corpo.get("processing"):
         concluiu = False
@@ -95,11 +96,11 @@ def cancelar_pedido(sessao, id_stokki: int, motivo: str, dormir=time.sleep) -> d
             except ValueError:
                 pass
         if not concluiu:
-            return {"ok": False, "situacao": situacao, "ja_estava": False,
+            return {"ok": False, "situacao": situacao, "situacao_antes": situacao, "ja_estava": False,
                     "erro": f"cancelamento ainda em processamento depois de {TENTATIVAS_POLL * INTERVALO_POLL}s"}
 
     depois, _ = situacao_e_token(sessao, id_stokki)
     ok = "cancel" in depois.lower()
     logger.info(f"Stokki: pedido {id_stokki} -> {depois!r} ({'ok' if ok else 'NAO cancelou'})")
-    return {"ok": ok, "situacao": depois, "ja_estava": False,
+    return {"ok": ok, "situacao": depois, "situacao_antes": situacao, "ja_estava": False,
             "erro": "" if ok else f"Stokki aceitou mas a situacao ficou {depois!r}"}

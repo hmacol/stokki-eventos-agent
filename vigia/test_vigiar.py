@@ -119,6 +119,18 @@ class TestRodada(unittest.TestCase):
         banco.registrar_listagem_stokki([{"codigo": "PS-3"}], completa=True, conn=self.conn)
         self.assertEqual(abertos(), {"PS-3"})
 
+    def test_preservar_acao_so_troca_a_situacao(self):
+        # --so-status (Hugo, 09/11): relê a situação sem apagar o motivo que a importação gravou
+        banco.registrar_listagem_stokki([{"codigo": "PS-7", "status_stokki": "Separating"}],
+                                        completa=False, conn=self.conn, preservar_acao=True)
+        row = self.conn.execute("SELECT status_stokki, ultima_acao FROM vigia_stokki_abertos "
+                                "WHERE codigo = 'PS-7'").fetchone()
+        self.assertEqual(tuple(row), ("Separating", "aguardando_redespacho"))
+        banco.registrar_listagem_stokki([{"codigo": "PS-7", "status_stokki": "Open"}],
+                                        completa=False, conn=self.conn)
+        row = self.conn.execute("SELECT ultima_acao FROM vigia_stokki_abertos WHERE codigo = 'PS-7'").fetchone()
+        self.assertIsNone(row[0])
+
     def test_reaparecer_zera_as_ausencias_e_mantem_o_desde(self):
         primeira = self.conn.execute(
             "SELECT primeira_vez_em FROM vigia_stokki_abertos WHERE codigo = 'PS-7'").fetchone()[0]

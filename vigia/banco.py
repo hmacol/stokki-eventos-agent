@@ -41,7 +41,7 @@ def garantir_esquema(conn: sqlite3.Connection) -> None:
             id_stokki       INTEGER,
             embarcador      TEXT,
             status_stokki   TEXT,
-            fonte           TEXT,               -- prioritario | aguardando_transportador | estacao_impressao
+            fonte           TEXT,               -- prioritario | aguardando_transportador | estacao_impressao | em_separacao
             ultima_acao     TEXT,               -- acao do pipeline (criado, erro, aguardando_redespacho...)
             ultima_obs      TEXT,
             primeira_vez_em TEXT NOT NULL,
@@ -86,25 +86,30 @@ def normalizar(codigo) -> str:
 
 
 def registrar_listagem_stokki(itens: list[dict], completa: bool, agora: datetime | None = None,
-                              conn: sqlite3.Connection | None = None) -> None:
+                              conn: sqlite3.Connection | None = None, preservar_acao: bool = False) -> None:
     """Chamado pelo pipeline no fim de uma rodada SEM filtro. `itens`:
     [{"codigo", "id_stokki", "embarcador", "status_stokki", "fonte",
     "acao", "observacao"}]. Quem não apareceu em DUAS listagens completas
     seguidas sai (foi expedido, cancelado...). Uma ausência só não basta:
     uma fonte pode voltar vazia sem erro (a Estação de Impressão devolve []
     quando a captura falha), e apagar zeraria o "desde" do pedido.
-    Listagem incompleta só atualiza quem apareceu."""
+    Listagem incompleta só atualiza quem apareceu.
+    preservar_acao=True (pipeline.py --so-status, botão "Status Stokki" do
+    planejamento, Hugo 09/11): só relê a situação, então mantém a última
+    ação/observação da importação de quem já estava no retrato."""
     agora_txt = (agora or datetime.now()).strftime(FMT)
     fechar = conn is None
     conn = conn or conectar()
     try:
+        atualiza_acao = ("" if preservar_acao
+                         else "ultima_acao = excluded.ultima_acao, ultima_obs = excluded.ultima_obs,")
         vistos = set()
         for it in itens:
             codigo = normalizar(it.get("codigo"))
             if not codigo:
                 continue
             vistos.add(codigo)
-            conn.execute("""
+            conn.execute(f"""
                 INSERT INTO vigia_stokki_abertos
                     (codigo, id_stokki, embarcador, status_stokki, fonte, ultima_acao, ultima_obs,
                      primeira_vez_em, ultima_vez_em, ausencias)
@@ -112,7 +117,7 @@ def registrar_listagem_stokki(itens: list[dict], completa: bool, agora: datetime
                 ON CONFLICT(codigo) DO UPDATE SET
                     id_stokki = excluded.id_stokki, embarcador = excluded.embarcador,
                     status_stokki = excluded.status_stokki, fonte = excluded.fonte,
-                    ultima_acao = excluded.ultima_acao, ultima_obs = excluded.ultima_obs,
+                    {atualiza_acao}
                     ultima_vez_em = excluded.ultima_vez_em, ausencias = 0
             """, (codigo, it.get("id_stokki"), it.get("embarcador"), it.get("status_stokki"),
                   it.get("fonte"), it.get("acao"), (it.get("observacao") or "")[:300],

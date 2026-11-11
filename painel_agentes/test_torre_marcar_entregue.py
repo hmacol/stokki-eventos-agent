@@ -70,7 +70,7 @@ class _VuuptFalso:
         if _VuuptFalso.falha:
             raise _VuuptFalso.falha
         _VuuptFalso.chamadas.append((service_id, sucesso, status_atual))
-        _VuuptFalso.ultima = {"fotos": fotos_checklist, "servico": servico}
+        _VuuptFalso.ultima = {"fotos": fotos_checklist, "servico": servico, "motivo": failed_reason_id}
         return _VuuptFalso.retorno if fotos_checklist else None
 
 
@@ -413,7 +413,102 @@ class TestMarcarEntregueManual(unittest.TestCase):
         c = sqlite3.connect(db)
         colunas = {r[1] for r in c.execute("PRAGMA table_info(torre_entregas_manuais)")}
         c.close()
-        self.assertTrue({"justificativa", "texto_outro", "checklist_id", "fotos"} <= colunas)
+        self.assertTrue({"justificativa", "texto_outro", "checklist_id", "fotos",
+                         "resultado", "failed_reason_id"} <= colunas)
+
+
+class TestMarcarSemSucessoManual(unittest.TestCase):
+    """"Sem sucesso" no mesmo modal (Hugo, 06/11): fecha como insucesso na
+    Vuupt com o motivo da lista; observacao opcional so na auditoria."""
+
+    # mesmo ambiente falso do entregue (sem herdar: os testes de la nao rodam de novo)
+    setUp = TestMarcarEntregueManual.setUp
+    tearDown = TestMarcarEntregueManual.tearDown
+    _entregas = TestMarcarEntregueManual._entregas
+    _marcar = TestMarcarEntregueManual._marcar
+
+    def _sem_sucesso(self, motivo=8490, observacao=None):
+        return torre_controle.marcar_sem_sucesso_manual(77, "hugo", motivo, observacao)
+
+    def test_fecha_como_insucesso_com_o_motivo(self):
+        r = self._sem_sucesso("8490", "  porteiro disse que o cliente viajou ")
+        self.assertEqual(r, {"ok": True, "codigo": "#PS-77"})
+        self.assertEqual(_VuuptFalso.chamadas, [(77, False, "on_route")])
+        self.assertEqual(_VuuptFalso.ultima["motivo"], 8490)
+        self.assertFalse(_VuuptFalso.ultima["fotos"])
+        registro = self._entregas()[77]
+        self.assertEqual(registro["resultado"], "insucesso")
+        self.assertEqual(registro["failed_reason_id"], 8490)
+        self.assertEqual(registro["texto_outro"], "porteiro disse que o cliente viajou")
+        self.assertEqual(registro["observacao"], "Sem sucesso: Cliente ausente (porteiro disse que o cliente viajou)")
+        chamada = torre_controle.tratativas.registrar_evento.call_args
+        self.assertEqual(chamada.args, ("#PS-77", "TORRE", "INSUCESSO_MANUAL"))
+        self.assertEqual(chamada.kwargs["motivo_id"], 8490)
+        self.assertEqual(chamada.kwargs["motivo_texto"], "Cliente ausente")
+        self.assertIn("hugo", chamada.kwargs["texto"])
+
+    def test_sem_observacao(self):
+        r = self._sem_sucesso(5431)
+        self.assertTrue(r["ok"], r)
+        registro = self._entregas()[77]
+        self.assertIsNone(registro["texto_outro"])
+        self.assertEqual(registro["observacao"], "Sem sucesso: Local fechado")
+
+    def test_entregue_continua_gravando_resultado_entregue(self):
+        self._marcar(justificativa="sem_bateria")
+        registro = self._entregas()[77]
+        self.assertEqual(registro["resultado"], "entregue")
+        self.assertIsNone(registro["failed_reason_id"])
+
+    def test_motivo_ausente_ou_fora_da_lista_recusa_sem_ler_vuupt(self):
+        for motivo in (None, "", "abc", 999999):
+            r = self._sem_sucesso(motivo)
+            self.assertFalse(r["ok"], motivo)
+            self.assertIn("motivo", r["erro"].lower())
+        self.assertEqual(_VuuptFalso.lidos, [])
+        self.assertEqual(_VuuptFalso.chamadas, [])
+
+    def test_observacao_longa_recusa(self):
+        r = self._sem_sucesso(8490, "x" * 201)
+        self.assertFalse(r["ok"])
+        self.assertEqual(_VuuptFalso.chamadas, [])
+
+    def test_ja_insucesso_ok_sem_mexer(self):
+        _VuuptFalso.status = "failed"
+        r = self._sem_sucesso()
+        self.assertEqual(r, {"ok": True, "ja_estava": True, "codigo": "#PS-77"})
+        self.assertEqual(_VuuptFalso.chamadas, [])
+        self.assertEqual(self._entregas(), {})
+
+    def test_entregue_cancelado_e_sem_motorista_recusam(self):
+        for status, trecho in (("done", "entregue"), ("canceled", "cancelad"), ("not_assigned", "sem motorista")):
+            _VuuptFalso.status = status
+            r = self._sem_sucesso()
+            self.assertFalse(r["ok"], status)
+            self.assertIn(trecho, r["erro"].lower())
+        self.assertEqual(_VuuptFalso.chamadas, [])
+        torre_controle.tratativas.registrar_evento.assert_not_called()
+
+    def test_nao_encontrado_recusa(self):
+        _VuuptFalso.servico = False
+        r = self._sem_sucesso()
+        self.assertFalse(r["ok"])
+        self.assertIn("encontrado", r["erro"].lower())
+
+    def test_falha_na_vuupt_nao_registra(self):
+        _VuuptFalso.falha = RuntimeError("check-out do servico 77: status 500")
+        r = self._sem_sucesso()
+        self.assertFalse(r["ok"])
+        self.assertIn("500", r["erro"])
+        self.assertEqual(self._entregas(), {})
+        torre_controle.tratativas.registrar_evento.assert_not_called()
+
+    def test_motivos_da_lista(self):
+        from insucesso_entrega.motivos_falha import MOTIVOS_FALHA
+        motivos = torre_controle.motivos_sem_sucesso()
+        self.assertEqual({k for k, _ in motivos}, set(MOTIVOS_FALHA))
+        textos = [t for _, t in motivos]
+        self.assertEqual(textos, sorted(textos))
 
 
 class TestMesmoDestinoParaFoto(unittest.TestCase):

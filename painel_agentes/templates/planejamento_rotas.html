@@ -530,6 +530,17 @@
     color: var(--rodando-texto);
   }
   .secao-pool-separacao .cabecalho-secao-pool { color: var(--rodando-texto); }
+  /* resumo da situação na Stokki no card da rota (Hugo, 09/11) */
+  .card-rota .situacao-stokki-rota:not(:empty) {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 100px;
+    margin: 3px 0;
+    background: var(--rodando-bg);
+    color: var(--rodando-texto);
+  }
   .secao-pool-separacao .retrato-stokki { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--texto-suave); }
   .item-parada .nf-pedido { font-size: 11px; color: var(--texto-suave); }
   /* checkbox de seleção múltipla dentro de uma rota (Hugo, 17/08) --
@@ -1395,6 +1406,9 @@
   .modal-reagendar .acoes button { padding: 7px 14px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
   .modal-reagendar .acoes button.confirmar { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
   .modal-reagendar .acoes button.confirmar:hover { background: #26C49A; }
+  .modal-reagendar .acoes button.confirmar.insucesso { background: var(--erro); color: #fff; }
+  .modal-reagendar .opcoes-resultado { display: flex; gap: 18px; font-size: 13px; font-weight: 600; }
+  .modal-reagendar .opcoes-resultado label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
   .modal-reagendar .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
   .modal-reagendar .acoes button.cancelar:hover { background: var(--fundo); }
   .modal-reagendar textarea {
@@ -2069,11 +2083,18 @@
 
 {# "Marcar como entregue" de parada em rota já enviada (Hugo, 08/10): fecha o
    servico na VUUPT por API (POST /api/torre/marcar-entregue). Com foto do
-   canhoto ela vai para o checklist da VUUPT; sem foto, justificativa da lista. #}
+   canhoto ela vai para o checklist da VUUPT; sem foto, justificativa da lista.
+   "Sem sucesso" (Hugo, 06/11): mesma tela, fecha como insucesso com o motivo
+   da lista da VUUPT e observacao opcional (fluxo normal de insucesso). #}
 <div class="modal-overlay-reagendar" id="modal-entregue">
   <div class="modal-reagendar" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-entregue">
     <h2 id="titulo-modal-entregue">Marcar pedido como entregue</h2>
     <p class="subtitulo"><span id="entregue-prefixo">Pedido</span> <strong id="entregue-codigo"></strong></p>
+    <div class="campo-reagendar opcoes-resultado" role="radiogroup" aria-label="Resultado">
+      <label><input type="radio" name="entregue-resultado" value="entregue" checked onchange="aoMudarResultadoEntregue()"> Entregue</label>
+      <label><input type="radio" name="entregue-resultado" value="sem_sucesso" onchange="aoMudarResultadoEntregue()"> Sem sucesso</label>
+    </div>
+    <div id="entregue-bloco-entregue">
     <p class="subtitulo">Fecha na VUUPT agora. Com foto, ela vai para o checklist da VUUPT.</p>
     <div class="campo-reagendar">
       <label for="entregue-foto-canhoto">Foto do canhoto</label>
@@ -2095,9 +2116,25 @@
       <label for="entregue-texto-outro">Descreva</label>
       <textarea id="entregue-texto-outro" maxlength="200" placeholder="De 5 a 200 caracteres"></textarea>
     </div>
+    </div>
+    <div id="entregue-bloco-sem-sucesso" hidden>
+      <p class="subtitulo">Fecha na VUUPT agora como insucesso e segue o fluxo normal de insucesso.</p>
+      <div class="campo-reagendar">
+        <label for="entregue-motivo">Motivo da não entrega</label>
+        <select id="entregue-motivo">
+          <option value="">Selecione...</option>
+          {% for codigo, rotulo in motivos_sem_sucesso %}<option value="{{ codigo }}">{{ rotulo }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="campo-reagendar">
+        <label for="entregue-observacao">Observação (opcional)</label>
+        <textarea id="entregue-observacao" maxlength="200" placeholder="Até 200 caracteres"></textarea>
+      </div>
+    </div>
     <div class="acoes">
       <button type="button" class="cancelar" onclick="fecharModalEntregue()">Cancelar</button>
-      <button type="button" class="confirmar" onclick="confirmarEntregue(this)">Marcar como entregue</button>
+      <button type="button" class="confirmar" id="botao-confirmar-entregue" onclick="confirmarEntregue(this)">Marcar como entregue</button>
     </div>
   </div>
 </div>
@@ -2291,6 +2328,8 @@
         ? "abrirPainelImportacao()"
         : e.agente_id === "somente_expedicao"
         ? "abrirPainelExpedicao()"
+        : e.agente_id === "atualizar_status_stokki"
+        ? "rodarStatusStokki()"
         : e.agente_id === "gerar_romaneios"
         ? "abrirPainelRomaneios()"
         : `rodarAgentePlanejamento('${e.agente_id}', '${escaparHtmlAgentes(e.titulo)}')`;
@@ -2383,6 +2422,19 @@
     algumaEtapaAgentePlanejamentoRodando = true;
     // feedback imediato na barra, sem esperar o próximo ciclo
     fetch(`${BASE_PATH}/api/planejamento/agentes/etapas`).then(r => r.json()).then(j => renderAgentesPlanejamento(j.etapas));
+  }
+
+  // Status Stokki (Hugo, 09/11): relê a situação na Stokki e, quando termina, atualiza o pool e o
+  // selo das rotas com o retrato novo (mesmo Atualizar do pool).
+  async function rodarStatusStokki() {
+    if (!confirm("Reler agora na Stokki quem está em aberto, separação, conferência ou espera?\n(Não importa nada pra VUUPT.)")) return;
+    try {
+      await iniciarExecucaoAgentePlanejamento("atualizar_status_stokki");
+    } catch (e) {
+      alert(`Falha ao iniciar: ${e.message}`);
+      return;
+    }
+    aguardarExpedicaoEAtualizarPool("atualizar_status_stokki");
   }
 
   async function rodarAgentePlanejamento(agenteId, titulo) {
@@ -2630,7 +2682,7 @@
          espera). Vem do retrato que o pipeline grava a cada rodada, não da
          Stokki ao vivo -- por isso a hora no título. Continua arrastável. #}
       <div class="secao-pool secao-pool-separacao" data-secao="separacao" id="secao-pool-separacao">
-        <div class="cabecalho-secao-pool" title="Pedidos que já estão na Vuupt mas a Stokki ainda não marcou 'Aguardando Transportador' (em aberto, em separação, em conferência ou em espera). A situação é a do último retrato do pipeline, não ao vivo. Dá pra arrastar pra rota mesmo assim.">
+        <div class="cabecalho-secao-pool" title="Pedidos que já estão na Vuupt mas a Stokki ainda não marcou 'Aguardando Transportador' (em aberto, em separação, em conferência ou em espera). A situação é a do último retrato do pipeline, não ao vivo. Pode ir pra rota; só os em espera saem dela no envio à Vuupt.">
           <span class="seta-secao">▾</span>
           <span class="titulo-secao-pool">Em separação na Stokki (<span id="contagem-secao-separacao">0</span>) <span class="retrato-stokki" id="retrato-stokki">{% if dados and dados.retrato_stokki_em %}· retrato de {{ dados.retrato_stokki_em }}{% endif %}</span></span>
           <button type="button" class="botao-mini botao-selecionar-secao" data-secao="separacao" title="Seleciona só os pedidos visíveis desta seção">Selecionar</button>
@@ -2741,7 +2793,7 @@
       <button type="button" id="botao-editar-endereco-selecao-rotas" disabled title="Edita o MESMO endereço em todos os pedidos selecionados">Editar endereço</button>
       <button type="button" id="botao-transportadora-selecao-rotas" disabled title="Manda os pedidos selecionados por redespacho: troca o endereço de todos pelo galpão da transportadora TERCEIROS escolhida (cadastro de transportadoras, tela Transportadoras)">Transportadora</button>
       <button type="button" id="botao-reagendar-selecao-rotas" disabled title="Aplica a MESMA janela de data/horário a todos os pedidos selecionados">Agendar</button>
-      <button type="button" id="botao-entregue-selecao-rotas" disabled title="Fecha na VUUPT como entregue (sem canhoto) os pedidos selecionados que estão em rota já ENVIADA -- os de rascunho ficam de fora">Marcar entregue</button>
+      <button type="button" id="botao-entregue-selecao-rotas" disabled title="Fecha na VUUPT como entregue ou sem sucesso os pedidos selecionados que estão em rota já ENVIADA -- os de rascunho ficam de fora">Entregue / sem sucesso</button>
       <button type="button" id="botao-limpar-selecao-rotas">Limpar</button>
     </div>
     <div id="lista-rotas"></div>
@@ -3176,6 +3228,30 @@
     return (badges || []).map(b => `<span class="badge-trava">${escaparHtml(b)}</span>`).join("");
   }
 
+  // Situação na Stokki das paradas de uma rota (Hugo, 09/11), lida dos cards: muda por arrasto sem
+  // recarregar. Ex.: "📦 Stokki: 2 em separação · 1 em conferência"; códigos no title.
+  function situacaoStokkiDasParadas(lis) {
+    return lis.filter(li => li.dataset.situacaoStokki).map(li => ({
+      codigo: (li.querySelector(".codigo")?.textContent || "").trim(), situacao: li.dataset.situacaoStokki }));
+  }
+
+  function textoContagemSituacoes(itens) {
+    const contagem = {};
+    itens.forEach(i => { contagem[i.situacao] = (contagem[i.situacao] || 0) + 1; });
+    return Object.entries(contagem).map(([s, n]) => `${n} ${s.toLowerCase()}`).join(" · ");
+  }
+
+  function atualizarSituacaoStokkiRota(ul, lis) {
+    const el = ul.closest(".card-rota")?.querySelector(".situacao-stokki-rota");
+    if (!el) return;
+    const itens = situacaoStokkiDasParadas(lis);
+    el.textContent = itens.length ? `📦 Stokki: ${textoContagemSituacoes(itens)}` : "";
+    el.title = itens.length
+      ? `Situação na Stokki no último retrato do pipeline (só "Em espera" sai da rota no envio):\n`
+        + itens.map(i => `${i.codigo}: ${i.situacao}`).join("\n")
+      : "";
+  }
+
   function renumerarRotaEl(ul, rascunhoId) {
     // numera as paradas na ordem atual da rota (mesmo número do marcador
     // no mapa, na cor da rota). No modo "digitando a posição", o badge
@@ -3183,6 +3259,7 @@
     const enviada = !!ul.closest(".card-rota.enviada");
     const lis = Array.from(ul.children);
     const corRota = coresPorRascunho[rascunhoId] || "#6B7280";
+    atualizarSituacaoStokkiRota(ul, lis);
     lis.forEach((li, i) => {
       li.dataset.numero = i + 1;
       const el = li.querySelector(".numero");
@@ -3309,6 +3386,7 @@
       <div class="metricas" id="metricas-${rascunho.id}">${metricasTexto(rascunho)}</div>
       <div class="capacidade" id="capacidade-${rascunho.id}">${capacidadeHtml(rascunho)}</div>
       <div id="badges-${rascunho.id}">${badgesHtml(rascunho.badges)}</div>
+      <div class="situacao-stokki-rota"></div>
       <div id="status-${rascunho.id}">${statusHtml(rascunho)}</div>
       <div id="confirmacao-${rascunho.id}">${confirmacaoMotoristaHtml(rascunho)}</div>
       <div id="oferta-${rascunho.id}">${ofertaHtml(rascunho)}</div>
@@ -3420,6 +3498,7 @@
       janelaFonte: li.dataset.janelaFonte || "",
       chegadaPrevista: li.dataset.chegadaPrevista || "",
       foraJanela: li.dataset.foraJanela === "1",
+      situacaoStokki: li.dataset.situacaoStokki || "",
     };
   }
 
@@ -3442,6 +3521,7 @@
     if (d.nivel) extras.push(`nível ${d.nivel}`);
     if (d.horarioInicio && d.horarioFim) extras.push(`atende ${d.horarioInicio}–${d.horarioFim}`);
     if (textoJanelaParada(d)) extras.push(textoJanelaParada(d));
+    if (d.situacaoStokki) extras.push(`Stokki: ${d.situacaoStokki}`);
     partes.push(`<div class="extras">${escaparHtml(extras.join(" — "))}</div>`);
     return partes.join("");
   }
@@ -3459,6 +3539,7 @@
     if (d.nivel) extras.push(`nível ${d.nivel}`);
     if (d.horarioInicio && d.horarioFim) extras.push(`atende ${d.horarioInicio}–${d.horarioFim}`);
     if (textoJanelaParada(d)) extras.push(textoJanelaParada(d));
+    if (d.situacaoStokki) extras.push(`Stokki: ${d.situacaoStokki}`);
     linhas.push(extras.join(" — "));
     return linhas.join("\n");
   }
@@ -4319,14 +4400,14 @@
   // expedir_pedidos fecha o serviço na VUUPT na hora, então o refresh
   // já volta sem os expedidos). Polling barato no /agentes/etapas
   // (SQLite), 5s; para sozinho em 30 min se algo ficar pendurado.
-  async function aguardarExpedicaoEAtualizarPool() {
+  async function aguardarExpedicaoEAtualizarPool(agenteId = "somente_expedicao") {
     const inicio = Date.now();
     while (Date.now() - inicio < 30 * 60 * 1000) {
       await new Promise(r => setTimeout(r, 5000));
       try {
         const resp = await fetch(`${BASE_PATH}/api/planejamento/agentes/etapas`);
         if (!resp.ok) continue;
-        const etapa = ((await resp.json()).etapas || []).find(e => e.agente_id === "somente_expedicao");
+        const etapa = ((await resp.json()).etapas || []).find(e => e.agente_id === agenteId);
         // o POST de disparo já deixou a execução RODANDO/NA_FILA antes
         // deste polling começar -- "não ativa" aqui significa "terminou"
         if (!etapa || (!etapa.rodando && !etapa.na_fila)) break;
@@ -5858,12 +5939,12 @@
 
   function aplicarResultadoEnvio(resultado) {
     const statusEl = document.getElementById(`status-${resultado.rascunho_id}`);
-    // Pedido ainda em separação/conferência/espera na Stokki sai da rota antes do envio e volta pro pool
-    // (plano 1.2 do sistema novo); a tela SEMPRE diz quem saiu, inclusive quando a VUUPT falha depois
+    // Pedido em espera na Stokki sai da rota antes do envio e volta pro pool (plano 1.2 do sistema novo;
+    // desde 09/11 separação/conferência vão na rota); a tela SEMPRE diz quem saiu, inclusive quando a VUUPT falha depois
     // (revisão 25/10 -- mesma lição do 19/08: pedido nunca some sem aviso).
     const naoProntos = resultado.codigos_nao_prontos || [];
     const avisoNaoProntos = naoProntos.length
-      ? ` -- ${naoProntos.length} pedido(s) ainda em separação na Stokki (retrato de ${resultado.retrato_stokki_em || "?"}) voltaram pro pool, NÃO foram enviados: ${naoProntos.join(", ")}`
+      ? ` -- ${naoProntos.length} pedido(s) em espera na Stokki (retrato de ${resultado.retrato_stokki_em || "?"}) voltaram pro pool, NÃO foram enviados: ${naoProntos.join(", ")}`
       : "";
     if (resultado.ok) {
       let msg = `Enviada à VUUPT (rota #${resultado.vuupt_route_id})`;
@@ -5889,11 +5970,18 @@
     const comBadge = alvo.filter(r => (r.badges || []).length > 0);
     const isoladas = alvo.filter(r => (r.badges || []).some(b => b.startsWith("rota isolada")));
     const kmTotal = alvo.reduce((soma, r) => soma + (r.km_estimado || 0), 0);
+    // situação na Stokki pelos cards (Hugo, 09/11): em espera sai da rota no envio, o resto vai
+    const situacoes = alvo.flatMap(r => situacaoStokkiDasParadas(
+      Array.from(document.getElementById(`lista-parada-${r.id}`)?.children || [])));
+    const emEspera = situacoes.filter(i => i.situacao === "Em espera");
+    const noGalpao = situacoes.filter(i => i.situacao !== "Em espera");
     let html = `
       <div class="resumo-linha"><span>Rota(s) a enviar</span><span>${alvo.length}</span></div>
       <div class="resumo-linha${comBadge.length ? " alerta" : ""}"><span>Com aviso ativo (badge)</span><span>${comBadge.length}</span></div>
       <div class="resumo-linha${isoladas.length ? " alerta" : ""}"><span>Rota(s) isolada(s) (&le;2 paradas)</span><span>${isoladas.length}</span></div>
-      <div class="resumo-linha"><span>Km total do lote (estimado)</span><span>${kmTotal.toFixed(1)} km</span></div>`;
+      <div class="resumo-linha"><span>Km total do lote (estimado)</span><span>${kmTotal.toFixed(1)} km</span></div>
+      <div class="resumo-linha" title="${escaparHtml(noGalpao.map(i => `${i.codigo}: ${i.situacao}`).join("\n"))}"><span>Ainda no galpão (aberto/separação/conferência) -- vão na rota</span><span>${noGalpao.length}${noGalpao.length ? ` (${escaparHtml(textoContagemSituacoes(noGalpao))})` : ""}</span></div>
+      <div class="resumo-linha${emEspera.length ? " alerta" : ""}" title="${escaparHtml(emEspera.map(i => i.codigo).join("\n"))}"><span>Em espera na Stokki -- saem da rota no envio</span><span>${emEspera.length}</span></div>`;
     if (comBadge.length) {
       html += `<ul class="lista-rotas-alerta">${comBadge.map(r => `<li>${escaparHtml(r.nome)}: ${r.badges.map(escaparHtml).join("; ")}</li>`).join("")}</ul>`;
     }
@@ -5940,7 +6028,7 @@
         });
         alert(`Atenção: a VUUPT recusou ${comRemovidos.reduce((n, r) => n + r.codigos_removidos.length, 0)} pedido(s) por já constar(em) em outra rota (dado desatualizado) -- voltaram pro pool, NÃO foram enviados:\n${linhas.join("\n")}`);
       }
-      // idem pros pedidos ainda em separação na Stokki (plano 1.2): saem da rota antes do envio, ok ou não
+      // idem pros pedidos em espera na Stokki (plano 1.2): saem da rota antes do envio, ok ou não
       const comNaoProntos = resp.resultados.filter(r => r.codigos_nao_prontos && r.codigos_nao_prontos.length);
       if (comNaoProntos.length) {
         const linhas = comNaoProntos.map(r => {
@@ -5948,7 +6036,7 @@
           return `• ${nome}: ${r.codigos_nao_prontos.join(", ")}`;
         });
         const retrato = (comNaoProntos.find(r => r.retrato_stokki_em) || {}).retrato_stokki_em || "?";
-        alert(`Atenção: ${comNaoProntos.reduce((n, r) => n + r.codigos_nao_prontos.length, 0)} pedido(s) ainda em separação/conferência/espera na Stokki (retrato de ${retrato}) voltaram pro pool, NÃO foram enviados:\n${linhas.join("\n")}`);
+        alert(`Atenção: ${comNaoProntos.reduce((n, r) => n + r.codigos_nao_prontos.length, 0)} pedido(s) em espera na Stokki (retrato de ${retrato}) voltaram pro pool, NÃO foram enviados:\n${linhas.join("\n")}`);
       }
       // recarrega pra travar as rotas enviadas (some seus botões/drag) e refletir o pool atualizado
       location.reload();
@@ -6136,17 +6224,38 @@
   function abrirModalEntregueLote(itens) {
     if (!itens.length) return;
     const lote = itens.length > 1;
-    document.getElementById("titulo-modal-entregue").textContent = lote ? `Marcar ${itens.length} pedidos como entregues` : "Marcar pedido como entregue";
     document.getElementById("entregue-prefixo").textContent = lote ? `${itens.length} pedidos:` : "Pedido";
     document.getElementById("entregue-codigo").textContent = itens.map(it => it.codigo).join(", ");
     document.getElementById("entregue-foto-canhoto").value = "";
     document.getElementById("entregue-foto-nota").value = "";
     document.getElementById("entregue-justificativa").value = "";
     document.getElementById("entregue-texto-outro").value = "";
+    document.querySelector('input[name="entregue-resultado"][value="entregue"]').checked = true;
+    document.getElementById("entregue-motivo").value = "";
+    document.getElementById("entregue-observacao").value = "";
     aoMudarFotoEntregue();
     entreguePendente = { itens };
+    aoMudarResultadoEntregue();
     document.getElementById("modal-entregue").classList.add("aberto");
     document.getElementById("entregue-foto-canhoto").focus();
+  }
+
+  // "Sem sucesso" (Hugo, 06/11): troca fotos/justificativa por motivo + observação.
+  function resultadoEntregue() {
+    return document.querySelector('input[name="entregue-resultado"]:checked').value;
+  }
+
+  function aoMudarResultadoEntregue() {
+    const semSucesso = resultadoEntregue() === "sem_sucesso";
+    const n = entreguePendente ? entreguePendente.itens.length : 1;
+    document.getElementById("entregue-bloco-entregue").hidden = semSucesso;
+    document.getElementById("entregue-bloco-sem-sucesso").hidden = !semSucesso;
+    document.getElementById("titulo-modal-entregue").textContent = semSucesso
+      ? (n > 1 ? `Marcar ${n} pedidos sem sucesso` : "Marcar pedido sem sucesso")
+      : (n > 1 ? `Marcar ${n} pedidos como entregues` : "Marcar pedido como entregue");
+    const botao = document.getElementById("botao-confirmar-entregue");
+    botao.textContent = semSucesso ? "Marcar sem sucesso" : "Marcar como entregue";
+    botao.classList.toggle("insucesso", semSucesso);
   }
 
   // Com foto do canhoto a justificativa some; sem foto ela é obrigatória.
@@ -6200,6 +6309,7 @@
   async function confirmarEntregue(botao) {
     const pendente = entreguePendente;
     if (!pendente) return;
+    if (resultadoEntregue() === "sem_sucesso") return confirmarSemSucesso(botao, pendente);
     let fotoCanhoto = document.getElementById("entregue-foto-canhoto").files[0] || null;
     let fotoNota = document.getElementById("entregue-foto-nota").files[0] || null;
     const justificativa = document.getElementById("entregue-justificativa").value;
@@ -6267,6 +6377,45 @@
     if (fechados.length) linhas.push(`Marcado(s) como entregue(s) na VUUPT: ${fechados.join(", ")}`);
     if (jaEstavam.length) linhas.push(`Já constava(m) como entregue(s): ${jaEstavam.join(", ")}`);
     if (avisos.length) linhas.push(`Avisos:\n${avisos.join("\n")}`);
+    if (falhas.length) linhas.push(`Falharam (${falhas.length}):\n${falhas.join("\n")}`);
+    alert(linhas.join("\n\n"));
+  }
+
+  // mesmo motivo e observação pra todos, um POST por pedido (falha de um não para os outros)
+  async function confirmarSemSucesso(botao, pendente) {
+    const motivo = document.getElementById("entregue-motivo").value;
+    const observacao = document.getElementById("entregue-observacao").value.trim();
+    if (!motivo) { alert("Escolha o motivo da não entrega."); return; }
+    const original = botao.textContent;
+    botao.disabled = true;
+    const fechados = [], jaEstavam = [], falhas = [];
+    try {
+      for (const [i, it] of pendente.itens.entries()) {
+        botao.textContent = pendente.itens.length > 1
+          ? `Fechando na VUUPT... ${i + 1}/${pendente.itens.length}` : "Fechando na VUUPT...";
+        try {
+          const fd = new FormData();
+          fd.append("service_id", it.serviceId);
+          fd.append("resultado", "sem_sucesso");
+          fd.append("failed_reason_id", motivo);
+          if (observacao) fd.append("observacao", observacao);
+          const resp = await fetch(URL_PLANEJAMENTO_MARCAR_ENTREGUE, { method: "POST", body: fd });
+          const dados = await resp.json();
+          if (!resp.ok) throw new Error(dados.erro || "Falha ao marcar sem sucesso.");
+          (dados.ja_estava ? jaEstavam : fechados).push(dados.codigo || it.codigo);
+        } catch (e) {
+          falhas.push(`${it.codigo}: ${e.message}`);
+        }
+      }
+    } finally {
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+    fecharModalEntregue();
+    if (pendente.itens.length > 1 && !falhas.length) limparSelecaoRotas();
+    const linhas = [];
+    if (fechados.length) linhas.push(`Marcado(s) sem sucesso na VUUPT: ${fechados.join(", ")}`);
+    if (jaEstavam.length) linhas.push(`Já constava(m) sem sucesso: ${jaEstavam.join(", ")}`);
     if (falhas.length) linhas.push(`Falharam (${falhas.length}):\n${falhas.join("\n")}`);
     alert(linhas.join("\n\n"));
   }
@@ -6886,8 +7035,8 @@
     if (PODE_EDITAR && rotaTravada) {
       // card na seleção: vale pra todos os selecionados em rota enviada (23/10)
       const loteEntregue = SELECIONADOS_ROTA.has(serviceId) ? itensEntregaveisSelecionados() : [];
-      if (loteEntregue.length > 1) itens.push({ rotulo: `Marcar como entregue (${loteEntregue.length} selecionados)`, acao: () => abrirModalEntregueLote(loteEntregue) });
-      else itens.push({ rotulo: "Marcar como entregue", acao: () => abrirModalEntregue(li, serviceId) });
+      if (loteEntregue.length > 1) itens.push({ rotulo: `Marcar entregue / sem sucesso (${loteEntregue.length} selecionados)`, acao: () => abrirModalEntregueLote(loteEntregue) });
+      else itens.push({ rotulo: "Marcar entregue / sem sucesso", acao: () => abrirModalEntregue(li, serviceId) });
     }
     if (PODE_EDITAR) {
       itens.push({ rotulo: "Cancelar pedido", classe: "perigo", acao: () => cancelarPedido(serviceId, rascunhoId, null) });
@@ -6962,6 +7111,23 @@
           if (li) li.remove();
         }
       });
+
+      // paradas já em rota: situação do mesmo retrato, pelo código base (Hugo, 09/11)
+      if (dados.situacoes_stokki) {
+        document.querySelectorAll(".card-rota .lista-paradas").forEach(ul => {
+          const lis = Array.from(ul.children);
+          lis.forEach(li => {
+            const codigos = (li.querySelector(".codigo")?.textContent || "").split(",")
+              .map(c => c.trim().replace(/^#/, "").toUpperCase().replace(/-R\d+$/, "")).filter(Boolean);
+            const situacao = codigos.map(c => dados.situacoes_stokki[c]).find(Boolean) || "";
+            if ((li.dataset.situacaoStokki || "") === situacao) return;
+            li.dataset.situacaoStokki = situacao;
+            li.querySelector(".badge-separacao")?.remove();
+            if (situacao) li.insertAdjacentHTML("beforeend", " " + badgeSeparacaoHtml({ situacao_stokki: situacao }));
+          });
+          atualizarSituacaoStokkiRota(ul, lis);
+        });
+      }
 
       document.getElementById("contagem-pool").textContent = Object.keys(POOL_BY_ID).length;
       document.getElementById("busca-pool").dispatchEvent(new Event("input"));  // reaplica filtro de busca ativo

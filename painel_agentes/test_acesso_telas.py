@@ -33,7 +33,8 @@ FORA_DO_CATALOGO = {"static", "login", "logout", "api_romaneios_pendentes", "api
                     "api_notificacoes_excecao", "api_notificacoes_piloto", "api_notificacoes_desfazer",
                     "api_notificacoes_embarcador", "api_notificacoes_embarcador_salvar",
                     "api_notificacoes_embarcador_situacao", "api_notificacoes_disparo_dados",
-                    "api_notificacoes_disparo"}
+                    "api_notificacoes_disparo",
+                    "homologacao.saude", "homologacao.envios", "homologacao.envio_detalhe"}
 
 
 def _caminho_exemplo(regra: str) -> str:
@@ -58,6 +59,11 @@ class TestCatalogo(unittest.TestCase):
     def test_inicio_nao_aprova_embarcador_sem_a_permissao(self):
         self.assertFalse(acesso_telas.caminho_liberado("/api/cadastro-embarcador/123/aprovar", ["inicio"]))
         self.assertTrue(acesso_telas.caminho_liberado("/api/cadastro-embarcador/123/aprovar", ["aprovar_embarcadores"]))
+
+    def test_pedidos_tabela_abre_canhotos(self):
+        for caminho in ("/pedidos/canhoto/manual/PS-1.pdf", "/pedidos/canhoto/vuupt/5.pdf",
+                        "/api/pedidos/acao/comprovantes", "/canhotos/5/foto"):
+            self.assertTrue(acesso_telas.caminho_liberado(caminho, ["pedidos_tabela"]), caminho)
 
     def test_planejamento_valida_foto_em_massa(self):
         # o modal do Planejamento chama a validacao do lote antes do marcar-entregue (30/10)

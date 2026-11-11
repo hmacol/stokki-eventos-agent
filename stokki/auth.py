@@ -101,6 +101,12 @@ class StokkiSession:
         conta até o processo terminar; fora dela, a conta da trava que o
         processo segura ou a principal (ver _aguardar_trava_stokki).
         """
+        if os.environ.get("FRESH_AMBIENTE", "").strip().lower() == "homolog":
+            # homologacao: nunca login na Stokki, nem para ler (nem entra na fila das contas)
+            from homologacao import registro
+            from homologacao.guarda import EnvioBloqueadoHomolog
+            registro.registrar_envio("stokki", None, "login StokkiSession", None, None)
+            raise EnvioBloqueadoHomolog("indisponível na homologação: login na Stokki")
         self._config = config
         self._usar_conta(conta or self._entrar_na_fila())
         if not self._usuario or not self._senha:

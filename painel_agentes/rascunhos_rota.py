@@ -1354,7 +1354,7 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
         return {"rascunho_id": rascunho_id, "ok": False, "erro": "Rascunho sem paradas.", "codigos_nao_prontos": []}
 
     # A rota so sai com pedido liberado pela Stokki (plano 1.2 do sistema novo, spec 5.4): parada cujo
-    # pedido o retrato do pipeline ainda mostra em separacao/conferencia/espera sai do rascunho (volta ao
+    # pedido o retrato do pipeline mostra em espera (desde 09/11 so esse; separacao/conferencia vao) sai do rascunho (volta ao
     # pool; o servico continua not_assigned na Vuupt) e vira evento `nao_aprontou` no freshhub. Todo retorno
     # daqui em diante leva `codigos_nao_prontos` e a hora do retrato: a tela avisa quem saiu (revisao 25/10).
     config = _carregar_config()
@@ -1365,14 +1365,14 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
     if nao_prontas:
         for p in nao_prontas:
             remover_parada(rascunho_id, p["service_id"])
-        logger.info(f"Rascunho {rascunho_id}: {len(nao_prontas)} parada(s) ainda nao pronta(s) na Stokki "
+        logger.info(f"Rascunho {rascunho_id}: {len(nao_prontas)} parada(s) em espera na Stokki "
                     f"voltaram ao pool: " + ", ".join(f"{p['codigo']} ({p['situacao_stokki']})" for p in nao_prontas))
         _avisar_freshhub("nao_aprontou", lambda: eventos_freshhub.nao_aprontaram(
             config, nao_prontas, contexto={"rascunho_id": rascunho_id, "rota_nome": rascunho["nome"],
                                            "origem": "envio"}))
     if not paradas:
-        mensagem = (f"Nenhuma parada liberada pela Stokki ainda ({len(nao_prontas)} em separacao/conferencia/"
-                    f"espera) -- nada enviado; os pedidos voltaram ao pool.")
+        mensagem = (f"Todas as paradas estao em espera na Stokki ({len(nao_prontas)}) -- nada enviado; "
+                    f"os pedidos voltaram ao pool.")
         marcar_erro_envio(rascunho_id, mensagem)
         return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem, **saiu}
 

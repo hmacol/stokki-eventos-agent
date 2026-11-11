@@ -244,7 +244,9 @@ def _expedir_pedidos_raiz():
 
 
 def duplicar_pedido_manual(service_id: int, codigo: str,
-                           motorista: str | None = None, rota: str | None = None) -> dict:
+                           motorista: str | None = None, rota: str | None = None, *,
+                           origem: str = "TORRE", texto: str | None = None,
+                           servico_original: dict | None = None, marcar_tratado: bool = True) -> dict:
     """
     Duplica manualmente um pedido com insucesso -- botão 'Duplicar
     pedido' da fila de ação (pedido do Hugo, 17/08: poder disparar a
@@ -254,6 +256,10 @@ def duplicar_pedido_manual(service_id: int, codigo: str,
     grava no MESMO fingerprint (insucessos_duplicados) -- o badge da
     fila passa a mostrar 'Duplicado' também pra essa duplicação manual,
     e o fluxo automático por e-mail não duplica de novo em cima dela.
+
+    Tela /pedidos (10/11) reaproveita: origem="PEDIDOS", servico_original (já lido
+    na Vuupt, não busca por code), texto com o marcador {novo} (vira o novo code)
+    e marcar_tratado=False (só insucesso sai da fila de ação).
     """
     import fingerprint_duplicacao_insucesso  # já no sys.path (insucesso_entrega/)
 
@@ -265,7 +271,8 @@ def duplicar_pedido_manual(service_id: int, codigo: str,
     token = config.get("vuupt_api", {}).get("token", "")
     vuupt = VuuptClient(token)
 
-    servico_original = vuupt.buscar_servico_por_code(codigo)
+    if servico_original is None:
+        servico_original = vuupt.buscar_servico_por_code(codigo)
     if not servico_original:
         return {"ok": False, "erro": f"Pedido {codigo} não encontrado no VUUPT."}
 
@@ -277,10 +284,13 @@ def duplicar_pedido_manual(service_id: int, codigo: str,
     novo_code = novo.get("code", "")
     fingerprint_duplicacao_insucesso.marcar_duplicado(service_id, novo_code)
     tratativas.registrar_evento(
-        codigo, "TORRE", "REENVIO_MANUAL",
+        codigo, origem, "REENVIO_MANUAL",
         service_id=service_id, motorista_nome=motorista, rota_nome=rota,
-        texto=f"Duplicado manualmente pela Torre → {novo_code}",
+        texto=(texto.replace("{novo}", novo_code) if texto
+               else f"Duplicado manualmente pela Torre → {novo_code}"),
     )
+    if not marcar_tratado:
+        return {"ok": True, "novo_code": novo_code}
     # Duplicar É a tratativa (Hugo, 16/09): o insucesso sai da Fila de
     # ação na hora e vai pro histórico de tratadas, sem precisar clicar
     # "Tratar" depois -- e a rota deixa de ficar presa na torre por
@@ -359,6 +369,7 @@ MSG_FOTO_EM_MASSA = ("Foto em massa só para pedidos do mesmo embarcador e do me
 AVISO_NOTA_SEM_CANHOTO = "A foto da nota de retorno só vai junto da foto do canhoto."
 DISTANCIA_MESMO_LOCAL_M = 50
 LIMITE_ERRO_TELA = 200      # texto de erro da Vuupt mostrado ao usuario (o completo vai pro log)
+LIMITE_OBSERVACAO_SEM_SUCESSO = 200   # observacao opcional do "Sem sucesso" (06/11)
 
 
 def _endereco_normalizado(servico: dict) -> str:
@@ -575,19 +586,89 @@ def marcar_entregue_manual(service_id: int, usuario: str, foto_canhoto: bytes | 
     return resultado
 
 
+def motivos_sem_sucesso() -> list[tuple[int, str]]:
+    """Motivos do "Sem sucesso" (mesma lista da baixa sem app), por texto."""
+    from insucesso_entrega.motivos_falha import MOTIVOS_FALHA
+    return sorted(((k, v["texto"]) for k, v in MOTIVOS_FALHA.items()), key=lambda kv: kv[1])
+
+
+def marcar_sem_sucesso_manual(service_id: int, usuario: str, failed_reason_id,
+                              observacao: str | None = None) -> dict:
+    """
+    Fecha um pedido como INSUCESSO direto na Vuupt -- opcao "Sem sucesso"
+    do mesmo modal do "Marcar como entregue" (Hugo, 06/11). Motivo da lista
+    da Vuupt (motivos_sem_sucesso) obrigatorio, observacao opcional (so
+    auditoria: torre_entregas_manuais + tratativas INSUCESSO_MANUAL). Dai
+    em diante e o fluxo normal de insucesso (expedir_pedidos detecta e
+    pergunta ao embarcador), igual a baixa sem app.
+
+    Travas: so servico com motorista e ainda aberto. 'failed' devolve ok
+    sem mexer (ja_estava=True); done, canceled e not_assigned recusam.
+    """
+    from insucesso_entrega.motivos_falha import MOTIVOS_FALHA
+    try:
+        motivo_id = int(failed_reason_id)
+    except (TypeError, ValueError):
+        motivo_id = None
+    if motivo_id not in MOTIVOS_FALHA:
+        return {"ok": False, "erro": "Escolha o motivo da não entrega."}
+    observacao = (observacao or "").strip()
+    if len(observacao) > LIMITE_OBSERVACAO_SEM_SUCESSO:
+        return {"ok": False, "erro": f"Observação com mais de {LIMITE_OBSERVACAO_SEM_SUCESSO} caracteres."}
+    motivo = MOTIVOS_FALHA[motivo_id]["texto"]
+
+    config = _carregar_config()
+    vuupt = VuuptClient(config.get("vuupt_api", {}).get("token", ""))
+    servico = vuupt.buscar_servico_por_id(service_id)
+    if not servico:
+        return {"ok": False, "erro": f"Pedido {service_id} não encontrado na VUUPT."}
+    codigo = servico.get("code") or f"#{service_id}"
+    status = servico.get("status") or ""
+
+    if status == "failed":
+        return {"ok": True, "ja_estava": True, "codigo": codigo}
+    if status == "canceled":
+        return {"ok": False, "erro": f"Pedido {codigo} está cancelado na VUUPT."}
+    if status == "done":
+        return {"ok": False, "erro": f"Pedido {codigo} já está entregue na VUUPT."}
+    if status not in _STATUS_SERVICO_ABERTO_COM_MOTORISTA:
+        return {"ok": False, "erro": f"Pedido {codigo} está sem motorista na VUUPT "
+                                     f"(status '{status}') -- não dá pra fechar sem alguém atribuído."}
+    try:
+        vuupt.concluir_como_agente(service_id, sucesso=False, failed_reason_id=motivo_id,
+                                   status_atual=status, servico=servico)
+    except Exception as e:
+        logger.warning(f"Sem sucesso {codigo}: falha ao fechar na VUUPT: {e}")
+        return {"ok": False, "erro": f"Falha ao fechar na VUUPT: {str(e)[:LIMITE_ERRO_TELA]}"}
+
+    detalhe = f"Sem sucesso: {motivo}" + (f" ({observacao})" if observacao else "")
+    _registrar_entrega_manual(service_id, codigo, status, usuario, detalhe,
+                              texto_outro=observacao or None, resultado="insucesso",
+                              failed_reason_id=motivo_id)
+    tratativas.registrar_evento(
+        codigo, "TORRE", "INSUCESSO_MANUAL", service_id=service_id,
+        motivo_id=motivo_id, motivo_texto=motivo,
+        texto=f"Marcado sem sucesso pelo painel por {usuario or '?'}: {motivo}"
+              + (f" ({observacao})." if observacao else "."),
+    )
+    return {"ok": True, "codigo": codigo}
+
+
 def _registrar_entrega_manual(service_id: int, codigo: str, status_anterior: str,
                               usuario: str, observacao: str, justificativa: str | None = None,
                               texto_outro: str | None = None, checklist_id: int | None = None,
-                              fotos: int = 0) -> None:
+                              fotos: int = 0, resultado: str = "entregue",
+                              failed_reason_id: int | None = None) -> None:
     conn = _conectar_tratadas()
     conn.execute("""
         INSERT INTO torre_entregas_manuais
             (service_id, codigo, status_anterior, usuario, observacao, marcado_em,
-             justificativa, texto_outro, checklist_id, fotos)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             justificativa, texto_outro, checklist_id, fotos, resultado, failed_reason_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (int(service_id), (codigo or "")[:60], (status_anterior or "")[:30], (usuario or "")[:100],
           observacao[:500], datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-          justificativa, (texto_outro or "")[:200] or None, checklist_id, int(fotos)))
+          justificativa, (texto_outro or "")[:200] or None, checklist_id, int(fotos),
+          resultado, failed_reason_id))
     conn.commit()
     conn.close()
 
@@ -601,7 +682,8 @@ def _buscar_entregas_manuais(service_ids: list[int]) -> dict[int, dict]:
     marcas = ",".join("?" * len(service_ids))
     rows = conn.execute(f"""
         SELECT service_id, codigo, status_anterior, usuario, observacao, marcado_em,
-               justificativa, texto_outro, checklist_id, fotos
+               justificativa, texto_outro, checklist_id, fotos,
+               resultado, failed_reason_id
           FROM torre_entregas_manuais
          WHERE service_id IN ({marcas})
          ORDER BY marcado_em
@@ -1525,10 +1607,13 @@ def _conectar_tratadas():
         )
     """)
     # Checklist pelas telas (29/10): justificativa da lista, id do checklist
-    # da Vuupt e quantas fotos foram. ALTER idempotente (banco ja existente).
+    # da Vuupt e quantas fotos foram. "Sem sucesso" (06/11): resultado
+    # ('entregue'/'insucesso'; NULL = entregue, registro antigo) e o motivo.
+    # ALTER idempotente (banco ja existente).
     colunas = {r[1] for r in conn.execute("PRAGMA table_info(torre_entregas_manuais)")}
     for nome, tipo in (("justificativa", "TEXT"), ("texto_outro", "TEXT"),
-                       ("checklist_id", "INTEGER"), ("fotos", "INTEGER")):
+                       ("checklist_id", "INTEGER"), ("fotos", "INTEGER"),
+                       ("resultado", "TEXT"), ("failed_reason_id", "INTEGER")):
         if nome not in colunas:
             try:
                 conn.execute(f"ALTER TABLE torre_entregas_manuais ADD COLUMN {nome} {tipo}")
