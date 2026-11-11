@@ -146,6 +146,10 @@ def gerar(prod: dict, *, url_base_painel: str, url_base_portal: str,
 
     for secao in ("painel_agentes", "portal_cliente"):
         _gravar(cfg, f"{secao}.secret_key", secrets.token_hex(32))
+    # o requer_auth so liga o painel com usuario+senha no config: senha aleatoria e desconhecida,
+    # o par do config nao entra e so valem os logins nominais (D6; visto no 1o subir, 10/11)
+    if isinstance(cfg.get("painel_agentes"), dict) and cfg["painel_agentes"].get("usuario"):
+        cfg["painel_agentes"]["senha"] = secrets.token_urlsafe(32)
 
     if isinstance(cfg.get("whatsapp_notificacoes"), dict):
         cfg["whatsapp_notificacoes"]["api_key"] = CHAVE_FALSA_OPENWA

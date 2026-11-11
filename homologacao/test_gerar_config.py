@@ -132,6 +132,24 @@ class TestGerar(unittest.TestCase):
         int(painel, 16)
         self.assertIn("painel_agentes.secret_key", removidas)
 
+    def test_senha_do_painel_vira_aleatoria(self):
+        """O requer_auth so liga o painel com usuario+senha no config (visto no 1o subir, 10/11):
+        a senha vira aleatoria e desconhecida (o par do config nao entra; so logins nominais, D6)."""
+        prod = {"painel_agentes": {"usuario": "admin", "senha": "PROD-SENHA",
+                                   "usuario_operador": "op", "senha_operador": "PROD-OP"}}
+        cfg, removidas, _ = _gerar(prod)
+        senha = cfg["painel_agentes"]["senha"]
+        self.assertNotEqual(senha, "PROD-SENHA")
+        self.assertGreaterEqual(len(senha), 40)
+        self.assertNotEqual(senha, _gerar(prod)[0]["painel_agentes"]["senha"])
+        self.assertEqual(cfg["painel_agentes"]["usuario"], "admin")
+        self.assertNotIn("senha_operador", cfg["painel_agentes"])
+        self.assertIn("painel_agentes.senha", removidas)
+
+    def test_sem_usuario_no_painel_nao_cria_senha(self):
+        cfg, _, _ = _gerar({"painel_agentes": {"senha": "x"}})
+        self.assertNotIn("senha", cfg["painel_agentes"])
+
     def test_openwa_ganha_chave_falsa(self):
         prod = {"whatsapp_notificacoes": {"base_url": "http://127.0.0.1:2785",
                                           "api_key": "real", "sessao": "s"}}
