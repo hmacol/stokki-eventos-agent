@@ -207,9 +207,11 @@ def anexar(conn: sqlite3.Connection, envio: dict, anexos: list[dict], por: str) 
         vistos.add(info["hash"])
         outro = conn.execute(
             "SELECT e.* FROM portal_envios_anexos a JOIN portal_envios e ON e.id = a.envio_id "
-            "WHERE a.hash_conteudo = ? AND a.cnpj_embarcador = ?", (info["hash"], emb)).fetchone()
+            "WHERE a.hash_conteudo = ? ORDER BY a.cnpj_embarcador = ? DESC", (info["hash"], emb)).fetchone()
         if outro:
-            onde = "neste pedido" if outro["id"] == envio["id"] else f"no pedido {ep.rotulo_envio(dict(outro))}"
+            # de outro embarcador: recusa sem dizer de quem e
+            onde = ("neste pedido" if outro["id"] == envio["id"]
+                    else f"no pedido {ep.rotulo_envio(dict(outro))}" if outro["cnpj_embarcador"] == emb else "em outro pedido")
             raise ep.ErroEnvio(f"{info['nome']}: este documento já está {onde}.")
     _pasta().mkdir(parents=True, exist_ok=True)
     gravados = []
@@ -256,9 +258,19 @@ def registrar_no_romaneio(conn: sqlite3.Connection, envio_id: int) -> int:
     for a in conn.execute(f"SELECT {cols} FROM portal_envios_anexos WHERE envio_id = ? AND registrado_em IS NULL",
                           (envio_id,)).fetchall():
         aid, arquivo, hash_, tipo, numero_nf, parcela, total, cnpj = a
-        existente = conn.execute("SELECT origem FROM documentos_processados WHERE hash_conteudo = ?", (hash_,)).fetchone()
-        # Mesmo arquivo que a Stokki ja entregou: o registro oficial fica como esta.
-        if not (existente and existente[0] == "stokki"):
+        existente = conn.execute("SELECT origem, status, codigo_pedido FROM documentos_processados WHERE hash_conteudo = ?",
+                                 (hash_,)).fetchone()
+        # O hash e a chave da tabela: um arquivo identico que ja esta ENVIADO (da
+        # Stokki, de e-mail ou de outro pedido/cliente) fica como esta -- o portal
+        # nunca toma o documento de outro dono (revisao de seguranca, 11/11). So
+        # assume a linha que ainda nao casou com ninguem (REVISAO_MANUAL) ou a
+        # propria (mesmo pedido, origem portal).
+        dono_alheio = existente and existente[1] == "ENVIADO" and not (
+            existente[0] == ORIGEM_DOCUMENTO and existente[2] == codigo)
+        if dono_alheio:
+            logger.warning(f"anexo {arquivo} (envio {envio_id}): arquivo identico ja registrado em {existente[2]} "
+                           f"({existente[0]}); nao registrado pro romaneio de {codigo}")
+        else:
             conn.execute(
                 "INSERT OR REPLACE INTO documentos_processados (hash_conteudo, origem, nome_arquivo, tipo, codigo_pedido, "
                 "status, motivo, gcs_path, processado_em, numero_parcela, total_parcelas, numero_nf, cnpj_contraparte) "

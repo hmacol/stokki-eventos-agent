@@ -136,6 +136,32 @@ class Gravacao(Base):
         with self.assertRaises(ep.ErroEnvio):
             ax.anexar(conn, e2, [{"token": ax.guardar_previa("a.pdf", _pdf())["token"]}], "cliente")
 
+    def test_nao_toma_documento_ja_enviado_de_outro_pedido(self):
+        """Revisao de seguranca 11/11: arquivo identico ja ENVIADO a outro pedido
+        (e-mail, outro cliente) continua do dono; so a linha sem dono e assumida."""
+        conn = self._conn()
+        envio = self._envio(conn, "1", codigo="PS-7", status="CRIADO")
+        for cor, status, codigo, esperado in ((61, "ENVIADO", "PS-999", ("email", "PS-999")),
+                                              (62, "REVISAO_MANUAL", None, ("portal", "PS-7"))):
+            previa = ax.guardar_previa(f"boleto{cor}.pdf", _pdf(cor))
+            hash_ = ax._ler_temporario(previa["token"])[0]["hash"]
+            conn.execute("INSERT INTO documentos_processados (hash_conteudo, origem, nome_arquivo, tipo, codigo_pedido, status, "
+                         "processado_em) VALUES (?, 'email', 'b.pdf', 'Boleto', ?, ?, '2026-11-10')", (hash_, codigo, status))
+            ax.anexar(conn, envio, [{"token": previa["token"]}], "cliente")
+            linha = conn.execute("SELECT origem, codigo_pedido FROM documentos_processados WHERE hash_conteudo = ?", (hash_,)).fetchone()
+            self.assertEqual(tuple(linha), esperado)
+
+    def test_documento_de_outro_embarcador_e_recusado_sem_dizer_de_quem(self):
+        conn = self._conn()
+        conn.execute("INSERT INTO portal_envios (cnpj_embarcador, chave_nfe, numero_nf, xml_path, status, criado_em, atualizado_em) "
+                     "VALUES ('99999999000199', 'z', '4242', 'x.xml', 'NA_FILA', '2026-11-11', '2026-11-11')")
+        alheio = dict(conn.execute("SELECT * FROM portal_envios WHERE chave_nfe = 'z'").fetchone())
+        ax.anexar(conn, alheio, [{"token": ax.guardar_previa("a.pdf", _pdf(63))["token"]}], "cliente")
+        with self.assertRaises(ep.ErroEnvio) as erro:
+            ax.anexar(conn, self._envio(conn, "1"), [{"token": ax.guardar_previa("a.pdf", _pdf(63))["token"]}], "cliente")
+        self.assertIn("em outro pedido", str(erro.exception))
+        self.assertNotIn("4242", str(erro.exception))
+
     def test_nao_sobrescreve_documento_que_veio_da_stokki(self):
         conn = self._conn()
         envio = self._envio(conn, "1", codigo="PS-7", status="CRIADO")
