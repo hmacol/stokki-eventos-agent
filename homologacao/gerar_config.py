@@ -4,8 +4,8 @@ Roda na VPS (criar.sh), como root:
     venv/bin/python -m homologacao.gerar_config --origem <prod> --destino <homolog> --caminho-gcs <arq>
 
 Remove toda chave com nome de segredo, em qualquer nivel; reinsere so os liberados (lista fixa);
-gera secret_key novos para painel e portal; troca url_base de app. por homolog.; acrescenta a
-secao homologacao. Grava o destino com 0600 e imprime SO nomes de chaves, nunca valores.
+gera secret_key novos para painel e portal; troca url_base de app. por homolog. e os caminhos de
+/opt/stokki-eventos por /opt/stokki-homolog; acrescenta a secao homologacao. Grava o destino com 0600 e imprime SO nomes de chaves, nunca valores.
 """
 import argparse
 import copy
@@ -39,6 +39,8 @@ SEGREDOS_LIBERADOS = ["vuupt_api.token", "google_maps.api_key", "anthropic.api_k
                       "freshhub_api.token", "gcs.credenciais_json"]
 URL_PRODUCAO = "https://app.freshhub.com.br/"
 URL_HOMOLOG = "https://homolog.freshhub.com.br/"
+PASTA_PRODUCAO = "/opt/stokki-eventos"
+PASTA_HOMOLOG = "/opt/stokki-homolog"
 CHAVE_FALSA_OPENWA = "HOMOLOG-SEM-CHAVE"
 CNPJS_PERMITIDOS = ["00000000000191"]
 
@@ -100,6 +102,23 @@ def _trocar_url_base(no):
             _trocar_url_base(item)
 
 
+def _trocar_caminhos(no):
+    # o usuario homolog nao le a pasta da producao (dados/ fechado): todo caminho absoluto
+    # dela passa a apontar para a copia da homologacao (visto 11/11: BD_CLIENTES.xlsx, Errno 13)
+    def _trocar(valor):
+        if isinstance(valor, str) and (valor == PASTA_PRODUCAO or valor.startswith(PASTA_PRODUCAO + "/")):
+            return PASTA_HOMOLOG + valor[len(PASTA_PRODUCAO):]
+        _trocar_caminhos(valor)
+        return valor
+
+    if isinstance(no, dict):
+        for chave in no:
+            no[chave] = _trocar(no[chave])
+    elif isinstance(no, list):
+        for i, item in enumerate(no):
+            no[i] = _trocar(item)
+
+
 def _ler(cfg, pontuado):
     no = cfg
     for parte in pontuado.split("."):
@@ -155,6 +174,7 @@ def gerar(prod: dict, *, url_base_painel: str, url_base_portal: str,
         cfg["whatsapp_notificacoes"]["api_key"] = CHAVE_FALSA_OPENWA
 
     _trocar_url_base(cfg)
+    _trocar_caminhos(cfg)
     _url_base_fixa(cfg, "painel_agentes", url_base_painel)
     _url_base_fixa(cfg, "portal_cliente", url_base_portal)
 
