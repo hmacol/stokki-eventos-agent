@@ -47,6 +47,7 @@ PORTA_FRESHHUB_HML = 8101
 # host externo -> (metodos liberados, caminho exigido ou None)
 _LIBERADOS = {
     "api.vuupt.com": ({"GET", "HEAD"}, None),
+    "app.vuupt.com": ({"GET", "HEAD"}, None),  # vuupt_client.py le daqui (prova da VPS, 10/11)
     "maps.googleapis.com": ({"GET"}, None),
     "storage.googleapis.com": ({"GET", "HEAD"}, None),
     "oauth2.googleapis.com": ({"POST"}, "/token"),
@@ -430,7 +431,7 @@ def _instalar_playwright():
 
 # ---------------------------------------------------------------- socket
 
-NOMES_PERMITIDOS = {"api.vuupt.com", "maps.googleapis.com", "storage.googleapis.com", "oauth2.googleapis.com",
+NOMES_PERMITIDOS = {"api.vuupt.com", "app.vuupt.com", "maps.googleapis.com", "storage.googleapis.com", "oauth2.googleapis.com",
                     "api.anthropic.com", "viacep.com.br", "brasilapi.com.br", "localhost"}
 
 _IPS_RESOLVIDOS = set()  # ipaddress dos nomes permitidos ja resolvidos neste processo

@@ -53,6 +53,13 @@ class TestGuardaRede(unittest.TestCase):
             ("GET", "https://api.vuupt.com/api/v1/services", "passa"),
             ("PUT", "https://api.vuupt.com/api/v1/services/1", "bloqueia"),
             ("GET", "https://API.VUUPT.COM:443/x", "passa"),
+            # vuupt_client.py le de app.vuupt.com (visto na prova da VPS, 10/11): mesma regra do api.
+            ("GET", "https://app.vuupt.com/api/v1/services?per_page=100", "passa"),
+            ("HEAD", "https://app.vuupt.com/api/v1/services/1", "passa"),
+            ("PUT", "https://app.vuupt.com/api/v1/services/1", "bloqueia"),
+            ("POST", "https://app.vuupt.com/api/v1/services", "bloqueia"),
+            ("DELETE", "https://app.vuupt.com/api/v1/services/1", "bloqueia"),
+            ("GET", "https://outro.vuupt.com/api/v1/services", "bloqueia"),
             ("GET", "https://freshlog.stokki.com.br/pt-br/x", "bloqueia"),
             ("POST", "http://127.0.0.1:2785/sessions/s/messages/send-text", "falso_openwa"),
             ("GET", "http://localhost:2785/sessions/s/contacts/check/1", "falso_openwa"),

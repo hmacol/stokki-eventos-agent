@@ -247,6 +247,12 @@ class TestGuardaProcesso(unittest.TestCase):
         s6.connect(("::ffff:127.0.0.1", 8100))
         self.assertEqual(self.connect.call_args.args[1], ("::ffff:127.0.0.1", 8100))
 
+    def test_socket_resolve_app_vuupt(self):
+        """vuupt_client.py usa app.vuupt.com: o nome resolve (o metodo e filtrado no requests)."""
+        socket.getaddrinfo("app.vuupt.com", 443)
+        with self.assertRaises(socket.gaierror):
+            socket.getaddrinfo("outro.vuupt.com", 443)
+
     def test_socket_resolucao_para_endereco_interno_nao_libera(self):
         for ip in ("0.0.0.0", "::ffff:127.0.0.1", "::", "10.0.0.5", "169.254.169.254", "224.0.0.1"):
             self.resolver.side_effect = lambda host, port, *a, ip=ip, **k: _resolver_falso(ip, port)
