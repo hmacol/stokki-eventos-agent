@@ -4005,6 +4005,31 @@ def _filtros_tabela_pedidos() -> dict:
     }
 
 
+def _pedido_celular(l: dict, formatar) -> dict:
+    """Tela do pedido no celular (Hugo, 11/11): o que ela mostra, já
+    formatado. Vai pra página como JSON e a tela monta com textContent."""
+    def hora(v):
+        return (v or "")[11:16]
+    return {
+        "chave": f"{l.get('sender_id')}|{l.get('pedido_base')}",
+        "codigo": l.get("codigo") or "", "servico": l.get("codigo_servico") or "",
+        "status": l.get("status") or "", "status_txt": formatar("status", l.get("status")),
+        "destinatario": l.get("destinatario") or "", "embarcador": l.get("embarcador") or "",
+        "endereco": l.get("endereco") or "", "complemento": l.get("complemento") or "",
+        "telefone": l.get("telefone") or "", "zona": l.get("zona") or "",
+        "caixas": formatar("caixas", l.get("caixas")), "janela": l.get("janela") or "",
+        "data": formatar("data", l.get("data")), "agendamento": formatar("agendamento", l.get("agendamento")),
+        "rota": l.get("rota") or "", "motorista": l.get("motorista") or "",
+        "conclusao": formatar("conclusao", l.get("conclusao")), "motivo": l.get("motivo") or "",
+        "consulta": url_for("consulta_pedido", codigo=l.get("codigo")) if l.get("codigo") else "",
+        "historico": [{"data": formatar("data", t.get("data"))[:5], "codigo": t.get("codigo") or "",
+                       "situacao": t.get("situacao") or "", "situacao_txt": formatar("status", t.get("situacao")),
+                       "motivo": t.get("motivo") or "", "rota": t.get("rota") or "",
+                       "motorista": t.get("motorista") or "", "hora": hora(t.get("conclusao"))}
+                      for t in l.get("historico") or []],
+    }
+
+
 @app.route("/pedidos")
 @requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def pedidos_tabela():
@@ -4031,6 +4056,8 @@ def pedidos_tabela():
 
     return render_template("pedidos_tabela.html", r=r, filtros=filtros, opcoes=opcoes,
                            ordem=ordem, direcao=direcao, url_com=url_com,
+                           hoje=date.today().isoformat(), ontem=(date.today() - timedelta(days=1)).isoformat(),
+                           pedidos_celular=[_pedido_celular(l, tabela_pedidos.formatar) for l in r["linhas"]],
                            colunas=tabela_pedidos.COLUNAS, datas=tabela_pedidos.DATAS,
                            status=tabela_pedidos.STATUS, fluxos=tabela_pedidos.FLUXOS,
                            formatar=tabela_pedidos.formatar,
@@ -4048,6 +4075,15 @@ def pedidos_tabela_csv():
     nome = f"pedidos_{date.today().strftime('%Y%m%d')}.csv"
     return Response(texto, mimetype="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f'attachment; filename="{nome}"'})
+
+
+@app.route("/api/pedidos/contagem")
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
+def api_pedidos_contagem():
+    """Abas por status da /pedidos no celular (Hugo, 11/11): só o modo
+    celular chama, pra tabela do computador não pagar a consulta a mais."""
+    from nucleo import tabela_pedidos
+    return jsonify(tabela_pedidos.contar_por_status(_filtros_tabela_pedidos()))
 
 
 @app.route("/api/motoristas/vuupt-disponiveis")

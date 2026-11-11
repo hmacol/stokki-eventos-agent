@@ -10,6 +10,16 @@
   (localStorage "pedidos.colunas"); o CSV leva só as visíveis.
 #}
 {% block estilo_extra %}
+<script>
+  // Celular (Hugo, 11/11): tela estreita (mesmo corte em que o menu vira
+  // gaveta) ou ?modo=mobile troca a tabela pela lista compacta; ?modo=desktop
+  // força a tabela. Entra no <head> pra não piscar.
+  (function () {
+    var modo = new URLSearchParams(location.search).get("modo");
+    var estreita = window.matchMedia && window.matchMedia("(max-width: 760px)").matches;
+    if (modo === "mobile" || (modo !== "desktop" && estreita)) document.documentElement.classList.add("modo-mobile");
+  })();
+</script>
 <style>
   .cabecalho-pagina { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 14px; flex-wrap: wrap; gap: 10px; }
   .cabecalho-pagina h1 { font-size: 20px; margin: 0; }
@@ -115,12 +125,258 @@
   .modal-caixa .acoes { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
   .modal-caixa .acoes button[hidden] { display: none; }
   .modal-caixa .acoes .botao.primario:hover { background: var(--acento); opacity: .88; }
+
+  /* ── Celular (Hugo, 11/11): lista compacta + abas + tela do pedido ── */
+  html:not(.modo-mobile) .so-m { display: none !important; }
+  html.modo-mobile .cabecalho-pagina, html.modo-mobile form.filtros, html.modo-mobile .filtros-coluna-ativos,
+  html.modo-mobile .tabela-rolagem, html.modo-mobile nav.paginacao { display: none !important; }
+  html.modo-mobile main { padding-left: 0; padding-right: 0; padding-top: 0; }
+  .pm-topo { position: sticky; top: var(--altura-abre-menu, 46px); z-index: 30; background: var(--superficie); border-bottom: 1px solid var(--borda); }
+  .pm-cab { display: flex; align-items: center; gap: 2px; padding: 4px 4px 0 16px; }
+  .pm-cab h1 { font-size: 19px; margin: 0; flex: 1; }
+  .pm-icone { width: 44px; height: 44px; border: 0; background: none; color: var(--texto); display: inline-flex; align-items: center; justify-content: center; border-radius: 10px; position: relative; cursor: pointer; text-decoration: none; }
+  .pm-icone svg { width: 21px; height: 21px; }
+  .pm-icone .pm-badge { position: absolute; top: 4px; right: 3px; min-width: 17px; height: 17px; border-radius: 9px; background: var(--acento); color: #06170F; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  .pm-texto-botao { height: 36px; padding: 0 12px; margin-left: 4px; border: 1px solid var(--borda); border-radius: 8px; background: var(--superficie); color: var(--texto); font: inherit; font-size: 14px; cursor: pointer; }
+  .pm-texto-botao[aria-pressed="true"] { border-color: var(--acento); color: var(--acento-texto); font-weight: 700; }
+  .pm-busca { display: flex; gap: 8px; padding: 8px 12px 4px; }
+  .pm-busca[hidden] { display: none; }
+  .pm-busca input { flex: 1; min-width: 0; height: 44px; padding: 0 12px; border: 1px solid var(--borda); border-radius: 10px; background: var(--fundo); color: var(--texto); font: inherit; font-size: 16px; }
+  .pm-abas { display: flex; gap: 2px; overflow-x: auto; padding: 0 8px; scrollbar-width: none; }
+  .pm-abas::-webkit-scrollbar { display: none; }
+  .pm-abas a { flex: none; padding: 11px 10px 10px; font-size: 14px; color: var(--texto-suave); text-decoration: none; border-bottom: 3px solid transparent; white-space: nowrap; }
+  .pm-abas a[aria-current="page"] { color: var(--texto); font-weight: 700; border-bottom-color: var(--acento); }
+  .pm-abas .pm-n { font-size: 12px; margin-left: 2px; font-variant-numeric: tabular-nums; }
+  .pm-resumo { padding: 8px 16px; font-size: 13px; color: var(--texto-suave); background: var(--fundo); border-bottom: 1px solid var(--borda); }
+  .pm-resumo strong { color: var(--texto); font-variant-numeric: tabular-nums; }
+  ul.pm-lista { list-style: none; margin: 0; padding: 0; background: var(--superficie); }
+  .pm-dia { padding: 14px 16px 6px; font-size: 12px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; color: var(--texto-suave); background: var(--fundo); }
+  li.pm { display: flex; align-items: center; border-bottom: 1px solid var(--borda); }
+  li.pm.selecionada { background: var(--sucesso-bg); }
+  li.pm input[name=sel-m] { display: none; width: 22px; height: 22px; margin: 0 0 0 14px; accent-color: var(--acento); flex: none; }
+  #pm.selecionando li.pm input[name=sel-m] { display: block; }
+  .pm-abrir { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; min-height: 66px; padding: 8px 8px 8px 16px; border: 0; background: none; color: var(--texto); font: inherit; text-align: left; cursor: pointer; }
+  .pm-marca { width: 10px; height: 10px; flex: none; border-radius: 50%; background: var(--texto-suave); }
+  .pm-marca.st-ENTREGUE { background: var(--acento); }
+  .pm-marca.st-EM_ROTA { background: var(--rodando); border-radius: 2px; }
+  .pm-marca.st-ABERTO { background: none; border: 2px solid var(--remetente); width: 11px; height: 11px; box-sizing: border-box; }
+  .pm-marca.st-INSUCESSO { background: var(--erro); border-radius: 2px; }
+  .pm-corpo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .pm-l1, .pm-l2 { display: flex; gap: 8px; align-items: baseline; min-width: 0; white-space: nowrap; }
+  .pm-cod { font-size: 14.5px; font-weight: 700; flex: none; }
+  .pm-dest { font-size: 14px; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+  .pm-data { font-size: 12px; color: var(--texto-suave); flex: none; }
+  .pm-l2 { font-size: 12.5px; color: var(--texto-suave); }
+  .pm-st { font-weight: 600; flex: none; }
+  .pm-st.st-ENTREGUE { color: var(--acento-texto); }
+  .pm-st.st-EM_ROTA { color: var(--destinatario); }
+  .pm-st.st-ABERTO { color: var(--remetente); }
+  .pm-st.st-INSUCESSO { color: var(--erro-texto); }
+  .pm-info { overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+  .pm-tent { flex: none; padding: 0 7px; border: 1px solid var(--borda); border-radius: 100px; font-weight: 600; }
+  .pm-abrir > svg { width: 18px; height: 18px; flex: none; color: var(--texto-suave); }
+  li.pm .selo-acao { margin-left: 0; }
+  .pm-vazio { padding: 28px 16px; text-align: center; color: var(--texto-suave); font-size: 14px; }
+  .pm-pag { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 12px 4px; font-size: 13px; color: var(--texto-suave); }
+  .pm-pag a, .pm-pag span.desligado { min-height: 44px; padding: 0 14px; display: inline-flex; align-items: center; border: 1px solid var(--borda); border-radius: 10px; background: var(--superficie); color: var(--texto); text-decoration: none; }
+  .pm-pag span.desligado { opacity: .45; }
+  .pm-completa { display: block; text-align: center; padding: 14px 16px 90px; font-size: 13px; color: var(--texto-suave); }
+
+  /* tela do pedido e filtros: tela cheia por cima da lista */
+  .pm-tela { position: fixed; inset: 0; z-index: 1200; display: flex; flex-direction: column; background: var(--fundo); color: var(--texto); }
+  .pm-tela[hidden] { display: none; }
+  .pm-tela > header { display: flex; align-items: center; gap: 6px; min-height: 52px; padding: 0 8px 0 4px; background: var(--primaria); color: #FFFFFF; flex: none; }
+  .pm-tela > header .pm-icone { color: #FFFFFF; }
+  .pm-tela > header h2 { font-size: 17px; margin: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pm-chip { padding: 3px 10px; border-radius: 100px; font-size: 12.5px; font-weight: 700; background: var(--interrompido-bg); color: var(--interrompido-texto); white-space: nowrap; }
+  .pm-chip.st-ENTREGUE { background: var(--sucesso-bg); color: var(--acento-texto); }
+  .pm-chip.st-EM_ROTA { background: var(--rodando-bg); color: var(--destinatario); }
+  .pm-chip.st-ABERTO { background: #E8EEFA; color: var(--remetente); }
+  .pm-chip.st-INSUCESSO { background: var(--erro-bg); color: var(--erro-texto); }
+  .pm-tela .pm-rolar { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .pm-cartao { background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px; padding: 12px 14px; }
+  .pm-rot { font-size: 11px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; color: var(--texto-suave); }
+  .pm-nome { font-size: 16px; font-weight: 700; margin-top: 4px; overflow-wrap: anywhere; }
+  .pm-end { font-size: 14px; margin-top: 2px; overflow-wrap: anywhere; }
+  .pm-links { display: flex; gap: 8px; margin-top: 10px; }
+  .pm-links a { flex: 1; min-height: 42px; border: 1px solid var(--borda); border-radius: 9px; display: flex; align-items: center; justify-content: center; font-size: 14px; color: var(--texto); text-decoration: none; }
+  .pm-grade { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+  .pm-grade .pm-val { font-size: 14px; margin-top: 2px; overflow-wrap: anywhere; }
+  .pm-tent-lista { list-style: none; margin: 8px 0 0; padding: 0; }
+  .pm-tent-lista li { display: flex; gap: 10px; padding: 6px 0; font-size: 14px; }
+  .pm-tent-lista li .pm-marca { margin-top: 5px; }
+  .pm-tent-lista .pm-sub { font-size: 13px; color: var(--texto-suave); }
+  .pm-tela > footer { flex: none; background: var(--superficie); border-top: 1px solid var(--borda); padding: 10px 12px calc(14px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 8px; }
+  .pm-tela > footer[hidden] { display: none; }
+  .pm-btn { min-height: 48px; border: 1px solid var(--borda); border-radius: 10px; background: var(--superficie); color: var(--texto); font: inherit; font-size: 15px; cursor: pointer; }
+  .pm-btn.primario { border: 0; background: var(--acento); color: #06170F; font-weight: 700; font-size: 16px; }
+  .pm-btn[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
+  .pm-dica { font-size: 12.5px; color: var(--texto-suave); margin: 0; }
+  .pm-campo { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--texto-suave); }
+  .pm-campo input, .pm-campo select { height: 44px; padding: 0 10px; border: 1px solid var(--borda); border-radius: 9px; font: inherit; font-size: 16px; color: var(--texto); background: var(--fundo); }
+  .pm-pilulas { display: flex; flex-wrap: wrap; gap: 6px; }
+  .pm-pilulas button { min-height: 40px; padding: 0 14px; border-radius: 100px; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); font: inherit; font-size: 14px; cursor: pointer; }
+  .pm-dupla { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+
+  /* ações no celular: menu vira folha de baixo, lote vira barra cheia */
+  html.modo-mobile .menu-flutuante { left: 0 !important; right: 0; top: auto !important; bottom: 0; z-index: 1300; border-radius: 16px 16px 0 0; padding: 8px 8px calc(14px + env(safe-area-inset-bottom, 0px)); box-shadow: 0 -8px 24px rgba(0,0,0,.22); }
+  html.modo-mobile .menu-flutuante button { font-size: 16px; padding: 13px 14px; }
+  html.modo-mobile .barra-lote { left: 8px; right: 8px; bottom: 10px; width: auto; max-width: none; z-index: 1100; padding: 10px; gap: 8px; }
+  html.modo-mobile .barra-lote strong { width: 100%; text-align: center; margin: 0; font-size: 14px; }
+  html.modo-mobile .barra-lote .botao { flex: 1 1 30%; min-height: 46px; font-size: 14.5px; background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  html.modo-mobile .barra-lote [data-lote="agendar"] { background: var(--acento); color: #06170F; border-color: var(--acento); font-weight: 700; }
+  html.modo-mobile .nota-sinc { padding: 0 16px 96px; }
+  .menu-dica { margin: 4px 10px 6px; font-size: 13px; color: var(--erro-texto); }
+  .menu-dica[hidden] { display: none; }
+  html.modo-mobile .barra-lote:not(.expandida) [data-lote="reenvio"], html.modo-mobile .barra-lote:not(.expandida) [data-lote="cancelar_vuupt"],
+  html.modo-mobile .barra-lote:not(.expandida) [data-lote="cancelar_stokki"], html.modo-mobile .barra-lote:not(.expandida) [data-lote="baixa"],
+  html.modo-mobile .barra-lote:not(.expandida) #lote-limpar { display: none; }
+  html.modo-mobile .barra-lote.expandida #lote-mais { display: none; }
+  html:not(.modo-mobile) #lote-mais { display: none; }
+  html.modo-mobile .modal-caixa input[type=text], html.modo-mobile .modal-caixa input[type=date], html.modo-mobile .modal-caixa input[type=time],
+  html.modo-mobile .modal-caixa select, html.modo-mobile .modal-caixa textarea { font-size: 16px; padding: 10px; }
+  html.modo-mobile .modal-caixa .acoes .botao { min-height: 46px; flex: 1; }
+  html.modo-mobile .modal-fundo { align-items: flex-end; padding: 0; }
+  html.modo-mobile .modal-caixa { width: 100%; border-radius: 16px 16px 0 0; max-height: 92vh; padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)); }
 </style>
 <style id="estilo-colunas"></style>
 {% endblock %}
 
 {% block conteudo %}
 {% set ativos = filtros.colunas %}
+{#
+  Celular (Hugo, 11/11): lista compacta + abas por status + tela do pedido +
+  filtros em tela cheia. Mesma rota e mesmos dados da tabela; só aparece com
+  html.modo-mobile. As ações reaproveitam o menu, o lote e os modais de baixo.
+#}
+{% set abas_m = [("", "Todos"), ("ABERTO", "Abertos"), ("EM_ROTA", "Em rota"), ("ENTREGUE", "Entregues"), ("INSUCESSO", "Insucesso"), ("CANCELADO", "Cancelados")] %}
+{% set n_filtros_m = [filtros.sender_id, filtros.agent_id, filtros.zona, filtros.fluxo, request.args.get('de') or request.args.get('ate'), filtros.data_tipo != 'referencia']|select|list|length %}
+<div class="so-m" id="pm">
+  <div class="pm-topo">
+    <div class="pm-cab">
+      <h1>Pedidos</h1>
+      <button type="button" class="pm-icone" id="pm-lupa" aria-label="Buscar" aria-expanded="{{ 'true' if filtros.q else 'false' }}" aria-controls="pm-busca">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+      </button>
+      <button type="button" class="pm-icone" id="pm-abrir-filtros" aria-label="Filtros{% if n_filtros_m %} ({{ n_filtros_m }} ativos){% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+        {% if n_filtros_m %}<span class="pm-badge" aria-hidden="true">{{ n_filtros_m }}</span>{% endif %}
+      </button>
+      {% if pode_agir %}<button type="button" class="pm-texto-botao" id="m-selecionar" aria-pressed="false">Selecionar</button>{% endif %}
+    </div>
+    <form class="pm-busca" id="pm-busca" method="get" action="{{ url_for('pedidos_tabela') }}" role="search"{% if not filtros.q %} hidden{% endif %}>
+      {% for k, v in request.args.items() if k not in ('q', 'pagina') and v %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+      <input type="search" name="q" value="{{ filtros.q }}" placeholder="Código, destinatário, CNPJ, motorista…" aria-label="Buscar pedido" enterkeyhint="search">
+      <button type="submit" class="pm-texto-botao">Buscar</button>
+    </form>
+    <nav class="pm-abas" aria-label="Status">
+      {% for s, rotulo in abas_m %}
+      <a href="{{ url_com(status=s, pagina=None) }}" data-aba="{{ s or 'total' }}"{% if (filtros.status or '') == s %} aria-current="page"{% endif %}>{{ rotulo }}<span class="pm-n"></span></a>
+      {% endfor %}
+    </nav>
+  </div>
+  <div class="pm-resumo"><strong>{{ "{:,}".format(r.total).replace(",", ".") }}</strong> pedidos · <strong>{{ "{:,}".format(r.total_caixas).replace(",", ".") }}</strong> caixas · {{ formatar('data', r.periodo.de)[:5] }} – {{ formatar('data', r.periodo.ate)[:5] }}</div>
+  <ul class="pm-lista" id="lista-m">
+    {% set dia = namespace(atual=None) %}
+    {% for l in r.linhas %}
+    {% if ordem == 'data' and l.data != dia.atual %}{% set dia.atual = l.data %}
+    <li class="pm-dia">{% if l.data == hoje %}Hoje · {% elif l.data == ontem %}Ontem · {% endif %}{{ formatar('data', l.data)[:5] if l.data else 'Sem data' }}</li>
+    {% endif %}
+    <li class="pm" data-service-id="{{ l.vuupt_service_id or '' }}" data-codigo="{{ l.codigo_servico or l.codigo }}" data-status="{{ l.status or '' }}" data-sender-id="{{ l.sender_id if l.sender_id is not none else '' }}" data-destinatario="{{ l.destinatario or '' }}" data-embarcador="{{ l.embarcador or '' }}" data-chave="{{ l.sender_id }}|{{ l.pedido_base }}">
+      {% if pode_agir %}<input type="checkbox" name="sel-m" aria-label="Selecionar {{ l.codigo }}">{% endif %}
+      <button type="button" class="pm-abrir" aria-label="Abrir {{ l.codigo }}">
+        <span class="pm-marca st-{{ l.status }}" aria-hidden="true"></span>
+        <span class="pm-corpo">
+          <span class="pm-l1"><span class="pm-cod">{{ l.codigo }}</span><span class="pm-dest">{{ l.destinatario or '—' }}</span>{% if ordem != 'data' %}<span class="pm-data">{{ formatar('data', l.data)[:5] }}</span>{% endif %}</span>
+          {%- if l.status == 'INSUCESSO' %}{% set info = [l.motivo or l.rota] %}
+          {%- elif l.status in ('EM_ROTA', 'ENTREGUE') %}{% set info = [l.rota, l.motorista, formatar('conclusao', l.conclusao)[11:] if l.status == 'ENTREGUE' else ''] %}
+          {%- elif l.status == 'ABERTO' and l.agendamento %}{% set info = ['agendado ' ~ formatar('agendamento', l.agendamento)[:5] ~ ' ' ~ formatar('agendamento', l.agendamento)[11:]] %}
+          {%- else %}{% set info = [(formatar('caixas', l.caixas) ~ ' cx') if l.caixas is not none else '', l.zona] %}{% endif %}
+          {%- set info = info|select|join(' · ') %}
+          <span class="pm-l2"><span class="pm-st st-{{ l.status }}">{{ formatar('status', l.status) or 'Sem status' }}</span>
+            {% if info %}<span class="pm-info">· {{ info }}</span>{% else %}<span class="pm-info"></span>{% endif %}
+            {% if l.historico|length > 1 %}<span class="pm-tent" title="{{ l.historico|length }} tentativas">{{ l.historico|length }}×</span>{% endif %}</span>
+        </span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
+    </li>
+    {% else %}
+    <li class="pm-vazio">Nenhum pedido com esses filtros entre {{ formatar('data', r.periodo.de) }} e {{ formatar('data', r.periodo.ate) }}.</li>
+    {% endfor %}
+  </ul>
+  {% if r.paginas > 1 %}
+  <nav class="pm-pag" aria-label="Páginas">
+    {% if r.pagina > 1 %}<a href="{{ url_com(pagina=r.pagina - 1) }}">‹ Anterior</a>{% else %}<span class="desligado">‹ Anterior</span>{% endif %}
+    <span>{{ r.pagina }} de {{ r.paginas }}</span>
+    {% if r.pagina < r.paginas %}<a href="{{ url_com(pagina=r.pagina + 1) }}">Próxima ›</a>{% else %}<span class="desligado">Próxima ›</span>{% endif %}
+  </nav>
+  {% endif %}
+  <a class="pm-completa" href="{{ url_com(modo='desktop') }}">Ver a tabela completa</a>
+
+  <section class="pm-tela" id="pm-det" role="dialog" aria-modal="true" aria-labelledby="pm-det-cod" hidden>
+    <header>
+      <button type="button" class="pm-icone" id="pm-det-voltar" aria-label="Voltar para a lista">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+      </button>
+      <h2 id="pm-det-cod"></h2>
+      <span class="pm-chip" id="pm-det-chip"></span>
+    </header>
+    <div class="pm-rolar" id="pm-det-corpo"></div>
+    {% if pode_agir %}
+    <footer id="pm-det-acoes">
+      <p class="pm-dica" id="pm-det-dica" hidden></p>
+      <button type="button" class="pm-btn primario" id="pm-det-principal"></button>
+      <button type="button" class="pm-btn" id="pm-det-todas" aria-haspopup="menu">Todas as ações</button>
+    </footer>
+    {% endif %}
+  </section>
+
+  <section class="pm-tela" id="pm-filtros" role="dialog" aria-modal="true" aria-labelledby="pm-filtros-tit" hidden>
+    <header>
+      <button type="button" class="pm-icone" id="pm-filtros-fechar" aria-label="Fechar filtros">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+      <h2 id="pm-filtros-tit">Filtros</h2>
+      <a class="pm-texto-botao" style="background:none;border:0;color:var(--acento);display:inline-flex;align-items:center;text-decoration:none;" href="{{ url_for('pedidos_tabela', modo=request.args.get('modo')) if request.args.get('modo') else url_for('pedidos_tabela') }}">Limpar</a>
+    </header>
+    <form class="pm-rolar" id="pm-form-filtros" method="get" action="{{ url_for('pedidos_tabela') }}" style="gap:16px;">
+      {% for k in ('status', 'q', 'ordem', 'direcao', 'modo') if request.args.get(k) %}<input type="hidden" name="{{ k }}" value="{{ request.args.get(k) }}">{% endfor %}
+      <div class="pm-campo">Período
+        <div class="pm-pilulas" id="pm-atalhos">
+          <button type="button" data-dias="0">Hoje</button>
+          <button type="button" data-dias="1">Ontem</button>
+          <button type="button" data-dias="7">7 dias</button>
+          <button type="button" data-dias="mes">Este mês</button>
+        </div>
+      </div>
+      <div class="pm-dupla">
+        <label class="pm-campo">De<input type="date" name="de" id="pm-de" value="{{ r.periodo.de }}"></label>
+        <label class="pm-campo">Até<input type="date" name="ate" id="pm-ate" value="{{ r.periodo.ate }}"></label>
+      </div>
+      <label class="pm-campo">Período por
+        <select name="data_tipo">{% for chave, (rotulo, _) in datas.items() %}<option value="{{ chave }}"{% if filtros.data_tipo == chave %} selected{% endif %}>{{ rotulo }}</option>{% endfor %}</select>
+      </label>
+      <label class="pm-campo">Embarcador
+        <select name="embarcador"><option value="">Todos</option>{% for e in opcoes.embarcadores %}<option value="{{ e.sender_id }}"{% if filtros.sender_id|string == e.sender_id|string %} selected{% endif %}>{{ e.nome }}</option>{% endfor %}</select>
+      </label>
+      <label class="pm-campo">Motorista
+        <select name="motorista"><option value="">Todos</option>{% for m in opcoes.motoristas %}<option value="{{ m.agent_id }}"{% if filtros.agent_id|string == m.agent_id|string %} selected{% endif %}>{{ m.nome }}</option>{% endfor %}</select>
+      </label>
+      <div class="pm-dupla">
+        <label class="pm-campo">Zona
+          <select name="zona"><option value="">Todas</option>{% for z in opcoes.zonas %}<option value="{{ z }}"{% if filtros.zona == z %} selected{% endif %}>{{ z }}</option>{% endfor %}</select>
+        </label>
+        <label class="pm-campo">Fluxo
+          <select name="fluxo"><option value="">Todos</option>{% for f in fluxos %}<option value="{{ f }}"{% if filtros.fluxo == f %} selected{% endif %}>{{ formatar('status', f) }}</option>{% endfor %}</select>
+        </label>
+      </div>
+    </form>
+    <footer>
+      <button type="submit" form="pm-form-filtros" class="pm-btn primario">Aplicar filtros</button>
+    </footer>
+  </section>
+</div>
+<script type="application/json" id="dados-m">{{ pedidos_celular|tojson }}</script>
 <div class="cabecalho-pagina">
   <div>
     <h1>Pedidos</h1>
@@ -390,9 +646,11 @@
   <button type="button" class="botao" data-lote="endereco">Endereço</button>
   <button type="button" class="botao" data-lote="baixa">Dar baixa</button>
   <button type="button" class="botao" id="lote-limpar">Limpar</button>
+  <button type="button" class="botao" id="lote-mais">Mais ações</button>
 </div>
 
 <div class="menu-flutuante" id="menu-flutuante" role="menu" aria-label="Ações do pedido" hidden>
+  <p class="menu-dica" id="menu-dica" role="status" hidden></p>
   <button type="button" role="menuitem" data-acao="reenvio">Reenvio</button>
   <button type="button" role="menuitem" data-acao="cancelar_vuupt">Cancelar Vuupt</button>
   <button type="button" role="menuitem" data-acao="cancelar_stokki">Cancelar Stokki</button>
@@ -573,7 +831,7 @@
 
   // ── selo na linha ──
   function selo(tr, texto) {
-    const td = tr.querySelector('td[data-col="codigo"]');
+    const td = tr.querySelector('td[data-col="codigo"], .pm-l1');   // linha da tabela ou do celular
     if (!td) return;
     let s = td.querySelector(".selo-acao");
     if (!s) { s = document.createElement("span"); s.className = "selo-acao"; td.appendChild(s); }
@@ -586,13 +844,16 @@
   // ── seleção e barra de lote ──
   const barra = $("barra-lote");
   const selTodos = $("sel-todos");
-  const caixas = () => Array.prototype.slice.call(document.querySelectorAll('input[name=sel]'));
-  const selecionadas = () => caixas().filter((c) => c.checked).map((c) => linha(c.closest("tr")));
+  // No celular as caixinhas são as da lista compacta (sel-m); as da tabela ficam de fora.
+  const celular = () => document.documentElement.classList.contains("modo-mobile");
+  const caixas = () => Array.prototype.slice.call(document.querySelectorAll(celular() ? "input[name=sel-m]" : "input[name=sel]"));
+  const selecionadas = () => caixas().filter((c) => c.checked).map((c) => linha(c.closest("[data-codigo]")));
   function atualizarBarra() {
     const todas = caixas();
     const n = todas.filter((c) => c.checked).length;
-    todas.forEach((c) => c.closest("tr").classList.toggle("selecionada", c.checked));
+    todas.forEach((c) => c.closest("[data-codigo]").classList.toggle("selecionada", c.checked));
     barra.hidden = n === 0;
+    if (n === 0) barra.classList.remove("expandida");
     $("lote-qtd").textContent = n === 1 ? "1 selecionado" : `${n} selecionados`;
     if (selTodos) {
       selTodos.checked = n > 0 && n === todas.length;
@@ -602,6 +863,10 @@
   document.querySelector(".tab-pedidos").addEventListener("change", (e) => {
     if (e.target.name === "sel") atualizarBarra();
   });
+  $("lista-m").addEventListener("change", (e) => {
+    if (e.target.name === "sel-m") atualizarBarra();
+  });
+  $("lote-mais").addEventListener("click", () => { barra.classList.add("expandida"); });
   if (selTodos) selTodos.addEventListener("change", () => {
     caixas().forEach((c) => { c.checked = selTodos.checked; });
     atualizarBarra();
@@ -626,9 +891,10 @@
       if (devolverFoco) menuBotao.focus();
     }
   }
-  function abrirMenu(botao) {
+  function abrirMenu(botao, l) {
     menuBotao = botao;
-    menuLinha = linha(botao.closest("tr"));
+    menuLinha = l || linha(botao.closest("tr"));
+    $("menu-dica").hidden = true;
     itensMenu().forEach((b) => {
       const motivo = bloqueio(b.dataset.acao, menuLinha);
       b.setAttribute("aria-disabled", motivo ? "true" : "false");
@@ -655,7 +921,12 @@
   });
   menu.addEventListener("click", (e) => {
     const b = e.target.closest("[data-acao]");
-    if (!b || b.getAttribute("aria-disabled") === "true") return;
+    if (!b) return;
+    if (b.getAttribute("aria-disabled") === "true") {
+      // no toque não existe dica de mouse: o porquê aparece no topo do menu
+      if (b.title) { $("menu-dica").textContent = `${b.textContent}: ${b.title}`; $("menu-dica").hidden = false; }
+      return;
+    }
     fecharMenu(false);
     abrirModal(b.dataset.acao, [menuLinha], false, menuBotao);
   });
@@ -1067,7 +1338,7 @@
         selo(it.tr, r.selo);
         (r.jaEstava ? jaEstavam : feitos).push(it.codigo);
         if (r.aviso) avisos.push(`${it.codigo}: ${r.aviso}`);
-        const caixa = it.tr.querySelector('input[name=sel]');
+        const caixa = it.tr.querySelector("input[name=sel], input[name=sel-m]");
         if (caixa) caixa.checked = false;   // falhas ficam marcadas, pra tentar de novo
       } catch (e) {
         falhas.push({ codigo: it.codigo, erro: e.message });
@@ -1085,7 +1356,242 @@
     $("modal-form").hidden = true;
     mostrarResumo(feitos, jaEstavam, falhas, atual.pulados, avisos);
   }
+
+  // Tela do pedido no celular usa o mesmo menu (como folha de baixo) e os mesmos modais.
+  window.PedidosAcoes = {
+    linha, bloqueio,
+    abrirMenu(botao, el) { fecharMenu(false); abrirMenu(botao, linha(el)); },
+    abrir(acao, el, botao) { abrirModal(acao, [linha(el)], false, botao); },
+  };
 })();
 </script>
 {% endif %}
+
+<script>
+// Celular (Hugo, 11/11): abas com contagem, busca, seleção, tela do pedido e
+// filtros. Tudo que vem do banco entra por textContent.
+(function () {
+  const raiz = document.getElementById("pm");
+  if (!raiz) return;
+  const URL_CONTAGEM = {{ url_for('api_pedidos_contagem')|tojson }};
+  const celular = () => document.documentElement.classList.contains("modo-mobile");
+  const $ = (id) => document.getElementById(id);
+  const lista = $("lista-m"), det = $("pm-det"), telaFiltros = $("pm-filtros");
+  const dados = {};
+  try { (JSON.parse($("dados-m").textContent) || []).forEach((p) => { dados[p.chave] = p; }); } catch (e) { /* sem dados: a lista segue funcionando */ }
+  let liAberto = null, voltarFoco = null;
+
+  // ── abas: contagem só no celular (a tabela do computador não paga a consulta) ──
+  if (celular()) {
+    fetch(URL_CONTAGEM + location.search, { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((c) => {
+        if (!c) return;
+        raiz.querySelectorAll(".pm-abas a").forEach((a) => {
+          const n = c[a.dataset.aba];
+          if (typeof n === "number") a.querySelector(".pm-n").textContent = ` ${n.toLocaleString("pt-BR")}`;
+        });
+      })
+      .catch(() => {});
+    const ativa = raiz.querySelector('.pm-abas a[aria-current="page"]');
+    if (ativa) ativa.scrollIntoView({ block: "nearest", inline: "center" });
+    if (/^#(pedido|filtros)$/.test(location.hash)) history.replaceState(null, "", location.pathname + location.search);
+  }
+
+  // ── busca ──
+  $("pm-lupa").addEventListener("click", () => {
+    const f = $("pm-busca");
+    f.hidden = !f.hidden;
+    $("pm-lupa").setAttribute("aria-expanded", f.hidden ? "false" : "true");
+    if (!f.hidden) f.querySelector("input[type=search]").focus();
+  });
+
+  // ── seleção (lote) ──
+  const botaoSel = $("m-selecionar");
+  function selecionando() { return raiz.classList.contains("selecionando"); }
+  if (botaoSel) botaoSel.addEventListener("click", () => {
+    const sim = !selecionando();
+    raiz.classList.toggle("selecionando", sim);
+    botaoSel.setAttribute("aria-pressed", sim ? "true" : "false");
+    botaoSel.textContent = sim ? "Concluir" : "Selecionar";
+    if (!sim) {
+      const cx = Array.prototype.slice.call(lista.querySelectorAll("input[name=sel-m]"));
+      cx.forEach((c) => { c.checked = false; });
+      if (cx.length) cx[0].dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  });
+
+  // ── telas cheias: o voltar do Android fecha (hash na URL) ──
+  function abrirTela(tela, nome, foco) {
+    voltarFoco = document.activeElement;
+    tela.hidden = false;
+    document.body.style.overflow = "hidden";
+    history.pushState({ pm: nome }, "", `#${nome}`);
+    if (foco) foco.focus();
+  }
+  function esconderTelas() {
+    [det, telaFiltros].forEach((t) => { t.hidden = true; });
+    document.body.style.overflow = "";
+    liAberto = null;
+    if (voltarFoco && document.contains(voltarFoco)) voltarFoco.focus();
+    voltarFoco = null;
+  }
+  function fecharTela() {
+    if (history.state && history.state.pm) history.back();   // popstate esconde
+    else esconderTelas();
+  }
+  window.addEventListener("popstate", () => { if (!det.hidden || !telaFiltros.hidden) esconderTelas(); });
+  $("pm-det-voltar").addEventListener("click", fecharTela);
+  $("pm-filtros-fechar").addEventListener("click", fecharTela);
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || (det.hidden && telaFiltros.hidden)) return;
+    const modal = $("modal-acao"), menu = $("menu-flutuante");
+    if ((modal && !modal.hidden) || (menu && !menu.hidden)) return;   // o menu/modal fecham primeiro
+    fecharTela();
+  });
+
+  // ── tela do pedido ──
+  function no(tag, classe, texto) {
+    const n = document.createElement(tag);
+    if (classe) n.className = classe;
+    if (texto !== undefined && texto !== null) n.textContent = texto;
+    return n;
+  }
+  function campo(rotulo, valor) {
+    const d = no("div");
+    d.appendChild(no("div", "pm-rot", rotulo));
+    d.appendChild(no("div", "pm-val", valor));
+    return d;
+  }
+  const PRINCIPAL = { INSUCESSO: "reenvio", CANCELADO: "reenvio", ENTREGUE: "reenvio", EM_ROTA: "baixa", ABERTO: "agendar" };
+  const ROTULO = { reenvio: "Criar reenvio", baixa: "Dar baixa com canhoto", agendar: "Agendar" };
+
+  function montarDetalhe(li, p) {
+    $("pm-det-cod").textContent = p.codigo;
+    const chip = $("pm-det-chip");
+    chip.textContent = p.status_txt || "Sem status";
+    chip.className = `pm-chip st-${p.status}`;
+    const corpo = $("pm-det-corpo");
+    while (corpo.firstChild) corpo.removeChild(corpo.firstChild);
+
+    const selo = li.querySelector(".selo-acao");
+    if (selo) corpo.appendChild(no("p", "pm-dica", `Feito agora: ${selo.textContent}. ${selo.title || ""}`));
+
+    const dest = no("section", "pm-cartao");
+    dest.appendChild(no("div", "pm-rot", "Destinatário"));
+    dest.appendChild(no("div", "pm-nome", p.destinatario || "—"));
+    const endereco = [p.endereco, p.complemento].filter(Boolean).join(" · ");
+    if (endereco) dest.appendChild(no("div", "pm-end", endereco));
+    const links = no("div", "pm-links");
+    const fone = (p.telefone || "").replace(/\D/g, "");
+    if (fone.length >= 8) { const a = no("a", "", "Ligar"); a.href = `tel:+${fone.length <= 11 ? "55" + fone : fone}`; links.appendChild(a); }
+    if (p.endereco) {
+      const a = no("a", "", "Abrir no mapa");
+      a.href = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.endereco)}`;
+      a.target = "_blank"; a.rel = "noopener";
+      links.appendChild(a);
+    }
+    if (links.childNodes.length) dest.appendChild(links);
+    corpo.appendChild(dest);
+
+    const grade = no("section", "pm-cartao pm-grade");
+    [["Embarcador", p.embarcador], ["Caixas", p.caixas], ["Data", p.data], ["Rota", p.rota], ["Motorista", p.motorista],
+     ["Janela", p.janela], ["Agendamento", p.agendamento], ["Zona", p.zona], ["Conclusão", p.conclusao],
+     ["Serviço", p.servico && p.servico !== p.codigo ? p.servico : ""], ["Motivo", p.motivo]]
+      .forEach(([r, v]) => { if (v) grade.appendChild(campo(r, v)); });
+    if (grade.childNodes.length) corpo.appendChild(grade);
+
+    if (p.historico && p.historico.length) {
+      const t = no("section", "pm-cartao");
+      t.appendChild(no("div", "pm-rot", p.historico.length === 1 ? "1 tentativa" : `${p.historico.length} tentativas`));
+      const ul = no("ul", "pm-tent-lista");
+      p.historico.slice().reverse().forEach((h) => {
+        const item = no("li");
+        item.appendChild(no("span", `pm-marca st-${h.situacao}`));
+        const txt = no("div");
+        const l1 = no("div");
+        l1.appendChild(no("strong", "", h.data || "—"));
+        l1.appendChild(document.createTextNode(` · ${h.codigo} · `));
+        l1.appendChild(no("span", `pm-st st-${h.situacao}`, h.situacao_txt));
+        txt.appendChild(l1);
+        const sub = [h.motivo, h.rota, h.motorista, h.hora].filter(Boolean).join(" · ");
+        if (sub) txt.appendChild(no("div", "pm-sub", sub));
+        item.appendChild(txt);
+        ul.appendChild(item);
+      });
+      t.appendChild(ul);
+      corpo.appendChild(t);
+    }
+    if (p.consulta) {
+      const a = no("a", "pm-completa", "Abrir na consulta de pedido");
+      a.href = p.consulta;
+      a.style.padding = "8px 0 4px";
+      corpo.appendChild(a);
+    }
+
+    const A = window.PedidosAcoes, principal = $("pm-det-principal");
+    if (A && principal) {
+      const acao = PRINCIPAL[li.dataset.status];
+      principal.hidden = !acao;
+      const motivo = acao ? A.bloqueio(acao, A.linha(li)) : "";
+      principal.textContent = acao ? ROTULO[acao] : "";
+      principal.dataset.acao = acao || "";
+      principal.setAttribute("aria-disabled", motivo ? "true" : "false");
+      $("pm-det-dica").textContent = motivo;
+      $("pm-det-dica").hidden = !motivo;
+    }
+  }
+
+  lista.addEventListener("click", (e) => {
+    const b = e.target.closest(".pm-abrir");
+    if (!b) return;
+    const li = b.closest("li.pm");
+    if (selecionando()) {
+      const c = li.querySelector("input[name=sel-m]");
+      if (c) { c.checked = !c.checked; c.dispatchEvent(new Event("change", { bubbles: true })); }
+      return;
+    }
+    const p = dados[li.dataset.chave];
+    if (!p) return;
+    liAberto = li;
+    montarDetalhe(li, p);
+    abrirTela(det, "pedido", $("pm-det-voltar"));
+  });
+  if ($("pm-det-principal")) {
+    $("pm-det-principal").addEventListener("click", (e) => {
+      const b = e.currentTarget;
+      if (!liAberto || !b.dataset.acao || b.getAttribute("aria-disabled") === "true") return;
+      window.PedidosAcoes.abrir(b.dataset.acao, liAberto, b);
+    });
+    $("pm-det-todas").addEventListener("click", (e) => {
+      e.stopPropagation();   // senão o clique chega no document e fecha o menu na hora
+      if (liAberto) window.PedidosAcoes.abrirMenu(e.currentTarget, liAberto);
+    });
+  }
+
+  // ── filtros ──
+  $("pm-abrir-filtros").addEventListener("click", () => abrirTela(telaFiltros, "filtros", $("pm-filtros-fechar")));
+  $("pm-form-filtros").addEventListener("submit", (e) => {
+    // "Todos" não vai pra URL (fica curta e o link compartilhado mais limpo)
+    Array.prototype.forEach.call(e.currentTarget.elements, (c) => { if (c.name && !c.value) c.disabled = true; });
+  });
+  function iso(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+  $("pm-atalhos").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-dias]");
+    if (!b) return;
+    const hoje = new Date(), de = new Date(), ate = new Date();
+    if (b.dataset.dias === "1") { de.setDate(hoje.getDate() - 1); ate.setDate(hoje.getDate() - 1); }
+    else if (b.dataset.dias === "7") de.setDate(hoje.getDate() - 6);
+    else if (b.dataset.dias === "mes") de.setDate(1);
+    $("pm-de").value = iso(de);
+    $("pm-ate").value = iso(ate);
+    $("pm-atalhos").querySelectorAll("button").forEach((x) => {
+      const on = x === b;
+      x.setAttribute("aria-pressed", on ? "true" : "false");
+      x.style.borderColor = on ? "var(--acento)" : "";
+      x.style.fontWeight = on ? "700" : "";
+    });
+  });
+})();
+</script>
 {% endblock %}

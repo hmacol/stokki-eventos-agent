@@ -176,6 +176,37 @@ class TestTelaPedidos(unittest.TestCase):
         self._logar("galpao")
         self.assertNotEqual(self.cliente.get("/pedidos").status_code, 200)
         self.assertNotEqual(self.cliente.get("/pedidos/exportar.csv").status_code, 200)
+        self.assertNotEqual(self.cliente.get("/api/pedidos/contagem").status_code, 200)
+
+    # ── celular (Hugo, 11/11): lista compacta + abas + tela do pedido ──
+    def test_contagem_das_abas_ignora_o_status_escolhido(self):
+        self._logar("leitura")
+        r = self.cliente.get("/api/pedidos/contagem?status=ENTREGUE&embarcador=10")
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()
+        self.assertEqual((d["ENTREGUE"], d["INSUCESSO"], d["ABERTO"], d["total"]), (1, 1, 0, 2))
+
+    def test_celular_tem_lista_compacta_com_os_dados_do_pedido(self):
+        self._logar("operador")
+        html = self.cliente.get("/pedidos").get_data(as_text=True)
+        itens = re.findall(r'<li class="pm"[^>]*>', html)
+        self.assertEqual(len(itens), 2)
+        self.assertRegex(html, r'<li class="pm"[^>]*data-codigo="PS-2"[^>]*data-status="INSUCESSO"[^>]*data-sender-id="10"')
+        self.assertEqual(html.count('name="sel-m"'), 2)
+        self.assertIn('id="m-selecionar"', html)
+        dados = re.search(r'<script type="application/json" id="dados-m">(.*?)</script>', html, re.S)
+        self.assertIsNotNone(dados)
+        self.assertIn('"PS-1"', dados.group(1))
+        # a tabela do computador continua com as mesmas contas
+        self.assertEqual(html.count('class="menu-acoes"'), 2)
+        self.assertEqual(html.count('name="sel"'), 2)
+
+    def test_celular_leitura_nao_seleciona(self):
+        self._logar("leitura")
+        html = self.cliente.get("/pedidos").get_data(as_text=True)
+        self.assertEqual(len(re.findall(r'<li class="pm"', html)), 2)
+        self.assertNotIn('name="sel-m"', html)
+        self.assertNotIn('id="m-selecionar"', html)
 
 
 if __name__ == "__main__":
