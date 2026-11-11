@@ -23,6 +23,14 @@ entra. Tipo sem tarifa (3/4, Truck): linha entra com valor None e
 `sem_tarifa=True`, o total ignora e o extrato avisa "a definir".
 Insucesso NÃO desconta (rota paga integral); reentrega (-R) é parada
 normal da rota em que foi roteirizada.
+
+Valor combinado (Hugo, 11/11): `nucleo_rotas.valor_combinado` preenchido
+vale no lugar do cálculo por tarifa/km (inclusive pra tipo sem tarifa);
+a linha sai com `valor_combinado=True` e o motivo. Pedágio aprovado
+continua somando à parte. Grava por `gravar_valor_combinado` / CLI (da
+raiz do repo):
+    venv/bin/python -m nucleo.financeiro --rota 1336 --valor 630 --motivo "..."
+    venv/bin/python -m nucleo.financeiro --rota 1336 --limpar
 """
 import sqlite3
 from collections import defaultdict
@@ -72,14 +80,43 @@ def linha_extrato(rota: dict, tipo_veiculo_motorista: str | None,
         "tipo_veiculo_motorista": tipo_veiculo_motorista,
         "sem_tarifa": resultado is None,
         "valor": None, "detalhe_tarifa": None,
+        "valor_combinado": False, "valor_combinado_motivo": None,
         **ped,
         "valor_com_pedagio": None,
     }
-    if resultado is not None:
+    combinado = rota.get("valor_combinado")
+    if combinado is not None:
+        linha["sem_tarifa"] = False
+        linha["valor"] = round(float(combinado), 2)
+        linha["valor_combinado"] = True
+        linha["valor_combinado_motivo"] = rota.get("valor_combinado_motivo")
+        linha["valor_com_pedagio"] = round(linha["valor"] + ped["pedagio_aprovado"], 2)
+    elif resultado is not None:
         linha["valor"] = resultado.valor_total
         linha["detalhe_tarifa"] = resultado.como_dict()
         linha["valor_com_pedagio"] = round(resultado.valor_total + ped["pedagio_aprovado"], 2)
     return linha
+
+
+def gravar_valor_combinado(rota_id: int, valor: float | None, motivo: str | None,
+                           conn: sqlite3.Connection | None = None) -> None:
+    """Grava (ou limpa, com valor None) o valor combinado da rota. Valor
+    exige motivo: é o registro de quem acertou e por quê."""
+    if valor is not None and not (motivo or "").strip():
+        raise ValueError("valor combinado exige motivo")
+    fechar = conn is None
+    conn = conn or banco.conectar()
+    try:
+        cur = conn.execute(
+            "UPDATE nucleo_rotas SET valor_combinado = ?, valor_combinado_motivo = ? WHERE id = ?",
+            (None if valor is None else round(float(valor), 2),
+             None if valor is None else motivo.strip(), rota_id))
+        if cur.rowcount != 1:
+            raise ValueError(f"rota {rota_id} nao existe no nucleo")
+        conn.commit()
+    finally:
+        if fechar:
+            conn.close()
 
 
 def extrato_motorista(agent_id: int, data_ini: date | str, data_fim: date | str,
@@ -165,3 +202,16 @@ def fechamento_periodo(data_ini: date | str, data_fim: date | str,
     finally:
         if fechar:
             conn.close()
+
+
+if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description="Valor combinado da rota no extrato do motorista")
+    ap.add_argument("--rota", type=int, required=True, help="id da rota no nucleo (nucleo_rotas.id)")
+    grupo = ap.add_mutually_exclusive_group(required=True)
+    grupo.add_argument("--valor", type=float)
+    grupo.add_argument("--limpar", action="store_true")
+    ap.add_argument("--motivo")
+    a = ap.parse_args()
+    gravar_valor_combinado(a.rota, None if a.limpar else a.valor, a.motivo)
+    print("rota", a.rota, "valor combinado:", "limpo" if a.limpar else a.valor)

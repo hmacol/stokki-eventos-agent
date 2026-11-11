@@ -975,7 +975,10 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  templates/cadastro_motorista.html  Página pública do link: 3 passos pelo celular (dados,
                            veículo, 5 documentos reduzidos no navegador); retoma de onde
                            parou (localStorage + /situacao).
- financeiro.py             Extrato do motorista.
+ financeiro.py             Extrato do motorista. Valor combinado por rota vence a tarifa
+                           (nucleo_rotas.valor_combinado + motivo; grava pelo CLI
+                           -m nucleo.financeiro --rota N --valor X --motivo "..."
+                           ou --limpar).
  tempos.py, metricas.py    Durações por parada.
  recalcular_km_rotas.py    Backfill de km.
  chamados_motorista.py     Chat "Ajuda" -> fila /atendimento do painel.
