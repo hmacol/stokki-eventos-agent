@@ -22,6 +22,7 @@ COMO RODAR (produção -- ver infra/portal-cliente.service):
 """
 import html as html_mod
 import io
+import json
 import logging
 import os
 import sys
@@ -50,6 +51,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import auth_cliente as auth
 import dados_cliente as dados
 import envio_pedidos as envios
+import anexos_pedido
 import cotacao
 import endereco_entrega
 import alterar_entrega
@@ -939,6 +941,7 @@ def api_envios_listar():
     conn = envios.conectar()
     try:
         lista = envios.listar_envios(conn, _empresa_envio()['cnpj'])
+        anexos_pedido.anotar(conn, lista)
         cfg = envios.config_stokki_cliente(conn, _empresa_envio()['cnpj'], _CONFIG)
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
@@ -967,6 +970,7 @@ def api_envios_analisar():
     if not arquivos:
         return jsonify({"erro": "Selecione pelo menos um arquivo: XML da NF-e (ou ZIP com XMLs) ou planilha .xlsx no modelo Fresh Log."}), 400
     itens, rejeitados, vistos = [], [], set()
+    anexos = []  # PDFs do lote: documentos dos pedidos (anexos_pedido.py, 11/11)
     n_planilhas = 0
     entrega_ativa = endereco_entrega.entrega_ativa(_CONFIG)
     conn = envios.conectar()
@@ -980,6 +984,12 @@ def api_envios_analisar():
                 rejeitados.append({"arquivo": f.filename or "arquivo", "erro": str(e)})
                 continue
             for nome, conteudo in partes:
+                if anexos_pedido.e_pdf(nome, conteudo):
+                    try:
+                        anexos.append(anexos_pedido.guardar_previa(nome, conteudo))
+                    except envios.ErroEnvio as e:
+                        rejeitados.append({"arquivo": nome, "erro": str(e)})
+                    continue
                 if envios.e_planilha(nome, conteudo):
                     # Planilha no modelo Fresh Log (09/09): vários pedidos por
                     # arquivo; cada pedido vira um item da prévia com token
@@ -1047,8 +1057,10 @@ def api_envios_analisar():
             rejeitados.extend({"arquivo": it.get("nome_arquivo") or it.get("rotulo"), "numero_nf": it.get("numero_nf"),
                                "rotulo": it.get("rotulo"), "erro": envios.MSG_XD_AUSENTE} for it in itens)
             itens = []
-    logger.info(f"analisar cnpj={_empresa_envio()['cnpj']} por={_quem_envia()} validos={len(itens)} rejeitados={len(rejeitados)} planilhas={n_planilhas}")
-    return jsonify({"itens": itens, "rejeitados": rejeitados, "destinatarios": destinatarios,
+    _sugerir_pedidos(anexos, [{**it, "chave": it["token"]} for it in itens])
+    logger.info(f"analisar cnpj={_empresa_envio()['cnpj']} por={_quem_envia()} validos={len(itens)} rejeitados={len(rejeitados)} "
+                f"planilhas={n_planilhas} anexos={len(anexos)}")
+    return jsonify({"itens": itens, "rejeitados": rejeitados, "destinatarios": destinatarios, "anexos": anexos,
                     "regra_xml": cfg["regra_xml"], "regra_xml_rotulo": envios.REGRAS_XML.get(cfg["regra_xml"], ""),
                     "envio_ativo": cfg["envio_ativo"], "hoje": date.today().isoformat(), "entrega_ativa": entrega_ativa,
                     "fluxos_disponiveis": fluxos_disp, "fluxo_rotulos": envios.FLUXO_ROTULOS, "xd": xd})
@@ -1110,6 +1122,109 @@ def api_envios_modelo_planilha():
     return send_file(io.BytesIO(conteudo), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name="modelo_pedidos_freshlog.xlsx", max_age=0)
 
+def _sugerir_pedidos(anexos: list[dict], pedidos: list[dict]) -> None:
+    """Poe em cada anexo o pedido sugerido (`pedido` = chave, ou None) e o
+    motivo. E so sugestao: o usuario confere antes de enviar."""
+    for a in anexos:
+        a["pedido"], a["motivo"] = anexos_pedido.sugerir_pedido(a, pedidos)
+
+
+@app.route("/api/envios/anexos/ler", methods=["POST"])
+@requer_cliente
+@exige_mesma_origem
+def api_envios_anexos_ler():
+    """So PDFs: le cada um, guarda no temporario e sugere o pedido entre os
+    que a tela mandou em `pedidos` (JSON [{chave, numero_nf, destinatario_doc,
+    referencia}]) -- os da previa ou um pedido ja enviado. Nada e anexado
+    aqui; quem anexa e o confirmar (previa) ou POST /api/envios/<id>/anexos."""
+    _exige_pode_enviar()
+    arquivos = request.files.getlist("arquivos")
+    if not arquivos:
+        return jsonify({"erro": "Selecione pelo menos um PDF."}), 400
+    try:
+        pedidos = [p for p in json.loads(request.form.get("pedidos") or "[]") if isinstance(p, dict) and p.get("chave")]
+    except ValueError:
+        pedidos = []
+    anexos, rejeitados = [], []
+    for f in arquivos:
+        try:
+            anexos.append(anexos_pedido.guardar_previa(f.filename or "documento.pdf", f.read()))
+        except envios.ErroEnvio as e:
+            rejeitados.append({"arquivo": f.filename or "arquivo", "erro": str(e)})
+    _sugerir_pedidos(anexos, pedidos[:500])
+    return jsonify({"anexos": anexos, "rejeitados": rejeitados})
+
+
+def _envio_pra_anexo(conn, envio_id: int) -> dict:
+    envio = envios.buscar_envio(conn, envio_id, _empresa_envio()['cnpj'])
+    if not envio:
+        abort(404)
+    return envio
+
+
+@app.route("/api/envios/<int:envio_id>/anexos", methods=["POST"])
+@requer_cliente
+@exige_mesma_origem
+def api_envios_anexar(envio_id):
+    """Anexa a um pedido ja enviado os documentos lidos em /anexos/ler.
+    Corpo: {anexos: [token], conferido: true}."""
+    _exige_pode_enviar()
+    corpo = request.get_json(silent=True) or {}
+    tokens = [t for t in (corpo.get("anexos") or []) if isinstance(t, str)]
+    if not tokens:
+        return jsonify({"erro": "Nenhum documento pra anexar."}), 400
+    if corpo.get("conferido") is not True:
+        return jsonify({"erro": "Confirme que os documentos são deste pedido."}), 400
+    conn = envios.conectar()
+    try:
+        envio = _envio_pra_anexo(conn, envio_id)
+        if not anexos_pedido.pode_anexar(conn, envio):
+            return jsonify({"erro": "Este pedido já saiu pra entrega (ou foi encerrado) e não aceita mais documentos."}), 409
+        gravados = anexos_pedido.anexar(conn, envio, [{"token": t, "casado_por": "manual"} for t in tokens], _quem_envia())
+        conn.commit()
+    except envios.ErroEnvio as e:
+        conn.rollback()
+        return _json_erro_envio(e)
+    finally:
+        conn.close()
+    logger.info(f"anexar envio={envio_id} por={_quem_envia()} n={len(gravados)}")
+    return jsonify({"ok": True, "anexados": gravados})
+
+
+@app.route("/api/envios/<int:envio_id>/anexos/<int:anexo_id>")
+@requer_cliente
+def api_envios_anexo_baixar(envio_id, anexo_id):
+    conn = envios.conectar()
+    try:
+        _envio_pra_anexo(conn, envio_id)
+        anexo = anexos_pedido.buscar(conn, envio_id, anexo_id)
+    finally:
+        conn.close()
+    if not anexo or not anexos_pedido.caminho(anexo).is_file():
+        abort(404)
+    return send_file(anexos_pedido.caminho(anexo), mimetype="application/pdf", download_name=anexo["nome_original"], max_age=0)
+
+
+@app.route("/api/envios/<int:envio_id>/anexos/<int:anexo_id>/remover", methods=["POST"])
+@requer_cliente
+@exige_mesma_origem
+def api_envios_anexo_remover(envio_id, anexo_id):
+    _exige_pode_enviar()
+    conn = envios.conectar()
+    try:
+        envio = _envio_pra_anexo(conn, envio_id)
+        anexo = anexos_pedido.buscar(conn, envio_id, anexo_id)
+        if not anexo:
+            abort(404)
+        if not anexos_pedido.pode_anexar(conn, envio):
+            return jsonify({"erro": "Este pedido já saiu pra entrega (ou foi encerrado): o documento não pode mais ser removido."}), 409
+        anexos_pedido.remover(conn, anexo)
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info(f"remover anexo={anexo_id} envio={envio_id} por={_quem_envia()}")
+    return jsonify({"ok": True})
+
 
 @app.route("/api/envios/confirmar", methods=["POST"])
 @requer_cliente
@@ -1122,8 +1237,16 @@ def api_envios_confirmar():
         return jsonify({"erro": "Nenhum pedido pra confirmar."}), 400
     if len(itens) > 200:
         return jsonify({"erro": "Envie no máximo 200 notas por vez."}), 400
+    # Documentos dos pedidos (11/11): item["anexos"] = [{token, casado_por}].
+    # So entram com a confirmacao do usuario de que cada um esta no pedido certo.
+    anexos_por_token = {it.get("token"): [a for a in (it.get("anexos") or []) if isinstance(a, dict)]
+                        for it in itens if isinstance(it, dict) and it.get("anexos")}
+    if anexos_por_token and corpo.get("anexos_conferidos") is not True:
+        return jsonify({"erro": "Confirme que cada documento está no pedido correto antes de enviar."}), 400
+    anexos_falhas = []
     conn = envios.conectar()
     try:
+        anexos_pedido.validar_tokens([a.get("token", "") for lista in anexos_por_token.values() for a in lista])
         # Data fora do dia de visita da região (Hugo, 03/10): pergunta antes de
         # gravar; o embarcador troca a data ou confirma assim mesmo
         # (aceita_fora_dia_fixo no item) e o pedido vira envio dedicado.
@@ -1134,6 +1257,20 @@ def api_envios_confirmar():
         fluxos_disp, _xd = envios.fluxos_para_envio(conn, _empresa_envio()['cnpj'])
         criados = envios.confirmar_envios(conn, _empresa_envio()['cnpj'], itens, _quem_envia(), _CONFIG, cfg["regra_xml"],
                                           fluxos_disponiveis=fluxos_disp, sender_id=_empresa_envio().get("sender_id"))
+        # Os pedidos ja estao gravados: documento que falhar nao derruba o envio,
+        # vira aviso (o cliente anexa de novo pela lista).
+        for c in criados:
+            lista = anexos_por_token.get(c.pop("token", None))
+            if not lista:
+                continue
+            try:
+                anexos_pedido.anexar(conn, envios.buscar_envio(conn, c["id"], _empresa_envio()['cnpj']), lista, _quem_envia())
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                logger.exception(f"anexos do envio {c['id']} falharam")
+                anexos_falhas.append(str(e) if isinstance(e, envios.ErroEnvio)
+                                     else f"{c.get('numero_nf') or c.get('referencia')}: documentos não anexados.")
         # Área não atendida (Hugo, 23/09): 1 chamado no chat + e-mails; a
         # linha fica AGUARDANDO_LIBERACAO até a equipe liberar no painel.
         bloqueados = [c for c in criados if c.get("status") == envios.STATUS_AGUARDANDO_LIBERACAO]
@@ -1160,7 +1297,9 @@ def api_envios_confirmar():
     else:
         mensagem = (f"{n} pedido{'s' if n > 1 else ''} recebido{'s' if n > 1 else ''} com sucesso. "
                     f"A criação na Stokki pode levar alguns instantes -- acompanhe o status na lista abaixo.")
-    return jsonify({"ok": True, "criados": criados, "bloqueados": bloqueados, "mensagem": mensagem})
+    if anexos_falhas:
+        mensagem += " Atenção: " + " ".join(anexos_falhas) + " Anexe de novo pela lista abaixo (Documentos)."
+    return jsonify({"ok": True, "criados": criados, "bloqueados": bloqueados, "mensagem": mensagem, "anexos_falhas": anexos_falhas})
 
 
 @app.route("/api/envios/reenviar-erros", methods=["POST"])

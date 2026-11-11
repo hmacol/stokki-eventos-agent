@@ -422,9 +422,10 @@ def expandir_upload(nome: str, conteudo: bytes) -> list[tuple[str, bytes]]:
         try:
             with zipfile.ZipFile(io.BytesIO(conteudo)) as zf:
                 for info in zf.infolist():
-                    if info.is_dir() or not info.filename.lower().endswith((".xml",) + EXTENSOES_PLANILHA):
+                    # .pdf: documento do pedido (anexos_pedido.py, 11/11)
+                    if info.is_dir() or not info.filename.lower().endswith((".xml", ".pdf") + EXTENSOES_PLANILHA):
                         continue
-                    if info.file_size > 5 * 1024 * 1024:
+                    if info.file_size > (10 if info.filename.lower().endswith(".pdf") else 5) * 1024 * 1024:
                         continue
                     saida.append((Path(info.filename).name, zf.read(info)))
         except zipfile.BadZipFile:
@@ -882,7 +883,7 @@ def xlsx_pedido_stokki(itens: list[dict]) -> bytes:
 # Um token por arquivo: .xml (NF-e), .xlsx/.xls (planilha original) ou .json
 # (um pedido lido da planilha, já validado, apontando pro token da planilha).
 
-_EXT_TEMP = (".xml", ".xlsx", ".xls", ".xlsm", ".json")
+_EXT_TEMP = (".xml", ".xlsx", ".xls", ".xlsm", ".json", ".pdf")
 
 
 def guardar_temporario(conteudo: bytes, extensao: str = "xml") -> str:
@@ -1466,7 +1467,7 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
             cols = ", ".join(campos)
             conn.execute(f"INSERT INTO portal_envios ({cols}) VALUES ({','.join('?' * len(campos))})", tuple(campos.values()))
             envio_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        criados.append({"id": envio_id, "numero_nf": nfe["numero_nf"], "referencia": nfe.get("referencia"),
+        criados.append({"id": envio_id, "token": item.get("token"), "numero_nf": nfe["numero_nf"], "referencia": nfe.get("referencia"),
                         "origem": campos["origem"], "destinatario_nome": nfe["destinatario_nome"],
                         "status": campos["status"], "bloqueio_motivo": motivo,
                         "destinatario_municipio": nfe["destinatario_municipio"], "destinatario_uf": nfe["destinatario_uf"]})

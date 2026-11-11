@@ -25,6 +25,8 @@ PASTAS_BUSCA = [
     _PASTA_DADOS / "boletos_separados",
     _PASTA_DADOS / "nfs_separadas",
     _PASTA_DADOS / "anexos_temp",
+    # documentos que o cliente anexou ao pedido no portal (portal_cliente/anexos_pedido.py, 11/11)
+    Path(__file__).parent.parent / "dados" / "portal_envios" / "_anexos",
 ]
 
 

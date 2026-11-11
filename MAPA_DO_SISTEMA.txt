@@ -118,6 +118,14 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              aprovação no /inicio (total) ou gerenciar_clientes.py cadastro
  Página pública /cliente/regioes ........... portal_cliente/regioes_atendimento.py + templates/regioes.html
  Envio de pedido (XML) pelo cliente ........ portal_cliente/envio_pedidos.py + enviar_stokki.py
+ Documentos (PDF) anexados ao pedido ....... portal_cliente/anexos_pedido.py (11/11): na prévia do envio (PDFs junto
+                                             com os XMLs, o sistema sugere o pedido; ou "+ Anexar PDF" por pedido) e
+                                             depois em "Documentos" na lista, até a rota sair. O usuário sempre marca
+                                             a conferência. Tabela portal_envios_anexos; arquivos em
+                                             dados/portal_envios/_anexos/. Com o PS, vira linha em
+                                             documentos_processados (origem 'portal') e o romaneio imprime:
+                                             boleto/NF como tais, o resto depois dos boletos.
+                                             APIs /api/envios/anexos/ler e /api/envios/<id>/anexos[/<aid>[/remover]]
  Endereço de entrega conferido no envio .... portal_cliente/endereco_entrega.py (prévia: casos nota/
                                              terceiros/sugestao/livre; <entrega> no XML do lote);
                                              chave portal_cliente.envios.endereco_entrega_ativo
@@ -898,7 +906,7 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  fingerprint_rotas.py      Evita incluir o mesmo pedido duas vezes.
 
  Documentos e avisos
- gerar_pdf_romaneios.py    1 PDF por rota (capa, NFs, boletos, canhoteira).
+ gerar_pdf_romaneios.py    1 PDF por rota (capa, NFs, boletos, anexos do portal, canhoteira).
                            Saída: roteirizacao/dados/romaneios/<data>/.
  documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
  avisar_motoristas_rotas.py  Texto WhatsApp/e-mail + confirmações.
@@ -1235,6 +1243,8 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            saída. `codigo` = código base, `codigo_servico` = o do serviço.
                            E-mails 07h/20h ainda usam linhas_das_rotas sem unir.
  envio_pedidos.py          "Máscara de envio": valida XML/planilha, fila.
+ anexos_pedido.py          PDFs anexados ao pedido (prévia e lista): lê, sugere o
+                           pedido, grava e registra pro romaneio quando sai o PS.
  endereco_entrega.py       Endereço de entrega escolhido na prévia: CEP com IBGE, última
                            entrega do destinatário (Vuupt/portal, por embarcador), <entrega>
                            inserido no XML do lote pelo worker (original intacto).
