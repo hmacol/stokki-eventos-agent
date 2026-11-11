@@ -2755,6 +2755,8 @@ def api_pedidos_acao_reenvio():
         return erro
     try:
         r = acoes_pedidos.reenviar(service_id, str(body.get("motivo") or ""), _autor_acao_pedidos())
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 409 amigavel
     except Exception:
         logging.getLogger(__name__).exception("reenvio pela tela Pedidos falhou")
         return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
@@ -2797,6 +2799,8 @@ def api_pedidos_acao_cancelar_vuupt():
             service_id, _autor_acao_pedidos(),
             token=(cfg.get("vuupt_api") or {}).get("token", ""),
             agent_lalamove=int((cfg.get("lalamove") or {}).get("agent_id_vuupt") or 0))
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 409 amigavel
     except Exception:
         logging.getLogger(__name__).exception("cancelar Vuupt pela tela Pedidos falhou")
         return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
@@ -2818,6 +2822,8 @@ def api_pedidos_acao_cancelar_stokki():
         return jsonify({"erro": "codigo ausente."}), 400
     try:
         r = acoes_pedidos.cancelar_stokki(codigo, str(body.get("motivo") or ""), _autor_acao_pedidos())
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 409 amigavel
     except Exception:
         logging.getLogger(__name__).exception("cancelar Stokki pela tela Pedidos falhou")
         return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
@@ -2839,6 +2845,8 @@ def api_pedidos_acao_endereco():
         return erro
     try:
         r = acoes_pedidos.alterar_endereco(service_id, str(body.get("endereco") or ""), _autor_acao_pedidos())
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 409 amigavel
     except Exception:
         logging.getLogger(__name__).exception("alterar endereço pela tela Pedidos falhou")
         return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
@@ -2861,6 +2869,8 @@ def api_pedidos_acao_agendar():
     try:
         r = acoes_pedidos.agendar(service_id, str(body.get("data") or ""), str(body.get("hora_inicio") or ""),
                                   str(body.get("hora_fim") or ""), _autor_acao_pedidos())
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 409 amigavel
     except Exception:
         logging.getLogger(__name__).exception("agendar pela tela Pedidos falhou")
         return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
@@ -2879,6 +2889,8 @@ def api_pedidos_acao_marcar_entregue():
         return jsonify({"erro": "Sem sucesso não é feito pela tela Pedidos."}), 400
     try:
         return _marcar_entregue_pelo_form()
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 409 amigavel
     except Exception:
         logging.getLogger(__name__).exception("marcar entregue pela tela Pedidos falhou")
         return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
@@ -2891,6 +2903,8 @@ def api_pedidos_acao_validar_lote_foto():
     """Foto em massa na tela /pedidos: mesma validacao da Torre."""
     try:
         return _validar_lote_foto_do_json()
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 409 amigavel
     except Exception:
         logging.getLogger(__name__).exception("validar lote de foto pela tela Pedidos falhou")
         return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500

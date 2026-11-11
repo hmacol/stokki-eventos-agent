@@ -127,5 +127,44 @@ class TestTelasStokki(unittest.TestCase):
                                         headers={"Origin": "http://localhost"}))
 
 
+class TestAcoesTelaPedidos(unittest.TestCase):
+    """Rotas /api/pedidos/acao/*: o bloqueio da guarda chega na tela como 'indisponivel', nao 500."""
+
+    def setUp(self):
+        bloqueio = EnvioBloqueadoHomolog("indisponível na homologação: teste")
+        acoes = painel_agentes.acoes_pedidos
+        for alvo in (
+            mock.patch.object(acoes, "reenviar", side_effect=bloqueio),
+            mock.patch.object(acoes, "cancelar_vuupt", side_effect=bloqueio),
+            mock.patch.object(acoes, "cancelar_stokki", side_effect=bloqueio),
+            mock.patch.object(acoes, "alterar_endereco", side_effect=bloqueio),
+            mock.patch.object(acoes, "agendar", side_effect=bloqueio),
+            mock.patch.object(painel_agentes, "_marcar_entregue_pelo_form", side_effect=bloqueio),
+            mock.patch.object(painel_agentes, "_validar_lote_foto_do_json", side_effect=bloqueio),
+            mock.patch.object(painel_agentes, "_carregar_config",
+                              return_value={"painel_agentes": {"usuario": "u", "senha": "s"}}),
+        ):
+            alvo.start()
+            self.addCleanup(alvo.stop)
+        painel_agentes.app.config["TESTING"] = True
+        self.cliente = painel_agentes.app.test_client()
+        with self.cliente.session_transaction() as sess:
+            sess["nivel_acesso"] = "total"
+            sess["usuario"] = "maria"
+
+    def test_sete_acoes(self):
+        corpo = {"service_id": 123, "codigo": "PS-123", "motivo": "teste", "endereco": "Rua A, 1",
+                 "data": "2026-11-11", "hora_inicio": "08:00", "hora_fim": "12:00"}
+        for rota in ("reenvio", "cancelar-vuupt", "cancelar-stokki", "endereco", "agendar",
+                     "marcar-entregue", "validar-lote-foto"):
+            with self.subTest(rota=rota):
+                resp = self.cliente.post(f"/api/pedidos/acao/{rota}", json=corpo,
+                                         headers={"Origin": "http://localhost"})
+                texto = json.dumps(resp.get_json(silent=True) or resp.get_data(as_text=True),
+                                   ensure_ascii=False)
+                self.assertNotEqual(resp.status_code, 500, texto[:300])
+                self.assertIn("indisponível na homologação", texto)
+
+
 if __name__ == "__main__":
     unittest.main()
