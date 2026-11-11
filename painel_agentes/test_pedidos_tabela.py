@@ -4,6 +4,7 @@ Tela /pedidos: todos os pedidos em tabela (Hugo, 09/11).
 
     py -3.11 -m unittest test_pedidos_tabela   (de dentro de painel_agentes/)
 """
+import re
 import sys
 import tempfile
 import unittest
@@ -71,7 +72,105 @@ class TestTelaPedidos(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertIn("attachment", r.headers["Content-Disposition"])
         linhas = r.get_data(as_text=True).lstrip("﻿").splitlines()
-        self.assertEqual(linhas, ["Código;Referência;Status", "PS-1;NF9;Entregue", "PS-2;NF9;Insucesso"])
+        self.assertEqual(linhas, ["Código;Referência;Status;Histórico de tentativas",
+                                  "PS-1;NF9;Entregue;", "PS-2;NF9;Insucesso;"])
+
+    def test_selo_de_tentativas_abre_historico_do_pedido(self):
+        conn = banco.conectar()
+        hoje = date.today().isoformat()
+        for codigo, status in (("PS-3", "INSUCESSO"), ("PS-3-R1", "ABERTO")):
+            conn.execute("""INSERT INTO nucleo_pedidos (codigo, titulo, status, destinatario_nome, remetente_nome,
+                                                        sender_id, caixas, criado_em_provedor)
+                            VALUES (?, ?, ?, 'LOJA', 'FRUTA FINA', 10, 4, ?)""",
+                         (codigo, f"#{codigo} - NF3 / FF / LOJA", status, f"{hoje} 08:00:00"))
+        # a tentativa que falhou é a parada da rota (insucesso); a reentrega ainda está aberta
+        rota = conn.execute("""INSERT INTO nucleo_rotas (data_rota, nome, agent_id, motorista_nome, status)
+                               VALUES (?, 'Rota 7', 501, 'JOAO', 'CONCLUIDA')""", (hoje,)).lastrowid
+        conn.execute("""INSERT INTO nucleo_paradas (rota_id, ordem, codigo, situacao, motivo_texto)
+                        VALUES (?, 1, 'PS-3', 'INSUCESSO', 'Ausente')""", (rota,))
+        conn.commit()
+        conn.close()
+        self._logar("leitura")
+        html = self.cliente.get("/pedidos?q=PS-3").get_data(as_text=True)
+        self.assertEqual(html.count('data-tentativas="10|PS-3"'), 1)
+        self.assertIn("2 tentativas", html)
+        self.assertIn('class="tentativas"', html)
+
+    def test_rota_reenvio_so_para_quem_age(self):
+        corpo = {"service_id": 1, "motivo": "cliente pediu"}
+        self._logar("leitura")
+        r = self.cliente.post("/api/pedidos/acao/reenvio", json=corpo, headers={"Origin": "http://localhost"})
+        self.assertNotEqual(r.status_code, 200)
+        self._logar("atendimento")
+        with mock.patch("acoes_pedidos.reenviar",
+                        return_value={"ok": True, "novo_code": "#PS-1-R1", "erro": ""}) as m:
+            r = self.cliente.post("/api/pedidos/acao/reenvio", json=corpo, headers={"Origin": "http://localhost"})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(r.get_json()["novo_code"], "#PS-1-R1")
+        self.assertEqual(m.call_args.args[:3], (1, "cliente pediu", "teste"))
+
+    def test_leitura_nao_ve_menu_de_acoes_nem_caixinhas(self):
+        self._logar("leitura")
+        html = self.cliente.get("/pedidos").get_data(as_text=True)
+        self.assertIn(">PS-1<", html)
+        self.assertNotIn('class="menu-acoes"', html)
+        self.assertNotIn('name="sel"', html)
+        self.assertNotIn('id="barra-lote"', html)
+
+    def test_quem_age_ve_menu_caixinhas_e_dados_da_linha(self):
+        conn = banco.conectar()
+        hoje = date.today().isoformat()
+        conn.execute("UPDATE nucleo_pedidos SET vuupt_service_id = 111 WHERE codigo = 'PS-1'")
+        # reentrega: a linha do pedido age sobre a tentativa principal (a mais recente)
+        for codigo, status, sid in (("PS-3", "INSUCESSO", 301), ("PS-3-R1", "EM_ROTA", 302)):
+            conn.execute("""INSERT INTO nucleo_pedidos (codigo, titulo, status, destinatario_nome, remetente_nome,
+                                                        sender_id, caixas, criado_em_provedor, vuupt_service_id)
+                            VALUES (?, ?, ?, 'LOJA', 'FRUTA FINA', 10, 4, ?, ?)""",
+                         (codigo, f"#{codigo} - NF3 / FF / LOJA", status, f"{hoje} 08:00:00", sid))
+        conn.commit()
+        conn.close()
+        self._logar("operador")
+        html = self.cliente.get("/pedidos").get_data(as_text=True)
+        self.assertEqual(html.count('class="menu-acoes"'), 3)
+        self.assertEqual(html.count('name="sel"'), 3)
+        self.assertIn('id="barra-lote"', html)
+        self.assertRegex(html, r'<tr[^>]*data-service-id="111"[^>]*data-codigo="PS-1"[^>]*data-status="ENTREGUE"')
+        self.assertRegex(html, r'<tr[^>]*data-service-id=""[^>]*data-codigo="PS-2"[^>]*data-status="INSUCESSO"')
+        self.assertRegex(html, r'<tr[^>]*data-service-id="302"[^>]*data-codigo="PS-3-R1"[^>]*data-status="EM_ROTA"')
+        # modal de baixa usa a lista fixa de justificativas
+        self.assertIn('value="canhoto_depois"', html)
+
+    def test_linha_leva_embarcador_e_destinatario_para_o_lote(self):
+        # Endereço em lote só com o mesmo embarcador e destinatário: a tela compara pelos data-* da linha
+        self._logar("operador")
+        html = self.cliente.get("/pedidos").get_data(as_text=True)
+        linhas = re.findall(r"<tr data-service-id=[^>]*>", html)
+        self.assertEqual(len(linhas), 2)
+        for tr in linhas:
+            self.assertIn('data-sender-id="10"', tr)
+        self.assertRegex(html, r'<tr[^>]*data-codigo="PS-1"[^>]*data-sender-id="10"[^>]*data-destinatario="MERCADO CENTRAL"')
+        self.assertRegex(html, r'<tr[^>]*data-codigo="PS-2"[^>]*data-sender-id="10"[^>]*data-destinatario="PADARIA"')
+
+    def test_acesso_personalizado_com_a_tela_ve_as_acoes(self):
+        # Conta com lista de telas age como "total" dentro delas (requer_auth poe em g.nivel_acesso);
+        # o nivel gravado na sessao segue "leitura".
+        acesso = painel_agentes.acesso_telas
+        conn = acesso.conectar()
+        acesso.criar(conn, "ana", "Ana", "leitura", "senha-123", "teste", (), equipe="Logística")
+        conn.execute("UPDATE painel_usuarios SET trocar_senha = 0 WHERE usuario = 'ana'")
+        conn.commit()
+        acesso.salvar(conn, "ana", ["pedidos_tabela"], "teste")
+        conn.close()
+        with self.cliente.session_transaction() as sess:
+            sess["nivel_acesso"] = "leitura"
+            sess["usuario"] = "ana"
+        html = self.cliente.get("/pedidos").get_data(as_text=True)
+        self.assertIn('class="menu-acoes"', html)
+
+    def test_cancelar_stokki_bloqueado_em_pedido_entregue(self):
+        self._logar("operador")
+        html = self.cliente.get("/pedidos").get_data(as_text=True)
+        self.assertRegex(html, r'acao === "cancelar_stokki"\) \{\s*if \(l\.status === "ENTREGUE"\) return "pedido já entregue";')
 
     def test_niveis_sem_acesso_nao_entram(self):
         self._logar("galpao")

@@ -244,7 +244,9 @@ def _expedir_pedidos_raiz():
 
 
 def duplicar_pedido_manual(service_id: int, codigo: str,
-                           motorista: str | None = None, rota: str | None = None) -> dict:
+                           motorista: str | None = None, rota: str | None = None, *,
+                           origem: str = "TORRE", texto: str | None = None,
+                           servico_original: dict | None = None, marcar_tratado: bool = True) -> dict:
     """
     Duplica manualmente um pedido com insucesso -- botão 'Duplicar
     pedido' da fila de ação (pedido do Hugo, 17/08: poder disparar a
@@ -254,6 +256,10 @@ def duplicar_pedido_manual(service_id: int, codigo: str,
     grava no MESMO fingerprint (insucessos_duplicados) -- o badge da
     fila passa a mostrar 'Duplicado' também pra essa duplicação manual,
     e o fluxo automático por e-mail não duplica de novo em cima dela.
+
+    Tela /pedidos (10/11) reaproveita: origem="PEDIDOS", servico_original (já lido
+    na Vuupt, não busca por code), texto com o marcador {novo} (vira o novo code)
+    e marcar_tratado=False (só insucesso sai da fila de ação).
     """
     import fingerprint_duplicacao_insucesso  # já no sys.path (insucesso_entrega/)
 
@@ -265,7 +271,8 @@ def duplicar_pedido_manual(service_id: int, codigo: str,
     token = config.get("vuupt_api", {}).get("token", "")
     vuupt = VuuptClient(token)
 
-    servico_original = vuupt.buscar_servico_por_code(codigo)
+    if servico_original is None:
+        servico_original = vuupt.buscar_servico_por_code(codigo)
     if not servico_original:
         return {"ok": False, "erro": f"Pedido {codigo} não encontrado no VUUPT."}
 
@@ -277,10 +284,13 @@ def duplicar_pedido_manual(service_id: int, codigo: str,
     novo_code = novo.get("code", "")
     fingerprint_duplicacao_insucesso.marcar_duplicado(service_id, novo_code)
     tratativas.registrar_evento(
-        codigo, "TORRE", "REENVIO_MANUAL",
+        codigo, origem, "REENVIO_MANUAL",
         service_id=service_id, motorista_nome=motorista, rota_nome=rota,
-        texto=f"Duplicado manualmente pela Torre → {novo_code}",
+        texto=(texto.replace("{novo}", novo_code) if texto
+               else f"Duplicado manualmente pela Torre → {novo_code}"),
     )
+    if not marcar_tratado:
+        return {"ok": True, "novo_code": novo_code}
     # Duplicar É a tratativa (Hugo, 16/09): o insucesso sai da Fila de
     # ação na hora e vai pro histórico de tratadas, sem precisar clicar
     # "Tratar" depois -- e a rota deixa de ficar presa na torre por

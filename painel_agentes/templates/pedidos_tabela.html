@@ -59,10 +59,62 @@
   .chip { display: inline-block; padding: 1px 8px; border-radius: 100px; border: 1px solid var(--borda); font-size: 11.5px; }
   .chip.ok { border-color: var(--acento); color: var(--acento); }
   .chip.ruim { border-color: var(--erro); color: var(--erro); }
+  /* Uma linha por pedido: o selo abre as tentativas embaixo (igual ao portal). */
+  .selo-tent { margin-left: 6px; border: 1px solid var(--borda); background: none; color: var(--texto-suave); border-radius: 100px; padding: 1px 8px; font-size: 11px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .selo-tent:hover, .selo-tent[aria-expanded="true"] { color: var(--acento); border-color: var(--acento); }
+  table.tab-pedidos tr.tentativas td { background: var(--fundo); padding: 6px 10px 8px; white-space: normal; max-width: none; position: static; }
+  table.tab-pedidos tr.tentativas ul { list-style: none; margin: 0; padding: 0; }
+  table.tab-pedidos tr.tentativas li { padding: 2px 0; font-size: 12px; }
+  table.tab-pedidos tr.tentativas li b { display: inline-block; min-width: 44px; font-variant-numeric: tabular-nums; }
+  table.tab-pedidos tr.tentativas .falha { color: var(--erro); }
   .vazio { padding: 28px; text-align: center; color: var(--texto-suave); font-size: 13px; }
   .paginacao { display: flex; gap: 6px; align-items: center; justify-content: flex-end; margin-top: 10px; font-size: 12.5px; color: var(--texto-suave); flex-wrap: wrap; }
   .paginacao a, .paginacao span.desligado { padding: 5px 11px; border: 1px solid var(--borda); border-radius: 6px; text-decoration: none; color: var(--texto); background: var(--superficie); }
   .paginacao span.desligado { opacity: .45; }
+
+  /* Ações (Hugo, 10/11): caixinha + menu "⋯" numa coluna fixa à esquerda, só pra quem age. */
+  table.tab-pedidos .col-acoes { position: sticky; left: 0; z-index: 1; background: var(--superficie); width: 66px; min-width: 66px; max-width: 66px; box-sizing: border-box; padding: 4px 6px; }
+  table.tab-pedidos thead .col-acoes { z-index: 3; background: var(--fundo); }
+  table.tab-pedidos.com-acoes [data-col="codigo"] { left: 66px; }
+  table.tab-pedidos .col-acoes input { margin: 0 6px 0 2px; vertical-align: middle; cursor: pointer; }
+  .menu-acoes { border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); border-radius: 6px; padding: 0 7px; font-size: 15px; line-height: 20px; cursor: pointer; font-family: inherit; vertical-align: middle; }
+  .menu-acoes:hover, .menu-acoes[aria-expanded="true"] { border-color: var(--acento); color: var(--acento); }
+  table.tab-pedidos tbody tr.selecionada td { background: var(--fundo); }
+  .menu-flutuante { position: fixed; z-index: 50; min-width: 220px; background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: 4px; }
+  .menu-flutuante button { display: block; width: 100%; text-align: left; border: 0; background: none; color: var(--texto); font-size: 13px; padding: 7px 10px; border-radius: 5px; cursor: pointer; font-family: inherit; }
+  .menu-flutuante button:hover, .menu-flutuante button:focus { background: var(--fundo); outline: none; }
+  .menu-flutuante button[aria-disabled="true"] { color: var(--texto-suave); opacity: .55; cursor: not-allowed; }
+  .menu-flutuante hr { border: 0; border-top: 1px solid var(--borda); margin: 4px 2px; }
+  .selo-acao { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 100px; font-size: 11px; font-weight: 600; border: 1px solid var(--acento); color: var(--acento); }
+  .nota-sinc { font-size: 12px; color: var(--texto-suave); margin: 0 0 8px; }
+  .barra-lote { position: fixed; left: 16px; right: 16px; width: fit-content; margin: 0 auto; bottom: 16px; z-index: 40; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: center; max-width: calc(100vw - 32px); background: var(--superficie); border: 1px solid var(--acento); border-radius: 10px; padding: 8px 12px; box-shadow: 0 8px 24px rgba(0,0,0,.22); }
+  .barra-lote[hidden] { display: none; }
+  .barra-lote strong { font-size: 13px; margin-right: 6px; font-variant-numeric: tabular-nums; }
+  .barra-lote .botao { padding: 6px 10px; font-size: 12.5px; }
+  .modal-fundo { position: fixed; inset: 0; z-index: 10000; background: rgba(0,0,0,.35); display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .modal-fundo[hidden] { display: none; }
+  .modal-caixa { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; box-shadow: 0 6px 20px rgba(0,0,0,.18); padding: 18px 20px; width: 460px; max-width: 100%; max-height: calc(100vh - 32px); overflow-y: auto; }
+  .modal-caixa h2 { font-size: 15px; margin: 0 0 4px; }
+  .modal-caixa .subtitulo { font-size: 12.5px; color: var(--texto-suave); margin: 0 0 12px; overflow-wrap: anywhere; }
+  .modal-caixa .campo { margin-bottom: 10px; }
+  .modal-caixa .campo > label { display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 4px; }
+  .modal-caixa input[type=text], .modal-caixa input[type=date], .modal-caixa input[type=time], .modal-caixa select, .modal-caixa textarea { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--borda); border-radius: 6px; font-size: 13px; background: var(--fundo); color: var(--texto); font-family: inherit; }
+  .modal-caixa textarea { resize: vertical; min-height: 60px; }
+  .modal-caixa .lado-a-lado { display: flex; gap: 8px; }
+  .modal-caixa .lado-a-lado .campo { flex: 1; }
+  .modal-caixa .avisos { margin: 0 0 12px; padding: 8px 10px 8px 26px; border: 1px solid var(--st-atencao, #b7791f); border-radius: 6px; font-size: 12.5px; }
+  .modal-caixa .avisos li { margin: 2px 0; }
+  .modal-caixa .contador { font-size: 11px; color: var(--texto-suave); text-align: right; }
+  .modal-caixa .erro-modal { color: var(--erro); font-size: 12.5px; margin: 6px 0 0; white-space: pre-line; }
+  .modal-caixa .progresso { font-size: 12.5px; margin: 8px 0 0; font-variant-numeric: tabular-nums; }
+  .modal-caixa progress { width: 100%; }
+  .modal-caixa .resumo { font-size: 12.5px; white-space: pre-line; max-height: 45vh; overflow-y: auto; }
+  .modal-caixa .resumo .falha { color: var(--erro); }
+  .modal-caixa ul.lista-canhotos { list-style: none; padding: 0; margin: 0; }
+  .modal-caixa ul.lista-canhotos li { padding: 4px 0; font-size: 13px; }
+  .modal-caixa .acoes { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .modal-caixa .acoes button[hidden] { display: none; }
+  .modal-caixa .acoes .botao.primario:hover { background: var(--acento); opacity: .88; }
 </style>
 <style id="estilo-colunas"></style>
 {% endblock %}
@@ -150,10 +202,13 @@
 </p>
 {% endif %}
 
+{% set ncols = colunas|length + (1 if pode_agir else 0) %}
+{% if pode_agir %}<p class="nota-sinc" id="nota-sinc" hidden>Ações feitas agora aparecem como selo na linha; o status atualiza na próxima sincronização (até 15 min).</p>{% endif %}
 <div class="tabela-rolagem">
-  <table class="tab-pedidos">
+  <table class="tab-pedidos{% if pode_agir %} com-acoes{% endif %}">
     <thead>
       <tr class="titulos">
+        {% if pode_agir %}<th class="col-acoes" scope="col"><input type="checkbox" id="sel-todos" aria-label="Selecionar todos desta página"></th>{% endif %}
         {% for c in colunas %}
         {% set ativo = ordem == c.chave %}
         <th data-col="{{ c.chave }}" scope="col"{% if ativo %} aria-sort="{{ 'ascending' if direcao == 'asc' else 'descending' }}"{% endif %}>
@@ -162,6 +217,7 @@
         {% endfor %}
       </tr>
       <tr class="filtros-col">
+        {% if pode_agir %}<th class="col-acoes"></th>{% endif %}
         {% for c in colunas %}
         <th data-col="{{ c.chave }}"><input form="form-pedidos" name="f_{{ c.chave }}" value="{{ ativos.get(c.chave, '') }}" aria-label="Filtrar {{ c.rotulo }}" placeholder="filtrar"{% if c.chave in ativos %} class="ativo"{% endif %}></th>
         {% endfor %}
@@ -169,7 +225,8 @@
     </thead>
     <tbody>
       {% for l in r.linhas %}
-      <tr>
+      <tr data-service-id="{{ l.vuupt_service_id or '' }}" data-codigo="{{ l.codigo_servico or l.codigo }}" data-status="{{ l.status or '' }}" data-sender-id="{{ l.sender_id if l.sender_id is not none else '' }}" data-destinatario="{{ l.destinatario or '' }}" data-embarcador="{{ l.embarcador or '' }}">
+        {% if pode_agir %}<td class="col-acoes"><input type="checkbox" name="sel" aria-label="Selecionar {{ l.codigo }}"><button type="button" class="menu-acoes" aria-haspopup="menu" aria-expanded="false" aria-label="Ações de {{ l.codigo }}" title="Ações">⋯</button></td>{% endif %}
         {% for c in colunas %}
         {% set v = l[c.chave] %}
         <td data-col="{{ c.chave }}"{% if c.formato == 'numero' %} class="num"{% endif %} title="{{ formatar(c.chave, v) }}">
@@ -179,14 +236,30 @@
             <a class="link-linha" href="{{ url_for('consulta_rota', rota_id=l.rota_id) }}">{{ v or ('#' ~ l.rota_id) }}</a>
           {%- elif c.chave == 'status' and v -%}
             <span class="chip{% if v == 'ENTREGUE' %} ok{% elif v in ('INSUCESSO', 'CANCELADO') %} ruim{% endif %}">{{ formatar(c.chave, v) }}</span>
+            {%- if l.historico|length > 1 -%}
+            <button type="button" class="selo-tent" data-tentativas="{{ l.sender_id }}|{{ l.pedido_base }}" aria-expanded="false">{{ l.historico|length }} tentativas ▾</button>
+            {%- endif -%}
           {%- else -%}
             {{ formatar(c.chave, v) }}
           {%- endif -%}
         </td>
         {% endfor %}
       </tr>
+      {% if l.historico|length > 1 %}
+      <tr class="tentativas" data-de="{{ l.sender_id }}|{{ l.pedido_base }}" hidden><td colspan="{{ ncols }}"><ul>
+        {%- for t in l.historico %}
+        <li><b>{{ t.data[8:10] ~ '/' ~ t.data[5:7] if t.data else '' }}</b>
+          <a class="link-linha" href="{{ url_for('consulta_pedido', codigo=t.codigo) }}">{{ t.codigo }}</a> ·
+          <span{% if t.situacao == 'INSUCESSO' %} class="falha"{% endif %}>{{ formatar('status', t.situacao) }}</span>
+          {%- if t.motivo %} · {{ t.motivo }}{% endif %}
+          {%- if t.rota %} · {% if t.rota_id %}<a class="link-linha" href="{{ url_for('consulta_rota', rota_id=t.rota_id) }}">{{ t.rota }}</a>{% else %}{{ t.rota }}{% endif %}{% endif %}
+          {%- if t.motorista %} · {{ t.motorista }}{% endif %}
+          {%- if t.conclusao %} · {{ t.conclusao[11:16] }}{% endif %}</li>
+        {%- endfor %}
+      </ul></td></tr>
+      {% endif %}
       {% else %}
-      <tr><td colspan="{{ colunas|length }}" class="vazio" style="position:static;">Nenhum pedido com esses filtros entre {{ formatar('data', r.periodo.de) }} e {{ formatar('data', r.periodo.ate) }}.</td></tr>
+      <tr><td colspan="{{ ncols }}" class="vazio" style="position:static;">Nenhum pedido com esses filtros entre {{ formatar('data', r.periodo.de) }} e {{ formatar('data', r.periodo.ate) }}.</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -250,6 +323,35 @@
   document.addEventListener("keydown", function (e) { if (e.key === "Escape") abrir(false); });
   document.addEventListener("click", function (e) { if (!painel.contains(e.target) && e.target !== botao) abrir(false); });
 
+  // Selo "N tentativas": abre/fecha o histórico do pedido; as chaves abertas
+  // sobrevivem a paginar e filtrar (sessionStorage).
+  var CHAVE_TENT = "pedidos.tentativas.abertas";
+  function lerAbertas() {
+    try { var v = JSON.parse(sessionStorage.getItem(CHAVE_TENT) || "[]"); if (Array.isArray(v)) return v; } catch (e) {}
+    return [];
+  }
+  function salvarAbertas(lista) { try { sessionStorage.setItem(CHAVE_TENT, JSON.stringify(lista)); } catch (e) {} }
+  function linhaDe(chave) {
+    return Array.prototype.filter.call(document.querySelectorAll("tr.tentativas"), function (tr) { return tr.dataset.de === chave; })[0];
+  }
+  function mostrar(selo, sim) {
+    var tr = linhaDe(selo.dataset.tentativas);
+    if (tr) tr.hidden = !sim;
+    selo.setAttribute("aria-expanded", sim ? "true" : "false");
+  }
+  var abertas = lerAbertas();
+  Array.prototype.forEach.call(document.querySelectorAll(".selo-tent"), function (selo) {
+    var chave = selo.dataset.tentativas;
+    if (abertas.indexOf(chave) >= 0) mostrar(selo, true);
+    selo.addEventListener("click", function () {
+      var sim = selo.getAttribute("aria-expanded") !== "true";
+      mostrar(selo, sim);
+      var lista = lerAbertas().filter(function (k) { return k !== chave; });
+      if (sim) lista.push(chave);
+      salvarAbertas(lista);
+    });
+  });
+
   // A linha de filtros gruda logo abaixo da de títulos, seja qual for a altura dela.
   var tabela = document.querySelector(".tab-pedidos");
   tabela.style.setProperty("--altura-titulos", tabela.querySelector("tr.titulos").offsetHeight + "px");
@@ -271,4 +373,719 @@
   });
 })();
 </script>
+
+{% if pode_agir %}
+{#
+  Ações na linha e em lote (Hugo, 10/11). A tela só habilita/desabilita pelo
+  status do núcleo (pode estar até 15 min atrás); quem decide é o servidor,
+  que relê a Vuupt/Stokki na hora. Resultado vira um selo na linha, sem
+  recarregar (filtros, página e ordem ficam como estão).
+#}
+<div class="barra-lote" id="barra-lote" role="region" aria-label="Ações em lote" hidden>
+  <strong id="lote-qtd">0 selecionados</strong>
+  <button type="button" class="botao" data-lote="reenvio">Reenvio</button>
+  <button type="button" class="botao" data-lote="cancelar_vuupt">Cancelar Vuupt</button>
+  <button type="button" class="botao" data-lote="cancelar_stokki">Cancelar Stokki</button>
+  <button type="button" class="botao" data-lote="agendar">Agendar</button>
+  <button type="button" class="botao" data-lote="endereco">Endereço</button>
+  <button type="button" class="botao" data-lote="baixa">Dar baixa</button>
+  <button type="button" class="botao" id="lote-limpar">Limpar</button>
+</div>
+
+<div class="menu-flutuante" id="menu-flutuante" role="menu" aria-label="Ações do pedido" hidden>
+  <button type="button" role="menuitem" data-acao="reenvio">Reenvio</button>
+  <button type="button" role="menuitem" data-acao="cancelar_vuupt">Cancelar Vuupt</button>
+  <button type="button" role="menuitem" data-acao="cancelar_stokki">Cancelar Stokki</button>
+  <hr>
+  <button type="button" role="menuitem" data-acao="endereco">Alterar endereço</button>
+  <button type="button" role="menuitem" data-acao="agendar">Agendar</button>
+  <hr>
+  <button type="button" role="menuitem" data-acao="canhoto">Ver canhoto</button>
+  <button type="button" role="menuitem" data-acao="baixa">Dar baixa com canhoto</button>
+  <button type="button" role="menuitem" data-acao="trocar_canhoto">Trocar canhoto</button>
+  <button type="button" role="menuitem" data-acao="nota_fiscal">Nota fiscal</button>
+</div>
+
+<div class="modal-fundo" id="modal-acao" hidden>
+  <div class="modal-caixa" role="dialog" aria-modal="true" aria-labelledby="modal-titulo">
+    <h2 id="modal-titulo">Ação</h2>
+    <p class="subtitulo" id="modal-alvo"></p>
+    <div id="modal-form">
+      <div data-secao="reenvio" hidden>
+        <p class="subtitulo">Cria um novo serviço na Vuupt (PS-N-R&lt;k&gt;) com o mesmo endereço, contato e remetente.</p>
+        <div class="campo">
+          <label for="reenvio-motivo">Motivo do reenvio</label>
+          <textarea id="reenvio-motivo" maxlength="200" placeholder="De 5 a 200 caracteres"></textarea>
+        </div>
+      </div>
+      <div data-secao="cancelar_vuupt" hidden>
+        <p class="subtitulo">Tira o pedido do rascunho ou da rota e cancela o serviço na Vuupt. A Stokki não muda (é a ação Cancelar Stokki). Com o motorista a caminho ou no local, o sistema recusa.</p>
+      </div>
+      <div data-secao="cancelar_stokki" hidden>
+        <ul class="avisos" id="stokki-avisos"></ul>
+        <div class="campo">
+          <label for="stokki-motivo">Motivo do cancelamento</label>
+          <textarea id="stokki-motivo" maxlength="300" placeholder="Mínimo de 15 caracteres (regra da Stokki)"></textarea>
+          <div class="contador" id="stokki-contador">0 de no mínimo 15</div>
+        </div>
+      </div>
+      <div data-secao="endereco" hidden>
+        <ul class="avisos" id="endereco-recusa" hidden></ul>
+        <div class="campo">
+          <label for="endereco-novo">Novo endereço</label>
+          <input type="text" id="endereco-novo" placeholder="Rua, número, bairro, cidade">
+        </div>
+      </div>
+      <div data-secao="agendar" hidden>
+        <div class="campo"><label for="agendar-data">Data</label><input type="date" id="agendar-data"></div>
+        <div class="lado-a-lado">
+          <div class="campo"><label for="agendar-inicio">Início</label><input type="time" id="agendar-inicio"></div>
+          <div class="campo"><label for="agendar-fim">Fim</label><input type="time" id="agendar-fim"></div>
+        </div>
+        <ul class="avisos" id="agendar-aviso" hidden></ul>
+      </div>
+      <div data-secao="baixa" hidden>
+        <p class="subtitulo">Fecha como entregue na Vuupt agora. Com foto, ela vai para o checklist da Vuupt.</p>
+        <div class="campo">
+          <label for="baixa-foto-canhoto">Foto do canhoto</label>
+          <input type="file" id="baixa-foto-canhoto" accept="image/*,application/pdf">
+        </div>
+        <div class="campo">
+          <label for="baixa-foto-nota">Foto da nota de retorno (opcional) — só com a foto do canhoto</label>
+          <input type="file" id="baixa-foto-nota" accept="image/*" disabled>
+        </div>
+        <div class="campo" id="baixa-campo-justificativa">
+          <label for="baixa-justificativa">Sem foto do canhoto: por quê?</label>
+          <select id="baixa-justificativa">
+            <option value="">Selecione...</option>
+            {% for codigo, rotulo in justificativas.items() %}<option value="{{ codigo }}">{{ rotulo }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="campo" id="baixa-campo-outro" hidden>
+          <label for="baixa-texto-outro">Descreva</label>
+          <textarea id="baixa-texto-outro" maxlength="200" placeholder="De 5 a 200 caracteres"></textarea>
+        </div>
+      </div>
+      <div data-secao="canhoto" hidden><ul class="lista-canhotos" id="canhoto-lista"></ul></div>
+    </div>
+    <div class="progresso" id="modal-progresso" hidden>
+      <progress id="modal-barra" max="1" value="0"></progress>
+      <div id="modal-progresso-texto" aria-live="polite"></div>
+    </div>
+    <div class="resumo" id="modal-resumo" hidden></div>
+    <p class="erro-modal" id="modal-erro" role="alert" hidden></p>
+    <div class="acoes">
+      <button type="button" class="botao" id="modal-fechar">Voltar</button>
+      <button type="button" class="botao primario" id="modal-confirmar">Confirmar</button>
+    </div>
+  </div>
+</div>
+
+{% set urls_acao = {
+  "reenvio": url_for('api_pedidos_acao_reenvio'),
+  "cancelar_vuupt": url_for('api_pedidos_acao_cancelar_vuupt'),
+  "cancelar_stokki": url_for('api_pedidos_acao_cancelar_stokki'),
+  "endereco": url_for('api_pedidos_acao_endereco'),
+  "agendar": url_for('api_pedidos_acao_agendar'),
+  "checar_dia_fixo": url_for('api_pedidos_acao_checar_dia_fixo'),
+  "baixa": url_for('api_pedidos_acao_marcar_entregue'),
+  "validar_lote_foto": url_for('api_pedidos_acao_validar_lote_foto'),
+  "comprovantes": url_for('api_pedidos_acao_comprovantes'),
+} %}
+{% set rotulos_status = {} %}
+{% for s in status %}{% set _ = rotulos_status.update({s: formatar('status', s)}) %}{% endfor %}
+<script>
+(function () {
+  const URLS = {{ urls_acao|tojson }};
+  const ROTULO_STATUS = {{ rotulos_status|tojson }};
+  const FINAIS = ["ENTREGUE", "INSUCESSO", "CANCELADO"];
+  const VIVOS = ["ABERTO", "EM_ROTA"];
+  const NOTA_SINC = "O status atualiza na próxima sincronização (até 15 min).";
+  const ACOES = {
+    reenvio: { titulo: "Reenvio", confirmar: "Criar reenvio" },
+    cancelar_vuupt: { titulo: "Cancelar na Vuupt", confirmar: "Cancelar na Vuupt" },
+    cancelar_stokki: { titulo: "Cancelar na Stokki", confirmar: "Cancelar na Stokki" },
+    endereco: { titulo: "Alterar endereço", confirmar: "Salvar endereço" },
+    agendar: { titulo: "Agendar", confirmar: "Agendar" },
+    baixa: { titulo: "Dar baixa com canhoto", confirmar: "Dar baixa" },
+    canhoto: { titulo: "Canhotos do pedido", confirmar: "" },
+  };
+
+{% include "_reduzir_imagem.js.html" %}
+
+  const $ = (id) => document.getElementById(id);
+  function rotuloStatus(s) { return ROTULO_STATUS[s] || s || "sem status"; }
+  function linha(tr) {
+    return { tr, serviceId: tr.dataset.serviceId || "", codigo: tr.dataset.codigo || "",
+             status: tr.dataset.status || "", destinatario: tr.dataset.destinatario || "",
+             senderId: tr.dataset.senderId || "", embarcador: tr.dataset.embarcador || "" };
+  }
+  function psDoCodigo(codigo) {
+    const ids = (codigo || "").toUpperCase().match(/PS-\d+/g) || [];
+    return ids.filter((v, i) => ids.indexOf(v) === i);
+  }
+  function ehReentrega(codigo) { return /-R\d+/i.test(codigo || ""); }
+
+  // "" = pode; senão, o porquê (vira a dica do item). O servidor confere de novo.
+  function bloqueio(acao, l) {
+    if (acao === "trocar_canhoto" || acao === "nota_fiscal") return "em breve";
+    if (acao === "canhoto") return "";
+    if (acao === "cancelar_stokki") {
+      if (l.status === "ENTREGUE") return "pedido já entregue";
+      return psDoCodigo(l.codigo).length ? "" : "Código sem PS-<número>: não dá pra achar o pedido na Stokki.";
+    }
+    if (!l.serviceId) return "Pedido sem serviço na Vuupt.";
+    const finalizado = FINAIS.indexOf(l.status) >= 0;
+    if (acao === "reenvio") {
+      return finalizado ? "" : `Reenvio só para pedido entregue, com insucesso ou cancelado (este está: ${rotuloStatus(l.status)}).`;
+    }
+    if (acao === "baixa") {
+      return l.status === "EM_ROTA" ? "" : `Dar baixa só para pedido em rota (este está: ${rotuloStatus(l.status)}).`;
+    }
+    return finalizado ? `Pedido já finalizado (${rotuloStatus(l.status)}).` : "";
+  }
+
+  // POST com cookie de sessão; a origem (exige_mesma_origem) o navegador manda sozinho.
+  async function lerResposta(resp) {
+    let dados = null;
+    try { dados = await resp.json(); } catch (e) { dados = null; }
+    if (!dados || typeof dados !== "object" || Array.isArray(dados)) {
+      throw new Error(resp.ok ? "Resposta inesperada do servidor (a sessão pode ter expirado: recarregue a página)."
+                              : `Falha HTTP ${resp.status}${resp.status === 403 ? " (sem permissão ou origem recusada)" : ""}.`);
+    }
+    if (!resp.ok || dados.ok === false) {
+      const erro = new Error(dados.erro || `Falha HTTP ${resp.status}.`);
+      erro.dados = dados;
+      throw erro;
+    }
+    return dados;
+  }
+  async function enviar(url, corpo) {
+    const ehForm = corpo instanceof FormData;
+    const resp = await fetch(url, {
+      method: "POST", credentials: "same-origin",
+      headers: ehForm ? {} : { "Content-Type": "application/json" },
+      body: ehForm ? corpo : JSON.stringify(corpo),
+    });
+    return lerResposta(resp);
+  }
+
+  // ── selo na linha ──
+  function selo(tr, texto) {
+    const td = tr.querySelector('td[data-col="codigo"]');
+    if (!td) return;
+    let s = td.querySelector(".selo-acao");
+    if (!s) { s = document.createElement("span"); s.className = "selo-acao"; td.appendChild(s); }
+    s.textContent = texto;
+    s.title = NOTA_SINC;
+    $("nota-sinc").hidden = false;
+  }
+  function ddmm(iso) { return iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}` : ""; }
+
+  // ── seleção e barra de lote ──
+  const barra = $("barra-lote");
+  const selTodos = $("sel-todos");
+  const caixas = () => Array.prototype.slice.call(document.querySelectorAll('input[name=sel]'));
+  const selecionadas = () => caixas().filter((c) => c.checked).map((c) => linha(c.closest("tr")));
+  function atualizarBarra() {
+    const todas = caixas();
+    const n = todas.filter((c) => c.checked).length;
+    todas.forEach((c) => c.closest("tr").classList.toggle("selecionada", c.checked));
+    barra.hidden = n === 0;
+    $("lote-qtd").textContent = n === 1 ? "1 selecionado" : `${n} selecionados`;
+    if (selTodos) {
+      selTodos.checked = n > 0 && n === todas.length;
+      selTodos.indeterminate = n > 0 && n < todas.length;
+    }
+  }
+  document.querySelector(".tab-pedidos").addEventListener("change", (e) => {
+    if (e.target.name === "sel") atualizarBarra();
+  });
+  if (selTodos) selTodos.addEventListener("change", () => {
+    caixas().forEach((c) => { c.checked = selTodos.checked; });
+    atualizarBarra();
+  });
+  $("lote-limpar").addEventListener("click", () => { caixas().forEach((c) => { c.checked = false; }); atualizarBarra(); });
+  barra.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-lote]");
+    if (!b) return;
+    const linhas = selecionadas();
+    if (linhas.length) abrirModal(b.dataset.lote, linhas, true, b);
+  });
+
+  // ── menu "⋯" (fora da tabela: a rolagem dela cortaria o menu) ──
+  const menu = $("menu-flutuante");
+  let menuLinha = null, menuBotao = null;
+  const itensMenu = () => Array.prototype.slice.call(menu.querySelectorAll("[data-acao]"));
+  function fecharMenu(devolverFoco) {
+    if (menu.hidden) return;
+    menu.hidden = true;
+    if (menuBotao) {
+      menuBotao.setAttribute("aria-expanded", "false");
+      if (devolverFoco) menuBotao.focus();
+    }
+  }
+  function abrirMenu(botao) {
+    menuBotao = botao;
+    menuLinha = linha(botao.closest("tr"));
+    itensMenu().forEach((b) => {
+      const motivo = bloqueio(b.dataset.acao, menuLinha);
+      b.setAttribute("aria-disabled", motivo ? "true" : "false");
+      b.title = motivo;
+    });
+    menu.hidden = false;
+    const r = botao.getBoundingClientRect();
+    const larg = menu.offsetWidth, alt = menu.offsetHeight;
+    let topo = r.bottom + 4;
+    if (topo + alt > window.innerHeight - 8) topo = Math.max(8, r.top - alt - 4);
+    menu.style.top = `${topo}px`;
+    menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - larg - 8))}px`;
+    botao.setAttribute("aria-expanded", "true");
+    const primeiro = itensMenu().filter((b) => b.getAttribute("aria-disabled") !== "true")[0];
+    if (primeiro) primeiro.focus();
+  }
+  document.querySelector(".tab-pedidos").addEventListener("click", (e) => {
+    const b = e.target.closest(".menu-acoes");
+    if (!b) return;
+    e.stopPropagation();
+    const mesmo = !menu.hidden && menuBotao === b;
+    fecharMenu(false);
+    if (!mesmo) abrirMenu(b);
+  });
+  menu.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-acao]");
+    if (!b || b.getAttribute("aria-disabled") === "true") return;
+    fecharMenu(false);
+    abrirModal(b.dataset.acao, [menuLinha], false, menuBotao);
+  });
+  menu.addEventListener("keydown", (e) => {
+    const lista = itensMenu();
+    const i = lista.indexOf(document.activeElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const passo = e.key === "ArrowDown" ? 1 : -1;
+      lista[(i + passo + lista.length) % lista.length].focus();
+    } else if (e.key === "Escape") {
+      e.stopPropagation();
+      fecharMenu(true);
+    } else if (e.key === "Tab") {
+      fecharMenu(false);
+    }
+  });
+  document.addEventListener("click", (e) => { if (!menu.contains(e.target)) fecharMenu(false); });
+  window.addEventListener("resize", () => fecharMenu(false));
+  document.querySelector(".tabela-rolagem").addEventListener("scroll", () => fecharMenu(false));
+  window.addEventListener("scroll", () => fecharMenu(false));
+
+  // ── modal ──
+  const modal = $("modal-acao");
+  const botaoConfirmar = $("modal-confirmar");
+  const botaoFechar = $("modal-fechar");
+  let atual = null;   // { acao, itens, pulados, lote, voltarFoco, rodando, terminou, diaFixoVisto }
+
+  function mostrarErro(texto) { $("modal-erro").textContent = texto || ""; $("modal-erro").hidden = !texto; }
+  function limparFilhos(el) { while (el.firstChild) el.removeChild(el.firstChild); }
+  function li(texto, classe) {
+    const el = document.createElement("li");
+    el.textContent = texto;
+    if (classe) el.className = classe;
+    return el;
+  }
+  function listaCodigos(itens) {
+    const cods = itens.map((it) => it.codigo);
+    return cods.length > 12 ? `${cods.slice(0, 12).join(", ")}… (+${cods.length - 12})` : cods.join(", ");
+  }
+  function amanha() {
+    const d = new Date(); d.setDate(d.getDate() + 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  function resetarCampos() {
+    ["reenvio-motivo", "stokki-motivo", "endereco-novo", "baixa-texto-outro"].forEach((id) => { $(id).value = ""; });
+    $("stokki-contador").textContent = "0 de no mínimo 15";
+    $("agendar-data").value = amanha();
+    $("agendar-inicio").value = "08:00";
+    $("agendar-fim").value = "18:00";
+    $("agendar-aviso").hidden = true;
+    limparFilhos($("agendar-aviso"));
+    $("endereco-recusa").hidden = true;
+    limparFilhos($("endereco-recusa"));
+    $("endereco-novo").disabled = false;
+    $("baixa-foto-canhoto").value = "";
+    $("baixa-foto-nota").value = "";
+    $("baixa-foto-nota").disabled = true;
+    $("baixa-justificativa").value = "";
+    $("baixa-campo-justificativa").hidden = false;
+    $("baixa-campo-outro").hidden = true;
+  }
+
+  function avisosStokki(itens) {
+    const ul = $("stokki-avisos");
+    limparFilhos(ul);
+    const ps = [];
+    itens.forEach((it) => psDoCodigo(it.codigo).forEach((p) => { if (ps.indexOf(p) < 0) ps.push(p); }));
+    ul.appendChild(li(`Na Stokki: ${ps.join(", ")}.`));
+    ul.appendChild(li("Se o pedido já foi separado, o estoque fica preso no Virtual até a equipe fazer o Desbloqueio."));
+    itens.filter((it) => ehReentrega(it.codigo)).forEach((it) => {
+      const base = it.codigo.replace(/-R\d+.*$/i, "");
+      ul.appendChild(li(`Linha de reentrega (${it.codigo}): o pedido da Stokki é o mesmo do original (${base}); cancelar cancela o pedido inteiro na Stokki.`));
+    });
+    if (itens.some((it) => it.serviceId && VIVOS.indexOf(it.status) >= 0)) {
+      ul.appendChild(li("A Vuupt continua com o pedido; use Cancelar Vuupt se for o caso."));
+    }
+  }
+
+  // Endereço em lote grava o MESMO texto em todos: só com o mesmo embarcador e o mesmo
+  // destinatário (nome sem diferença de caixa/espaços). Devolve true se pode; senão mostra quem difere.
+  function chaveDestino(it) { return `${it.senderId}|${it.destinatario.trim().toUpperCase()}`; }
+  function recusarEnderecoLote(itens) {
+    const grupos = {};
+    itens.forEach((it) => { (grupos[chaveDestino(it)] = grupos[chaveDestino(it)] || []).push(it); });
+    const chaves = Object.keys(grupos);
+    const semDados = itens.some((it) => !it.senderId || !it.destinatario.trim());
+    if (chaves.length === 1 && !semDados) return true;
+    const ul = $("endereco-recusa");
+    limparFilhos(ul);
+    ul.appendChild(li("Endereço em lote só para pedidos do mesmo embarcador e do mesmo destinatário."));
+    chaves.forEach((k) => {
+      const g = grupos[k];
+      const dest = g[0].destinatario.trim() || "(sem destinatário)";
+      const emb = g[0].embarcador.trim() || (g[0].senderId ? `embarcador ${g[0].senderId}` : "sem embarcador");
+      ul.appendChild(li(`${dest} (${emb}): ${listaCodigos(g)}`));
+    });
+    ul.appendChild(li("Selecione só os de um destinatário, ou altere um a um."));
+    ul.hidden = false;
+    $("endereco-novo").disabled = true;
+    return false;
+  }
+
+  async function carregarCanhotos(l) {
+    const ul = $("canhoto-lista");
+    limparFilhos(ul);
+    ul.appendChild(li("Carregando..."));
+    try {
+      const resp = await fetch(`${URLS.comprovantes}?codigo=${encodeURIComponent(l.codigo)}`, { credentials: "same-origin" });
+      const dados = await lerResposta(resp);
+      limparFilhos(ul);
+      const itens = dados.comprovantes || [];
+      if (!itens.length) ul.appendChild(li("Sem canhoto: nada na Vuupt, nenhum canhoto manual nem foto do app."));
+      itens.forEach((c) => {
+        const item = document.createElement("li");
+        const a = document.createElement("a");
+        a.href = c.url;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.className = "link-linha";
+        a.textContent = c.rotulo || c.origem || "Canhoto";
+        item.appendChild(a);
+        ul.appendChild(item);
+      });
+    } catch (e) {
+      limparFilhos(ul);
+      ul.appendChild(li(`Falha ao buscar os canhotos: ${e.message}`, "falha"));
+    }
+  }
+
+  function abrirModal(acao, linhas, lote, voltarFoco) {
+    const conf = ACOES[acao];
+    if (!conf) return;
+    const itens = [], pulados = [];
+    linhas.forEach((l) => {
+      const motivo = bloqueio(acao, l);
+      if (motivo) pulados.push({ codigo: l.codigo, motivo }); else itens.push(l);
+    });
+    atual = { acao, itens, pulados, lote, voltarFoco, rodando: false, terminou: false, diaFixoVisto: false };
+    resetarCampos();
+    mostrarErro("");
+    $("modal-progresso").hidden = true;
+    $("modal-resumo").hidden = true;
+    $("modal-form").hidden = false;
+    Array.prototype.forEach.call(modal.querySelectorAll("[data-secao]"), (s) => { s.hidden = s.dataset.secao !== acao; });
+    $("modal-titulo").textContent = lote ? `${conf.titulo} em lote` : conf.titulo;
+    if (lote) {
+      let txt = `${itens.length} pedido(s): ${listaCodigos(itens)}`;
+      if (pulados.length) txt += ` · ${pulados.length} não se aplica(m) e fica(m) de fora`;
+      $("modal-alvo").textContent = txt;
+    } else {
+      $("modal-alvo").textContent = [linhas[0].codigo, linhas[0].destinatario].filter(Boolean).join(" · ");
+    }
+    botaoConfirmar.hidden = !conf.confirmar;
+    botaoConfirmar.disabled = false;
+    botaoConfirmar.textContent = conf.confirmar || "";
+    botaoFechar.textContent = conf.confirmar ? "Voltar" : "Fechar";
+    botaoFechar.disabled = false;
+    if (!itens.length) {
+      $("modal-form").hidden = true;
+      mostrarResumo([], [], [], pulados);
+    } else if (acao === "endereco" && lote && !recusarEnderecoLote(itens)) {
+      atual.bloqueado = true;
+      botaoConfirmar.disabled = true;
+    } else if (acao === "cancelar_stokki") {
+      avisosStokki(itens);
+    } else if (acao === "canhoto") {
+      carregarCanhotos(itens[0]);
+    }
+    modal.hidden = false;
+    const foco = modal.querySelector(`[data-secao="${acao}"]:not([hidden]) textarea, [data-secao="${acao}"]:not([hidden]) input`);
+    (foco && !foco.disabled && !$("modal-form").hidden ? foco
+      : (botaoConfirmar.hidden || botaoConfirmar.disabled ? botaoFechar : botaoConfirmar)).focus();
+  }
+
+  function fecharModal() {
+    if (!atual || atual.rodando) return;
+    modal.hidden = true;
+    const foco = atual.voltarFoco;
+    atual = null;
+    if (foco && document.body.contains(foco)) foco.focus();
+  }
+  botaoFechar.addEventListener("click", fecharModal);
+  $("modal-form").addEventListener("input", () => mostrarErro(""));
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !modal.hidden) fecharModal(); });
+
+  $("stokki-motivo").addEventListener("input", () => {
+    const n = $("stokki-motivo").value.trim().length;
+    $("stokki-contador").textContent = n >= 15 ? `${n} caracteres` : `${n} de no mínimo 15`;
+  });
+  $("agendar-data").addEventListener("change", () => {
+    if (!atual) return;
+    atual.diaFixoVisto = false;
+    $("agendar-aviso").hidden = true;
+    botaoConfirmar.textContent = ACOES.agendar.confirmar;
+  });
+  // Torre: com foto do canhoto a justificativa some; a nota de retorno só vai junto da FOTO do canhoto.
+  $("baixa-foto-canhoto").addEventListener("change", () => {
+    const canhoto = $("baixa-foto-canhoto").files[0];
+    const nota = $("baixa-foto-nota");
+    nota.disabled = !canhoto || canhoto.type === "application/pdf";
+    if (nota.disabled) nota.value = "";
+    $("baixa-campo-justificativa").hidden = !!canhoto;
+    aoMudarJustificativa();
+  });
+  function aoMudarJustificativa() {
+    const temFoto = $("baixa-foto-canhoto").files.length > 0;
+    $("baixa-campo-outro").hidden = temFoto || $("baixa-justificativa").value !== "outro";
+  }
+  $("baixa-justificativa").addEventListener("change", aoMudarJustificativa);
+
+  // Lê e confere o formulário da ação; devolve {erro} ou os parâmetros.
+  function lerFormulario(acao) {
+    if (acao === "reenvio") {
+      const motivo = $("reenvio-motivo").value.trim();
+      if (motivo.length < 5 || motivo.length > 200) return { erro: "Escreva o motivo do reenvio (5 a 200 caracteres)." };
+      return { motivo };
+    }
+    if (acao === "cancelar_stokki") {
+      const motivo = $("stokki-motivo").value.trim();
+      if (motivo.length < 15) return { erro: "Informe o motivo do cancelamento (mínimo de 15 caracteres)." };
+      return { motivo };
+    }
+    if (acao === "endereco") {
+      const endereco = $("endereco-novo").value.trim();
+      if (!endereco) return { erro: "Informe o novo endereço." };
+      return { endereco };
+    }
+    if (acao === "agendar") {
+      const data = $("agendar-data").value, inicio = $("agendar-inicio").value, fim = $("agendar-fim").value;
+      if (!data || !inicio || !fim) return { erro: "Preencha a data e a janela de horário." };
+      if (inicio >= fim) return { erro: "O início da janela precisa ser antes do fim." };
+      return { data, inicio, fim };
+    }
+    if (acao === "baixa") {
+      const foto = $("baixa-foto-canhoto").files[0] || null;
+      const nota = $("baixa-foto-nota").files[0] || null;
+      const justificativa = $("baixa-justificativa").value;
+      const textoOutro = $("baixa-texto-outro").value.trim();
+      if (!foto) {
+        if (!justificativa) return { erro: "Anexe a foto do canhoto ou escolha uma justificativa." };
+        if (justificativa === "outro" && (textoOutro.length < 5 || textoOutro.length > 200)) {
+          return { erro: "Descreva o motivo em 5 a 200 caracteres." };
+        }
+      }
+      return { foto, nota, justificativa, textoOutro };
+    }
+    return {};
+  }
+
+  // Um pedido; devolve {selo, aviso?, jaEstava?}.
+  async function executar(acao, it, i, p) {
+    const sid = Number(it.serviceId);
+    if (acao === "reenvio") {
+      const d = await enviar(URLS.reenvio, { service_id: sid, motivo: p.motivo });
+      return { selo: `Reenvio → ${String(d.novo_code || "").replace(/^#/, "")}` };
+    }
+    if (acao === "cancelar_vuupt") {
+      const d = await enviar(URLS.cancelar_vuupt, { service_id: sid });
+      return { selo: d.ja_estava ? "Já estava cancelado" : "Cancelado agora", aviso: d.aviso, jaEstava: !!d.ja_estava };
+    }
+    if (acao === "cancelar_stokki") {
+      const d = await enviar(URLS.cancelar_stokki, { codigo: it.codigo, motivo: p.motivo });
+      const sits = (d.resultados || []).map((r) => r.situacao).filter(Boolean);
+      return { selo: "Cancelado na Stokki", aviso: sits.length ? `situação na Stokki: ${sits.join(", ")}` : "" };
+    }
+    if (acao === "endereco") {
+      await enviar(URLS.endereco, { service_id: sid, endereco: p.endereco });
+      return { selo: "Endereço alterado" };
+    }
+    if (acao === "agendar") {
+      await enviar(URLS.agendar, { service_id: sid, data: p.data, hora_inicio: p.inicio, hora_fim: p.fim });
+      return { selo: `Agendado ${ddmm(p.data)} ${p.inicio}–${p.fim}` };
+    }
+    if (acao === "baixa") {
+      const fd = new FormData();
+      fd.append("service_id", sid);
+      if (p.foto) {
+        // itens 2..N levam o 1º como referência (o servidor confere de novo), como no Planejamento
+        if (i > 0) fd.append("lote_referencia", Number(atual.itens[0].serviceId));
+        fd.append("foto_canhoto", p.foto);
+        if (p.nota) fd.append("foto_nota_retorno", p.nota);
+      } else {
+        fd.append("justificativa", p.justificativa);
+        if (p.justificativa === "outro") fd.append("texto_outro", p.textoOutro);
+      }
+      const d = await enviar(URLS.baixa, fd);
+      return { selo: d.ja_estava ? "Já estava entregue" : "Baixa dada", aviso: d.aviso, jaEstava: !!d.ja_estava };
+    }
+    throw new Error("ação desconhecida");
+  }
+
+  // Agendar: antes, pergunta ao servidor quem fica fora do dia fixo da região (só avisa).
+  async function conferirDiaFixo(p) {
+    let fora = [];
+    try {
+      const d = await enviar(URLS.checar_dia_fixo, { service_ids: atual.itens.map((it) => Number(it.serviceId)), data: p.data });
+      fora = d.fora_do_dia || [];
+    } catch (e) {
+      console.warn("Checagem de dia fixo falhou; agendando sem o aviso.", e);
+      return true;
+    }
+    atual.diaFixoVisto = true;
+    if (!fora.length) return true;
+    const ul = $("agendar-aviso");
+    limparFilhos(ul);
+    if (fora.length === 1 && atual.itens.length === 1) {
+      ul.appendChild(li(`Este pedido é de ${fora[0].regiao}, com visita só às ${fora[0].dias}.`));
+    } else {
+      ul.appendChild(li(`${fora.length} pedido(s) ficam fora do dia de visita da região:`));
+      fora.forEach((f) => ul.appendChild(li(`${f.codigo || "#" + f.service_id} — ${f.regiao}: só ${f.dias}`)));
+    }
+    ul.appendChild(li("Confirme para agendar mesmo assim."));
+    ul.hidden = false;
+    botaoConfirmar.textContent = "Agendar mesmo assim";
+    return false;
+  }
+
+  async function validarLoteFoto() {
+    try {
+      await enviar(URLS.validar_lote_foto, { service_ids: atual.itens.map((it) => Number(it.serviceId)) });
+      return "";
+    } catch (e) {
+      const fora = ((e.dados || {}).fora || []);
+      return `${e.message}${fora.length ? `\nFora da regra: ${fora.join(", ")}` : ""}\nRemova a foto e use uma justificativa, ou dê baixa um a um.`;
+    }
+  }
+
+  function mostrarResumo(feitos, jaEstavam, falhas, pulados, avisos) {
+    const caixa = $("modal-resumo");
+    limparFilhos(caixa);
+    const bloco = (titulo, linhas, classe) => {
+      if (!linhas.length) return;
+      const p = document.createElement("p");
+      p.textContent = titulo;
+      if (classe) p.className = classe;
+      caixa.appendChild(p);
+      const ul = document.createElement("ul");
+      linhas.forEach((t) => ul.appendChild(li(t, classe)));
+      caixa.appendChild(ul);
+    };
+    bloco(`Feito (${feitos.length}):`, feitos.length ? [feitos.join(", ")] : []);
+    bloco(`Já estava (${jaEstavam.length}):`, jaEstavam.length ? [jaEstavam.join(", ")] : []);
+    bloco("Avisos:", avisos || []);
+    bloco(`Falharam (${falhas.length}):`, falhas.map((f) => `${f.codigo}: ${f.erro}`), "falha");
+    bloco(`Não se aplica (${pulados.length}):`, pulados.map((x) => `${x.codigo}: ${x.motivo}`));
+    if (feitos.length || jaEstavam.length) {
+      const p = document.createElement("p");
+      p.textContent = NOTA_SINC;
+      caixa.appendChild(p);
+    }
+    caixa.hidden = false;
+    botaoConfirmar.hidden = true;
+    botaoFechar.textContent = "Fechar";
+    if (atual) atual.terminou = true;
+  }
+
+  botaoConfirmar.addEventListener("click", async () => {
+    if (!atual || atual.rodando || atual.terminou || atual.bloqueado) return;
+    const acao = atual.acao;
+    const p = lerFormulario(acao);
+    if (p.erro) { mostrarErro(p.erro); return; }
+    mostrarErro("");
+    atual.rodando = true;
+    botaoConfirmar.disabled = true;
+    botaoFechar.disabled = true;
+    const rotuloOriginal = botaoConfirmar.textContent;
+    try {
+      if (acao === "agendar" && !atual.diaFixoVisto) {
+        botaoConfirmar.textContent = "Conferindo o dia fixo...";
+        if (!(await conferirDiaFixo(p))) return;
+      }
+      if (acao === "baixa" && p.foto) {
+        if (atual.itens.length > 1) {
+          botaoConfirmar.textContent = "Conferindo o lote...";
+          const recusa = await validarLoteFoto();
+          if (recusa) { mostrarErro(recusa); botaoConfirmar.textContent = rotuloOriginal; return; }
+        }
+        // reduz uma vez no navegador e reaproveita o mesmo arquivo em todos os envios
+        botaoConfirmar.textContent = "Preparando a foto...";
+        p.foto = await reduzirImagem(p.foto);
+        p.nota = p.nota ? await reduzirImagem(p.nota) : null;
+      }
+      await rodarLote(acao, p);
+    } finally {
+      if (atual) {
+        atual.rodando = false;
+        botaoFechar.disabled = false;
+        botaoConfirmar.disabled = false;
+        if (!atual.terminou && botaoConfirmar.textContent.indexOf("...") >= 0) botaoConfirmar.textContent = rotuloOriginal;
+      }
+    }
+  });
+
+  // Um fetch por pedido, em sequência; falha de um não para os outros.
+  async function rodarLote(acao, p) {
+    const itens = atual.itens, total = itens.length;
+    const feitos = [], jaEstavam = [], falhas = [], avisos = [];
+    $("modal-progresso").hidden = false;
+    $("modal-barra").max = total;
+    for (let i = 0; i < total; i++) {
+      const it = itens[i];
+      $("modal-barra").value = i;
+      $("modal-progresso-texto").textContent = `${i + 1} de ${total}: ${it.codigo}`;
+      botaoConfirmar.textContent = `Enviando ${i + 1} de ${total}...`;
+      try {
+        const r = await executar(acao, it, i, p);
+        selo(it.tr, r.selo);
+        (r.jaEstava ? jaEstavam : feitos).push(it.codigo);
+        if (r.aviso) avisos.push(`${it.codigo}: ${r.aviso}`);
+        const caixa = it.tr.querySelector('input[name=sel]');
+        if (caixa) caixa.checked = false;   // falhas ficam marcadas, pra tentar de novo
+      } catch (e) {
+        falhas.push({ codigo: it.codigo, erro: e.message });
+      }
+    }
+    $("modal-barra").value = total;
+    $("modal-progresso-texto").textContent = `${total} de ${total}`;
+    atualizarBarra();
+    // Um pedido só que falhou: mostra o erro e deixa o formulário pra tentar de novo.
+    if (!atual.lote && falhas.length === 1 && !feitos.length && !jaEstavam.length) {
+      $("modal-progresso").hidden = true;
+      mostrarErro(falhas[0].erro);
+      return;
+    }
+    $("modal-form").hidden = true;
+    mostrarResumo(feitos, jaEstavam, falhas, atual.pulados, avisos);
+  }
+})();
+</script>
+{% endif %}
 {% endblock %}
