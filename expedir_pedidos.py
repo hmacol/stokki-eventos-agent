@@ -1328,9 +1328,14 @@ def _soltar_da_oe_e_expedir(page, codigo_ps: str) -> tuple[str, str]:
         return "ja_expedido", f"a OE-{r['oe']} não aceitou: {r['erro']}"
     if r["acao"] == "removido_da_oe":
         return expedir_na_stokki(page, codigo_ps), f"tirado da OE-{r['oe']} (ela tinha outros pedidos)"
-    situacao = _situacao_na_stokki(page, codigo_ps)
-    if situacao and "enviado" in situacao.lower():
-        return "expedido", f"OE-{r['oe']} finalizada"
+    # A Stokki conclui a OE na hora, mas o pedido so vira "Enviado" alguns
+    # segundos depois (1a execucao real, PS-43333 em 12/11: reler em 5 s ainda
+    # dava "Aguardando Transportador"). Espera ate 1 minuto.
+    for _ in range(12):
+        situacao = _situacao_na_stokki(page, codigo_ps)
+        if situacao and "enviado" in situacao.lower():
+            return "expedido", f"OE-{r['oe']} finalizada"
+        time.sleep(5)
     return "ja_expedido", f"a OE-{r['oe']} foi finalizada, mas o pedido segue '{situacao or 'sem situação lida'}'"
 
 

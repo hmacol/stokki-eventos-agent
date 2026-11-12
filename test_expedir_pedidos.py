@@ -62,6 +62,7 @@ class TestSoltarDaOe(unittest.TestCase):
     def _rodar(self, situacoes, liberar, expedir="expedido"):
         from stokki import expedicao_programada
         with mock.patch.object(ep, "_situacao_na_stokki", side_effect=situacoes), \
+                mock.patch.object(ep.time, "sleep"), \
                 mock.patch.object(expedicao_programada, "liberar_pedido", return_value=liberar) as lib, \
                 mock.patch.object(ep, "expedir_na_stokki", return_value=expedir) as exp:
             return ep._soltar_da_oe_e_expedir(object(), "PS-43333-R1"), lib, exp
@@ -78,6 +79,14 @@ class TestSoltarDaOe(unittest.TestCase):
         self.assertEqual((resultado, nota), ("expedido", "OE-17424 finalizada"))
         self.assertEqual(lib.call_args.args[1], "43333")   # id da Stokki, nao o sufixo da reentrega
         exp.assert_not_called()
+
+    def test_espera_a_stokki_virar_o_pedido_depois_de_finalizar_a_oe(self):
+        ag = "Aguardando Transportador"
+        (resultado, _), _, _ = self._rodar([ag, ag, ag, "Enviado"], {"acao": "oe_finalizada", "oe": 17424, "erro": ""})
+        self.assertEqual(resultado, "expedido")
+        (resultado, nota), _, _ = self._rodar([ag] * 13, {"acao": "oe_finalizada", "oe": 17424, "erro": ""})
+        self.assertEqual(resultado, "ja_expedido")
+        self.assertIn("foi finalizada, mas o pedido segue", nota)
 
     def test_removido_da_oe_expede_em_seguida(self):
         (resultado, nota), _, exp = self._rodar(["Aguardando Transportador"],
