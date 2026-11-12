@@ -94,6 +94,21 @@
   .atencao-env .item { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; padding: 6px 0; border-top: 1px dashed var(--rodando-borda); }
   .atencao-env .item:first-of-type { border-top: none; }
   .erro-txt { color: var(--st-falha); font-size: 11.5px; }
+  /* Documentos do pedido em PDF (11/11, anexos_pedido.py) */
+  .c-doc { min-width: 190px; max-width: 280px; white-space: normal; }
+  .anx { border: 1px solid var(--borda); border-radius: 6px; padding: 5px 8px; margin-bottom: 5px; font-size: 12px; display: flex; flex-direction: column; gap: 2px; background: var(--fundo); }
+  .anx.diverge { border-color: var(--st-falha); }
+  .anx-nome { font-weight: 600; color: var(--texto); word-break: break-all; }
+  .anx-info { font-size: 11px; color: var(--texto-suave); }
+  .anx-alerta { font-size: 11px; color: var(--st-falha); font-weight: 600; }
+  .anx-link { background: none; border: none; padding: 0; color: var(--st-rota); font-size: 11.5px; font-weight: 600; text-decoration: underline; cursor: pointer; font-family: inherit; align-self: flex-start; }
+  .anx-mais { border: 1px dashed var(--borda); color: var(--texto-suave); background: none; border-radius: 6px; padding: 3px 9px; font-size: 11.5px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .anx-mais:hover { border-color: var(--acento); color: var(--acento); }
+  .anx-soltos { border: 1px solid var(--rodando-borda); background: var(--rodando-bg); border-radius: 8px; padding: 10px 14px; font-size: 12.5px; display: flex; flex-direction: column; gap: 8px; }
+  .anx-solto { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
+  .anx-solto select { font-family: inherit; font-size: 12.5px; color: var(--texto); background: var(--superficie); border: 1px solid var(--borda); border-radius: 6px; padding: 4px 8px; max-width: 320px; }
+  .anx-conf { display: inline-flex !important; flex-direction: row !important; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 700; color: var(--texto); border: 1px solid var(--rodando-borda); background: var(--rodando-bg); border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+  .anx-lista { display: flex; flex-direction: column; gap: 6px; }
 </style>
 
 <section id="vista-envios" class="oculto" data-aba-inicial="{{ aba_inicial }}" data-pode-enviar="{{ 1 if pode_enviar else 0 }}">
@@ -113,11 +128,13 @@
           <span style="font-size:12px; color:var(--texto-suave);" id="env-regra"></span>
         </div>
         <label class="zona" id="zona">
-          <input type="file" id="arquivos" multiple accept=".xml,.zip,.xlsx,.xls,text/xml,application/xml,application/zip,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel">
+          <input type="file" id="arquivos" multiple accept=".xml,.zip,.xlsx,.xls,.pdf,application/pdf,text/xml,application/xml,application/zip,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
           <div><b>Arraste os XMLs das notas ou a planilha de pedidos aqui</b> ou clique pra escolher</div>
           <div style="font-size:11.5px; margin-top:4px;">XML: vários .xml de uma vez ou um .zip (só NF-e de saída da sua empresa). Planilha: .xlsx no modelo Fresh Log, uma linha por item.</div>
+          <div style="font-size:11.5px; margin-top:4px;">Documentos dos pedidos (boleto e outros, em PDF) podem vir juntos: o sistema coloca cada um no pedido certo e você confere antes de enviar. Eles saem impressos com a nota na entrega.</div>
         </label>
+        <input type="file" id="anx-arquivo" multiple accept=".pdf,application/pdf" hidden>
         <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:12px; color:var(--texto-suave);">
           <a class="botao-linha" id="btn-modelo" href="{{ request.script_root }}/api/envios/modelo-planilha" download style="text-decoration:none;">Baixar modelo de planilha (.xlsx)</a>
           <span>Sem XML da nota? Preencha o modelo e suba aqui -- os pedidos são criados do mesmo jeito.</span>
@@ -125,11 +142,13 @@
         <div class="msg" id="env-msg"></div>
         <div class="previa" id="previa">
           <div class="rej oculto" id="previa-rej"></div>
+          <div class="anx-soltos oculto" id="previa-anexos"></div>
           <div>
             <h4 id="previa-titulo"></h4>
-            <div class="rolagem"><table id="previa-tabela"><thead><tr><th>NF / Pedido</th><th>Destinatário</th><th>Endereço</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Agendamento</th></tr></thead><tbody></tbody></table></div>
+            <div class="rolagem"><table id="previa-tabela"><thead><tr><th>NF / Pedido</th><th>Destinatário</th><th>Endereço</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Documentos</th><th>Agendamento</th></tr></thead><tbody></tbody></table></div>
           </div>
           <div id="previa-dest" style="display:flex; flex-direction:column; gap:8px;"></div>
+          <label class="anx-conf oculto" id="anx-conf-box"><input type="checkbox" id="anx-conf"> <span id="anx-conf-txt"></span></label>
           <div class="barra-confirmar">
             <button type="button" class="botao" id="btn-confirmar">Confirmar envio</button>
             <button type="button" class="botao-linha" id="btn-limpar">Descartar</button>
@@ -166,6 +185,7 @@
           <div><b style="color:var(--texto)">2.</b> A gente confere: NF-e precisa ser de saída da sua empresa e não pode ter sido enviada antes; na planilha, cada pedido precisa de destinatário, endereço completo e pelo menos um SKU com quantidade.</div>
           <div><b style="color:var(--texto)">3.</b> Na primeira vez que um destinatário aparece, você informa o horário em que ele recebe. Quem só recebe com agendamento pede a data (ou fica como <i>agendamento pendente</i>).</div>
           <div><b style="color:var(--texto)">4.</b> O pedido entra na fila e é criado na Stokki em instantes. Se der erro, aparece aqui e você recebe um e-mail.</div>
+          <div><b style="color:var(--texto)">5.</b> Boleto ou outro documento que precisa ir com a nota? Suba os PDFs junto com os pedidos, ou anexe depois em <i>Documentos</i>, na lista, enquanto o pedido não saiu pra entrega.</div>
         </div>
       </div>
       <div class="card">
@@ -319,6 +339,7 @@
         ${PODE_ENVIAR && x.pode_em_espera ? `<button type="button" data-acao="em_espera" data-id="${x.id}">Tirar da rota</button>` : ''}
         ${PODE_ENVIAR && x.pode_reenviar ? `<button type="button" data-acao="reenviar" data-id="${x.id}">Reenviar</button>` : ''}
         ${PODE_ENVIAR && x.pode_cancelar ? `<button type="button" class="perigo" data-acao="cancelar" data-id="${x.id}">Cancelar</button>` : ''}
+        ${(PODE_ENVIAR && x.pode_anexar) || (x.anexos || []).length ? `<button type="button" data-acao="documentos" data-id="${x.id}" title="Documentos em PDF que vão impressos com a nota">Documentos${(x.anexos || []).length ? ' (' + x.anexos.length + ')' : ''}</button>` : ''}
         <button type="button" data-acao="xml" data-id="${x.id}" title="${x.origem === 'planilha' ? 'Baixar a planilha enviada' : 'Baixar o XML enviado'}">${x.origem === 'planilha' ? 'Planilha' : 'XML'}</button>
       </div></td></tr>`).join('');
     const vazio = $('env-vazia');
@@ -355,6 +376,14 @@
 
   async function analisar(arquivos) {
     if (!arquivos || !arquivos.length) return;
+    // Só PDFs: são documentos de pedidos. Com prévia aberta entram nela;
+    // sem prévia não há pedido pra receber.
+    if ([...arquivos].every(f => /\.pdf$/i.test(f.name))) {
+      if (previa && previa.itens.length) await adicionarAnexosPrevia(arquivos, null);
+      else mensagem('Os documentos em PDF entram junto com os pedidos: suba os XMLs ou a planilha (pode ser tudo de uma vez). Pra um pedido já enviado, use "Documentos" na lista abaixo.', 'info');
+      $('arquivos').value = '';
+      return;
+    }
     const fd = new FormData();
     for (const f of arquivos) fd.append('arquivos', f);
     mensagem(`Lendo ${arquivos.length} arquivo${arquivos.length > 1 ? 's' : ''}…`, 'info');
@@ -363,7 +392,8 @@
       const j = await r.json();
       if (!r.ok) throw new Error(j.erro || 'Falha ao ler os arquivos.');
       previa = j;
-      mensagem('', '');
+      previa.anexos = j.anexos || [];
+      mensagem(previa.anexos.length && !j.itens.length ? 'Nenhum pedido válido neste lote: os documentos em PDF não foram anexados.' : '', 'info');
       renderPrevia();
     } catch (e) {
       mensagem(e.message, 'erro');
@@ -388,7 +418,7 @@
     const rotFl = p.fluxo_rotulos || {};
     $('previa-tabela').querySelector('thead').innerHTML = '<tr><th>NF / Pedido</th>' +
       (multi ? `<th>Fluxo <select id="fl-todos" title="Aplicar a todos"><option value="">todos…</option>${p.fluxos_disponiveis.map(f => `<option value="${esc(f)}">${esc(rotFl[f] || f)}</option>`).join('')}</select></th>` : '') +
-      `<th>Destinatário</th><th>${p.entrega_ativa ? 'Endereço de entrega' : 'Endereço'}</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Agendamento</th></tr>`;
+      `<th>Destinatário</th><th>${p.entrega_ativa ? 'Endereço de entrega' : 'Endereço'}</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Documentos</th><th>Agendamento</th></tr>`;
     const opcoesFluxo = it => (p.fluxos_disponiveis || []).filter(f => !(it.origem === 'planilha' && f === 'cross'));
     $('previa-tabela').querySelector('tbody').innerHTML = p.itens.map((it, i) => {
       const d = p.destinatarios[it.destinatario_doc] || {};
@@ -408,6 +438,7 @@
         <td class="num nw" style="text-align:center">${it.volumes}</td>
         <td class="num nw" style="text-align:right">${it.peso_kg ? it.peso_kg.toLocaleString('pt-BR') + ' kg' : '—'}</td>
         <td class="num nw" style="text-align:right">${brl(it.valor_nf)}</td>
+        <td class="c-doc" data-i="${i}"></td>
         <td class="nw">${d.requer_agendamento ? `<div class="ag"><label><input type="date" class="ag-data" min="${p.hoje}"></label><label>das <input type="time" class="ag-ini" value="${esc(d.horario_inicio || '08:00')}"></label><label>às <input type="time" class="ag-fim" value="${esc(d.horario_fim || '12:00')}"></label><label><input type="checkbox" class="ag-pend"> pendente</label></div>` : '<span style="color:var(--texto-suave)">—</span>'}</td>
       </tr>`;
     }).join('');
@@ -423,7 +454,141 @@
     }).join('');
     $('btn-confirmar').disabled = !p.itens.length;
     $('btn-confirmar').textContent = p.itens.length ? `Confirmar envio de ${p.itens.length} pedido${p.itens.length > 1 ? 's' : ''}` : 'Nada a enviar';
+    renderAnexos();
   }
+
+  // ── Documentos dos pedidos (PDF) -- 11/11, anexos_pedido.py ─────────────────
+  // previa.anexos: [{token, nome, tipo, numero_nf, pedido (token do item ou
+  // null), motivo, manual}]. O servidor só SUGERE o pedido; quem decide é o
+  // usuário, que marca a conferência antes de enviar (o confirmar recusa sem).
+  const nfLimpa = v => String(v || '').replace(/\D/g, '').replace(/^0+/, '');
+  const rotIt = it => it.rotulo || ('NF ' + it.numero_nf);
+  const infoAnexo = a => esc(a.tipo || 'Documento') + (a.numero_nf ? ' · NF ' + esc(a.numero_nf) : '');
+  const diverge = (a, numeroNf) => a.numero_nf && numeroNf && nfLimpa(a.numero_nf) !== nfLimpa(numeroNf);
+  // pedido (da prévia) que o sistema sugeriu, quando o usuário pôs o documento em outro
+  const outroPedido = (a, it) => a.sugerido && a.sugerido !== it.token && a.motivo !== 'único pedido' && previa.itens.find(v => v.token === a.sugerido);
+  let anxDestino = null, docNovos = [];
+
+  function renderAnexos() {
+    const p = previa;
+    if (!p) return;
+    p.anexos = p.anexos || [];
+    p.itens.forEach((it, i) => {
+      const td = $('previa-tabela').querySelector(`td.c-doc[data-i="${i}"]`);
+      if (!td) return;
+      td.innerHTML = p.anexos.filter(a => a.pedido === it.token).map(a => `<div class="anx ${diverge(a, it.numero_nf) || outroPedido(a, it) ? 'diverge' : ''}">
+          <span class="anx-nome">${esc(a.nome)}</span>
+          <span class="anx-info">${infoAnexo(a)} · ${a.manual ? 'escolhido por você' : 'colocado pelo sistema (' + esc(a.motivo) + ')'}</span>
+          ${diverge(a, it.numero_nf) ? `<span class="anx-alerta">Atenção: o documento cita a NF ${esc(a.numero_nf)}, e este pedido é a NF ${esc(it.numero_nf)}.</span>` : ''}
+          ${outroPedido(a, it) ? `<span class="anx-alerta">Atenção: pelo nome ou conteúdo, este documento parece ser de ${esc(rotIt(outroPedido(a, it)))}.</span>` : ''}
+          <button type="button" class="anx-link" data-anx="tirar" data-token="${esc(a.token)}">tirar deste pedido</button></div>`).join('') +
+        `<button type="button" class="anx-mais" data-anx="anexar" data-i="${i}">+ Anexar PDF</button>`;
+    });
+    const soltos = p.anexos.filter(a => !p.itens.some(it => it.token === a.pedido));
+    const box = $('previa-anexos');
+    box.classList.toggle('oculto', !soltos.length);
+    box.innerHTML = !soltos.length ? '' : `<div><b>${soltos.length} documento${soltos.length > 1 ? 's' : ''} sem pedido.</b> O sistema não conseguiu identificar de qual pedido ${soltos.length > 1 ? 'são' : 'é'}: escolha o pedido ou descarte.</div>` +
+      soltos.map(a => `<div class="anx-solto"><span><span class="anx-nome">${esc(a.nome)}</span> <span class="anx-info">${infoAnexo(a)}</span></span>
+        <select data-anx-sel="${esc(a.token)}" aria-label="Pedido do documento ${esc(a.nome)}"><option value="">escolha o pedido…</option>${p.itens.map(it => `<option value="${esc(it.token)}">${esc(rotIt(it))} · ${esc(it.destinatario_nome)}</option>`).join('')}</select>
+        <button type="button" class="anx-link" data-anx="descartar" data-token="${esc(a.token)}">descartar</button></div>`).join('');
+    const n = p.anexos.length;
+    $('anx-conf-box').classList.toggle('oculto', !n);
+    $('anx-conf').checked = false;   // qualquer mudança nos documentos pede conferência de novo
+    $('anx-conf-txt').textContent = n > 1 ? `Conferi os ${n} documentos: cada um está no pedido correto.` : 'Conferi o documento: ele está no pedido correto.';
+  }
+
+  async function lerAnexos(arquivos, pedidos) {
+    const fd = new FormData();
+    for (const f of arquivos) fd.append('arquivos', f);
+    fd.append('pedidos', JSON.stringify(pedidos));
+    const r = await fetch(`${BASE}/api/envios/anexos/ler`, { method: 'POST', credentials: 'same-origin', body: fd });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.erro || 'Falha ao ler os documentos.');
+    return j;
+  }
+
+  // tokenItem: anexo unitário (botão do pedido); null: vários de uma vez, o sistema distribui
+  async function adicionarAnexosPrevia(arquivos, tokenItem) {
+    mensagem(`Lendo ${arquivos.length} documento${arquivos.length > 1 ? 's' : ''}…`, 'info');
+    try {
+      const j = await lerAnexos(arquivos, previa.itens.map(it => ({ chave: it.token, numero_nf: it.numero_nf, destinatario_doc: it.destinatario_doc, referencia: it.referencia })));
+      for (const a of j.anexos) {
+        // anexo unitário: guarda o que o sistema leu pra alertar se parecer de outro pedido
+        if (tokenItem) { a.sugerido = a.pedido; a.pedido = tokenItem; a.manual = true; }
+        previa.anexos.push(a);
+      }
+      mensagem(j.rejeitados.map(r => r.erro).join(' '), j.rejeitados.length ? 'erro' : '');
+      renderAnexos();
+    } catch (e) {
+      mensagem(e.message, 'erro');
+    }
+  }
+
+  function acaoAnexoPrevia(e) {
+    const b = e.target.closest('[data-anx]');
+    if (!b || !previa) return;
+    const a = previa.anexos.find(v => v.token === b.dataset.token);
+    if (b.dataset.anx === 'anexar') { anxDestino = { item: previa.itens[Number(b.dataset.i)].token }; $('anx-arquivo').click(); return; }
+    if (!a) return;
+    if (b.dataset.anx === 'tirar') Object.assign(a, { pedido: null, manual: true });
+    else if (b.dataset.anx === 'descartar') previa.anexos = previa.anexos.filter(v => v !== a);
+    renderAnexos();
+  }
+
+  // Documentos de um pedido já enviado (lista): ver, remover e anexar até a rota sair
+  function abrirDocumentos(id, erro = '') {
+    const x = dados.envios.find(e => e.id === Number(id));
+    if (!x) { fecharModal(); return; }
+    const pode = PODE_ENVIAR && x.pode_anexar, atuais = x.anexos || [];
+    modal(`<h3>Documentos do pedido</h3>
+      <p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}</p>
+      <p>Os documentos anexados aqui saem impressos junto da nota fiscal na entrega.</p>
+      <div class="anx-lista">${atuais.length ? atuais.map(a => `<div class="anx-solto"><a href="${comEmpresa(`${BASE}/api/envios/${x.id}/anexos/${a.id}`)}" target="_blank" rel="noopener" class="anx-nome">${esc(a.nome)}</a><span class="anx-info">${infoAnexo(a)}</span>${pode ? `<button type="button" class="anx-link" data-doc-remover="${a.id}">remover</button>` : ''}</div>`).join('') : '<div class="anx-info">Nenhum documento anexado ainda.</div>'}</div>
+      ${docNovos.length ? `<div class="anx-lista"><b style="font-size:12.5px;">Pra anexar agora:</b>${docNovos.map(a => `<div class="anx ${diverge(a, x.numero_nf) ? 'diverge' : ''}"><span class="anx-nome">${esc(a.nome)}</span><span class="anx-info">${infoAnexo(a)}</span>${diverge(a, x.numero_nf) ? `<span class="anx-alerta">Atenção: o documento cita a NF ${esc(a.numero_nf)}, e este pedido é a NF ${esc(x.numero_nf)}.</span>` : ''}</div>`).join('')}
+        <label class="anx-conf"><input type="checkbox" id="m-conf"> ${docNovos.length > 1 ? `Conferi os ${docNovos.length} documentos: são deste pedido.` : 'Conferi o documento: é deste pedido.'}</label></div>` : ''}
+      ${!pode && PODE_ENVIAR ? '<p>Este pedido já saiu pra entrega ou foi encerrado: não aceita mais documentos.</p>' : ''}
+      <div class="msg ${erro ? 'erro' : ''}" id="m-msg">${esc(erro)}</div>
+      <div class="pe"><button type="button" class="botao-linha" data-fechar>Fechar</button>${pode ? `<button type="button" class="botao-linha" id="m-escolher">${docNovos.length ? 'Escolher mais PDFs' : 'Escolher PDF…'}</button>` : ''}${pode && docNovos.length ? `<button type="button" class="botao" id="m-ok">Anexar ${docNovos.length} documento${docNovos.length > 1 ? 's' : ''}</button>` : ''}</div>`);
+    const falha = t => { const m = $('m-msg'); m.className = 'msg erro'; m.textContent = t; };
+    const chamar = async (url, corpo) => {
+      const r = await fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.erro || 'Não foi possível concluir.');
+    };
+    if ($('m-escolher')) $('m-escolher').addEventListener('click', () => { anxDestino = { envio: x.id }; $('anx-arquivo').click(); });
+    if ($('m-ok')) $('m-ok').addEventListener('click', async () => {
+      if (!$('m-conf').checked) { falha('Confira os documentos e marque a confirmação antes de anexar.'); return; }
+      $('m-ok').disabled = true;
+      try {
+        await chamar(`${BASE}/api/envios/${x.id}/anexos`, { anexos: docNovos.map(a => a.token), conferido: true });
+        docNovos = [];
+        await carregar();
+        abrirDocumentos(x.id);
+      } catch (e) { falha(e.message); $('m-ok').disabled = false; }
+    });
+    $('modal-caixa').querySelectorAll('[data-doc-remover]').forEach(b => b.addEventListener('click', async () => {
+      b.disabled = true;
+      try {
+        await chamar(`${BASE}/api/envios/${x.id}/anexos/${b.dataset.docRemover}/remover`, {});
+        await carregar();
+        abrirDocumentos(x.id);
+      } catch (e) { falha(e.message); b.disabled = false; }
+    }));
+  }
+
+  $('anx-arquivo').addEventListener('change', async e => {
+    const arquivos = [...e.target.files], destino = anxDestino;
+    e.target.value = '';
+    if (!arquivos.length || !destino) return;
+    if (destino.item) { if (previa) await adicionarAnexosPrevia(arquivos, destino.item); return; }
+    const x = dados.envios.find(v => v.id === destino.envio);
+    if (!x) return;
+    try {
+      const j = await lerAnexos(arquivos, [{ chave: String(x.id), numero_nf: x.numero_nf, destinatario_doc: x.destinatario_doc, referencia: x.referencia }]);
+      docNovos.push(...j.anexos);
+      abrirDocumentos(x.id, j.rejeitados.map(r => r.erro).join(' '));
+    } catch (err) { abrirDocumentos(x.id, err.message); }
+  });
 
   // ── Endereço de entrega na prévia (27/10, spec endereco-entrega-portal) ──────
   // item.entrega.modo vem do servidor (nota | terceiros | retirada | sugestao |
@@ -571,6 +736,9 @@
     for (const el of $('previa-dest').querySelectorAll('.dest')) {
       horarios[el.dataset.doc] = { ini: el.querySelector('.h-ini').value, fim: el.querySelector('.h-fim').value, ag: el.querySelector('.h-ag').checked };
     }
+    const anx = p.anexos || [];
+    if (anx.some(a => !p.itens.some(it => it.token === a.pedido))) { mensagem('Há documentos sem pedido: escolha o pedido de cada um ou descarte.', 'erro'); return; }
+    if (anx.length && !$('anx-conf').checked) { mensagem('Confira os documentos de cada pedido e marque a confirmação de que estão nos pedidos corretos.', 'erro'); return; }
     const itens = [];
     for (let i = 0; i < p.itens.length; i++) {
       const it = p.itens[i], h = horarios[it.destinatario_doc] || {};
@@ -600,12 +768,14 @@
         if (st.end) item.entrega_endereco = { cep: st.end.cep, logradouro: st.end.logradouro, numero: st.end.numero,
                                               complemento: st.end.complemento, bairro: st.end.bairro };
       }
+      const meus = anx.filter(a => a.pedido === it.token);
+      if (meus.length) item.anexos = meus.map(a => ({ token: a.token, casado_por: a.manual ? 'manual' : 'automatico' }));
       itens.push(item);
     }
     $('btn-confirmar').disabled = true;
     mensagem('Registrando os pedidos…', 'info');
     try {
-      const r = await fetch(`${BASE}/api/envios/confirmar`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itens }) });
+      const r = await fetch(`${BASE}/api/envios/confirmar`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itens, anexos_conferidos: anx.length > 0 }) });
       const j = await r.json();
       if (r.status === 409 && j.fora_dia_fixo) {
         mensagem('', '');
@@ -615,7 +785,7 @@
       }
       if (!r.ok) throw new Error(j.erro || 'Falha ao confirmar.');
       previa = null; $('previa').classList.remove('aberta');
-      mensagem(j.mensagem, (j.bloqueados || []).length ? 'info' : 'ok');
+      mensagem(j.mensagem, (j.bloqueados || []).length || (j.anexos_falhas || []).length ? 'info' : 'ok');
       aba = 'fila';
       carregar();
     } catch (e) {
@@ -677,6 +847,7 @@
     const x = dados.envios.find(e => e.id === Number(id));
     if (!x) return;
     if (tipo === 'xml') { window.open(comEmpresa(`${BASE}/api/envios/${id}/xml`), '_blank'); return; }
+    if (tipo === 'documentos') { docNovos = []; abrirDocumentos(x.id); return; }
     const cab = `<p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}</p>`;
     const textos = {
       cancelar: ['Cancelar pedido', x.status === 'NA_FILA' || x.status === 'ERRO' ? 'O pedido ainda não foi criado na Stokki — será cancelado na hora.' : 'O pedido já existe na Stokki. A Fresh Log vai cancelá-lo e você acompanha por aqui.'],
@@ -731,6 +902,14 @@
   ['dragleave', 'drop'].forEach(ev => zona.addEventListener(ev, e => { e.preventDefault(); zona.classList.remove('sobre'); }));
   zona.addEventListener('drop', e => analisar(e.dataTransfer.files));
   $('btn-confirmar').addEventListener('click', () => confirmar());
+  $('previa-tabela').addEventListener('click', acaoAnexoPrevia);
+  $('previa-anexos').addEventListener('click', acaoAnexoPrevia);
+  $('previa-anexos').addEventListener('change', e => {
+    const a = previa && e.target.dataset.anxSel && previa.anexos.find(v => v.token === e.target.dataset.anxSel);
+    if (!a || !e.target.value) return;
+    Object.assign(a, { pedido: e.target.value, manual: true });
+    renderAnexos();
+  });
   $('btn-limpar').addEventListener('click', () => { previa = null; $('previa').classList.remove('aberta'); mensagem('', ''); });
   if ($('env-empresa')) {
     const trocarEmpresa = () => {

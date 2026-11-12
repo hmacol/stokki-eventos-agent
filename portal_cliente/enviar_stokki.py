@@ -58,6 +58,7 @@ for _p in (_RAIZ, _AQUI):
 
 import yaml
 
+import anexos_pedido
 import cancelamento as cm
 import endereco_entrega
 import envio_pedidos as ep
@@ -533,6 +534,11 @@ def _gravar_codigo(conn, envio_id: int, codigo: str | None, **campos) -> None:
         pedidos_dedicados.vincular_codigo(conn, envio_id, codigo)
     except Exception as ex:
         logger.warning(f"nao vinculou dedicado do envio {envio_id}: {ex}")
+    # Documentos anexados no portal passam a valer pro romaneio com o PS (11/11)
+    try:
+        anexos_pedido.registrar_no_romaneio(conn, envio_id)
+    except Exception as ex:
+        logger.warning(f"nao registrou os anexos do envio {envio_id}: {ex}")
 
 
 def _falha_tecnica(conn, envios: list[dict], erro: str) -> list[dict]:
