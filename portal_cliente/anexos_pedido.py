@@ -115,7 +115,7 @@ def ler_pdf(nome: str, conteudo: bytes) -> dict:
             "tipo": "Outro", "numero_nf": None, "cnpj": None, "numero_parcela": None, "total_parcelas": None}
     # O classificador olha o NOME do arquivo: grava num temporario com o nome original.
     with tempfile.TemporaryDirectory() as pasta:
-        caminho = Path(pasta) / (re.sub(r"[^\w.\- ]+", "_", nome) or "documento.pdf")
+        caminho = Path(pasta) / (re.sub(r"[^\w.\- ]+", "_", nome).lstrip(". ")[-100:] or "documento.pdf")
         caminho.write_bytes(conteudo)
         try:
             info["tipo"] = classificador.classificar_documento(caminho)["tipo"]
@@ -170,26 +170,35 @@ def sugerir_pedido(info: dict, pedidos: list[dict]) -> tuple[str | None, str]:
 
 # ── Temporario (entre a leitura e a confirmacao do usuario) ───────────────────
 
-def guardar_previa(nome: str, conteudo: bytes) -> dict:
-    """Le o PDF e guarda no temporario do envio. Devolve o que a tela mostra."""
+def guardar_previa(nome: str, conteudo: bytes, cnpj: str) -> dict:
+    """Le o PDF e guarda no temporario do envio, amarrado ao embarcador que
+    enviou (so ele usa o token). Devolve o que a tela mostra."""
     info = ler_pdf(nome, conteudo)
+    info["dono"] = ep._so_digitos(cnpj)
     token = ep.guardar_temporario(conteudo, "pdf")
     (ep.PASTA_TEMP / f"{token}.meta").write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
     return {"token": token, **{k: info[k] for k in ("nome", "tipo", "numero_nf", "paginas")}}
 
 
-def _ler_temporario(token: str) -> tuple[dict, Path]:
+def _ler_temporario(token: str, cnpj: str) -> tuple[dict, Path]:
+    invalido = ep.ErroEnvio("Documento temporário inválido -- anexe o arquivo de novo.")
+    if not isinstance(token, str):
+        raise invalido
     caminho = ep._caminho_temporario(token)
     meta = ep.PASTA_TEMP / f"{token}.meta"
     if caminho.suffix != ".pdf" or not meta.is_file():
-        raise ep.ErroEnvio("Documento temporário inválido -- anexe o arquivo de novo.")
-    return json.loads(meta.read_text(encoding="utf-8")), caminho
+        raise invalido
+    info = json.loads(meta.read_text(encoding="utf-8"))
+    if not info.get("dono") or info["dono"] != ep._so_digitos(cnpj):
+        raise invalido
+    return info, caminho
 
 
-def validar_tokens(tokens: list[str]) -> None:
-    """Antes de criar qualquer pedido: todos os documentos do lote ainda existem."""
+def validar_tokens(tokens: list[str], cnpj: str) -> None:
+    """Antes de criar qualquer pedido: todos os documentos do lote ainda
+    existem e sao do embarcador."""
     for t in tokens:
-        _ler_temporario(t)
+        _ler_temporario(t, cnpj)
 
 
 # ── Gravacao ──────────────────────────────────────────────────────────────────
@@ -203,7 +212,7 @@ def anexar(conn: sqlite3.Connection, envio: dict, anexos: list[dict], por: str) 
     ja = conn.execute("SELECT COUNT(*) FROM portal_envios_anexos WHERE envio_id = ?", (envio["id"],)).fetchone()[0]
     if ja + len(anexos) > MAX_ANEXOS_POR_PEDIDO:
         raise ep.ErroEnvio(f"{ep.rotulo_envio(envio)}: no máximo {MAX_ANEXOS_POR_PEDIDO} documentos por pedido.")
-    lidos = [(a, *_ler_temporario(a.get("token", ""))) for a in anexos]
+    lidos = [(a, *_ler_temporario(a.get("token", ""), emb)) for a in anexos]
     vistos = set()
     for _a, info, _c in lidos:
         if info["hash"] in vistos:
@@ -220,24 +229,35 @@ def anexar(conn: sqlite3.Connection, envio: dict, anexos: list[dict], por: str) 
             onde = "neste pedido" if outro["id"] == envio["id"] else f"no pedido {ep.rotulo_envio(dict(outro))}"
             raise ep.ErroEnvio(f"{info['nome']}: este documento já está {onde}.")
     _pasta().mkdir(parents=True, exist_ok=True)
-    gravados = []
-    for a, info, caminho in lidos:
-        seguro = re.sub(r"[^A-Za-z0-9._-]+", "_", info["nome"])[-80:] or "documento.pdf"
-        arquivo = f"{info['hash'][:16]}_{envio['id']}_{seguro}"
-        (_pasta() / arquivo).write_bytes(caminho.read_bytes())
-        casado = a.get("casado_por") if a.get("casado_por") in ("automatico", "manual") else "manual"
-        conn.execute(
-            "INSERT INTO portal_envios_anexos (envio_id, cnpj_embarcador, nome_original, arquivo, hash_conteudo, tipo, "
-            "numero_nf, numero_parcela, total_parcelas, cnpj_contraparte, casado_por, conferido_por, criado_em) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (envio["id"], emb, info["nome"], arquivo, info["hash"], info["tipo"], info["numero_nf"],
-             info["numero_parcela"], info["total_parcelas"], info["cnpj"], casado, por, ep._agora()))
-        gravados.append({"nome": info["nome"], "tipo": info["tipo"]})
+    gravados, escritos = [], []
+    try:
+        for a, info, caminho in lidos:
+            seguro = re.sub(r"[^A-Za-z0-9._-]+", "_", info["nome"])[-80:] or "documento.pdf"
+            arquivo = f"{info['hash'][:16]}_{envio['id']}_{seguro}"
+            escritos.append(_pasta() / arquivo)
+            escritos[-1].write_bytes(caminho.read_bytes())
+            _gravar_linha(conn, envio, emb, a, info, arquivo, por)
+            gravados.append({"nome": info["nome"], "tipo": info["tipo"]})
+        registrar_no_romaneio(conn, envio["id"])
+    except Exception:
+        # quem chamou desfaz a transacao: os arquivos saem junto
+        for p in escritos:
+            p.unlink(missing_ok=True)
+        raise
     for _a, _i, caminho in lidos:
         for p in (caminho, caminho.with_suffix(".meta")):
             p.unlink(missing_ok=True)
-    registrar_no_romaneio(conn, envio["id"])
     return gravados
+
+
+def _gravar_linha(conn, envio, emb, a, info, arquivo, por) -> None:
+    casado = a.get("casado_por") if a.get("casado_por") in ("automatico", "manual") else "manual"
+    conn.execute(
+        "INSERT INTO portal_envios_anexos (envio_id, cnpj_embarcador, nome_original, arquivo, hash_conteudo, tipo, "
+        "numero_nf, numero_parcela, total_parcelas, cnpj_contraparte, casado_por, conferido_por, criado_em) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (envio["id"], emb, info["nome"], arquivo, info["hash"], info["tipo"], info["numero_nf"],
+         info["numero_parcela"], info["total_parcelas"], info["cnpj"], casado, por, ep._agora()))
 
 
 def _codigo(valor) -> str | None:
