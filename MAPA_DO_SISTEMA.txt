@@ -943,6 +943,10 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            + reentregas); a principal é a reentrega viva com -R maior
                            que a entregue, senão a entregue, senão a mais recente.
                            contar_por_status = abas do celular (filtros sem o status).
+                           Canhoto (coluna e filtro com/sem, 11/11) = mesmo criterio
+                           da /canhotos-pendentes: checklist Vuupt > 0, comprovante
+                           CANHOTO/ASSINATURA do app ou canhotos_manuais; "sem" = so
+                           ENTREGUE com qtd_checklists = 0 (NULL fica fora).
  relatorios_financeiro.py  Cópia dos relatórios Rotas/Serviços da Vuupt.
 
  App do motorista

@@ -250,7 +250,8 @@
   html.modo-mobile. As ações reaproveitam o menu, o lote e os modais de baixo.
 #}
 {% set abas_m = [("", "Todos"), ("ABERTO", "Abertos"), ("EM_ROTA", "Em rota"), ("ENTREGUE", "Entregues"), ("INSUCESSO", "Insucesso"), ("CANCELADO", "Cancelados")] %}
-{% set n_filtros_m = [filtros.sender_id, filtros.agent_id, filtros.zona, filtros.fluxo, request.args.get('de') or request.args.get('ate'), filtros.data_tipo != 'referencia']|select|list|length %}
+{% set opcoes_canhoto = [('com', 'Com canhoto'), ('sem', 'Sem canhoto')] %}
+{% set n_filtros_m = [filtros.sender_id, filtros.agent_id, filtros.zona, filtros.fluxo, filtros.canhoto, request.args.get('de') or request.args.get('ate'), filtros.data_tipo != 'referencia']|select|list|length %}
 <div class="so-m" id="pm">
   <div class="pm-topo">
     <div class="pm-cab">
@@ -344,6 +345,9 @@
       <label class="pm-campo">Status
         <select id="pm-status" name="status"><option value="">Todos</option>{% for s in status %}<option value="{{ s }}"{% if filtros.status == s %} selected{% endif %}>{{ formatar('status', s) }}</option>{% endfor %}</select>
       </label>
+      <label class="pm-campo">Canhoto
+        <select id="pm-canhoto" name="canhoto"><option value="">Todos</option>{% for v, rotulo in opcoes_canhoto %}<option value="{{ v }}"{% if filtros.canhoto == v %} selected{% endif %}>{{ rotulo }}</option>{% endfor %}</select>
+      </label>
       <div class="pm-campo">Período
         <div class="pm-pilulas" id="pm-atalhos">
           <button type="button" data-dias="0">Hoje</button>
@@ -425,6 +429,12 @@
       <label for="f-status">Status</label>
       <select id="f-status" name="status"><option value="">Todos</option>
         {% for s in status %}<option value="{{ s }}"{% if filtros.status == s %} selected{% endif %}>{{ formatar('status', s) }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="campo-filtro">
+      <label for="f-canhoto">Canhoto</label>
+      <select id="f-canhoto" name="canhoto" title="Sem canhoto = entregue sem foto na Vuupt, sem canhoto/assinatura do app e sem canhoto subido pelo painel"><option value="">Todos</option>
+        {% for v, rotulo in opcoes_canhoto %}<option value="{{ v }}"{% if filtros.canhoto == v %} selected{% endif %}>{{ rotulo }}</option>{% endfor %}
       </select>
     </div>
     <div class="campo-filtro">

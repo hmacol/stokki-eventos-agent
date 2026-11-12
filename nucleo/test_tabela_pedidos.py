@@ -109,6 +109,36 @@ class TestListar(_Base):
         self.assertEqual(self._codigos({"zona": "NORTE"}), ["PS-2"])
         self.assertEqual(self._codigos({"fluxo": "RETIRADA"}), ["PS-3"])
 
+    def test_filtro_canhoto_igual_canhotos_pendentes(self):
+        """Hugo, 11/11: com canhoto = foto no checklist da Vuupt, canhoto/assinatura
+        do app ou canhoto subido pelo painel; sem canhoto = ENTREGUE sem nenhum
+        deles (checklist sem informacao fica fora, como em /canhotos-pendentes)."""
+        from nucleo import canhotos_manuais
+        canhotos_manuais.garantir_tabela(self.conn)
+        rota = self._rota(_dia(-1))
+        for codigo, status, qtd in (("PS-1", "ENTREGUE", 2), ("PS-2", "ENTREGUE", 0), ("PS-3", "ENTREGUE", 0),
+                                    ("PS-4", "ENTREGUE", 0), ("PS-5", "ENTREGUE", None), ("PS-6", "ABERTO", 0),
+                                    ("PS-7", "ENTREGUE", 0)):
+            self._pedido(codigo, status=status)
+            self.conn.execute("UPDATE nucleo_pedidos SET qtd_checklists = ? WHERE codigo = ?", (qtd, codigo))
+            self._parada(rota, codigo)
+        paradas = {c: i for c, i in self.conn.execute("SELECT codigo, id FROM nucleo_paradas")}
+        self.conn.execute("INSERT INTO nucleo_comprovantes (parada_id, tipo) VALUES (?, 'ASSINATURA')", (paradas["PS-2"],))
+        self.conn.execute("INSERT INTO nucleo_comprovantes (parada_id, tipo) VALUES (?, 'NF_DEVOLUCAO')", (paradas["PS-7"],))
+        self.conn.execute("INSERT INTO canhotos_manuais (codigo, caminho, enviado_em) VALUES ('PS-3', 'x.pdf', '2026-11-11')")
+        self.conn.commit()
+        self.assertEqual(sorted(self._codigos({"canhoto": "com"})), ["PS-1", "PS-2", "PS-3"])
+        self.assertEqual(sorted(self._codigos({"canhoto": "sem"})), ["PS-4", "PS-7"])
+        self.assertEqual(len(self._codigos({"canhoto": "qualquer"})), 7)
+        # a coluna Canhoto usa o mesmo critério
+        self.assertEqual(sorted(self._codigos({"colunas": {"canhoto": "sim"}})), ["PS-1", "PS-2", "PS-3"])
+        # as abas contam com o filtro de canhoto aplicado
+        self.assertEqual(tp.contar_por_status({"canhoto": "sem"}, conn=self.conn)["total"], 2)
+
+    def test_filtro_canhoto_cria_a_tabela_de_canhotos_manuais_se_faltar(self):
+        self._pedido("PS-1")
+        self.assertEqual(self._codigos({"canhoto": "sem"}), [])
+
     def test_busca_livre_aceita_cerquilha_e_cnpj_formatado(self):
         self._pedido("PS-43565")
         self._pedido("PS-2", cnpj="11222333000144", destinatario="PADARIA")
