@@ -110,7 +110,7 @@ class Gravacao(Base):
     def test_anexo_so_vale_pro_romaneio_quando_o_envio_ganha_o_ps(self):
         conn = self._conn()
         envio = self._envio(conn, "1")
-        previa = ax.guardar_previa("laudo.pdf", _pdf())
+        previa = ax.guardar_previa("laudo.pdf", _pdf(), CNPJ)
         ax.anexar(conn, envio, [{"token": previa["token"], "casado_por": "automatico"}], "cliente")
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM documentos_processados").fetchone()[0], 0)
         self.assertFalse(list(ep.PASTA_TEMP.glob(previa["token"] + ".*")))  # temporario consumido
@@ -125,16 +125,16 @@ class Gravacao(Base):
     def test_envio_que_ja_tem_ps_registra_na_hora(self):
         conn = self._conn()
         envio = self._envio(conn, "1", codigo="#PS-7", status="CRIADO")
-        ax.anexar(conn, envio, [{"token": ax.guardar_previa("boleto.pdf", _pdf())["token"]}], "cliente")
+        ax.anexar(conn, envio, [{"token": ax.guardar_previa("boleto.pdf", _pdf(), CNPJ)["token"]}], "cliente")
         doc = conn.execute("SELECT codigo_pedido, tipo FROM documentos_processados").fetchone()
         self.assertEqual(tuple(doc), ("PS-7", "Boleto"))
 
     def test_mesmo_documento_nao_entra_em_dois_pedidos(self):
         conn = self._conn()
         e1, e2 = self._envio(conn, "1"), self._envio(conn, "2")
-        ax.anexar(conn, e1, [{"token": ax.guardar_previa("a.pdf", _pdf())["token"]}], "cliente")
+        ax.anexar(conn, e1, [{"token": ax.guardar_previa("a.pdf", _pdf(), CNPJ)["token"]}], "cliente")
         with self.assertRaises(ep.ErroEnvio):
-            ax.anexar(conn, e2, [{"token": ax.guardar_previa("a.pdf", _pdf())["token"]}], "cliente")
+            ax.anexar(conn, e2, [{"token": ax.guardar_previa("a.pdf", _pdf(), CNPJ)["token"]}], "cliente")
 
     def test_nao_toma_documento_ja_enviado_de_outro_pedido(self):
         """Revisao de seguranca 11/11: arquivo identico ja ENVIADO a outro pedido
@@ -144,8 +144,8 @@ class Gravacao(Base):
         for cor, status, codigo, esperado in ((61, "ENVIADO", "PS-999", ("email", "PS-999")),
                                               (64, "REVISAO_MANUAL", "PS-999", ("email", "PS-999")),
                                               (62, "REVISAO_MANUAL", None, ("portal", "PS-7"))):
-            previa = ax.guardar_previa(f"boleto{cor}.pdf", _pdf(cor))
-            hash_ = ax._ler_temporario(previa["token"])[0]["hash"]
+            previa = ax.guardar_previa(f"boleto{cor}.pdf", _pdf(cor), CNPJ)
+            hash_ = ax._ler_temporario(previa["token"], CNPJ)[0]["hash"]
             conn.execute("INSERT INTO documentos_processados (hash_conteudo, origem, nome_arquivo, tipo, codigo_pedido, status, "
                          "processado_em) VALUES (?, 'email', 'b.pdf', 'Boleto', ?, ?, '2026-11-10')", (hash_, codigo, status))
             ax.anexar(conn, envio, [{"token": previa["token"]}], "cliente")
@@ -159,16 +159,16 @@ class Gravacao(Base):
         conn.execute("INSERT INTO portal_envios (cnpj_embarcador, chave_nfe, numero_nf, xml_path, status, codigo_pedido, criado_em, "
                      "atualizado_em) VALUES ('99999999000199', 'z', '4242', 'x.xml', 'CRIADO', 'PS-900', '2026-11-11', '2026-11-11')")
         alheio = dict(conn.execute("SELECT * FROM portal_envios WHERE chave_nfe = 'z'").fetchone())
-        ax.anexar(conn, alheio, [{"token": ax.guardar_previa("a.pdf", _pdf(63))["token"]}], "cliente")
+        ax.anexar(conn, alheio, [{"token": ax.guardar_previa("a.pdf", _pdf(63), "99999999000199")["token"]}], "cliente")
         meu = self._envio(conn, "1", codigo="PS-7", status="CRIADO")
-        ax.anexar(conn, meu, [{"token": ax.guardar_previa("a.pdf", _pdf(63))["token"]}], "cliente")  # aceita, sem erro
+        ax.anexar(conn, meu, [{"token": ax.guardar_previa("a.pdf", _pdf(63), CNPJ)["token"]}], "cliente")  # aceita, sem erro
         self.assertEqual([r[0] for r in conn.execute("SELECT codigo_pedido FROM documentos_processados")], ["PS-900"])
 
     def test_nao_sobrescreve_documento_que_veio_da_stokki(self):
         conn = self._conn()
         envio = self._envio(conn, "1", codigo="PS-7", status="CRIADO")
-        previa = ax.guardar_previa("danfe.pdf", _pdf())
-        hash_ = ax._ler_temporario(previa["token"])[0]["hash"]
+        previa = ax.guardar_previa("danfe.pdf", _pdf(), CNPJ)
+        hash_ = ax._ler_temporario(previa["token"], CNPJ)[0]["hash"]
         conn.execute("INSERT INTO documentos_processados (hash_conteudo, origem, nome_arquivo, tipo, codigo_pedido, status, processado_em) "
                      "VALUES (?, 'stokki', 'PS-7_DANFE.pdf', 'Nota Fiscal', 'PS-7', 'ENVIADO', '2026-11-10')", (hash_,))
         ax.anexar(conn, envio, [{"token": previa["token"]}], "cliente")
@@ -178,7 +178,7 @@ class Gravacao(Base):
         """Revisao de 12/11: a NF do pedido e a da Stokki; a do cliente sai como anexo."""
         conn = self._conn()
         envio = self._envio(conn, "1", codigo="PS-7", status="CRIADO")
-        previa = ax.guardar_previa("danfe.pdf", _pdf(77))
+        previa = ax.guardar_previa("danfe.pdf", _pdf(77), CNPJ)
         self.assertEqual(previa["tipo"], "Nota Fiscal")
         ax.anexar(conn, envio, [{"token": previa["token"]}], "cliente")
         conn.execute("UPDATE portal_envios_anexos SET numero_nf = '5480', cnpj_contraparte = '1', registrado_em = NULL")
@@ -197,10 +197,31 @@ class Gravacao(Base):
         with self.assertRaises(ax.ep.ErroEnvio):
             ax.ler_pdf("grande.pdf", saida.getvalue())
 
+    def test_token_da_previa_so_serve_pro_embarcador_que_enviou(self):
+        conn = self._conn()
+        envio = self._envio(conn, "1")
+        previa = ax.guardar_previa("laudo.pdf", _pdf(81), "99999999000199")
+        for token in (previa["token"], {"x": 1}):
+            with self.assertRaises(ax.ep.ErroEnvio):
+                ax.anexar(conn, envio, [{"token": token}], "cliente")
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM portal_envios_anexos").fetchone()[0], 0)
+
+    def test_falha_no_meio_nao_deixa_arquivo_orfao(self):
+        conn = self._conn()
+        envio = self._envio(conn, "1")
+        token = ax.guardar_previa("laudo.pdf", _pdf(82), CNPJ)["token"]
+        with mock.patch.object(ax, "registrar_no_romaneio", side_effect=RuntimeError("x")), self.assertRaises(RuntimeError):
+            ax.anexar(conn, envio, [{"token": token}], "cliente")
+        self.assertEqual(list(ax._pasta().glob("*")), [])
+
+    def test_nome_de_arquivo_estranho_nao_derruba_a_leitura(self):
+        for nome in ("..", "a" * 400 + ".pdf"):
+            self.assertEqual(ax.ler_pdf(nome, _pdf(83))["paginas"], 1)
+
     def test_remover_tira_do_pedido_e_do_romaneio(self):
         conn = self._conn()
         envio = self._envio(conn, "1", codigo="PS-7", status="CRIADO")
-        ax.anexar(conn, envio, [{"token": ax.guardar_previa("laudo.pdf", _pdf())["token"]}], "cliente")
+        ax.anexar(conn, envio, [{"token": ax.guardar_previa("laudo.pdf", _pdf(), CNPJ)["token"]}], "cliente")
         linhas = [dict(envio)]
         ax.anotar(conn, linhas)
         anexo = ax.buscar(conn, envio["id"], linhas[0]["anexos"][0]["id"])
