@@ -25,7 +25,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date, timedelta
 
-from nucleo import banco
+from nucleo import banco, canhotos_manuais
 
 POR_PAGINA = 100
 DIAS_PADRAO = 7   # Hugo, 09/11: a tela abre nos últimos 7 dias
@@ -54,6 +54,15 @@ _SQL_REFERENCIA = (f"CASE WHEN instr({_SQL_CABECA}, ' - ') > 0 "
                    f"THEN trim(substr({_SQL_CABECA}, instr({_SQL_CABECA}, ' - ') + 3)) END")
 # fluxo só existe desde 16/09; nas linhas antigas sai do título.
 _SQL_FLUXO = "COALESCE(fluxo, CASE WHEN titulo LIKE '[RETIRADA]%' THEN 'RETIRADA' ELSE 'ENTREGA' END)"
+# Tem canhoto (Hugo, 11/11): o mesmo critério da /canhotos-pendentes
+# (canhotos_manuais.pendentes) -- foto no checklist da Vuupt, canhoto ou
+# assinatura do app (nucleo_comprovantes da última parada) ou canhoto subido
+# pelo painel (canhotos_manuais). Vale pra coluna Canhoto e pro filtro.
+_SQL_TEM_CANHOTO = (
+    "(COALESCE(base.qtd_checklists, 0) > 0"
+    " OR base.c IN (SELECT UPPER(LTRIM(codigo, '# ')) FROM canhotos_manuais)"
+    " OR EXISTS (SELECT 1 FROM nucleo_comprovantes cp WHERE cp.parada_id = base.parada_id"
+    " AND cp.tipo IN ('CANHOTO', 'ASSINATURA')))")
 
 
 @dataclass(frozen=True)
@@ -100,7 +109,7 @@ COLUNAS = [
     Coluna("conclusao", "Conclusão", "conclusao", True, "data_hora"),
     Coluna("motivo", "Motivo do insucesso", "motivo", True),
     Coluna("tentativas", "Tentativas", "tentativas", False, "numero"),
-    Coluna("canhoto", "Canhoto", "CASE WHEN COALESCE(qtd_checklists, 0) > 0 THEN 'Sim' ELSE 'Não' END"),
+    Coluna("canhoto", "Canhoto", f"CASE WHEN {_SQL_TEM_CANHOTO} THEN 'Sim' ELSE 'Não' END"),
     Coluna("anexos", "Anexos", "qtd_anexos", False, "numero"),
     Coluna("origem", "Origem", "origem"),
     Coluna("nota", "Nota", "nota"),
@@ -124,7 +133,7 @@ _SQL_POS_R = "MIN(" + ", ".join(
 # (empresa, código base): duas empresas com o mesmo código não se misturam.
 _SQL_CTES = f"""
 WITH ult AS (
-    SELECT p.codigo AS u_codigo, p.ordem AS ordem, p.situacao AS situacao_parada,
+    SELECT p.codigo AS u_codigo, p.id AS parada_id, p.ordem AS ordem, p.situacao AS situacao_parada,
            p.arrived_at AS chegada, p.completed_at AS conclusao, p.motivo_texto AS motivo,
            p.tentativas AS tentativas, r.id AS rota_id, r.nome AS rota_nome, r.data_rota AS data_rota,
            r.agent_id AS agent_id, r.motorista_nome AS motorista, r.tipo_veiculo AS tipo_veiculo,
@@ -201,8 +210,8 @@ def _termo_coluna(termo: str) -> str:
 
 def _where(filtros: dict) -> tuple[str, list]:
     """Monta o WHERE a partir do dicionário de filtros da tela. Chaves:
-    de, ate, data_tipo, status, fluxo, sender_id, agent_id, zona, q e
-    colunas = {chave_da_coluna: texto}."""
+    de, ate, data_tipo, status, fluxo, sender_id, agent_id, zona, canhoto
+    (com | sem), q e colunas = {chave_da_coluna: texto}."""
     inicio, fim = periodo(filtros.get("de"), filtros.get("ate"))
     _, sql_data = DATAS.get(filtros.get("data_tipo") or "", DATAS["referencia"])
     partes = [f"{sql_data} BETWEEN ? AND ?"]
@@ -227,6 +236,13 @@ def _where(filtros: dict) -> tuple[str, list]:
     if filtros.get("zona"):
         partes.append("zona = ?")
         params.append(filtros["zona"])
+    canhoto = (filtros.get("canhoto") or "").lower()
+    if canhoto == "com":
+        partes.append(_SQL_TEM_CANHOTO)
+    elif canhoto == "sem":
+        # Só entregue (Hugo, 11/11), e checklist sem informação (NULL) fica
+        # fora, como na /canhotos-pendentes.
+        partes.append(f"status = 'ENTREGUE' AND qtd_checklists = 0 AND NOT {_SQL_TEM_CANHOTO}")
 
     q = (filtros.get("q") or "").strip().lstrip("#").strip()
     if q:
@@ -268,6 +284,7 @@ def listar(filtros: dict, pagina: int = 1, por_pagina: int = POR_PAGINA, ordem: 
     fechar = conn is None
     conn = conn or banco.conectar()
     try:
+        canhotos_manuais.garantir_tabela(conn)   # a coluna Canhoto lê dela
         where, params = _where(filtros)
         tot = conn.execute(f"{_SQL_BASE} SELECT COUNT(*) n, COALESCE(SUM(caixas), 0) cx FROM base{where}",
                            params).fetchone()
@@ -294,6 +311,7 @@ def contar_por_status(filtros: dict, conn: sqlite3.Connection | None = None) -> 
     fechar = conn is None
     conn = conn or banco.conectar()
     try:
+        canhotos_manuais.garantir_tabela(conn)   # a coluna Canhoto lê dela
         where, params = _where({**filtros, "status": ""})
         rows = conn.execute(f"{_SQL_BASE} SELECT status, COUNT(*) n FROM base{where} GROUP BY status",
                             params).fetchall()
@@ -398,6 +416,7 @@ def exportar_csv(filtros: dict, chaves: list[str] | None = None, ordem: str | No
     fechar = conn is None
     conn = conn or banco.conectar()
     try:
+        canhotos_manuais.garantir_tabela(conn)   # a coluna Canhoto lê dela
         where, params = _where(filtros)
         rows = conn.execute(f"{_SQL_BASE} {_select()}{where}{_order_by(ordem, direcao)}", params).fetchall()
         hist = tentativas([(r["sender_id"], r["pedido_base"]) for r in rows], conn)

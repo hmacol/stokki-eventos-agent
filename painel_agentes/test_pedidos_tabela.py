@@ -211,6 +211,25 @@ class TestTelaPedidos(unittest.TestCase):
         # o status vem so do select (sem hidden duplicado no mesmo form)
         self.assertNotIn('type="hidden" name="status"', form)
 
+    def test_filtro_canhoto_no_computador_e_no_celular(self):
+        conn = banco.conectar()
+        conn.execute("UPDATE nucleo_pedidos SET qtd_checklists = 0")
+        conn.commit()
+        conn.close()
+        self._logar("leitura")
+        html = self.cliente.get("/pedidos?canhoto=sem").get_data(as_text=True)
+        # PS-1 é o entregue sem comprovante; PS-2 (insucesso) não entra
+        self.assertEqual(re.findall(r'<li class="pm"[^>]*data-codigo="([^"]+)"', html), ["PS-1"])
+        self.assertRegex(html, r'<select id="f-canhoto" name="canhoto"')
+        form = re.search(r'<form[^>]*id="pm-form-filtros".*?</form>', html, re.S).group(0)
+        self.assertRegex(form, r'<select id="pm-canhoto" name="canhoto">')
+        self.assertEqual(html.count('<option value="sem" selected>Sem canhoto</option>'), 2)
+        self.assertRegex(html, r'id="pm-abrir-filtros" aria-label="Filtros \(1 ativos\)"')
+        html = self.cliente.get("/pedidos?canhoto=com").get_data(as_text=True)
+        self.assertEqual(re.findall(r'<li class="pm"[^>]*data-codigo="([^"]+)"', html), [])
+        d = self.cliente.get("/api/pedidos/contagem?canhoto=sem").get_json()
+        self.assertEqual((d["ENTREGUE"], d["total"]), (1, 1))
+
     def test_celular_leitura_nao_seleciona(self):
         self._logar("leitura")
         html = self.cliente.get("/pedidos").get_data(as_text=True)

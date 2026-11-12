@@ -37,7 +37,8 @@ houve e agir (reenvio, agendar, endereço, cancelar, canhoto) fora do computador
   baixa). Mesmo fluxo e mesmas regras do lote do computador (endereço em lote
   só mesmo embarcador + destinatário).
 - **Filtros em tela cheia**: Status (11/11, pedido do Hugo; mesmo filtro das
-  abas, que ficam marcadas junto), atalhos Hoje / Ontem / 7 dias / Este mês,
+  abas, que ficam marcadas junto), Canhoto (11/11: Todos / Com / Sem, também
+  na barra do computador; critério da /canhotos-pendentes, "Sem" só entregues), atalhos Hoje / Ontem / 7 dias / Este mês,
   De, Até, Tipo de data, Embarcador, Motorista, Zona, Fluxo; botão "Aplicar".
   Busca pela lupa no topo (mesmo campo `q`).
 - Paginação continua de 100 em 100 (Anterior / Próxima).
