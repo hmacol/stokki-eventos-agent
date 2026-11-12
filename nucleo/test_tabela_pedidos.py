@@ -254,6 +254,90 @@ class TestListar(_Base):
         self.assertEqual(tp.exportar_csv(antigo, ["codigo"], conn=self.conn).count("PS-2;"), 1)
         self.assertEqual(tp.listar({"q": "nada-disso"}, pagina=4, conn=self.conn)["total"], 0)
 
+    def _tabelas_stokki_e_portal(self):
+        from galpao3d import banco as galpao
+        galpao.garantir_esquema(self.conn)
+        # só as colunas que a tela lê (as tabelas de verdade nascem em portal_cliente/)
+        self.conn.executescript("""
+            CREATE TABLE portal_envios (id INTEGER PRIMARY KEY AUTOINCREMENT, cnpj_embarcador TEXT,
+                numero_nf TEXT, destinatario_doc TEXT, destinatario_nome TEXT, destinatario_endereco TEXT,
+                destinatario_bairro TEXT, destinatario_municipio TEXT, destinatario_uf TEXT,
+                destinatario_telefone TEXT, volumes INTEGER, status TEXT, codigo_pedido TEXT,
+                horario_inicio TEXT, horario_fim TEXT, agendamento_data TEXT, agendamento_hora_inicio TEXT,
+                observacoes TEXT, criado_em TEXT);
+            CREATE TABLE clientes_portal (cnpj TEXT PRIMARY KEY, sender_id INTEGER, nome TEXT);
+            INSERT INTO clientes_portal VALUES ('11222333000144', 10, 'FRUTA FINA');
+        """)
+
+    def _galpao(self, id_stokki, situacao="Aberto", embarcador="FRUTA FINA ... #stkkc-9", criado=None):
+        self.conn.execute("INSERT INTO galpao_pedidos (id_stokki, codigo, embarcador, situacao, atualizado_em) "
+                          "VALUES (?, ?, ?, ?, ?)", (id_stokki, f"PS-{id_stokki}", embarcador, situacao,
+                                                     f"{_dia(0)} 09:00:00"))
+        self.conn.execute("INSERT INTO galpao_eventos (id_stokki, situacao, quando) VALUES (?, 'Aberto', ?)",
+                          (id_stokki, criado or f"{_dia(0)} 08:30:00"))
+        self.conn.commit()
+
+    def _envio(self, status="CRIADO", codigo=None, nf="100", destinatario="PADARIA DO ZE", criado=None):
+        self.conn.execute(
+            "INSERT INTO portal_envios (cnpj_embarcador, numero_nf, destinatario_doc, destinatario_nome, "
+            "destinatario_endereco, destinatario_municipio, destinatario_uf, volumes, status, codigo_pedido, "
+            "criado_em) VALUES ('11222333000144', ?, '999', ?, 'RUA A, 1', 'SAO PAULO', 'SP', 7, ?, ?, ?)",
+            (nf, destinatario, status, codigo, criado or f"{_dia(0)} 08:00:00"))
+        self.conn.commit()
+
+    def test_pedido_da_stokki_e_do_portal_aparece_antes_da_vuupt(self):
+        """Hugo, 12/11: todo pedido importado aparece na hora, com o status
+        Importado, até chegar à Vuupt (núcleo). Erro e duplicado do portal
+        ficam fora; cancelado aparece como Cancelado."""
+        self._tabelas_stokki_e_portal()
+        self._pedido("PS-1")                                    # já está na Vuupt
+        self._galpao(1, "Aguardando Transportador")             # ... então o galpão não duplica
+        self._envio(codigo="PS-1")
+        self._galpao(2, "Em separação")                         # só na Stokki, veio pelo portal
+        self._envio(codigo="PS-2", nf="200")
+        self._galpao(3)                                         # só na Stokki, entrou por fora do portal
+        self._galpao(4, "Cancelado")
+        self._envio(status="ENVIANDO", nf="500")                # portal ainda enviando: sem código
+        self._envio(status="CRIADO", codigo="PS-6", nf="600")   # criado, coletor ainda não viu
+        self._envio(status="CANCELADO", nf="700")
+        self._envio(status="ERRO", nf="800")
+        self._envio(status="DUPLICADO", codigo="PS-2", nf="200")
+        r = tp.listar({}, ordem="codigo", direcao="asc", conn=self.conn)
+        por = {l["codigo"]: l for l in r["linhas"]}
+        self.assertEqual({c: l["status"] for c, l in por.items()},
+                         {"ENVIO-3": "IMPORTADO", "ENVIO-5": "CANCELADO", "PS-1": "ENTREGUE", "PS-2": "IMPORTADO",
+                          "PS-3": "IMPORTADO", "PS-4": "CANCELADO", "PS-6": "IMPORTADO"})
+        ps2 = por["PS-2"]
+        self.assertEqual((ps2["destinatario"], ps2["caixas"], ps2["referencia"], ps2["situacao_stokki"],
+                          ps2["embarcador"], ps2["sender_id"], ps2["endereco"], ps2["data"], ps2["origem"]),
+                         ("PADARIA DO ZE", 7, "200", "Em separação", "FRUTA FINA", 10, "RUA A, 1  SAO PAULO SP",
+                          _dia(0), "STOKKI"))
+        self.assertEqual(len(ps2["historico"]), 1)
+        self.assertIsNone(ps2["service_id"])
+        # sem portal: embarcador vem do nome do galpão; com pedido dele no núcleo, vira o da Vuupt
+        self.assertEqual((por["PS-3"]["embarcador"], por["PS-3"]["sender_id"]), ("FRUTA FINA", 10))
+        self.assertEqual((por["ENVIO-3"]["situacao_stokki"], por["ENVIO-3"]["referencia"], por["ENVIO-3"]["origem"]),
+                         ("Enviando pelo portal", "500", "PORTAL"))
+        self.assertEqual(self._codigos({"status": "IMPORTADO"}, ordem="codigo", direcao="asc"),
+                         ["ENVIO-3", "PS-2", "PS-3", "PS-6"])
+        self.assertEqual(self._codigos({"sender_id": "10", "status": "CANCELADO"}, ordem="codigo", direcao="asc"),
+                         ["ENVIO-5", "PS-4"])
+        filas = tp.contar_filas({}, conn=self.conn)
+        self.assertEqual((filas["IMPORTADO"], filas["CANCELADO"], filas["ENTREGUE"], filas["total"]), (4, 2, 1, 7))
+        self.assertEqual(tp.contar_por_status({}, conn=self.conn)["IMPORTADO"], 4)
+        self.assertIn("PS-3;Importado", tp.exportar_csv({}, ["codigo", "status"], conn=self.conn))
+        # chegou à Vuupt: sai de Importado sozinho, sem linha repetida
+        self._pedido("PS-2", status="ABERTO")
+        self.assertEqual([l["status"] for l in tp.listar({"q": "PS-2"}, conn=self.conn)["linhas"]], ["ABERTO"])
+
+    def test_importado_sem_embarcador_conhecido_e_fora_do_periodo(self):
+        self._tabelas_stokki_e_portal()
+        self._galpao(8, embarcador="NOVO CLIENTE ... #stkkc-77", criado=f"{_dia(-20)} 10:00:00")
+        self.assertEqual(self._codigos(), [])                   # criado há 20 dias: fora dos últimos 7
+        l = tp.listar({"de": _dia(-21), "ate": _dia(-19)}, conn=self.conn)["linhas"][0]
+        self.assertEqual((l["codigo"], l["status"], l["embarcador"], l["sender_id"]),
+                         ("PS-8", "IMPORTADO", "NOVO CLIENTE ... #stkkc-77", None))
+
     def test_total_e_caixas_contam_pedidos(self):
         self._pedido("PS-1", status="INSUCESSO", caixas=4); self._pedido("PS-1-R1", status="ABERTO", caixas=4)
         r = tp.listar({}, conn=self.conn)
@@ -266,7 +350,8 @@ class TestListar(_Base):
         self._pedido("PS-3", status="ENTREGUE", sender_id=20, remetente="OUTRO")
         self._pedido("PS-4", status="CANCELADO", criado_provedor=f"{_dia(-30)} 08:00:00")   # fora do período
         c = tp.contar_por_status({"status": "ENTREGUE"}, conn=self.conn)
-        self.assertEqual(c, {"ABERTO": 1, "EM_ROTA": 0, "ENTREGUE": 2, "INSUCESSO": 0, "CANCELADO": 0, "total": 3})
+        self.assertEqual(c, {"IMPORTADO": 0, "ABERTO": 1, "EM_ROTA": 0, "ENTREGUE": 2, "INSUCESSO": 0, "CANCELADO": 0,
+                             "total": 3})
         self.assertEqual(tp.contar_por_status({"sender_id": "20"}, conn=self.conn)["total"], 1)
 
     def test_tentativas_do_grupo(self):
