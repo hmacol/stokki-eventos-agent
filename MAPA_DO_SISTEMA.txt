@@ -85,6 +85,11 @@
  Rota fraca (juntar, segurar, avisar) ...... roteirizacao/rotas_fracas.py, pedidos_segurados.py
  PDF de romaneio ........................... roteirizacao/gerar_pdf_romaneios.py
  Expedição na Stokki ....................... expedir_pedidos.py (O DA RAIZ!)
+ Expedir na Stokki pela tela /pedidos ...... painel_agentes/acoes_pedidos.py (expedir_stokki, andamento_expedicao;
+                                             POST /api/pedidos/acao/expedir-stokki + GET .../andamento) põe na fila
+                                             do painel o expedir_pedidos.py --pedido ... --tela-pedidos, que solta o
+                                             pedido da Expedição Programada (stokki/expedicao_programada.py) e aceita
+                                             retirada/coleta pela transportadora da Stokki (12/11)
  Insucesso de entrega ...................... insucesso_entrega/ + resposta_insucesso/
  Documentos (NF, boleto) por pedido ........ documentos_pedido/processar_documentos.py
  Tela de planejamento (dados) .............. painel_agentes/planejamento_rotas.py
@@ -473,6 +478,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                          trata insucessos e cria a reentrega automática (12h
                          sem resposta). É ESTE que roda em produção. Pega a
                          trava da sessão Stokki antes do Playwright.
+                         --tela-pedidos (com --pedido, botão "Expedir na Stokki"
+                         da /pedidos): solta da OE e aceita retirada pela
+                         transportadora; --resultado-json grava {PS-N: {ok, mensagem}}.
  fingerprint_expedicao.py  Tabelas do que já foi expedido / falhas.
  verificar_entregues_nao_expedidos.py  Checagem diária + e-mail interno.
 
@@ -715,6 +723,11 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  pedidos.py           Pedidos de saída: contar_pedidos, listar_pedidos,
                       iterar_todos_pedidos, obter_detalhe, extrair_itens_do_pedido,
                       listar_transportadoras, listar_embarcadores, parsers de linha.
+ expedicao_programada.py  Expedição Programada (#OE-n) pela conta provider, com a page do
+                      Playwright do expedir_pedidos.py: oe_do_pedido, pedidos_da_oe,
+                      finalizar_oe (POST shipping/scheduled/finish), remover_pedido
+                      (POST shipping/scheduled/remove) e liberar_pedido (OE só com o
+                      pedido = finaliza; com outros = tira só ele). 12/11.
  cancelar.py          Cancela pedido de saída por HTTP (POST outbound/cancel +
                       poll cancel/status; motivo >= 15 caracteres). Sem Playwright;
                       só sob a trava de sessao_uso. Descoberto 06/10 (PS-39959).

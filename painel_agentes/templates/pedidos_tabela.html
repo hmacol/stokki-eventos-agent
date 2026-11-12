@@ -272,6 +272,7 @@
   .menu-dica[hidden] { display: none; }
   html.modo-mobile .barra-lote:not(.expandida) [data-lote="reenvio"], html.modo-mobile .barra-lote:not(.expandida) [data-lote="cancelar_vuupt"],
   html.modo-mobile .barra-lote:not(.expandida) [data-lote="cancelar_stokki"], html.modo-mobile .barra-lote:not(.expandida) [data-lote="baixa"],
+  html.modo-mobile .barra-lote:not(.expandida) [data-lote="expedir_stokki"],
   html.modo-mobile .barra-lote:not(.expandida) #lote-limpar { display: none; }
   html.modo-mobile .barra-lote.expandida #lote-mais { display: none; }
   html:not(.modo-mobile) #lote-mais { display: none; }
@@ -325,7 +326,7 @@
     {% if ordem == 'data' and l.data != dia.atual %}{% set dia.atual = l.data %}
     <li class="pm-dia">{% if l.data == hoje %}Hoje · {% elif l.data == ontem %}Ontem · {% endif %}{{ formatar('data', l.data)[:5] if l.data else 'Sem data' }}</li>
     {% endif %}
-    <li class="pm" data-service-id="{{ l.vuupt_service_id or '' }}" data-codigo="{{ l.codigo_servico or l.codigo }}" data-status="{{ l.status or '' }}" data-sender-id="{{ l.sender_id if l.sender_id is not none else '' }}" data-destinatario="{{ l.destinatario or '' }}" data-embarcador="{{ l.embarcador or '' }}" data-chave="{{ l.sender_id }}|{{ l.pedido_base }}">
+    <li class="pm" data-service-id="{{ l.vuupt_service_id or '' }}" data-codigo="{{ l.codigo_servico or l.codigo }}" data-status="{{ l.status or '' }}" data-fluxo="{{ l.fluxo or '' }}" data-sender-id="{{ l.sender_id if l.sender_id is not none else '' }}" data-destinatario="{{ l.destinatario or '' }}" data-embarcador="{{ l.embarcador or '' }}" data-chave="{{ l.sender_id }}|{{ l.pedido_base }}">
       {% if pode_agir %}<input type="checkbox" name="sel-m" aria-label="Selecionar {{ l.codigo }}">{% endif %}
       <button type="button" class="pm-abrir" aria-label="Abrir {{ l.codigo }}">
         <span class="pm-marca st-{{ l.status }}" aria-hidden="true"></span>
@@ -573,7 +574,7 @@
     </thead>
     <tbody>
       {% for l in r.linhas %}
-      <tr data-service-id="{{ l.vuupt_service_id or '' }}" data-codigo="{{ l.codigo_servico or l.codigo }}" data-status="{{ l.status or '' }}" data-sender-id="{{ l.sender_id if l.sender_id is not none else '' }}" data-destinatario="{{ l.destinatario or '' }}" data-embarcador="{{ l.embarcador or '' }}" data-chave="{{ l.sender_id }}|{{ l.pedido_base }}">
+      <tr data-service-id="{{ l.vuupt_service_id or '' }}" data-codigo="{{ l.codigo_servico or l.codigo }}" data-status="{{ l.status or '' }}" data-fluxo="{{ l.fluxo or '' }}" data-sender-id="{{ l.sender_id if l.sender_id is not none else '' }}" data-destinatario="{{ l.destinatario or '' }}" data-embarcador="{{ l.embarcador or '' }}" data-chave="{{ l.sender_id }}|{{ l.pedido_base }}">
         {% if pode_agir %}<td class="col-acoes"><input type="checkbox" name="sel" aria-label="Selecionar {{ l.codigo }}"><button type="button" class="menu-acoes" aria-haspopup="menu" aria-expanded="false" aria-label="Ações de {{ l.codigo }}" title="Ações">⋯</button></td>{% endif %}
         {% for c in colunas %}
         {% set v = l[c.chave] %}
@@ -736,7 +737,8 @@
   <button type="button" class="botao" data-lote="cancelar_stokki">Cancelar Stokki</button>
   <button type="button" class="botao" data-lote="agendar">Agendar</button>
   <button type="button" class="botao" data-lote="endereco">Endereço</button>
-  <button type="button" class="botao" data-lote="baixa">Dar baixa</button>
+  <button type="button" class="botao" data-lote="baixa">Dar baixa na Vuupt</button>
+  <button type="button" class="botao" data-lote="expedir_stokki">Expedir na Stokki</button>
   <button type="button" class="botao" id="lote-limpar">Limpar</button>
   <button type="button" class="botao" id="lote-mais">Mais ações</button>
 </div>
@@ -751,7 +753,8 @@
   <button type="button" role="menuitem" data-acao="agendar">Agendar</button>
   <hr>
   <button type="button" role="menuitem" data-acao="canhoto">Ver canhoto</button>
-  <button type="button" role="menuitem" data-acao="baixa">Dar baixa com canhoto</button>
+  <button type="button" role="menuitem" data-acao="baixa">Dar baixa na Vuupt</button>
+  <button type="button" role="menuitem" data-acao="expedir_stokki">Expedir na Stokki</button>
   <button type="button" role="menuitem" data-acao="trocar_canhoto">Trocar canhoto</button>
   <button type="button" role="menuitem" data-acao="nota_fiscal">Nota fiscal</button>
 </div>
@@ -817,6 +820,9 @@
           <textarea id="baixa-texto-outro" maxlength="200" placeholder="De 5 a 200 caracteres"></textarea>
         </div>
       </div>
+      <div data-secao="expedir_stokki" hidden>
+        <p class="subtitulo">Expede o pedido na Stokki agora e anexa o canhoto que existir. Se ele estiver preso numa Expedição Programada (OE), ela é finalizada; se a OE tiver outros pedidos, só este sai dela. Leva cerca de 1 minuto por pedido e espera a vez se outra rotina da Stokki estiver rodando.</p>
+      </div>
       <div data-secao="canhoto" hidden><ul class="lista-canhotos" id="canhoto-lista"></ul></div>
     </div>
     <div class="progresso" id="modal-progresso" hidden>
@@ -842,6 +848,8 @@
   "baixa": url_for('api_pedidos_acao_marcar_entregue'),
   "validar_lote_foto": url_for('api_pedidos_acao_validar_lote_foto'),
   "comprovantes": url_for('api_pedidos_acao_comprovantes'),
+  "expedir_stokki": url_for('api_pedidos_acao_expedir_stokki'),
+  "expedir_andamento": url_for('api_pedidos_acao_expedir_stokki_andamento'),
 } %}
 {% set rotulos_status = {} %}
 {% for s in status %}{% set _ = rotulos_status.update({s: formatar('status', s)}) %}{% endfor %}
@@ -858,7 +866,8 @@
     cancelar_stokki: { titulo: "Cancelar na Stokki", confirmar: "Cancelar na Stokki" },
     endereco: { titulo: "Alterar endereço", confirmar: "Salvar endereço" },
     agendar: { titulo: "Agendar", confirmar: "Agendar" },
-    baixa: { titulo: "Dar baixa com canhoto", confirmar: "Dar baixa" },
+    baixa: { titulo: "Dar baixa na Vuupt", confirmar: "Dar baixa" },
+    expedir_stokki: { titulo: "Expedir na Stokki", confirmar: "Expedir" },
     canhoto: { titulo: "Canhotos do pedido", confirmar: "" },
   };
 
@@ -868,7 +877,7 @@
   function rotuloStatus(s) { return ROTULO_STATUS[s] || s || "sem status"; }
   function linha(tr) {
     return { tr, serviceId: tr.dataset.serviceId || "", codigo: tr.dataset.codigo || "",
-             status: tr.dataset.status || "", destinatario: tr.dataset.destinatario || "",
+             status: tr.dataset.status || "", fluxo: tr.dataset.fluxo || "", destinatario: tr.dataset.destinatario || "",
              senderId: tr.dataset.senderId || "", embarcador: tr.dataset.embarcador || "" };
   }
   function psDoCodigo(codigo) {
@@ -885,13 +894,20 @@
       if (l.status === "ENTREGUE") return "pedido já entregue";
       return psDoCodigo(l.codigo).length ? "" : "Código sem PS-<número>: não dá pra achar o pedido na Stokki.";
     }
+    if (acao === "expedir_stokki") {
+      if (!psDoCodigo(l.codigo).length) return "Código sem PS-<número>: não dá pra achar o pedido na Stokki.";
+      if (l.status === "CANCELADO") return "pedido cancelado";
+      // sem serviço na Vuupt (ou fluxo de retirada): o servidor confere a transportadora na Stokki
+      return (l.status === "ENTREGUE" || !l.serviceId || l.fluxo === "RETIRADA") ? ""
+        : `Expedir na Stokki só para pedido entregue ou de retirada/coleta no galpão (este está: ${rotuloStatus(l.status)}).`;
+    }
     if (!l.serviceId) return "Pedido sem serviço na Vuupt.";
     const finalizado = FINAIS.indexOf(l.status) >= 0;
     if (acao === "reenvio") {
       return finalizado ? "" : `Reenvio só para pedido entregue, com insucesso ou cancelado (este está: ${rotuloStatus(l.status)}).`;
     }
     if (acao === "baixa") {
-      return l.status === "EM_ROTA" ? "" : `Dar baixa só para pedido em rota (este está: ${rotuloStatus(l.status)}).`;
+      return l.status === "EM_ROTA" ? "" : `Dar baixa na Vuupt só para pedido em rota (este está: ${rotuloStatus(l.status)}).`;
     }
     return finalizado ? `Pedido já finalizado (${rotuloStatus(l.status)}).` : "";
   }
@@ -1403,7 +1419,8 @@
         p.foto = await reduzirImagem(p.foto);
         p.nota = p.nota ? await reduzirImagem(p.nota) : null;
       }
-      await rodarLote(acao, p);
+      if (acao === "expedir_stokki") await rodarExpedicao();
+      else await rodarLote(acao, p);
     } finally {
       if (atual) {
         atual.rodando = false;
@@ -1447,6 +1464,64 @@
     }
     $("modal-form").hidden = true;
     mostrarResumo(feitos, jaEstavam, falhas, atual.pulados, avisos);
+  }
+
+  // Expedir na Stokki: um pedido de execução para todos os selecionados (entra na fila do painel);
+  // a tela consulta o andamento até terminar e mostra o resultado de cada pedido.
+  async function rodarExpedicao() {
+    const itens = atual.itens;
+    const feitos = [], falhas = [], avisos = [];
+    const texto = (t) => { $("modal-progresso-texto").textContent = t; };
+    const NA_FILA = "Na fila: outra rotina da Stokki está rodando. A expedição começa quando ela terminar.";
+    $("modal-progresso").hidden = false;
+    $("modal-barra").removeAttribute("value");   // sem valor = barra indeterminada
+    botaoConfirmar.textContent = "Expedindo...";
+    let resultados = {}, erroGeral = "";
+    try {
+      const d = await enviar(URLS.expedir_stokki, { codigos: itens.map((it) => it.codigo) });
+      texto(d.na_fila ? NA_FILA : "Expedindo na Stokki...");
+      const url = `${URLS.expedir_andamento}?execucao_id=${encodeURIComponent(d.execucao_id)}&token=${encodeURIComponent(d.token)}`;
+      let semResposta = 0;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 4000));
+        let a;
+        try {
+          a = await lerResposta(await fetch(url, { credentials: "same-origin" }));
+          semResposta = 0;
+        } catch (e) {
+          if (e.dados || ++semResposta >= 10) throw new Error(e.dados ? e.message : "Perdi o contato com o painel; a expedição segue rodando. Confira o pedido daqui a alguns minutos.");
+          continue;
+        }
+        if (a.estado === "fim") { resultados = a.resultados || {}; erroGeral = a.erro || ""; break; }
+        texto(a.estado === "na_fila" ? NA_FILA : "Expedindo na Stokki (cerca de 1 minuto por pedido)...");
+      }
+    } catch (e) {
+      erroGeral = e.message;
+    }
+    itens.forEach((it) => {
+      const rs = psDoCodigo(it.codigo).map((ps) => resultados[ps]).filter(Boolean);
+      const ruins = rs.filter((r) => !r.ok);
+      if (!rs.length || ruins.length) {
+        falhas.push({ codigo: it.codigo, erro: ruins.map((r) => r.mensagem).join("; ") || erroGeral || "a expedição não devolveu resultado para este pedido" });
+        return;
+      }
+      selo(it.tr, "Expedido na Stokki");
+      feitos.push(it.codigo);
+      avisos.push(`${it.codigo}: ${rs.map((r) => r.mensagem).join("; ")}`);
+      const caixa = it.tr.querySelector("input[name=sel], input[name=sel-m]");
+      if (caixa) caixa.checked = false;
+    });
+    $("modal-barra").max = 1;
+    $("modal-barra").value = 1;
+    texto("");
+    atualizarBarra();
+    if (!atual.lote && falhas.length === 1 && !feitos.length) {
+      $("modal-progresso").hidden = true;
+      mostrarErro(falhas[0].erro);
+      return;
+    }
+    $("modal-form").hidden = true;
+    mostrarResumo(feitos, [], falhas, atual.pulados, avisos);
   }
 
   // Tela do pedido no celular usa o mesmo menu (como folha de baixo) e os mesmos modais.
@@ -1648,7 +1723,7 @@
     return d;
   }
   const PRINCIPAL = { INSUCESSO: "reenvio", CANCELADO: "reenvio", ENTREGUE: "reenvio", EM_ROTA: "baixa", ABERTO: "agendar" };
-  const ROTULO = { reenvio: "Criar reenvio", baixa: "Dar baixa com canhoto", agendar: "Agendar" };
+  const ROTULO = { reenvio: "Criar reenvio", baixa: "Dar baixa na Vuupt", agendar: "Agendar" };
 
   function montarDetalhe(li, p) {
     $("pm-det-cod").textContent = p.codigo;

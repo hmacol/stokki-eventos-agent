@@ -6,6 +6,7 @@ Torre / portal / planejamento. Nenhuma acao manda e-mail ou WhatsApp.
 
 Hoje: Reenvio (novo servico #PS-N-R<k> copiado do existente).
 """
+import json
 import logging
 import re
 import sys
@@ -32,6 +33,8 @@ VIVOS_VUUPT_FIM = ("done", "failed", "canceled", "cancelled")
 _MAX_TENTATIVAS_VUUPT = 20
 _FALTAS_SEGUIDAS_VUUPT = 3   # -Rk que nao existe: so para depois de 3 seguidos (R1 apagado, R2 vivo)
 _MAX_PS_STOKKI = 5           # cada PS leva ~30 s na Stokki
+_MAX_EXPEDIR = 30            # pedidos por clique no Expedir na Stokki (uma execucao so)
+AGENTE_EXPEDICAO = "somente_expedicao"
 
 _RE_REENTREGA = re.compile(r"-R\d.*$")
 
@@ -294,6 +297,43 @@ def cancelar_stokki(codigo: str, motivo: str, usuario: str, *, abrir_sessao=None
     falhas = [x for x in resultados if not x["ok"]]
     return {"ok": not falhas, "resultados": resultados,
             "erro": "; ".join(f"PS-{x['id_stokki']}: {x['erro']}" for x in falhas)}
+
+
+def expedir_stokki(codigos, usuario: str, *, iniciar, pasta) -> dict:
+    """Expedir na Stokki (Hugo, 12/11): poe na fila de execucoes do painel o
+    expedir_pedidos.py so dos pedidos pedidos, no modo --tela-pedidos (solta da
+    Expedicao Programada e aceita retirada/coleta pela transportadora). Quem
+    confere entrega, OE e transportadora e o script; o resultado por pedido sai
+    em andamento_expedicao. iniciar(args_extra) -> (execucao_id, entrou_na_fila)."""
+    if not isinstance(codigos, list) or not codigos:
+        return {"ok": False, "erro": "codigos ausente."}
+    bases = list(dict.fromkeys(m.upper() for c in codigos for m in re.findall(r"PS-\d+", str(c), re.I)))
+    if not bases:
+        return {"ok": False, "erro": "código sem PS-<número>: não dá pra achar o pedido na Stokki."}
+    if len(bases) > _MAX_EXPEDIR:
+        return {"ok": False, "erro": f"no máximo {_MAX_EXPEDIR} pedidos por vez."}
+    token = uuid.uuid4().hex
+    arquivo = Path(pasta) / f"expedir_tela_{token}.json"
+    execucao_id, na_fila = iniciar(["--pedido", *bases, "--tela-pedidos", "--resultado-json", str(arquivo)])
+    for base in bases:
+        tratativas.registrar_evento(base, "PEDIDOS", "EXPEDIR_STOKKI",
+                                    texto=f"{usuario}: pediu a expedição na Stokki pela tela Pedidos")
+    return {"ok": True, "execucao_id": execucao_id, "token": token, "na_fila": bool(na_fila), "codigos": bases}
+
+
+def andamento_expedicao(execucao: dict | None, token: str, pasta) -> dict:
+    """Estado de um Expedir na Stokki: na_fila | rodando | fim (+ resultados {PS-N: {ok, mensagem}}).
+    execucao = linha de painel_execucoes do execucao_id devolvido por expedir_stokki."""
+    if not execucao or execucao.get("agente_id") != AGENTE_EXPEDICAO or not re.fullmatch(r"[0-9a-f]{32}", token or ""):
+        return {"ok": False, "erro": "Execução não encontrada."}
+    if execucao["status"] in ("NA_FILA", "RODANDO"):
+        return {"ok": True, "estado": execucao["status"].lower()}
+    try:
+        resultados = json.loads((Path(pasta) / f"expedir_tela_{token}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"ok": True, "estado": "fim", "resultados": {},
+                "erro": f"A expedição terminou sem devolver o resultado (execução {execucao['id']}: {execucao['status']})."}
+    return {"ok": True, "estado": "fim", "resultados": resultados}
 
 
 def _servico_vivo(service_id: int, vuupt):

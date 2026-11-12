@@ -61,6 +61,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.routing import BuildError
 
 from agentes import AGENTES, buscar_agente, categorias_ordenadas, montar_args_parametros
+from executor import LOGS_DIR as _LOGS_EXECUCOES
 from executor import (
     iniciar_execucao, iniciar_execucao_com_fila, iniciar_sequencia, buscar_execucao, buscar_ultima_execucao,
     listar_execucoes_recentes, ha_execucao_rodando, ha_execucao_pendente, ler_log, limpar_execucoes_travadas,
@@ -2894,6 +2895,45 @@ def api_pedidos_acao_marcar_entregue():
     except Exception:
         logging.getLogger(__name__).exception("marcar entregue pela tela Pedidos falhou")
         return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+
+
+@app.route("/api/pedidos/acao/expedir-stokki", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_acao_expedir_stokki():
+    """Expedir na Stokki pela tela /pedidos (Hugo, 12/11): JSON {codigos}. Entra na fila de execucoes
+    da barra do Planejamento (nunca junto com outra rotina da Stokki); a tela acompanha pelo andamento."""
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    agente = buscar_agente(acoes_pedidos.AGENTE_EXPEDICAO)
+
+    def iniciar(args_extra):
+        return iniciar_execucao_com_fila(agente, modo_teste=False, ids_do_grupo=AGENTES_PLANEJAMENTO_IDS,
+                                         args_extra=args_extra)
+    try:
+        r = acoes_pedidos.expedir_stokki(body.get("codigos"), _autor_acao_pedidos(), iniciar=iniciar,
+                                         pasta=_LOGS_EXECUCOES)
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 409 amigavel
+    except Exception:
+        logging.getLogger(__name__).exception("expedir na Stokki pela tela Pedidos falhou")
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+    if not r.get("ok"):
+        return jsonify({"erro": r.get("erro") or "Falha ao pedir a expedição."}), 400
+    return jsonify(r)
+
+
+@app.route("/api/pedidos/acao/expedir-stokki/andamento", methods=["GET"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+def api_pedidos_acao_expedir_stokki_andamento():
+    """Andamento do Expedir na Stokki: ?execucao_id=&token= (os dois vem da resposta do POST)."""
+    try:
+        execucao = buscar_execucao(int(request.args.get("execucao_id", "")))
+    except ValueError:
+        execucao = None
+    r = acoes_pedidos.andamento_expedicao(execucao, request.args.get("token", ""), _LOGS_EXECUCOES)
+    return jsonify(r), (200 if r.get("ok") else 404)
 
 
 @app.route("/api/pedidos/acao/validar-lote-foto", methods=["POST"])

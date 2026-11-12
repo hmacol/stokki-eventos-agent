@@ -1265,9 +1265,78 @@ def _falhas_bloqueadas(falhas_persistentes: dict, agora: datetime | None = None)
     return {c: f for c, f in falhas_persistentes.items() if (f.get("ultima_em") or "") > limite}
 
 
+# Resultado por pedido do --tela-pedidos (botao "Expedir na Stokki" da tela
+# /pedidos, Hugo 12/11): o painel le o JSON de --resultado-json no fim.
+_RESULTADOS: dict = {}
+
+
+def _anotar(codigo: str, ok: bool, mensagem: str):
+    for base in _bases_do_code(codigo) or {fingerprint_expedicao._normalizar(codigo)}:
+        _RESULTADOS[base] = {"ok": ok, "mensagem": mensagem}
+
+
+def _retiradas_pela_transportadora(config: dict, codigos: set[str]) -> tuple[dict, dict]:
+    """Codigos sem entrega na VUUPT: le a transportadora do pedido na Stokki
+    (conta admin, so leitura). Retirada/coleta no galpao ("CLIENTE RETIRA"
+    ou tipo RETIRADA no cadastro de transportadoras) pode expedir sem
+    entrega -- desde 06/11 esse pedido nem sobe pra VUUPT. Devolve
+    ({codigo: transportadora} das retiradas, {codigo: motivo} dos outros)."""
+    try:
+        from stokki.auth import StokkiSession
+        from stokki import pedidos as stokki_pedidos
+        from regras.transportadoras import CatalogoTransportadoras
+        sessao = StokkiSession(config)
+        catalogo = CatalogoTransportadoras.carregar_do_banco(_RAIZ / "dados" / "dados.db")
+    except Exception as e:
+        logger.warning(f"Leitura da transportadora na Stokki indisponivel ({e}).")
+        return {}, {c: "não está entregue na Vuupt e não consegui ler a transportadora na Stokki" for c in codigos}
+    retiradas, recusas = {}, {}
+    for codigo in sorted(codigos):
+        try:
+            detalhe = stokki_pedidos.obter_detalhe(sessao, int(_extrair_id(codigo)))
+            nome = ((detalhe.get("transportadora") or {}).get("nome") or "").strip()
+            eh_retirada = "CLIENTE RETIRA" in nome.upper() or (bool(nome) and catalogo.resolver(nome).tipo == "RETIRADA")
+        except Exception as e:
+            logger.warning(f"  {codigo}: leitura da transportadora na Stokki falhou ({e}).")
+            recusas[codigo] = "não está entregue na Vuupt e não consegui ler a transportadora na Stokki"
+            continue
+        if eh_retirada:
+            retiradas[codigo] = nome
+        else:
+            recusas[codigo] = (f"não está entregue na Vuupt e a transportadora na Stokki "
+                               f"({nome or 'não informada'}) não é de retirada/coleta no galpão")
+    return retiradas, recusas
+
+
+def _soltar_da_oe_e_expedir(page, codigo_ps: str) -> tuple[str, str]:
+    """--tela-pedidos: a Stokki recusou ("situacao invalida") e o pedido esta
+    "Aguardando Transportador" -> solta da Expedicao Programada
+    (stokki/expedicao_programada.py) e expede. Devolve (resultado no formato
+    do expedir_na_stokki, nota pro resultado da tela)."""
+    from stokki import expedicao_programada
+    situacao = _situacao_na_stokki(page, codigo_ps)
+    if not situacao or "aguardando transportador" not in situacao.lower():
+        return "ja_expedido", ""
+    try:
+        r = expedicao_programada.liberar_pedido(page, _extrair_id(codigo_ps), datetime.now().strftime("%H:%M"))
+    except Exception as e:
+        logger.warning(f"  {codigo_ps}: falha ao soltar da Expedicao Programada: {e}")
+        return "ja_expedido", "não consegui ler a Expedição Programada do pedido"
+    if r["acao"] == "sem_oe":
+        return "ja_expedido", "o pedido não está em nenhuma Expedição Programada"
+    if r["acao"] == "falha":
+        return "ja_expedido", f"a OE-{r['oe']} não aceitou: {r['erro']}"
+    if r["acao"] == "removido_da_oe":
+        return expedir_na_stokki(page, codigo_ps), f"tirado da OE-{r['oe']} (ela tinha outros pedidos)"
+    situacao = _situacao_na_stokki(page, codigo_ps)
+    if situacao and "enviado" in situacao.lower():
+        return "expedido", f"OE-{r['oe']} finalizada"
+    return "ja_expedido", f"a OE-{r['oe']} foi finalizada, mas o pedido segue '{situacao or 'sem situação lida'}'"
+
+
 def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
          forcar: list = None, horas_entregues: int = HORAS_ENTREGUES,
-         pedidos: list = None):
+         pedidos: list = None, tela_pedidos: bool = False):
     prefixo = "[MODO TESTE] " if modo_teste else ""
     logger.info(f"{prefixo}Expedicao iniciada (janela entregues: {horas_entregues}h | insucessos: {horas}h)")
 
@@ -1330,10 +1399,23 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
             if achadas:
                 logger.info(f"{len(achadas)} retirada(s) no galpao entre os selecionados: {sorted(achadas)}")
             faltando -= achadas
+        if faltando and tela_pedidos:
+            # Retirada/coleta no galpao sem servico na VUUPT (Hugo, 12/11): quem
+            # diz e a transportadora do pedido na Stokki.
+            pela_transportadora, recusas = _retiradas_pela_transportadora(config, faltando)
+            for codigo, nome in pela_transportadora.items():
+                logger.info(f"  {codigo}: retirada/coleta no galpao pela transportadora ({nome}) -- expede sem entrega na VUUPT.")
+                validados.append({"code": codigo, "id": None, "_retirada": True, "_sem_vuupt": True,
+                                  "checklistAnswers": {"data": []}})
+            for codigo, motivo in recusas.items():
+                _anotar(codigo, False, motivo)
+            faltando -= set(pela_transportadora)
         if faltando:
             logger.warning(f"{len(faltando)} pedido(s) selecionado(s) NAO estao entre os entregues "
                            f"das ultimas {horas_entregues}h na VUUPT nem entre as retiradas em aberto "
                            f"-- fora desta rodada: {sorted(faltando)}")
+            for codigo in faltando - set(_RESULTADOS):
+                _anotar(codigo, False, "não está entre os entregues dos últimos 30 dias na Vuupt")
         falhas_persistentes = {}
         if not validados:
             logger.info("Nenhum dos pedidos selecionados esta elegivel. Nada a expedir.")
@@ -1521,6 +1603,7 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                 f"entregue_em={(s.get('completed_at') or '')[:16]} | "
                 f"checklist_id={cl.get('id') if cl else '?'} | canhoto={situacao}"
             )
+            _anotar(s.get("code"), True, f"[modo teste] seria expedido ({situacao})")
         return
 
     # Cliente VUUPT pra fechar retiradas na hora (check-out) -- só existe
@@ -1561,6 +1644,10 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
 
             resultado_exp = expedir_na_stokki(page, codigo_ps)
             situacao = None
+            nota_oe = ""
+            if resultado_exp == "ja_expedido" and tela_pedidos:
+                resultado_exp, nota_oe = _soltar_da_oe_e_expedir(page, codigo_ps)
+            com_nota = f" ({nota_oe})" if nota_oe else ""
 
             if resultado_exp == "ja_expedido":
                 # 404 "situação inválida" só vale como "já expedido" se a
@@ -1569,6 +1656,7 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                 if situacao and "enviado" not in situacao.lower():
                     res["falha"] += 1
                     motivo = f"situacao_invalida_na_stokki ({situacao})"
+                    _anotar(codigo_ps, False, f"a Stokki recusou: o pedido está '{situacao}' lá{com_nota}")
                     n = fingerprint_expedicao.registrar_falha(codigo_ps, motivo, servico.get("id"))
                     logger.warning(f"  {codigo_ps}: Stokki recusou e o pedido esta '{situacao}', "
                                    f"nao 'Enviado' -- sem fingerprint ({n}/{MAX_TENTATIVAS_FALHA}).")
@@ -1602,17 +1690,21 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                         logger.warning(f"  {codigo_ps}: WMS saldo negativo -- {neg}")
                 except Exception as e:  # noqa: BLE001
                     logger.warning(f"  {codigo_ps}: baixa no WMS falhou ({e}) -- expedicao segue.")
+                feito = ("Expedido na Stokki" if resultado_exp == "expedido" else "Já estava Enviado na Stokki") + com_nota
                 if pdf_path:
                     if _canhoto_ja_anexado(page, codigo_ps):
                         res["anexado"] += 1  # conta como ok -- ja estava la
                         fingerprint_expedicao.marcar_processado(codigo_ps, servico.get("id"))
                         fingerprint_expedicao.limpar_falha(codigo_ps)
+                        _anotar(codigo_ps, True, f"{feito}; o canhoto já estava anexado")
                     elif anexar_canhoto(page, codigo_ps, pdf_path):
                         res["anexado"] += 1
                         fingerprint_expedicao.marcar_processado(codigo_ps, servico.get("id"))
                         fingerprint_expedicao.limpar_falha(codigo_ps)
+                        _anotar(codigo_ps, True, f"{feito}; canhoto anexado")
                     else:
                         res["falha_anexo"] += 1
+                        _anotar(codigo_ps, True, f"{feito}, mas o canhoto NÃO foi anexado")
                         n = fingerprint_expedicao.registrar_falha(codigo_ps, "falha_anexo_canhoto", servico.get("id"))
                         logger.warning(f"  {codigo_ps}: falha ao anexar canhoto ({n}/{MAX_TENTATIVAS_FALHA}).")
                 elif servico.get("_retirada"):
@@ -1623,6 +1715,11 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                     fingerprint_expedicao.marcar_processado(codigo_ps, servico.get("id"), canhoto_anexado=False)
                     fingerprint_expedicao.limpar_falha(codigo_ps)
                     verbo = "expedida" if resultado_exp == "expedido" else "ja constava como Enviado"
+                    _anotar(codigo_ps, True, f"{feito} (retirada/coleta no galpão)")
+                    if servico.get("_sem_vuupt"):
+                        logger.info(f"  {codigo_ps}: retirada no galpao {verbo} -- sem servico na VUUPT pra fechar.")
+                        time.sleep(0.5)
+                        continue
                     # Fecha o serviço na VUUPT NA HORA (check-out) -- antes
                     # só o timer do acompanhar_retiradas fazia isso, até 30
                     # min depois, e a seção "A retirar no galpão" (que lê a
@@ -1646,6 +1743,7 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                     fingerprint_expedicao.marcar_processado(codigo_ps, servico.get("id"), canhoto_anexado=False)
                     fingerprint_expedicao.limpar_falha(codigo_ps)
                     sem_comprovante.append(servico)
+                    _anotar(codigo_ps, True, f"{feito}, sem comprovante (não há foto de canhoto)")
                     logger.warning(f"  {codigo_ps}: expedido sem comprovante (sem foto de canhoto).")
                 elif situacao and "enviado" in situacao.lower():
                     # Stokki confirmou "Enviado" e não há canhoto pra
@@ -1653,6 +1751,7 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                     res["ja_expedido"] = res.get("ja_expedido", 0)
                     fingerprint_expedicao.marcar_processado(codigo_ps, servico.get("id"), canhoto_anexado=False)
                     fingerprint_expedicao.limpar_falha(codigo_ps)
+                    _anotar(codigo_ps, True, f"{feito}, sem canhoto pra anexar")
                     logger.info(f"  {codigo_ps}: ja 'Enviado' na Stokki, sem canhoto -- marcado como processado.")
                 else:
                     # Stokki recusou ("situação inválida"), não deu pra
@@ -1660,10 +1759,12 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                     # que já estava expedido. Conta como falha; depois de
                     # MAX_TENTATIVAS_FALHA vai pro e-mail de pendências.
                     res["falha"] += 1
+                    _anotar(codigo_ps, False, f"a Stokki recusou a expedição e não deu pra ler a situação do pedido{com_nota}")
                     n = fingerprint_expedicao.registrar_falha(codigo_ps, "situacao_invalida_na_stokki", servico.get("id"))
                     logger.warning(f"  {codigo_ps}: Stokki recusou e nao ha canhoto pra confirmar ({n}/{MAX_TENTATIVAS_FALHA}).")
             else:
                 res["falha"] += 1
+                _anotar(codigo_ps, False, f"a Stokki recusou a expedição{com_nota}")
                 n = fingerprint_expedicao.registrar_falha(codigo_ps, "expedicao_recusada", servico.get("id"))
                 logger.warning(f"  {codigo_ps}: falha na expedicao ({n}/{MAX_TENTATIVAS_FALHA}).")
 
@@ -1703,6 +1804,18 @@ if __name__ == "__main__":
                              "entrega na VUUPT e anexa canhoto); aceita tambem retiradas no "
                              "galpao em aberto (expede sem canhoto); ignora fingerprint/falha "
                              "persistente e nao roda a parte de insucessos")
+    parser.add_argument("--tela-pedidos", action="store_true",
+                        help="com --pedido (botao 'Expedir na Stokki' da tela /pedidos): solta o pedido "
+                             "da Expedicao Programada (OE) que trava a expedicao e aceita retirada/coleta "
+                             "no galpao pela transportadora da Stokki, sem entrega na VUUPT")
+    parser.add_argument("--resultado-json", metavar="ARQUIVO",
+                        help="grava o resultado por pedido ({PS-N: {ok, mensagem}}) neste arquivo")
     args = parser.parse_args()
-    main(horas=args.horas, modo_teste=args.modo_teste, limite=args.limite,
-         forcar=args.forcar, horas_entregues=args.horas_entregues, pedidos=args.pedido)
+    try:
+        main(horas=args.horas, modo_teste=args.modo_teste, limite=args.limite,
+             forcar=args.forcar, horas_entregues=args.horas_entregues, pedidos=args.pedido,
+             tela_pedidos=args.tela_pedidos)
+    finally:
+        if args.resultado_json:
+            import json
+            Path(args.resultado_json).write_text(json.dumps(_RESULTADOS, ensure_ascii=False), encoding="utf-8")
