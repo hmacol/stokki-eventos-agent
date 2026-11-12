@@ -160,12 +160,23 @@ base_raw AS (
 # entregue -- é um reenvio feito depois da entrega e não pode ficar escondido (revisão final, 10/11);
 # 2) entregue (vence tentativa fechada e tentativa mais antiga); depois a data, o peso do status
 # (empate no mesmo dia), o número da reentrega e o código.
-_SQL_BASE = _SQL_CTES + """,
+# `alvo` (12/11, velocidade): só os pedidos com ALGUMA tentativa na data do
+# filtro entram no agrupamento. A linha principal do pedido é uma das
+# tentativas dele, então quem passaria no filtro de data está sempre em `alvo`
+# -- o resultado é o mesmo, mas as janelas rodam em centenas de linhas e não
+# no núcleo inteiro (em produção: de ~0,9 s pra ~0,1 s por consulta).
+# __DATA__ é a expressão da data escolhida (DATAS); ver _consulta().
+_SQL_BASE = _SQL_CTES.rstrip() + """,
+alvo AS (
+    SELECT DISTINCT COALESCE(sender_id, -1) AS a_sid, pedido_base AS a_pb
+    FROM base_raw WHERE __DATA__ BETWEEN ? AND ?
+),
 com_entregue AS (
     SELECT base_raw.*,
            MAX(CASE WHEN status = 'ENTREGUE' THEN sufixo_r END)
                OVER (PARTITION BY COALESCE(sender_id, -1), pedido_base) AS sufixo_r_entregue
     FROM base_raw
+    WHERE (COALESCE(sender_id, -1), pedido_base) IN (SELECT a_sid, a_pb FROM alvo)
 ),
 rank AS (
     SELECT com_entregue.*,
@@ -267,6 +278,15 @@ def _where(filtros: dict) -> tuple[str, list]:
     return " WHERE " + " AND ".join(partes), params
 
 
+def _consulta(filtros: dict) -> tuple[str, str, list]:
+    """(CTEs até `base`, WHERE, parâmetros) pros filtros da tela. O período
+    entra duas vezes: no `alvo` (quem participa do agrupamento) e no WHERE
+    (a linha principal do pedido)."""
+    where, params = _where(filtros)
+    _, sql_data = DATAS.get(filtros.get("data_tipo") or "", DATAS["referencia"])
+    return _SQL_BASE.replace("__DATA__", sql_data), where, params[:2] + params
+
+
 def _order_by(ordem: str | None, direcao: str | None) -> str:
     coluna = POR_CHAVE.get(ordem or "") or POR_CHAVE["data"]
     sentido = "ASC" if (direcao or "").lower() == "asc" else "DESC"
@@ -274,9 +294,9 @@ def _order_by(ordem: str | None, direcao: str | None) -> str:
     return f" ORDER BY ({coluna.sql}) IS NULL, ({coluna.sql}) {sentido}, codigo {sentido}"
 
 
-def _select() -> str:
+def _select(extra: str = "") -> str:
     campos = ", ".join(f"({c.sql}) AS {c.chave}" for c in COLUNAS)
-    return f"SELECT {campos}, rota_id, sender_id, pedido_base, vuupt_service_id FROM base"
+    return f"SELECT {campos}, rota_id, sender_id, pedido_base, vuupt_service_id{extra} FROM base"
 
 
 def listar(filtros: dict, pagina: int = 1, por_pagina: int = POR_PAGINA, ordem: str | None = None,
@@ -285,20 +305,25 @@ def listar(filtros: dict, pagina: int = 1, por_pagina: int = POR_PAGINA, ordem: 
     conn = conn or banco.conectar()
     try:
         canhotos_manuais.garantir_tabela(conn)   # a coluna Canhoto lê dela
-        where, params = _where(filtros)
-        tot = conn.execute(f"{_SQL_BASE} SELECT COUNT(*) n, COALESCE(SUM(caixas), 0) cx FROM base{where}",
-                           params).fetchone()
-        total = tot["n"]
+        base, where, params = _consulta(filtros)
+        # Total e caixas vêm na mesma consulta da página (12/11, velocidade).
+        sql = (f"{base} {_select(', COUNT(*) OVER () AS _n, COALESCE(SUM(caixas) OVER (), 0) AS _cx')}"
+               f"{where}{_order_by(ordem, direcao)} LIMIT ? OFFSET ?")
+        pagina = max(1, int(pagina or 1))
+        rows = conn.execute(sql, params + [por_pagina, (pagina - 1) * por_pagina]).fetchall()
+        if not rows and pagina > 1:
+            # Página além do fim (filtro mudou com a URL antiga): cai na última.
+            n = conn.execute(f"{base} SELECT COUNT(*) n FROM base{where}", params).fetchone()["n"]
+            pagina = max(1, -(-n // por_pagina))
+            rows = conn.execute(sql, params + [por_pagina, (pagina - 1) * por_pagina]).fetchall()
+        total, caixas = (rows[0]["_n"], rows[0]["_cx"]) if rows else (0, 0)
         paginas = max(1, -(-total // por_pagina))
-        pagina = min(max(1, int(pagina or 1)), paginas)
-        rows = conn.execute(f"{_SQL_BASE} {_select()}{where}{_order_by(ordem, direcao)} LIMIT ? OFFSET ?",
-                            params + [por_pagina, (pagina - 1) * por_pagina]).fetchall()
         inicio, fim = periodo(filtros.get("de"), filtros.get("ate"))
-        linhas = [dict(r) for r in rows]
+        linhas = [{k: r[k] for k in r.keys() if k not in ("_n", "_cx")} for r in rows]
         hist = tentativas([(l["sender_id"], l["pedido_base"]) for l in linhas], conn)
         for l in linhas:
             l["historico"] = hist.get((l["sender_id"], l["pedido_base"]), [])
-        return {"linhas": linhas, "total": total, "total_caixas": tot["cx"],
+        return {"linhas": linhas, "total": total, "total_caixas": caixas,
                 "pagina": pagina, "paginas": paginas, "periodo": {"de": inicio, "ate": fim}}
     finally:
         if fechar:
@@ -312,8 +337,8 @@ def contar_por_status(filtros: dict, conn: sqlite3.Connection | None = None) -> 
     conn = conn or banco.conectar()
     try:
         canhotos_manuais.garantir_tabela(conn)   # a coluna Canhoto lê dela
-        where, params = _where({**filtros, "status": ""})
-        rows = conn.execute(f"{_SQL_BASE} SELECT status, COUNT(*) n FROM base{where} GROUP BY status",
+        base, where, params = _consulta({**filtros, "status": ""})
+        rows = conn.execute(f"{base} SELECT status, COUNT(*) n FROM base{where} GROUP BY status",
                             params).fetchall()
     finally:
         if fechar:
@@ -323,6 +348,31 @@ def contar_por_status(filtros: dict, conn: sqlite3.Connection | None = None) -> 
         if r["status"] in saida:
             saida[r["status"]] = r["n"]
     saida["total"] = sum(r["n"] for r in rows)
+    return saida
+
+
+def contar_filas(filtros: dict, conn: sqlite3.Connection | None = None) -> dict:
+    """Filas do topo da tela no computador (Hugo, 11/11): quantos pedidos por
+    status e quantos entregues sem canhoto, com os filtros da tela MENOS status
+    e canhoto (a fila é quem escolhe os dois). Uma consulta só."""
+    fechar = conn is None
+    conn = conn or banco.conectar()
+    try:
+        canhotos_manuais.garantir_tabela(conn)
+        base, where, params = _consulta({**filtros, "status": "", "canhoto": ""})
+        rows = conn.execute(
+            f"{base} SELECT status, COUNT(*) n, COALESCE(SUM(CASE WHEN status = 'ENTREGUE' "
+            f"AND qtd_checklists = 0 AND NOT {_SQL_TEM_CANHOTO} THEN 1 ELSE 0 END), 0) sc "
+            f"FROM base{where} GROUP BY status", params).fetchall()
+    finally:
+        if fechar:
+            conn.close()
+    saida = {s: 0 for s in STATUS}
+    for r in rows:
+        if r["status"] in saida:
+            saida[r["status"]] = r["n"]
+    saida["total"] = sum(r["n"] for r in rows)
+    saida["sem_canhoto"] = sum(r["sc"] for r in rows)
     return saida
 
 
@@ -417,8 +467,8 @@ def exportar_csv(filtros: dict, chaves: list[str] | None = None, ordem: str | No
     conn = conn or banco.conectar()
     try:
         canhotos_manuais.garantir_tabela(conn)   # a coluna Canhoto lê dela
-        where, params = _where(filtros)
-        rows = conn.execute(f"{_SQL_BASE} {_select()}{where}{_order_by(ordem, direcao)}", params).fetchall()
+        base, where, params = _consulta(filtros)
+        rows = conn.execute(f"{base} {_select()}{where}{_order_by(ordem, direcao)}", params).fetchall()
         hist = tentativas([(r["sender_id"], r["pedido_base"]) for r in rows], conn)
     finally:
         if fechar:

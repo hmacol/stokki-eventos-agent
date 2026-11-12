@@ -39,8 +39,48 @@
   .campo-filtro input, .campo-filtro select { padding: 7px 9px; border: 1px solid var(--borda); border-radius: 6px; font-size: 12.5px; background: var(--fundo); color: var(--texto); max-width: 230px; }
   .limpar-filtros { font-size: 12.5px; color: var(--texto-suave); text-decoration: none; padding-bottom: 8px; }
   .limpar-filtros:hover { color: var(--texto); }
-  .filtros-coluna-ativos { font-size: 12px; color: var(--texto-suave); margin: 0 0 10px; }
-  .filtros-coluna-ativos span { display: inline-block; margin-right: 6px; padding: 2px 8px; border-radius: 100px; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); }
+  /* Filas, barra do período e etiquetas de filtro (Hugo, 11/11) */
+  .filas { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  .fila { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 13px; border: 1px solid var(--borda); border-radius: 100px; background: var(--superficie); color: var(--texto); font-size: 13px; text-decoration: none; }
+  .fila:hover { border-color: var(--acento); }
+  .fila[aria-current="true"] { background: var(--primaria); border-color: var(--primaria); color: #FFFFFF; font-weight: 600; }
+  .fila .n { font-weight: 700; font-variant-numeric: tabular-nums; }
+  /* Visões salvas (12/11): filtros guardados neste navegador, ao lado das filas. */
+  .fila.visao { padding-right: 4px; gap: 2px; }
+  .fila.visao a { color: inherit; text-decoration: none; }
+  .fila.visao.ativa { background: var(--primaria); border-color: var(--primaria); color: #FFFFFF; font-weight: 600; }
+  .fila.visao button { width: 26px; height: 26px; border: 0; border-radius: 50%; background: none; color: inherit; font-size: 16px; line-height: 1; cursor: pointer; }
+  .fila.visao button:hover { background: rgba(127, 127, 127, .25); }
+  .fila-nova { border-style: dashed; background: none; color: var(--texto-suave); font: inherit; font-size: 13px; cursor: pointer; }
+  .fila-nova[hidden] { display: none; }
+  #visoes { display: contents; }
+  #visao-form { display: inline-flex; gap: 6px; align-items: center; }
+  #visao-form[hidden] { display: none; }
+  #visao-nome { height: 36px; width: 190px; padding: 0 10px; border: 1px solid var(--borda); border-radius: 8px; background: var(--superficie); color: var(--texto); font: inherit; font-size: 13px; }
+  .barra-status { display: flex; gap: 2px; height: 8px; border-radius: 100px; overflow: hidden; margin-bottom: 10px; }
+  .barra-status[hidden] { display: none; }
+  .barra-status span { min-width: 3px; }
+  .barra-status .b-ENTREGUE { background: var(--acento); }
+  .barra-status .b-INSUCESSO { background: var(--erro); }
+  .barra-status .b-ABERTO { background: var(--texto-suave); }
+  .barra-status .b-EM_ROTA { background: var(--rodando); }
+  .barra-status .b-CANCELADO { background: var(--borda); }
+  details.mais-filtros { margin-top: 10px; }
+  details.mais-filtros > summary { display: inline-block; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--texto); padding: 6px 12px; border: 1px solid var(--borda); border-radius: 6px; list-style: none; user-select: none; }
+  details.mais-filtros > summary::-webkit-details-marker { display: none; }
+  details.mais-filtros[open] > summary { border-color: var(--acento); }
+  .etiquetas { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 10px; font-size: 12.5px; color: var(--texto-suave); }
+  .etiqueta { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 10px; border-radius: 100px; border: 1px solid var(--borda); background: var(--fundo); color: var(--texto); text-decoration: none; }
+  a.etiqueta:hover { border-color: var(--erro); }
+  /* Painel do pedido no computador: a tela do pedido do celular, presa à direita */
+  html:not(.modo-mobile) #pm-det { inset: 0 0 0 auto; width: min(440px, 100vw); z-index: 45; border-left: 1px solid var(--borda); box-shadow: -8px 0 24px rgba(0,0,0,.14); }
+  html:not(.modo-mobile) #pm-det .pm-btn { min-height: 40px; font-size: 13.5px; }
+  html.modo-mobile .pm-nav { display: none; }
+  /* tela larga: a tabela encolhe em vez de ficar coberta pelo painel */
+  @media (min-width: 1100px) { html.painel-aberto:not(.modo-mobile) main { padding-right: 456px; } }
+  table.tab-pedidos tbody tr[data-chave] { cursor: pointer; }
+  table.tab-pedidos tbody tr.aberta td { background: var(--sucesso-bg); }
+  .pm-sem { color: var(--erro-texto); font-weight: 600; }
 
   .painel-colunas { display: none; position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; width: min(560px, 92vw); background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
   .painel-colunas.aberto { display: block; }
@@ -128,7 +168,7 @@
 
   /* ── Celular (Hugo, 11/11): lista compacta + abas + tela do pedido ── */
   html:not(.modo-mobile) .so-m { display: none !important; }
-  html.modo-mobile .cabecalho-pagina, html.modo-mobile form.filtros, html.modo-mobile .filtros-coluna-ativos,
+  html.modo-mobile .cabecalho-pagina, html.modo-mobile form.filtros, html.modo-mobile .filas, html.modo-mobile .barra-status,
   html.modo-mobile .tabela-rolagem, html.modo-mobile nav.paginacao { display: none !important; }
   html.modo-mobile main { padding-left: 0; padding-right: 0; padding-top: 0; }
   .pm-topo { position: sticky; top: var(--altura-abre-menu, 46px); z-index: 30; background: var(--superficie); border-bottom: 1px solid var(--borda); }
@@ -314,23 +354,6 @@
   {% endif %}
   <a class="pm-completa" href="{{ url_com(modo='desktop') }}">Ver a tabela completa</a>
 
-  <section class="pm-tela" id="pm-det" role="dialog" aria-modal="true" aria-labelledby="pm-det-cod" hidden>
-    <header>
-      <button type="button" class="pm-icone" id="pm-det-voltar" aria-label="Voltar para a lista">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
-      </button>
-      <h2 id="pm-det-cod"></h2>
-      <span class="pm-chip" id="pm-det-chip"></span>
-    </header>
-    <div class="pm-rolar" id="pm-det-corpo"></div>
-    {% if pode_agir %}
-    <footer id="pm-det-acoes">
-      <p class="pm-dica" id="pm-det-dica" hidden></p>
-      <button type="button" class="pm-btn primario" id="pm-det-principal"></button>
-      <button type="button" class="pm-btn" id="pm-det-todas" aria-haspopup="menu">Todas as ações</button>
-    </footer>
-    {% endif %}
-  </section>
 
   <section class="pm-tela" id="pm-filtros" role="dialog" aria-modal="true" aria-labelledby="pm-filtros-tit" hidden>
     <header>
@@ -383,6 +406,30 @@
     </footer>
   </section>
 </div>
+{# tela do pedido: tela cheia no celular, painel à direita no computador #}
+<section class="pm-tela" id="pm-det" role="dialog" aria-modal="true" aria-labelledby="pm-det-cod" hidden>
+  <header>
+    <button type="button" class="pm-icone" id="pm-det-voltar" aria-label="Voltar para a lista">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+    </button>
+    <h2 id="pm-det-cod"></h2>
+    <span class="pm-chip" id="pm-det-chip"></span>
+    <button type="button" class="pm-icone pm-nav" id="pm-det-ant" aria-label="Pedido anterior da lista">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg>
+    </button>
+    <button type="button" class="pm-icone pm-nav" id="pm-det-prox" aria-label="Próximo pedido da lista">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+  </header>
+  <div class="pm-rolar" id="pm-det-corpo"></div>
+  {% if pode_agir %}
+  <footer id="pm-det-acoes">
+    <p class="pm-dica" id="pm-det-dica" hidden></p>
+    <button type="button" class="pm-btn primario" id="pm-det-principal"></button>
+    <button type="button" class="pm-btn" id="pm-det-todas" aria-haspopup="menu">Todas as ações</button>
+  </footer>
+  {% endif %}
+</section>
 <script type="application/json" id="dados-m">{{ pedidos_celular|tojson }}</script>
 <div class="cabecalho-pagina">
   <div>
@@ -409,6 +456,22 @@
   </div>
 </div>
 
+{% if filtros.canhoto == 'sem' and filtros.status in ('', 'ENTREGUE') %}{% set fila_ativa = 'sem_canhoto' %}
+{% elif filtros.canhoto %}{% set fila_ativa = '' %}{% else %}{% set fila_ativa = filtros.status or 'total' %}{% endif %}
+<nav class="filas" id="filas" aria-label="Filas de pedidos">
+  {% for chave, rotulo, st, ca in [('total', 'Todos', None, None), ('sem_canhoto', 'Sem canhoto', None, 'sem'), ('INSUCESSO', 'Insucesso', 'INSUCESSO', None), ('ABERTO', 'Abertos', 'ABERTO', None), ('EM_ROTA', 'Em rota', 'EM_ROTA', None)] %}
+  <a class="fila" data-fila="{{ chave }}" href="{{ url_com(status=st, canhoto=ca, pagina=None) }}"{% if fila_ativa == chave %} aria-current="true"{% endif %}>{{ rotulo }} <span class="n"></span></a>
+  {% endfor %}
+  <span id="visoes"></span>
+  <button type="button" class="fila fila-nova" id="visao-salvar" title="Guarda os filtros de agora como um atalho aqui em cima (fica neste navegador)">+ Salvar esta visão</button>
+  <form id="visao-form" hidden>
+    <input type="text" id="visao-nome" maxlength="30" placeholder="Nome da visão" aria-label="Nome da visão" autocomplete="off">
+    <button type="submit" class="botao primario">Salvar</button>
+    <button type="button" class="botao" id="visao-cancelar">Cancelar</button>
+  </form>
+</nav>
+<div class="barra-status" id="barra-status" role="img" hidden></div>
+
 <form class="filtros" id="form-pedidos" method="get" action="{{ url_for('pedidos_tabela') }}">
   <input type="hidden" name="ordem" value="{{ ordem }}">
   <input type="hidden" name="direcao" value="{{ direcao }}">
@@ -416,6 +479,8 @@
     <input type="search" name="q" value="{{ filtros.q }}" placeholder="Buscar código, destinatário, CNPJ, endereço, embarcador, motorista…" aria-label="Busca livre">
     <button type="submit" class="botao primario">Filtrar</button>
   </div>
+  <details class="mais-filtros" id="mais-filtros">
+  <summary>Filtros</summary>
   <div class="linha-filtros">
     <div class="campo-filtro">
       <label for="f-data-tipo">Período por</label>
@@ -461,15 +526,25 @@
         {% for z in opcoes.zonas %}<option value="{{ z }}"{% if filtros.zona == z %} selected{% endif %}>{{ z }}</option>{% endfor %}
       </select>
     </div>
-    <a class="limpar-filtros" href="{{ url_for('pedidos_tabela') }}">Limpar tudo</a>
+  </div>
+  </details>
+  {% set et = [] %}
+  {% if request.args.get('de') or request.args.get('ate') %}{% set _ = et.append((formatar('data', r.periodo.de)[:5] ~ ' a ' ~ formatar('data', r.periodo.ate)[:5], url_com(de=None, ate=None, pagina=None))) %}{% endif %}
+  {% if filtros.data_tipo != 'referencia' and filtros.data_tipo in datas %}{% set _ = et.append(('Período por: ' ~ datas[filtros.data_tipo][0], url_com(data_tipo=None, pagina=None))) %}{% endif %}
+  {% if filtros.status in status %}{% set _ = et.append(('Status: ' ~ formatar('status', filtros.status), url_com(status=None, pagina=None))) %}{% endif %}
+  {% for v, rotulo in opcoes_canhoto if filtros.canhoto == v %}{% set _ = et.append((rotulo, url_com(canhoto=None, pagina=None))) %}{% endfor %}
+  {% if filtros.fluxo in fluxos %}{% set _ = et.append(('Fluxo: ' ~ formatar('status', filtros.fluxo), url_com(fluxo=None, pagina=None))) %}{% endif %}
+  {% for e in opcoes.embarcadores if filtros.sender_id|string == e.sender_id|string %}{% set _ = et.append(('Embarcador: ' ~ e.nome, url_com(embarcador=None, pagina=None))) %}{% endfor %}
+  {% for m in opcoes.motoristas if filtros.agent_id|string == m.agent_id|string %}{% set _ = et.append(('Motorista: ' ~ m.nome, url_com(motorista=None, pagina=None))) %}{% endfor %}
+  {% if filtros.zona %}{% set _ = et.append(('Zona: ' ~ filtros.zona, url_com(zona=None, pagina=None))) %}{% endif %}
+  {% if filtros.q %}{% set _ = et.append(('Busca: “' ~ filtros.q ~ '”', url_com(q=None, pagina=None))) %}{% endif %}
+  {% for c in colunas if c.chave in ativos %}{% set _ = et.append((c.rotulo ~ ': “' ~ ativos[c.chave] ~ '”', url_com(**{'f_' ~ c.chave: None, 'pagina': None}))) %}{% endfor %}
+  <div class="etiquetas" id="etiquetas">
+    {% if not (request.args.get('de') or request.args.get('ate')) %}<span class="etiqueta">Últimos 7 dias</span>{% endif %}
+    {% for texto, url in et %}<a class="etiqueta" href="{{ url }}" aria-label="Tirar o filtro {{ texto }}">{{ texto }} <span aria-hidden="true">×</span></a>{% endfor %}
+    {% if et %}<a class="limpar-filtros" style="padding: 0 4px;" href="{{ url_for('pedidos_tabela') }}">Limpar tudo</a>{% endif %}
   </div>
 </form>
-
-{% if ativos %}
-<p class="filtros-coluna-ativos">Filtro por coluna:
-  {% for c in colunas if c.chave in ativos %}<span>{{ c.rotulo }}: “{{ ativos[c.chave] }}”</span>{% endfor %}
-</p>
-{% endif %}
 
 {% set ncols = colunas|length + (1 if pode_agir else 0) %}
 {% if pode_agir %}<p class="nota-sinc" id="nota-sinc" hidden>Ações feitas agora aparecem como selo na linha; o status atualiza na próxima sincronização (até 15 min).</p>{% endif %}
@@ -494,7 +569,7 @@
     </thead>
     <tbody>
       {% for l in r.linhas %}
-      <tr data-service-id="{{ l.vuupt_service_id or '' }}" data-codigo="{{ l.codigo_servico or l.codigo }}" data-status="{{ l.status or '' }}" data-sender-id="{{ l.sender_id if l.sender_id is not none else '' }}" data-destinatario="{{ l.destinatario or '' }}" data-embarcador="{{ l.embarcador or '' }}">
+      <tr data-service-id="{{ l.vuupt_service_id or '' }}" data-codigo="{{ l.codigo_servico or l.codigo }}" data-status="{{ l.status or '' }}" data-sender-id="{{ l.sender_id if l.sender_id is not none else '' }}" data-destinatario="{{ l.destinatario or '' }}" data-embarcador="{{ l.embarcador or '' }}" data-chave="{{ l.sender_id }}|{{ l.pedido_base }}">
         {% if pode_agir %}<td class="col-acoes"><input type="checkbox" name="sel" aria-label="Selecionar {{ l.codigo }}"><button type="button" class="menu-acoes" aria-haspopup="menu" aria-expanded="false" aria-label="Ações de {{ l.codigo }}" title="Ações">⋯</button></td>{% endif %}
         {% for c in colunas %}
         {% set v = l[c.chave] %}
@@ -1387,6 +1462,7 @@
   const raiz = document.getElementById("pm");
   if (!raiz) return;
   const URL_CONTAGEM = {{ url_for('api_pedidos_contagem')|tojson }};
+  const URL_FILAS = {{ url_for('api_pedidos_filas')|tojson }};
   const celular = () => document.documentElement.classList.contains("modo-mobile");
   const $ = (id) => document.getElementById(id);
   const lista = $("lista-m"), det = $("pm-det"), telaFiltros = $("pm-filtros");
@@ -1409,6 +1485,93 @@
     const ativa = raiz.querySelector('.pm-abas a[aria-current="page"]');
     if (ativa) ativa.scrollIntoView({ block: "nearest", inline: "center" });
     if (/^#(pedido|filtros)$/.test(location.hash)) history.replaceState(null, "", location.pathname + location.search);
+  }
+
+  // ── computador: contagem das filas, barra do período e filtros recolhidos ──
+  if (!celular()) {
+    fetch(URL_FILAS + location.search, { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((c) => {
+        if (!c) return;
+        document.querySelectorAll("#filas .fila").forEach((a) => {
+          const n = c[a.dataset.fila];
+          if (typeof n === "number") a.querySelector(".n").textContent = n.toLocaleString("pt-BR");
+        });
+        const barra = $("barra-status"), nomes = { ENTREGUE: "entregues", INSUCESSO: "insucessos", ABERTO: "abertos", EM_ROTA: "em rota", CANCELADO: "cancelados" };
+        if (!barra || !c.total) return;
+        const partes = [];
+        Object.keys(nomes).forEach((st) => {
+          if (!c[st]) return;
+          const p = document.createElement("span");
+          p.className = `b-${st}`;
+          p.style.flex = String(c[st]);
+          barra.appendChild(p);
+          partes.push(`${c[st].toLocaleString("pt-BR")} ${nomes[st]}`);
+        });
+        barra.title = partes.join(" · ");
+        barra.setAttribute("aria-label", `No período: ${partes.join(", ")}`);
+        barra.hidden = false;
+      })
+      .catch(() => {});
+    // Visões salvas: os filtros da tela (menos a página) com um nome, neste
+    // navegador (localStorage, como as colunas). Sem data escolhida a visão
+    // acompanha os "últimos 7 dias"; com data, fica presa naquelas datas.
+    const CHAVE_VISOES = "pedidos.visoes", MAX_VISOES = 8;
+    const buscaAtual = () => {
+      const q = new URLSearchParams(location.search), limpo = [];
+      q.forEach((v, k) => { if (v !== "" && k !== "pagina") limpo.push([k, v]); });
+      limpo.sort((a, b) => (a[0] + "=" + a[1]).localeCompare(b[0] + "=" + b[1]));
+      return new URLSearchParams(limpo).toString();
+    };
+    const lerVisoes = () => {
+      try {
+        const v = JSON.parse(localStorage.getItem(CHAVE_VISOES) || "[]");
+        return Array.isArray(v) ? v.filter((x) => x && typeof x.nome === "string" && typeof x.busca === "string") : [];
+      } catch (e) { return []; }
+    };
+    const gravarVisoes = (v) => { try { localStorage.setItem(CHAVE_VISOES, JSON.stringify(v)); return true; } catch (e) { return false; } };
+    const caixaVisoes = $("visoes"), btVisao = $("visao-salvar"), formVisao = $("visao-form"), nomeVisao = $("visao-nome");
+    const desenharVisoes = () => {
+      const atual = buscaAtual();
+      caixaVisoes.textContent = "";
+      lerVisoes().forEach((v) => {
+        const pilula = document.createElement("span"), link = document.createElement("a"), tirar = document.createElement("button");
+        pilula.className = "fila visao" + (v.busca === atual ? " ativa" : "");
+        link.href = location.pathname + (v.busca ? "?" + v.busca : "");
+        link.textContent = v.nome;
+        const q = new URLSearchParams(v.busca);
+        if (q.get("de") || q.get("ate")) link.title = "Período fixo: " + [q.get("de"), q.get("ate")].filter(Boolean).map((d) => d.split("-").reverse().join("/")).join(" a ");
+        if (v.busca === atual) link.setAttribute("aria-current", "true");
+        tirar.type = "button";
+        tirar.textContent = "×";
+        tirar.setAttribute("aria-label", "Apagar a visão " + v.nome);
+        tirar.addEventListener("click", () => { gravarVisoes(lerVisoes().filter((x) => x.nome !== v.nome)); desenharVisoes(); });
+        pilula.append(link, tirar);
+        caixaVisoes.appendChild(pilula);
+      });
+    };
+    if (caixaVisoes && btVisao && formVisao) {
+      desenharVisoes();
+      const fecharForm = () => { formVisao.hidden = true; btVisao.hidden = false; };
+      btVisao.addEventListener("click", () => { btVisao.hidden = true; formVisao.hidden = false; nomeVisao.value = ""; nomeVisao.focus(); });
+      $("visao-cancelar").addEventListener("click", () => { fecharForm(); btVisao.focus(); });
+      nomeVisao.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); fecharForm(); btVisao.focus(); } });
+      formVisao.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const nome = nomeVisao.value.trim();
+        if (!nome) { nomeVisao.focus(); return; }
+        const outras = lerVisoes().filter((x) => x.nome !== nome);
+        if (outras.length >= MAX_VISOES) { alert("Já são " + MAX_VISOES + " visões salvas. Apague uma pra guardar outra."); return; }
+        if (!gravarVisoes(outras.concat([{ nome: nome, busca: buscaAtual() }]))) { alert("Este navegador não deixou guardar a visão."); return; }
+        fecharForm();
+        desenharVisoes();
+      });
+    }
+    const mais = $("mais-filtros");
+    if (mais) {
+      try { mais.open = localStorage.getItem("pedidos.filtros_abertos") === "1"; } catch (e) { /* sem armazenamento: fica fechado */ }
+      mais.addEventListener("toggle", () => { try { localStorage.setItem("pedidos.filtros_abertos", mais.open ? "1" : "0"); } catch (e) { /* idem */ } });
+    }
   }
 
   // ── busca ──
@@ -1438,14 +1601,18 @@
   function abrirTela(tela, nome, foco) {
     voltarFoco = document.activeElement;
     tela.hidden = false;
-    document.body.style.overflow = "hidden";
-    history.pushState({ pm: nome }, "", `#${nome}`);
+    if (celular()) {   // no computador é um painel ao lado: a lista segue rolando e o endereço não muda
+      document.body.style.overflow = "hidden";
+      history.pushState({ pm: nome }, "", `#${nome}`);
+    } else if (tela === det) document.documentElement.classList.add("painel-aberto");
     if (foco) foco.focus();
   }
   function esconderTelas() {
     [det, telaFiltros].forEach((t) => { t.hidden = true; });
     document.body.style.overflow = "";
+    if (liAberto) liAberto.classList.remove("aberta");
     liAberto = null;
+    document.documentElement.classList.remove("painel-aberto");
     if (voltarFoco && document.contains(voltarFoco)) voltarFoco.focus();
     voltarFoco = null;
   }
@@ -1514,6 +1681,24 @@
       .forEach(([r, v]) => { if (v) grade.appendChild(campo(r, v)); });
     if (grade.childNodes.length) corpo.appendChild(grade);
 
+    // comprovante: mesmo critério da coluna e do filtro de canhoto
+    if (p.status === "ENTREGUE" || p.canhoto === "Sim") {
+      const c = no("section", "pm-cartao");
+      c.appendChild(no("div", "pm-rot", "Comprovante"));
+      c.appendChild(no("div", p.canhoto === "Sim" ? "pm-val" : "pm-val pm-sem", p.canhoto === "Sim" ? "Com canhoto" : "Sem canhoto"));
+      const acoesC = no("div", "pm-links");
+      if (p.canhoto === "Sim" && window.PedidosAcoes) {
+        const b = no("button", "pm-btn", "Ver canhoto");
+        b.type = "button";
+        b.style.flex = "1";
+        b.addEventListener("click", () => window.PedidosAcoes.abrir("canhoto", li, b));
+        acoesC.appendChild(b);
+      }
+      if (p.pendentes) { const a = no("a", "", "Enviar em Canhotos pendentes"); a.href = p.pendentes; acoesC.appendChild(a); }
+      if (acoesC.childNodes.length) c.appendChild(acoesC);
+      corpo.appendChild(c);
+    }
+
     if (p.historico && p.historico.length) {
       const t = no("section", "pm-cartao");
       t.appendChild(no("div", "pm-rot", p.historico.length === 1 ? "1 tentativa" : `${p.historico.length} tentativas`));
@@ -1570,6 +1755,39 @@
     montarDetalhe(li, p);
     abrirTela(det, "pedido", $("pm-det-voltar"));
   });
+  // ── computador: clicar na linha abre o pedido ao lado; setas andam pela lista ──
+  const corpoTab = document.querySelector("table.tab-pedidos tbody");
+  function abrirLinha(tr, foco) {
+    const p = dados[tr.dataset.chave];
+    if (!p) return;
+    if (liAberto) liAberto.classList.remove("aberta");
+    liAberto = tr;
+    tr.classList.add("aberta");
+    montarDetalhe(tr, p);
+    if (det.hidden) abrirTela(det, "pedido", foco ? $("pm-det-voltar") : null);
+    // só pra cima/baixo, dentro da caixa da tabela (scrollIntoView também rolava pro lado)
+    const caixa = tr.closest(".tabela-rolagem");
+    if (caixa) {
+      const a = tr.getBoundingClientRect(), c = caixa.getBoundingClientRect(), topo = c.top + 70;   // 70 = cabeçalho fixo
+      if (a.top < topo) caixa.scrollTop -= topo - a.top;
+      else if (a.bottom > c.bottom) caixa.scrollTop += a.bottom - c.bottom;
+    }
+  }
+  if (corpoTab) corpoTab.addEventListener("click", (e) => {
+    if (celular() || e.target.closest("a, button, input, label, tr.tentativas")) return;
+    if (String(window.getSelection && window.getSelection()) !== "") return;   // estava selecionando texto
+    const tr = e.target.closest("tr[data-chave]");
+    if (tr) abrirLinha(tr, true);
+  });
+  function vizinha(passo) {
+    if (!liAberto || !corpoTab) return;
+    const linhas = Array.prototype.slice.call(corpoTab.querySelectorAll("tr[data-chave]"));
+    const alvo = linhas[linhas.indexOf(liAberto) + passo];
+    if (alvo) abrirLinha(alvo, false);
+  }
+  $("pm-det-ant").addEventListener("click", () => vizinha(-1));
+  $("pm-det-prox").addEventListener("click", () => vizinha(1));
+
   if ($("pm-det-principal")) {
     $("pm-det-principal").addEventListener("click", (e) => {
       const b = e.currentTarget;
