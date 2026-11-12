@@ -23,7 +23,9 @@ os documentos):
      local do pedido; sem DANFE, os volumes caem pro dimension_3 do
      VUUPT dividido pelo fator_ponderado do embarcador (o dimension_3
      é o volume PONDERADO, não a contagem real) e o peso fica "—".
-  2. Documentos emendados direto: NFs e depois boletos, pedido a pedido.
+  2. Documentos emendados direto: NFs e depois boletos, pedido a pedido;
+     por último os outros documentos que o cliente anexou ao pedido no
+     portal (11/11, portal_cliente/anexos_pedido.py).
   3. CANHOTEIRA (só se a rota tiver entrega de Padrão Puro, Quatro
      Estrelas ou Pedramoura): tabela na ordem da rota com campos de
      recebedor/data/assinatura, identificando motorista, rota e dia.
@@ -220,8 +222,8 @@ def carregar_documentos_por_pedido(codigos: set[str]) -> tuple[dict[str, list[di
             marcadores = ",".join("?" * len(lote))
             for row in con.execute(
                 f"SELECT * FROM documentos_processados "
-                f"WHERE status='ENVIADO' AND tipo IN ('Nota Fiscal','Boleto','Pedido de Venda') "
-                f"AND codigo_pedido IN ({marcadores})", lote):
+                f"WHERE status='ENVIADO' AND (tipo IN ('Nota Fiscal','Boleto','Pedido de Venda') "
+                f"OR origem='portal') AND codigo_pedido IN ({marcadores})", lote):
                 docs_por_pedido.setdefault(row["codigo_pedido"], []).append(dict(row))
             em_revisao += con.execute(
                 f"SELECT COUNT(*) FROM documentos_processados "
@@ -352,6 +354,20 @@ def selecionar_boletos(docs: list[dict]) -> list[dict]:
                                 d.get("numero_parcela") or 0,
                                 d.get("processado_em") or ""))
     return boletos
+
+
+def selecionar_anexos_portal(docs: list[dict], ja_usados: set[str]) -> list[dict]:
+    """Documentos que o cliente anexou ao pedido no portal (origem
+    'portal', ver portal_cliente/anexos_pedido.py -- Hugo, 11/11) e que
+    não são NF nem boleto: saem depois dos boletos do pedido, na ordem
+    em que foram anexados. NF e boleto do portal já entram pelas réguas
+    de cima; ja_usados (hashes) evita imprimir duas vezes o 'Pedido de
+    Venda' que entrou no lugar da NF."""
+    anexos = [d for d in docs if d.get("origem") == "portal"
+              and d.get("tipo") not in ("Nota Fiscal", "Boleto")
+              and d["hash_conteudo"] not in ja_usados]
+    anexos.sort(key=lambda d: d.get("processado_em") or "")
+    return anexos
 
 
 def selecionar_pedidos_de_venda(docs: list[dict]) -> list[dict]:
@@ -994,6 +1010,8 @@ def avaliar_documentos_pedido(codigo: str, sender_id: int | None, docs_por_pedid
         if not nfs and sender_id in SENDERS_PEDIDO_VENDA_SUBSTITUI_NF:
             nfs, problemas_nf = _abrir_documentos(selecionar_pedidos_de_venda(docs))
     boletos, problemas_bol = _abrir_documentos(selecionar_boletos(docs))
+    anexos, problemas_anexo = _abrir_documentos(selecionar_anexos_portal(
+        docs, {row["hash_conteudo"] for row, _r in nfs}))
     esperado = _boleto_esperado(sender_id, [row.get("cobranca") for row, _r in nfs
                                             if row.get("tipo") == "Nota Fiscal"])
 
@@ -1002,8 +1020,8 @@ def avaliar_documentos_pedido(codigo: str, sender_id: int | None, docs_por_pedid
         faltas.append("sem nota fiscal")
     if not boletos and esperado:
         faltas.append("sem boleto")
-    faltas.extend(problemas_nf + problemas_bol)
-    return {"nfs": nfs, "boletos": boletos, "nf_dispensada": nf_dispensada,
+    faltas.extend(problemas_nf + problemas_bol + problemas_anexo)
+    return {"nfs": nfs, "boletos": boletos, "anexos": anexos, "nf_dispensada": nf_dispensada,
             "boleto_esperado": esperado, "faltas": faltas}
 
 
@@ -1020,7 +1038,7 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
     buffers_vivos: list = []        # BytesIO das páginas Pillow -- vivos até o write()
     readers_vivos: list = []        # PdfReaders dos arquivos -- idem
     pendencias: list[str] = []
-    total_nfs = total_boletos = 0
+    total_nfs = total_boletos = total_anexos = 0
 
     # Passada 1: resolve e valida os documentos de todos os pedidos --
     # a capa precisa do status de tudo antes de qualquer página.
@@ -1066,7 +1084,7 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
             # boleto não esperado (NF à vista / embarcador fora da lista)
             # -> capa mostra "—" em vez do X vermelho (05/10)
             "boleto_dispensado": not boletos and not av["boleto_esperado"],
-            "_abertos_nf": nfs, "_abertos_bol": boletos,
+            "_abertos_nf": nfs, "_abertos_bol": boletos, "_abertos_anexo": av["anexos"],
         })
 
     entregas_canhoteira = [i for i in itens if i["sender_id"] in SENDERS_CANHOTEIRA]
@@ -1100,6 +1118,19 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
             for pagina in reader.pages:
                 writer.add_page(pagina)
             total_boletos += 1
+        # anexos do portal que não são NF nem boleto (11/11)
+        for _row, reader in item["_abertos_anexo"]:
+            readers_vivos.append(reader)
+            # PDF vindo do cliente: se nao emendar, fica de fora sem derrubar
+            # o romaneio da rota (12/11)
+            try:
+                paginas_anexo = list(reader.pages)
+            except Exception as e:
+                logger.warning(f"anexo do portal {_row.get('nome_arquivo')} nao emendado: {type(e).__name__}: {e}")
+                continue
+            for pagina in paginas_anexo:
+                writer.add_page(pagina)
+            total_anexos += 1
 
     # Canhoteira (só quando a rota tem entrega dos embarcadores monitorados)
     if entregas_canhoteira:
@@ -1120,7 +1151,7 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
         writer.write(f)
 
     return {"pedidos": total, "paginas": len(writer.pages),
-            "nfs": total_nfs, "boletos": total_boletos,
+            "nfs": total_nfs, "boletos": total_boletos, "anexos": total_anexos,
             "canhoteira": len(entregas_canhoteira), "pendencias": pendencias,
             # [(nome da transportadora, nº de pedidos)] na ordem da rota
             "canhoteira_transportadoras": [(nome, len(e)) for nome, (_p, e)
