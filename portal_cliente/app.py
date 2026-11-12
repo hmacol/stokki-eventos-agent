@@ -1012,7 +1012,7 @@ def api_envios_analisar():
                         rejeitados.append({"arquivo": nome, "erro": f"{nome}: no máximo {anexos_pedido.MAX_PDFS_POR_ENVIO} PDFs por envio."})
                         continue
                     try:
-                        anexos.append(anexos_pedido.guardar_previa(nome, conteudo))
+                        anexos.append(anexos_pedido.guardar_previa(nome, conteudo, _empresa_envio()['cnpj']))
                     except envios.ErroEnvio as e:
                         rejeitados.append({"arquivo": nome, "erro": str(e)})
                     continue
@@ -1176,7 +1176,7 @@ def api_envios_anexos_ler():
     anexos, rejeitados = [], []
     for f in arquivos:
         try:
-            anexos.append(anexos_pedido.guardar_previa(f.filename or "documento.pdf", f.read()))
+            anexos.append(anexos_pedido.guardar_previa(f.filename or "documento.pdf", f.read(), _empresa_envio()['cnpj']))
         except envios.ErroEnvio as e:
             rejeitados.append({"arquivo": f.filename or "arquivo", "erro": str(e)})
     _sugerir_pedidos(anexos, pedidos[:500])
@@ -1230,7 +1230,9 @@ def api_envios_anexo_baixar(envio_id, anexo_id):
         conn.close()
     if not anexo or not anexos_pedido.caminho(anexo).is_file():
         abort(404)
-    return send_file(anexos_pedido.caminho(anexo), mimetype="application/pdf", download_name=anexo["nome_original"], max_age=0)
+    resposta = send_file(anexos_pedido.caminho(anexo), mimetype="application/pdf", download_name=anexo["nome_original"], max_age=0)
+    resposta.headers["X-Content-Type-Options"] = "nosniff"
+    return resposta
 
 
 @app.route("/api/envios/<int:envio_id>/anexos/<int:anexo_id>/remover", methods=["POST"])
@@ -1268,13 +1270,14 @@ def api_envios_confirmar():
     # Documentos dos pedidos (11/11): item["anexos"] = [{token, casado_por}].
     # So entram com a confirmacao do usuario de que cada um esta no pedido certo.
     anexos_por_token = {it.get("token"): [a for a in (it.get("anexos") or []) if isinstance(a, dict)]
-                        for it in itens if isinstance(it, dict) and it.get("anexos")}
+                        for it in itens if isinstance(it, dict) and isinstance(it.get("anexos"), list) and it["anexos"]}
     if anexos_por_token and corpo.get("anexos_conferidos") is not True:
         return jsonify({"erro": "Confirme que cada documento está no pedido correto antes de enviar."}), 400
     anexos_falhas = []
     conn = envios.conectar()
     try:
-        anexos_pedido.validar_tokens([a.get("token", "") for lista in anexos_por_token.values() for a in lista])
+        anexos_pedido.validar_tokens([a.get("token", "") for lista in anexos_por_token.values() for a in lista],
+                                     _empresa_envio()['cnpj'])
         # Data fora do dia de visita da região (Hugo, 03/10): pergunta antes de
         # gravar; o embarcador troca a data ou confirma assim mesmo
         # (aceita_fora_dia_fixo no item) e o pedido vira envio dedicado.
