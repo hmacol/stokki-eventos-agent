@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aprenda a usar o portal — Fresh Log</title>
+<link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
+<link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+<meta name="description" content="Vídeos curtos mostrando como acompanhar, enviar e resolver seus pedidos no portal da Fresh Log.">
+<style>
+  :root { --navy: #141428; --mint: #00C896; --mint-dark: #0EA575; --mint-light: #E6FBF5;
+          --texto: #1F2937; --suave: #6B7280; --borda: #E5E7EB; --fundo: #EEF0F3; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fundo); color: var(--texto); font-size: 15px; line-height: 1.5; padding: 24px 16px;
+         font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif; }
+  .folha { max-width: 980px; margin: 0 auto; background: #fff; border-radius: 14px; overflow: hidden; box-shadow: 0 10px 40px rgba(20,20,40,.10); }
+  .capa { background: var(--navy); color: #fff; padding: 28px 32px 24px; position: relative; overflow: hidden; }
+  .capa::after { content: ""; position: absolute; right: -80px; top: -80px; width: 320px; height: 320px; border-radius: 50%;
+                 background: radial-gradient(circle at 30% 30%, rgba(0,200,150,.55), rgba(0,200,150,0) 70%); pointer-events: none; }
+  .capa > * { position: relative; z-index: 1; }
+  .capa-topo { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .logo { background: #fff; border-radius: 10px; padding: 8px 14px; display: inline-flex; align-items: center; }
+  .logo img { height: 36px; width: auto; display: block; }
+  .entrar { display: inline-block; background: var(--mint); color: var(--navy); font-weight: 700; text-decoration: none;
+            padding: 9px 18px; border-radius: 999px; }
+  .entrar:hover { background: #2BD9AC; }
+  .eyebrow { font-weight: 700; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--mint); margin-top: 20px; }
+  .capa h1 { font-weight: 800; font-size: clamp(26px, 4vw, 34px); line-height: 1.1; margin: 6px 0 8px; }
+  .capa p { margin: 0; max-width: 640px; color: #CBD0DC; }
+  .miolo { padding: 24px 32px 32px; }
+  .palco video { width: 100%; aspect-ratio: 16 / 9; background: var(--navy); border-radius: 10px; display: block; }
+  .palco h2 { font-weight: 800; font-size: 20px; color: var(--navy); margin: 14px 0 2px; }
+  .palco p { margin: 0; color: var(--suave); }
+  .proximo { margin-top: 12px; display: none; }
+  .proximo.on { display: block; }
+  .proximo button { background: var(--navy); color: #fff; border: 0; border-radius: 999px; padding: 9px 18px; font: inherit; font-weight: 700; cursor: pointer; }
+  .lista { list-style: none; padding: 0; margin: 28px 0 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+  .lista button { all: unset; box-sizing: border-box; display: flex; gap: 12px; width: 100%; padding: 10px; border-radius: 10px;
+                  border: 1px solid var(--borda); cursor: pointer; align-items: flex-start; }
+  .lista button:hover { border-color: var(--mint-dark); }
+  .lista button:focus-visible { outline: 3px solid var(--mint); outline-offset: 2px; }
+  .lista button[aria-current="true"] { border-color: var(--mint-dark); background: var(--mint-light); }
+  .lista img { width: 112px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 6px; background: var(--navy); flex: none; }
+  .lista .num { font-weight: 700; font-size: 12px; color: var(--mint-dark); }
+  .lista strong { display: block; color: var(--navy); line-height: 1.25; }
+  .lista small { display: block; color: var(--suave); font-size: 13px; line-height: 1.35; margin-top: 2px; }
+  .vazio { padding: 40px 0; text-align: center; color: var(--suave); }
+  @media (max-width: 600px) {
+    body { padding: 0; }
+    .folha { border-radius: 0; }
+    .capa { padding: 20px 16px; }
+    .miolo { padding: 16px 16px 24px; }
+    .lista { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="folha">
+  <div class="capa">
+    <div class="capa-topo">
+      <span class="logo"><img src="{{ logo_src }}" alt="Fresh Log"></span>
+      <a class="entrar" href="{{ url_for('login') }}">Entrar no portal</a>
+    </div>
+    <div class="eyebrow">Portal do cliente</div>
+    <h1>Aprenda a usar o portal</h1>
+    <p>Vídeos curtos, de 1 a 3 minutos, mostrando cada tarefa do portal. Assista em qualquer ordem.</p>
+  </div>
+  <div class="miolo">
+    {% if videos %}
+    <div class="palco">
+      <video id="player" controls preload="metadata" playsinline></video>
+      <h2 id="p-titulo"></h2>
+      <p id="p-resumo"></p>
+      <div class="proximo" id="proximo"><button type="button" id="btn-proximo"></button></div>
+    </div>
+    <ol class="lista" id="lista">
+      {% for v in videos %}
+      <li>
+        <button type="button" data-i="{{ loop.index0 }}">
+          <img src="{{ url_for('aula_arquivo', nome=v.capa) }}" alt="" loading="lazy">
+          <span>
+            <span class="num">Vídeo {{ v.numero }} · {{ '%d:%02d' % ((v.duracao_s or 0) // 60, (v.duracao_s or 0) % 60) }}</span>
+            <strong>{{ v.titulo }}</strong>
+            <small>{{ v.resumo }}</small>
+          </span>
+        </button>
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <div class="vazio">Os vídeos estão sendo preparados. Volte em breve.</div>
+    {% endif %}
+  </div>
+</div>
+{% if videos %}
+<script>
+  const VIDEOS = {{ videos | tojson }}.map(v => ({ ...v,
+    src: {{ url_for('aula_arquivo', nome='__N__') | tojson }}.replace('__N__', encodeURIComponent(v.video)),
+    poster: {{ url_for('aula_arquivo', nome='__N__') | tojson }}.replace('__N__', encodeURIComponent(v.capa)) }));
+  const player = document.getElementById('player');
+  const botoes = [...document.querySelectorAll('#lista button')];
+  let atual = 0;
+  function abrir(i, tocar) {
+    atual = i;
+    const v = VIDEOS[i];
+    player.src = v.src; player.poster = v.poster;
+    document.getElementById('p-titulo').textContent = `${v.numero}. ${v.titulo}`;
+    document.getElementById('p-resumo').textContent = v.resumo;
+    document.getElementById('proximo').classList.remove('on');
+    botoes.forEach((b, j) => b.setAttribute('aria-current', j === i ? 'true' : 'false'));
+    history.replaceState(null, '', '#' + v.numero);
+    if (tocar) { player.play().catch(() => {}); document.querySelector('.palco').scrollIntoView({ behavior: 'smooth' }); }
+  }
+  botoes.forEach(b => b.addEventListener('click', () => abrir(Number(b.dataset.i), true)));
+  player.addEventListener('ended', () => {
+    const prox = VIDEOS[atual + 1];
+    if (!prox) return;
+    const b = document.getElementById('btn-proximo');
+    b.textContent = `Próximo: ${prox.titulo} ▸`;
+    b.onclick = () => abrir(atual + 1, true);
+    document.getElementById('proximo').classList.add('on');
+  });
+  const pedido = VIDEOS.findIndex(v => '#' + v.numero === location.hash);
+  abrir(pedido >= 0 ? pedido : 0, false);
+</script>
+{% endif %}
+</body>
+</html>

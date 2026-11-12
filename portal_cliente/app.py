@@ -44,7 +44,8 @@ from homologacao import ambiente as _ambiente
 _ambiente.exigir_coerencia(_RAIZ)
 
 import yaml
-from flask import Flask, Response, abort, g, jsonify, redirect, render_template, request, send_file, session, url_for
+from flask import (Flask, Response, abort, g, jsonify, redirect, render_template, request, send_file,
+                   send_from_directory, session, url_for)
 from jinja2 import ChoiceLoader, FileSystemLoader
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -60,6 +61,7 @@ from email_utils import enviar_email, envelope_html
 import preferencias_notificacao as preferencias
 import cadastro_embarcador as cad_emb
 import regioes_atendimento as regioes_info
+import aula as aula_info
 from fingerprint_aguardando_resposta import buscar_pendentes_por_grupo
 import aplicar_resposta_insucesso as logica_insucesso
 from painel_agentes import acesso_telas
@@ -174,7 +176,7 @@ def _carregar_cliente():
             return redirect(url_for("completar_cadastro"))
 
 
-_LIVRES_ANTES_DA_TROCA = {"trocar_pin", "sair", "static", "saude", "regioes", "regioes_logo"}
+_LIVRES_ANTES_DA_TROCA = {"trocar_pin", "sair", "static", "saude", "regioes", "regioes_logo", "aula", "aula_arquivo"}
 _LIVRES_ANTES_DO_CADASTRO = _LIVRES_ANTES_DA_TROCA | {"completar_cadastro"}
 
 
@@ -631,6 +633,27 @@ def regioes():
 @app.route("/regioes/logo.png")
 def regioes_logo():
     return send_file(_RAIZ / "assets" / "logo_freshlog.png", mimetype="image/png", max_age=86400)
+
+
+# ── Página pública: aula em vídeo (Hugo, 06/11) ────────────────────────────────
+
+@app.route("/aula")
+def aula():
+    """Videos curtos de treinamento do portal, sem login (o link vai por
+    WhatsApp ate pra quem ainda nao entrou). So lista o que esta no
+    manifesto gerado pelo aula_portal/gravar.py."""
+    return render_template("aula.html", videos=aula_info.carregar_manifesto(),
+                           logo_src=url_for("regioes_logo"))
+
+
+@app.route("/aula/arquivo/<nome>")
+def aula_arquivo(nome):
+    # conditional=True responde Range com 206: o Safari do iPhone so toca mp4 assim.
+    if not aula_info.arquivo_permitido(nome, aula_info.carregar_manifesto()):
+        abort(404)
+    resp = send_from_directory(aula_info.PASTA_AULA, nome, conditional=True, max_age=3600)
+    resp.headers["Cache-Control"] = "public, max-age=3600"
+    return resp
 
 
 # ── API ────────────────────────────────────────────────────────────────────────
