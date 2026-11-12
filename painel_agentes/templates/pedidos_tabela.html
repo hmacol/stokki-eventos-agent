@@ -548,6 +548,7 @@
     {% if et %}<a class="limpar-filtros" style="padding: 0 4px;" href="{{ url_for('pedidos_tabela') }}">Limpar tudo</a>{% endif %}
   </div>
 </form>
+{% if r.fora_do_periodo %}<p class="aviso-fora-periodo" role="status" style="margin: 0 0 8px; padding: 8px 12px; border: 1px solid var(--st-atencao, #b7791f); border-radius: 6px; font-size: 13px;">{{ r.fora_do_periodo|join(', ') }} está fora do período ({{ formatar('data', r.periodo.de)[:5] }} a {{ formatar('data', r.periodo.ate)[:5] }}): aparece porque a busca foi pelo código do pedido.</p>{% endif %}
 
 {% set ncols = colunas|length + (1 if pode_agir else 0) %}
 {% if pode_agir %}<p class="nota-sinc" id="nota-sinc" hidden>Ações feitas agora aparecem como selo na linha; o status atualiza na próxima sincronização (até 15 min).</p>{% endif %}

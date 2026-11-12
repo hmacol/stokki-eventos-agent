@@ -258,11 +258,11 @@ def _norm(conn: sqlite3.Connection) -> str:
 # tentativas dele, então quem passaria no filtro de data está sempre em `alvo`
 # -- o resultado é o mesmo, mas as janelas rodam em centenas de linhas e não
 # no núcleo inteiro (em produção: de ~0,9 s pra ~0,1 s por consulta).
-# __DATA__ é a expressão da data escolhida (DATAS); ver _consulta().
+# __PERIODO__ é o filtro de período (ver _periodo_sql e _consulta).
 _SQL_BASE = _SQL_CTES.rstrip() + """,
 alvo AS (
     SELECT DISTINCT COALESCE(sender_id, -1) AS a_sid, pedido_base AS a_pb
-    FROM base_raw WHERE __DATA__ BETWEEN ? AND ?
+    FROM base_raw WHERE __PERIODO__
 ),
 com_entregue AS (
     SELECT base_raw.*,
@@ -303,6 +303,27 @@ def periodo(de=None, ate=None) -> tuple[str, str]:
     return inicio, fim
 
 
+_RE_CODIGO = re.compile(r"^#?\s*(?:PS-)?(\d+)(?:-R\d+)?$", re.IGNORECASE)
+
+
+def _codigo_buscado(filtros: dict) -> str | None:
+    """Código base (PS-N) quando a busca é um código de pedido inteiro."""
+    m = _RE_CODIGO.match((filtros.get("q") or "").strip())
+    return f"PS-{m.group(1)}" if m else None
+
+
+def _periodo_sql(filtros: dict) -> tuple[str, list]:
+    """Filtro de período. Busca por código de pedido acha o pedido mesmo fora
+    do período (Hugo, 12/11): quem digita o código quer AQUELE pedido, e a
+    tela avisa que ele é de outra data (`fora_do_periodo` do listar)."""
+    inicio, fim = periodo(filtros.get("de"), filtros.get("ate"))
+    _, sql_data = DATAS.get(filtros.get("data_tipo") or "", DATAS["referencia"])
+    codigo = _codigo_buscado(filtros)
+    if codigo:
+        return f"({sql_data} BETWEEN ? AND ? OR pedido_base = ?)", [inicio, fim, codigo]
+    return f"{sql_data} BETWEEN ? AND ?", [inicio, fim]
+
+
 def _termo_coluna(termo: str) -> str:
     """O banco guarda data em ISO; quem filtra digita 09/11 ou 09/11/2026."""
     m = _RE_DATA_BR.match(termo)
@@ -316,10 +337,8 @@ def _where(filtros: dict) -> tuple[str, list]:
     """Monta o WHERE a partir do dicionário de filtros da tela. Chaves:
     de, ate, data_tipo, status, fluxo, sender_id, agent_id, zona, canhoto
     (com | sem), q e colunas = {chave_da_coluna: texto}."""
-    inicio, fim = periodo(filtros.get("de"), filtros.get("ate"))
-    _, sql_data = DATAS.get(filtros.get("data_tipo") or "", DATAS["referencia"])
-    partes = [f"{sql_data} BETWEEN ? AND ?"]
-    params: list = [inicio, fim]
+    sql_periodo, params = _periodo_sql(filtros)
+    partes = [sql_periodo]
 
     status = (filtros.get("status") or "").upper()
     if status in STATUS:
@@ -376,9 +395,9 @@ def _consulta(filtros: dict, conn: sqlite3.Connection) -> tuple[str, str, list]:
     entra duas vezes: no `alvo` (quem participa do agrupamento) e no WHERE
     (a linha principal do pedido)."""
     where, params = _where(filtros)
-    _, sql_data = DATAS.get(filtros.get("data_tipo") or "", DATAS["referencia"])
-    return (_SQL_BASE.replace("__DATA__", sql_data).replace("__NORM__", _norm(conn)), where,
-            params[:2] + params)
+    sql_periodo, params_periodo = _periodo_sql(filtros)
+    return (_SQL_BASE.replace("__PERIODO__", sql_periodo).replace("__NORM__", _norm(conn)), where,
+            params_periodo + params)
 
 
 def _order_by(ordem: str | None, direcao: str | None) -> str:
@@ -400,8 +419,9 @@ def listar(filtros: dict, pagina: int = 1, por_pagina: int = POR_PAGINA, ordem: 
     try:
         canhotos_manuais.garantir_tabela(conn)   # a coluna Canhoto lê dela
         base, where, params = _consulta(filtros, conn)
+        _, sql_data = DATAS.get(filtros.get("data_tipo") or "", DATAS["referencia"])
         # Total e caixas vêm na mesma consulta da página (12/11, velocidade).
-        sql = (f"{base} {_select(', COUNT(*) OVER () AS _n, COALESCE(SUM(caixas) OVER (), 0) AS _cx')}"
+        sql = (f"{base} {_select(', COUNT(*) OVER () AS _n, COALESCE(SUM(caixas) OVER (), 0) AS _cx, ' + sql_data + ' AS _data')}"
                f"{where}{_order_by(ordem, direcao)} LIMIT ? OFFSET ?")
         pagina = max(1, int(pagina or 1))
         rows = conn.execute(sql, params + [por_pagina, (pagina - 1) * por_pagina]).fetchall()
@@ -413,12 +433,15 @@ def listar(filtros: dict, pagina: int = 1, por_pagina: int = POR_PAGINA, ordem: 
         total, caixas = (rows[0]["_n"], rows[0]["_cx"]) if rows else (0, 0)
         paginas = max(1, -(-total // por_pagina))
         inicio, fim = periodo(filtros.get("de"), filtros.get("ate"))
-        linhas = [{k: r[k] for k in r.keys() if k not in ("_n", "_cx")} for r in rows]
+        linhas = [{k: r[k] for k in r.keys() if k not in ("_n", "_cx", "_data")} for r in rows]
+        # Só a busca por código traz pedido de fora do período (_periodo_sql).
+        fora = [r["codigo"] for r in rows if not inicio <= (r["_data"] or "") <= fim]
         hist = tentativas([(l["sender_id"], l["pedido_base"]) for l in linhas], conn)
         for l in linhas:
             l["historico"] = hist.get((l["sender_id"], l["pedido_base"]), [])
         return {"linhas": linhas, "total": total, "total_caixas": caixas,
-                "pagina": pagina, "paginas": paginas, "periodo": {"de": inicio, "ate": fim}}
+                "pagina": pagina, "paginas": paginas, "periodo": {"de": inicio, "ate": fim},
+                "fora_do_periodo": fora}
     finally:
         if fechar:
             conn.close()

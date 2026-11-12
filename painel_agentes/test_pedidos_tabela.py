@@ -66,6 +66,20 @@ class TestTelaPedidos(unittest.TestCase):
         # Link de página/ordem mantém o filtro de coluna
         self.assertIn("f_destinatario=pada", html)
 
+    def test_busca_pelo_codigo_mostra_pedido_fora_do_periodo_com_aviso(self):
+        conn = banco.conectar()
+        conn.execute("""INSERT INTO nucleo_pedidos (codigo, titulo, status, destinatario_nome, remetente_nome,
+                                                    sender_id, caixas, criado_em_provedor)
+                        VALUES ('PS-42692', '#PS-42692 - NF1 / FF / HOTEL', 'INSUCESSO', 'HOTEL', 'FRUTA FINA',
+                                10, 1, '2026-01-05 08:00:00')""")
+        conn.commit()
+        conn.close()
+        self._logar("leitura")
+        html = self.cliente.get("/pedidos?q=42692").get_data(as_text=True)
+        self.assertIn(">PS-42692<", html)
+        self.assertIn("PS-42692 está fora do período", html)
+        self.assertNotIn("fora do período", self.cliente.get("/pedidos").get_data(as_text=True))
+
     def test_csv_com_colunas_escolhidas(self):
         self._logar("atendimento")
         r = self.cliente.get("/pedidos/exportar.csv?colunas=codigo,referencia,status&ordem=codigo&direcao=asc")

@@ -184,6 +184,23 @@ class TestListar(_Base):
         self.assertEqual(self._codigos({"data_tipo": "criacao"}), [])
         self.assertEqual(self._codigos({"data_tipo": "criacao", "de": _dia(-31), "ate": _dia(-29)}), ["PS-1"])
 
+    def test_busca_pelo_codigo_acha_o_pedido_fora_do_periodo(self):
+        # Hugo, 12/11: buscou 42692, o PS-42692 era de antes do período e a
+        # tela só mostrou o PS-43879 (CNPJ do destinatário contém 42692).
+        self._pedido("PS-42692", criado_provedor=f"{_dia(-30)} 10:00:00")
+        self._pedido("PS-43879", cnpj="55426927000180")
+        for q in ("42692", "PS-42692", "#ps-42692"):
+            r = tp.listar({"q": q}, ordem="codigo", direcao="asc", conn=self.conn)
+            self.assertIn("PS-42692", [l["codigo"] for l in r["linhas"]], q)
+            self.assertEqual(r["fora_do_periodo"], ["PS-42692"], q)
+        self.assertEqual(self._codigos({"q": "42692"}, ordem="codigo", direcao="asc"), ["PS-42692", "PS-43879"])
+        # Pedaço do código não fura o período; e sem busca nada muda.
+        self.assertEqual(self._codigos({"q": "4269"}), ["PS-43879"])
+        self.assertEqual(self._codigos(), ["PS-43879"])
+        self.assertEqual(tp.listar({}, conn=self.conn)["fora_do_periodo"], [])
+        # As filas do topo contam o mesmo que a lista.
+        self.assertEqual(tp.contar_filas({"q": "42692"}, conn=self.conn)["total"], 2)
+
     def test_reentrega_vira_uma_linha_com_a_tentativa_mais_recente(self):
         self._pedido("PS-1", status="INSUCESSO")
         self._parada(self._rota(_dia(-2)), "PS-1", situacao="INSUCESSO")
