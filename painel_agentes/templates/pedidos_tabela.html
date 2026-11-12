@@ -340,7 +340,10 @@
       <a class="pm-texto-botao" style="background:none;border:0;color:var(--acento);display:inline-flex;align-items:center;text-decoration:none;" href="{{ url_for('pedidos_tabela', modo=request.args.get('modo')) if request.args.get('modo') else url_for('pedidos_tabela') }}">Limpar</a>
     </header>
     <form class="pm-rolar" id="pm-form-filtros" method="get" action="{{ url_for('pedidos_tabela') }}" style="gap:16px;">
-      {% for k in ('status', 'q', 'ordem', 'direcao', 'modo') if request.args.get(k) %}<input type="hidden" name="{{ k }}" value="{{ request.args.get(k) }}">{% endfor %}
+      {% for k in ('q', 'ordem', 'direcao', 'modo') if request.args.get(k) %}<input type="hidden" name="{{ k }}" value="{{ request.args.get(k) }}">{% endfor %}
+      <label class="pm-campo">Status
+        <select id="pm-status" name="status"><option value="">Todos</option>{% for s in status %}<option value="{{ s }}"{% if filtros.status == s %} selected{% endif %}>{{ formatar('status', s) }}</option>{% endfor %}</select>
+      </label>
       <div class="pm-campo">Período
         <div class="pm-pilulas" id="pm-atalhos">
           <button type="button" data-dias="0">Hoje</button>

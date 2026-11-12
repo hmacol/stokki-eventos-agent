@@ -36,9 +36,10 @@ houve e agir (reenvio, agendar, endereço, cancelar, canhoto) fora do computador
   Agendar, Endereço e "Mais" (Reenvio, Cancelar Vuupt, Cancelar Stokki, Dar
   baixa). Mesmo fluxo e mesmas regras do lote do computador (endereço em lote
   só mesmo embarcador + destinatário).
-- **Filtros em tela cheia**: atalhos Hoje / Ontem / 7 dias / Este mês, De,
-  Até, Tipo de data, Embarcador, Motorista, Zona, Fluxo; botão "Aplicar".
-  Status fica nas abas. Busca pela lupa no topo (mesmo campo `q`).
+- **Filtros em tela cheia**: Status (11/11, pedido do Hugo; mesmo filtro das
+  abas, que ficam marcadas junto), atalhos Hoje / Ontem / 7 dias / Este mês,
+  De, Até, Tipo de data, Embarcador, Motorista, Zona, Fluxo; botão "Aplicar".
+  Busca pela lupa no topo (mesmo campo `q`).
 - Paginação continua de 100 em 100 (Anterior / Próxima).
 - Link "Versão completa" leva para `?modo=desktop`.
 
