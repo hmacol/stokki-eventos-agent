@@ -45,6 +45,8 @@ logger = logging.getLogger(__name__)
 
 MAX_BYTES_PDF = 10 * 1024 * 1024
 MAX_ANEXOS_POR_PEDIDO = 10
+MAX_PAGINAS_PDF = 30           # o anexo e impresso inteiro no romaneio
+MAX_PDFS_POR_ENVIO = 30        # por requisicao: cada PDF e aberto e lido
 ORIGEM_DOCUMENTO = "portal"
 
 # Envio que ainda aceita documento (o que ja morreu nao aceita)
@@ -106,6 +108,8 @@ def ler_pdf(nome: str, conteudo: bytes) -> dict:
         paginas = 0
     if not paginas:
         raise ep.ErroEnvio(f"{nome}: não foi possível abrir o PDF (arquivo corrompido ou com senha).")
+    if paginas > MAX_PAGINAS_PDF:
+        raise ep.ErroEnvio(f"{nome}: o PDF tem {paginas} páginas; o limite é {MAX_PAGINAS_PDF}.")
 
     info = {"nome": nome, "paginas": paginas, "hash": hashlib.sha256(conteudo).hexdigest(),
             "tipo": "Outro", "numero_nf": None, "cnpj": None, "numero_parcela": None, "total_parcelas": None}
@@ -272,6 +276,12 @@ def registrar_no_romaneio(conn: sqlite3.Connection, envio_id: int) -> int:
             logger.warning(f"anexo {arquivo} (envio {envio_id}): arquivo identico ja registrado em {existente[2]} "
                            f"({existente[0]}); nao registrado pro romaneio de {codigo}")
         else:
+            # 'Nota Fiscal' do portal entra como 'Outro' e sem numero: quem diz
+            # qual e a NF do pedido e a Stokki. Senao o PDF do cliente entraria
+            # no indice NF->pedido (puxando boleto de outro cliente) e faria o
+            # robo deixar de baixar a DANFE real (revisao de seguranca, 12/11).
+            if tipo == "Nota Fiscal":
+                tipo, numero_nf, cnpj = "Outro", None, None
             conn.execute(
                 "INSERT OR REPLACE INTO documentos_processados (hash_conteudo, origem, nome_arquivo, tipo, codigo_pedido, "
                 "status, motivo, gcs_path, processado_em, numero_parcela, total_parcelas, numero_nf, cnpj_contraparte) "

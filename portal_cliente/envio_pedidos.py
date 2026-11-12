@@ -421,6 +421,9 @@ def expandir_upload(nome: str, conteudo: bytes) -> list[tuple[str, bytes]]:
         saida = []
         try:
             with zipfile.ZipFile(io.BytesIO(conteudo)) as zf:
+                # teto do total descompactado: PDFs de 10 MB comprimem muito (12/11)
+                if sum(i.file_size for i in zf.infolist()) > 150 * 1024 * 1024:
+                    raise ErroEnvio(f"{nome}: o ZIP é grande demais depois de aberto. Envie em partes.")
                 for info in zf.infolist():
                     # .pdf: documento do pedido (anexos_pedido.py, 11/11)
                     if info.is_dir() or not info.filename.lower().endswith((".xml", ".pdf") + EXTENSOES_PLANILHA):

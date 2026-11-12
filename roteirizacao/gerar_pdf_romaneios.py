@@ -1121,7 +1121,14 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
         # anexos do portal que não são NF nem boleto (11/11)
         for _row, reader in item["_abertos_anexo"]:
             readers_vivos.append(reader)
-            for pagina in reader.pages:
+            # PDF vindo do cliente: se nao emendar, fica de fora sem derrubar
+            # o romaneio da rota (12/11)
+            try:
+                paginas_anexo = list(reader.pages)
+            except Exception as e:
+                logger.warning(f"anexo do portal {_row.get('nome_arquivo')} nao emendado: {type(e).__name__}: {e}")
+                continue
+            for pagina in paginas_anexo:
                 writer.add_page(pagina)
             total_anexos += 1
 

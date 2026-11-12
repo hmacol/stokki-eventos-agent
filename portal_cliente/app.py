@@ -985,6 +985,9 @@ def api_envios_analisar():
                 continue
             for nome, conteudo in partes:
                 if anexos_pedido.e_pdf(nome, conteudo):
+                    if len(anexos) >= anexos_pedido.MAX_PDFS_POR_ENVIO:
+                        rejeitados.append({"arquivo": nome, "erro": f"{nome}: no máximo {anexos_pedido.MAX_PDFS_POR_ENVIO} PDFs por envio."})
+                        continue
                     try:
                         anexos.append(anexos_pedido.guardar_previa(nome, conteudo))
                     except envios.ErroEnvio as e:
@@ -1141,6 +1144,8 @@ def api_envios_anexos_ler():
     arquivos = request.files.getlist("arquivos")
     if not arquivos:
         return jsonify({"erro": "Selecione pelo menos um PDF."}), 400
+    if len(arquivos) > anexos_pedido.MAX_PDFS_POR_ENVIO:
+        return jsonify({"erro": f"Envie no máximo {anexos_pedido.MAX_PDFS_POR_ENVIO} PDFs por vez."}), 400
     try:
         pedidos = [p for p in json.loads(request.form.get("pedidos") or "[]") if isinstance(p, dict) and p.get("chave")]
     except ValueError:

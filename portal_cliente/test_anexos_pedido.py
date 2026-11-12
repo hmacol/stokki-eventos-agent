@@ -174,6 +174,29 @@ class Gravacao(Base):
         ax.anexar(conn, envio, [{"token": previa["token"]}], "cliente")
         self.assertEqual(conn.execute("SELECT origem FROM documentos_processados").fetchone()[0], "stokki")
 
+    def test_nota_fiscal_anexada_no_portal_nao_entra_como_nf_no_indice(self):
+        """Revisao de 12/11: a NF do pedido e a da Stokki; a do cliente sai como anexo."""
+        conn = self._conn()
+        envio = self._envio(conn, "1", codigo="PS-7", status="CRIADO")
+        previa = ax.guardar_previa("danfe.pdf", _pdf(77))
+        self.assertEqual(previa["tipo"], "Nota Fiscal")
+        ax.anexar(conn, envio, [{"token": previa["token"]}], "cliente")
+        conn.execute("UPDATE portal_envios_anexos SET numero_nf = '5480', cnpj_contraparte = '1', registrado_em = NULL")
+        conn.execute("DELETE FROM documentos_processados")
+        ax.registrar_no_romaneio(conn, envio["id"])
+        self.assertEqual(tuple(conn.execute("SELECT tipo, numero_nf, cnpj_contraparte FROM documentos_processados").fetchone()),
+                         ("Outro", None, None))
+
+    def test_recusa_pdf_com_paginas_demais(self):
+        from pypdf import PdfWriter
+        w = PdfWriter()
+        for _ in range(ax.MAX_PAGINAS_PDF + 1):
+            w.add_blank_page(width=72, height=72)
+        saida = io.BytesIO()
+        w.write(saida)
+        with self.assertRaises(ax.ep.ErroEnvio):
+            ax.ler_pdf("grande.pdf", saida.getvalue())
+
     def test_remover_tira_do_pedido_e_do_romaneio(self):
         conn = self._conn()
         envio = self._envio(conn, "1", codigo="PS-7", status="CRIADO")
