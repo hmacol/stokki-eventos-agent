@@ -201,6 +201,16 @@ class TestTelaPedidos(unittest.TestCase):
         self.assertEqual(html.count('class="menu-acoes"'), 2)
         self.assertEqual(html.count('name="sel"'), 2)
 
+    def test_celular_filtros_tem_status(self):
+        self._logar("leitura")
+        html = self.cliente.get("/pedidos?status=INSUCESSO").get_data(as_text=True)
+        form = re.search(r'<form[^>]*id="pm-form-filtros".*?</form>', html, re.S).group(0)
+        self.assertRegex(form, r'<select[^>]*id="pm-status"[^>]*name="status"')
+        self.assertRegex(form, r'<option value="INSUCESSO" selected>')
+        self.assertRegex(form, r'<option value="">Todos</option>')
+        # o status vem so do select (sem hidden duplicado no mesmo form)
+        self.assertNotIn('type="hidden" name="status"', form)
+
     def test_celular_leitura_nao_seleciona(self):
         self._logar("leitura")
         html = self.cliente.get("/pedidos").get_data(as_text=True)
