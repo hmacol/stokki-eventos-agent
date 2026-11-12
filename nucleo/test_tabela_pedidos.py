@@ -134,6 +134,11 @@ class TestListar(_Base):
         self.assertEqual(sorted(self._codigos({"colunas": {"canhoto": "sim"}})), ["PS-1", "PS-2", "PS-3"])
         # as abas contam com o filtro de canhoto aplicado
         self.assertEqual(tp.contar_por_status({"canhoto": "sem"}, conn=self.conn)["total"], 2)
+        # as filas do computador (Hugo, 11/11) ignoram status e canhoto escolhidos:
+        # cada fila mostra quanto tem no periodo, nao dentro da fila aberta
+        filas = tp.contar_filas({"canhoto": "sem", "status": "ABERTO"}, conn=self.conn)
+        self.assertEqual((filas["total"], filas["ENTREGUE"], filas["ABERTO"], filas["sem_canhoto"]), (7, 6, 1, 2))
+        self.assertEqual(tp.contar_filas({"sender_id": "999"}, conn=self.conn)["sem_canhoto"], 0)
 
     def test_filtro_canhoto_cria_a_tabela_de_canhotos_manuais_se_faltar(self):
         self._pedido("PS-1")
@@ -222,6 +227,32 @@ class TestListar(_Base):
     def test_busca_por_codigo_da_reentrega_acha_o_grupo(self):
         self._pedido("PS-1", status="INSUCESSO"); self._pedido("PS-1-R1", status="ABERTO")
         self.assertEqual(self._codigos({"q": "PS-1-R1"}), ["PS-1"])
+
+    def test_agrupar_so_o_periodo_nao_muda_o_resultado(self):
+        """12/11 (velocidade): só os pedidos com tentativa no período entram
+        no agrupamento. O pedido cuja linha principal é de fora não aparece
+        por causa de tentativa antiga dentro do período, e o que aparece
+        continua trazendo as tentativas de fora dele."""
+        # PS-1: insucesso antigo (fora), reentrega entregue ontem (dentro) -> aparece, 2 tentativas
+        self._pedido("PS-1", status="INSUCESSO")
+        self._parada(self._rota(_dia(-30)), "PS-1", situacao="INSUCESSO", motivo="AUSENTE")
+        self._pedido("PS-1-R1", reentrega_de="PS-1")
+        self._parada(self._rota(_dia(-1)), "PS-1-R1")
+        # PS-2: entregue há 30 dias (linha principal, fora); reentrega cancelada ontem (dentro) -> não aparece
+        self._pedido("PS-2")
+        self._parada(self._rota(_dia(-30)), "PS-2")
+        self._pedido("PS-2-R1", status="CANCELADO", reentrega_de="PS-2", agendamento=f"{_dia(-1)} 08:00:00")
+        r = tp.listar({}, conn=self.conn)
+        self.assertEqual([(l["codigo"], l["codigo_servico"], len(l["historico"])) for l in r["linhas"]],
+                         [("PS-1", "PS-1-R1", 2)])
+        self.assertEqual((r["total"], r["total_caixas"]), (1, 5))
+        self.assertEqual(tp.contar_filas({}, conn=self.conn)["total"], 1)
+        self.assertEqual(self._codigos({"q": "PS-1"}), ["PS-1"])   # busca pelo código da tentativa de fora
+        antigo = {"de": _dia(-31), "ate": _dia(-29)}
+        self.assertEqual([(l["codigo"], l["status"]) for l in tp.listar(antigo, conn=self.conn)["linhas"]],
+                         [("PS-2", "ENTREGUE")])
+        self.assertEqual(tp.exportar_csv(antigo, ["codigo"], conn=self.conn).count("PS-2;"), 1)
+        self.assertEqual(tp.listar({"q": "nada-disso"}, pagina=4, conn=self.conn)["total"], 0)
 
     def test_total_e_caixas_contam_pedidos(self):
         self._pedido("PS-1", status="INSUCESSO", caixas=4); self._pedido("PS-1-R1", status="ABERTO", caixas=4)

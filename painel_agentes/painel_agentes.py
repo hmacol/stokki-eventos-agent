@@ -4022,6 +4022,10 @@ def _pedido_celular(l: dict, formatar) -> dict:
         "data": formatar("data", l.get("data")), "agendamento": formatar("agendamento", l.get("agendamento")),
         "rota": l.get("rota") or "", "motorista": l.get("motorista") or "",
         "conclusao": formatar("conclusao", l.get("conclusao")), "motivo": l.get("motivo") or "",
+        # painel do pedido (11/11): mesmo criterio da coluna e do filtro de canhoto
+        "canhoto": l.get("canhoto") or "",
+        "pendentes": (url_for("canhotos_pendentes", busca=l.get("codigo_servico") or l.get("codigo"))
+                      if l.get("status") == "ENTREGUE" and l.get("canhoto") == "Não" else ""),
         "consulta": url_for("consulta_pedido", codigo=l.get("codigo")) if l.get("codigo") else "",
         "historico": [{"data": formatar("data", t.get("data"))[:5], "codigo": t.get("codigo") or "",
                        "situacao": t.get("situacao") or "", "situacao_txt": formatar("status", t.get("situacao")),
@@ -4029,6 +4033,17 @@ def _pedido_celular(l: dict, formatar) -> dict:
                        "motorista": t.get("motorista") or "", "hora": hora(t.get("conclusao"))}
                       for t in l.get("historico") or []],
     }
+
+
+def _pedidos_celular(linhas: list, formatar) -> list:
+    """O link pra /canhotos-pendentes só vai pra quem entra lá (total,
+    operador, logística; acesso personalizado chega aqui como total)."""
+    pode = getattr(g, "nivel_acesso", None) in ("total", "operador", "logistica")
+    saida = [_pedido_celular(l, formatar) for l in linhas]
+    if not pode:
+        for p in saida:
+            p["pendentes"] = ""
+    return saida
 
 
 @app.route("/pedidos")
@@ -4058,7 +4073,7 @@ def pedidos_tabela():
     return render_template("pedidos_tabela.html", r=r, filtros=filtros, opcoes=opcoes,
                            ordem=ordem, direcao=direcao, url_com=url_com,
                            hoje=date.today().isoformat(), ontem=(date.today() - timedelta(days=1)).isoformat(),
-                           pedidos_celular=[_pedido_celular(l, tabela_pedidos.formatar) for l in r["linhas"]],
+                           pedidos_celular=_pedidos_celular(r["linhas"], tabela_pedidos.formatar),
                            colunas=tabela_pedidos.COLUNAS, datas=tabela_pedidos.DATAS,
                            status=tabela_pedidos.STATUS, fluxos=tabela_pedidos.FLUXOS,
                            formatar=tabela_pedidos.formatar,
@@ -4085,6 +4100,16 @@ def api_pedidos_contagem():
     celular chama, pra tabela do computador não pagar a consulta a mais."""
     from nucleo import tabela_pedidos
     return jsonify(tabela_pedidos.contar_por_status(_filtros_tabela_pedidos()))
+
+
+@app.route("/api/pedidos/filas")
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
+def api_pedidos_filas():
+    """Filas do topo da /pedidos no computador (Hugo, 11/11): contagem por
+    status + sem canhoto, sem os filtros de status e canhoto. A tela chama
+    depois de abrir, pra lista não esperar por ela."""
+    from nucleo import tabela_pedidos
+    return jsonify(tabela_pedidos.contar_filas(_filtros_tabela_pedidos()))
 
 
 @app.route("/api/motoristas/vuupt-disponiveis")

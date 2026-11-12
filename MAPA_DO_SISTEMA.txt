@@ -943,6 +943,17 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            + reentregas); a principal é a reentrega viva com -R maior
                            que a entregue, senão a entregue, senão a mais recente.
                            contar_por_status = abas do celular (filtros sem o status).
+                           contar_filas = filas do topo no computador (11/11; GET
+                           /api/pedidos/filas): por status + sem canhoto, sem os
+                           filtros de status e canhoto. Na tela: filtros ligados
+                           viram etiquetas, a barra de filtros fica recolhida e
+                           clicar na linha abre o pedido num painel a direita (e a
+                           tela do pedido do celular, #pm-det, fora do bloco so-m).
+                           Visoes salvas (12/11): filtros com nome, no navegador
+                           (localStorage "pedidos.visoes"), ao lado das filas.
+                           Velocidade (12/11): o agrupamento por pedido roda so nos
+                           pedidos com tentativa no periodo (CTE alvo, _consulta) e
+                           total + pagina saem numa consulta (2,3 s -> 0,55 s).
                            Canhoto (coluna e filtro com/sem, 11/11) = mesmo criterio
                            da /canhotos-pendentes: checklist Vuupt > 0, comprovante
                            CANHOTO/ASSINATURA do app ou canhotos_manuais; "sem" = so

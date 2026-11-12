@@ -177,6 +177,7 @@ class TestTelaPedidos(unittest.TestCase):
         self.assertNotEqual(self.cliente.get("/pedidos").status_code, 200)
         self.assertNotEqual(self.cliente.get("/pedidos/exportar.csv").status_code, 200)
         self.assertNotEqual(self.cliente.get("/api/pedidos/contagem").status_code, 200)
+        self.assertNotEqual(self.cliente.get("/api/pedidos/filas").status_code, 200)
 
     # ── celular (Hugo, 11/11): lista compacta + abas + tela do pedido ──
     def test_contagem_das_abas_ignora_o_status_escolhido(self):
@@ -229,6 +230,46 @@ class TestTelaPedidos(unittest.TestCase):
         self.assertEqual(re.findall(r'<li class="pm"[^>]*data-codigo="([^"]+)"', html), [])
         d = self.cliente.get("/api/pedidos/contagem?canhoto=sem").get_json()
         self.assertEqual((d["ENTREGUE"], d["total"]), (1, 1))
+
+    def test_filas_etiquetas_e_painel_do_pedido_no_computador(self):
+        """Hugo, 11/11: filas no topo, filtros ligados como etiquetas e o
+        pedido abrindo ao lado (a mesma tela do pedido do celular)."""
+        conn = banco.conectar()
+        conn.execute("UPDATE nucleo_pedidos SET qtd_checklists = 0")
+        conn.commit()
+        conn.close()
+        self._logar("operador")
+        d = self.cliente.get("/api/pedidos/filas?status=INSUCESSO&canhoto=com").get_json()
+        self.assertEqual((d["total"], d["ENTREGUE"], d["INSUCESSO"], d["sem_canhoto"]), (2, 1, 1, 1))
+        html = self.cliente.get("/pedidos?status=INSUCESSO&f_destinatario=pad").get_data(as_text=True)
+        filas = re.findall(r'<a class="fila" data-fila="([^"]+)" href="([^"]+)"( aria-current="true")?', html)
+        self.assertEqual([f[0] for f in filas], ["total", "sem_canhoto", "INSUCESSO", "ABERTO", "EM_ROTA"])
+        # Salvar esta visão (12/11): botão + formulário ao lado das filas, guardado no navegador
+        self.assertIn('id="visao-salvar"', html)
+        self.assertIn('id="visao-form" hidden', html)
+        self.assertIn('"pedidos.visoes"', html)
+        self.assertEqual([f[0] for f in filas if f[2]], ["INSUCESSO"])
+        sem = dict((f[0], f[1]) for f in filas)["sem_canhoto"]
+        self.assertIn("canhoto=sem", sem)
+        self.assertNotIn("status=", sem)           # a fila troca o status, não soma
+        self.assertIn("f_destinatario=pad", sem)   # e mantém os outros filtros
+        etiquetas = re.findall(r'<a class="etiqueta" href="([^"]+)" aria-label="Tirar o filtro ([^"]+)"', html)
+        self.assertEqual([e[1] for e in etiquetas], ["Status: Insucesso", "Destinatário: “pad”"])
+        self.assertNotIn("status=", etiquetas[0][0])
+        self.assertNotIn("f_destinatario", etiquetas[1][0])
+        self.assertIn('<span class="etiqueta">Últimos 7 dias</span>', html)
+        self.assertIn('<details class="mais-filtros" id="mais-filtros">', html)
+        # painel: a linha da tabela aponta pro mesmo dado da tela do pedido, que saiu do bloco só-celular
+        self.assertRegex(html, r'<tr[^>]*data-codigo="PS-2"[^>]*data-chave="10\|PS-2"')
+        self.assertLess(html.index('id="pm-filtros"'), html.index('id="pm-det"'))
+        self.assertIn('\n<section class="pm-tela" id="pm-det"', html)   # sem recuo = fora do #pm
+        dados = re.search(r'<script type="application/json" id="dados-m">(.*?)</script>', html, re.S).group(1)
+        self.assertIn('"canhoto": "N\\u00e3o"', dados)
+        # entregue sem canhoto ganha o link pra /canhotos-pendentes; leitura não
+        html = self.cliente.get("/pedidos?canhoto=sem").get_data(as_text=True)
+        self.assertIn('/canhotos-pendentes?busca=PS-1', html)
+        self._logar("leitura")
+        self.assertNotIn('/canhotos-pendentes?busca=', self.cliente.get("/pedidos?canhoto=sem").get_data(as_text=True))
 
     def test_celular_leitura_nao_seleciona(self):
         self._logar("leitura")
