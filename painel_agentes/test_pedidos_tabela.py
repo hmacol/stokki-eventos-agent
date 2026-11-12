@@ -231,6 +231,29 @@ class TestTelaPedidos(unittest.TestCase):
         d = self.cliente.get("/api/pedidos/contagem?canhoto=sem").get_json()
         self.assertEqual((d["ENTREGUE"], d["total"]), (1, 1))
 
+    def test_pedido_importado_aparece_antes_de_chegar_na_vuupt(self):
+        """Hugo, 12/11: pedido que só existe na Stokki (coletor do galpão)
+        entra na tela como Importado, com fila e aba próprias."""
+        from galpao3d import banco as galpao
+        conn = banco.conectar()
+        galpao.garantir_esquema(conn)
+        conn.execute("INSERT INTO galpao_pedidos (id_stokki, codigo, embarcador, situacao, atualizado_em) "
+                     "VALUES (900, 'PS-900', 'CLIENTE NOVO ... #stkkc-7', 'Em separação', datetime('now', 'localtime'))")
+        conn.commit()
+        conn.close()
+        self._logar("operador")
+        html = self.cliente.get("/pedidos?status=IMPORTADO").get_data(as_text=True)
+        linha = re.search(r'<tr[^>]*data-codigo="PS-900"[^>]*>', html)
+        self.assertIsNotNone(linha)
+        self.assertIn('data-status="IMPORTADO"', linha.group(0))
+        self.assertIn('<span class="chip">Importado</span>', html)
+        self.assertIn('data-fila="IMPORTADO"', html)
+        self.assertIn('"stokki": "Em separa', html)
+        self.assertIn(">Importados<", html)   # aba do celular e fila do computador
+        self.assertEqual(self.cliente.get("/api/pedidos/filas").get_json()["IMPORTADO"], 1)
+        self.assertEqual(self.cliente.get("/api/pedidos/contagem").get_json()["IMPORTADO"], 1)
+        self.assertIn("PS-900", self.cliente.get("/pedidos").get_data(as_text=True))
+
     def test_filas_etiquetas_e_painel_do_pedido_no_computador(self):
         """Hugo, 11/11: filas no topo, filtros ligados como etiquetas e o
         pedido abrindo ao lado (a mesma tela do pedido do celular)."""
@@ -243,7 +266,7 @@ class TestTelaPedidos(unittest.TestCase):
         self.assertEqual((d["total"], d["ENTREGUE"], d["INSUCESSO"], d["sem_canhoto"]), (2, 1, 1, 1))
         html = self.cliente.get("/pedidos?status=INSUCESSO&f_destinatario=pad").get_data(as_text=True)
         filas = re.findall(r'<a class="fila" data-fila="([^"]+)" href="([^"]+)"( aria-current="true")?', html)
-        self.assertEqual([f[0] for f in filas], ["total", "sem_canhoto", "INSUCESSO", "ABERTO", "EM_ROTA"])
+        self.assertEqual([f[0] for f in filas], ["total", "IMPORTADO", "sem_canhoto", "INSUCESSO", "ABERTO", "EM_ROTA"])
         # Salvar esta visão (12/11): botão + formulário ao lado das filas, guardado no navegador
         self.assertIn('id="visao-salvar"', html)
         self.assertIn('id="visao-form" hidden', html)

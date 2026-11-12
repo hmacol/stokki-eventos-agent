@@ -4015,6 +4015,7 @@ def _pedido_celular(l: dict, formatar) -> dict:
         "chave": f"{l.get('sender_id')}|{l.get('pedido_base')}",
         "codigo": l.get("codigo") or "", "servico": l.get("codigo_servico") or "",
         "status": l.get("status") or "", "status_txt": formatar("status", l.get("status")),
+        "stokki": l.get("situacao_stokki") or "",   # só no Importado/cancelado antes da Vuupt (12/11)
         "destinatario": l.get("destinatario") or "", "embarcador": l.get("embarcador") or "",
         "endereco": l.get("endereco") or "", "complemento": l.get("complemento") or "",
         "telefone": l.get("telefone") or "", "zona": l.get("zona") or "",

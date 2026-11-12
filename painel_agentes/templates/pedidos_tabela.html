@@ -60,6 +60,7 @@
   .barra-status { display: flex; gap: 2px; height: 8px; border-radius: 100px; overflow: hidden; margin-bottom: 10px; }
   .barra-status[hidden] { display: none; }
   .barra-status span { min-width: 3px; }
+  .barra-status .b-IMPORTADO { background: var(--remetente); }
   .barra-status .b-ENTREGUE { background: var(--acento); }
   .barra-status .b-INSUCESSO { background: var(--erro); }
   .barra-status .b-ABERTO { background: var(--texto-suave); }
@@ -201,6 +202,7 @@
   .pm-marca.st-EM_ROTA { background: var(--rodando); border-radius: 2px; }
   .pm-marca.st-ABERTO { background: none; border: 2px solid var(--remetente); width: 11px; height: 11px; box-sizing: border-box; }
   .pm-marca.st-INSUCESSO { background: var(--erro); border-radius: 2px; }
+  .pm-marca.st-IMPORTADO { background: none; border: 2px dashed var(--texto-suave); width: 11px; height: 11px; box-sizing: border-box; }
   .pm-corpo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .pm-l1, .pm-l2 { display: flex; gap: 8px; align-items: baseline; min-width: 0; white-space: nowrap; }
   .pm-cod { font-size: 14.5px; font-weight: 700; flex: none; }
@@ -289,7 +291,7 @@
   filtros em tela cheia. Mesma rota e mesmos dados da tabela; só aparece com
   html.modo-mobile. As ações reaproveitam o menu, o lote e os modais de baixo.
 #}
-{% set abas_m = [("", "Todos"), ("ABERTO", "Abertos"), ("EM_ROTA", "Em rota"), ("ENTREGUE", "Entregues"), ("INSUCESSO", "Insucesso"), ("CANCELADO", "Cancelados")] %}
+{% set abas_m = [("", "Todos"), ("IMPORTADO", "Importados"), ("ABERTO", "Abertos"), ("EM_ROTA", "Em rota"), ("ENTREGUE", "Entregues"), ("INSUCESSO", "Insucesso"), ("CANCELADO", "Cancelados")] %}
 {% set opcoes_canhoto = [('com', 'Com canhoto'), ('sem', 'Sem canhoto')] %}
 {% set n_filtros_m = [filtros.sender_id, filtros.agent_id, filtros.zona, filtros.fluxo, filtros.canhoto, request.args.get('de') or request.args.get('ate'), filtros.data_tipo != 'referencia']|select|list|length %}
 <div class="so-m" id="pm">
@@ -331,6 +333,7 @@
           <span class="pm-l1"><span class="pm-cod">{{ l.codigo }}</span><span class="pm-dest">{{ l.destinatario or '—' }}</span>{% if ordem != 'data' %}<span class="pm-data">{{ formatar('data', l.data)[:5] }}</span>{% endif %}</span>
           {%- if l.status == 'INSUCESSO' %}{% set info = [l.motivo or l.rota] %}
           {%- elif l.status in ('EM_ROTA', 'ENTREGUE') %}{% set info = [l.rota, l.motorista, formatar('conclusao', l.conclusao)[11:] if l.status == 'ENTREGUE' else ''] %}
+          {%- elif l.status == 'IMPORTADO' %}{% set info = [l.situacao_stokki, (formatar('caixas', l.caixas) ~ ' cx') if l.caixas is not none else '', l.embarcador] %}
           {%- elif l.status == 'ABERTO' and l.agendamento %}{% set info = ['agendado ' ~ formatar('agendamento', l.agendamento)[:5] ~ ' ' ~ formatar('agendamento', l.agendamento)[11:]] %}
           {%- else %}{% set info = [(formatar('caixas', l.caixas) ~ ' cx') if l.caixas is not none else '', l.zona] %}{% endif %}
           {%- set info = info|select|join(' · ') %}
@@ -459,7 +462,7 @@
 {% if filtros.canhoto == 'sem' and filtros.status in ('', 'ENTREGUE') %}{% set fila_ativa = 'sem_canhoto' %}
 {% elif filtros.canhoto %}{% set fila_ativa = '' %}{% else %}{% set fila_ativa = filtros.status or 'total' %}{% endif %}
 <nav class="filas" id="filas" aria-label="Filas de pedidos">
-  {% for chave, rotulo, st, ca in [('total', 'Todos', None, None), ('sem_canhoto', 'Sem canhoto', None, 'sem'), ('INSUCESSO', 'Insucesso', 'INSUCESSO', None), ('ABERTO', 'Abertos', 'ABERTO', None), ('EM_ROTA', 'Em rota', 'EM_ROTA', None)] %}
+  {% for chave, rotulo, st, ca in [('total', 'Todos', None, None), ('IMPORTADO', 'Importados', 'IMPORTADO', None), ('sem_canhoto', 'Sem canhoto', None, 'sem'), ('INSUCESSO', 'Insucesso', 'INSUCESSO', None), ('ABERTO', 'Abertos', 'ABERTO', None), ('EM_ROTA', 'Em rota', 'EM_ROTA', None)] %}
   <a class="fila" data-fila="{{ chave }}" href="{{ url_com(status=st, canhoto=ca, pagina=None) }}"{% if fila_ativa == chave %} aria-current="true"{% endif %}>{{ rotulo }} <span class="n"></span></a>
   {% endfor %}
   <span id="visoes"></span>
@@ -1497,7 +1500,7 @@
           const n = c[a.dataset.fila];
           if (typeof n === "number") a.querySelector(".n").textContent = n.toLocaleString("pt-BR");
         });
-        const barra = $("barra-status"), nomes = { ENTREGUE: "entregues", INSUCESSO: "insucessos", ABERTO: "abertos", EM_ROTA: "em rota", CANCELADO: "cancelados" };
+        const barra = $("barra-status"), nomes = { IMPORTADO: "importados (ainda não estão na Vuupt)", ENTREGUE: "entregues", INSUCESSO: "insucessos", ABERTO: "abertos", EM_ROTA: "em rota", CANCELADO: "cancelados" };
         if (!barra || !c.total) return;
         const partes = [];
         Object.keys(nomes).forEach((st) => {
@@ -1675,7 +1678,7 @@
     corpo.appendChild(dest);
 
     const grade = no("section", "pm-cartao pm-grade");
-    [["Embarcador", p.embarcador], ["Caixas", p.caixas], ["Data", p.data], ["Rota", p.rota], ["Motorista", p.motorista],
+    [["Embarcador", p.embarcador], ["Na Stokki", p.stokki], ["Caixas", p.caixas], ["Data", p.data], ["Rota", p.rota], ["Motorista", p.motorista],
      ["Janela", p.janela], ["Agendamento", p.agendamento], ["Zona", p.zona], ["Conclusão", p.conclusao],
      ["Serviço", p.servico && p.servico !== p.codigo ? p.servico : ""], ["Motivo", p.motivo]]
       .forEach(([r, v]) => { if (v) grade.appendChild(campo(r, v)); });

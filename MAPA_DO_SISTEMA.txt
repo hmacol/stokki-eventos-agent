@@ -954,6 +954,11 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            Velocidade (12/11): o agrupamento por pedido roda so nos
                            pedidos com tentativa no periodo (CTE alvo, _consulta) e
                            total + pagina saem numa consulta (2,3 s -> 0,55 s).
+                           Status IMPORTADO (12/11): pedido que ainda nao chegou a
+                           Vuupt. Nao existe em nucleo_pedidos: _norm() junta na
+                           consulta galpao_pedidos (coletor do galpao, 1 min) e
+                           portal_envios (menos ERRO/DUPLICADO); cancelado antes da
+                           Vuupt entra como CANCELADO. Coluna Situacao na Stokki.
                            Canhoto (coluna e filtro com/sem, 11/11) = mesmo criterio
                            da /canhotos-pendentes: checklist Vuupt > 0, comprovante
                            CANHOTO/ASSINATURA do app ou canhotos_manuais; "sem" = so
