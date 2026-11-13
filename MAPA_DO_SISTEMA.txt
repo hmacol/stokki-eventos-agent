@@ -1290,7 +1290,12 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            "Não coletado" (5744) some pro cliente; só ele = Aguardando
                            saída. `codigo` = código base, `codigo_servico` = o do serviço.
                            E-mails 07h/20h ainda usam linhas_das_rotas sem unir.
- envio_pedidos.py          "Máscara de envio": valida XML/planilha, fila.
+ envio_pedidos.py          "Máscara de envio": valida XML/planilha, fila. Login de grupo
+                           (12/11): sem seletor de empresa na tela; a planilha traz a
+                           coluna "CNPJ da empresa (quem envia)" por pedido (obrigatória
+                           só no grupo; o modelo do grupo já vem com ela), o XML vai
+                           pelo emitente e a lista junta todas as empresas. Rotas em
+                           app.py: _grupo_sem_seletor / _empresa_do_envio.
  anexos_pedido.py          PDFs anexados ao pedido (prévia e lista): lê, sugere o
                            pedido, grava e registra pro romaneio quando sai o PS.
  endereco_entrega.py       Endereço de entrega escolhido na prévia: CEP com IBGE, última

@@ -476,6 +476,13 @@ COLUNAS_PLANILHA: list[tuple[str, str, bool, tuple[str, ...], int, str]] = [
      ("valor unitario", "vlr unitario", "vlr unit", "valor unit", "preco", "preco unitario", "unitario"), 16, "45,00"),
 ]
 _COLUNAS_POR_CHAVE = {c[0]: c for c in COLUNAS_PLANILHA}
+# Login de grupo (12/11): a planilha diz de qual empresa é cada pedido, no
+# lugar do seletor da tela. Fora de COLUNAS_PLANILHA de propósito: o modelo e
+# a leitura dos outros clientes não mudam (a coluna só é exigida com `empresas`).
+COLUNA_EMPRESA: tuple[str, str, bool, tuple[str, ...], int, str] = (
+    "empresa_cnpj", "CNPJ da empresa (quem envia)", True,
+    ("cnpj da empresa", "cnpj empresa", "empresa", "cnpj do embarcador", "cnpj embarcador", "embarcador",
+     "cnpj do remetente", "cnpj remetente", "remetente"), 26, "")
 MAX_LINHAS_PLANILHA = 2000
 UFS = {"AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ",
        "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"}
@@ -496,7 +503,7 @@ def _normalizar_texto(valor) -> str:
 
 
 _APELIDOS_NORMALIZADOS: dict[str, str] = {}
-for _c in COLUNAS_PLANILHA:
+for _c in (*COLUNAS_PLANILHA, COLUNA_EMPRESA):
     _APELIDOS_NORMALIZADOS[_normalizar_texto(_c[1])] = _c[0]
     for _a in _c[3]:
         _APELIDOS_NORMALIZADOS.setdefault(_normalizar_texto(_a), _c[0])
@@ -613,11 +620,15 @@ def _achar_cabecalho(linhas: list[list]) -> tuple[int, dict[int, str]]:
     return melhor[1], melhor[2]
 
 
-def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str) -> tuple[list[dict], list[dict]]:
+def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
+                 empresas: dict[str, str] | None = None) -> tuple[list[dict], list[dict]]:
     """Lê a planilha no modelo Fresh Log. Devolve (pedidos, rejeitados):
     cada pedido tem o MESMO formato do dict de ler_nfe (pra prévia, validação
     e gravação serem as mesmas) mais origem/referencia/itens_lista/
-    data_expedicao/linhas; rejeitados = {arquivo, rotulo, linha, erro}."""
+    data_expedicao/linhas; rejeitados = {arquivo, rotulo, linha, erro}.
+    `empresas` ({cnpj: nome}, login de grupo): a empresa de cada pedido vem da
+    coluna "CNPJ da empresa" (primeira linha do pedido) e vira o emitente;
+    sem `empresas`, todo pedido é do `cnpj_embarcador`."""
     linhas = _abrir_planilha(conteudo, nome)
     if not linhas:
         raise ErroEnvio(f"{nome}: a planilha está vazia.")
@@ -626,7 +637,10 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str) -> tuple[list
     if faltando:
         raise ErroEnvio(f"{nome}: faltam colunas obrigatórias no cabeçalho: {', '.join(faltando)}. "
                         f"Baixe o modelo Fresh Log pra conferir os nomes.")
-    emb = _so_digitos(cnpj_embarcador)
+    if empresas is not None and COLUNA_EMPRESA[0] not in mapa.values():
+        raise ErroEnvio(f"{nome}: falta a coluna \"{COLUNA_EMPRESA[1]}\". Seu acesso tem {len(empresas)} empresas e a "
+                        f"planilha precisa dizer de qual é cada pedido. Baixe o modelo de novo: ele já vem com a coluna.")
+    emb_padrao = _so_digitos(cnpj_embarcador)
     hoje = date.today()
     grupos: dict[str, dict] = {}
     rejeitados: list[dict] = []
@@ -703,6 +717,15 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str) -> tuple[list
                 valor_total = _numero_br(campos.get("valor_total"))
             except ValueError:
                 erros.append("Volumes, peso ou valor total com número inválido.")
+            emb = emb_padrao
+            if empresas is not None:
+                # o Excel come o zero à esquerda de CNPJ digitado como número
+                emb = _so_digitos(_celula_texto(campos.get(COLUNA_EMPRESA[0])))
+                emb = emb.zfill(14) if emb else ""
+                if not emb:
+                    erros.append(f"Sem o CNPJ da empresa que envia (coluna \"{COLUNA_EMPRESA[1]}\").")
+                elif emb not in empresas:
+                    erros.append(f"O CNPJ da empresa ({formatar_documento(emb)}) não faz parte do seu acesso.")
             g = grupos[chave_grupo] = {
                 "chave_nfe": chave_planilha(emb, ref),
                 "origem": ORIGEM_PLANILHA,
@@ -711,7 +734,7 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str) -> tuple[list
                 "serie": "",
                 "emitida_em": "",
                 "emitente_cnpj": emb,
-                "emitente_nome": "",
+                "emitente_nome": (empresas or {}).get(emb, ""),
                 "destinatario_doc": doc,
                 "destinatario_nome": _celula_texto(campos.get("destinatario_nome"))[:120],
                 "destinatario_endereco": endereco[:200],
@@ -738,6 +761,11 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str) -> tuple[list
             if doc_linha and doc_linha != g["destinatario_doc"]:
                 erros_grupo.setdefault(chave_grupo, []).append(
                     f"linha {n}: destinatário diferente do da primeira linha do pedido {ref} -- use outra referência.")
+            if empresas is not None:
+                emb_linha = _so_digitos(_celula_texto(campos.get(COLUNA_EMPRESA[0])))
+                if emb_linha and emb_linha.zfill(14) != g["emitente_cnpj"]:
+                    erros_grupo.setdefault(chave_grupo, []).append(
+                        f"linha {n}: empresa diferente da primeira linha do pedido {ref} -- use outra referência.")
         g["itens_lista"].append(item)
         g["linhas"].append(n)
 
@@ -798,20 +826,23 @@ def validar_skus(conn: sqlite3.Connection, pedido: dict, cfg: dict) -> tuple[lis
     return erros, avisos
 
 
-def gerar_modelo_planilha(nome_cliente: str = "") -> bytes:
+def gerar_modelo_planilha(nome_cliente: str = "", empresas: dict[str, str] | None = None) -> bytes:
     """Modelo .xlsx pra download: aba Pedidos (cabeçalho + 3 linhas de
-    exemplo = 2 pedidos) e aba Instruções."""
+    exemplo = 2 pedidos) e aba Instruções. `empresas` ({cnpj: nome}, login de
+    grupo): o modelo ganha a coluna "CNPJ da empresa" na frente e as
+    instruções listam os CNPJs do acesso."""
     import openpyxl
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
+    colunas = ([COLUNA_EMPRESA] if empresas else []) + COLUNAS_PLANILHA
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Pedidos"
     cab = Font(bold=True, color="FFFFFF")
     fundo_ob = PatternFill("solid", fgColor="0EA575")
     fundo_op = PatternFill("solid", fgColor="6B7280")
-    for j, (chave, rotulo, obrig, _ap, larg, _ex) in enumerate(COLUNAS_PLANILHA, start=1):
+    for j, (chave, rotulo, obrig, _ap, larg, _ex) in enumerate(colunas, start=1):
         c = ws.cell(row=1, column=j, value=rotulo)
         c.font, c.fill = cab, (fundo_ob if obrig else fundo_op)
         c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -819,20 +850,22 @@ def gerar_modelo_planilha(nome_cliente: str = "") -> bytes:
     ws.row_dimensions[1].height = 34
     ws.freeze_panes = "A2"
     exemplos = [
-        {c[0]: c[5] for c in COLUNAS_PLANILHA},
+        {c[0]: c[5] for c in colunas},
         {"referencia": "PED-1001", "sku": "QE-0002", "quantidade": "4", "valor_unitario": "12,50"},
         {"referencia": "PED-1002", "numero_nf": "", "destinatario_doc": "123.456.789-09", "destinatario_nome": "Ana Souza",
          "cep": "04538-132", "logradouro": "Rua Joaquim Floriano", "numero": "100", "complemento": "Apto 31", "bairro": "Itaim Bibi",
          "cidade": "São Paulo", "uf": "SP", "telefone": "(11) 98888-7777", "email": "", "data_expedicao": "", "volumes": "1",
          "peso_kg": "2", "valor_total": "", "observacoes": "Portaria 24h", "sku": "QE-0010", "quantidade": "2", "valor_unitario": "30,00"},
     ]
+    if empresas:
+        exemplos[0][COLUNA_EMPRESA[0]] = exemplos[2][COLUNA_EMPRESA[0]] = formatar_documento(next(iter(empresas)))
     for i, ex in enumerate(exemplos, start=2):
-        for j, col in enumerate(COLUNAS_PLANILHA, start=1):
+        for j, col in enumerate(colunas, start=1):
             v = ex.get(col[0], "")
             if v != "":
                 ws.cell(row=i, column=j, value=v)
     for i in range(2, 2 + len(exemplos)):
-        for j in range(1, len(COLUNAS_PLANILHA) + 1):
+        for j in range(1, len(colunas) + 1):
             ws.cell(row=i, column=j).font = Font(italic=True, color="9CA3AF")
 
     wi = wb.create_sheet("Instruções")
@@ -853,6 +886,11 @@ def gerar_modelo_planilha(nome_cliente: str = "") -> bytes:
         "Ao subir a planilha no portal, você vê uma prévia por pedido, confere o horário de recebimento de cada destinatário",
         "e confirma. Os pedidos entram na fila e são criados na Stokki automaticamente.",
     ]
+    if empresas:
+        texto += ["",
+                  f"Seu acesso tem {len(empresas)} empresas. Na coluna \"{COLUNA_EMPRESA[1]}\", informe na PRIMEIRA linha de cada pedido",
+                  "o CNPJ da empresa dona do pedido (com ou sem pontuação). A mesma planilha pode levar pedidos de várias empresas:"]
+        texto += [f"   {formatar_documento(c)}  ·  {n}" for c, n in empresas.items()]
     for i, t in enumerate(texto, start=1):
         c = wi.cell(row=i, column=1, value=t)
         if i == 1:
@@ -1338,15 +1376,27 @@ def _resolver_entrega(conn: sqlite3.Connection, item: dict, nfe: dict, emb: str,
 
 def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list[dict], enviado_por: str,
                      config: dict | None, regra_xml: str, fluxos_disponiveis: list[str] | None = None,
-                     sender_id: int | None = None) -> list[dict]:
+                     sender_id: int | None = None, por_empresa: dict[str, dict] | None = None) -> list[dict]:
     """Cada item: {token, horario_inicio?, horario_fim?, agendamento_data?,
     agendamento_hora_inicio?, agendamento_hora_fim?, agendamento_pendente?,
     observacoes?, entrega_escolha?, entrega_endereco?}. Relê o XML temporário
     (nunca confia no que o navegador mandou), revalida, grava o definitivo e
     cria a linha NA_FILA. sender_id: da empresa do envio, pra memória do
-    endereço de entrega (_resolver_entrega)."""
-    emb = _so_digitos(cnpj_embarcador)
-    if fluxos_disponiveis is not None and not fluxos_disponiveis:
+    endereço de entrega (_resolver_entrega).
+    por_empresa (login de grupo sem seletor, 12/11): {cnpj: {"regra_xml",
+    "fluxos", "sender_id"}} das empresas do login. A empresa de cada item é
+    o emitente do próprio temporário (XML ou pedido de planilha) e os três
+    parâmetros avulsos são ignorados; tudo é validado antes de gravar."""
+    def _contexto(cnpj: str) -> dict:
+        if por_empresa is None:
+            return {"regra_xml": regra_xml, "fluxos": fluxos_disponiveis, "sender_id": sender_id}
+        ctx = por_empresa.get(cnpj)
+        if ctx is None:
+            raise ErroEnvio(f"O CNPJ emitente ({formatar_documento(cnpj)}) não é de uma empresa do seu acesso.")
+        return ctx
+
+    emb_padrao = _so_digitos(cnpj_embarcador)
+    if por_empresa is None and fluxos_disponiveis is not None and not fluxos_disponiveis:
         raise ErroEnvio(MSG_XD_AUSENTE)  # só Cross e o XD falta (fluxos_para_envio)
     criados = []
     lidos = []
@@ -1356,33 +1406,38 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
         if caminho.suffix == ".json":
             # pedido lido de uma planilha (gravado pelo servidor em analisar)
             nfe = json.loads(conteudo.decode("utf-8"))
-            if nfe.get("origem") != ORIGEM_PLANILHA or _so_digitos(nfe.get("emitente_cnpj")) != emb:
+            if nfe.get("origem") != ORIGEM_PLANILHA or (
+                    por_empresa is None and _so_digitos(nfe.get("emitente_cnpj")) != emb_padrao):
                 raise ErroEnvio("Pedido temporário inválido -- envie a planilha de novo.")
             if nfe.get("data_expedicao") and nfe["data_expedicao"] < date.today().isoformat():
                 nfe["data_expedicao"] = date.today().isoformat()
         else:
             nfe = ler_nfe(conteudo)
             nfe["origem"] = ORIGEM_XML
+        emb = emb_padrao if por_empresa is None else _so_digitos(nfe.get("emitente_cnpj"))
+        ctx = _contexto(emb)
+        if ctx["fluxos"] is not None and not ctx["fluxos"]:
+            raise ErroEnvio(f"{rotulo_envio(nfe)}: {MSG_XD_AUSENTE}")
         v = validar_item(conn, nfe, emb)
         if not v["ok"]:
             raise ErroEnvio(f"{rotulo_envio(nfe)}: " + " ".join(v["erros"]))
-        nfe["_fluxo"] = escolher_fluxo(item, fluxos_disponiveis or ["armazenagem"], nfe.get("origem") or ORIGEM_XML,
+        nfe["_fluxo"] = escolher_fluxo(item, ctx["fluxos"] or ["armazenagem"], nfe.get("origem") or ORIGEM_XML,
                                        rotulo_envio(nfe))
         # Endereço de entrega escolhido na prévia (27/10): antes da área, pra
         # área, dia fixo e gravação já usarem o endereço de entrega.
         if nfe.get("origem") == ORIGEM_XML:
-            nfe = _resolver_entrega(conn, item, nfe, emb, sender_id, config)
+            nfe = _resolver_entrega(conn, item, nfe, emb, ctx["sender_id"], config)
         # Área não atendida (Hugo, 23/09): classifica AQUI, antes de qualquer
         # escrita -- a geocodificação grava cache por outra conexão e travaria
         # ~5 s por NF se já houvesse transação de escrita aberta nesta.
         nfe["_bloqueio_motivo"] = classificar_area_envio(nfe, config)
-        lidos.append((item, caminho, conteudo, nfe, v["envio_existente"]))
+        lidos.append((item, caminho, conteudo, nfe, v["envio_existente"], emb, ctx))
 
-    dest_info = info_destinatarios(conn, emb, [x[3] for x in lidos], config)
+    dest_info = {e: info_destinatarios(conn, e, [x[3] for x in lidos if x[5] == e], config) for e in {x[5] for x in lidos}}
     hoje = date.today()
-    planilhas_movidas: dict[str, Path] = {}
-    for item, caminho, conteudo, nfe, existente in lidos:
-        d = dest_info.get(nfe["destinatario_doc"], {})
+    planilhas_movidas: dict[tuple[str, str], Path] = {}
+    for item, caminho, conteudo, nfe, existente, emb, ctx in lidos:
+        d = dest_info[emb].get(nfe["destinatario_doc"], {})
         ini = _hora_valida(item.get("horario_inicio")) or d.get("horario_inicio") or ""
         fim = _hora_valida(item.get("horario_fim")) or d.get("horario_fim") or ""
         if not ini or not fim:
@@ -1413,17 +1468,15 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
         if planilha:
             # a planilha original é guardada UMA vez por arquivo; cada pedido
             # aponta pra ela (xml_path) e leva os próprios itens em itens_json
+            # (login de grupo: uma cópia por empresa que tem pedido no arquivo;
+            # o temporário só sai no fim, depois da última cópia)
             tk = nfe.get("arquivo_token", "")
-            destino = planilhas_movidas.get(tk)
+            destino = planilhas_movidas.get((tk, emb))
             if destino is None:
                 origem_plan = _caminho_temporario(tk)
                 destino = _caminho_definitivo_planilha(emb, nfe.get("nome_arquivo") or origem_plan.name)
                 destino.write_bytes(origem_plan.read_bytes())
-                planilhas_movidas[tk] = destino
-                try:
-                    origem_plan.unlink()
-                except OSError:
-                    pass
+                planilhas_movidas[(tk, emb)] = destino
         else:
             destino = _caminho_definitivo(emb, nfe["chave_nfe"])
             destino.write_bytes(conteudo)
@@ -1442,7 +1495,7 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
             "destinatario_cep": nfe["destinatario_cep"], "destinatario_telefone": nfe["destinatario_telefone"],
             "endereco_fiscal": nfe.get("endereco_fiscal") or None,
             "volumes": nfe["volumes"], "peso_kg": nfe["peso_kg"], "valor_nf": nfe["valor_nf"], "itens": nfe["itens"],
-            "xml_path": str(destino.relative_to(_RAIZ)), "regra_xml": None if planilha else regra_xml,
+            "xml_path": str(destino.relative_to(_RAIZ)), "regra_xml": None if planilha else ctx["regra_xml"],
             "status": STATUS_AGUARDANDO_LIBERACAO if motivo else STATUS_NA_FILA, "tentativas": 0,
             "bloqueio_motivo": motivo, "bloqueio_chamado_id": None,
             "erro": None, "resposta_stokki": None, "codigo_pedido": None, "horario_inicio": ini, "horario_fim": fim,
@@ -1470,10 +1523,15 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
             cols = ", ".join(campos)
             conn.execute(f"INSERT INTO portal_envios ({cols}) VALUES ({','.join('?' * len(campos))})", tuple(campos.values()))
             envio_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        criados.append({"id": envio_id, "token": item.get("token"), "numero_nf": nfe["numero_nf"], "referencia": nfe.get("referencia"),
+        criados.append({"id": envio_id, "token": item.get("token"), "cnpj_embarcador": emb, "numero_nf": nfe["numero_nf"], "referencia": nfe.get("referencia"),
                         "origem": campos["origem"], "destinatario_nome": nfe["destinatario_nome"],
                         "status": campos["status"], "bloqueio_motivo": motivo,
                         "destinatario_municipio": nfe["destinatario_municipio"], "destinatario_uf": nfe["destinatario_uf"]})
+    for tk, _emb in planilhas_movidas:
+        try:
+            _caminho_temporario(tk).unlink()
+        except (OSError, ErroEnvio):   # mesmo arquivo, segunda empresa: já saiu
+            pass
     conn.commit()
     return criados
 

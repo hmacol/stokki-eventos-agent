@@ -119,12 +119,6 @@
       <div class="card" id="card-enviar" style="display:flex; flex-direction:column; gap:14px;">
         <div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;">
           <h3 style="margin:0;">Enviar novos pedidos</h3>
-          {% if empresas_envio | length > 1 %}
-          {# Login de grupo (17/09): cada empresa é um cliente na Stokki -- o envio é numa empresa por vez #}
-          <select id="env-empresa" aria-label="Empresa que está enviando os pedidos" style="font-family:inherit; font-size:12.5px; color:var(--texto); background:var(--superficie); border:1px solid var(--borda); border-radius:6px; padding:5px 9px; max-width:280px;">
-            {% for e in empresas_envio %}<option value="{{ e.cnpj }}">{{ e.nome }}</option>{% endfor %}
-          </select>
-          {% endif %}
           <span style="font-size:12px; color:var(--texto-suave);" id="env-regra"></span>
         </div>
         <label class="zona" id="zona">
@@ -138,6 +132,10 @@
         <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:12px; color:var(--texto-suave);">
           <a class="botao-linha" id="btn-modelo" href="{{ request.script_root }}/api/envios/modelo-planilha" download style="text-decoration:none;">Baixar modelo de planilha (.xlsx)</a>
           <span>Sem XML da nota? Preencha o modelo e suba aqui -- os pedidos são criados do mesmo jeito.</span>
+          {% if empresas_envio | length > 1 %}
+          {# Login de grupo (12/11): sem seletor -- a planilha diz a empresa de cada pedido; o XML vai pelo emitente #}
+          <span>Seu acesso tem {{ empresas_envio | length }} empresas: na planilha, preencha a coluna "CNPJ da empresa (quem envia)" em cada pedido (o modelo já vem com ela). No XML, a empresa é a emitente da nota.</span>
+          {% endif %}
         </div>
         <div class="msg" id="env-msg"></div>
         <div class="previa" id="previa">
@@ -209,12 +207,9 @@
   const BASE = {{ request.script_root | tojson }};
   const secao = document.getElementById('vista-envios');
   const PODE_ENVIAR = secao.dataset.podeEnviar === '1';
-  // Empresa do envio (login de grupo): vai no cabeçalho de TODA chamada desta
-  // vista -- fila, prévia, confirmação, ações e destinatários são por empresa.
-  const EMPRESAS_ENVIO = {{ empresas_envio | tojson }};
-  let empresaEnvio = EMPRESAS_ENVIO.length ? EMPRESAS_ENVIO[0].cnpj : '';
-  const fetch = (url, o = {}) => window.fetch(url, { ...o, headers: { ...(o.headers || {}), ...(empresaEnvio ? { 'X-Portal-Empresa': empresaEnvio } : {}) } });
-  const comEmpresa = url => empresaEnvio ? `${url}?empresa=${empresaEnvio}` : url;
+  // Login de grupo (12/11): a tela não escolhe mais a empresa. Cada pedido tem a
+  // dele (coluna da planilha ou emitente do XML) e a lista junta todas.
+  const empresaDe = x => x.empresa ? `<div class="end">${esc(x.empresa)}</div>` : '';
   const $ = id => document.getElementById(id);
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const brl = v => (Number(v) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -293,7 +288,7 @@
     else if (aba === 'erros') lista = lista.filter(x => x.status === 'ERRO');
     else if (aba === 'pendencias') lista = lista.filter(x => (x.agendamento_pendente && x.status !== 'CANCELADO') || x.solicitacoes_pendentes.length || x.status === 'AGUARDANDO_LIBERACAO' || x.status === 'EM_ESPERA_CLIENTE');
     const q = busca.trim().toLowerCase();
-    if (q) lista = lista.filter(x => [x.numero_nf, x.referencia, x.destinatario_nome, x.codigo_pedido, x.endereco_curto].join(' ').toLowerCase().includes(q));
+    if (q) lista = lista.filter(x => [x.numero_nf, x.referencia, x.destinatario_nome, x.codigo_pedido, x.endereco_curto, x.empresa].join(' ').toLowerCase().includes(q));
     return lista;
   }
 
@@ -326,7 +321,7 @@
     const lista = filtrados();
     $('env-tabela').querySelector('tbody').innerHTML = lista.map(x => `<tr>
       <td class="nw num">${esc(x.criado_em_br)}${x.enviado_por && x.enviado_por.startsWith('equipe') ? ' <span class="chip" title="Enviado pela equipe Fresh Log">equipe</span>' : ''}</td>
-      <td class="nw">${docCurto(x)}</td>
+      <td class="nw">${docCurto(x)}${empresaDe(x)}</td>
       <td><div class="dest" style="border:none;padding:0;background:none;gap:1px;"><span style="font-weight:600">${esc(x.destinatario_nome)}</span><span class="end">${esc(x.endereco_curto)}</span>${x.endereco_entrega_origem === 'cliente' || x.endereco_entrega_origem === 'ultima_entrega' ? `<span class="end-entrega" title="Endereço fiscal do destinatário: ${esc(x.endereco_fiscal)}">Endereço de entrega alterado no envio</span>` : x.endereco_fiscal ? `<span class="end-entrega" title="Endereço fiscal do destinatário: ${esc(x.endereco_fiscal)}">Local de entrega indicado na NF</span>` : ''}</div></td>
       <td class="num nw" style="text-align:center">${x.volumes || '—'}</td>
       <td class="nw"><span class="badge b-${x.status}"><span class="pt"></span>${esc(x.status_rotulo)}</span>${x.status === 'ERRO' && x.erro ? `<div class="erro-txt" title="${esc(x.erro)}">${esc(x.erro.slice(0, 90))}${x.erro.length > 90 ? '…' : ''}</div>` : ''}${x.status === 'AGUARDANDO_LIBERACAO' ? `<div class="bloq-txt">${esc(x.bloqueio_texto)}</div>` : ''}${x.dedicado ? `<div><span class="chip dedicado" title="Transporte dedicado combinado com a Fresh Log">Envio dedicado</span></div>${x.dedicado.motivo ? `<div class="bloq-txt">${esc(x.dedicado.motivo)}</div>` : ''}` : ''}${x.solicitacoes_pendentes.map(s => `<div><span class="chip">${esc(s.rotulo)} · aguardando Fresh Log</span></div>`).join('')}</td>
@@ -419,7 +414,7 @@
     $('previa-tabela').querySelector('thead').innerHTML = '<tr><th>NF / Pedido</th>' +
       (multi ? `<th>Fluxo <select id="fl-todos" title="Aplicar a todos"><option value="">todos…</option>${p.fluxos_disponiveis.map(f => `<option value="${esc(f)}">${esc(rotFl[f] || f)}</option>`).join('')}</select></th>` : '') +
       `<th>Destinatário</th><th>${p.entrega_ativa ? 'Endereço de entrega' : 'Endereço'}</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Documentos</th><th>Agendamento</th></tr>`;
-    const opcoesFluxo = it => (p.fluxos_disponiveis || []).filter(f => !(it.origem === 'planilha' && f === 'cross'));
+    const opcoesFluxo = it => (it.fluxos || p.fluxos_disponiveis || []).filter(f => !(it.origem === 'planilha' && f === 'cross'));
     $('previa-tabela').querySelector('tbody').innerHTML = p.itens.map((it, i) => {
       const d = p.destinatarios[it.destinatario_doc] || {};
       const plan = it.origem === 'planilha';
@@ -432,7 +427,7 @@
         ? `<td class="nw" data-fluxo="${esc(ops[0])}">${esc(rotFl[ops[0]] || ops[0])}</td>`
         : `<td class="nw"><select class="fl" aria-label="Fluxo do pedido"><option value="">escolha</option>${ops.map(f => `<option value="${esc(f)}">${esc(rotFl[f] || f)}</option>`).join('')}</select></td>`);
       return `<tr data-i="${i}">
-        <td class="nw">${doc}${it.avisos.length ? `<div class="avisos">${esc(it.avisos.join(' '))}</div>` : ''}</td>${celFluxo}
+        <td class="nw">${doc}${empresaDe(it)}${it.avisos.length ? `<div class="avisos">${esc(it.avisos.join(' '))}</div>` : ''}</td>${celFluxo}
         <td><div style="font-weight:600">${esc(it.destinatario_nome)}</div><div class="end">${esc(it.destinatario_doc_formatado)}</div></td>
         <td class="c-end" data-i="${i}">${celulaEndereco(it)}</td>
         <td class="num nw" style="text-align:center">${it.volumes}</td>
@@ -543,7 +538,7 @@
     modal(`<h3>Documentos do pedido</h3>
       <p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}</p>
       <p>Os documentos anexados aqui saem impressos junto da nota fiscal na entrega.</p>
-      <div class="anx-lista">${atuais.length ? atuais.map(a => `<div class="anx-solto"><a href="${comEmpresa(`${BASE}/api/envios/${x.id}/anexos/${a.id}`)}" target="_blank" rel="noopener" class="anx-nome">${esc(a.nome)}</a><span class="anx-info">${infoAnexo(a)}</span>${pode ? `<button type="button" class="anx-link" data-doc-remover="${a.id}">remover</button>` : ''}</div>`).join('') : '<div class="anx-info">Nenhum documento anexado ainda.</div>'}</div>
+      <div class="anx-lista">${atuais.length ? atuais.map(a => `<div class="anx-solto"><a href="${BASE}/api/envios/${x.id}/anexos/${a.id}" target="_blank" rel="noopener" class="anx-nome">${esc(a.nome)}</a><span class="anx-info">${infoAnexo(a)}</span>${pode ? `<button type="button" class="anx-link" data-doc-remover="${a.id}">remover</button>` : ''}</div>`).join('') : '<div class="anx-info">Nenhum documento anexado ainda.</div>'}</div>
       ${docNovos.length ? `<div class="anx-lista"><b style="font-size:12.5px;">Pra anexar agora:</b>${docNovos.map(a => `<div class="anx ${diverge(a, x.numero_nf) ? 'diverge' : ''}"><span class="anx-nome">${esc(a.nome)}</span><span class="anx-info">${infoAnexo(a)}</span>${diverge(a, x.numero_nf) ? `<span class="anx-alerta">Atenção: o documento cita a NF ${esc(a.numero_nf)}, e este pedido é a NF ${esc(x.numero_nf)}.</span>` : ''}</div>`).join('')}
         <label class="anx-conf"><input type="checkbox" id="m-conf"> ${docNovos.length > 1 ? `Conferi os ${docNovos.length} documentos: são deste pedido.` : 'Conferi o documento: é deste pedido.'}</label></div>` : ''}
       ${!pode && PODE_ENVIAR ? '<p>Este pedido já saiu pra entrega ou foi encerrado: não aceita mais documentos.</p>' : ''}
@@ -846,7 +841,7 @@
     if (tipo === 'reenviar-todos') { reenviarTodos(); return; }
     const x = dados.envios.find(e => e.id === Number(id));
     if (!x) return;
-    if (tipo === 'xml') { window.open(comEmpresa(`${BASE}/api/envios/${id}/xml`), '_blank'); return; }
+    if (tipo === 'xml') { window.open(`${BASE}/api/envios/${id}/xml`, '_blank'); return; }
     if (tipo === 'documentos') { docNovos = []; abrirDocumentos(x.id); return; }
     const cab = `<p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}</p>`;
     const textos = {
@@ -911,16 +906,6 @@
     renderAnexos();
   });
   $('btn-limpar').addEventListener('click', () => { previa = null; $('previa').classList.remove('aberta'); mensagem('', ''); });
-  if ($('env-empresa')) {
-    const trocarEmpresa = () => {
-      empresaEnvio = $('env-empresa').value;
-      previa = null; $('previa').classList.remove('aberta'); mensagem('', '');   // a prévia era da outra empresa
-      $('btn-modelo').href = comEmpresa(`${BASE}/api/envios/modelo-planilha`);
-      if (vista === 'envios') carregar();
-    };
-    $('env-empresa').addEventListener('change', trocarEmpresa);
-    $('btn-modelo').href = comEmpresa(`${BASE}/api/envios/modelo-planilha`);
-  }
   $('env-abas').addEventListener('click', e => { const b = e.target.closest('[data-aba]'); if (!b) return; aba = b.dataset.aba; render(); });
   $('env-tiles').addEventListener('click', e => { const t = e.target.closest('[data-aba]'); if (!t) return; aba = t.dataset.aba; render(); });
   $('env-busca').addEventListener('input', e => { busca = e.target.value; renderTabela(); });

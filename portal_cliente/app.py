@@ -892,17 +892,55 @@ def api_notificacoes_salvar():
 
 def _empresa_envio() -> dict:
     """Empresa em que o envio acontece. Login avulso: a própria. Login de
-    grupo: a do seletor da tela (cabeçalho X-Portal-Empresa; `?empresa=` nos
-    links de download) -- cada empresa é um cliente diferente na Stokki, então
-    fila, destinatários e validação do emitente são por empresa."""
+    grupo: a informada na chamada (cabeçalho X-Portal-Empresa ou `?empresa=`);
+    sem ela, a dona do pedido da rota ou a primeira que é cliente na Stokki
+    (rotas de lote usam _grupo_sem_seletor) -- cada empresa é um cliente
+    diferente na Stokki, então fila, destinatários e emitente são por empresa."""
     pedido = auth.normalizar_cnpj(request.headers.get("X-Portal-Empresa") or request.args.get("empresa"))
     if not pedido:
-        return g.cliente["empresas"][0]
+        # Grupo sem seletor (12/11): rota de um pedido já enviado vale pra empresa dona dele
+        envio_id = (request.view_args or {}).get("envio_id")
+        if len(g.cliente["empresas"]) < 2:
+            return g.cliente["empresas"][0]
+        if envio_id is not None:
+            return _empresa_do_envio(envio_id)
+        if "empresa_padrao_envio" not in g:   # grupo em que a do login não é cliente na Stokki
+            primeira = _empresas_com_envio()[0]["cnpj"]
+            g.empresa_padrao_envio = next(e for e in g.cliente["empresas"] if e["cnpj"] == primeira)
+        return g.empresa_padrao_envio
     for e in g.cliente["empresas"]:
         if e["cnpj"] == pedido:
             return e
     abort(Response(jsonify({"erro": "Essa empresa não faz parte do seu acesso."}).get_data(), status=403,
                    mimetype="application/json"))
+
+
+def _empresa_do_envio(envio_id: int) -> dict:
+    """Empresa do login dona do envio; envio de fora (ou inexistente) cai na
+    do login, e a busca do envio por CNPJ dá 404 como sempre."""
+    if g.get("empresa_do_envio", (None,))[0] != envio_id:
+        conn = envios.conectar()
+        try:
+            r = conn.execute("SELECT cnpj_embarcador FROM portal_envios WHERE id = ?", (envio_id,)).fetchone()
+        finally:
+            conn.close()
+        dono = r["cnpj_embarcador"] if r else None
+        g.empresa_do_envio = (envio_id, next((e for e in g.cliente["empresas"] if e["cnpj"] == dono),
+                                             g.cliente["empresas"][0]))
+    return g.empresa_do_envio[1]
+
+
+def _grupo_sem_seletor() -> dict[str, dict] | None:
+    """Login de grupo sem empresa informada na chamada (12/11, pedido do Hugo:
+    a tela não tem mais seletor; a planilha diz a empresa de cada pedido e o
+    XML vai pelo emitente): {cnpj: empresa} das que são cliente na Stokki.
+    None = uma empresa só (login avulso, ou X-Portal-Empresa/?empresa= mandado)."""
+    if request.headers.get("X-Portal-Empresa") or request.args.get("empresa") or len(g.cliente["empresas"]) < 2:
+        return None
+    if "grupo_envio" not in g:
+        com_envio = {e["cnpj"] for e in _empresas_com_envio()}
+        g.grupo_envio = {e["cnpj"]: e for e in g.cliente["empresas"] if e["cnpj"] in com_envio}
+    return g.grupo_envio if len(g.grupo_envio) > 1 else None
 
 
 def _outras_empresas_envio() -> dict[str, str]:
@@ -940,7 +978,12 @@ def _avisar_xd_ausente(nome: str, erro: str) -> None:
 def api_envios_listar():
     conn = envios.conectar()
     try:
-        lista = envios.listar_envios(conn, _empresa_envio()['cnpj'])
+        grupo = _grupo_sem_seletor()
+        if grupo:   # todas as empresas juntas, com o nome de cada uma na linha
+            lista = [{**l, "empresa": e["nome"]} for e in grupo.values() for l in envios.listar_envios(conn, e["cnpj"])]
+            lista.sort(key=lambda l: (l.get("criado_em") or "", l.get("id") or 0), reverse=True)
+        else:
+            lista = envios.listar_envios(conn, _empresa_envio()['cnpj'])
         anexos_pedido.anotar(conn, lista)
         cfg = envios.config_stokki_cliente(conn, _empresa_envio()['cnpj'], _CONFIG)
     except envios.ErroEnvio as e:
@@ -975,8 +1018,20 @@ def api_envios_analisar():
     entrega_ativa = endereco_entrega.entrega_ativa(_CONFIG)
     conn = envios.conectar()
     try:
-        cfg = envios.config_stokki_cliente(conn, _empresa_envio()['cnpj'], _CONFIG)
-        fluxos_disp, xd = envios.fluxos_para_envio(conn, _empresa_envio()['cnpj'])
+        # Cada item da prévia tem a empresa dele (grupo sem seletor: a da coluna
+        # da planilha ou o emitente do XML); `ctx` guarda o que é por empresa.
+        grupo = _grupo_sem_seletor()
+        padrao = _empresa_envio()['cnpj']
+        ctxs: dict[str, dict] = {}
+
+        def ctx(cnpj: str) -> dict:
+            if cnpj not in ctxs:
+                fl, xd_ = envios.fluxos_para_envio(conn, cnpj)
+                ctxs[cnpj] = {"cfg": envios.config_stokki_cliente(conn, cnpj, _CONFIG), "fluxos": fl, "xd": xd_,
+                              "nome": ((grupo or {}).get(cnpj) or _empresa_envio())["nome"]}
+            return ctxs[cnpj]
+
+        cfg = ctx(padrao)["cfg"]
         for f in arquivos:
             try:
                 partes = envios.expandir_upload(f.filename or "", f.read())
@@ -989,7 +1044,7 @@ def api_envios_analisar():
                         rejeitados.append({"arquivo": nome, "erro": f"{nome}: no máximo {anexos_pedido.MAX_PDFS_POR_ENVIO} PDFs por envio."})
                         continue
                     try:
-                        anexos.append(anexos_pedido.guardar_previa(nome, conteudo, _empresa_envio()['cnpj']))
+                        anexos.append(anexos_pedido.guardar_previa(nome, conteudo, g.cliente["cnpj"]))
                     except envios.ErroEnvio as e:
                         rejeitados.append({"arquivo": nome, "erro": str(e)})
                     continue
@@ -999,7 +1054,8 @@ def api_envios_analisar():
                     # próprio (JSON temporário) apontando pra planilha original.
                     n_planilhas += 1
                     try:
-                        pedidos, rej = envios.ler_planilha(conteudo, nome, _empresa_envio()['cnpj'])
+                        pedidos, rej = envios.ler_planilha(conteudo, nome, padrao,
+                                                           {c: e["nome"] for c, e in grupo.items()} if grupo else None)
                     except envios.ErroEnvio as e:
                         rejeitados.append({"arquivo": nome, "erro": str(e)})
                         continue
@@ -1011,14 +1067,16 @@ def api_envios_analisar():
                             rejeitados.append({"arquivo": nome, "rotulo": rotulo, "erro": "Repetido dentro do mesmo envio."})
                             continue
                         vistos.add(ped["chave_nfe"])
-                        v = envios.validar_item(conn, ped, _empresa_envio()['cnpj'], _outras_empresas_envio())
-                        erros_sku, avisos_sku = envios.validar_skus(conn, ped, cfg)
+                        emp = ped["emitente_cnpj"]
+                        v = envios.validar_item(conn, ped, emp, _outras_empresas_envio())
+                        erros_sku, avisos_sku = envios.validar_skus(conn, ped, ctx(emp)["cfg"])
                         if not v["ok"] or erros_sku:
                             rejeitados.append({"arquivo": nome, "rotulo": rotulo, "erro": " ".join(v["erros"] + erros_sku)})
                             continue
                         token = envios.guardar_temporario_pedido(ped, token_plan)
                         item = {k: v_ for k, v_ in ped.items() if k not in ("emitente_cnpj",)}
                         item.update({"token": token, "avisos": v["avisos"] + avisos_sku, "rotulo": rotulo,
+                                     "empresa_cnpj": emp, "empresa": ctx(emp)["nome"] if grupo else "",
                                      "destinatario_doc_formatado": envios.formatar_documento(ped["destinatario_doc"])})
                         itens.append(item)
                     continue
@@ -1033,7 +1091,8 @@ def api_envios_analisar():
                                        "erro": "Repetida dentro do mesmo envio."})
                     continue
                 vistos.add(nfe["chave_nfe"])
-                v = envios.validar_item(conn, nfe, _empresa_envio()['cnpj'], _outras_empresas_envio())
+                emp = nfe["emitente_cnpj"] if grupo and nfe["emitente_cnpj"] in grupo else padrao
+                v = envios.validar_item(conn, nfe, emp, _outras_empresas_envio())
                 if not v["ok"]:
                     rejeitados.append({"arquivo": nome, "numero_nf": nfe["numero_nf"], "rotulo": f"NF {nfe['numero_nf']}",
                                        "erro": " ".join(v["erros"])})
@@ -1041,27 +1100,44 @@ def api_envios_analisar():
                 token = envios.guardar_temporario(conteudo)
                 item = {k: v_ for k, v_ in nfe.items() if k not in ("emitente_cnpj",)}
                 item.update({"token": token, "avisos": v["avisos"], "rotulo": f"NF {nfe['numero_nf']}",
+                             "empresa_cnpj": emp, "empresa": ctx(emp)["nome"] if grupo else "",
                              "destinatario_doc_formatado": envios.formatar_documento(nfe["destinatario_doc"])})
                 itens.append(item)
         if entrega_ativa:
             _casos_de_entrega(conn, itens)
-        destinatarios = envios.info_destinatarios(conn, _empresa_envio()['cnpj'], itens, _CONFIG)
+        usadas = list(dict.fromkeys(it["empresa_cnpj"] for it in itens)) or [padrao]
+        destinatarios: dict[str, dict] = {}
+        for cnpj in usadas:
+            do_cnpj = [it for it in itens if it["empresa_cnpj"] == cnpj]
+            for doc, d in envios.info_destinatarios(conn, cnpj, do_cnpj, _CONFIG).items():
+                ant = destinatarios.get(doc)
+                # mesmo destinatário em duas empresas do grupo: só é "conhecido"
+                # (não pergunta o horário) se as duas já souberem
+                destinatarios[doc] = d if ant is None else {
+                    **(ant if ant["conhecido"] else d), "conhecido": ant["conhecido"] and d["conhecido"],
+                    "requer_agendamento": ant["requer_agendamento"] or d["requer_agendamento"]}
         # XD ausente: o cliente vê na prévia; o atendimento recebe 1 e-mail por
         # embarcador por dia, e só quando o lote tem pedido que iria em Cross.
-        avisar_xd = bool(xd["erro"] and itens) and envios.primeiro_aviso_xd_do_dia(conn, _empresa_envio()['cnpj'])
+        avisar_xd = [c for c in usadas if ctx(c)["xd"]["erro"] and any(it["empresa_cnpj"] == c for it in itens)
+                     and envios.primeiro_aviso_xd_do_dia(conn, c)]
+        for it in itens:
+            it["fluxos"] = ctx(it["empresa_cnpj"])["fluxos"]
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     finally:
         conn.close()
-    if avisar_xd:
-        _avisar_xd_ausente(_empresa_envio()["nome"] or _empresa_envio()["cnpj"], xd["erro"])
-    if xd["erro"]:
-        if not fluxos_disp:  # só Cross e o XD falta: nada pode ir
-            rejeitados.extend({"arquivo": it.get("nome_arquivo") or it.get("rotulo"), "numero_nf": it.get("numero_nf"),
-                               "rotulo": it.get("rotulo"), "erro": envios.MSG_XD_AUSENTE} for it in itens)
-            itens = []
+    for c in avisar_xd:
+        _avisar_xd_ausente(ctxs[c]["nome"] or c, ctxs[c]["xd"]["erro"])
+    # só Cross e o XD falta: nada daquela empresa pode ir
+    sem_fluxo = {c for c in usadas if ctxs[c]["xd"]["erro"] and not ctxs[c]["fluxos"]}
+    rejeitados.extend({"arquivo": it.get("nome_arquivo") or it.get("rotulo"), "numero_nf": it.get("numero_nf"),
+                       "rotulo": it.get("rotulo"), "erro": envios.MSG_XD_AUSENTE}
+                      for it in itens if it["empresa_cnpj"] in sem_fluxo)
+    itens = [it for it in itens if it["empresa_cnpj"] not in sem_fluxo]
+    fluxos_disp = [f for f in envios.FLUXOS if any(f in ctxs[c]["fluxos"] for c in usadas)]
+    xd = next((ctxs[c]["xd"] for c in usadas if ctxs[c]["xd"]["erro"]), ctxs[usadas[0]]["xd"])
     _sugerir_pedidos(anexos, [{**it, "chave": it["token"]} for it in itens])
-    logger.info(f"analisar cnpj={_empresa_envio()['cnpj']} por={_quem_envia()} validos={len(itens)} rejeitados={len(rejeitados)} "
+    logger.info(f"analisar cnpj={','.join(usadas)} por={_quem_envia()} validos={len(itens)} rejeitados={len(rejeitados)} "
                 f"planilhas={n_planilhas} anexos={len(anexos)}")
     return jsonify({"itens": itens, "rejeitados": rejeitados, "destinatarios": destinatarios, "anexos": anexos,
                     "regra_xml": cfg["regra_xml"], "regra_xml_rotulo": envios.REGRAS_XML.get(cfg["regra_xml"], ""),
@@ -1071,14 +1147,15 @@ def api_envios_analisar():
 
 def _casos_de_entrega(conn, itens: list[dict]) -> None:
     """Caso do endereço de entrega de cada XML da prévia (27/10, item["entrega"]):
-    memória pela empresa do envio (login de grupo: a do seletor). Mesmo
-    destinatário/endereço no lote calcula uma vez só."""
-    emp = _empresa_envio()
+    memória pela empresa do item (login de grupo: a emitente do XML). Mesmo
+    destinatário/endereço da mesma empresa no lote calcula uma vez só."""
+    empresas = {e["cnpj"]: e for e in g.cliente["empresas"]}
     casos: dict[tuple, dict] = {}
     for it in itens:
         if it.get("origem") != envios.ORIGEM_XML:
             continue
-        chave = tuple(it.get(k) or "" for k in ("destinatario_doc", "destinatario_cep", "destinatario_endereco",
+        emp = empresas.get(it.get("empresa_cnpj")) or _empresa_envio()
+        chave = tuple(it.get(k) or "" for k in ("empresa_cnpj", "destinatario_doc", "destinatario_cep", "destinatario_endereco",
                                                 "endereco_fiscal", "transportadora_nome", "transportadora_cnpj"))
         if chave not in casos:
             casos[chave] = endereco_entrega.classificar_entrega(conn, it, emp["cnpj"], emp.get("sender_id"))
@@ -1121,7 +1198,9 @@ def api_envios_cep(cep):
 @requer_cliente
 def api_envios_modelo_planilha():
     """Modelo .xlsx da Fresh Log pra importação por planilha (09/09)."""
-    conteudo = envios.gerar_modelo_planilha(_empresa_envio()["nome"] or "")
+    grupo = _grupo_sem_seletor()
+    conteudo = envios.gerar_modelo_planilha(_empresa_envio()["nome"] or "",
+                                            {c: e["nome"] for c, e in grupo.items()} if grupo else None)
     return send_file(io.BytesIO(conteudo), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name="modelo_pedidos_freshlog.xlsx", max_age=0)
 
@@ -1153,7 +1232,7 @@ def api_envios_anexos_ler():
     anexos, rejeitados = [], []
     for f in arquivos:
         try:
-            anexos.append(anexos_pedido.guardar_previa(f.filename or "documento.pdf", f.read(), _empresa_envio()['cnpj']))
+            anexos.append(anexos_pedido.guardar_previa(f.filename or "documento.pdf", f.read(), g.cliente["cnpj"]))
         except envios.ErroEnvio as e:
             rejeitados.append({"arquivo": f.filename or "arquivo", "erro": str(e)})
     _sugerir_pedidos(anexos, pedidos[:500])
@@ -1185,7 +1264,8 @@ def api_envios_anexar(envio_id):
         envio = _envio_pra_anexo(conn, envio_id)
         if not anexos_pedido.pode_anexar(conn, envio):
             return jsonify({"erro": "Este pedido já saiu pra entrega (ou foi encerrado) e não aceita mais documentos."}), 409
-        gravados = anexos_pedido.anexar(conn, envio, [{"token": t, "casado_por": "manual"} for t in tokens], _quem_envia())
+        gravados = anexos_pedido.anexar(conn, envio, [{"token": t, "casado_por": "manual"} for t in tokens], _quem_envia(),
+                                        dono=g.cliente["cnpj"])
         conn.commit()
     except envios.ErroEnvio as e:
         conn.rollback()
@@ -1254,17 +1334,25 @@ def api_envios_confirmar():
     conn = envios.conectar()
     try:
         anexos_pedido.validar_tokens([a.get("token", "") for lista in anexos_por_token.values() for a in lista],
-                                     _empresa_envio()['cnpj'])
+                                     g.cliente["cnpj"])
         # Data fora do dia de visita da região (Hugo, 03/10): pergunta antes de
         # gravar; o embarcador troca a data ou confirma assim mesmo
         # (aceita_fora_dia_fixo no item) e o pedido vira envio dedicado.
         fora = envios.avisos_fora_dia_fixo(itens, _CONFIG)
         if fora:
             return jsonify({"erro": "Há pedidos com data fora do dia de visita da região.", "fora_dia_fixo": fora}), 409
-        cfg = envios.config_stokki_cliente(conn, _empresa_envio()['cnpj'], _CONFIG)
-        fluxos_disp, _xd = envios.fluxos_para_envio(conn, _empresa_envio()['cnpj'])
-        criados = envios.confirmar_envios(conn, _empresa_envio()['cnpj'], itens, _quem_envia(), _CONFIG, cfg["regra_xml"],
-                                          fluxos_disponiveis=fluxos_disp, sender_id=_empresa_envio().get("sender_id"))
+        grupo = _grupo_sem_seletor()
+        if grupo:   # a empresa de cada pedido sai do próprio temporário (emitente)
+            por_empresa = {c: {"regra_xml": envios.config_stokki_cliente(conn, c, _CONFIG)["regra_xml"],
+                               "fluxos": envios.fluxos_para_envio(conn, c)[0], "sender_id": e.get("sender_id")}
+                           for c, e in grupo.items()}
+            criados = envios.confirmar_envios(conn, g.cliente["cnpj"], itens, _quem_envia(), _CONFIG, "nenhuma",
+                                              por_empresa=por_empresa)
+        else:
+            cfg = envios.config_stokki_cliente(conn, _empresa_envio()['cnpj'], _CONFIG)
+            fluxos_disp, _xd = envios.fluxos_para_envio(conn, _empresa_envio()['cnpj'])
+            criados = envios.confirmar_envios(conn, _empresa_envio()['cnpj'], itens, _quem_envia(), _CONFIG, cfg["regra_xml"],
+                                              fluxos_disponiveis=fluxos_disp, sender_id=_empresa_envio().get("sender_id"))
         # Os pedidos ja estao gravados: documento que falhar nao derruba o envio,
         # vira aviso (o cliente anexa de novo pela lista).
         for c in criados:
@@ -1272,7 +1360,8 @@ def api_envios_confirmar():
             if not lista:
                 continue
             try:
-                anexos_pedido.anexar(conn, envios.buscar_envio(conn, c["id"], _empresa_envio()['cnpj']), lista, _quem_envia())
+                anexos_pedido.anexar(conn, envios.buscar_envio(conn, c["id"], c.get("cnpj_embarcador") or _empresa_envio()['cnpj']),
+                                     lista, _quem_envia(), dono=g.cliente["cnpj"])
                 conn.commit()
             except Exception as e:
                 conn.rollback()
@@ -1284,11 +1373,12 @@ def api_envios_confirmar():
         bloqueados = [c for c in criados if c.get("status") == envios.STATUS_AGUARDANDO_LIBERACAO]
         if bloqueados:
             import bloqueio_area
-            emp = _empresa_envio()
-            # CNPJ do LOGIN (g.cliente), não da empresa do seletor: o widget do
+            # CNPJ do LOGIN (g.cliente), não da empresa do pedido: o widget do
             # chat busca o chamado pelo CNPJ logado (login de grupo -- revisão 23/09)
-            bloqueio_area.abrir_bloqueio(conn, {"cnpj": g.cliente["cnpj"], "sender_id": emp.get("sender_id"), "nome": emp.get("nome")},
-                                         criados, _CONFIG)
+            for cnpj in dict.fromkeys(c.get("cnpj_embarcador") for c in bloqueados):
+                emp = (grupo or {}).get(cnpj) or _empresa_envio()
+                bloqueio_area.abrir_bloqueio(conn, {"cnpj": g.cliente["cnpj"], "sender_id": emp.get("sender_id"), "nome": emp.get("nome")},
+                                             [c for c in criados if c.get("cnpj_embarcador") == cnpj], _CONFIG)
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     except Exception as e:
@@ -1296,7 +1386,8 @@ def api_envios_confirmar():
         return jsonify({"erro": f"Não foi possível registrar os pedidos ({type(e).__name__})."}), 500
     finally:
         conn.close()
-    logger.info(f"confirmar cnpj={_empresa_envio()['cnpj']} por={_quem_envia()} n={len(criados)}")
+    logger.info(f"confirmar cnpj={','.join(dict.fromkeys(c.get('cnpj_embarcador') or _empresa_envio()['cnpj'] for c in criados))} "
+                f"por={_quem_envia()} n={len(criados)}")
     n = len(criados)
     if bloqueados:
         b = len(bloqueados)
@@ -1318,7 +1409,10 @@ def api_envios_reenviar_erros():
     _exige_pode_enviar()
     conn = envios.conectar()
     try:
-        r = envios.reenviar_erros(conn, _empresa_envio()['cnpj'], _quem_envia())
+        r = {"na_fila": 0, "liberacao": 0}
+        for cnpj in (_grupo_sem_seletor() or {_empresa_envio()['cnpj']: None}):
+            for k, v in envios.reenviar_erros(conn, cnpj, _quem_envia()).items():
+                r[k] += v
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     finally:

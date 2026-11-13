@@ -6,11 +6,14 @@ grupo na mesma tela -- Marchef tem 10 CNPJs, Grupo Trigo 2 remetentes).
 
     py -3.11 -m unittest portal_cliente.test_grupos
 """
+import io
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+
+import openpyxl
 
 _AQUI = Path(__file__).parent
 _RAIZ = _AQUI.parent
@@ -248,7 +251,7 @@ class RotasGrupoTest(_BancoTemporario):
         self.assertEqual([r[1].value for r in so_101.iter_rows(min_row=2)], ["#PS-1"])
         self.assertEqual(de_fora.max_row, 3)   # empresa que nao e do grupo = ignora o filtro
 
-    # ── envio de pedidos: acontece numa empresa do grupo por vez ──────────────
+    # ── envio de pedidos: cada pedido na empresa dele (12/11, sem seletor na tela) ──
 
     def _listar_envios(self, **kw):
         cfg = {"regra_xml": "nenhuma", "envio_ativo": True, "client_id": 61}
@@ -257,10 +260,107 @@ class RotasGrupoTest(_BancoTemporario):
             r = self.cli.get("/api/envios", base_url=self.HTTPS, **kw)
         return r, listar
 
-    def test_envios_sem_empresa_informada_valem_pro_cnpj_do_login(self):
+    def test_envios_sem_empresa_informada_juntam_todas_as_empresas_do_grupo(self):
+        # 12/11: a tela nao tem mais seletor de empresa
         r, listar = self._listar_envios()
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(listar.call_args.args[1], PRINCIPAL)
+        self.assertEqual([c.args[1] for c in listar.call_args_list], [PRINCIPAL, MEMBRO_A])
+
+    def test_envios_de_login_avulso_seguem_so_com_a_empresa_dele(self):
+        self.cli = self._logar(AVULSO)
+        r, listar = self._listar_envios()
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual([c.args[1] for c in listar.call_args_list], [AVULSO])
+
+    def test_grupo_com_uma_so_empresa_cliente_na_stokki_usa_ela_sem_informar(self):
+        # so o membro tem cadastro na Stokki: nao ha o que escolher, e a empresa do envio e ele
+        cfg = lambda conn, cnpj, config: {"regra_xml": "nenhuma", "envio_ativo": True,
+                                          "client_id": "61" if cnpj == MEMBRO_A else ""}
+        with mock.patch.object(self.portal.envios, "listar_envios", return_value=[]) as listar,              mock.patch.object(self.portal.envios, "config_stokki_cliente", side_effect=cfg):
+            r = self.cli.get("/api/envios", base_url=self.HTTPS)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual([c.args[1] for c in listar.call_args_list], [MEMBRO_A])
+
+    def _ambiente_envio(self):
+        """Envio de verdade no banco temporario (o mesmo arquivo do auth, como
+        na producao), sem geocodificar nem escrever na roteirizacao."""
+        import regras.complexidade_entrega as ce
+        ep, raiz = self.portal.envios, Path(self._tmp.name)
+        for alvo, nome, valor in (
+                (ep, "DB_PATH", raiz / "dados.db"), (ep, "_RAIZ", raiz), (ep, "PASTA_XMLS", raiz / "portal_envios"),
+                (ep, "PASTA_TEMP", raiz / "portal_envios" / "_temporarios"),
+                (ep, "fluxos_para_envio", lambda conn, cnpj: (["armazenagem"], {"codigo": None, "erro": None})),
+                (ep, "classificar_area_envio", lambda nfe, config: None),
+                (ep, "avisos_fora_dia_fixo", lambda itens, config=None: []),
+                (ce, "definir_ajuste_manual", lambda *a, **k: None), (ce, "carregar_ajustes_manuais", lambda: {}),
+                (self.portal, "_CONFIG", {})):
+            m = mock.patch.object(alvo, nome, valor)
+            m.start()
+            self.addCleanup(m.stop)
+        self.conn.execute("ALTER TABLE interno ADD COLUMN stkkc_id INTEGER")
+        self.conn.execute("UPDATE interno SET stkkc_id = sender_id")
+        self.conn.commit()
+
+    def _planilha_grupo(self, linhas):
+        ep = self.portal.envios
+        colunas = [ep.COLUNA_EMPRESA] + ep.COLUNAS_PLANILHA
+        wb = openpyxl.Workbook()
+        wb.active.append([c[1] for c in colunas])
+        base = {"destinatario_doc": "98.765.432/0001-10", "destinatario_nome": "Mercado Teste", "cep": "01310-100",
+                "logradouro": "Av. Paulista", "numero": "1578", "bairro": "Bela Vista", "cidade": "São Paulo", "uf": "SP",
+                "sku": "SKU-A", "quantidade": 10}
+        for l in linhas:
+            wb.active.append([{**base, **l}.get(c[0], "") for c in colunas])
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    def test_planilha_do_grupo_vai_pra_empresa_de_cada_pedido_sem_escolher_na_tela(self):
+        self._ambiente_envio()
+        modelo = openpyxl.load_workbook(io.BytesIO(self.cli.get("/api/envios/modelo-planilha", base_url=self.HTTPS).data))
+        self.assertEqual(modelo["Pedidos"]["A1"].value, self.portal.envios.COLUNA_EMPRESA[1])
+
+        planilha = self._planilha_grupo([{"referencia": "P-MARCHEF", "empresa_cnpj": PRINCIPAL},
+                                         {"referencia": "P-ITAUEIRA", "empresa_cnpj": "48.654.566/0001-63"},
+                                         {"referencia": "P-FORA", "empresa_cnpj": MEMBRO_B}])   # GOURMAR nao e deste grupo
+        r = self.cli.post("/api/envios/analisar", base_url=self.HTTPS, content_type="multipart/form-data",
+                          data={"arquivos": (io.BytesIO(planilha), "pedidos.xlsx")})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        previa = r.get_json()
+        self.assertEqual({i["referencia"]: (i["empresa_cnpj"], i["empresa"]) for i in previa["itens"]},
+                         {"P-MARCHEF": (PRINCIPAL, "MARCHEF"), "P-ITAUEIRA": (MEMBRO_A, "ITAUEIRA")})
+        self.assertEqual([x["rotulo"] for x in previa["rejeitados"]], ["Pedido P-FORA"])
+        self.assertIn("não faz parte do seu acesso", previa["rejeitados"][0]["erro"])
+
+        itens = [{"token": i["token"], "horario_inicio": "08:00", "horario_fim": "17:00"} for i in previa["itens"]]
+        r = self.cli.post("/api/envios/confirmar", base_url=self.HTTPS, json={"itens": itens})
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        gravados = {r_["referencia"]: r_["cnpj_embarcador"]
+                    for r_ in self.conn.execute("SELECT referencia, cnpj_embarcador FROM portal_envios")}
+        self.assertEqual(gravados, {"P-MARCHEF": PRINCIPAL, "P-ITAUEIRA": MEMBRO_A})
+
+        lista = self.cli.get("/api/envios", base_url=self.HTTPS).get_json()["envios"]
+        self.assertEqual({x["referencia"]: x["empresa"] for x in lista}, {"P-MARCHEF": "MARCHEF", "P-ITAUEIRA": "ITAUEIRA"})
+        # rota de um pedido ja enviado acha a empresa dona sem a tela informar
+        do_membro = next(x["id"] for x in lista if x["referencia"] == "P-ITAUEIRA")
+        self.assertEqual(self.cli.get(f"/api/envios/{do_membro}/xml", base_url=self.HTTPS).status_code, 200)
+        # ...e pedido de empresa de fora do grupo continua invisivel
+        self.conn.execute("UPDATE portal_envios SET cnpj_embarcador = ? WHERE id = ?", (MEMBRO_B, do_membro))
+        self.conn.commit()
+        self.assertEqual(self.cli.get(f"/api/envios/{do_membro}/xml", base_url=self.HTTPS).status_code, 404)
+
+    def test_planilha_sem_a_coluna_da_empresa_e_recusada_no_login_de_grupo(self):
+        self._ambiente_envio()
+        ep = self.portal.envios
+        wb = openpyxl.Workbook()
+        wb.active.append([c[1] for c in ep.COLUNAS_PLANILHA])
+        buf = io.BytesIO()
+        wb.save(buf)
+        r = self.cli.post("/api/envios/analisar", base_url=self.HTTPS, content_type="multipart/form-data",
+                          data={"arquivos": (io.BytesIO(buf.getvalue()), "antiga.xlsx")})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.get_json()["itens"], [])
+        self.assertIn("falta a coluna", r.get_json()["rejeitados"][0]["erro"])
 
     def test_envios_na_empresa_do_grupo_escolhida(self):
         r, listar = self._listar_envios(headers={"X-Portal-Empresa": "48.654.566/0001-63"})
