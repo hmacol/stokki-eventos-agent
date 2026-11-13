@@ -274,6 +274,7 @@
   html.modo-mobile .barra-lote:not(.expandida) [data-lote="reenvio"], html.modo-mobile .barra-lote:not(.expandida) [data-lote="cancelar_vuupt"],
   html.modo-mobile .barra-lote:not(.expandida) [data-lote="cancelar_stokki"], html.modo-mobile .barra-lote:not(.expandida) [data-lote="baixa"],
   html.modo-mobile .barra-lote:not(.expandida) [data-lote="expedir_stokki"],
+  html.modo-mobile .barra-lote:not(.expandida) [data-lote="documentos"],
   html.modo-mobile .barra-lote:not(.expandida) #lote-limpar { display: none; }
   html.modo-mobile .barra-lote.expandida #lote-mais { display: none; }
   html:not(.modo-mobile) #lote-mais { display: none; }
@@ -740,6 +741,7 @@
   <button type="button" class="botao" data-lote="endereco">Endereço</button>
   <button type="button" class="botao" data-lote="baixa">Dar baixa na Vuupt</button>
   <button type="button" class="botao" data-lote="expedir_stokki">Expedir na Stokki</button>
+  <button type="button" class="botao" data-lote="documentos">Documentos por e-mail</button>
   <button type="button" class="botao" id="lote-limpar">Limpar</button>
   <button type="button" class="botao" id="lote-mais">Mais ações</button>
 </div>
@@ -757,7 +759,7 @@
   <button type="button" role="menuitem" data-acao="baixa">Dar baixa na Vuupt</button>
   <button type="button" role="menuitem" data-acao="expedir_stokki">Expedir na Stokki</button>
   <button type="button" role="menuitem" data-acao="trocar_canhoto">Trocar canhoto</button>
-  <button type="button" role="menuitem" data-acao="nota_fiscal">Nota fiscal</button>
+  <button type="button" role="menuitem" data-acao="documentos">Documentos por e-mail</button>
 </div>
 
 <div class="modal-fundo" id="modal-acao" hidden>
@@ -824,6 +826,19 @@
       <div data-secao="expedir_stokki" hidden>
         <p class="subtitulo">Expede o pedido na Stokki agora e anexa o canhoto que existir. Se ele estiver preso numa Expedição Programada (OE), ela é finalizada; se a OE tiver outros pedidos, só este sai dela. Leva cerca de 1 minuto por pedido e espera a vez se outra rotina da Stokki estiver rodando.</p>
       </div>
+      <div data-secao="documentos" hidden>
+        <p class="subtitulo">Manda o XML, a DANFE e o boleto guardados de cada pedido num e-mail só. Clique no nome do arquivo para baixar. O e-mail sai de verdade para o endereço abaixo.</p>
+        <div class="resumo" id="docs-lista" aria-live="polite"></div>
+        <div class="campo" id="docs-campo-mesmo" hidden>
+          <label>Enviar para o mesmo e-mail do último envio?</label>
+          <p class="subtitulo"><strong id="docs-mesmo-email"></strong></p>
+          <button type="button" class="botao" id="docs-alterar">Alterar e-mail</button>
+        </div>
+        <div class="campo" id="docs-campo-email">
+          <label for="docs-email">E-mail de quem vai receber</label>
+          <input type="text" id="docs-email" inputmode="email" autocomplete="off" maxlength="600" placeholder="nome@empresa.com.br (mais de um: separe por vírgula)">
+        </div>
+      </div>
       <div data-secao="canhoto" hidden><ul class="lista-canhotos" id="canhoto-lista"></ul></div>
     </div>
     <div class="progresso" id="modal-progresso" hidden>
@@ -851,6 +866,8 @@
   "comprovantes": url_for('api_pedidos_acao_comprovantes'),
   "expedir_stokki": url_for('api_pedidos_acao_expedir_stokki'),
   "expedir_andamento": url_for('api_pedidos_acao_expedir_stokki_andamento'),
+  "documentos_conferir": url_for('api_pedidos_documentos_conferir'),
+  "documentos_enviar": url_for('api_pedidos_documentos_enviar'),
 } %}
 {% set rotulos_status = {} %}
 {% for s in status %}{% set _ = rotulos_status.update({s: formatar('status', s)}) %}{% endfor %}
@@ -870,6 +887,7 @@
     baixa: { titulo: "Dar baixa na Vuupt", confirmar: "Dar baixa" },
     expedir_stokki: { titulo: "Expedir na Stokki", confirmar: "Expedir" },
     canhoto: { titulo: "Canhotos do pedido", confirmar: "" },
+    documentos: { titulo: "Documentos por e-mail", confirmar: "Enviar por e-mail" },
   };
 
 {% include "_reduzir_imagem.js.html" %}
@@ -889,7 +907,11 @@
 
   // "" = pode; senão, o porquê (vira a dica do item). O servidor confere de novo.
   function bloqueio(acao, l) {
-    if (acao === "trocar_canhoto" || acao === "nota_fiscal") return "em breve";
+    if (acao === "trocar_canhoto") return "em breve";
+    // XML, DANFE e boleto guardados: vale em qualquer status, basta o código ser de um pedido da Stokki
+    if (acao === "documentos") {
+      return /^#?PS-\d+(-[RC]\d+)?$/i.test(l.codigo) ? "" : "Código sem PS-<número>: não dá pra achar os documentos do pedido.";
+    }
     if (acao === "canhoto") return "";
     if (acao === "cancelar_stokki") {
       if (l.status === "ENTREGUE") return "pedido já entregue";
@@ -1098,6 +1120,104 @@
     $("baixa-justificativa").value = "";
     $("baixa-campo-justificativa").hidden = false;
     $("baixa-campo-outro").hidden = true;
+    limparFilhos($("docs-lista"));
+    mostrarEmailDocs("");
+  }
+
+  // ── documentos por e-mail (XML, DANFE e boleto guardados) ──
+  const ROTULO_DOC = { XML: "XML", DANFE: "DANFE", BOLETO: "boleto" };
+  function tamanhoLegivel(b) {
+    return b >= 1048576 ? `${(b / 1048576).toFixed(1).replace(".", ",")} MB` : `${Math.max(1, Math.round(b / 1024))} KB`;
+  }
+  function semDocs(faltando) { return `sem ${faltando.map((t) => ROTULO_DOC[t] || t).join(" e ")}`; }
+  function itensDocumentos() { return atual.itens.map((it) => ({ codigo: it.codigo, destinatario: it.destinatario })); }
+  // Com e-mail lembrado: pergunta se vai pro mesmo; "Alterar e-mail" abre o campo.
+  function mostrarEmailDocs(lembrado) {
+    $("docs-campo-mesmo").hidden = !lembrado;
+    $("docs-campo-email").hidden = !!lembrado;
+    $("docs-mesmo-email").textContent = lembrado || "";
+    $("docs-email").value = lembrado || "";
+  }
+  $("docs-alterar").addEventListener("click", () => {
+    $("docs-campo-mesmo").hidden = true;
+    $("docs-campo-email").hidden = false;
+    $("docs-email").focus();
+    $("docs-email").select();
+  });
+  async function carregarDocumentos() {
+    const meu = atual, caixa = $("docs-lista");
+    caixa.textContent = "Procurando os documentos...";
+    botaoConfirmar.disabled = true;
+    atual.bloqueado = true;
+    let d;
+    try {
+      d = await enviar(URLS.documentos_conferir, { itens: itensDocumentos() });
+    } catch (e) {
+      if (atual === meu) { limparFilhos(caixa); mostrarErro(`Falha ao procurar os documentos: ${e.message}`); }
+      return;
+    }
+    if (atual !== meu) return;
+    limparFilhos(caixa);
+    const ul = document.createElement("ul");
+    ul.className = "lista-canhotos";
+    d.pedidos.forEach((p) => {
+      const item = document.createElement("li");
+      const forte = document.createElement("strong");
+      forte.textContent = `${p.codigo}: `;
+      item.appendChild(forte);
+      p.arquivos.forEach((a, i) => {
+        if (i) item.appendChild(document.createTextNode(" · "));
+        const link = document.createElement("a");
+        link.href = a.url;
+        link.className = "link-linha";
+        link.textContent = a.nome;
+        link.title = `Baixar (${tamanhoLegivel(a.tamanho)})`;
+        item.appendChild(link);
+      });
+      if (!p.arquivos.length || p.faltando.length) {
+        const falta = document.createElement("span");
+        falta.className = "falha";
+        falta.textContent = p.arquivos.length ? ` — ${semDocs(p.faltando)}` : "nenhum documento guardado";
+        item.appendChild(falta);
+      }
+      ul.appendChild(item);
+    });
+    caixa.appendChild(ul);
+    const total = document.createElement("p");
+    total.textContent = !d.total_arquivos ? "Nada para enviar: nenhum documento guardado para a seleção."
+      : `${d.total_arquivos} arquivo(s), ${tamanhoLegivel(d.total_bytes)}` + (d.partes > 1 ? `: vai em ${d.partes} e-mails por causa do tamanho.` : ".");
+    caixa.appendChild(total);
+    const lembrados = d.emails_lembrados || [];
+    mostrarEmailDocs(lembrados.length === 1 ? lembrados[0] : "");
+    atual.bloqueado = !d.total_arquivos;
+    botaoConfirmar.disabled = atual.bloqueado;
+    if (!atual.bloqueado) ($("docs-campo-email").hidden ? botaoConfirmar : $("docs-email")).focus();
+  }
+  async function enviarDocumentos(p) {
+    botaoConfirmar.textContent = "Enviando...";
+    let d;
+    try {
+      d = await enviar(URLS.documentos_enviar, { itens: itensDocumentos(), emails: p.emails });
+    } catch (e) {
+      mostrarErro(e.message);
+      return;
+    }
+    atual.terminou = true;
+    $("modal-form").hidden = true;
+    const caixa = $("modal-resumo");
+    limparFilhos(caixa);
+    const ok = document.createElement("p");
+    ok.textContent = `Enviado para ${d.emails.join(", ")}: ${d.arquivos} arquivo(s)` + (d.partes > 1 ? ` em ${d.partes} e-mails.` : ".");
+    caixa.appendChild(ok);
+    const faltas = Object.keys(d.faltando || {});
+    if (faltas.length) {
+      const ul = document.createElement("ul");
+      faltas.forEach((c) => ul.appendChild(li(`${c}: ${semDocs(d.faltando[c])}`, "falha")));
+      caixa.appendChild(ul);
+    }
+    caixa.hidden = false;
+    botaoConfirmar.hidden = true;
+    botaoFechar.textContent = "Fechar";
   }
 
   function avisosStokki(itens) {
@@ -1205,6 +1325,8 @@
       avisosStokki(itens);
     } else if (acao === "canhoto") {
       carregarCanhotos(itens[0]);
+    } else if (acao === "documentos") {
+      carregarDocumentos();
     }
     modal.hidden = false;
     const foco = modal.querySelector(`[data-secao="${acao}"]:not([hidden]) textarea, [data-secao="${acao}"]:not([hidden]) input`);
@@ -1270,6 +1392,11 @@
       if (!data || !inicio || !fim) return { erro: "Preencha a data e a janela de horário." };
       if (inicio >= fim) return { erro: "O início da janela precisa ser antes do fim." };
       return { data, inicio, fim };
+    }
+    if (acao === "documentos") {
+      const emails = $("docs-email").value.trim();
+      if (!emails) return { erro: "Informe o e-mail de quem vai receber." };
+      return { emails };
     }
     if (acao === "baixa") {
       const foto = $("baixa-foto-canhoto").files[0] || null;
@@ -1420,7 +1547,8 @@
         p.foto = await reduzirImagem(p.foto);
         p.nota = p.nota ? await reduzirImagem(p.nota) : null;
       }
-      if (acao === "expedir_stokki") await rodarExpedicao();
+      if (acao === "documentos") await enviarDocumentos(p);
+      else if (acao === "expedir_stokki") await rodarExpedicao();
       else await rodarLote(acao, p);
     } finally {
       if (atual) {

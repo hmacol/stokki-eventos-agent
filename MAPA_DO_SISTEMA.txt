@@ -98,6 +98,13 @@
  Tela de planejamento (HTML/JS) ............ painel_agentes/templates/planejamento_rotas.html
  Rascunhos de rota (tabelas) ............... painel_agentes/rascunhos_rota.py
  Torre de Controle ......................... painel_agentes/torre_controle.py
+ Documentos por e-mail na /pedidos ......... painel_agentes/documentos_email.py (13/11): XML, DANFE e boleto(s) guardados
+                                             de um ou varios pedidos num e-mail so, pro endereco digitado (envio REAL,
+                                             sem forcar_destino); anexos XML_NF<n>/DANFE_NF<n>/BOLETO_NF<n>; lembra o
+                                             e-mail por destinatario/pedido. So le o que ja esta guardado
+                                             (documentos_processados + dados/xml_stokki), nada na Stokki. Rotas
+                                             POST /api/pedidos/documentos/conferir e .../enviar, GET .../arquivo.
+                                             Tabelas pedidos_documentos_envios e pedidos_documentos_destinos.
 Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/acoes_pedidos.py (rotas POST /api/pedidos/acao/reenvio, .../cancelar-vuupt, .../cancelar-stokki, .../endereco, .../agendar, .../checar-dia-fixo, .../marcar-entregue (multipart, helper _marcar_entregue_pelo_form da Torre), .../validar-lote-foto; GET .../comprovantes?codigo= + /pedidos/canhoto/vuupt/<checklist_id>.pdf + /pedidos/canhoto/manual/<PS-N>.pdf (leitura, canhoto Vuupt/manual/app);
                                              confere Vuupt na hora, Stokki pela trava sessao_uso)
  Vigia de pedidos abertos (estado/prazo) ... vigia/ (regras.py = prazos; tela /vigia)
