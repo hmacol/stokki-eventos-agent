@@ -34,7 +34,12 @@ DIAS_PADRAO = 7   # Hugo, 09/11: a tela abre nos últimos 7 dias
 # pelo portal) e ainda não chegou à Vuupt. Não existe em nucleo_pedidos: só
 # esta tela monta, juntando galpao_pedidos e portal_envios (ver _norm).
 IMPORTADO = "IMPORTADO"
-STATUS = [IMPORTADO, banco.PEDIDO_ABERTO, banco.PEDIDO_EM_ROTA, banco.PEDIDO_ENTREGUE,
+# COLETADO (Hugo, 12/11): pedido de retirada que saiu do galpão sem passar pela
+# Vuupt -- a transportadora ou o cliente levou. Quem diz é expedicao_coletas_fila
+# (coletas/ler_stokki.py): transportadora de retirada e já fora da listagem
+# "Aguardando Transportador" da Stokki.
+COLETADO = "COLETADO"
+STATUS = [IMPORTADO, COLETADO, banco.PEDIDO_ABERTO, banco.PEDIDO_EM_ROTA, banco.PEDIDO_ENTREGUE,
           banco.PEDIDO_INSUCESSO, banco.PEDIDO_CANCELADO]
 FLUXOS = [banco.FLUXO_ENTREGA, banco.FLUXO_RETIRADA]
 
@@ -203,9 +208,11 @@ def _norm(conn: sqlite3.Connection) -> str:
     as tabelas que existem (banco de teste pode não ter galpão nem portal)."""
     tabelas = {r[0] for r in conn.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN "
-        "('galpao_pedidos', 'galpao_eventos', 'portal_envios', 'clientes_portal')")}
+        "('galpao_pedidos', 'galpao_eventos', 'portal_envios', 'clientes_portal', 'expedicao_coletas_fila')")}
     galpao = {"galpao_pedidos", "galpao_eventos"} <= tabelas
     portal = {"portal_envios", "clientes_portal"} <= tabelas
+    coletas = "expedicao_coletas_fila" in tabelas
+    coletado = "cf.retirada = 1 AND cf.saiu_em IS NOT NULL"
     partes = [_NORM_NUCLEO]
     if galpao:
         do_envio = dict(_DO_ENVIO, titulo=_TITULO_ENVIO.format(cod="g.codigo")) if portal else {}
@@ -214,15 +221,18 @@ def _norm(conn: sqlite3.Connection) -> str:
             **do_envio,
             "codigo": "g.codigo",
             "status": ("CASE WHEN g.situacao = 'Cancelado'" + (" OR e.status = 'CANCELADO'" if portal else "")
-                       + f" THEN 'CANCELADO' ELSE '{IMPORTADO}' END"),
+                       + " THEN 'CANCELADO'" + (f" WHEN {coletado} THEN '{COLETADO}'" if coletas else "")
+                       + f" ELSE '{IMPORTADO}' END"),
             "sender_id": "COALESCE(m.e_sid" + ou("cp.sender_id") + ", NULL)",
             "remetente_nome": "COALESCE(m.e_rem" + ou("cp.nome") + ", g.embarcador)",
             "remetente_codigo": "COALESCE(m.e_cnpj" + ou("e.cnpj_embarcador") + ", NULL)",
             "origem": "'STOKKI'",
             "criado_em": ("COALESCE((SELECT MIN(ev.quando) FROM galpao_eventos ev WHERE ev.id_stokki = g.id_stokki)"
                           + ou("e.criado_em") + ", g.atualizado_em)"),
-            "situacao_stokki": "g.situacao"})
+            "situacao_stokki": (f"CASE WHEN g.situacao <> 'Cancelado' AND {coletado} THEN 'Enviado' ELSE g.situacao END"
+                                if coletas else "g.situacao")})
             + " FROM galpao_pedidos g"
+            + (" LEFT JOIN expedicao_coletas_fila cf ON cf.id_stokki = g.id_stokki" if coletas else "")
             # embarcador do galpão ("NOME ... #stkkc-N") -> o da Vuupt, pelo pedido mais novo dele no núcleo
             + " LEFT JOIN (SELECT g2.embarcador AS e_nome, n.sender_id AS e_sid, n.remetente_nome AS e_rem,"
               " n.remetente_codigo AS e_cnpj, MAX(g2.id_stokki) AS e_ultimo FROM galpao_pedidos g2"

@@ -347,6 +347,33 @@ class TestListar(_Base):
         self._pedido("PS-2", status="ABERTO")
         self.assertEqual([l["status"] for l in tp.listar({"q": "PS-2"}, conn=self.conn)["linhas"]], ["ABERTO"])
 
+    def test_retirada_que_saiu_do_galpao_vira_coletado(self):
+        """Hugo, 12/11: retirada que sumiu da listagem "Aguardando Transportador"
+        da Stokki (expedicao_coletas_fila, lida por coletas/ler_stokki.py) sai
+        de Importado e vira Coletado. Cancelado e o nucleo continuam vencendo."""
+        from coletas import banco as coletas_banco
+        self._tabelas_stokki_e_portal()
+        coletas_banco.garantir_esquema(self.conn)
+        self._pedido("PS-6")
+        for i in (2, 3, 5, 6):
+            self._galpao(i, "Aguardando Transportador")
+        self._galpao(4, "Cancelado")
+        for i, retirada, saiu in ((2, 1, "x"), (3, 1, None), (4, 1, "x"), (5, 0, "x"), (6, 1, "x")):
+            self.conn.execute("INSERT INTO expedicao_coletas_fila (id_stokki, codigo, retirada, saiu_em) "
+                              "VALUES (?, ?, ?, ?)", (i, f"PS-{i}", retirada, saiu))
+        self.conn.commit()
+        por = {l["codigo"]: l for l in tp.listar({}, conn=self.conn)["linhas"]}
+        self.assertEqual({c: l["status"] for c, l in por.items()},
+                         {"PS-2": "COLETADO", "PS-3": "IMPORTADO", "PS-4": "CANCELADO", "PS-5": "IMPORTADO",
+                          "PS-6": "ENTREGUE"})
+        self.assertEqual((por["PS-2"]["situacao_stokki"], por["PS-3"]["situacao_stokki"]),
+                         ("Enviado", "Aguardando Transportador"))
+        self.assertEqual(self._codigos({"status": "COLETADO"}), ["PS-2"])
+        c = tp.contar_por_status({}, conn=self.conn)
+        self.assertEqual((c["COLETADO"], c["IMPORTADO"]), (1, 2))
+        self.assertEqual(tp.contar_filas({}, conn=self.conn)["IMPORTADO"], 2)
+        self.assertIn("PS-2;Coletado", tp.exportar_csv({}, ["codigo", "status"], conn=self.conn))
+
     def test_importado_sem_embarcador_conhecido_e_fora_do_periodo(self):
         self._tabelas_stokki_e_portal()
         self._galpao(8, embarcador="NOVO CLIENTE ... #stkkc-77", criado=f"{_dia(-20)} 10:00:00")
@@ -367,7 +394,7 @@ class TestListar(_Base):
         self._pedido("PS-3", status="ENTREGUE", sender_id=20, remetente="OUTRO")
         self._pedido("PS-4", status="CANCELADO", criado_provedor=f"{_dia(-30)} 08:00:00")   # fora do período
         c = tp.contar_por_status({"status": "ENTREGUE"}, conn=self.conn)
-        self.assertEqual(c, {"IMPORTADO": 0, "ABERTO": 1, "EM_ROTA": 0, "ENTREGUE": 2, "INSUCESSO": 0, "CANCELADO": 0,
+        self.assertEqual(c, {"IMPORTADO": 0, "COLETADO": 0, "ABERTO": 1, "EM_ROTA": 0, "ENTREGUE": 2, "INSUCESSO": 0, "CANCELADO": 0,
                              "total": 3})
         self.assertEqual(tp.contar_por_status({"sender_id": "20"}, conn=self.conn)["total"], 1)
 
