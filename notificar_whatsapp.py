@@ -897,8 +897,13 @@ def avisar_devolucao_galpao(id_stokki: int, embarcador: str, itens: list, config
         hash_itens = hashlib.sha1(chave.encode("utf-8")).hexdigest()[:8]
         situacao = "enviado"
         for n, texto in enumerate(textos_devolucao_galpao(id_stokki, embarcador, itens), 1):
-            ret = despachar(config, "devolucao_estoque", "devolucao", texto,
-                            f"devolucao:{id_stokki}:{hash_itens}:{n}", grupo_id=grupo, **kw)
+            assinatura = f"devolucao:{id_stokki}:{hash_itens}:{n}"
+            try:  # parte que ja saiu (tentativa anterior do mesmo aviso) nao reenvia nem trava as seguintes
+                if _cfg(config).get("ativo") and not kw.get("modo_teste")                         and _ja_enviada_alguma_vez(kw.get("conn"), "devolucao_estoque", assinatura):
+                    continue
+            except Exception:  # noqa: BLE001 -- sem historico, despacha normalmente
+                pass
+            ret = despachar(config, "devolucao_estoque", "devolucao", texto, assinatura, grupo_id=grupo, **kw)
             if ret not in ("enviado", "modo_teste"):
                 return ret
             situacao = ret

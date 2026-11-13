@@ -85,6 +85,12 @@ class TextoDevolucaoGalpao(unittest.TestCase):
 
 
 class AvisarDevolucaoGalpao(unittest.TestCase):
+    def setUp(self):
+        # hermetico: nao le o dados.db real
+        p = mock.patch.object(nw, "_ja_enviada_alguma_vez", return_value=False)
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_sem_grupo_cancelados_desligado(self):
         config = {"whatsapp_notificacoes": {"ativo": True, "grupo_id": "g@g.us"}}
         with mock.patch.object(nw, "despachar") as d:
@@ -116,6 +122,32 @@ class AvisarDevolucaoGalpao(unittest.TestCase):
         self.assertEqual(len(ass), 2)
         self.assertNotEqual(ass[0], ass[1])
         self.assertTrue(ass[0].endswith(":1") and ass[1].endswith(":2"))
+
+    ITENS15 = [{"sku": f"SKU{i:03d}", "nome": "Produto", "movido": 1, "destino": "FABENNE-1"} for i in range(15)]
+
+    def _com_historico(self, ja_enviadas, **kw):
+        """Roda o aviso de 15 itens com as partes de numero em `ja_enviadas` ja registradas como enviadas."""
+        with mock.patch.object(nw, "_ja_enviada_alguma_vez", side_effect=lambda c, o, a: int(a.rsplit(":", 1)[1]) in ja_enviadas, **kw) as ja, \
+                mock.patch.object(nw, "despachar", return_value="enviado") as d:
+            r = nw.avisar_devolucao_galpao(43101, "F", self.ITENS15, CFG_DEV)
+        return r, d
+
+    def test_retoma_da_parte_que_falta(self):
+        r, d = self._com_historico({1, 2})
+        self.assertEqual(r, "enviado")
+        self.assertEqual([c.args[4].rsplit(":", 1)[1] for c in d.call_args_list][0], "3")
+        self.assertTrue(all(int(c.args[4].rsplit(":", 1)[1]) >= 3 for c in d.call_args_list))
+
+    def test_tudo_ja_enviado_nao_despacha(self):
+        r, d = self._com_historico(set(range(1, 50)))
+        self.assertEqual(r, "enviado")
+        d.assert_not_called()
+
+    def test_consulta_de_historico_que_levanta_despacha_tudo(self):
+        with mock.patch.object(nw, "_ja_enviada_alguma_vez", side_effect=RuntimeError("db")), \
+                mock.patch.object(nw, "despachar", return_value="enviado") as d:
+            self.assertEqual(nw.avisar_devolucao_galpao(43101, "F", self.ITENS15, CFG_DEV), "enviado")
+        self.assertEqual(d.call_count, len(nw.textos_devolucao_galpao(43101, "F", self.ITENS15)))
 
     def test_todas_enviadas_devolve_enviado(self):
         itens = [{"sku": f"SKU{i:03d}", "nome": "Produto", "movido": 1, "destino": "FABENNE-1"} for i in range(15)]
