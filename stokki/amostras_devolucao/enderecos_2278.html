@@ -1,0 +1,1589 @@
+<!DOCTYPE html>
+<html lang="pt-br" style="background:#eef0f4">
+
+
+
+  	<head>
+
+	  	<!--<meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">-->
+
+    	<meta charset="utf-8">
+		<meta http-equiv="X-UA-Compatible" content="IE=edge">
+
+
+    	<!-- Titles -->
+    	<title>Stokki - Logística digital, acessível e descomplicada</title>
+
+    	<!-- Favicon -->
+    	<link rel="icon" href="https://freshlog.stokki.com.br/img/logo_novo.png">
+
+    	<!-- Tell the browser to be responsive to screen width -->
+    	<meta name="viewport" content="width=device-width, initial-scale=1">
+
+    	<!-- Font Awesome -->
+    	<link rel="stylesheet" href="https://freshlog.stokki.com.br/plugins/fontawesome-free/css/all.min.css">
+
+		<!-- Ionicons -->
+		
+		<!-- Ionicons -->
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/vendor/ionicons/2.0.1/css/ionicons.min.css">
+
+		<!-- flag-icon-css -->
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/vendor/flag-icon-css/3.4.6/css/flag-icon.min.css">
+
+		<!-- Toastr -->
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/plugins/toastr/toastr.min.css">
+		<!-- Tempusdominus Bbootstrap 4 -->
+		
+
+		<!-- iCheck -->
+		
+
+		<!-- JQVMap -->
+		
+        
+		<!-- Theme style -->
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/css/adminlte.min.css">
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/css/stokki.css?v=1794483339">
+
+		<!-- overlayScrollbars -->
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/plugins/overlayScrollbars/css/OverlayScrollbars.min.css">
+
+		<!-- Daterange picker -->
+		
+
+		<!-- summernote -->
+		
+
+		<!-- Google Font: Source Sans Pro -->
+		
+		<link href="https://freshlog.stokki.com.br/vendor/google-fonts/gf5/index.css" rel="stylesheet">
+		<link href="https://freshlog.stokki.com.br/vendor/google-fonts/source-sans-pro/semibold.css" rel="stylesheet">
+		<link href="https://freshlog.stokki.com.br/vendor/google-fonts/montserrat/index.css" rel="stylesheet">
+
+		<!-- Big Grid -->
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/css/bootstrap-largegrid.min.css">
+
+	 	 <link rel="stylesheet" href="/css/app.css">
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/css/layout-surface.css?v=1794483339">
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/css/layout-navbar.css?v=1794483339">
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/css/layout-sidebar.css?v=1794483339">
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/css/usermenu.css?v=1794483339">
+		
+  <!-- DataTables -->
+  <link rel="stylesheet" href="https://freshlog.stokki.com.br/plugins/datatables-bs4/css/dataTables.bootstrap4.css">
+
+  <style>
+    .dataTables_filter {
+      margin-left: -35px !important;
+    }
+    .dataTables_info  {
+      margin-top: 20px !important;
+    }
+  </style>
+
+
+		<style>
+			/* Support mode: destaque pulsante no ícone "Voltar para Torre" (a cor amarela vem
+			   do text-warning; a animação só dá o destaque). Valores literais porque os tokens
+			   de motion do Design System só resolvem dentro de .ds-scope com css/ds.css. */
+			@keyframes  support-return-pulse {
+				0%   { transform: scale(1);    opacity: 1; }
+				50%  { transform: scale(1.25); opacity: 0.55; }
+				100% { transform: scale(1);    opacity: 1; }
+			}
+
+			.support-return-pulse {
+				display: inline-block;
+				animation: support-return-pulse 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+			}
+
+			@media (prefers-reduced-motion: reduce) {
+				.support-return-pulse {
+					animation: none;
+				}
+			}
+
+			/* keyframe para ajustar até onde treme */
+			@keyframes  tremer {
+				0% {margin-top: 0;}
+				25% {margin-top: 5px;}
+				50% {margin-top: 0;}
+				75% {margin-top: -5px;}
+				100% {margin-top: 0;}
+			}
+
+			[class*="dropdown-menu-tip-"]::after {
+			content: '';
+			position: absolute;
+			width: .5rem;
+			height: .5rem;
+			background-color: white;
+			border: solid 1px rgba(0, 0, 0, .15);
+			border-bottom: none;
+			border-left: none;
+			}
+
+			/* North */
+			.dropdown-menu-tip-n::after {
+			top: calc(-.25rem - 1px);
+			left: calc(50% - .25rem);
+			transform: rotate(-45deg);
+			}
+
+			/* Northeast */
+			.dropdown-menu-tip-ne::after {
+			top: calc(-.25rem - 1px);
+			right: 1rem;
+			transform: rotate(-45deg);
+			}
+
+			/* Northwest */
+			.dropdown-menu-tip-nw::after {
+			top: calc(-.25rem - 1px);
+			left: 1rem;
+			transform: rotate(-45deg);
+			}
+
+			/* South */
+			.dropdown-menu-tip-s::after {
+			left: calc(50% - .25rem);
+			bottom: calc(-.25rem - 1px);
+			transform: rotate(135deg);
+			}
+
+			/* Southeast */
+			.dropdown-menu-tip-se::after {
+			right: 1rem;
+			bottom: calc(-.25rem - 1px);
+			transform: rotate(135deg);
+			}
+
+			/* Southwest */
+			.dropdown-menu-tip-sw::after {
+			left: 1rem;
+			bottom: calc(-.25rem - 1px);
+			transform: rotate(135deg);
+			}
+
+			.vertical-line{
+				width: 1px; /* Line width */
+				background-color: #e9ecef; /* Line color */
+				height: 100%; /* Override in-line if you want specific height. */
+				float: left; /* Causes the line to float to left of content. 
+					You can instead use position:absolute or display:inline-block
+					if this fits better with your design */
+			}
+
+			.main-header {
+				transition: margin-left .3s ease-in-out;
+				margin-left: 4.6rem; /* Largura da sidebar colapsada */
+			}
+
+			body:not(.sidebar-collapse) .main-header {
+				margin-left: 250px !important; /* Largura da sidebar aberta */
+			}
+
+			@media (max-width: 991.98px) {
+				.main-header {
+					margin-left: 0 !important;
+				}
+			}
+
+			.main-sidebar {
+				display: block !important;
+			}
+
+			@media (max-width: 768px) {
+				.display_desktop {
+					display: none !important;
+				}
+				.display_mobile {
+					display: block !important;
+				}
+			}
+
+			@media (min-width: 768px) {
+				.display_desktop {
+					display: block !important;
+				}
+				.display_mobile {
+					display: none !important;
+				}
+			}
+
+			/* Network Stats Panel — layout/visual via utilitários Bootstrap no markup;
+			   aqui ficam só os valores que o Bootstrap 4 não oferece (offsets, tamanhos,
+			   cores específicas, gap, animação). position:absolute (.position-absolute)
+			   faz o painel rolar junto com a página e sumir com a navbar. */
+			#panel.panel {
+				top: 60px;
+				right: 16px;
+				width: 300px;
+				border-radius: 10px;
+				z-index: 1055;
+				opacity: 0;
+				visibility: hidden;
+				transform: translateY(-8px);
+				transition: opacity .2s ease, transform .2s ease, visibility .2s ease;
+			}
+
+			#panel.panel.visible {
+				opacity: 1;
+				visibility: visible;
+				transform: translateY(0);
+			}
+
+			#panel .panel-header {
+				padding: 12px 14px;
+				border-bottom: 1px solid #f0f0f0;
+			}
+
+			#panel .panel-title {
+				gap: 7px;
+				font-weight: 600;
+				font-size: 13px;
+				color: #333;
+			}
+
+			#panel .live-dot {
+				width: 8px;
+				height: 8px;
+				background: var(--dot-color, #2e7d32);
+				animation: live-pulse 1.6s infinite;
+			}
+
+			@keyframes  live-pulse {
+				0% { box-shadow: 0 0 0 0 var(--dot-glow, rgba(46, 125, 50, .4)); }
+				70% { box-shadow: 0 0 0 6px var(--dot-glow-end, rgba(46, 125, 50, 0)); }
+				100% { box-shadow: 0 0 0 0 var(--dot-glow-end, rgba(46, 125, 50, 0)); }
+			}
+
+			#panel .close-btn {
+				cursor: pointer;
+				color: #aaa;
+				padding: 2px 7px;
+				border-radius: 6px;
+				line-height: 1;
+			}
+
+			#panel .close-btn:hover {
+				background: #f5f5f5;
+				color: #666;
+			}
+
+			#panel .status-hero {
+				gap: 12px;
+				padding: 14px;
+			}
+
+			#panel .hero-icon {
+				width: 40px;
+				height: 40px;
+				border-radius: 10px;
+				flex: 0 0 auto;
+			}
+
+			#panel .metrics {
+				padding: 0 14px 6px;
+			}
+
+			#panel .metric-row {
+				padding: 7px 0;
+				border-top: 1px solid #f5f5f5;
+			}
+
+			#panel .metric-row:first-child {
+				border-top: none;
+			}
+
+			#panel .bar-mini {
+				width: 80px;
+				height: 5px;
+				border-radius: 3px;
+				background: #eee;
+				margin-top: 4px;
+			}
+
+			#panel .bar-fill {
+				height: 100%;
+				border-radius: 3px;
+			}
+
+			#panel .notice {
+				margin: 8px 14px;
+				padding: 8px 10px;
+				border-radius: 8px;
+				font-size: 11px;
+			}
+
+			#panel .admin-link {
+				padding: 10px 14px;
+				border-top: 1px solid #f0f0f0;
+				cursor: pointer;
+				color: #555;
+				text-decoration: none;
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+			}
+
+			#panel .admin-link:visited {
+				color: #555;
+			}
+
+			#panel .admin-link:hover {
+				background: #f9f9f9;
+				color: #555;
+				text-decoration: none;
+			}
+
+			#panel .admin-link:active {
+				color: #555;
+			}
+
+		</style>
+
+		
+  	</head>
+      <body class="hold-transition sidebar-collapse layout-top-nav text-sm" style="font-size: 0.73rem !important;">
+
+		<div class="wrapper" >
+
+			<!-- Navbar -->
+			<nav class="main-header navbar navbar-expand-md navbar-white navbar-light" >
+				<!-- Left navbar links -->
+
+				        <ul class="navbar-nav display_mobile" id="btn_menu_mobile">
+          <li class="nav-item">
+            <a class="nav-link" id="btn_pushmenu_mobile" data-widget="pushmenu" href="#">
+                <i class="fas fa-bars" ></i>
+            </a>
+          </li>
+
+          
+        </ul>
+
+		
+		
+		<div class="input-group" id="div_input_search_menu" style="display: none">
+			<input type="text" class="form-control" aria-describedby="basic-addon2" id="input_search_menu" placeholder="Procure pedidos pelo número do #PS-123, referências, da NF-e, nome do destinatário, CPF ou CNPJ do destinatário e a chave eletrônica da NF-e.">
+			<div class="input-group-append">
+				<span class="input-group-text bg-stokki" id="basic-addon2" style="color: white"><i class="fas fa-search fa-lg"></i></span>
+				<span class="input-group-text bg-danger" id="btn_close_search_menu" style="color: white; cursor: pointer;" ><i class="fas fa-times fa-lg"></i></span>
+			</div>
+		</div>
+
+		<div class="div_header_menu">
+
+        
+		<div class="collapse navbar-collapse order-3 display_desktop" id="btn_menu">
+			<!-- Left navbar links -->
+			<ul class="navbar-nav"  id="navbarCollapse2">
+
+								<li class="nav-item">
+					<a class="nav-link" id="btn_pushmenu" data-widget="pushmenu" href="#">
+						<i class="fas fa-bars" ></i>
+					</a>
+					</li>
+												
+  
+    <li class="nav-item">
+      <a href="https://freshlog.stokki.com.br/pt-br/administrator" class="nav-link">Painel</a>
+    </li>
+    
+    <li class="nav-item">
+      <a href="https://freshlog.stokki.com.br/pt-br/administrator/message" class="nav-link">Mensagens</a>
+    </li>
+
+  
+  
+    <li class="nav-item">
+      <a href="https://freshlog.stokki.com.br/pt-br/administrator/client" class="nav-link">Clientes</a>
+    </li>
+
+  
+  
+    <li class="nav-item">
+      <a href="https://freshlog.stokki.com.br/pt-br/administrator/provider" class="nav-link">Armazéns</a>
+    </li>
+
+  
+  
+    <li class="nav-item dropdown text-left">
+      <a id="dropdownSubMenu1" href="#" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" class="nav-link dropdown-toggle">Armazenamento</a>
+      <ul aria-labelledby="dropdownSubMenu1" class="dropdown-menu border-0 shadow">
+        <li><a href="https://freshlog.stokki.com.br/pt-br/administrator/client/product" class="dropdown-item">Produtos</a></li>
+        <li><a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory" class="dropdown-item">Inventário</a></li>
+        <li><a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory/incoming" class="dropdown-item">Pedidos de Entrada</a></li>
+        <li><a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory/outbound" class="dropdown-item">Pedidos de Saída</a></li>
+        <li><a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory/devolution" class="dropdown-item">Retornos e Devoluções</a></li>
+      </ul>
+    </li>
+
+  
+								   <li class="nav-item">
+  <span class="stk-warehouse-chip" title="Torre de Controle">
+    <i class="fas fa-broadcast-tower"></i>Torre de Controle
+  </span>
+</li>
+ 
+
+			</ul>
+		</div>
+		</div>
+		<div class="div_header_menu ml-auto">
+
+					<!-- Right navbar links -->
+					<ul class="order-1 order-md-3 navbar-nav navbar-no-expand ml-auto">
+						<!-- Support mode: yellow indicator + back to the Tower — left of the printer (visible only in support mode) -->
+												<!-- Messages Dropdown Menu -->
+						<li class="dropdown">
+							  <div id="messages-notifications-box"
+  uid="63"
+  utype=3
+  mode="1"
+  token="" style="display:none">
+</div>
+  						</li>
+
+						<li class="nav-item">
+													</li>
+
+						<li class="dropdown">
+							  <a class="nav-link stk-nav-icon" data-widget="navbar-search" href="#" role="button" id="btn_search_menu">
+     <svg class="stk-ico stk-ico--search" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="10.5" cy="10.5" r="7.5"/><line x1="16" y1="16" x2="20.5" y2="20.5"/></svg>
+ 
+  </a>
+    
+						</li>
+
+						<li class="dropdown">
+													</li>
+
+						<li class="dropdown">
+							<div id="div_post_update">
+								  <a href="#"  class="nav-link stk-nav-icon disabled" data-toggle="dropdown" id="btn_post_menu">
+   <svg class="stk-ico" id="fa_post" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5z"/></svg>
+ 
+  <span class="badge badge-danger navbar-badge post-counter count_message" id="count_message">
+     <svg class="stk-ico stk-ico--spin" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+ 
+  </span>
+</a>
+<ul class="dropdown-menu ul-notification" aria-labelledby="dropdownMenuButtonTeste" id="dropdown_post">
+  <div id="div_post_menu">
+    <div class="row justify-content-center"> 
+      <img class="mb-3 mt-5 mb-5" src="https://freshlog.stokki.com.br/img/loading/loading.gif" alt="" width="150">
+    </div>
+  </div>
+</ul>  							</div>
+						</li>
+
+						<!-- Notifications Dropdown Menu -->
+						<li class="nav-item dropdown">
+							<div id="div_notification_update">
+								  <a href="#"  class="nav-link stk-nav-icon disabled" data-toggle="dropdown" id="btn_notification_menu">
+   <svg class="stk-ico" id="fa_notification" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+ 
+  <span class="badge badge-warning navbar-badge notification-counter" id="count_notification">
+     <svg class="stk-ico stk-ico--spin" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+ 
+  </span>
+</a>
+<ul class="dropdown-menu ul-notification" aria-labelledby="dropdownMenuButtonTeste" id="dropdown_notification">
+  <div id="div_notification_menu">
+    <div class="row justify-content-center"> 
+      <img class="mb-3 mt-5 mb-5" src="https://freshlog.stokki.com.br/img/loading/loading.gif" alt="" width="150">
+    </div>
+  </div>
+</ul>  							</div>
+						</li>
+
+                          <li class="nav-item">
+                <a class="nav-link stk-nav-icon" data-widget="fullscreen" href="#" role="button" id="btn_fullscreen">
+                 <svg class="stk-ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+ 
+                </a>
+              </li>
+            
+						<!-- Provider Chat -->
+						<div id="chat-provider">
+													</div>
+
+						<!-- Network Stats -->
+												<!-- End network stats -->
+
+					<!-- Language Dropdown Menu -->
+					
+					
+
+						<!-- User Dropdown Menu -->
+						<li class="nav-item dropdown user-menu">
+
+							
+ <div class="dropdown stk-usermenu">
+  <a href="#" class="nav-link stk-nav-labeled stk-usermenu__toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+     <span class="stokki-avatar stokki-avatar--32" role="img" aria-label="Hugo Maçol" title="Hugo Maçol">HM</span>
+ 
+    <span class="d-none d-md-inline stk-usermenu__name">
+      Hugo Maçol
+          </span>
+     <svg class="stk-ico stk-usermenu__chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="6 9 12 15 18 9"/></svg>
+ 
+  </a>
+
+  <div class="dropdown-menu dropdown-menu-right stk-usermenu__menu">
+    <div class="stk-usermenu__identity">
+      <strong class="stk-usermenu__account">Hugo Maçol</strong>
+      <span class="stk-usermenu__email">hugo@freshlogbr.com</span>
+    </div>
+    <div class="dropdown-divider"></div>
+    <h6 class="dropdown-header">Links Rápidos</h6>
+     <a href="https://freshlog.stokki.com.br/pt-br/administrator/message" class="dropdown-item stk-usermenu__item">
+   <svg class="stk-ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/></svg>
+ 
+  <span>Mensagens</span>
+</a>
+ 
+     <a href="https://adm.stokki.com.br/pt-br/public/support-center" class="dropdown-item stk-usermenu__item" target="_blank" rel="noopener noreferrer">
+   <svg class="stk-ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><line x1="4.93" y1="4.93" x2="9.17" y2="9.17"/><line x1="14.83" y1="14.83" x2="19.07" y2="19.07"/><line x1="14.83" y1="9.17" x2="19.07" y2="4.93"/><line x1="4.93" y1="19.07" x2="9.17" y2="14.83"/></svg>
+ 
+  <span>Central de Suporte</span>
+</a>
+    <div class="dropdown-divider"></div>
+     <a href="https://freshlog.stokki.com.br/pt-br/logout" class="dropdown-item stk-usermenu__item">
+   <svg class="stk-ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+ 
+  <span>Sair</span>
+</a>
+ 
+  </div>
+</div>
+ 
+
+						</li>
+
+					</ul>
+		</div>
+			
+      </nav><!-- /.navbar -->
+
+			
+			
+<!-- Main Sidebar Container -->
+<aside class="main-sidebar sidebar-dark-primary elevation-4">
+
+  <!-- Brand Logo -->
+  <a href="#" class="brand-link d-flex align-items-center" style=" background:#fff">
+
+    <img src="https://freshlog.stokki.com.br/img/logo.svg" alt="AdminLTE Logo" class="brand-image" style=" background:#fff">
+
+		<span class="brand-text font-weight-light d-flex align-items-center"><img
+				src="https://freshlog.stokki.com.br/img/logo-name.svg" height="24" ></span>
+
+  </a>
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+
+    <!-- Sidebar Menu -->
+    <nav class="mt-2 color-stokki">
+      <ul class="nav nav-pills nav-sidebar flex-column nav-compact nav-flat" data-widget="treeview" role="menu" data-accordion="false">
+
+                
+          <!-- Add icons to the links using the .nav-icon class with font-awesome or any other icon font library -->
+          <li class="nav-item has-treeview">
+            <a href="https://freshlog.stokki.com.br/pt-br/administrator" class="nav-link" id="menu-dashboard">
+              <i class="nav-icon fas fa-tachometer-alt"></i>
+              <p>Painel de Controle</p>
+            </a>
+          </li>
+
+          <li class="nav-item">
+            <a href="https://freshlog.stokki.com.br/pt-br/administrator/message" class="nav-link" id="menu-message">
+              <i class="nav-icon fas fa-comments"></i>
+              <p>Central de Mensagens</p>
+              <span class="badge badge-danger right count_message"><i class="fa fa-spinner fa-spin"></i></span>
+            </a>
+          </li>
+
+        
+        
+          <li class="nav-item">
+            <a href="https://freshlog.stokki.com.br/pt-br/administrator/client" class="nav-link" id="menu-client">
+              <i class="nav-icon fas fa-user-tag"></i>
+              <p>Área de Clientes</p>
+            </a>
+          </li>
+
+        
+                  <li class="nav-item">
+            <a href="https://freshlog.stokki.com.br/pt-br/administrator/provider" class="nav-link" id="menu_provider_area">
+              <i class="nav-icon fas fa-warehouse"></i>
+              <p>Área de Armazém</p>
+            </a>
+          </li>
+        
+        
+
+        <li class="nav-item has-treeview" id="menu_storage_li">
+          <a href="#" class="nav-link" id="menu_storage">
+            <i class="nav-icon fas fa-warehouse"></i>
+            <p>
+              Armazenamento              <i class="fas fa-angle-left right"></i>
+            </p>
+          </a>
+          <ul class="nav nav-treeview color-stokki-sub">
+                          <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/client/product" class="nav-link" id="menu_storage_product">
+                  <i class="fas fa-box nav-icon ml-3"></i>
+                  <p >Produtos</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory" class="nav-link" id="menu_storage_inventory">
+                  <i class="fas fa-boxes nav-icon ml-3"></i>
+                  <p>Inventário</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory/incoming" class="nav-link" id="menu_storage_incoming">
+                  <i class="fas fa-sign-in-alt nav-icon ml-3"></i>
+                  <p>Pedidos de Entrada</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory/outbound" class="nav-link" id="menu_storage_outbound">
+                  <i class="fas fa-sign-out-alt nav-icon ml-3"></i>
+                  <p>Pedidos de Saída</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory/devolution" class="nav-link" id="menu_storage_devolution">
+                  <i class="fas fa-undo nav-icon ml-3"></i>
+                  <p>Retornos e Devoluções</p>
+                </a>
+              </li>
+                      </ul>
+        </li>
+
+         
+
+          <li class="nav-item has-treeview" id="menu_operation_inventory_li">
+            <a href="#" class="nav-link" id="menu_operation_inventory">
+              <i class="nav-icon fas fa-boxes"></i>
+              <p >
+                Operações de Inventário                <i class="fas fa-angle-left right"></i>
+              </p>
+            </a>
+            <ul class="nav nav-treeview color-stokki-sub">
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/operation/inventory/dashboard/v2" class="nav-link" id="menu_operation_inventory_dashboard_index">
+                  <i class="fas fa-tachometer-alt nav-icon ml-3"></i>
+                  <p>Gestão à Vista</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/operation/inventory/danfe" class="nav-link" id="menu_operation_inventory_danfe_index">
+                  <i class="fas fa-file nav-icon ml-3"></i>
+                  <p>Gerar DANFE</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/operation/inventory/serialnumber" class="nav-link" id="menu_operation_inventory_serial_number_index">
+                  <i class="fas fa-box-open nav-icon ml-3"></i>
+                  <p>Gerenciar Número de Série</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/operation/inventory/lot" class="nav-link" id="menu_operation_inventory_lot_index">
+                  <i class="fas fa-box-open nav-icon ml-3"></i>
+                  <p>Gerenciar Lotes e Validades</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/operation/inventory/value" class="nav-link" id="menu_operation_inventory_value_index">
+                  <i class="fas fa-boxes nav-icon ml-3"></i>
+                  <p>Consultar Valor de Estoque</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/operation/inventory/cancel" class="nav-link" id="menu_operation_inventory_cancel_index">
+                  <i class="fas fa-times-circle nav-icon ml-3"></i>
+                  <p>Consultar Pedidos Cancelados</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory/order" class="nav-link" id="menu_operation_inventory_search_index">
+                  <i class="fas fa-search nav-icon ml-3"></i>
+                  <p>Procurar Pedido</p>
+                </a>
+              </li>
+            </ul>
+          </li>
+
+           
+
+            <li class="nav-item has-treeview" id="menu_transport_li">
+              <a href="#" class="nav-link" id="menu_transport">
+                <i class="nav-icon fas fa-truck"></i>
+                <p>
+                  Transporte                  <i class="fas fa-angle-left right"></i>
+                </p>
+              </a>
+              <ul class="nav nav-treeview color-stokki-sub">
+                <li class="nav-item">
+                  <a href="https://freshlog.stokki.com.br/pt-br/administrator/carrier" class="nav-link" id="menu_transport_carrier">
+                    <i class="fas fa-truck-moving nav-icon ml-3"></i>
+                    <p>Transportadoras</p>
+                  </a>
+                </li>
+                <li class="nav-item">
+                  <a href="https://freshlog.stokki.com.br/pt-br/administrator/client/transport/address" class="nav-link" id="menu_transport_address">
+                    <i class="fas fa-map-marked-alt nav-icon ml-3"></i>
+                    <p>Lista de Endereços</p>
+                  </a>
+                </li>
+              </ul>
+            </li>
+
+          
+        
+        <li class="nav-item has-treeview" id="menu_crossdocking_li">
+          <a href="#" class="nav-link" id="menu_crossdocking">
+            <i class="nav-icon fas fa-dolly-flatbed"></i>
+            <p>
+              Cross Docking              <i class="fas fa-angle-left right"></i>
+            </p>
+          </a>
+          <ul class="nav nav-treeview color-stokki-sub">
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/crossdocking/incoming" class="nav-link" id="menu_crossdocking_incoming">
+                <i class="fas fa-sign-in-alt nav-icon ml-3"></i>
+                <p>Pedidos de Entrada</p>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/crossdocking/outbound" class="nav-link" id="menu_crossdocking_outbound">
+                <i class="fas fa-sign-out-alt nav-icon ml-3"></i>
+                <p>Pedidos de Saída</p>
+              </a>
+            </li>
+          </ul>
+        </li>
+
+        <li class="nav-item has-treeview" id="menu_integration_li">
+          <a href="#" class="nav-link" id="menu_integration">
+            <i class="nav-icon fas fa-plug"></i>
+            <p>
+              Integrações              <i class="fas fa-angle-left right"></i>
+            </p>
+          </a>
+          <ul class="nav nav-treeview color-stokki-sub">
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory/incoming/integration" class="nav-link" id="menu_integration_incoming">
+                <i class="fas fa-sign-in-alt nav-icon ml-3"></i>
+                <p>Pedidos de Entrada</p>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/integration/sale" class="nav-link" id="menu_integration_sale">
+                <i class="fas fa-sign-out-alt nav-icon ml-3"></i>
+                <p>Pedidos de Saída</p>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/integration/setting" class="nav-link" id="menu_integration_setting">
+                <i class="fas fa-cog nav-icon ml-3"></i>
+                <p>Configurações</p>
+              </a>
+            </li>
+          </ul>
+        </li>
+        
+          <li class="nav-item">
+            <a href="https://freshlog.stokki.com.br/pt-br/administrator/bill" class="nav-link" id="menu_bill">
+              <i class="nav-icon fa fa-file-invoice-dollar"></i>
+              <p>Notas Fiscais</p>
+            </a>
+          </li>
+
+          <li class="nav-item has-treeview" id="menu_report_li">
+            <a href="#" class="nav-link" id="menu_report">
+              <i class="nav-icon fa fa-file"></i>
+              <p >
+              Relatórios              <i class="fas fa-angle-left right"></i>
+              </p>
+            </a>
+            <ul class="nav nav-treeview color-stokki-sub">
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/report/incoming" class="nav-link" id="menu_report_incoming">
+                  <i class="fas fa-list nav-icon"></i>
+                  <p >Pedidos de Entrada</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/report/outbound" class="nav-link" id="menu_report_outbound">
+                  <i class="fas fa-list nav-icon"></i>
+                  <p >Pedidos de Saída</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/report/inventory" class="nav-link" id="menu_report_inventory">
+                  <i class="fas fa-list nav-icon"></i>
+                  <p >Inventário</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/report/crm" class="nav-link" id="menu_report_crm">
+                  <i class="fas fa-list nav-icon"></i>
+                  <p >CRM</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/report/extra" class="nav-link" id="menu_report_extra">
+                  <i class="fas fa-list nav-icon"></i>
+                  <p >Extras</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/crossdocking/report" class="nav-link" id="menu_report_crossdocking">
+                  <i class="fas fa-list nav-icon"></i>
+                  <p>Cross Docking</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/report/export" class="nav-link" id="menu_report_export">
+                  <i class="fas fa-file-excel nav-icon"></i>
+                  <p>Lista de Exportações</p>
+                </a>
+              </li>
+            </ul>
+          </li>
+
+        
+        <li class="nav-item has-treeview" id="menu_billing_li">
+          <a href="#" class="nav-link" id="menu_billing">
+            <i class="nav-icon fas fa-file-invoice-dollar"></i>
+            <p >
+            Faturas            <i class="fas fa-angle-left right"></i>
+            </p>
+          </a>
+          <ul class="nav nav-treeview color-stokki-sub">
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/billing/dashboard" class="nav-link" id="menu_billing_dashboard">
+                <i class="fas fa-tachometer-alt nav-icon ml-3"></i>
+                <p >Visão Geral</p>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/billing/charge" class="nav-link" id="menu_billing_charge">
+                <i class="fas fa-list nav-icon ml-3"></i>
+                <p >Lista de Cobranças</p>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/billing" class="nav-link" id="menu_billing_index">
+                <i class="fas fa-list nav-icon ml-3"></i>
+                <p>Lista de Faturamento</p>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/billing/tariff" class="nav-link" id="menu_billing_tariff">
+                <i class="fas fa-list nav-icon ml-3"></i>
+                <p>Tabelas de Tarifário</p>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/billing/setting" class="nav-link" id="menu_billing_setting">
+                <i class="fas fa-cog nav-icon ml-3"></i>
+                <p>Configurações</p>
+              </a>
+            </li>
+          </ul>
+        </li>
+
+        <div class="user-panel mb-2 mt-2"></div>
+
+        
+          <li class="nav-item">
+            <a href="https://freshlog.stokki.com.br/pt-br/administrator/user" class="nav-link" id="menu_user">
+              <i class="nav-icon fas fa-users"></i>
+              <p>Usuários</p>
+            </a>
+          </li>
+
+        
+        
+        <li class="nav-item">
+          <a target="_blank" rel="noopener noreferrer" href="https://adm.stokki.com.br/pt-br/public/support-center" class="nav-link" id="menu-config">
+            <i class="nav-icon fas fa-question-circle"></i>
+            <p>Central de Suporte</p>
+          </a>
+        </li>
+
+        
+        
+        
+        
+        
+        
+        <li class="nav-item">
+          <a href="https://freshlog.stokki.com.br/pt-br/logout" class="nav-link" id="menu-config">
+            <i class="nav-icon fas fa-sign-out-alt"></i>
+            <p>Sair</p>
+          </a>
+        </li>
+
+      </ul>
+    </nav><!-- /.sidebar-menu -->
+  </div><!-- /.sidebar -->
+</aside>
+
+
+
+
+  
+  
+  
+
+
+
+  <!-- Content Wrapper. Contains page content -->
+  <div class="content-wrapper">
+    <!-- Content Header (Page header) -->
+    <div class="content-header">
+      <div class="container-fluid">
+        <div class="row mb-0">
+          <div class="col-sm-6">
+            <h1 class="m-0 text-dark" id="page-title">
+              Inventário: informações            </h1>
+          </div><!-- /.col -->
+          <div class="col d-flex align-items-end">
+            <a class="btn button-back ml-auto" href="" onClick="window.location=document.referrer; return false;" data-toggle="tooltip" data-placement="bottom" title='Voltar'>
+              <i class="fas fa-arrow-left"></i>
+            </a>
+          </div>
+        </div><!-- /.row -->
+      </div><!-- /.container-fluid -->
+    </div><!-- /.content-header -->
+
+    <!-- Main content -->
+    <section class="content">
+      <div class="container-fluid">
+
+        <!-- Main row -->
+        <div class="row">
+          <div class="col">
+            <div class="card card-default">
+              <div class="card-header">
+                <div class="row">
+                  <div class="col-lg-6 col-12">
+                    <h4>Informações de produtos</h4>
+                    <p class="p-stokki">Veja informações de endereçamentos.</p>
+                    
+                  </div>
+                  <div class="col-lg-6 col-12 d-flex align-items-end align-items-center">
+                    <a class="btn btn-outline-success ml-auto" href="https://freshlog.stokki.com.br/pt-br/administrator/inventory/moviment/addressing/moviment/2278/1"> 
+                      <i class="fas fa-dolly-flatbed mr-2"></i> Ver Movimentação                    </a>
+                    <a class="btn button-stokki ml-2" href="https://freshlog.stokki.com.br/pt-br/administrator/inventory">
+                      <i class="fas fa-boxes mr-2"></i> Inventário                    </a>
+                    <button id="btn_excel_download" class="btn btn-success ml-2" data-toggle="tooltip" data-placement="bottom" title='Download da lista'>
+                      <img src="https://freshlog.stokki.com.br/img/icon-excel.png">
+                    </button>
+                  </div>
+                </div>
+
+                <h5 class="text-muted">
+                  <div class="row mb-3">
+                    <div class="col-lg col-12 mt-3">
+                      SKU: <span class="badge badge-success">FABMLT</span>
+                    </div>
+                    <div class="col-lg col-12 mt-3">
+                      Produto: <span class="badge badge-success">FABENNE MERLOT</span>
+                    </div>
+                    <div class="col-lg col-12 mt-3">
+                      Unidade: <span class="badge badge-success">#stkkw-1</span>
+                    </div>
+                    <div class="col-lg col-12 mt-3">
+                      Cliente: <span class="badge badge-success">#stkkc-100</span>
+                    </div>
+                    <div class="col-lg col-12 mt-3">
+                      Unidade de medida: <span class="badge badge-success">UN</span>
+                    </div>
+                  </div>
+                </h5>
+              </div>
+              <!-- /.card-header -->
+              <div class="card-body mt-3">
+                <div id="div_table">
+                  <table id="example1" class="table table-hover table-responsive-sm table-nowrap table-center-vertically table-center w-100">
+  <thead>
+    <tr >
+      <th>Código de Localização</th>
+      <th>Estoque</th>
+      <th>Bloqueado</th>
+      <th>Disponível</th>
+  </thead>
+  <tbody>
+          <tr>
+        <td>
+          FABENNE-1
+        </td>
+        <td class="content-center">
+          <h6><span class="badge badge-secondary text-capitalize">2</span></h6>
+        </td>
+        <td class="content-center">
+          <h6><span class="badge badge-danger text-capitalize">0</span></h6>
+        </td>
+        <td class="content-center">
+          <h6><span class="badge badge-success">2</span></h6>
+        </td>
+      </tr>
+          <tr>
+        <td>
+          Virtual
+        </td>
+        <td class="content-center">
+          <h6><span class="badge badge-secondary text-capitalize">31</span></h6>
+        </td>
+        <td class="content-center">
+          <h6><span class="badge badge-danger text-capitalize">23</span></h6>
+        </td>
+        <td class="content-center">
+          <h6><span class="badge badge-success">8</span></h6>
+        </td>
+      </tr>
+      </tbody>
+</table>                </div>
+              </div><!-- /.card-body -->
+            </div><!-- /.card -->
+          </div><!-- /.col -->
+        </div><!-- /.row (main row) -->
+      </div><!-- /.container-fluid -->
+
+    </section><!-- /.content -->
+  </div><!-- /.content-wrapper -->
+
+
+
+			<!-- Modal Contact -->
+			<div class="modal fade" data-keyboard="false" data-backdrop="static" id="modal_contact" tabindex="-999" role="dialog" aria-labelledby="modal_title" aria-hidden="true">
+				<div id="class_modal" class="modal-dialog modal-dialog-centered modal-800" role="document">
+					<div class="modal-content">
+						<div class="modal-header">
+							<h3 class="modal-title w-100 text-center">Fale Conosco</h3>
+							<button type="button" class="close" data-dismiss="modal" aria-label="Close">
+								<span aria-hidden="true">&times;</span>
+							</button>
+						</div>
+						<div class="modal-body">
+							<div class="row d-flex align-items-center">
+								<div class="col d-flex justify-content-center">
+									<p>
+										<span style="font-size: 20px">Entre em contato com a Stokki:</span><br><br>
+										<span class="text-muted">
+											<i class="fab fa-whatsapp mr-2"></i>
+											<a target="_blank" rel="noopener noreferrer" href="https://web.whatsapp.com/send?phone=+554130529595">
+												 (41) 3052-9595
+											</a> 
+											<br>
+											<i class="fa fa-envelope mr-2 mt-1"></i> 
+											<a target="_blank" rel="noopener noreferrer" href="mailto:suporte@stokki.com.br">
+												suporte@stokki.com.br
+											</a>
+										</span>
+									</p>
+								</div>
+								<div class="vertical-line" style="height: 180px;"></div>
+								<div class="col d-flex justify-content-center">
+									<p>
+										<span style="font-size: 20px">Suporte:</span><br>
+										<span class="text-muted">
+											Horário de Atendimento<br>
+											Segunda à Sexta-feira, das 08:30hrs até 17:30hrs
+										</span><br><br>
+										<span style="font-size: 20px">Ouvidoria:</span><br>
+										<span class="text-muted">
+											<i class="fa fa-envelope mr-2"></i>
+											<a target="_blank" rel="noopener noreferrer" href="mailto:ouvidoria@stokki.com.br"> 
+												ouvidoria@stokki.com.br
+											</a>
+										</span>
+									</p>
+								</div>
+							</div>
+
+						</div>
+						<div class="modal-footer">
+						<div class="row">
+							<div class="col d-flex align-items-end align-items-center">
+								<a class="btn btn-success ml-auto" href="#" data-dismiss="modal">
+									Fechar								</a>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div><!-- /.modal-contact -->
+
+			<footer class="main-footer">
+				<strong >Stokki - Logística digital, acessível e descomplicada</strong>
+				<div class="float-right d-none d-sm-inline-block">
+					<b>Versão</b> 1.0
+				</div>
+			</footer>
+
+			<!-- Control Sidebar -->
+			<aside class="control-sidebar control-sidebar-dark">
+				<!-- Control sidebar content goes here -->
+			</aside><!-- /.control-sidebar -->
+		</div><!-- ./wrapper -->
+
+
+		<script>
+			window.locale = "pt-br";
+			window.APP_URL = "https:\/\/freshlog.stokki.com.br";
+		</script>
+		<!-- jQuery -->
+		<script src="https://freshlog.stokki.com.br/plugins/jquery/jquery.min.js"></script>
+
+
+		<!-- jQuery UI 1.11.4 -->
+		<script src="https://freshlog.stokki.com.br/plugins/jquery-ui/jquery-ui.min.js"></script>
+
+		<!-- Resolve conflict in jQuery UI tooltip with Bootstrap tooltip -->
+		<script> $.widget.bridge('uibutton', $.ui.button) </script>
+
+		<!-- Bootstrap 4 -->
+		<script src="https://freshlog.stokki.com.br/plugins/bootstrap/js/bootstrap.bundle.min.js"></script>
+
+        <!-- MapQuest -->
+        
+		<!-- ChartJS -->
+		
+
+		<!-- Sparkline -->
+		
+
+		<!-- JQVMap -->
+		
+
+		<!-- jQuery Knob Chart -->
+		
+
+		<!-- daterangepicker -->
+		
+
+		<!-- Tempusdominus Bootstrap 4 -->
+		
+
+		<!-- Summernote -->
+		
+
+		<!-- overlayScrollbars -->
+		
+
+		<!-- AdminLTE App -->
+		<script src="https://freshlog.stokki.com.br/js/adminlte2.js"></script>
+
+		<!-- AdminLTE dashboard demo (This is only for demo purposes) -->
+		
+
+		<!-- AdminLTE for demo purposes -->
+		
+
+		<!-- Toastr -->
+		<script src="https://freshlog.stokki.com.br/plugins/toastr/toastr.min.js"></script>
+
+		<!-- The screens' request, loaded before any screen script that uses it -->
+		<script src="https://freshlog.stokki.com.br/js/http.js?v=1794483339"></script>
+		 <script src="https://freshlog.stokki.com.br/js/session-pulse.js?v=1794483339"
+  data-pulse-url="https://freshlog.stokki.com.br/pt-br/session/pulse"
+  data-sign-in-url="https://freshlog.stokki.com.br/pt-br/login"
+  data-ended-session-url="https://freshlog.stokki.com.br/pt-br/session-ended"
+  data-tower-url="https://freshlog.stokki.com.br/pt-br/administrator"
+  data-pulse-interval="15000"></script>
+ 
+		<script src="https://freshlog.stokki.com.br/js/avatar.js?v=1794483339"></script>
+		<script src="https://freshlog.stokki.com.br/js/usermenu.js?v=1794483339"></script>
+		<script src="https://freshlog.stokki.com.br/js/cnpj.js?v=1794483339"></script>
+
+		<!-- App -->
+		<!-- Teste socket -->
+		<script src="https://freshlog.stokki.com.br/js/app/manifest.js"></script>
+		<script src="https://freshlog.stokki.com.br/js/app/vendor.js"></script>
+		<script src="https://freshlog.stokki.com.br/js/app/app.js"></script>
+
+
+
+
+					<!-- App/Notifications -->
+			<!-- Teste socket -->
+			
+			<script>
+
+				$(document).ready(function(){
+
+          $.ajax({
+            type: "GET",
+            url: 'https://freshlog.stokki.com.br/pt-br/post/central/count',
+            data: {},
+            cache: false,
+            contentType: false,
+            processData: false,
+            success: (data) => {
+              $('.count_message').html(data.count);
+              if(data.count>0){
+                $('#btn_post_menu').removeClass('disabled');
+              }
+            },
+            error: function (xhr) {
+              console.log(xhr);
+            }
+          });
+
+          $('#btn_post_menu').click(function () {
+            if(Number($('#count_message').html())>0){
+              $.ajax({
+                type: "GET",
+                url: 'https://freshlog.stokki.com.br/pt-br/post/central/list',
+                data: {},
+                cache: false,
+                contentType: false,
+                processData: false,
+                success: (data) => {
+                  $('#div_post_menu').html(data.html);
+                },
+                error: function (xhr) {
+                  console.log(xhr);
+                }
+              });
+            }
+          });
+
+          $.ajax({
+            type: "GET",
+            url: 'https://freshlog.stokki.com.br/pt-br/notification/count',
+            data: {},
+            cache: false,
+            contentType: false,
+            processData: false,
+            success: (data) => {
+              $('#count_notification').html(data.count);
+              if(data.count>0){
+                $('#btn_notification_menu').removeClass('disabled');
+              }
+            },
+            error: function (xhr) {
+              console.log(xhr);
+            }
+          });
+
+          $('#btn_notification_menu').click(function () {
+            if(Number($('#count_notification').html())>0){
+              $.ajax({
+                type: "GET",
+                url: 'https://freshlog.stokki.com.br/pt-br/notification/list',
+                data: {},
+                cache: false,
+                contentType: false,
+                processData: false,
+                success: (data) => {
+                  $('#div_notification_menu').html(data.html);
+                },
+                error: function (xhr) {
+                  console.log(xhr);
+                }
+              });
+            }
+          });
+
+					$('form').keypress(function(e) {
+						if ((e.keyCode == 10)||(e.keyCode == 13)) {
+							e.preventDefault();
+						}
+					});
+
+					$(document).on("wheel", "input[type=number]", function (e) {
+						$(this).blur();
+					});
+
+				//$('[data-toggle="tooltip"]').tooltip();
+
+				$('[data-toggle="tooltip"]').tooltip({ trigger: "hover" });
+
+				var dropdownMenu;
+
+				// and when you show it, move it to the body
+				$(window).on('show.bs.dropdown', function (e) {
+
+					// grab the menu
+					dropdownMenu = $(e.target).find('.dropdown-menu-table');
+
+					// detach it and append it to the body
+					$('body').append(dropdownMenu.detach());
+
+					// grab the new offset position
+					var eOffset = $(e.target).offset();
+
+					// make sure to place it where it would normally go (this could be improved)
+					dropdownMenu.css({
+					'display': 'block',
+					//'right': eOffset.left,
+					'left': eOffset.left - dropdownMenu.width() + $(e.target).outerWidth(),
+					'top': eOffset.top + $(e.target).outerHeight(),
+
+					});
+				});
+
+				// and when you hide it, reattach the drop down, and hide it normally
+				$(window).on('hide.bs.dropdown', function (e) {
+					$(e.target).append(dropdownMenu.detach());
+					dropdownMenu.hide();
+				});
+
+				
+				
+
+				
+
+				
+			});
+
+			function readAllNotificationNew () {
+					$.ajax({
+
+						type:'GET',
+						url: 'https://freshlog.stokki.com.br/pt-br/notification/readAll',
+						data: {},
+						cache:false,
+						contentType: false,
+						processData: false,
+						success: (data) => {
+
+							$('.div_notifications').html("");
+							$('.notification-counter').html("0");
+						}
+
+					});
+				}
+
+				function readAllPostNew() {
+					$.ajax({
+						type:'GET',
+						url: 'https://freshlog.stokki.com.br/pt-br/post/central/readAll',
+						data: {},
+						cache:false,
+						contentType: false,
+						processData: false,
+						success: (data) => {
+
+							$('.div_posts').html("");
+							$('.post-counter').html("0");
+						}
+
+					});
+				}
+			</script>
+			<script>
+				(function () {
+					const path = window.location.pathname;
+					const ignoreForward =
+					path.includes('crossdocking/outbound') ||
+					path.includes('crossdocking/incoming');
+					if (!ignoreForward) {
+						window.history.forward();
+					}
+				})();
+			</script>
+				<script>
+			$(document).ready(function(){
+
+				$.ajaxSetup({
+					headers: {
+					}
+				});
+			});
+		</script>
+		
+				
+						
+  <!-- Moment js -->
+  <script src="https://freshlog.stokki.com.br/vendor/moment.js/2.27.0/moment.min.js"></script>
+  <!--<script src="https://freshlog.stokki.com.br/vendor/datatables-plugins/1.10.21/sorting/datetime-moment.js"></script>-->
+
+  <!-- DataTables -->
+  <script src="https://freshlog.stokki.com.br/plugins/datatables/jquery.dataTables.js"></script>
+  <script src="https://freshlog.stokki.com.br/plugins/datatables-bs4/js/dataTables.bootstrap4.js"></script>
+  <script src="https://freshlog.stokki.com.br/js/sorting-natural.js"></script>
+
+  <!-- datepicker -->
+  <script src="https://freshlog.stokki.com.br/vendor/gijgo/1.9.13/js/gijgo.min.js" type="text/javascript"></script>
+  <script src="https://freshlog.stokki.com.br/vendor/gijgo/1.9.13/js/messages/messages.pt-br.js" type="text/javascript"></script>
+
+  <script>
+
+	  $(document).ready(function(){
+			$("#menu_storage").addClass("active");
+			$("#menu_storage_li").addClass("menu-open");
+      $("#menu_storage_inventory").addClass("active");
+
+      var table = $("#example1").DataTable({
+        "scrollX": true,
+        "dom": "<'row'<'col-sm-6'B>>" +
+                "<'row'<'col-sm-12'tr>>" +
+                "<'row'<'col-sm-4'i><'col-sm-4 text-center'l><'col-sm-4'p>>",
+        columnDefs: [
+          { type: 'natural', targets: 0 }
+        ],
+        "order": [[0, "desc"]],
+        "oLanguage": {
+          "oPaginate": {
+            "sNext": "Próximo",
+            "sPrevious": "Anterior"
+          },
+          "sInfo": 'Exibindo de _START_ a _END_ de _TOTAL_ endereçamentos',
+          "sInfoEmpty": 'Exibindo 0 endereçamentos',
+          "sSearch": "Pesquisar",
+          "sEmptyTable": 'Nenhum endereçamento cadastrado',
+          "sZeroRecords": 'Nenhum endereçamento correspondente encontrado',
+          "sInfoFiltered": '(filtrado de um total de _MAX_ endereçamentos)',
+          "sLengthMenu": 'Exibir <select>'+
+            '<option value="10">10</option>'+
+            '<option value="20">20</option>'+
+            '<option value="30">30</option>'+
+            '<option value="40">40</option>'+
+            '<option value="50">50</option>'+
+            '<option value="-1">Todos</option>'+
+            '</select> movimentações',
+        }
+      });
+      
+      $('#btn_excel_download').click(function(e) {
+
+        e.preventDefault();
+
+        $('#btn_excel_download').html('<i class="fa fa-spinner fa-spin"></i>').prop('disabled', true);
+
+        var url = 'https://freshlog.stokki.com.br/pt-br/administrator/inventory/moviment/addressing/excel/:product_id/:unit_id';
+        url = url.replace(':product_id', '2278');
+        url = url.replace(':unit_id', '1');
+
+        $.ajax({
+          type:'GET',
+          url: url,
+          data: {},
+          cache:false,
+          contentType: false,
+          processData: false,
+          success: (data) => {
+            toastr.success('Dowload concluído');
+
+            window.location.href = data.file_url;
+
+            $('#btn_excel_download').html('<img src="https://freshlog.stokki.com.br/img/icon-excel.png">').prop('disabled', false);
+
+          },
+          error: function (xhr) {
+            console.log(xhr);
+            toastr.error('Erro');
+          }
+        });
+
+
+      });
+
+    });
+
+  </script>
+
+
+<script>
+/*(function (o, c, t, a, d, e, s, k) {
+o.octadesk = o.octadesk || {};
+o.octadesk.chatOptions = {
+subDomain: a,
+showButton: d,
+openOnMessage: e,
+hide: s
+};
+var bd = c.getElementsByTagName("body")[0];
+var sc = c.createElement("script");
+sc.async = 1;
+sc.src = t;
+bd.appendChild(sc);
+})(window, document, 'https://cdn.octadesk.com/embed.js', 'stokki1', 'true', 'false', 'false');*/
+  $(document).ready(function(){
+
+    $('#btn_search_menu').click(function () {
+      $('.div_header_menu').hide();
+      $('#div_input_search_menu').show();
+      $('#input_search_menu').focus();
+    });
+
+    $('#btn_close_search_menu').click(function () {
+      $('#div_input_search_menu').hide();
+      $('.div_header_menu').show();
+    });
+
+    $('#input_search_menu').on('input keyup change', function(e) {
+
+      if(e.which == 13 && $('#input_search_menu').val()) {
+
+        var url = 'https://freshlog.stokki.com.br/pt-br/administrator/outbound/search?search=:search';
+        url = url.replace(':search', encodeURIComponent($('#input_search_menu').val()));
+
+        window.location.href = url;
+
+      }
+
+    });
+
+  });
+</script>
+
+		<script>
+			$(document).ready(function(){
+				$('.dataTables_processing').removeClass('card');
+
+				$('[data-widget="pushmenu"]').PushMenu({
+					autoCollapseSize: 0,
+					enableRemember: false
+				});
+			});
+		</script>
+
+		
+		<script>
+			function togglePanel() {
+				var panel = document.getElementById('panel');
+				if (panel) {
+					panel.classList.toggle('visible');
+				}
+			}
+
+			function openDiag() {
+				// TODO: integrar com a tela de diagnóstico de qualidade de conexão
+			}
+
+			// Fecha o painel ao clicar fora dele
+			document.addEventListener('click', function (event) {
+				var panel = document.getElementById('panel');
+				var btn = document.getElementById('btn-navbar-my-network-stats');
+				if (!panel || !panel.classList.contains('visible')) {
+					return;
+				}
+				if (panel.contains(event.target) || (btn && btn.contains(event.target))) {
+					return;
+				}
+				panel.classList.remove('visible');
+			});
+		</script>
+
+		<!-- Network Stats Panel (fora do .wrapper; .position-absolute faz rolar com a página e sumir com a navbar) -->
+				<!-- End Network Stats Panel -->
+
+	</body>
+
+</html>

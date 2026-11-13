@@ -66,9 +66,12 @@ Por produto, nesta ordem:
 1. **Endereço de origem** da separação. Fonte provável: "movimentos entre endereçamentos"
    (`/administrator/inventory/moviment/addressing/moviment/<product_id>/1`, dados em
    `.../addressing/table/moviment/table`), colunas Localização inicial e Localização
-   destino. **Ainda não provado** que a separação aparece ali: a sonda de 12/11 leu só
-   os cabeçalhos. Confirmar isso é o primeiro passo da construção (leitura, com o
-   PS-43101, produto 2278, 03/11 12h12). Se a separação tirou de mais de um endereço,
+   destino. **Provado em 12/11** (amostras em `stokki/amostras_devolucao/`, ver `LEIA.txt`): a separação
+   aparece ali como linha `origem -> Virtual`. PS-43101: produto 2278 = `#A-110830 | 03/11/2026 11:44 |
+   Carla | FABENNE-1 -> Virtual | 4` (produto 2282 = `#A-110831`, mesmo minuto). A hora é a de "Em
+   Conferência" no histórico do pedido (11:44), e o Bloqueio de 12:12 na tela de movimentos é o
+   cancelamento. A linha não traz o número do pedido: casar por produto + hora + quantidade +
+   usuário. Se a separação tirou de mais de um endereço,
    cada parte volta para o seu.
 2. Sem origem conhecida: **endereço físico com mais estoque daquele produto**
    (`/administrator/inventory/moviment/addressing/<product_id>/1`: Código de
