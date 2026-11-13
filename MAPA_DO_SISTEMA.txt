@@ -145,6 +145,10 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  Cancelamento de pedido pelo cliente ....... portal_cliente/cancelamento.py (CANCELANDO -> worker
                                              enviar_stokki -> stokki/cancelar.py + roteirizacao/cancelar_servico.py
                                              -> CANCELADO | CRIADO + solicitação PENDENTE, e-mail + WhatsApp atendimento)
+ Devolução de estoque de pedido cancelado .. stokki/devolucao_estoque.py (regras, fila stokki_devolucoes, plano) +
+                                             devolucao_executor.py + mover_virtual.py; os 3 caminhos de cancelamento
+                                             registram, o worker do portal executa (chave stokki.devolucao_cancelamento.ativo;
+                                             spec DOC_EXECUCAO_CLAUDE_DEVOLUCAO_ESTOQUE_CANCELAMENTO.md)
  Retomar pedido em espera (cliente) ........ portal_cliente/retomada.py (RETOMANDO -> worker enviar_stokki:
                                              data na Vuupt + fecha a pausa -> CRIADO | EM_ESPERA_CLIENTE; sem Stokki)
  Chat/chamados ............................. portal_cliente/chamados.py
@@ -700,6 +704,8 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                final de cada pedido; job 07h25 desde 05/10),
                                BOLETOS_PARCELADOS,
                                CODE (= duplicados na Vuupt), COTACAO_FRETE,
+                               DEVOLUCAO_ESTOQUE_CANCELAMENTO (saldo do cancelado
+                               volta do Virtual pro endereço físico),
                                MIGRACAO_VPS, NOTIFICACAO_ENTREGAS,
                                NOTIFICACAO_MOTORISTAS, NOTIFICACAO_TRANSPORTADORAS,
                                OTIMIZACAO_ROTAS, RESUMO_DIARIO_EMBARCADOR,
@@ -780,6 +786,29 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                       logar por cima). Recorrentes (WMS, expedição, importação
                       horária, documentos) esperam sem limite; sequências,
                       portal e importador do 2º projeto, até 2h.
+ devolucao_estoque.py Devolução de estoque do pedido cancelado (12/11): regras puras
+                      (quanto e pra onde: de onde saiu, senão o endereço com mais
+                      produto do embarcador), fila stokki_devolucoes (registrar,
+                      pendentes, gravar), leituras (ler_pedido, ler_origem,
+                      ler_devolucoes) e montar_plano (SÓ LEITURA). Chave
+                      stokki.devolucao_cancelamento.ativo; ausente = desligada.
+                      A devolução NÃO traz o número do pedido nos movimentos entre
+                      endereços; "Desbloqueio | Interno" sem referência também
+                      nasce de recebimento: não prova nada. Na dúvida, não move.
+ devolucao_executor.py  processar_pendentes: pega PENDENTE da fila, monta o plano pela
+                      conta admin e move pela provider, avisa o galpão (WhatsApp).
+                      Movimento sem confirmação nunca é repetido (vai a DUVIDA e a
+                      operação confere); erro técnico conta tentativa (máx. 3);
+                      conta ocupada espera o próximo ciclo sem gastar tentativa.
+ mover_virtual.py     Movimentação de Estoque Manual da área provider (POST
+                      operation/inventory/adjust/store/process + poll
+                      adjust/processed/:id), Virtual -> endereço. Script provado à mão
+                      em 03/11 (PS-43101); pelo robô ainda não. NÃO pega trava (quem
+                      chama já está com a provider). Nunca move mais que o pedido
+                      bloqueou nem mais que a tela oferece.
+ amostras_devolucao/  Respostas REAIS da Stokki (PS-43101, leitura 12/11) usadas como
+                      fixture dos testes da devolução; LEIA.txt explica cada arquivo.
+                      Tokens removidos. Não regravar sem refazer a leitura.
  contas.py            Credenciais por conta e ordem principal -> reserva.
  fixtures/, test_*.py Parsers testados com HTML salvo (não conectar na Stokki
                       a partir da máquina local).
@@ -1326,7 +1355,10 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
                           destinatarios com ajuste manual de horario de recebimento sao
                           reenviados uma vez.
  enviar_stokki.py          Worker que cria o pedido na Stokki (Playwright) e, a cada
-                           ciclo, executa os cancelamentos CANCELANDO sob a trava.
+                           ciclo, executa os cancelamentos CANCELANDO sob a trava e, no
+                           fim (processar_devolucoes_do_ciclo), devolve o saldo dos
+                           cancelados (fila stokki_devolucoes; chave desligada = não
+                           abre sessão).
                            Fluxo Cross: converte pro item XD e enfileira a troca de NF.
  trocas_nf.py              Fila trocas_nf_pendentes (portal, importador por e-mail,
                            virada); o worker troca 3x com 10 min entre tentativas,
@@ -1342,6 +1374,9 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
                            operação (lê nucleo_pedidos/nucleo_rotas: rota iniciada,
                            entregue, insucesso, Lalamove -> operação), executa na Vuupt
                            e na Stokki, três fins; aviso e-mail + WhatsApp atendimento.
+                           Cancelado na Stokki registra o pedido na fila da devolução
+                           de estoque (assim como solicitacoes_execucao e o botão
+                           "Cancelar na Stokki" da /pedidos: acoes_pedidos.cancelar_stokki).
  retomada.py               Retomada de pedido em espera (RETOMANDO, ciclo do enviar_stokki):
                            agendamento = data do cliente na Vuupt + agendamentos_pedido;
                            proxima_rota = dia fixo da região (None = não mexe); fecha a
@@ -1676,6 +1711,8 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
    vigia_*                   vigia/banco.py (stokki_abertos, pedidos, historico, listagens)
    geocache                  geocodificacao.py
    stokki_sessao_uso         stokki/sessao_uso.py
+   stokki_devolucoes         stokki/devolucao_estoque.py (fila da devolução de estoque do
+                             cancelado: PENDENTE/..., itens, tentativas, erro)
    galpao_*                  galpao3d/banco.py (Galpão 3D): galpao_pedidos (último
                              estado + falhas_show/show_pendente), galpao_eventos,
                              galpao_conferencias; galpao_coletas, galpao_contagens,
@@ -1803,6 +1840,9 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
    (whatsapp_notificacoes.grupo_atendimento_id; sem ele não envia, nunca
    cai no grupo de alertas). Desliga sozinho com avisar_chamados: false.
    O portal lê o config na subida: mudou a seção, reinicie portal-cliente.
+ - Aviso da devolução de estoque (guardar a caixa devolvida) vai pro grupo
+   PEDIDOS CANCELADOS (whatsapp_notificacoes.grupo_cancelados_id; sem ele não
+   envia). A devolução só roda com stokki.devolucao_cancelamento.ativo.
  - WhatsApp DIRETO AO CLIENTE (avisar_cliente_sem_resposta.py) é a única
    notificação por WhatsApp que sai pra fora: whatsapp_notificacoes.clientes
    {ativo, minutos, dias_max, teto_diario, forcar_destino}. Teto separado do
