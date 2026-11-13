@@ -258,6 +258,16 @@ def abertas(conn) -> list[dict]:
     return _resumos(conn, "c.status IN ('ABERTA', 'CONFIRMADA')")
 
 
+def assinatura(conn) -> str:
+    """Muda quando qualquer folha ou pedido de folha muda de estado: a tela do
+    computador compara e recarrega quando o celular da doca confirma."""
+    r = conn.execute("SELECT COUNT(*), COALESCE(SUM(id), 0), "
+                     "COALESCE(GROUP_CONCAT(status || COALESCE(execucao_id, ''), ''), '') FROM expedicao_coletas").fetchone()
+    p = conn.execute("SELECT COALESCE(GROUP_CONCAT(estado, ''), '') FROM expedicao_coletas_pedidos").fetchone()
+    import hashlib
+    return hashlib.sha1(f"{r[0]}|{r[1]}|{r[2]}|{p[0]}".encode()).hexdigest()[:16]
+
+
 def historico(conn, limite: int = 50) -> list[dict]:
     return _resumos(conn, "c.status = 'CONCLUIDA'", limite=limite)
 

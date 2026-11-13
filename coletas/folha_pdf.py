@@ -53,8 +53,22 @@ def _data_br(texto) -> str:
         return texto or ""
 
 
-def gerar(coleta: dict) -> bytes:
-    """coleta = coletas.regras.coleta(conn, id). Devolve o PDF (1 pagina)."""
+LADO_QR = 150
+
+
+def _qr(conteudo: str):
+    import qrcode
+    from qrcode.constants import ERROR_CORRECT_M
+    qr = qrcode.QRCode(error_correction=ERROR_CORRECT_M, box_size=10, border=1)
+    qr.add_data(conteudo)
+    qr.make(fit=True)
+    return qr.make_image(fill_color="black", back_color="white").convert("RGB").resize((LADO_QR, LADO_QR))
+
+
+def gerar(coleta: dict, url: str | None = None) -> bytes:
+    """coleta = coletas.regras.coleta(conn, id). url = endereco da coleta no
+    painel: vira o QR code do canto, que o celular da doca le pra abrir direto
+    a confirmacao (foto, nome e placa). Devolve o PDF (1 pagina)."""
     img = Image.new("RGB", A4, "white")
     d = ImageDraw.Draw(img)
     largura = A4[0] - 2 * MARGEM
@@ -63,14 +77,20 @@ def gerar(coleta: dict) -> bytes:
 
     d.text((MARGEM, 50), "Fresh Log", font=_fonte(26, True), fill=CINZA)
     d.text((MARGEM, 84), f"Folha de coleta {coleta['numero']}", font=_fonte(46, True), fill=PRETO)
-    d.text((direita, 96), _data_br(coleta.get("criada_em")), font=_fonte(26), fill=PRETO, anchor="ra")
+    largura_topo = largura
+    if url:
+        img.paste(_qr(url), (direita - LADO_QR, 36))
+        d.text((direita - LADO_QR / 2, 36 + LADO_QR + 4), "Confirmar pelo celular", font=_fonte(15), fill=CINZA, anchor="ma")
+        largura_topo = largura - LADO_QR - 24
     y = 152
     transportadora = coleta.get("transportadora") or ""
-    if coleta.get("embarcador"):
+    if coleta.get("embarcador"):   # Cliente Retira: o CNPJ colado no nome so rouba o espaco do embarcador
+        transportadora = re.sub(r"\s*\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}", "", transportadora).strip()
         transportadora += f"  |  {coleta['embarcador']}"
-    d.text((MARGEM, y), _truncar(d, f"Transportadora: {transportadora}", _fonte(28, True), largura),
+    d.text((MARGEM, y), _truncar(d, f"Transportadora: {transportadora}", _fonte(28, True), largura_topo),
            font=_fonte(28, True), fill=PRETO)
-    d.text((MARGEM, y + 38), f"Gerada por: {coleta.get('criada_por') or ''}", font=_fonte(22), fill=CINZA)
+    d.text((MARGEM, y + 38), f"Gerada por {coleta.get('criada_por') or ''} em {_data_br(coleta.get('criada_em'))}",
+           font=_fonte(22), fill=CINZA)
     y += 84
 
     # tabela: Levou | Pedido | Embarcador | NF | Destinatario | Unid.

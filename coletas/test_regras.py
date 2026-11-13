@@ -165,6 +165,17 @@ class TestRegras(unittest.TestCase):
         with self.assertRaises(ErroColeta):
             regras.tentar_de_novo(self.conn, cid)
 
+    def test_assinatura_muda_a_cada_passo(self):
+        vistas = [regras.assinatura(self.conn)]
+        cid = self._folha()
+        vistas.append(regras.assinatura(self.conn))
+        self._confirmar(cid, [1])
+        vistas.append(regras.assinatura(self.conn))
+        regras.aplicar_resultados(self.conn, cid, {"PS-1": {"ok": True, "mensagem": ""}})
+        vistas.append(regras.assinatura(self.conn))
+        self.assertEqual(len(set(vistas)), 4)
+        self.assertEqual(regras.assinatura(self.conn), vistas[-1])
+
     def test_coleta_do_pedido(self):
         cid = self._folha()
         self._confirmar(cid, [1])

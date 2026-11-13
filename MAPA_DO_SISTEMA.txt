@@ -1176,6 +1176,8 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
    /laboratorio-rotas         laboratorio_rotas.html
    /expedicao                 expedicao.html
    /expedicao/coletas         coletas_expedicao.html (+ /api/expedicao/coletas/...: folha,
+                              estado (a lista recarrega quando outro aparelho confirma),
+                              /expedicao/coletas/<id> = tela de UMA coleta, destino do QR;
                               <id>/confirmar|cancelar|tentar-de-novo|retirar|andamento;
                               <id>/folha.pdf e <id>/foto). Ver: total, operador, leitura,
                               atendimento, logistica, expedicao, galpao. Agir: total,
@@ -1487,7 +1489,8 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
                             Retira = 1 embarcador), confirmar (foto + nome + placa
                             obrigatórios), aplicar_resultados, tentar_de_novo,
                             retirar_pedido, tem_foto (o robô confere), retiradas_novas.
-   folha_pdf.py             PDF A4 da folha (PIL), 1 página até 30 pedidos.
+   folha_pdf.py             PDF A4 da folha (PIL), 1 página até 30 pedidos, com QR code
+                            que abre /expedicao/coletas/<id> no celular da doca (13/11).
    exemplo_homolog.py       SÓ na homologação: monta a fila uma vez com a cópia dos dados
                             (galpao_pedidos + transportadora do batimento), porque a
                             bancada nunca lê a Stokki. Em produção não faz nada.

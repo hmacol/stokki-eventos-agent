@@ -28,6 +28,7 @@
   .bt.sec { background: transparent; color: var(--texto); border: 1px solid var(--borda); }
   .bt.mini { font-size: 12.5px; padding: 5px 9px; }
   .bt:disabled { opacity: .5; cursor: not-allowed; }
+  .bt[hidden] { display: none; }
   .campos { display: grid; grid-template-columns: 2fr 1fr; gap: 10px; margin-top: 12px; }
   .campos label { font-size: 12.5px; font-weight: 600; color: var(--texto-suave); display: block; }
   .campos input[type=text] { width: 100%; box-sizing: border-box; font-size: 16px; padding: 10px; border: 1px solid var(--borda); border-radius: 8px; background: var(--fundo); color: var(--texto); font-family: inherit; margin-top: 3px; }
@@ -38,6 +39,13 @@
   table.hist { width: 100%; border-collapse: collapse; font-size: 13.5px; }
   table.hist th, table.hist td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--borda); }
   table.hist th { font-size: 12px; color: var(--texto-suave); }
+  .aviso.ok { background: #d9f2e4; color: #17603a; }
+  .dica-qr { margin: 0 0 8px; }
+  .c-webcam { margin-top: 8px; }
+  .c-camera { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+  .c-camera[hidden], .c-previa[hidden] { display: none; }
+  .c-video, .c-previa { width: 100%; max-width: 420px; border-radius: 8px; border: 1px solid var(--borda); background: #000; }
+  .c-previa { margin-top: 8px; display: block; }
   .vazio { font-size: 14px; color: var(--texto-suave); padding: 6px 0; }
   details.outras { font-size: 13px; color: var(--texto-suave); margin-top: 8px; }
   @media (max-width: 560px) {
@@ -55,15 +63,22 @@
 
 {% block conteudo %}
 <div class="coletas">
+  {% if foco %}
+  <h1>Coleta {{ foco.numero }}</h1>
+  <p class="sub"><a href="{{ url_for('expedicao_coletas') }}">Ver todas as coletas</a></p>
+  {% if foco.status == 'CANCELADA' %}<div class="aviso">Esta folha foi cancelada. Os pedidos voltaram para a lista: gere outra folha.</div>{% endif %}
+  {% if foco.status == 'CONCLUIDA' %}<div class="aviso ok">Coleta concluída{% if foco.simulada %} (simulada){% endif %}.</div>{% endif %}
+  {% else %}
   <h1>Coletas</h1>
-  <p class="sub">Pedidos de retirada esperando a transportadora ou o cliente. Gere a folha, o motorista preenche e assina, e a foto dela confirma a saída na Stokki.</p>
+  <p class="sub">Pedidos de retirada esperando a transportadora ou o cliente. Imprima a folha, o motorista preenche e assina, e quem está na doca aponta o celular para o QR code da folha para tirar a foto e confirmar a saída.</p>
   <p class="sub">Lista lida da Stokki {% if ultima_leitura %}em {{ dh(ultima_leitura) }}{% else %}— ainda não houve leitura{% endif %} (atualiza a cada 10 min).
     <a href="{{ url_for('expedicao') }}">Voltar para Expedição</a></p>
+  {% endif %}
   {% if exemplo %}<div class="aviso">Homologação: a lista abaixo é de exemplo (pedidos da cópia dos dados). Confirmar a coleta aqui só registra, nada vai à Stokki.</div>{% endif %}
   {% if leitura_atrasada %}<div class="aviso">A leitura da Stokki está atrasada: a lista abaixo pode estar desatualizada.</div>{% endif %}
 
   {% if folhas %}
-  <h2>Folhas em andamento</h2>
+  {% if not foco %}<h2>Folhas em andamento</h2>{% endif %}
   {% for c in folhas %}
   <section class="cartao {{ 'aberta' if c.status == 'ABERTA' }}" data-coleta="{{ c.id }}" data-status="{{ c.status }}">
     <div class="cartao-topo">
@@ -76,6 +91,7 @@
       </span>
     </div>
     {% if c.status == 'ABERTA' %}
+    {% if not foco and pode_agir %}<p class="sub dica-qr">Folha impressa? Aponte a câmera do celular para o QR code dela: abre esta coleta para tirar a foto e confirmar. Esta tela atualiza sozinha.</p>{% endif %}
     <ul class="lista-ped">
       {% for p in c.pedidos %}
       <li><label><input type="checkbox" class="saiu" value="{{ p.id_stokki }}" checked {{ 'disabled' if not pode_agir }}>
@@ -88,7 +104,14 @@
       <div><label>Nome do motorista (obrigatório)<input type="text" class="c-nome" maxlength="120" autocomplete="off"></label></div>
       <div><label>Placa (obrigatória)<input type="text" class="c-placa" maxlength="12" autocomplete="off" style="text-transform:uppercase"></label></div>
       <div class="foto"><label>Foto da folha preenchida e assinada (obrigatória)
-        <input type="file" class="c-foto" accept="image/*" capture="environment"></label></div>
+        <input type="file" class="c-foto" accept="image/*" capture="environment"></label>
+        <button type="button" class="bt sec mini c-webcam" hidden>Usar a câmera deste computador</button>
+        <div class="c-camera" hidden>
+          <video class="c-video" autoplay playsinline muted></video>
+          <button type="button" class="bt mini c-capturar">Capturar a foto</button>
+        </div>
+        <img class="c-previa" alt="Foto capturada" hidden>
+      </div>
     </div>
     <div class="rodape-cartao">
       <button type="button" class="bt" data-acao="confirmar" disabled>Confirmar coleta</button>
@@ -97,6 +120,8 @@
       <span class="erro" hidden></span>
     </div>
     {% endif %}
+    {% elif c.status == 'CANCELADA' %}
+    <p class="sub">Cancelada por {{ c.confirmada_por }}.</p>
     {% else %}
     <p class="sub">Confirmada {{ dh(c.confirmada_em) }} por {{ c.confirmada_por }} · motorista {{ c.motorista_nome }} · placa {{ c.placa }}</p>
     <ul class="lista-ped">
@@ -120,6 +145,7 @@
   {% endfor %}
   {% endif %}
 
+  {% if not foco %}
   <h2>A coletar</h2>
   {% if not grupos %}<p class="vazio">Nenhum pedido de retirada aguardando transportador.</p>{% endif %}
   {% for gr in grupos %}
@@ -162,6 +188,7 @@
       <td>{% if h.foto_arquivo %}<a target="_blank" href="{{ url_for('expedicao_coleta_foto', coleta_id=h.id) }}">foto</a>{% endif %}</td></tr>
     {% endfor %}
   </table>
+  {% endif %}
   {% endif %}
 </div>
 
@@ -213,6 +240,34 @@
     });
   });
 
+  // Lista geral: recarrega quando algo muda em outro aparelho (o celular da doca confirmou).
+  // Nao recarrega por cima de quem esta preenchendo: mostra um aviso com o botao.
+  const ASSINATURA = {{ (assinatura or '') | tojson }};
+  if (ASSINATURA) {
+    const ocupado = () => !!document.querySelector(".vai:checked") || [...document.querySelectorAll(".c-nome, .c-placa")].some((i) => i.value.trim())
+      || [...document.querySelectorAll(".c-foto")].some((i) => i.files.length) || !!document.querySelector(".c-camera:not([hidden])");
+    const vigiar = async () => {
+      try {
+        const d = await (await fetch(COLETAS_API + "/estado")).json();
+        if (d.assinatura && d.assinatura !== ASSINATURA) {
+          if (!ocupado()) return location.reload();
+          if (!document.getElementById("aviso-mudou")) {
+            const a = document.createElement("div");
+            a.className = "aviso"; a.id = "aviso-mudou";
+            a.textContent = "Uma coleta mudou em outro aparelho. ";
+            const b = document.createElement("button");
+            b.type = "button"; b.className = "bt sec mini"; b.textContent = "Atualizar a tela";
+            b.addEventListener("click", () => location.reload());
+            a.appendChild(b);
+            document.querySelector(".coletas h1").after(a);
+          }
+        }
+      } catch (e) { /* tenta de novo */ }
+      setTimeout(vigiar, 8000);
+    };
+    setTimeout(vigiar, 8000);
+  }
+
   // Folhas em andamento
   document.querySelectorAll("[data-coleta]").forEach((cartao) => {
     const id = cartao.dataset.coleta;
@@ -221,16 +276,43 @@
     if (confirmar) {
       const nome = cartao.querySelector(".c-nome"), placa = cartao.querySelector(".c-placa"), foto = cartao.querySelector(".c-foto");
       const sairam = () => [...cartao.querySelectorAll(".saiu")].filter((c) => c.checked).map((c) => c.value);
+      let capturada = null;   // foto tirada pela camera do computador
+      const temFoto = () => foto.files.length > 0 || !!capturada;
       const atualizar = () => {
         const n = sairam().length;
         // nada marcado = cancelar a folha: nao precisa de foto
-        confirmar.disabled = n > 0 && !(nome.value.trim() && placa.value.trim() && foto.files.length);
+        confirmar.disabled = n > 0 && !(nome.value.trim() && placa.value.trim() && temFoto());
         confirmar.textContent = n ? "Confirmar coleta (" + n + ")" : "Nenhum saiu: cancelar folha";
       };
       cartao.querySelectorAll(".saiu, .c-nome, .c-placa, .c-foto").forEach((el) => {
         el.addEventListener("input", atualizar); el.addEventListener("change", atualizar);
       });
       atualizar();
+      // Reserva sem celular: a camera do computador (so aparece se o aparelho tem uma e nao e toque)
+      const btCam = cartao.querySelector(".c-webcam"), caixaCam = cartao.querySelector(".c-camera");
+      const video = cartao.querySelector(".c-video"), previa = cartao.querySelector(".c-previa");
+      const desligar = () => { if (video.srcObject) video.srcObject.getTracks().forEach((t) => t.stop()); video.srcObject = null; caixaCam.hidden = true; };
+      const celular = window.matchMedia("(pointer: coarse)").matches || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia && !celular) {
+        btCam.hidden = false;
+        btCam.addEventListener("click", async () => {
+          try {
+            video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1920 }, height: { ideal: 1080 } } });
+            caixaCam.hidden = false; erro(cartao, "");
+          } catch (e) { erro(cartao, "Não consegui abrir a câmera deste computador. Use o celular pelo QR code da folha."); }
+        });
+        cartao.querySelector(".c-capturar").addEventListener("click", () => {
+          const tela = document.createElement("canvas");
+          tela.width = video.videoWidth; tela.height = video.videoHeight;
+          tela.getContext("2d").drawImage(video, 0, 0);
+          tela.toBlob((b) => {
+            capturada = b; foto.value = "";
+            previa.src = URL.createObjectURL(b); previa.hidden = false;
+            desligar(); atualizar();
+          }, "image/jpeg", 0.9);
+        });
+        foto.addEventListener("change", () => { if (foto.files.length) { capturada = null; previa.hidden = true; } });
+      }
       confirmar.addEventListener("click", async () => {
         const ids = sairam();
         if (ids.length && !confirm("Confirmar a saída de " + ids.length + " pedido(s)? Eles serão marcados como Enviado na Stokki.")) return;
@@ -240,6 +322,7 @@
         corpo.append("motorista_nome", nome.value);
         corpo.append("placa", placa.value);
         if (foto.files.length) corpo.append("foto", foto.files[0]);
+        else if (capturada) corpo.append("foto", capturada, "camera.jpg");
         try { await enviar(url("confirmar"), corpo); location.reload(); }
         catch (e) { erro(cartao, e.message); atualizar(); }
       });

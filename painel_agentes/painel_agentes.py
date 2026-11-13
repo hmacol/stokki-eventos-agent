@@ -1103,6 +1103,7 @@ def expedicao_coletas():
         folhas = [coletas_regras.coleta(conn, c["id"]) for c in coletas_regras.abertas(conn)]
         historico = coletas_regras.historico(conn)
         ultima = coletas_ler_stokki.ultima_leitura(conn)
+        assinatura = coletas_regras.assinatura(conn)
     finally:
         conn.close()
     atrasada = not exemplo
@@ -1111,7 +1112,34 @@ def expedicao_coletas():
     return render_template("coletas_expedicao.html", grupos=lista["grupos"], sem_cadastro=lista["sem_cadastro"],
                            folhas=folhas, historico=historico, ultima_leitura=ultima, leitura_atrasada=atrasada,
                            pode_agir=g.nivel_acesso in NIVEIS_COLETA_AGIR, max_pedidos=coletas_regras.MAX_PEDIDOS,
-                           exemplo=exemplo)
+                           exemplo=exemplo, foco=None, assinatura=assinatura)
+
+
+@app.route("/expedicao/coletas/<int:coleta_id>")
+@requer_auth(niveis=NIVEIS_COLETA_VER)
+def expedicao_coleta_tela(coleta_id: int):
+    """Uma coleta so: e onde o QR code da folha impressa cai. O celular da doca
+    tira a foto, digita nome e placa e confirma daqui (Hugo, 13/11)."""
+    conn = coletas_banco.conectar()
+    try:
+        c = coletas_regras.coleta(conn, coleta_id)
+    except coletas_regras.ErroColeta:
+        abort(404)
+    finally:
+        conn.close()
+    return render_template("coletas_expedicao.html", foco=c, folhas=[c], grupos=[], sem_cadastro=[], historico=[],
+                           ultima_leitura=None, leitura_atrasada=False, exemplo=_homolog_ativo(),
+                           pode_agir=g.nivel_acesso in NIVEIS_COLETA_AGIR, max_pedidos=coletas_regras.MAX_PEDIDOS)
+
+
+@app.route("/api/expedicao/coletas/estado")
+@requer_auth(niveis=NIVEIS_COLETA_VER)
+def api_expedicao_coletas_estado():
+    conn = coletas_banco.conectar()
+    try:
+        return jsonify({"assinatura": coletas_regras.assinatura(conn)})
+    finally:
+        conn.close()
 
 
 @app.route("/api/expedicao/coletas/folha", methods=["POST"])
@@ -1145,7 +1173,9 @@ def expedicao_coleta_folha(coleta_id: int):
         abort(404)
     finally:
         conn.close()
-    return Response(coletas_folha_pdf.gerar(c), mimetype="application/pdf",
+    # o QR da folha abre esta coleta no celular da doca (endereco publico, via ProxyFix)
+    url = url_for("expedicao_coleta_tela", coleta_id=coleta_id, _external=True)
+    return Response(coletas_folha_pdf.gerar(c, url=url), mimetype="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="{c["numero"]}.pdf"'})
 
 

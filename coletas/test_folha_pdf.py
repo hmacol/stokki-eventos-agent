@@ -26,6 +26,16 @@ class TestFolhaPdf(unittest.TestCase):
             # A4 em pe (595 x 842 pt)
             self.assertAlmostEqual(float(pagina[0].mediabox.width), 595, delta=2)
 
+    def test_qr_code_leva_o_endereco_da_coleta(self):
+        from PIL import Image
+        url = "https://app.freshhub.com.br/painel/expedicao/coletas/7"
+        self.assertEqual(folha_pdf._qr(url).size, (folha_pdf.LADO_QR, folha_pdf.LADO_QR))
+        pdf = folha_pdf.gerar(_coleta(30), url=url)
+        self.assertEqual(len(PdfReader(io.BytesIO(pdf)).pages), 1)
+        self.assertNotEqual(pdf, folha_pdf.gerar(_coleta(30)))
+        # o QR termina antes da tabela
+        self.assertLess(36 + folha_pdf.LADO_QR + 24, folha_pdf.Y_LINHAS - 34)
+
     def test_trinta_linhas_nao_invadem_o_rodape(self):
         # 30 linhas + a linha do total (12 de respiro + 30 de altura) terminam antes do rodape
         fim = folha_pdf.Y_LINHAS + folha_pdf.MAX_LINHAS * folha_pdf.ALT_LINHA + 12 + 30

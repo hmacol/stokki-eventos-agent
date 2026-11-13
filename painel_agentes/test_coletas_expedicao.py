@@ -262,6 +262,39 @@ class TestColetasExpedicao(unittest.TestCase):
         r = self.cliente.post(f"/api/expedicao/coletas/{cid}/retirar", json={"id_stokki": 1}, headers=ORIGEM)
         self.assertEqual(r.status_code, 200)
 
+    def test_qr_da_folha_abre_a_coleta_sozinha_e_a_lista_sabe_quando_mudou(self):
+        """Hugo, 13/11: quem imprime no computador nao tem como tirar foto. O QR
+        da folha abre a coleta no celular da doca; o computador atualiza sozinho."""
+        self._logar("galpao")
+        antes = self.cliente.get("/api/expedicao/coletas/estado").get_json()["assinatura"]
+        cid = self._folha([1])
+        with mock.patch.object(painel_agentes.coletas_folha_pdf, "gerar", return_value=b"%PDF-x") as gerar:
+            self.cliente.get(f"/expedicao/coletas/{cid}/folha.pdf")
+        self.assertTrue(gerar.call_args.kwargs["url"].endswith(f"/expedicao/coletas/{cid}"))
+        self.assertTrue(gerar.call_args.kwargs["url"].startswith("http"))
+        r = self.cliente.get(f"/expedicao/coletas/{cid}")
+        self.assertEqual(r.status_code, 200)
+        html = r.get_data(as_text=True).split("const COLETAS_API")[0]
+        self.assertIn(f"Coleta COL-{cid}", html)
+        self.assertIn("c-foto", html)
+        self.assertIn('class="saiu" value="1"', html)
+        self.assertNotIn("A coletar", html)
+        self.assertNotIn("Coletas concluídas", html)
+        self.assertEqual(self.cliente.get("/expedicao/coletas/999").status_code, 404)
+        depois = self.cliente.get("/api/expedicao/coletas/estado").get_json()["assinatura"]
+        self.assertNotEqual(antes, depois)
+        self.assertIn(depois, self.cliente.get("/expedicao/coletas").get_data(as_text=True))
+        # confirmada pelo celular: a assinatura muda de novo e a tela da coleta mostra o andamento
+        self.assertEqual(self._confirmar(cid, ids="1").status_code, 200)
+        self.assertNotEqual(self.cliente.get("/api/expedicao/coletas/estado").get_json()["assinatura"], depois)
+        html = self.cliente.get(f"/expedicao/coletas/{cid}").get_data(as_text=True).split("const COLETAS_API")[0]
+        self.assertIn("JOSE DA SILVA", html)
+        self.assertNotIn("c-foto", html)
+        # folha cancelada: o QR antigo avisa em vez de dar erro
+        cid2 = self._folha([2])
+        self.cliente.post(f"/api/expedicao/coletas/{cid2}/cancelar", json={}, headers=ORIGEM)
+        self.assertIn("Esta folha foi cancelada", self.cliente.get(f"/expedicao/coletas/{cid2}").get_data(as_text=True))
+
     def test_tela_nova_esta_no_cadastro_de_acessos(self):
         chaves = [t[0] for t in painel_agentes.acesso_telas.TELAS]
         self.assertIn("expedicao_coletas", chaves)

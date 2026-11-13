@@ -82,6 +82,19 @@ novo" (não pede foto outra vez). A coleta só fica "concluída" quando todos os
   painel do pedido mostra o número da coleta, quem levou e o link da foto. Pedido marcado direto na
   Stokki, sem folha, também vira Coletado, sem esses dados.
 
+## Ajuste de 13/11: quem imprime não é quem fotografa
+
+Testando na homologação o Hugo viu que o operador imprime no computador e não tem como pôr a foto ali.
+Ficou assim (opção escolhida por ele):
+
+- A folha sai com um **QR code** que abre a tela só daquela coleta (`/expedicao/coletas/<id>`). Quem está
+  na doca aponta o celular do galpão, tira a foto, digita nome e placa, desmarca o que não saiu e confirma.
+- A tela do computador **atualiza sozinha** quando a coleta muda em outro aparelho (se alguém estiver
+  preenchendo, mostra um aviso com botão em vez de recarregar por cima).
+- Reserva sem celular: botão "Usar a câmera deste computador" (só aparece em computador com câmera).
+- Segurança igual: o QR só abre para quem está logado no painel; foto, nome e placa continuam obrigatórios.
+  O login não volta sozinho para a coleta depois de entrar: celular deslogado loga e lê o QR de novo.
+
 ## Decisões do Hugo (12/11)
 
 - A foto obrigatória é **uma: a folha de coleta preenchida e assinada**. Não guardamos foto de documento
