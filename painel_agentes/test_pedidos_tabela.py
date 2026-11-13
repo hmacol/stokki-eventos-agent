@@ -268,6 +268,42 @@ class TestTelaPedidos(unittest.TestCase):
         self.assertEqual(self.cliente.get("/api/pedidos/contagem").get_json()["IMPORTADO"], 1)
         self.assertIn("PS-900", self.cliente.get("/pedidos").get_data(as_text=True))
 
+    def test_retirada_coletada_aparece_como_coletado_com_a_coleta(self):
+        """Hugo, 12/11: retirada que saiu pela tela Coletas da Expedicao vira
+        Coletado na /pedidos, com a coleta no painel do pedido; retirada nova
+        nao sai pelo botao Expedir na Stokki."""
+        from galpao3d import banco as galpao
+        from coletas import banco as coletas_banco, regras
+        conn = banco.conectar()
+        galpao.garantir_esquema(conn)
+        coletas_banco.garantir_esquema(conn)
+        for i in (900, 901):
+            conn.execute("INSERT INTO galpao_pedidos (id_stokki, codigo, embarcador, situacao, atualizado_em) "
+                         "VALUES (?, ?, 'NONNA ... #stkkc-1', 'Aguardando Transportador', datetime('now', 'localtime'))",
+                         (i, f"PS-{i}"))
+            conn.execute("INSERT INTO expedicao_coletas_fila (id_stokki, codigo, embarcador, transportadora, retirada,"
+                         " carga_inicial) VALUES (?, ?, 'NONNA', 'J3 FLEX', 1, 0)", (i, f"PS-{i}"))
+        conn.commit()
+        cid = regras.gerar_folha(conn, [900], "expedicao")
+        regras.confirmar(conn, cid, [900], "JOSE DA SILVA", "ABC1D23", "COL-1-0123abcd.jpg", "expedicao")
+        regras.aplicar_resultados(conn, cid, {"PS-900": {"ok": True, "mensagem": "expedido"}})
+        conn.close()
+        self._logar("operador")
+        html = self.cliente.get("/pedidos").get_data(as_text=True)
+        linha = re.search(r'<tr[^>]*data-codigo="PS-900"[^>]*>', html)
+        self.assertIn('data-status="COLETADO"', linha.group(0))
+        self.assertIn('data-status="IMPORTADO"', re.search(r'<tr[^>]*data-codigo="PS-901"[^>]*>', html).group(0))
+        self.assertIn('"coleta": "COL-1 \\u00b7 JOSE DA SILVA \\u00b7 placa ABC1D23', html)
+        self.assertIn("/expedicao/coletas/1/foto", html)
+        self.assertIn(">Coletados<", html)
+        self.assertEqual(self.cliente.get("/api/pedidos/contagem").get_json()["COLETADO"], 1)
+        origem = {"Origin": "http://localhost"}
+        with mock.patch.object(painel_agentes, "iniciar_execucao_com_fila") as iniciar:
+            r = self.cliente.post("/api/pedidos/acao/expedir-stokki", json={"codigos": ["PS-901"]}, headers=origem)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("Coletas", r.get_json()["erro"])
+        iniciar.assert_not_called()
+
     def test_filas_etiquetas_e_painel_do_pedido_no_computador(self):
         """Hugo, 11/11: filas no topo, filtros ligados como etiquetas e o
         pedido abrindo ao lado (a mesma tela do pedido do celular)."""

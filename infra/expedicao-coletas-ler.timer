@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara expedicao-coletas-ler.service a cada 10 min, 07:00-20:50
+
+[Timer]
+OnCalendar=*-*-* 07..20:03/10:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

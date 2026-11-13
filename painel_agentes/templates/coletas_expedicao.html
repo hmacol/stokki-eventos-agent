@@ -1,0 +1,272 @@
+{% extends "base.html" %}
+{% block titulo %}Coletas{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  .coletas { max-width: 920px; margin: 0 auto; }
+  .coletas h1 { font-size: 20px; margin: 0 0 4px; }
+  .coletas h2 { font-size: 15px; margin: 26px 0 10px; }
+  .coletas .sub { font-size: 13px; color: var(--texto-suave); margin: 0 0 6px; }
+  .coletas .aviso { background: #fff3cd; color: #7a5200; border-radius: 8px; padding: 10px 12px; font-size: 13.5px; font-weight: 600; margin: 10px 0; }
+  .cartao { background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; }
+  .cartao.aberta { border-color: var(--acento); border-width: 2px; }
+  .cartao-topo { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 8px; }
+  .cartao-topo strong { font-size: 16px; }
+  .cartao-topo .qtd { font-size: 13px; color: var(--texto-suave); }
+  .cartao-topo .acoes { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+  .lista-ped { list-style: none; margin: 0; padding: 0; }
+  .lista-ped li { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--borda); font-size: 14px; }
+  .lista-ped label { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; cursor: pointer; }
+  .lista-ped input[type=checkbox] { width: 20px; height: 20px; flex: none; }
+  .lista-ped .cod { font-weight: 700; flex: none; }
+  .lista-ped .det { color: var(--texto-suave); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lista-ped .estado { flex: none; font-size: 12.5px; font-weight: 700; }
+  .estado.EXPEDIDO { color: #23824a; } .estado.FALHOU { color: var(--erro, #c0392b); }
+  .estado.EXPEDINDO { color: #9a7300; } .estado.NAO_SAIU, .estado.RETIRADO { color: var(--texto-suave); }
+  .lista-ped .msg { font-size: 12.5px; color: var(--erro, #c0392b); }
+  .bt { background: var(--acento); color: #fff; border: 0; border-radius: 8px; font-size: 14px; font-weight: 700; padding: 9px 14px; cursor: pointer; font-family: inherit; text-decoration: none; display: inline-block; }
+  .bt.sec { background: transparent; color: var(--texto); border: 1px solid var(--borda); }
+  .bt.mini { font-size: 12.5px; padding: 5px 9px; }
+  .bt:disabled { opacity: .5; cursor: not-allowed; }
+  .campos { display: grid; grid-template-columns: 2fr 1fr; gap: 10px; margin-top: 12px; }
+  .campos label { font-size: 12.5px; font-weight: 600; color: var(--texto-suave); display: block; }
+  .campos input[type=text] { width: 100%; box-sizing: border-box; font-size: 16px; padding: 10px; border: 1px solid var(--borda); border-radius: 8px; background: var(--fundo); color: var(--texto); font-family: inherit; margin-top: 3px; }
+  .campos .foto { grid-column: 1 / -1; }
+  .campos input[type=file] { margin-top: 4px; font-size: 14px; max-width: 100%; }
+  .rodape-cartao { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+  .rodape-cartao .erro { color: var(--erro, #c0392b); font-size: 13.5px; font-weight: 600; flex-basis: 100%; }
+  table.hist { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  table.hist th, table.hist td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--borda); }
+  table.hist th { font-size: 12px; color: var(--texto-suave); }
+  .vazio { font-size: 14px; color: var(--texto-suave); padding: 6px 0; }
+  details.outras { font-size: 13px; color: var(--texto-suave); margin-top: 8px; }
+  @media (max-width: 560px) {
+    .campos { grid-template-columns: 1fr; }
+    .cartao-topo .acoes { margin-left: 0; flex-basis: 100%; }
+    table.hist .some-m { display: none; }
+  }
+</style>
+{% endblock %}
+
+{% macro dh(t) %}{% if t %}{{ t[8:10] }}/{{ t[5:7] }} {{ t[11:16] }}{% endif %}{% endmacro %}
+{% macro emb(t) %}{{ (t or '').split(' ... #stkkc')[0] }}{% endmacro %}
+{% set ROTULO = {'NA_FOLHA': 'na folha', 'EXPEDINDO': 'expedindo…', 'EXPEDIDO': 'expedido', 'FALHOU': 'falhou',
+                 'NAO_SAIU': 'não saiu', 'RETIRADO': 'retirado da coleta'} %}
+
+{% block conteudo %}
+<div class="coletas">
+  <h1>Coletas</h1>
+  <p class="sub">Pedidos de retirada esperando a transportadora ou o cliente. Gere a folha, o motorista preenche e assina, e a foto dela confirma a saída na Stokki.</p>
+  <p class="sub">Lista lida da Stokki {% if ultima_leitura %}em {{ dh(ultima_leitura) }}{% else %}— ainda não houve leitura{% endif %} (atualiza a cada 10 min).
+    <a href="{{ url_for('expedicao') }}">Voltar para Expedição</a></p>
+  {% if leitura_atrasada %}<div class="aviso">A leitura da Stokki está atrasada: a lista abaixo pode estar desatualizada.</div>{% endif %}
+
+  {% if folhas %}
+  <h2>Folhas em andamento</h2>
+  {% for c in folhas %}
+  <section class="cartao {{ 'aberta' if c.status == 'ABERTA' }}" data-coleta="{{ c.id }}" data-status="{{ c.status }}">
+    <div class="cartao-topo">
+      <strong>{{ c.numero }}</strong>
+      <span>{{ c.transportadora }}{% if c.embarcador %} · {{ emb(c.embarcador) }}{% endif %}</span>
+      <span class="qtd">gerada {{ dh(c.criada_em) }} por {{ c.criada_por }}</span>
+      <span class="acoes">
+        <a class="bt sec mini" target="_blank" href="{{ url_for('expedicao_coleta_folha', coleta_id=c.id) }}">Imprimir folha</a>
+        {% if c.foto_arquivo %}<a class="bt sec mini" target="_blank" href="{{ url_for('expedicao_coleta_foto', coleta_id=c.id) }}">Ver foto</a>{% endif %}
+      </span>
+    </div>
+    {% if c.status == 'ABERTA' %}
+    <ul class="lista-ped">
+      {% for p in c.pedidos %}
+      <li><label><input type="checkbox" class="saiu" value="{{ p.id_stokki }}" checked {{ 'disabled' if not pode_agir }}>
+        <span class="cod">{{ p.codigo }}</span>
+        <span class="det">{{ emb(p.embarcador) }}{% if p.destinatario %} · {{ p.destinatario }}{% endif %}{% if p.nf %} · NF {{ p.nf }}{% endif %}{% if p.unidades is not none %} · {{ p.unidades }} un.{% endif %}</span></label></li>
+      {% endfor %}
+    </ul>
+    {% if pode_agir %}
+    <div class="campos">
+      <div><label>Nome do motorista (obrigatório)<input type="text" class="c-nome" maxlength="120" autocomplete="off"></label></div>
+      <div><label>Placa (obrigatória)<input type="text" class="c-placa" maxlength="12" autocomplete="off" style="text-transform:uppercase"></label></div>
+      <div class="foto"><label>Foto da folha preenchida e assinada (obrigatória)
+        <input type="file" class="c-foto" accept="image/*" capture="environment"></label></div>
+    </div>
+    <div class="rodape-cartao">
+      <button type="button" class="bt" data-acao="confirmar" disabled>Confirmar coleta</button>
+      <button type="button" class="bt sec" data-acao="cancelar">Cancelar folha</button>
+      <span class="sub">Desmarque o que não saiu. Sem foto, nome e placa não confirma.</span>
+      <span class="erro" hidden></span>
+    </div>
+    {% endif %}
+    {% else %}
+    <p class="sub">Confirmada {{ dh(c.confirmada_em) }} por {{ c.confirmada_por }} · motorista {{ c.motorista_nome }} · placa {{ c.placa }}</p>
+    <ul class="lista-ped">
+      {% for p in c.pedidos %}
+      <li data-ped="{{ p.id_stokki }}"><span class="cod">{{ p.codigo }}</span>
+        <span class="det">{{ emb(p.embarcador) }}</span>
+        <span class="estado {{ p.estado }}">{{ ROTULO.get(p.estado, p.estado) }}</span>
+        {% if p.estado == 'FALHOU' %}<span class="msg">{{ p.mensagem }}</span>
+          {% if pode_agir %}<button type="button" class="bt sec mini" data-acao="retirar" data-id="{{ p.id_stokki }}">Tirar da coleta</button>{% endif %}{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    <div class="rodape-cartao">
+      {% if pode_agir and c.pedidos | selectattr('estado', 'equalto', 'FALHOU') | list and not (c.pedidos | selectattr('estado', 'equalto', 'EXPEDINDO') | list) %}
+      <button type="button" class="bt" data-acao="tentar">Tentar de novo os que falharam</button>{% endif %}
+      {% if c.pedidos | selectattr('estado', 'equalto', 'EXPEDINDO') | list %}<span class="sub andamento">Expedindo na Stokki… cada pedido leva cerca de 30 segundos.</span>{% endif %}
+      <span class="erro" hidden></span>
+    </div>
+    {% endif %}
+  </section>
+  {% endfor %}
+  {% endif %}
+
+  <h2>A coletar</h2>
+  {% if not grupos %}<p class="vazio">Nenhum pedido de retirada aguardando transportador.</p>{% endif %}
+  {% for gr in grupos %}
+  <section class="cartao" data-grupo>
+    <div class="cartao-topo">
+      <strong>{{ gr.transportadora }}</strong>
+      {% if gr.embarcador %}<span>{{ emb(gr.embarcador) }}</span>{% endif %}
+      <span class="qtd">{{ gr.pedidos | length }} pedido(s)</span>
+      {% if pode_agir %}<span class="acoes">
+        <button type="button" class="bt sec mini" data-acao="todos">Marcar todos</button>
+        <button type="button" class="bt mini" data-acao="gerar" disabled>Gerar folha</button>
+      </span>{% endif %}
+    </div>
+    <ul class="lista-ped">
+      {% for p in gr.pedidos %}
+      <li><label>{% if pode_agir %}<input type="checkbox" class="vai" value="{{ p.id_stokki }}">{% endif %}
+        <span class="cod">{{ p.codigo }}</span>
+        <span class="det">{{ emb(p.embarcador) }}{% if p.destinatario %} · {{ p.destinatario }}{% endif %}{% if p.nf %} · NF {{ p.nf }}{% endif %}{% if p.unidades is not none %} · {{ p.unidades }} un.{% endif %} · desde {{ dh(p.desde) }}</span></label></li>
+      {% endfor %}
+    </ul>
+    <div class="rodape-cartao"><span class="erro" hidden></span></div>
+  </section>
+  {% endfor %}
+  {% if sem_cadastro %}
+  <details class="outras"><summary>Outras transportadoras em "Aguardando Transportador" (não são retirada: não entram em folha)</summary>
+    <p>{% for s in sem_cadastro %}{{ s.transportadora }}: {{ s.n }}{{ ' · ' if not loop.last }}{% endfor %}</p>
+    <p>Se alguma delas coleta no galpão, cadastre como RETIRADA em <a href="{{ url_for('transportadoras') }}">Transportadoras</a>.</p>
+  </details>
+  {% endif %}
+
+  <h2>Coletas concluídas</h2>
+  {% if not historico %}<p class="vazio">Nenhuma coleta concluída ainda.</p>{% else %}
+  <table class="hist">
+    <tr><th>Coleta</th><th>Quando</th><th>Transportadora</th><th>Motorista</th><th class="some-m">Placa</th><th>Pedidos</th><th class="some-m">Confirmou</th><th></th></tr>
+    {% for h in historico %}
+    <tr><td><strong>{{ h.numero }}</strong>{% if h.simulada %} (simulada){% endif %}</td><td>{{ dh(h.confirmada_em) }}</td>
+      <td>{{ h.transportadora }}{% if h.embarcador %} · {{ emb(h.embarcador) }}{% endif %}</td>
+      <td>{{ h.motorista_nome }}</td><td class="some-m">{{ h.placa }}</td><td>{{ h.n_expedidos }}</td>
+      <td class="some-m">{{ h.confirmada_por }}</td>
+      <td>{% if h.foto_arquivo %}<a target="_blank" href="{{ url_for('expedicao_coleta_foto', coleta_id=h.id) }}">foto</a>{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</div>
+
+<script>
+(function () {
+  const COLETAS_API = {{ url_for('api_expedicao_coletas_folha') | tojson }}.replace(/\/folha$/, "");
+  const MAX = {{ max_pedidos }};
+
+  async function enviar(url, corpo) {
+    const opcoes = { method: "POST" };
+    if (corpo instanceof FormData) opcoes.body = corpo;
+    else { opcoes.headers = { "Content-Type": "application/json" }; opcoes.body = JSON.stringify(corpo || {}); }
+    const r = await fetch(url, opcoes);
+    let d = {};
+    try { d = await r.json(); } catch (e) { /* resposta sem JSON */ }
+    if (!r.ok) throw new Error(d.erro || ("Falhou (" + r.status + ")."));
+    return d;
+  }
+  function erro(cartao, texto) {
+    const e = cartao.querySelector(".erro");
+    if (e) { e.textContent = texto; e.hidden = !texto; }
+  }
+
+  // A coletar: marcar e gerar a folha
+  document.querySelectorAll("[data-grupo]").forEach((cartao) => {
+    const caixas = [...cartao.querySelectorAll(".vai")];
+    const gerar = cartao.querySelector('[data-acao="gerar"]');
+    if (!gerar) return;
+    const marcados = () => caixas.filter((c) => c.checked).map((c) => Number(c.value));
+    const atualizar = () => {
+      const n = marcados().length;
+      gerar.disabled = !n || n > MAX;
+      gerar.textContent = n ? "Gerar folha (" + n + ")" : "Gerar folha";
+      erro(cartao, n > MAX ? "A folha leva no máximo " + MAX + " pedidos. Gere mais de uma." : "");
+    };
+    caixas.forEach((c) => c.addEventListener("change", atualizar));
+    cartao.querySelector('[data-acao="todos"]').addEventListener("click", () => {
+      const tudo = caixas.every((c) => c.checked);
+      caixas.forEach((c, i) => { c.checked = !tudo && i < MAX; });
+      atualizar();
+    });
+    gerar.addEventListener("click", async () => {
+      gerar.disabled = true;
+      try {
+        const d = await enviar(COLETAS_API + "/folha", { ids: marcados() });
+        window.open(COLETAS_API.replace("/api/", "/") + "/" + d.coleta_id + "/folha.pdf", "_blank");
+        location.reload();
+      } catch (e) { erro(cartao, e.message); atualizar(); }
+    });
+  });
+
+  // Folhas em andamento
+  document.querySelectorAll("[data-coleta]").forEach((cartao) => {
+    const id = cartao.dataset.coleta;
+    const url = (acao) => COLETAS_API + "/" + id + "/" + acao;
+    const confirmar = cartao.querySelector('[data-acao="confirmar"]');
+    if (confirmar) {
+      const nome = cartao.querySelector(".c-nome"), placa = cartao.querySelector(".c-placa"), foto = cartao.querySelector(".c-foto");
+      const sairam = () => [...cartao.querySelectorAll(".saiu")].filter((c) => c.checked).map((c) => c.value);
+      const atualizar = () => {
+        const n = sairam().length;
+        // nada marcado = cancelar a folha: nao precisa de foto
+        confirmar.disabled = n > 0 && !(nome.value.trim() && placa.value.trim() && foto.files.length);
+        confirmar.textContent = n ? "Confirmar coleta (" + n + ")" : "Nenhum saiu: cancelar folha";
+      };
+      cartao.querySelectorAll(".saiu, .c-nome, .c-placa, .c-foto").forEach((el) => {
+        el.addEventListener("input", atualizar); el.addEventListener("change", atualizar);
+      });
+      atualizar();
+      confirmar.addEventListener("click", async () => {
+        const ids = sairam();
+        if (ids.length && !confirm("Confirmar a saída de " + ids.length + " pedido(s)? Eles serão marcados como Enviado na Stokki.")) return;
+        confirmar.disabled = true;
+        const corpo = new FormData();
+        corpo.append("ids", ids.join(","));
+        corpo.append("motorista_nome", nome.value);
+        corpo.append("placa", placa.value);
+        if (foto.files.length) corpo.append("foto", foto.files[0]);
+        try { await enviar(url("confirmar"), corpo); location.reload(); }
+        catch (e) { erro(cartao, e.message); atualizar(); }
+      });
+    }
+    const acao = (seletor, caminho, corpo, pergunta) => cartao.querySelectorAll(seletor).forEach((b) => {
+      b.addEventListener("click", async () => {
+        if (pergunta && !confirm(pergunta)) return;
+        b.disabled = true;
+        try { await enviar(url(caminho), corpo ? corpo(b) : {}); location.reload(); }
+        catch (e) { erro(cartao, e.message); b.disabled = false; }
+      });
+    });
+    acao('[data-acao="cancelar"]', "cancelar", null, "Cancelar esta folha? Os pedidos voltam para a lista.");
+    acao('[data-acao="tentar"]', "tentar-de-novo");
+    acao('[data-acao="retirar"]', "retirar", (b) => ({ id_stokki: Number(b.dataset.id) }),
+         "Tirar este pedido da coleta? Use quando ele não vai mais ser expedido (ex.: cancelado).");
+
+    if (cartao.querySelector(".andamento")) {
+      const olhar = async () => {
+        try {
+          const d = await (await fetch(url("andamento"))).json();
+          if (!d.rodando) return location.reload();
+        } catch (e) { /* tenta de novo */ }
+        setTimeout(olhar, 5000);
+      };
+      setTimeout(olhar, 4000);
+    }
+  });
+})();
+</script>
+{% endblock %}
