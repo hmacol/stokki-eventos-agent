@@ -124,6 +124,8 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              + cadastro_embarcador.py; tela /cliente/completar-cadastro;
                                              aprovação no /inicio (total) ou gerenciar_clientes.py cadastro
  Página pública /cliente/regioes ........... portal_cliente/regioes_atendimento.py + templates/regioes.html
+ Página pública /cliente/aula (vídeos) ..... portal_cliente/aula.py + templates/aula.html; vídeos gerados
+                                            por aula_portal/gravar.py, servidos de dados/aula/ (aula.json)
  Envio de pedido (XML) pelo cliente ........ portal_cliente/envio_pedidos.py + enviar_stokki.py
  Documentos (PDF) anexados ao pedido ....... portal_cliente/anexos_pedido.py (11/11): na prévia do envio (PDFs junto
                                              com os XMLs, o sistema sugere o pedido; ou "+ Anexar PDF" por pedido) e
@@ -1294,6 +1296,26 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            lidos de roteirizacao/regioes_dia_fixo.py e
                            regras/feriados.py. ?mes=AAAA-MM (1 atrás, 3 à
                            frente). Logo servido de assets/ em /regioes/logo.png.
+ aula.py                   Página pública /aula (06/11): vídeos de treinamento do
+                           cliente, sem login, liberada antes da troca de PIN.
+                           Lê dados/aula/aula.json (gerado por aula_portal/gravar.py)
+                           e só entrega /aula/arquivo/<nome> que está no manifesto
+                           (Range -> 206, o Safari precisa). Link no login e no
+                           cabeçalho (botão "Aula").
+ ../aula_portal/            Gerador dos vídeos da aula (roda na máquina do Hugo, nunca na VPS):
+                           `py -3.11 -m aula_portal.gravar --video N | --todos | --manifesto`.
+                           Sobe o portal DESTE checkout na porta 8097 com config.yaml e
+                           dados/dados.db FICTÍCIOS (marca própria: recusa sobrescrever os reais;
+                           use um worktree, nunca a raiz), cliente "Mercado Exemplo"
+                           (dados_teste.py). servidor.py roda o portal com guarda de rede
+                           (socket só loopback, SMTP recusado) e roteiriza o assistente do chat;
+                           roteiro.py tem os 12 vídeos, todos publicados (3 = status do pedido,
+                           banco no estado "status" com um envio em cada status; 4 = endereço na
+                           prévia + alterar entrega pela regra de 12/11; CEP e alteração interceptados).
+                           Rede: DNS bloqueado no Chromium + falha se algo tentar sair.
+                           Narração edge-tts (Francisca; NUNCA voz "Multilingual": a Thalita
+                           trocava de língua em frases fixas), ffmpeg do imageio-ffmpeg. Saída em
+                           aula_portal/saida/ (gitignored) -> scp pra dados/aula/ na VPS.
  auth_cliente.py           CNPJ + PIN, grupos econômicos. Conta criada com
                            PIN padrão (clientes_portal.trocar_pin=1) só
                            abre /trocar-pin até o cliente trocar.
