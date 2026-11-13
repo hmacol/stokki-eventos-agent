@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """py -3.11 -m unittest stokki.test_devolucao_estoque"""
+import sqlite3
 import unittest
 from datetime import datetime
+from unittest import mock
 
 from stokki import devolucao_estoque as de
 
@@ -117,6 +119,71 @@ class TestRegras(unittest.TestCase):
 
     def test_antigo_limite_exato_24h(self):
         self.assertTrue(de.cancelamento_antigo(datetime(2026, 11, 4, 12, 0), datetime(2026, 11, 5, 12, 0), True))
+
+
+LIGADO = {"stokki": {"devolucao_cancelamento": {"ativo": True}}}
+
+
+class TestFila(unittest.TestCase):
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+
+    def linhas(self):
+        return [dict(r) for r in self.conn.execute("SELECT * FROM stokki_devolucoes")]
+
+    def test_ligado_so_com_chave_verdadeira(self):
+        self.assertFalse(de.ligado({}))
+        self.assertFalse(de.ligado({"stokki": {}}))
+        self.assertFalse(de.ligado({"stokki": {"devolucao_cancelamento": {"ativo": False}}}))
+        self.assertTrue(de.ligado(LIGADO))
+
+    def test_desligado_nao_grava_nem_cria_tabela(self):
+        self.assertFalse(de.registrar(1, "portal", {}, conn=self.conn))
+        existe = self.conn.execute("SELECT 1 FROM sqlite_master WHERE name='stokki_devolucoes'").fetchone()
+        self.assertIsNone(existe)
+
+    def test_desligado_nao_abre_o_banco(self):
+        with mock.patch("sqlite3.connect") as c:
+            self.assertFalse(de.registrar(1, "portal", {}))
+        c.assert_not_called()
+
+    def test_ligado_grava_pendente_com_origem(self):
+        self.assertTrue(de.registrar(43101, "pedidos", LIGADO, ja_estava=True, conn=self.conn))
+        (l,) = self.linhas()
+        self.assertEqual((l["id_stokki"], l["origem"], l["ja_estava"], l["status"], l["tentativas"]),
+                         (43101, "pedidos", 1, "PENDENTE", 0))
+
+    def test_segundo_registro_do_mesmo_id_e_ignorado(self):
+        self.assertTrue(de.registrar(5, "portal", LIGADO, conn=self.conn))
+        self.assertFalse(de.registrar(5, "pedidos", LIGADO, conn=self.conn))
+        (l,) = self.linhas()
+        self.assertEqual(l["origem"], "portal")
+
+    def test_pedido_ja_feito_nao_volta_para_pendente(self):
+        de.registrar(5, "portal", LIGADO, conn=self.conn)
+        de.gravar(self.conn, 5, status="FEITA")
+        self.assertFalse(de.registrar(5, "portal", LIGADO, conn=self.conn))
+        self.assertEqual(self.linhas()[0]["status"], "FEITA")
+
+    def test_conn_que_levanta_devolve_false(self):
+        ruim = mock.Mock()
+        ruim.execute.side_effect = sqlite3.OperationalError("database is locked")
+        self.assertFalse(de.registrar(1, "portal", LIGADO, conn=ruim))
+
+    def test_pendentes_e_gravar(self):
+        de.registrar(1, "portal", LIGADO, conn=self.conn)
+        de.registrar(2, "portal", LIGADO, conn=self.conn)
+        de.gravar(self.conn, 2, status="NADA")
+        de.gravar(self.conn, 1, itens=[{"sku": "Maca", "obs": "açaí"}], erro="x", mais_uma_tentativa=True)
+        (p,) = de.pendentes(self.conn)
+        self.assertEqual((p["id_stokki"], p["tentativas"], p["erro"]), (1, 1, "x"))
+        self.assertEqual(p["itens"], [{"sku": "Maca", "obs": "açaí"}])
+        self.assertIn("açaí", self.linhas()[0]["itens_json"])   # ensure_ascii=False
+
+    def test_pendentes_sem_itens_devolve_lista_vazia(self):
+        de.registrar(1, "portal", LIGADO, conn=self.conn)
+        self.assertEqual(de.pendentes(self.conn)[0]["itens"], [])
 
 
 if __name__ == "__main__":

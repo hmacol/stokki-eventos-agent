@@ -7,6 +7,7 @@ Cancelamento de pedido pelo portal (DOC_EXECUCAO_CLAUDE_CANCELAMENTO_PORTAL.md).
 import sqlite3
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 _AQUI = Path(__file__).parent
@@ -304,6 +305,31 @@ class Processar(unittest.TestCase):
         self.servico_vuupt = {"id": 333, "code": "PS-39959", "status": "canceled"}
         self.assertEqual(self.rodar(conn)["cancelados"], 1)
         self.assertEqual(self.vuupt_chamadas, [])
+
+    def test_cancelamento_ok_registra_na_fila_de_devolucao(self):
+        conn = self.preparar()
+        cfg = {"lalamove": {"agent_id_vuupt": 99}, "stokki": {"devolucao_cancelamento": {"ativo": True}}}
+        with mock.patch("stokki.devolucao_estoque.registrar") as reg:
+            r = cm.processar_cancelamentos(conn, cfg, self.cancelar_vuupt, self.cancelar_stokki, self.avisar,
+                                           buscar_vuupt=self.buscar_vuupt)
+        self.assertEqual(r["cancelados"], 1)
+        reg.assert_called_once()
+        self.assertEqual(reg.call_args.args[:2], (39959, "portal"))
+        self.assertIs(reg.call_args.args[2], cfg)
+
+    def test_cancelamento_com_falha_nao_registra(self):
+        conn = self.preparar()
+        self.stokki_ok = False
+        with mock.patch("stokki.devolucao_estoque.registrar") as reg:
+            self.rodar(conn)
+        reg.assert_not_called()
+
+    def test_registro_que_levanta_nao_muda_o_cancelamento(self):
+        conn = self.preparar()
+        with mock.patch("stokki.devolucao_estoque.registrar", side_effect=RuntimeError("banco")):
+            r = self.rodar(conn)
+        self.assertEqual(r, {"cancelados": 1, "operacao": 0, "falhas": 0})
+        self.assertEqual(envio(conn, 50)["status"], ep.STATUS_CANCELADO)
 
 
 class AvisarOperacao(unittest.TestCase):

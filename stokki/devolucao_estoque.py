@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Devolucao de estoque no cancelamento: regras puras de decisao (sem rede, sem banco).
+"""Devolucao de estoque no cancelamento: regras puras de decisao (sem rede) e a fila no banco.
 
 Pedido cancelado depois da separacao deixa o saldo preso no endereco Virtual.
 Aqui so se decide QUANTO devolver e PARA ONDE; quem le a Stokki e move e outro trecho.
 Na duvida, nao mover e avisar a operacao.
 """
+import json
+import logging
+import sqlite3
 from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
 
 SISTEMA = ("virtual", "falta", "sobra", "ajuste")
 
@@ -92,3 +97,87 @@ def cancelamento_antigo(cancelado_em, agora: datetime, ja_estava: bool) -> bool:
     if not ja_estava:
         return False
     return cancelado_em is None or agora - cancelado_em >= timedelta(hours=24)
+
+
+# --- Fila no banco (dados.db): o gancho do cancelamento registra, o robo processa ---
+
+STATUS = ("PENDENTE", "FEITA", "PARCIAL", "NADA", "JA_DEVOLVIDO", "ANTIGO", "DUVIDA", "FALHA")
+
+
+def ligado(config: dict) -> bool:
+    """Chave stokki.devolucao_cancelamento.ativo; ausente = desligada."""
+    try:
+        return bool(((config or {}).get("stokki") or {}).get("devolucao_cancelamento", {}).get("ativo"))
+    except AttributeError:
+        return False
+
+
+def garantir_tabela(conn) -> None:
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS stokki_devolucoes ("
+        "id_stokki INTEGER PRIMARY KEY, origem TEXT, ja_estava INTEGER, status TEXT, "
+        "tentativas INTEGER DEFAULT 0, itens_json TEXT, erro TEXT, criado_em TEXT, atualizado_em TEXT)")
+
+
+def _agora() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def registrar(id_stokki: int, origem: str, config: dict, ja_estava: bool = False, conn=None) -> bool:
+    """Poe o pedido cancelado na fila (PENDENTE), uma vez so (INSERT OR IGNORE). Desligado: False sem
+    tocar o banco. Nunca levanta: falha vira log e False, o cancelamento segue."""
+    if not ligado(config):
+        return False
+    propria = conn is None
+    try:
+        if propria:
+            from stokki.sessao_uso import DB_PATH
+            conn = sqlite3.connect(DB_PATH, timeout=30)
+        garantir_tabela(conn)
+        agora = _agora()
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO stokki_devolucoes (id_stokki, origem, ja_estava, status, tentativas, criado_em, atualizado_em) "
+            "VALUES (?, ?, ?, 'PENDENTE', 0, ?, ?)", (int(id_stokki), origem, int(bool(ja_estava)), agora, agora))
+        conn.commit()
+        return cur.rowcount == 1
+    except Exception as e:  # noqa: BLE001 -- a fila nunca pode derrubar o cancelamento
+        logger.warning(f"devolucao_estoque: nao registrou PS-{id_stokki} na fila: {e}")
+        return False
+    finally:
+        if propria and conn is not None:
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def pendentes(conn) -> list:
+    """Linhas PENDENTE (mais antigas primeiro) como dict, com `itens` ja desserializado."""
+    garantir_tabela(conn)
+    cur = conn.execute("SELECT * FROM stokki_devolucoes WHERE status = 'PENDENTE' ORDER BY criado_em, id_stokki")
+    nomes = [c[0] for c in cur.description]
+    saida = []
+    for linha in cur.fetchall():
+        d = dict(zip(nomes, tuple(linha)))
+        d["itens"] = json.loads(d.get("itens_json") or "[]")
+        saida.append(d)
+    return saida
+
+
+def gravar(conn, id_stokki: int, *, status=None, itens=None, erro=None, mais_uma_tentativa=False) -> None:
+    """Atualiza so o que foi informado; sempre carimba atualizado_em."""
+    garantir_tabela(conn)
+    campos, valores = ["atualizado_em = ?"], [_agora()]
+    if status is not None:
+        campos.append("status = ?")
+        valores.append(status)
+    if itens is not None:
+        campos.append("itens_json = ?")
+        valores.append(json.dumps(itens, ensure_ascii=False))
+    if erro is not None:
+        campos.append("erro = ?")
+        valores.append(erro)
+    if mais_uma_tentativa:
+        campos.append("tentativas = COALESCE(tentativas, 0) + 1")
+    conn.execute(f"UPDATE stokki_devolucoes SET {', '.join(campos)} WHERE id_stokki = ?", (*valores, int(id_stokki)))
+    conn.commit()
