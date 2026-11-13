@@ -86,6 +86,38 @@ class TestRegras(unittest.TestCase):
         self.assertFalse(de.cancelamento_antigo(datetime(2026, 11, 1, 9, 0), agora, False))
         self.assertTrue(de.cancelamento_antigo(None, agora, True))
 
+    def test_bloqueado_ignora_movimento_nao_interno(self):
+        externo = dict(mov("Bloqueio", "#PS-43101", 4, 12), movimento="Externo")
+        self.assertEqual(de.bloqueado_pelo_pedido([externo, mov("Bloqueio", "#PS-43101", 2, 12)], 43101), 2)
+
+    def test_desbloqueio_nao_interno_e_ignorado(self):
+        externo = dict(mov("Desbloqueio", "", 4, 13), movimento="Externo")
+        self.assertEqual(de.ja_devolvido([externo], 4, T), "nao")
+
+    def test_desbloqueio_no_mesmo_minuto_conta(self):
+        m = dict(mov("Desbloqueio", "", 4, 12), quando=T)
+        self.assertEqual(de.ja_devolvido([m], 4, T), "sim")
+
+    def test_sem_data_de_cancelamento_e_duvida(self):
+        self.assertEqual(de.ja_devolvido([mov("Desbloqueio", "", 4, 13)], 4, None), "duvida")
+
+    def test_linha_sem_data_conta_como_posterior(self):
+        m = dict(mov("Desbloqueio", "", 4, 13), quando=None)
+        self.assertEqual(de.ja_devolvido([m], 4, T), "sim")
+
+    def test_quantidade_com_tolerancia(self):
+        self.assertEqual(de.ja_devolvido([mov("Desbloqueio", "", 0.1 + 0.2, 13)], 0.3, T), "sim")
+
+    def test_endereco_vazio_descartado(self):
+        self.assertEqual(de.escolher_destinos(4, [("", 4), ("  ", 4)], [{"endereco": "", "estoque": 5}], []), [])
+
+    def test_origem_que_passa_de_qtd_e_cortada(self):
+        r = de.escolher_destinos(4, [("A-1", 3), ("A-2", 3)], [], [])
+        self.assertEqual(r, [("A-1", 3), ("A-2", 1)])
+
+    def test_antigo_limite_exato_24h(self):
+        self.assertTrue(de.cancelamento_antigo(datetime(2026, 11, 4, 12, 0), datetime(2026, 11, 5, 12, 0), True))
+
 
 if __name__ == "__main__":
     unittest.main()

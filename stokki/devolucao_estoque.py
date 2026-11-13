@@ -11,7 +11,9 @@ SISTEMA = ("virtual", "falta", "sobra", "ajuste")
 
 
 def _e_sistema(endereco: str) -> bool:
-    return (endereco or "").strip().lower() in SISTEMA
+    """Endereco de sistema ou vazio nunca e destino."""
+    e = (endereco or "").strip().lower()
+    return not e or e in SISTEMA
 
 
 def _ref_pedido(referencia: str) -> str:
@@ -20,21 +22,26 @@ def _ref_pedido(referencia: str) -> str:
 
 
 def bloqueado_pelo_pedido(movimentos: list, id_stokki: int) -> float:
-    """Soma dos Bloqueios cuja referencia e exatamente #PS-<id> (PE- e outros pedidos nao contam)."""
+    """Soma dos Bloqueios Internos cuja referencia e exatamente #PS-<id> (PE-, outros pedidos
+    e movimentos nao Internos nao contam)."""
     alvo = f"ps-{id_stokki}"
     return sum(m["quantidade"] for m in movimentos
-               if m.get("tipo") == "Bloqueio" and _ref_pedido(m.get("referencia")) == alvo)
+               if m.get("tipo") == "Bloqueio" and m.get("movimento") == "Interno"
+               and _ref_pedido(m.get("referencia")) == alvo)
 
 
 def ja_devolvido(movimentos: list, qtd: float, cancelado_em: datetime) -> str:
-    """'sim' se ha Desbloqueio Interno sem referencia depois do cancelamento com a mesma qtd;
-    'duvida' se ha desses mas de outra qtd; 'nao' se nao ha nenhum."""
+    """'sim' se ha Desbloqueio Interno sem referencia a partir do minuto do cancelamento com a mesma
+    qtd (tolerancia 0.001); 'duvida' se ha desses mas de outra qtd ou se nao ha data de cancelamento;
+    'nao' se nao ha nenhum. Linha sem data conta como posterior (lado seguro)."""
+    if cancelado_em is None:
+        return "duvida"
     desbloqueios = [m for m in movimentos
                     if m.get("tipo") == "Desbloqueio" and m.get("movimento") == "Interno"
-                    and not _ref_pedido(m.get("referencia")) and m["quando"] > cancelado_em]
+                    and not _ref_pedido(m.get("referencia")) and (m.get("quando") is None or m["quando"] >= cancelado_em)]
     if not desbloqueios:
         return "nao"
-    if any(m["quantidade"] == qtd for m in desbloqueios):
+    if any(abs(m["quantidade"] - qtd) < 0.001 for m in desbloqueios):
         return "sim"
     return "duvida"
 
@@ -53,7 +60,10 @@ def _por_estoque(saldo: list) -> list:
 def escolher_destinos(qtd: float, origens: list, saldo_produto: list, saldo_embarcador: list) -> list:
     """Candidatos (endereco, qtd) em ordem de preferencia: origem da separacao, maior saldo do
     produto, maior saldo do embarcador. Sem repetir endereco e sem endereco de sistema.
-    Se as partes da origem nao somam qtd, o resto vai para o melhor endereco das regras seguintes."""
+    Contrato para quem executa: as partes da origem somam; se nao chegam a qtd, o resto vai como
+    candidato extra. Os candidatos das regras 2 e 3 sao ALTERNATIVAS que levam o que falta: o
+    executor acumula o que ja moveu e nunca passa de qtd no total. Se a soma movida ficar menor
+    que qtd, o item e parcial."""
     saldos = _por_estoque(saldo_produto) + [e for e in _por_estoque(saldo_embarcador)
                                            if e not in _por_estoque(saldo_produto)]
     cands, vistos, restante = [], set(), qtd
@@ -78,7 +88,7 @@ def escolher_destinos(qtd: float, origens: list, saldo_produto: list, saldo_emba
 
 
 def cancelamento_antigo(cancelado_em, agora: datetime, ja_estava: bool) -> bool:
-    """Cancelamento que ja existia na primeira leitura e tem mais de 24 h (ou sem data): so avisar."""
+    """Cancelamento que ja existia na primeira leitura e tem 24 h ou mais (ou sem data): so avisar."""
     if not ja_estava:
         return False
-    return cancelado_em is None or agora - cancelado_em > timedelta(hours=24)
+    return cancelado_em is None or agora - cancelado_em >= timedelta(hours=24)
