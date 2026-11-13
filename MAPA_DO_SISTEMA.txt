@@ -802,7 +802,8 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                       conta ocupada espera o próximo ciclo sem gastar tentativa.
                       Sem Bloqueio nos 10 min após o cancelamento = AGUARDAR (espera,
                       sem tentativa). Reconfere a prova pela admin logo antes de mover.
-                      Orçamento: 5 pedidos e 60 s de pedidos novos por ciclo.
+                      Orçamento: 5 pedidos e 60 s de pedidos novos por ciclo; quem está em
+                      AGUARDAR não ocupa lugar e só é relido a cada 2 min.
  mover_virtual.py     Movimentação de Estoque Manual da área provider (POST
                       operation/inventory/adjust/store/process + poll
                       adjust/processed/:id), Virtual -> endereço. Script provado à mão

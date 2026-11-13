@@ -14,13 +14,16 @@ import time
 from datetime import datetime
 
 from stokki import contas, sessao_uso
-from stokki.devolucao_estoque import garantir_tabela, gravar, ler_devolucoes, ligado, montar_plano, pendentes
+from stokki.devolucao_estoque import (garantir_tabela, gravar, ler_devolucoes, ligado, montar_plano, pendentes,
+                                      segundos_desde)
 
 logger = logging.getLogger(__name__)
 
 MAX_TENTATIVAS = 3          # so para erro tecnico; conta ocupada nao conta
 ESPERA_CONTA_SEGUNDOS = 20  # espera curta: o ciclo do worker nao pode ficar preso
 MAX_POR_CICLO = 5
+RECONFERIR_AGUARDAR_SEGUNDOS = 120   # pedido sem Bloqueio ainda: so rele a Stokki depois disso
+AGUARDANDO_BLOQUEIO = "aguardando o Bloqueio do pedido na Stokki"   # marca no campo erro da linha PENDENTE
 ORCAMENTO_SEGUNDOS = 60     # nao comeca pedido novo depois disso no mesmo ciclo (o que esta em andamento termina)
 SEM_PLANO_DE_MOVER = ("NADA", "JA_DEVOLVIDO", "ANTIGO")
 TOL_QTD = 0.001
@@ -162,7 +165,7 @@ def _encerrar(conn, id_stokki, cliente_id, status, itens, motivo, avisar_galpao,
     texto = motivo
     if any(_movs(i) for i in itens):
         texto = f"{motivo} | {_resumo(itens)}" if _resumo(itens) else motivo
-    gravar(conn, id_stokki, status=status, itens=itens, erro=texto if status != "FEITA" else None,
+    gravar(conn, id_stokki, status=status, itens=itens, erro=texto if status != "FEITA" else "",
            mais_uma_tentativa=tentativa)
     novos = [(i, m) for i in itens for m in _movs(i) if _confirmado(m) and not m.get("avisado")]
     if novos:
@@ -244,7 +247,9 @@ def _processar_um(conn, config, row, simular, abrir_admin, mover, avisar_galpao,
         logger.info(f"devolucao_estoque SIMULACAO: PS-{id_stokki} plano {status} ({plano['motivo']}) {resumo}")
         return "ok"
     if status == "AGUARDAR":   # Bloqueio ainda nao apareceu: continua PENDENTE, sem tentativa nem aviso
-        logger.info(f"devolucao_estoque: PS-{id_stokki} sem Bloqueio ainda, espera o proximo ciclo")
+        logger.info(f"devolucao_estoque: PS-{id_stokki} sem Bloqueio ainda, reconfere em "
+                    f"{RECONFERIR_AGUARDAR_SEGUNDOS} s")
+        gravar(conn, id_stokki, erro=AGUARDANDO_BLOQUEIO)   # carimba atualizado_em: e dele que o intervalo conta
         return "aguardar"
     if status in SEM_PLANO_DE_MOVER:
         if any(_confirmado(m) and not m.get("avisado") for i in itens_fila for m in _movs(i)):
@@ -373,9 +378,18 @@ def _mover_e_fechar(conn, config, row, plano, itens_fila, movimentos, ignorar, a
     return "ok"
 
 
+def _aguardando_ha_pouco(row) -> bool:
+    """Linha que ficou em AGUARDAR ha menos de RECONFERIR_AGUARDAR_SEGUNDOS: nao rele a Stokki agora."""
+    if row.get("erro") != AGUARDANDO_BLOQUEIO:
+        return False
+    idade = segundos_desde(row.get("atualizado_em"))
+    return idade is not None and 0 <= idade < RECONFERIR_AGUARDAR_SEGUNDOS
+
+
 def processar_pendentes(conn, config, *, simular: bool, abrir_admin, mover, avisar_galpao, avisar_operacao,
                         agora=None, relogio=time.monotonic) -> dict:
-    """Atende a fila (ate MAX_POR_CICLO pedidos por chamada; passados ORCAMENTO_SEGUNDOS desde o inicio, nao
+    """Atende a fila (ate MAX_POR_CICLO pedidos por chamada, sem contar quem so espera o Bloqueio: esse e
+    relido a cada RECONFERIR_AGUARDAR_SEGUNDOS e nao ocupa lugar; passados ORCAMENTO_SEGUNDOS desde o inicio, nao
     comeca pedido novo: o envio dos clientes espera). `abrir_admin()` e um gerenciador de contexto
     que entrega a sessao admin ou levanta ContaOcupada se a conta esta ocupada (qualquer outro erro e tecnico).
     Conta ocupada (admin ou provider) = pedido continua PENDENTE sem gastar tentativa e o ciclo para. Erro
@@ -386,12 +400,19 @@ def processar_pendentes(conn, config, *, simular: bool, abrir_admin, mover, avis
     if not ligado(config):
         return cont
     inicio = relogio()
-    for row in pendentes(conn)[:MAX_POR_CICLO]:
+    atendidos = 0
+    for row in pendentes(conn):
+        if atendidos >= MAX_POR_CICLO:
+            break
         id_stokki = row["id_stokki"]
+        if _aguardando_ha_pouco(row):
+            cont["esperando"] += 1
+            continue
         if relogio() - inicio >= ORCAMENTO_SEGUNDOS:
             logger.info(f"devolucao_estoque: orcamento de {ORCAMENTO_SEGUNDOS} s do ciclo esgotado; PS-{id_stokki} "
                         "e os seguintes ficam para o proximo ciclo")
             break
+        atendidos += 1
         try:
             res = _processar_um(conn, config, row, simular, abrir_admin, mover, avisar_galpao, avisar_operacao,
                                 agora or datetime.now(), cont)   # sem `agora` (teste): relogio por pedido
@@ -400,6 +421,8 @@ def processar_pendentes(conn, config, *, simular: bool, abrir_admin, mover, avis
                 break   # conta ocupada vale para os proximos tambem
             if res in ("mudou", "aguardar"):
                 cont["esperando"] += 1
+            if res == "aguardar":
+                atendidos -= 1   # quem so espera o Bloqueio nao ocupa lugar do ciclo
         except Exception as e:  # noqa: BLE001 -- um pedido nunca derruba a fila
             logger.error(f"devolucao_estoque: PS-{id_stokki} falhou: {e}")
             if simular:

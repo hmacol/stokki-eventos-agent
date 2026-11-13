@@ -462,6 +462,14 @@ def _agora() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def segundos_desde(carimbo) -> float | None:
+    """Segundos desde um carimbo gravado por `_agora()`; None se ilegivel."""
+    try:
+        return (datetime.now() - datetime.strptime(carimbo, "%Y-%m-%d %H:%M:%S")).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
 def registrar(id_stokki: int, origem: str, config: dict, ja_estava: bool = False, conn=None) -> bool:
     """Poe o pedido cancelado na fila (PENDENTE), uma vez so (INSERT OR IGNORE). Desligado: False sem
     tocar o banco. Nunca levanta: falha vira log e False, o cancelamento segue."""

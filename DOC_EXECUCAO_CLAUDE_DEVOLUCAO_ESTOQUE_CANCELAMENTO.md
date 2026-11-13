@@ -163,6 +163,8 @@ Motivo gravado na Stokki: `Retorno ao estoque do PS-<id> cancelado`.
   andamento termina; os outros ficam para o ciclo seguinte). A devolução roda logo
   depois dos cancelamentos e das retomadas, antes dos lotes dos clientes. *(ajustado
   em 13/11 na revisão final)*
+- Pedido que só espera o Bloqueio aparecer (até 10 min depois do cancelamento) não
+  ocupa lugar entre os 5 e só é relido na Stokki a cada 2 min. *(ajustado em 13/11)*
 
 ### Aviso ao galpão (decisão do Hugo, 12/11)
 

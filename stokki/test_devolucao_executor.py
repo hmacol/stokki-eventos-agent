@@ -699,6 +699,53 @@ class TestExecutor(unittest.TestCase):
         self.assertEqual(self.operacao, [])
         self.assertEqual([c[0] for c in self.chamadas_mover], [100])
 
+    # AGUARDAR nao rele a Stokki a cada ciclo: so depois de RECONFERIR_AGUARDAR_SEGUNDOS
+    def _aguardar_para(self, *ids_aguardar):
+        def plano(sess, id_stokki, agora, ja_estava=False, ignorar_movimentos=frozenset()):
+            self.planos.append(id_stokki)
+            return _plano("AGUARDAR", [_item(situacao="nada")]) if id_stokki in ids_aguardar else self.plano
+        ex.montar_plano.side_effect = plano
+
+    def _envelhecer(self, id_stokki, segundos):
+        from datetime import timedelta
+        antes = (datetime.now() - timedelta(seconds=segundos)).strftime("%Y-%m-%d %H:%M:%S")
+        self.conn.execute("UPDATE stokki_devolucoes SET atualizado_em = ? WHERE id_stokki = ?", (antes, id_stokki))
+
+    def test_aguardar_nao_e_relido_no_ciclo_seguinte(self):
+        self.fila(1)
+        self._aguardar_para(1)
+        self.rodar()
+        r = self.rodar()
+        self.assertEqual((self.planos, self.admin_abriu, r["esperando"]), ([1], 1, 1))
+        self.assertEqual((self.linha(1)["status"], self.linha(1)["tentativas"]), ("PENDENTE", 0))
+
+    def test_aguardar_e_relido_depois_do_intervalo(self):
+        self.fila(1)
+        self._aguardar_para(1)
+        self.rodar()
+        self._envelhecer(1, ex.RECONFERIR_AGUARDAR_SEGUNDOS + 1)
+        self._aguardar_para()   # o Bloqueio apareceu
+        r = self.rodar()
+        self.assertEqual((self.planos, r["feitas"]), ([1, 1], 1))
+        self.assertEqual((self.linha(1)["status"], self.linha(1)["erro"]), ("FEITA", ""))
+
+    def test_aguardar_nao_ocupa_lugar_do_ciclo(self):
+        ids = list(range(1, ex.MAX_POR_CICLO + 3))   # 5 aguardando na frente + 2 de verdade
+        self.fila(*ids)
+        self._aguardar_para(*ids[:ex.MAX_POR_CICLO])
+        r = self.rodar()
+        self.assertEqual((r["esperando"], r["feitas"]), (ex.MAX_POR_CICLO, 2))
+        r = self.rodar()   # ciclo seguinte: ninguem e relido
+        self.assertEqual((len(self.planos), r["esperando"]), (ex.MAX_POR_CICLO + 2, ex.MAX_POR_CICLO))
+
+    def test_erro_tecnico_nao_e_confundido_com_aguardar(self):
+        self.fila(1)
+        self.plano_levanta = RuntimeError("sessao caiu")
+        ex.montar_plano.side_effect = self._montar_plano
+        self.rodar()
+        self.rodar()
+        self.assertEqual(self.linha(1)["tentativas"], 2)
+
     # I4: orcamento de tempo por ciclo: nao comeca pedido novo depois de 60 s
     def test_i4_passou_do_orcamento_nao_comeca_o_proximo(self):
         self.fila(1, 2, 3)
@@ -780,7 +827,7 @@ class TestExecutor(unittest.TestCase):
     def test_m5_feita_nao_grava_erro(self):
         self.fila(1)
         self.rodar()
-        self.assertEqual((self.linha(1)["status"], self.linha(1)["erro"]), ("FEITA", None))
+        self.assertEqual((self.linha(1)["status"], self.linha(1)["erro"]), ("FEITA", ""))
 
 
 class TestAdjustIdsDoRobo(unittest.TestCase):
