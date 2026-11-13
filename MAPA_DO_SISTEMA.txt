@@ -98,7 +98,7 @@
  Tela de planejamento (HTML/JS) ............ painel_agentes/templates/planejamento_rotas.html
  Rascunhos de rota (tabelas) ............... painel_agentes/rascunhos_rota.py
  Torre de Controle ......................... painel_agentes/torre_controle.py
-Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/acoes_pedidos.py (rotas POST /api/pedidos/acao/reenvio, .../cancelar-vuupt, .../cancelar-stokki, .../endereco, .../agendar, .../checar-dia-fixo, .../marcar-entregue (multipart, helper _marcar_entregue_pelo_form da Torre), .../validar-lote-foto; GET .../comprovantes?codigo= + /pedidos/canhoto/vuupt/<checklist_id>.pdf + /pedidos/canhoto/manual/<PS-N>.pdf (leitura, canhoto Vuupt/manual/app);
+Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/acoes_pedidos.py (rotas POST /api/pedidos/acao/reenvio, .../cancelar-vuupt, .../cancelar-stokki, .../endereco, .../agendar, .../checar-dia-fixo, .../marcar-entregue (multipart, helper _marcar_entregue_pelo_form da Torre), .../validar-lote-foto; GET .../comprovantes?codigo= + /pedidos/canhoto/vuupt/<checklist_id>.pdf + /pedidos/canhoto/manual/<PS-N>.pdf (leitura, canhoto Vuupt/manual/app); cancelar-stokki concluído registra o pedido na fila stokki_devolucoes (origem 'pedidos'; devolução de estoque).
                                              confere Vuupt na hora, Stokki pela trava sessao_uso)
  Vigia de pedidos abertos (estado/prazo) ... vigia/ (regras.py = prazos; tela /vigia)
  Clientes que exigem agendamento (AGENDA) .. regras/clientes_agendamento.py; fila em
@@ -1388,6 +1388,8 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
                            em_espera (tira da rota na Vuupt + grava pedidos_pausados_cliente; nada na Stokki),
                            reagendar (PUT serviço Vuupt). Só conclui se tudo deu
                            certo; trava sessao_uso (60 s) só em cancelar.
+                           Cancelar concluído registra o pedido na fila stokki_devolucoes
+                           (origem 'solicitacao'; devolução de estoque).
  chamados.py, chamados_web.py, static/atendimento.js  Chat e chamados.
  static/favicon.*, apple-touch-icon.png  Ícone da aba (cópia do painel_agentes/static).
  assistente.py             Triagem com Claude no chat.
@@ -1712,7 +1714,7 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
    geocache                  geocodificacao.py
    stokki_sessao_uso         stokki/sessao_uso.py
    stokki_devolucoes         stokki/devolucao_estoque.py (fila da devolução de estoque do
-                             cancelado: PENDENTE/..., itens, tentativas, erro)
+                             cancelado: PENDENTE/..., origem portal/solicitacao/pedidos, ja_estava, status, itens, tentativas, erro)
    galpao_*                  galpao3d/banco.py (Galpão 3D): galpao_pedidos (último
                              estado + falhas_show/show_pendente), galpao_eventos,
                              galpao_conferencias; galpao_coletas, galpao_contagens,
