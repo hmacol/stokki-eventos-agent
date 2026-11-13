@@ -985,13 +985,14 @@ def processar_devolucoes_do_ciclo(conn, config: dict, simular: bool = False) -> 
     entra sob a trava do worker só durante a leitura; a provider é pega por pedido, com espera curta."""
     from contextlib import contextmanager
     from stokki import devolucao_estoque as dev
+    from stokki import devolucao_executor as exe
     from stokki import mover_virtual
     if not dev.ligado(config) or not dev.pendentes(conn):
         return {"feitas": 0, "parciais": 0, "nada": 0, "falhas": 0, "esperando": 0}
 
     @contextmanager
     def abrir_admin():
-        conta = sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=10 * 60, esperar_segundos=dev.ESPERA_CONTA_SEGUNDOS,
+        conta = sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=10 * 60, esperar_segundos=exe.ESPERA_CONTA_SEGUNDOS,
                                     alternativa=True)
         if not conta:
             raise RuntimeError(f"Stokki ocupada por '{sessao_uso.em_uso()}'")
@@ -1008,7 +1009,7 @@ def processar_devolucoes_do_ciclo(conn, config: dict, simular: bool = False) -> 
     def avisar_operacao(id_stokki, cliente_id, motivo):
         logger.warning(f"devolução PS-{id_stokki} (cliente {cliente_id}): aviso à operação pendente: {motivo}")
 
-    return dev.processar_pendentes(conn, config, simular=simular, abrir_admin=abrir_admin, mover=mover_virtual.mover,
+    return exe.processar_pendentes(conn, config, simular=simular, abrir_admin=abrir_admin, mover=mover_virtual.mover,
                                    avisar_galpao=avisar_galpao, avisar_operacao=avisar_operacao)
 
 

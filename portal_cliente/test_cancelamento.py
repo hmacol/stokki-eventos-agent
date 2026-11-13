@@ -457,6 +457,7 @@ class DevolucaoNoWorker(unittest.TestCase):
     def test_abrir_admin_usa_a_trava_e_libera_ao_sair(self):
         import enviar_stokki as es
         from stokki import devolucao_estoque as de
+        from stokki import devolucao_executor as ex
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         de.registrar(5, "portal", self.LIGADO, conn=conn)
@@ -469,9 +470,9 @@ class DevolucaoNoWorker(unittest.TestCase):
         with mock.patch.object(es.sessao_uso, "adquirir", return_value="principal") as adq, \
              mock.patch.object(es.sessao_uso, "liberar") as lib, \
              mock.patch.object(es, "StokkiSession") as sess, \
-             mock.patch.object(de, "processar_pendentes", side_effect=processar):
+             mock.patch.object(ex, "processar_pendentes", side_effect=processar):
             es.processar_devolucoes_do_ciclo(conn, self.LIGADO)
-        self.assertEqual(adq.call_args.kwargs["esperar_segundos"], de.ESPERA_CONTA_SEGUNDOS)
+        self.assertEqual(adq.call_args.kwargs["esperar_segundos"], ex.ESPERA_CONTA_SEGUNDOS)
         self.assertTrue(adq.call_args.kwargs["alternativa"])
         sess.assert_called_once_with(self.LIGADO, conta="principal")
         lib.assert_called_once_with(es.DONO_TRAVA)
@@ -479,6 +480,7 @@ class DevolucaoNoWorker(unittest.TestCase):
     def test_abrir_admin_com_conta_ocupada_levanta_runtime_error(self):
         import enviar_stokki as es
         from stokki import devolucao_estoque as de
+        from stokki import devolucao_executor as ex
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         de.registrar(5, "portal", self.LIGADO, conn=conn)
@@ -491,7 +493,7 @@ class DevolucaoNoWorker(unittest.TestCase):
         with mock.patch.object(es.sessao_uso, "adquirir", return_value=False), \
              mock.patch.object(es.sessao_uso, "liberar") as lib, \
              mock.patch.object(es, "StokkiSession") as sess, \
-             mock.patch.object(de, "processar_pendentes", side_effect=processar):
+             mock.patch.object(ex, "processar_pendentes", side_effect=processar):
             es.processar_devolucoes_do_ciclo(conn, self.LIGADO)
         sess.assert_not_called()
         lib.assert_not_called()
