@@ -125,7 +125,7 @@ FALHA_TECNICA = "falha técnica no cancelamento automático"
 
 
 def _processar_um(conn, envio: dict, agent_lalamove: int, cancelar_vuupt, cancelar_stokki, avisar, buscar_vuupt,
-                  agora_txt: str, quando: datetime) -> str:
+                  agora_txt: str, quando: datetime, config: dict | None = None) -> str:
     """Um envio CANCELANDO -> "cancelados" | "operacao" | "falhas"."""
     sol = ep.buscar_solicitacao_cancelamento(conn, envio["id"]) or {}
     motivo_cliente = sol.get("detalhes") or ""
@@ -173,6 +173,12 @@ def _processar_um(conn, envio: dict, agent_lalamove: int, cancelar_vuupt, cancel
         res = cancelar_stokki(id_stokki, motivo_cliente)
         if not res.get("ok"):
             erro = f"Stokki: {res.get('erro')}"
+        else:
+            try:
+                from stokki import devolucao_estoque
+                devolucao_estoque.registrar(id_stokki, "portal", config or {}, ja_estava=bool(res.get("ja_estava")))
+            except Exception as e:  # noqa: BLE001 -- a fila de devolucao nunca trava o cancelamento
+                logger.warning(f"{rotulo} {codigo}: nao registrou na fila de devolucao de estoque: {e}")
     if erro:
         logger.warning(f"{rotulo} {codigo}: cancelamento falhou -- {erro}")
         _voltar_pra_operacao(conn, envio, agora_txt)
@@ -200,7 +206,7 @@ def processar_cancelamentos(conn: sqlite3.Connection, config: dict, cancelar_vuu
         envio = dict(r)
         try:
             fim = _processar_um(conn, envio, agent_lalamove, cancelar_vuupt, cancelar_stokki, avisar, buscar_vuupt,
-                                agora_txt, quando)
+                                agora_txt, quando, config)
         except Exception as e:  # noqa: BLE001 -- rede, Stokki, SQLite: o envio volta pra operação, a fila continua
             logger.error(f"{ep.rotulo_envio(envio)}: exceção no cancelamento: {e}", exc_info=True)
             _voltar_pra_operacao(conn, envio, agora_txt)

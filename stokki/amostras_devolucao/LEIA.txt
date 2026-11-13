@@ -1,0 +1,54 @@
+Amostras REAIS da Stokki (leitura, 12/11/2026) para os testes da devolucao de estoque no cancelamento.
+Caso: pedido PS-43101 (cancelado), cliente #stkkc-100, itens produto 2278 (FABMLT) e 2282 (FABMO1), 4 un cada.
+Tokens (_token/csrf) removidos; show_43101.html foi REDUZIDO (sem destinatario/transportadora/enderecos).
+
+RESULTADO: a origem da separacao E legivel. A separacao aparece em "movimentos entre enderecamentos" como
+linha  FABENNE-1 -> Virtual  (origem = endereco fisico, destino = Virtual). Ver origem_*.json.
+
+------------------------------------------------------------------------------------------------
+show_43101.html   GET {ADM}/inventory/outbound/show/43101   (ADM = https://freshlog.stokki.com.br/pt-br/administrator)
+  - cliente: linha "Cliente:" -> texto "NOME (#stkkc-100)"; id do cliente = numero depois de "#stkkc-" (regex #stkkc-(\d+)).
+  - situacao: linha "Situacao:" (th) -> "Cancelado".
+  - itens: div#item, tabela "Itens solicitados" colunas NR. | ID | SKU | Nome | Quantidade | unidade | Valor Unitario |
+    Quantidade confirmada | Peso informado | Obs. A coluna ID traz "#ITM-<product_id>" (ex. #ITM-2278 -> product_id 2278);
+    SKU (FABMLT) e Nome na 3a/4a colunas; Quantidade na 5a (4).
+  - div#serialnumber: "EANS lidos na separacao" (produto "SKU - Nome", EAN, quantidade). Opcional.
+  - historico: div#history. Blocos (mais recente primeiro) em que o dia vem numa linha ("03/11/2026"), depois pares
+    hora / usuario / situacao:  12:12 Valeria de Lima Cancelado | 12:11 Fael Aguardando Transportador |
+    11:44 Carla Em Conferencia | 11:41 Carla Em separacao | 10:03 Hugo Macol Aberto.
+    Data/hora do cancelamento = hora da linha cuja situacao e "Cancelado" + o dia do bloco (03/11/2026 12:12).
+    A hora de "Em Conferencia" (11:44) e o instante da separacao: e a hora do movimento de origem (abaixo).
+
+movimentos_2278_2026_11.json   GET {ADM}/inventory/v2/moviment/table   (cabecalho X-Requested-With: XMLHttpRequest)
+  params: draw=1,start=0,length=100,search[value]=,search[regex]=false,order[0][column]=1,order[0][dir]=asc,
+    columns[i][data|name|searchable|orderable|search][value|regex] para as colunas
+    date,conclusion,reference,marker,type,motion,quantity,quantity_stock (=ajuste_estoque._params_tabela),
+    moviment=all,type=all,warehouse_id=1,year=2026,month=11,product_id=2278.
+  resposta: {draw,iTotalRecords,iTotalDisplayRecords,aaData:[{date,conclusion,reference,marker,type,motion,quantity,
+    quantity_stock}]} com HTML dentro dos valores. Ex.: "#PS-43101 | Bloqueio | Interno | 4" (03/11 12:12 = o cancelamento);
+    "Desbloqueio | Interno | 4" sem referencia (12:48). NAO mostra endereco: serve para o Bloqueio, nao para a origem.
+    ATENCAO (revisao 13/11): o recebimento tambem gera "Desbloqueio | Interno" sem referencia (20 as 16:52 = par do
+    #PE-2609), entao essa tabela NAO prova devolucao. A prova de "ja devolvido" e a linha Virtual -> endereco fisico
+    de origem_*.json (ex. #A-110832) criada a partir do cancelamento.
+
+enderecos_2278.html   GET {ADM}/inventory/moviment/addressing/2278/1
+  tabela: Codigo de Localizacao | Estoque | Bloqueado | Disponivel. Hoje: FABENNE-1 2 0 2 ; Virtual 31 23 8.
+
+origem_2278_2026_11.json / origem_2278_2026_10.json / origem_2282_2026_11.json
+  GET {ADM}/inventory/moviment/addressing/table/moviment/table  (cabecalho X-Requested-With: XMLHttpRequest;
+  Referer {ADM}/inventory/moviment/addressing/moviment/<product_id>/1). Parametros (lidos do JS da pagina
+  moviment/addressing/moviment/<product_id>/1):
+    draw=1, start=0, length=100, search[value]=, search[regex]=false,
+    product_id=<id>, provider_id=1, month=<MM com zero, "11">, year=<AAAA>, origin_id= (vazio), destination_id= (vazio),
+    columns[i][data]= id,created,concluded,user,origin,destination,quantity (i=0..6; name vazio, searchable/orderable true).
+  origin_id/destination_id sao ids de localizacao (select2); vazios = todos. Mes/ano sao obrigatorios na pratica.
+  resposta: {draw,iTotalRecords,iTotalDisplayRecords,aaData:[{icon,id,created,concluded,user,origin,destination,
+    lots_series,quantity,details_content}]}. Formato dos valores: id "#A-110830" (ajuste/movimento) ou "#T-1527"
+    (recebimento); created/concluded "<div>03/11/2026<br><span class=\"text-muted\">11:44</span></div>" (HTML: tirar tags);
+    user texto; origin/destination texto puro (codigo do endereco, "Virtual", "Recebimento");
+    quantity "<h6><span class=\"badge badge-success\">4</span></h6>" ou numero puro. Ordenacao: mais recente primeiro.
+  A linha da separacao do PS-43101 (produto 2278): #A-110830 | 03/11/2026 11:44 | Carla | FABENNE-1 -> Virtual | 4.
+  Produto 2282: #A-110831 | 03/11/2026 11:44 | Carla | FABENNE-1 -> Virtual | 4. (ids consecutivos, mesmo minuto)
+  Em 03/11 12:48/12:49 o provider devolveu: #A-110832 / #A-110833 | ClaudeIA | Virtual -> FABENNE-1 | 4.
+  A linha NAO traz o numero do pedido: casar por produto + hora (= "Em Conferencia" do historico) + quantidade
+  + origem fisica -> Virtual, usuario = o do historico. Cuidado: outros A-... iguais (FABENNE-1 -> Virtual) existem em outros dias.

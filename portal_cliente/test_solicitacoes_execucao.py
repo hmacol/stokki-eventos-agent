@@ -455,6 +455,34 @@ class DependenciasReais(unittest.TestCase):
         self.assertEqual(adq.call_args.kwargs["esperar_segundos"], 60)
         self.assertEqual(lib.call_args.args[0], adq.call_args.args[0])
 
+    def _cancelar_real(self, retorno, registrar):
+        from unittest import mock
+        cfg = {"stokki": {"devolucao_cancelamento": {"ativo": True}}}
+        with mock.patch("stokki.cancelar.cancelar_pedido", return_value=retorno), \
+                mock.patch("stokki.sessao_uso.adquirir", return_value="principal"), \
+                mock.patch("stokki.devolucao_estoque.registrar", **registrar) as reg:
+            d = se.dependencias_reais(cfg)
+            d.abrir_stokki()
+            with mock.patch("stokki.auth.StokkiSession", return_value=object()):
+                r = d.cancelar_stokki(39959, "motivo")
+        return r, reg, cfg
+
+    def test_cancelar_stokki_ok_registra_na_fila_de_devolucao(self):
+        r, reg, cfg = self._cancelar_real({"ok": True, "erro": "", "ja_estava": True}, {})
+        self.assertTrue(r["ok"])
+        reg.assert_called_once()
+        self.assertEqual(reg.call_args.args[:3], (39959, "solicitacao", cfg))
+        self.assertIs(reg.call_args.kwargs["ja_estava"], True)
+
+    def test_cancelar_stokki_falha_nao_registra(self):
+        r, reg, _ = self._cancelar_real({"ok": False, "erro": "x"}, {})
+        self.assertFalse(r["ok"])
+        reg.assert_not_called()
+
+    def test_registro_que_levanta_nao_muda_o_resultado(self):
+        r, reg, _ = self._cancelar_real({"ok": True, "erro": ""}, {"side_effect": RuntimeError("banco")})
+        self.assertTrue(r["ok"])
+
     def test_sem_vez_nao_libera_trava_alheia(self):
         from unittest import mock
         from stokki import sessao_uso

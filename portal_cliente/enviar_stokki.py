@@ -40,6 +40,7 @@ COMO RODAR:
     py -3 portal_cliente/enviar_stokki.py --uma-vez --visivel   # navegador na tela
 """
 import argparse
+import html as html_mod
 import json
 import logging
 import re
@@ -979,6 +980,119 @@ def processar_retomadas_do_ciclo(conn, config: dict, simular: bool = False) -> d
     return rt.processar_retomadas(conn, config, aplicar_data_vuupt, proxima_data, avisar)
 
 
+def _nome_embarcador_stokki(conn, cliente_id) -> str:
+    """Nome do embarcador pelo id dele na Stokki (interno.stkkc_id). Sem achar (ou com erro): #stkkc-<id>."""
+    try:
+        cid = int(cliente_id or 0)
+    except (TypeError, ValueError):
+        cid = 0
+    if not cid:
+        return "embarcador não identificado"
+    try:
+        row = conn.execute("SELECT apelido, nome_remetente FROM interno WHERE stkkc_id = ? LIMIT 1", (cid,)).fetchone()
+        nome = (row[0] or row[1]) if row else None
+        return str(nome).strip() if nome and str(nome).strip() else f"#stkkc-{cid}"
+    except Exception:  # noqa: BLE001 -- sem nome, o aviso sai com o id
+        return f"#stkkc-{cid}"
+
+
+def _qtd_log(v) -> str:
+    try:
+        return f"{float(v):g}".replace(".", ",")
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def _avisar_devolucao_galpao(conn, config: dict, id_stokki: int, cliente_id, itens: list) -> bool:
+    """Aviso ao grupo PEDIDOS CANCELADOS: onde guardar a caixa devolvida. Sem o grupo no config, ou com o
+    teto/janela do WhatsApp barrando, a devolucao ja aconteceu: o PS e os enderecos vao pro log pra equipe
+    guardar por ele. Levanta so quando o envio falhou de fato (o executor deixa os movimentos sem 'avisado'
+    e a proxima passada avisa de novo); desligado por falta do id do grupo nao levanta (nao ha o que reenviar).
+    Com o id preenchido, "desligado" (WhatsApp desligado no geral) conta como falha."""
+    import notificar_whatsapp
+    embarcador = _nome_embarcador_stokki(conn, cliente_id)
+    situacao = notificar_whatsapp.avisar_devolucao_galpao(id_stokki, embarcador, itens, config)
+    if situacao in ("enviado", "modo_teste"):
+        return True
+    if situacao == "desligado" and ((config or {}).get("whatsapp_notificacoes") or {}).get("grupo_cancelados_id"):
+        situacao = "falhou"   # grupo configurado, mas o WhatsApp está desligado no geral: ninguém avisou o galpão
+    onde = "; ".join(f"{i.get('sku')} {i.get('movido')} -> {i.get('destino')}" for i in itens)
+    logger.warning(f"devolução PS-{id_stokki} ({embarcador}): aviso ao galpão {situacao}; guardar a caixa em: {onde}")
+    if situacao in ("falhou", "nao_enviado"):
+        # devolução FEITA não avisa a operação e o status é final: a equipe recebe a lista pra avisar o galpão
+        trechos = [f"{i.get('sku')} {i.get('nome') or ''}: {_qtd_log(i.get('movido'))} -> {i.get('destino')}" for i in itens]
+        _avisar_devolucao_operacao(config, id_stokki, embarcador,
+                                   " | ".join([f"aviso ao galpao nao saiu ({situacao}): avisar a equipe para guardar"] + trechos))
+        raise RuntimeError(f"aviso ao galpão {situacao}")
+    return True
+
+
+def _avisar_devolucao_operacao(config: dict, id_stokki: int, embarcador: str, motivo: str) -> None:
+    """Devolução de estoque que falhou, ficou parcial ou caiu em dúvida: e-mail ao atendimento + WhatsApp
+    no grupo do atendimento. Best-effort: nunca levanta (a devolução e o ciclo seguem)."""
+    esc = lambda v: html_mod.escape(str(v or ""))  # noqa: E731
+    try:
+        email_cfg = (config or {}).get("email", {}) or {}
+        destino = email_cfg.get("email_atendimento") or email_cfg.get("email_responsavel")
+        if destino:
+            partes = [p.strip() for p in str(motivo or "").split(" | ") if p.strip()]
+            lista = "<ul>" + "".join(f"<li>{esc(p)}</li>" for p in partes) + "</ul>" if len(partes) > 1 else ""
+            html = envelope_html(
+                f"<p>A devolução de estoque do pedido cancelado <b>PS-{esc(id_stokki)}</b> · {esc(embarcador)} "
+                f"não terminou sozinha e <b>precisa de conferência</b>.</p>"
+                + (f"<p>Situação:</p>{lista}" if lista else f"<p>Situação: <b>{esc(motivo)}</b></p>")
+                + "<p>Antes de qualquer nova devolução, confira na Stokki o saldo no endereço Virtual e as "
+                  "movimentações do produto, para não mover o mesmo saldo duas vezes.</p>",
+                rodape="Fresh Log · Stokki · devolução de estoque", cor_acento="#F5A623")
+            enviar_email([destino], f"[Stokki] Devolução de estoque precisa de conferência · PS-{id_stokki}", html, email_cfg)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"e-mail da devolução PS-{id_stokki} falhou: {e}")
+    try:
+        import notificar_whatsapp
+        notificar_whatsapp.avisar_devolucao_pendente(id_stokki, embarcador, motivo, config)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"WhatsApp da devolução PS-{id_stokki} falhou: {e}")
+
+
+def processar_devolucoes_do_ciclo(conn, config: dict, simular: bool = False) -> dict:
+    """Devolve ao estoque o saldo preso no Virtual dos pedidos cancelados (fila stokki_devolucoes).
+    Desligada (stokki.devolucao_cancelamento.ativo) ou sem pendente: não abre sessão nenhuma. A conta admin
+    entra sob a trava do worker só durante a leitura; a provider é pega por pedido, com espera curta."""
+    from contextlib import contextmanager
+    from stokki import devolucao_estoque as dev
+    from stokki import devolucao_executor as exe
+    from stokki import mover_virtual
+    zeros = {"feitas": 0, "parciais": 0, "nada": 0, "falhas": 0, "esperando": 0}
+    if not dev.ligado(config):
+        return zeros
+    fila = dev.pendentes(conn)
+    if not fila:
+        return zeros
+    if simular:
+        logger.info(f"SIMULAÇÃO: {len(fila)} devolução(ões) ficam como estão.")
+        return zeros
+
+    @contextmanager
+    def abrir_admin():
+        conta = sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=10 * 60, esperar_segundos=exe.ESPERA_CONTA_SEGUNDOS,
+                                    alternativa=True)
+        if not conta:
+            raise exe.ContaOcupada(f"Stokki ocupada por '{sessao_uso.em_uso()}'")
+        try:
+            yield StokkiSession(config, conta=conta if isinstance(conta, str) else None)
+        finally:
+            sessao_uso.liberar(DONO_TRAVA)
+
+    def avisar_galpao(id_stokki, cliente_id, itens):
+        return _avisar_devolucao_galpao(conn, config, id_stokki, cliente_id, itens)
+
+    def avisar_operacao(id_stokki, cliente_id, motivo):
+        _avisar_devolucao_operacao(config, id_stokki, _nome_embarcador_stokki(conn, cliente_id), motivo)
+
+    return exe.processar_pendentes(conn, config, simular=simular, abrir_admin=abrir_admin, mover=mover_virtual.mover,
+                                   avisar_galpao=avisar_galpao, avisar_operacao=avisar_operacao)
+
+
 # ── Ciclo ──────────────────────────────────────────────────────────────────────
 
 def ciclo(config: dict, simular: bool = False, headless: bool = True) -> dict:
@@ -996,6 +1110,10 @@ def ciclo(config: dict, simular: bool = False, headless: bool = True) -> dict:
             total["retomadas"] = processar_retomadas_do_ciclo(conn, config, simular=simular)
         except Exception as e:  # noqa: BLE001 -- retomada não derruba a fila de envios
             logger.error(f"retomadas falharam: {e}\n{traceback.format_exc()}")
+        try:
+            total["devolucoes"] = processar_devolucoes_do_ciclo(conn, config, simular=simular)
+        except Exception as e:  # noqa: BLE001 -- devolução de estoque não derruba a fila de envios
+            logger.error(f"devoluções falharam: {e}\n{traceback.format_exc()}")
         rows = conn.execute("SELECT * FROM portal_envios WHERE status = 'NA_FILA' ORDER BY cnpj_embarcador, criado_em, id").fetchall()
         por_cliente: dict[str, list[dict]] = {}
         for r in rows:
@@ -1037,7 +1155,7 @@ def main(argv=None) -> int:
         while True:
             try:
                 r = ciclo(config, simular=args.simular, headless=not args.visivel)
-                if r["lotes"] or any((r.get("cancelamentos") or {}).values()) or any((r.get("retomadas") or {}).values())                         or any(v for k, v in (r.get("trocas_nf") or {}).items() if k != "adiados"):
+                if r["lotes"] or any((r.get("cancelamentos") or {}).values()) or any((r.get("retomadas") or {}).values()) or any((r.get("devolucoes") or {}).values())                         or any(v for k, v in (r.get("trocas_nf") or {}).items() if k != "adiados"):
                     logger.info(f"ciclo: {r}")
             except Exception as e:
                 logger.error(f"ciclo falhou: {e}\n{traceback.format_exc()}")
