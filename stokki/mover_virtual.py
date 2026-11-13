@@ -52,23 +52,32 @@ def _id_local(resp):
 
 
 def _destino_confere(resp, endereco: str) -> bool:
-    """A busca pode devolver endereco parecido (FAB-1 x FAB-10): se a resposta traz texto do endereco,
-    um deles tem de ser exatamente o codigo pedido. Sem texto nenhum nao ha o que conferir."""
+    """A busca pode devolver endereco parecido (FAB-1 x FAB-10): a resposta precisa trazer o texto do endereco
+    e um deles tem de ser exatamente o codigo pedido. Sem nenhuma chave de texto conhecida: recusa e loga as
+    chaves que vieram (a prova real mostra o nome certo)."""
     loc = resp.get("location") if isinstance(resp, dict) else None
     textos = [str(loc[k]).strip().casefold() for k in CHAVES_TEXTO_DO_ENDERECO
               if isinstance(loc, dict) and isinstance(loc.get(k), str)]
-    return not textos or endereco.strip().casefold() in textos
+    if not textos:
+        chaves = sorted(loc) if isinstance(loc, dict) else loc
+        logger.warning(f"mover_virtual: resposta do destino {endereco} sem chave de texto conhecida "
+                       f"{CHAVES_TEXTO_DO_ENDERECO}; chaves que vieram: {chaves}")
+        return False
+    return endereco.strip().casefold() in textos
 
 
 def _oferecido(resp, product_id: int):
-    """Quanto a tela deixa tirar do Virtual para o produto (como o script provado le a resposta)."""
+    """Quanto a tela deixa tirar do Virtual para o produto. `quantity_available` manda, mesmo 0; so sem ele
+    (chave ausente) cai para `quantity`, que e o total do Virtual compartilhado."""
     if not isinstance(resp, dict):
         return None
     lista = resp.get("products") or ([resp["product"]] if resp.get("product") else [])
     achado = next((x for x in lista if isinstance(x, dict) and str(x.get("id")) == str(product_id)), None)
     if not achado:
         return None
-    return _num(achado.get("quantity_available") or achado.get("quantity"))
+    if achado.get("quantity_available") is not None:
+        return _num(achado["quantity_available"])
+    return _num(achado.get("quantity"))
 
 
 def _concluido(resp) -> bool:
@@ -76,14 +85,31 @@ def _concluido(resp) -> bool:
                                            or resp.get("status") in ("finished", "processed", "success"))
 
 
-def _res(m, destino, pedido, movido=0, adjust_id=None, erro=""):
+def _int(v):
+    """adjust_id como int (a Stokki pode mandar texto); o que nao converte vira None."""
+    if isinstance(v, bool):
+        return None
+    try:
+        return int(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _recusa(st) -> bool:
+    """Status que e a tela dizendo nao (404/422 e outros 4xx de validacao); 401/403/419/429 e 5xx sao tecnicos."""
+    return isinstance(st, int) and 400 <= st < 500 and st not in (401, 403, 419, 429)
+
+
+def _res(m, destino, pedido, movido=0, adjust_id=None, erro="", **marcas):
     return {"product_id": m["product_id"], "destino": destino, "pedido": pedido, "movido": movido,
-            "adjust_id": adjust_id, "erro": erro}
+            "adjust_id": adjust_id, "erro": erro, **marcas}
 
 
 def _executar(api, cliente_id: int, movimentos: list, motivo: str, ao_concluir=None, dormir=time.sleep) -> list:
     """Conversa com a tela por `api` (get(caminho) -> (status, json|texto); post(campos) -> (status, texto);
-    token). Um resultado por movimento tentado; `ao_concluir` roda depois de cada um."""
+    token). Um resultado por movimento tentado; `ao_concluir` roda depois de cada um. Resultado `tecnico`
+    (sessao caiu, tela fora do ar: nada foi gravado) ou `incerto` (nao se sabe se gravou) PARA tudo.
+    Falta de saldo e recusa de destino nao: seguem para o proximo candidato (ou encerram o item)."""
     resultados = []
 
     def fim(r):
@@ -94,47 +120,56 @@ def _executar(api, cliente_id: int, movimentos: list, motivo: str, ao_concluir=N
     st, orig = api.get(f"adjust/location/search/{cliente_id}/VIRTUAL")
     id_virtual = _id_local(orig) if st == 200 else None
     if not id_virtual:
-        for m in movimentos:
-            fim(_res(m, "", m["qtd"], erro=f"endereco Virtual nao encontrado (status {st})"))
+        fim(_res(movimentos[0], "", movimentos[0]["qtd"], tecnico=True,
+                 erro=f"busca do endereco Virtual falhou (status {st})"))
         return resultados
-    parar = False
     for m in movimentos:
-        if parar:
-            fim(_res(m, "", m["qtd"], erro="nao tentado: movimentacao anterior sem confirmacao"))
-            continue
         restante = m["qtd"]
         for endereco, parte in m["destinos"]:
             if restante <= TOLERANCIA:
                 break
             alvo = min(parte, restante)
             st, dest = api.get(f"adjust/destination/search/0/{quote(endereco, safe='')}")
+            if st != 200 and not _recusa(st):
+                fim(_res(m, endereco, alvo, tecnico=True, erro=f"busca do destino {endereco} falhou (status {st})"))
+                return resultados
             id_destino = _id_local(dest) if st == 200 else None
             if not id_destino or not _destino_confere(dest, endereco):
                 fim(_res(m, endereco, alvo, erro=f"destino {endereco} nao encontrado ou diferente do pedido (status {st})"))
                 continue
             st, prod = api.get(f"adjust/product/search/{cliente_id}/{id_virtual}/{quote(m['sku'], safe='')}")
-            oferecido = _oferecido(prod, m["product_id"]) if st == 200 else None
+            if st != 200:
+                fim(_res(m, endereco, alvo, tecnico=True, erro=f"busca do produto {m['sku']} falhou (status {st})"))
+                return resultados
+            oferecido = _oferecido(prod, m["product_id"])
             quantidade = quanto_mover(alvo, oferecido) if oferecido is not None else 0
             if quantidade <= 0:
-                fim(_res(m, endereco, alvo, erro=f"Virtual nao oferece saldo de {m['sku']} (status {st})"))
+                fim(_res(m, endereco, alvo, erro=f"Virtual nao oferece saldo de {m['sku']}"))
                 break
             st, _chk = api.get(f"adjust/check/location/{id_destino}/{m['product_id']}")
             if st != 200:
+                if not _recusa(st):
+                    fim(_res(m, endereco, alvo, tecnico=True, erro=f"conferencia do destino {endereco} falhou (status {st})"))
+                    return resultados
                 fim(_res(m, endereco, alvo, erro=f"destino {endereco} recusado na conferencia (status {st})"))
                 continue
             campos = montar_campos(cliente_id, id_virtual, m["product_id"], oferecido, quantidade, id_destino, motivo)
             campos = {"_token": api.token, **{k: _txt(v) for k, v in campos.items()}}
             st, corpo = api.post(campos)
             try:
-                adjust_id = json.loads(corpo).get("adjust_id")
+                adjust_id = _int(json.loads(corpo).get("adjust_id"))
             except (ValueError, TypeError, AttributeError):
                 adjust_id = None
-            if not adjust_id:
-                fim(_res(m, endereco, alvo, erro=f"store/process sem adjust_id (status {st}): {str(corpo)[:200]}"))
-                if 400 <= st < 500:
-                    continue         # recusado pela tela: nada foi gravado, vale o proximo destino
-                parar = True         # resposta que nao se sabe ler: nao repetir
-                break
+            if adjust_id is None:
+                if st in (401, 403, 419, 429):
+                    fim(_res(m, endereco, alvo, tecnico=True, erro=f"store/process negado (status {st}); nada gravado"))
+                    return resultados
+                if _recusa(st):
+                    fim(_res(m, endereco, alvo, erro=f"store/process recusado (status {st}): {str(corpo)[:200]}"))
+                    continue   # a tela disse nao: nada foi gravado, vale o proximo destino
+                fim(_res(m, endereco, alvo, incerto=True,
+                         erro=f"store/process sem resposta clara (status {st}): {str(corpo)[:200]}"))
+                return resultados   # nao se sabe se gravou: nao repetir
             confirmado = False
             for _ in range(POLL_TENTATIVAS):
                 dormir(POLL_INTERVALO)
@@ -143,11 +178,13 @@ def _executar(api, cliente_id: int, movimentos: list, motivo: str, ao_concluir=N
                     confirmado = True
                     break
             if not confirmado:
-                fim(_res(m, endereco, alvo, 0, adjust_id, f"movimentacao {adjust_id} ainda em processamento"))
-                parar = True
-                break
+                fim(_res(m, endereco, alvo, 0, adjust_id, f"movimentacao {adjust_id} ainda em processamento",
+                         incerto=True))
+                return resultados
             fim(_res(m, endereco, alvo, quantidade, adjust_id))
             restante -= quantidade
+            if quantidade < alvo - TOLERANCIA:
+                break   # a tela ofereceu menos: leva o que deu e encerra o item (parcial)
     return resultados
 
 

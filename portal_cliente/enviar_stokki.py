@@ -987,15 +987,22 @@ def processar_devolucoes_do_ciclo(conn, config: dict, simular: bool = False) -> 
     from stokki import devolucao_estoque as dev
     from stokki import devolucao_executor as exe
     from stokki import mover_virtual
-    if not dev.ligado(config) or not dev.pendentes(conn):
-        return {"feitas": 0, "parciais": 0, "nada": 0, "falhas": 0, "esperando": 0}
+    zeros = {"feitas": 0, "parciais": 0, "nada": 0, "falhas": 0, "esperando": 0}
+    if not dev.ligado(config):
+        return zeros
+    fila = dev.pendentes(conn)
+    if not fila:
+        return zeros
+    if simular:
+        logger.info(f"SIMULAÇÃO: {len(fila)} devolução(ões) ficam como estão.")
+        return zeros
 
     @contextmanager
     def abrir_admin():
         conta = sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=10 * 60, esperar_segundos=exe.ESPERA_CONTA_SEGUNDOS,
                                     alternativa=True)
         if not conta:
-            raise RuntimeError(f"Stokki ocupada por '{sessao_uso.em_uso()}'")
+            raise exe.ContaOcupada(f"Stokki ocupada por '{sessao_uso.em_uso()}'")
         try:
             yield StokkiSession(config, conta=conta if isinstance(conta, str) else None)
         finally:

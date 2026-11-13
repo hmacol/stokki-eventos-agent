@@ -477,6 +477,21 @@ class DevolucaoNoWorker(unittest.TestCase):
         sess.assert_called_once_with(self.LIGADO, conta="principal")
         lib.assert_called_once_with(es.DONO_TRAVA)
 
+    def test_simular_nao_abre_sessao_nem_chama_o_executor(self):
+        import enviar_stokki as es
+        from stokki import devolucao_estoque as de
+        from stokki import devolucao_executor as ex
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        de.registrar(5, "portal", self.LIGADO, conn=conn)
+        with mock.patch.object(es, "StokkiSession") as sess, mock.patch.object(es.sessao_uso, "adquirir") as adq,              mock.patch.object(ex, "processar_pendentes") as proc, self.assertLogs("portal_envios", level="INFO") as cap:
+            r = es.processar_devolucoes_do_ciclo(conn, self.LIGADO, simular=True)
+        self.assertEqual(r, self.ZEROS)
+        sess.assert_not_called()
+        adq.assert_not_called()
+        proc.assert_not_called()
+        self.assertTrue(any("SIMULAÇÃO: 1 devolução(ões) ficam como estão." in l for l in cap.output))
+
     def test_abrir_admin_com_conta_ocupada_levanta_runtime_error(self):
         import enviar_stokki as es
         from stokki import devolucao_estoque as de
@@ -486,7 +501,7 @@ class DevolucaoNoWorker(unittest.TestCase):
         de.registrar(5, "portal", self.LIGADO, conn=conn)
 
         def processar(conn_, config, **kw):
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(ex.ContaOcupada):
                 with kw["abrir_admin"]():
                     pass
             return self.ZEROS
