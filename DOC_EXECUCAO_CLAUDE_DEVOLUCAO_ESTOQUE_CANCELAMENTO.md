@@ -107,10 +107,13 @@ Motivo gravado na Stokki: `Retorno ao estoque do PS-<id> cancelado`.
 
 - Nunca mover mais que o Bloqueio do pedido, nem mais que o `product.quantity` que a
   tela oferece. Se a tela oferecer menos, move o que der e trata como parcial (aviso).
-- O Desbloqueio feito à mão **não traz referência do pedido**. Antes de mover, olhar
-  as movimentações do produto: se depois do cancelamento já existe um `Desbloqueio |
-  Interno` sem referência com a mesma quantidade, considerar que a equipe já devolveu
-  e não mover (registra "já devolvido"). *(decisão minha, não do Hugo)*
+- O Desbloqueio feito à mão **não traz referência do pedido**, e o recebimento também gera
+  `Desbloqueio | Interno` sem referência: por isso a prova de "já devolvido" NÃO é a tabela
+  de movimentações. Prova = linha `Virtual -> endereço físico` do produto em "movimentos
+  entre endereçamentos", criada a partir do cancelamento (mesmo minuto conta) até agora.
+  Quantidade igual ou soma das linhas igual ao Bloqueio = já devolvido (não move);
+  linha que existe mas não fecha, ou não concluída = dúvida (avisa). *(decisão minha, não do
+  Hugo; ajustado em 13/11 na revisão: recebimento também gera Desbloqueio sem referência)*
 - Na dúvida, **não mover e avisar**: Desbloqueio sem referência depois do
   cancelamento em quantidade diferente da do pedido, ou qualquer leitura que não
   feche, vira aviso à operação em vez de movimentação. Saldo preso com aviso é

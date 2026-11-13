@@ -26,7 +26,10 @@ movimentos_2278_2026_11.json   GET {ADM}/inventory/v2/moviment/table   (cabecalh
     moviment=all,type=all,warehouse_id=1,year=2026,month=11,product_id=2278.
   resposta: {draw,iTotalRecords,iTotalDisplayRecords,aaData:[{date,conclusion,reference,marker,type,motion,quantity,
     quantity_stock}]} com HTML dentro dos valores. Ex.: "#PS-43101 | Bloqueio | Interno | 4" (03/11 12:12 = o cancelamento);
-    "Desbloqueio | Interno | 4" sem referencia (12:48). NAO mostra endereco: serve para o Bloqueio/Desbloqueio, nao para a origem.
+    "Desbloqueio | Interno | 4" sem referencia (12:48). NAO mostra endereco: serve para o Bloqueio, nao para a origem.
+    ATENCAO (revisao 13/11): o recebimento tambem gera "Desbloqueio | Interno" sem referencia (20 as 16:52 = par do
+    #PE-2609), entao essa tabela NAO prova devolucao. A prova de "ja devolvido" e a linha Virtual -> endereco fisico
+    de origem_*.json (ex. #A-110832) criada a partir do cancelamento.
 
 enderecos_2278.html   GET {ADM}/inventory/moviment/addressing/2278/1
   tabela: Codigo de Localizacao | Estoque | Bloqueado | Disponivel. Hoje: FABENNE-1 2 0 2 ; Virtual 31 23 8.

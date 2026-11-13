@@ -12,13 +12,9 @@ import sqlite3
 import unicodedata
 from datetime import datetime, timedelta
 
-from bs4 import BeautifulSoup
-
-from stokki import ajuste_estoque as ae
-
 logger = logging.getLogger(__name__)
 
-SISTEMA = ("virtual", "falta", "sobra", "ajuste")
+SISTEMA = ("virtual", "falta", "sobra", "ajuste", "recebimento")
 
 
 def _e_sistema(endereco: str) -> bool:
@@ -42,9 +38,11 @@ def bloqueado_pelo_pedido(movimentos: list, id_stokki: int) -> float:
 
 
 def ja_devolvido(movimentos: list, qtd: float, cancelado_em: datetime) -> str:
-    """'sim' se ha Desbloqueio Interno sem referencia a partir do minuto do cancelamento com a mesma
-    qtd (tolerancia 0.001); 'duvida' se ha desses mas de outra qtd ou se nao ha data de cancelamento;
-    'nao' se nao ha nenhum. Linha sem data conta como posterior (lado seguro)."""
+    """Prova de devolucao: linhas `Desbloqueio | Interno` sem referencia a partir do minuto do cancelamento
+    (na pratica, as de ler_devolucoes). 'sim' se alguma tem a mesma qtd ou se a SOMA delas e a qtd
+    (devolucao em partes), tolerancia 0.001; 'duvida' se ha linhas que nao fecham, se nao ha data de
+    cancelamento ou se a prova usa linha nao concluida (`concluido` False; sem a chave conta como concluida);
+    'nao' se nao ha nenhuma. Linha sem data conta como posterior (lado seguro)."""
     if cancelado_em is None:
         return "duvida"
     desbloqueios = [m for m in movimentos
@@ -52,9 +50,16 @@ def ja_devolvido(movimentos: list, qtd: float, cancelado_em: datetime) -> str:
                     and not _ref_pedido(m.get("referencia")) and (m.get("quando") is None or m["quando"] >= cancelado_em)]
     if not desbloqueios:
         return "nao"
-    if any(abs(m["quantidade"] - qtd) < 0.001 for m in desbloqueios):
-        return "sim"
-    return "duvida"
+    iguais = [m for m in desbloqueios if abs(m["quantidade"] - qtd) < 0.001]
+    if iguais:
+        usadas = iguais
+    elif abs(sum(m["quantidade"] for m in desbloqueios) - qtd) < 0.001:
+        usadas = desbloqueios
+    else:
+        return "duvida"
+    if any(m.get("concluido") is False for m in usadas):
+        return "duvida"
+    return "sim"
 
 
 def quanto_mover(bloqueado: float, oferecido: float) -> float:
@@ -106,16 +111,29 @@ def cancelamento_antigo(cancelado_em, agora: datetime, ja_estava: bool) -> bool:
 
 
 # --- Leituras na Stokki (so GET; a sessao vem de fora, aqui nao se loga nem se pega trava) ---
+# ajuste_estoque e bs4 entram so quando uma leitura roda: a fila (registrar/ligado) nao carrega nada disso.
 
 TOLERANCIA_ORIGEM = timedelta(minutes=2)
 MESES_PARA_TRAS = 3
 COLS_MOVIMENTOS = ["date", "conclusion", "reference", "marker", "type", "motion", "quantity", "quantity_stock"]
 COLS_ORIGEM = ["id", "created", "concluded", "user", "origin", "destination", "quantity"]
+CHAVES_MOVIMENTOS = ("date", "conclusion", "reference", "type", "motion", "quantity")
+CHAVES_ORIGEM = ("created", "concluded", "origin", "destination", "quantity")
+
+
+def _ae():
+    from stokki import ajuste_estoque
+    return ajuste_estoque
+
+
+def _soup(html: str):
+    from bs4 import BeautifulSoup
+    return BeautifulSoup(html, "html.parser")
 
 
 def _quando(texto):
     """'03/11/2026 12:12' (com ou sem HTML no meio) -> datetime; sem data legivel -> None."""
-    m = re.search(r"(\d{2})/(\d{2})/(\d{4})\D+(\d{1,2}):(\d{2})", ae.limpa(texto))
+    m = re.search(r"(\d{2})/(\d{2})/(\d{4})\D+(\d{1,2}):(\d{2})", _ae().limpa(texto))
     if not m:
         return None
     d, mes, a, h, mi = (int(x) for x in m.groups())
@@ -141,39 +159,57 @@ def _get(sess, url: str, **kw):
     return r
 
 
-def _linhas_tabela(sess, url: str, params: dict, referer: str) -> list:
-    """Todas as linhas (aaData) de uma tabela DataTables, de 100 em 100. Sem aaData: ValueError com a URL."""
-    linhas, start = [], 0
+def _linhas_tabela(sess, url: str, params: dict, referer: str, chaves: tuple = ()) -> list:
+    """Todas as linhas (aaData) de uma tabela DataTables. Levanta ValueError com a URL se a resposta nao
+    tem aaData/iTotalDisplayRecords, se uma linha nao tem as `chaves`, se uma pagina repete linhas de
+    paginas anteriores (servidor ignorou `start`) ou se o total lido nao fecha com o informado."""
+    linhas, vistas, start, total = [], set(), 0, 0
     while True:
-        r = _get(sess, url, params={**params, "start": start}, headers={**ae.AJAX, "Referer": referer})
+        r = _get(sess, url, params={**params, "start": start}, headers={**_ae().AJAX, "Referer": referer})
         try:
             j = r.json()
             rows = j["aaData"]
-            total = int(j.get("iTotalDisplayRecords") or 0)
-        except (ValueError, KeyError, TypeError, AttributeError) as e:
-            raise ValueError(f"resposta sem a tabela esperada (aaData): {url}") from e
+            total = int(j["iTotalDisplayRecords"])
+            assert isinstance(rows, list)
+        except (ValueError, KeyError, TypeError, AttributeError, AssertionError) as e:
+            raise ValueError(f"resposta sem a tabela esperada (aaData/iTotalDisplayRecords): {url}") from e
+        for row in rows:
+            faltam = [c for c in chaves if not isinstance(row, dict) or c not in row]
+            if faltam:
+                raise ValueError(f"linha sem a coluna {faltam[0]}: {url}")
+        pagina = {json.dumps(x, sort_keys=True) for x in rows}
+        if pagina & vistas:
+            raise ValueError(f"paginacao repetiu linhas (start ignorado?): {url}")
+        vistas |= pagina
         linhas += rows
-        start += 100
-        if not rows or start >= total:
-            return linhas
+        start += len(rows)
+        if not rows or len(linhas) >= total:
+            break
+    if len(linhas) != total:
+        raise ValueError(f"total lido ({len(linhas)}) difere de iTotalDisplayRecords ({total}): {url}")
+    return linhas
 
 
 def ler_pedido(sess, id_stokki: int) -> dict:
     """Pedido de saida: cliente, quando foi cancelado, quando comecou a separar (a mais antiga entre
-    'Em separacao' e 'Em Conferencia') e os itens."""
+    'Em separacao' e 'Em Conferencia') e os itens (uma entrada por produto, mesmo repetido no pedido)."""
+    ae = _ae()
     url = f"{ae.ADM}/inventory/outbound/show/{int(id_stokki)}"
-    soup = BeautifulSoup(_get(sess, url, headers=ae.HTML).text, "html.parser")
+    soup = _soup(_get(sess, url, headers=ae.HTML).text)
     th = next((t for t in soup.find_all("th") if _sem_acento(ae.limpa(t.get_text())).startswith("cliente")), None)
     m = re.search(r"#stkkc-(\d+)", th.find_next("td").get_text()) if th is not None else None
     tabela = soup.select_one("div#item table")
     if not m or tabela is None:
         raise ValueError(f"pagina do pedido sem cliente ou sem itens: {url}")
-    itens = []
+    itens, vistos = [], set()
     for tr in tabela.select("tbody tr"):
         tds = [ae.limpa(td.get_text()) for td in tr.find_all("td")]
         mi = re.search(r"#ITM-(\d+)", tds[1]) if len(tds) >= 4 else None
         if not mi:
             raise ValueError(f"linha de item sem #ITM-<id>: {url}")
+        if int(mi.group(1)) in vistos:   # o Bloqueio e por produto: duas linhas = uma so entrada
+            continue
+        vistos.add(int(mi.group(1)))
         itens.append({"product_id": int(mi.group(1)), "sku": tds[2], "nome": tds[3]})
     if not itens:
         raise ValueError(f"pedido sem itens: {url}")
@@ -196,24 +232,27 @@ def ler_pedido(sess, id_stokki: int) -> dict:
 
 def ler_movimentos(sess, product_id: int, ano: int, mes: int) -> list:
     """Movimentacao do produto no mes (v2/moviment/table), normalizada: tipo, movimento, referencia,
-    quantidade, quando (conclusao da linha)."""
+    quantidade, quando (conclusao da linha, ou a data da linha se vier vazia). Fonte SO do Bloqueio do pedido."""
+    ae = _ae()
     url = f"{ae.ADM}/inventory/v2/moviment/table"
     extra = {"moviment": "all", "type": "all", "warehouse_id": 1, "year": ano, "month": mes, "product_id": int(product_id)}
-    rows = _linhas_tabela(sess, url, ae._params_tabela(extra, COLS_MOVIMENTOS), f"{ae.ADM}/inventory/v2/moviment")
+    rows = _linhas_tabela(sess, url, ae._params_tabela(extra, COLS_MOVIMENTOS), f"{ae.ADM}/inventory/v2/moviment",
+                          CHAVES_MOVIMENTOS)
     saida = []
     for r in rows:
-        ref = re.search(r"#\s*[A-Za-z]+-\d+", ae.limpa(r.get("reference")))
-        saida.append({"tipo": ae.limpa(r.get("type")), "movimento": ae.limpa(r.get("motion")),
+        ref = re.search(r"#\s*[A-Za-z]+-\d+", ae.limpa(r["reference"]))
+        saida.append({"tipo": ae.limpa(r["type"]), "movimento": ae.limpa(r["motion"]),
                       "referencia": re.sub(r"\s+", "", ref.group(0)) if ref else "",
-                      "quantidade": ae.numero(r.get("quantity")),
-                      "quando": _quando(r.get("conclusion")) or _quando(r.get("date"))})
+                      "quantidade": ae.numero(r["quantity"]),
+                      "quando": _quando(r["conclusion"]) or _quando(r["date"])})
     return saida
 
 
 def ler_saldo_enderecos(sess, product_id: int) -> list:
     """Saldo do produto por endereco (Codigo | Estoque | Bloqueado | Disponivel), Virtual incluido."""
+    ae = _ae()
     url = f"{ae.ADM}/inventory/moviment/addressing/{int(product_id)}/1"
-    tabela = BeautifulSoup(_get(sess, url, headers=ae.HTML).text, "html.parser").select_one("table#example1")
+    tabela = _soup(_get(sess, url, headers=ae.HTML).text).select_one("table#example1")
     if tabela is None or "localiza" not in _sem_acento(tabela.get_text()):
         raise ValueError(f"pagina sem a tabela de enderecos: {url}")
     saida = []
@@ -225,16 +264,13 @@ def ler_saldo_enderecos(sess, product_id: int) -> list:
     return saida
 
 
-def ler_origem(sess, product_id: int, inicio, fim, qtd: float) -> list:
-    """Origem da separacao: linhas `<endereco fisico> -> Virtual` do produto entre o inicio da separacao e o
-    cancelamento (+-2 min). So vale se a soma delas for exatamente `qtd`; qualquer outra situacao (nada,
-    soma diferente, janela desconhecida) devolve [] = origem desconhecida. Nao adivinha subconjuntos."""
-    if inicio is None or fim is None:
-        return []
-    de, ate = inicio - TOLERANCIA_ORIGEM, fim + TOLERANCIA_ORIGEM
+def _movimentos_entre_enderecos(sess, product_id: int, de: datetime, ate: datetime) -> list:
+    """Linhas de 'movimentos entre enderecamentos' dos meses de `de` a `ate`, normalizadas:
+    [{quando (criacao), concluido (bool), origem, destino, quantidade}]. Base de ler_origem e ler_devolucoes."""
+    ae = _ae()
     url = f"{ae.ADM}/inventory/moviment/addressing/table/moviment/table"
     referer = f"{ae.ADM}/inventory/moviment/addressing/moviment/{int(product_id)}/1"
-    partes = {}
+    saida = []
     for ano, mes in _meses(de, ate):
         params = {"draw": 1, "length": 100, "search[value]": "", "search[regex]": "false",
                   "product_id": int(product_id), "provider_id": 1, "month": f"{mes:02d}", "year": ano,
@@ -242,30 +278,59 @@ def ler_origem(sess, product_id: int, inicio, fim, qtd: float) -> list:
         for i, nome in enumerate(COLS_ORIGEM):
             params.update({f"columns[{i}][data]": nome, f"columns[{i}][name]": "",
                            f"columns[{i}][searchable]": "true", f"columns[{i}][orderable]": "true"})
-        for r in _linhas_tabela(sess, url, params, referer):
-            quando = _quando(r.get("created"))
-            origem, destino = ae.limpa(r.get("origin")), ae.limpa(r.get("destination"))
-            if quando and de <= quando <= ate and destino.lower() == "virtual" and not _e_sistema(origem):
-                partes[origem] = partes.get(origem, 0) + ae.numero(r.get("quantity"))
+        for r in _linhas_tabela(sess, url, params, referer, CHAVES_ORIGEM):
+            saida.append({"quando": _quando(r["created"]), "concluido": _quando(r["concluded"]) is not None,
+                          "origem": ae.limpa(r["origin"]), "destino": ae.limpa(r["destination"]),
+                          "quantidade": ae.numero(r["quantity"])})
+    return saida
+
+
+def ler_origem(sess, product_id: int, inicio, fim, qtd: float) -> list:
+    """Origem da separacao: linhas `<endereco fisico> -> Virtual` do produto entre o inicio da separacao e o
+    cancelamento (+-2 min). So vale se a soma delas for exatamente `qtd`; qualquer outra situacao (nada,
+    soma diferente, janela desconhecida) devolve [] = origem desconhecida. Nao adivinha subconjuntos."""
+    if inicio is None or fim is None:
+        return []
+    de, ate = inicio - TOLERANCIA_ORIGEM, fim + TOLERANCIA_ORIGEM
+    partes = {}
+    for r in _movimentos_entre_enderecos(sess, product_id, de, ate):
+        if (r["quando"] and de <= r["quando"] <= ate and r["destino"].lower() == "virtual"
+                and not _e_sistema(r["origem"])):
+            partes[r["origem"]] = partes.get(r["origem"], 0) + r["quantidade"]
     if partes and abs(sum(partes.values()) - qtd) < 0.001:
         return list(partes.items())
     return []
 
 
+def ler_devolucoes(sess, product_id: int, desde: datetime, ate: datetime) -> list:
+    """Prova de devolucao ja feita: linhas `Virtual -> <endereco fisico>` do produto criadas de `desde` (inclusive,
+    mesmo minuto conta) ate `ate`, no formato que ja_devolvido entende. E o que a devolucao manual gera."""
+    return [{"tipo": "Desbloqueio", "movimento": "Interno", "referencia": "", "quantidade": r["quantidade"],
+             "quando": r["quando"], "concluido": r["concluido"]}
+            for r in _movimentos_entre_enderecos(sess, product_id, desde, ate)
+            if (r["quando"] and desde <= r["quando"] <= ate and r["origem"].lower() == "virtual"
+                and not _e_sistema(r["destino"]))]
+
+
 # --- Plano: leituras + regras (nada de escrita aqui) ---
+
+def _inicio_da_janela(agora: datetime) -> datetime:
+    """Primeiro dia do mes que fica MESES_PARA_TRAS meses antes do de `agora`."""
+    limite = agora.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    for _ in range(MESES_PARA_TRAS):
+        limite = (limite - timedelta(days=1)).replace(day=1)
+    return limite
+
 
 def _meses_dos_movimentos(cancelado_em: datetime, agora: datetime) -> list:
     """Do mes do cancelamento ate o mes de `agora`, no maximo 3 meses para tras de `agora`."""
-    limite = agora.replace(day=1)
-    for _ in range(MESES_PARA_TRAS):
-        limite = (limite - timedelta(days=1)).replace(day=1)
-    inicio = max(cancelado_em.replace(day=1), limite)
+    inicio = max(cancelado_em.replace(day=1), _inicio_da_janela(agora))
     return _meses(inicio, max(agora, inicio))
 
 
 def _saldo_do_embarcador(sess, cliente_id: int) -> list:
     por_endereco = {}
-    for linha in ae.saldo_por_endereco(sess, cliente_id):
+    for linha in _ae().saldo_por_endereco(sess, cliente_id):
         por_endereco[linha["endereco"]] = por_endereco.get(linha["endereco"], 0) + linha["estoque"]
     return [{"endereco": e, "estoque": q} for e, q in por_endereco.items()]
 
@@ -280,7 +345,8 @@ def _plano_do_item(sess, ped: dict, item: dict, agora: datetime) -> tuple:
     if bloqueado <= 0:
         return saida, ""
     saida["qtd"] = bloqueado
-    ja = ja_devolvido(movimentos, bloqueado, ped["cancelado_em"])
+    devolucoes = ler_devolucoes(sess, item["product_id"], ped["cancelado_em"], max(agora, ped["cancelado_em"]))
+    ja = ja_devolvido(devolucoes, bloqueado, ped["cancelado_em"])
     if ja == "sim":
         saida["situacao"] = "ja_devolvido"
         return saida, ""
@@ -313,6 +379,8 @@ def montar_plano(sess, id_stokki: int, agora: datetime, ja_estava: bool = False)
         return plano("ANTIGO", vazios, "cancelamento de 24 h ou mais (ou sem data) que ja existia: avisar a operacao")
     if ped["cancelado_em"] is None:
         return plano("DUVIDA", vazios, "nao consegui ler a data do cancelamento no historico do pedido")
+    if ped["cancelado_em"].replace(day=1, hour=0, minute=0) < _inicio_da_janela(agora):
+        return plano("DUVIDA", vazios, "cancelamento antigo demais para conferir as movimentacoes")
     itens, motivos = [], []
     for item in ped["itens"]:
         it, motivo = _plano_do_item(sess, ped, item, agora)
