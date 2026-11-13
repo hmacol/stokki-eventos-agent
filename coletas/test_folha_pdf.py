@@ -36,6 +36,15 @@ class TestFolhaPdf(unittest.TestCase):
         # o QR termina antes da tabela
         self.assertLess(36 + folha_pdf.LADO_QR + 24, folha_pdf.Y_LINHAS - 34)
 
+    def test_folha_sai_mesmo_sem_o_arquivo_do_logo(self):
+        from pathlib import Path
+        from unittest import mock
+        com_logo = folha_pdf.gerar(_coleta(2))
+        with mock.patch.object(folha_pdf, "LOGO_PATH", Path("nao_existe.png")):
+            sem_logo = folha_pdf.gerar(_coleta(2))
+        self.assertTrue(sem_logo.startswith(b"%PDF"))
+        self.assertNotEqual(com_logo, sem_logo)   # com o arquivo, o logo entra
+
     def test_trinta_linhas_nao_invadem_o_rodape(self):
         # 30 linhas + a linha do total (12 de respiro + 30 de altura) terminam antes do rodape
         fim = folha_pdf.Y_LINHAS + folha_pdf.MAX_LINHAS * folha_pdf.ALT_LINHA + 12 + 30

@@ -1489,7 +1489,8 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
                             Retira = 1 embarcador), confirmar (foto + nome + placa
                             obrigatórios), aplicar_resultados, tentar_de_novo,
                             retirar_pedido, tem_foto (o robô confere), retiradas_novas.
-   folha_pdf.py             PDF A4 da folha (PIL), 1 página até 30 pedidos, com QR code
+   folha_pdf.py             PDF A4 da folha (PIL), 1 página até 30 pedidos, com a marca
+                            (assets/logo_freshlog.png, azul-marinho e verde-água) e QR code
                             que abre /expedicao/coletas/<id> no celular da doca (13/11).
    exemplo_homolog.py       SÓ na homologação: monta a fila uma vez com a cópia dos dados
                             (galpao_pedidos + transportadora do batimento), porque a

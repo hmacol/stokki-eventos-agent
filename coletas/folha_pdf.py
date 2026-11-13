@@ -4,24 +4,32 @@ coletas/folha_pdf.py
 
 PDF da folha de coleta (COL-n): uma pagina A4 em pe pra imprimir na doca. O
 motorista marca o que levou, preenche nome, documento, placa e assina; a foto
-dessa folha e obrigatoria pra confirmar a coleta (Hugo, 12/11).
+dessa folha e obrigatoria pra confirmar a coleta (Hugo, 12/11). O QR code do
+canto abre a coleta no celular da doca (13/11).
 
-Desenhada com PIL, como a capa do romaneio (roteirizacao/gerar_pdf_romaneios).
-Cabem 30 pedidos (o maximo de uma folha).
+Desenhada com PIL, como a capa do romaneio (roteirizacao/gerar_pdf_romaneios),
+com a mesma identidade: logo Freshlog, azul-marinho e verde-agua (o Hugo
+escolheu esta entre 3 opcoes, 13/11). Cabem 30 pedidos (o maximo de uma folha).
 """
 import io
 import re
 from datetime import datetime
+from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
 A4 = (1240, 1754)   # 150 dpi
 MARGEM = 60
-PRETO, CINZA, LINHA = (20, 20, 20), (95, 95, 95), (170, 170, 170)
-Y_LINHAS = 270          # onde comeca a 1a linha de pedido
-ALT_LINHA = 34
+LOGO_PATH = Path(__file__).resolve().parent.parent / "assets" / "logo_freshlog.png"
+# Identidade visual (as mesmas cores do romaneio, tiradas do logo)
+NAVY, TEAL = (23, 29, 51), (34, 220, 160)
+PRETO, CINZA, LINHA, ZEBRA = (20, 20, 20), (95, 102, 115), (190, 196, 205), (243, 246, 249)
+Y_CAB_TABELA = 286      # faixa de titulos da tabela
+Y_LINHAS = 320          # onde comeca a 1a linha de pedido
+ALT_LINHA = 32
 Y_RODAPE = A4[1] - 390  # declaracao + campos do motorista
 MAX_LINHAS = 30
+LADO_QR = 150
 
 
 def _fonte(tamanho_px: int, negrito: bool = False):
@@ -53,9 +61,6 @@ def _data_br(texto) -> str:
         return texto or ""
 
 
-LADO_QR = 150
-
-
 def _qr(conteudo: str):
     import qrcode
     from qrcode.constants import ERROR_CORRECT_M
@@ -63,6 +68,23 @@ def _qr(conteudo: str):
     qr.add_data(conteudo)
     qr.make(fit=True)
     return qr.make_image(fill_color="black", back_color="white").convert("RGB").resize((LADO_QR, LADO_QR))
+
+
+def _logo(altura: int):
+    """Logo na altura pedida, ou None se o arquivo nao estiver la (a folha sai com o nome escrito)."""
+    try:
+        logo = Image.open(LOGO_PATH).convert("RGBA")
+    except OSError:
+        return None
+    return logo.resize((round(logo.width * altura / logo.height), altura), Image.LANCZOS)
+
+
+def _transportadora(coleta: dict) -> str:
+    texto = coleta.get("transportadora") or ""
+    if coleta.get("embarcador"):   # Cliente Retira: o CNPJ colado no nome so rouba o espaco do embarcador
+        texto = re.sub(r"\s*\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}", "", texto).strip()
+        texto += f"  |  {coleta['embarcador']}"
+    return texto
 
 
 def gerar(coleta: dict, url: str | None = None) -> bytes:
@@ -75,56 +97,58 @@ def gerar(coleta: dict, url: str | None = None) -> bytes:
     direita = A4[0] - MARGEM
     pedidos = coleta.get("pedidos") or []
 
-    d.text((MARGEM, 50), "Fresh Log", font=_fonte(26, True), fill=CINZA)
-    d.text((MARGEM, 84), f"Folha de coleta {coleta['numero']}", font=_fonte(46, True), fill=PRETO)
-    largura_topo = largura
+    # cabecalho: logo, titulo, transportadora, QR e o filete verde-agua
+    logo = _logo(72)
+    if logo is None:
+        d.text((MARGEM, 40), "Fresh Log", font=_fonte(34, True), fill=NAVY)
+    else:
+        img.paste(logo, (MARGEM, 30), logo)
+    largura_txt = largura - (LADO_QR + 24 if url else 0)
+    d.text((MARGEM, 120), f"Folha de coleta {coleta['numero']}", font=_fonte(40, True), fill=NAVY)
+    d.text((MARGEM, 176), _truncar(d, "Transportadora: " + _transportadora(coleta), _fonte(26, True), largura_txt),
+           font=_fonte(26, True), fill=NAVY)
+    d.text((MARGEM, 214), f"Gerada por {coleta.get('criada_por') or ''} em {_data_br(coleta.get('criada_em'))}",
+           font=_fonte(20), fill=CINZA)
+    d.rectangle([(MARGEM, 264), (direita, 270)], fill=TEAL)
     if url:
         img.paste(_qr(url), (direita - LADO_QR, 36))
-        d.text((direita - LADO_QR / 2, 36 + LADO_QR + 4), "Confirmar pelo celular", font=_fonte(15), fill=CINZA, anchor="ma")
-        largura_topo = largura - LADO_QR - 24
-    y = 152
-    transportadora = coleta.get("transportadora") or ""
-    if coleta.get("embarcador"):   # Cliente Retira: o CNPJ colado no nome so rouba o espaco do embarcador
-        transportadora = re.sub(r"\s*\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}", "", transportadora).strip()
-        transportadora += f"  |  {coleta['embarcador']}"
-    d.text((MARGEM, y), _truncar(d, f"Transportadora: {transportadora}", _fonte(28, True), largura_topo),
-           font=_fonte(28, True), fill=PRETO)
-    d.text((MARGEM, y + 38), f"Gerada por {coleta.get('criada_por') or ''} em {_data_br(coleta.get('criada_em'))}",
-           font=_fonte(22), fill=CINZA)
-    y += 84
+        d.text((direita - LADO_QR / 2, 36 + LADO_QR + 4), "Confirmar pelo celular", font=_fonte(15), fill=CINZA,
+               anchor="ma")
 
     # tabela: Levou | Pedido | Embarcador | NF | Destinatario | Unid.
     colunas = [("Levou", 90), ("Pedido", 150), ("Embarcador", 320), ("NF", 120), ("Destinatário", 350), ("Unid.", 90)]
     f_cab, f_lin = _fonte(20, True), _fonte(21)
-    d.rectangle([(MARGEM, y), (direita, y + 34)], fill=(230, 230, 230))
+    y = Y_CAB_TABELA
+    d.rectangle([(MARGEM, y), (direita, y + 34)], fill=NAVY)
     x = MARGEM
     for titulo, w in colunas:
-        d.text((x + 8, y + 6), titulo, font=f_cab, fill=PRETO)
+        d.text((x + 8, y + 6), titulo, font=f_cab, fill="white")
         x += w
-    y += 34
-    assert y == Y_LINHAS
+    y = Y_LINHAS
     alt = ALT_LINHA
-    for p in pedidos:
+    for i, p in enumerate(pedidos):
+        if i % 2:
+            d.rectangle([(MARGEM, y), (direita, y + alt)], fill=ZEBRA)
         d.line([(MARGEM, y + alt), (direita, y + alt)], fill=LINHA, width=1)
-        d.rectangle([(MARGEM + 28, y + 5), (MARGEM + 52, y + 29)], outline=PRETO, width=2)
+        d.rectangle([(MARGEM + 28, y + 4), (MARGEM + 52, y + 28)], outline=NAVY, width=2, fill="white")
         embarcador = re.sub(r"\s*\.\.\.\s*#stkkc-\d+\s*$", "", p.get("embarcador") or "")
         valores = [None, p.get("codigo"), embarcador, p.get("nf"), p.get("destinatario"),
                    "" if p.get("unidades") is None else p.get("unidades")]
         x = MARGEM
         for (titulo, w), valor in zip(colunas, valores):
             if valor is not None:
-                d.text((x + 8, y + 6), _truncar(d, valor, f_lin, w - 14), font=f_lin, fill=PRETO)
+                d.text((x + 8, y + 5), _truncar(d, valor, f_lin, w - 14), font=f_lin, fill=PRETO)
             x += w
         y += alt
     total_un = sum(p.get("unidades") or 0 for p in pedidos)
     y += 12
     d.text((MARGEM, y), f"Total: {len(pedidos)} pedido(s)" + (f", {total_un} unidade(s)" if total_un else ""),
-           font=_fonte(24, True), fill=PRETO)
+           font=_fonte(24, True), fill=NAVY)
 
-    # rodape fixo: declaracao e campos do motorista
+    # rodape fixo: declaracao e campos do motorista (fundo branco: e o que a foto precisa mostrar)
     y = Y_RODAPE
-    d.line([(MARGEM, y), (direita, y)], fill=PRETO, width=2)
-    d.text((MARGEM, y + 16), "Recebi os pedidos marcados acima.", font=_fonte(26, True), fill=PRETO)
+    d.line([(MARGEM, y), (direita, y)], fill=NAVY, width=4)
+    d.text((MARGEM, y + 16), "Recebi os pedidos marcados acima.", font=_fonte(26, True), fill=NAVY)
     y += 86
     f_campo = _fonte(22)
     meio = MARGEM + largura // 2 + 20
