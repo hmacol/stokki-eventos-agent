@@ -1488,6 +1488,9 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
                             obrigatórios), aplicar_resultados, tentar_de_novo,
                             retirar_pedido, tem_foto (o robô confere), retiradas_novas.
    folha_pdf.py             PDF A4 da folha (PIL), 1 página até 30 pedidos.
+   exemplo_homolog.py       SÓ na homologação: monta a fila uma vez com a cópia dos dados
+                            (galpao_pedidos + transportadora do batimento), porque a
+                            bancada nunca lê a Stokki. Em produção não faz nada.
                            Fotos em dados/coletas/COL-<id>-<8 hex>.jpg. Retirada nova
                            (vista depois da 1a leitura) só expede por coleta com foto:
                            expedir_pedidos._decidir_retirada recusa sem --coleta N, e

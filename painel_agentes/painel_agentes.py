@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from homologacao import ambiente as _ambiente
 _ambiente.exigir_coerencia(_RAIZ)
 from homologacao.guarda import EnvioBloqueadoHomolog as _EnvioBloqueadoHomolog
+from homologacao.ambiente import DesligadoNaHomologacao as _DesligadoNaHomologacao, homolog_ativo as _homolog_ativo
 
 (Path(__file__).parent / "dados").mkdir(parents=True, exist_ok=True)
 
@@ -97,7 +98,7 @@ import tratativas
 import pedidos_parados_triagem
 import consulta_expedicao
 from coletas import banco as coletas_banco, folha_pdf as coletas_folha_pdf, ler_stokki as coletas_ler_stokki, \
-    regras as coletas_regras
+    regras as coletas_regras, exemplo_homolog as coletas_exemplo_homolog
 import acoes_pedidos
 import contadores_menu
 import pagina_inicial
@@ -1075,7 +1076,7 @@ def _coletas_despachar(conn, coleta_id: int, codigos: list) -> dict:
     try:
         r = acoes_pedidos.expedir_stokki(codigos, _autor_acao_pedidos(), iniciar=iniciar, pasta=_LOGS_EXECUCOES,
                                          coleta=coleta_id)
-    except _EnvioBloqueadoHomolog:
+    except (_EnvioBloqueadoHomolog, _DesligadoNaHomologacao):   # a fila de agentes e desligada na bancada
         coletas_regras.aplicar_resultados(
             conn, coleta_id, {c: {"ok": True, "mensagem": "homologação: registrado, nada foi à Stokki"} for c in codigos},
             simulada=True)
@@ -1095,18 +1096,22 @@ def _coletas_despachar(conn, coleta_id: int, codigos: list) -> dict:
 def expedicao_coletas():
     conn = coletas_banco.conectar()
     try:
+        exemplo = _homolog_ativo()
+        if exemplo:   # a bancada nunca le a Stokki: lista de exemplo com a copia dos dados
+            coletas_exemplo_homolog.preencher(conn, forcar=True)   # a rota ja conferiu o ambiente
         lista = coletas_regras.a_coletar(conn)
         folhas = [coletas_regras.coleta(conn, c["id"]) for c in coletas_regras.abertas(conn)]
         historico = coletas_regras.historico(conn)
         ultima = coletas_ler_stokki.ultima_leitura(conn)
     finally:
         conn.close()
-    atrasada = True
-    if ultima:
+    atrasada = not exemplo
+    if ultima and not exemplo:
         atrasada = (datetime.now() - datetime.strptime(ultima, coletas_banco.FMT)).total_seconds() > 60 * _COLETA_LEITURA_ATRASADA_MIN
     return render_template("coletas_expedicao.html", grupos=lista["grupos"], sem_cadastro=lista["sem_cadastro"],
                            folhas=folhas, historico=historico, ultima_leitura=ultima, leitura_atrasada=atrasada,
-                           pode_agir=g.nivel_acesso in NIVEIS_COLETA_AGIR, max_pedidos=coletas_regras.MAX_PEDIDOS)
+                           pode_agir=g.nivel_acesso in NIVEIS_COLETA_AGIR, max_pedidos=coletas_regras.MAX_PEDIDOS,
+                           exemplo=exemplo)
 
 
 @app.route("/api/expedicao/coletas/folha", methods=["POST"])

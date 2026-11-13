@@ -16,7 +16,7 @@ from coletas import banco, regras
 
 
 class _Catalogo:
-    def resolver(self, nome):
+    def resolver(self, nome, cnpj=""):
         return SimpleNamespace(tipo={"J3 FLEX": "RETIRADA", "FRESHLOG": "ENTREGA"}.get(nome.upper()))
 
 

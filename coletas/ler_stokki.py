@@ -37,6 +37,7 @@ logger = logging.getLogger("coletas.ler_stokki")
 DONO = "coletas-expedicao"
 TTL_TRAVA = 300
 ESPERA_TRAVA = 120   # a listagem e curta: espera a vez em vez de pular 10 min
+_RE_CNPJ = re.compile(r"\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}")
 
 
 def eh_retirada(nome: str, catalogo) -> bool:
@@ -47,8 +48,14 @@ def eh_retirada(nome: str, catalogo) -> bool:
         return False
     if "CLIENTE RETIRA" in nome.upper():
         return True
+    if catalogo is None:
+        return False
+    # A listagem da Stokki manda "J3 FLEX 15.119.003/0001-16": o nome com o CNPJ
+    # colado nao casa no cadastro (mesmo cuidado de batimento/medir.py).
+    m = _RE_CNPJ.search(nome)
+    cnpj = re.sub(r"\D", "", m.group(0)) if m else ""
     try:
-        return catalogo is not None and catalogo.resolver(nome).tipo == "RETIRADA"
+        return catalogo.resolver(_RE_CNPJ.sub("", nome).strip(), cnpj=cnpj).tipo == "RETIRADA"
     except Exception:
         return False
 

@@ -59,6 +59,7 @@
   <p class="sub">Pedidos de retirada esperando a transportadora ou o cliente. Gere a folha, o motorista preenche e assina, e a foto dela confirma a saída na Stokki.</p>
   <p class="sub">Lista lida da Stokki {% if ultima_leitura %}em {{ dh(ultima_leitura) }}{% else %}— ainda não houve leitura{% endif %} (atualiza a cada 10 min).
     <a href="{{ url_for('expedicao') }}">Voltar para Expedição</a></p>
+  {% if exemplo %}<div class="aviso">Homologação: a lista abaixo é de exemplo (pedidos da cópia dos dados). Confirmar a coleta aqui só registra, nada vai à Stokki.</div>{% endif %}
   {% if leitura_atrasada %}<div class="aviso">A leitura da Stokki está atrasada: a lista abaixo pode estar desatualizada.</div>{% endif %}
 
   {% if folhas %}

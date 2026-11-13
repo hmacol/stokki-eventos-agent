@@ -10,7 +10,8 @@ from coletas import banco, ler_stokki
 class _Catalogo:
     TIPOS = {"J3 FLEX": "RETIRADA", "FRESHLOG": "ENTREGA"}
 
-    def resolver(self, nome):
+    def resolver(self, nome, cnpj=""):
+        self.cnpj = cnpj
         return SimpleNamespace(tipo=self.TIPOS.get(nome.upper()))
 
 
@@ -81,6 +82,10 @@ class TestLerStokki(unittest.TestCase):
         self.assertTrue(ler_stokki.eh_retirada("CLIENTE RETIRA 15.060.670/0001-70", c))
         self.assertTrue(ler_stokki.eh_retirada("Cliente Retira", None))
         self.assertTrue(ler_stokki.eh_retirada("J3 FLEX", c))
+        # a listagem da Stokki cola o CNPJ no nome
+        self.assertTrue(ler_stokki.eh_retirada("J3 FLEX 15.119.003/0001-16", c))
+        self.assertEqual(c.cnpj, "15119003000116")
+        self.assertFalse(ler_stokki.eh_retirada("FRESHLOG 15.060.670/0001-70", c))
         for nome in ("FRESHLOG", "", None, "QUALY-TRANSPORTE"):
             self.assertFalse(ler_stokki.eh_retirada(nome, c), nome)
 

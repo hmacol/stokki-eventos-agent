@@ -211,12 +211,45 @@ class TestColetasExpedicao(unittest.TestCase):
     def test_homologacao_conclui_simulada_sem_stokki(self):
         self._logar("expedicao")
         cid = self._folha()
+        # na bancada quem recusa e a fila de agentes (DesligadoNaHomologacao)
         with mock.patch.object(painel_agentes, "iniciar_execucao_com_fila",
-                               side_effect=painel_agentes._EnvioBloqueadoHomolog("Agentes")):
+                               side_effect=painel_agentes._DesligadoNaHomologacao("Agentes desligado")):
             r = self._confirmar(cid)
         self.assertEqual((r.status_code, r.get_json().get("simulada")), (200, True))
         c = self._coleta(cid)
         self.assertEqual((c["status"], c["simulada"]), ("CONCLUIDA", 1))
+
+    def test_homologacao_preenche_lista_de_exemplo_uma_vez(self):
+        """A bancada nunca le a Stokki: a lista vem da copia dos dados (Hugo, 12/11)."""
+        from galpao3d import banco as galpao
+        conn = coletas_banco.conectar()
+        conn.execute("DELETE FROM expedicao_coletas_fila")
+        conn.execute("DELETE FROM expedicao_coletas_leituras")
+        galpao.garantir_esquema(conn)
+        conn.execute("CREATE TABLE IF NOT EXISTS batimento_pedidos (id_stokki INTEGER, transportadora TEXT, visto_em TEXT)")
+        for i, sit, transp in ((800, "Aguardando Transportador", "CLIENTE RETIRA 15.060.670/0001-70"),
+                               (801, "Aguardando Transportador", "FRESHLOG"), (802, "Aberto", "CLIENTE RETIRA"),
+                               (803, "Aguardando Transportador", None)):
+            conn.execute("INSERT INTO galpao_pedidos (id_stokki, codigo, embarcador, situacao, atualizado_em) "
+                         "VALUES (?, ?, 'PADRAO PURO ... #stkkc-2', ?, '2026-11-10 10:00:00')", (i, f"PS-{i}", sit))
+            if transp:
+                conn.execute("INSERT INTO batimento_pedidos VALUES (?, ?, '2026-11-10')", (i, transp))
+        conn.commit()
+        conn.close()
+        self._logar("expedicao")
+        html = self._tela()                      # fora da homologacao: nada e preenchido
+        self.assertNotIn("PS-800", html)
+        with mock.patch.object(painel_agentes, "_homolog_ativo", return_value=True):
+            html = self._tela()
+            self.assertIn("lista abaixo é de exemplo", html)
+            self.assertEqual(html.count('class="vai" value="800"'), 1)
+            self.assertNotIn('value="801"', html)    # nao e retirada
+            self.assertNotIn('value="802"', html)    # nao esta aguardando transportador
+            self.assertNotIn("leitura da Stokki está atrasada", html)
+            self._tela()                             # segunda abertura nao duplica nem reabre
+        conn = coletas_banco.conectar()
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM expedicao_coletas_fila").fetchone()[0], 2)   # 803 nao tem transportadora na copia
+        conn.close()
 
     def test_falha_ao_enfileirar_deixa_a_coleta_confirmada_pra_tentar_de_novo(self):
         self._logar("expedicao")
