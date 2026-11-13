@@ -18,7 +18,8 @@ from coletas.ler_stokki import _catalogo_padrao, eh_retirada
 from homologacao.ambiente import homolog_ativo
 
 logger = logging.getLogger("coletas.exemplo_homolog")
-MAX_EXEMPLO = 80
+MAX_EXEMPLO = 80   # pedidos de retirada
+MAX_OUTRAS = 15    # de outras transportadoras (so aparecem no resumo)
 
 
 def _transportadoras(conn) -> dict:
@@ -42,7 +43,7 @@ def preencher(conn, catalogo=None, agora=None, forcar: bool = False) -> int:
         return 0
     quando = (agora or datetime.now()).strftime(banco.FMT)
     tem_galpao = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'galpao_pedidos'").fetchone()
-    n = 0
+    n = n_ret = n_out = 0
     if tem_galpao:
         catalogo = catalogo if catalogo is not None else _catalogo_padrao()
         transportadoras = _transportadoras(conn)
@@ -52,13 +53,15 @@ def preencher(conn, catalogo=None, agora=None, forcar: bool = False) -> int:
             nome = transportadoras.get(r["id_stokki"])
             if not nome:
                 continue
+            retirada = eh_retirada(nome, catalogo)
+            # o que interessa na tela e retirada; das outras basta um punhado pro resumo
+            if (n_ret if retirada else n_out) >= (MAX_EXEMPLO if retirada else MAX_OUTRAS):
+                continue
+            n_ret, n_out = n_ret + retirada, n_out + (not retirada)
             conn.execute("INSERT OR IGNORE INTO expedicao_coletas_fila (id_stokki, codigo, embarcador, transportadora,"
                          " retirada, carga_inicial, visto_primeiro_em, visto_ultimo_em) VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
-                         (r["id_stokki"], r["codigo"], r["embarcador"], nome, int(eh_retirada(nome, catalogo)),
-                          quando, quando))
-            n += 1
-            if n >= MAX_EXEMPLO:
-                break
+                         (r["id_stokki"], r["codigo"], r["embarcador"], nome, int(retirada), quando, quando))
+        n = n_ret + n_out
     conn.execute("INSERT OR REPLACE INTO expedicao_coletas_leituras (quando, resultado, obs) VALUES (?, 'ok', ?)",
                  (quando, f"exemplo da homologacao: {n} pedidos"))
     conn.commit()
