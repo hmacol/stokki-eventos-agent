@@ -69,6 +69,8 @@ config.yaml:
       grupo_id: "...@g.us"
       grupo_atendimento_id: "...@g.us"   # grupo dos avisos de chamado
       grupo_logistica_id: "...@g.us"     # ALERTA LOGISTICA: rotas sem baixa (cancelar_rotas_sem_motorista.py)
+      grupo_cancelados_id: "...@g.us"    # "PEDIDOS CANCELADOS": onde guardar a caixa devolvida ao estoque
+                                         # (avisar_devolucao_galpao; sem ele o aviso nao sai, so o log)
       grupo_resumo_email_id: "...@g.us"  # resumo diario do Gmail (resumo_email_whatsapp.py)
       avisar_chamados: true              # desliga so o aviso de chamado
       sempre_avisar: [cancelar_rotas_sem_motorista, executar_tudo, criar_rotas_diarias]
@@ -89,6 +91,7 @@ config.yaml:
       forcar_destino_whatsapp: ""  # numero do Hugo enquanto for piloto; vazio = envio real;
                                    # ausente = vale clientes.forcar_destino (sem ele: nao manda)
 """
+import hashlib
 import logging
 import re
 import sqlite3
@@ -823,6 +826,69 @@ def avisar_cancelamento_pendente(envio: dict, motivo: str, erro: str, config: di
         return despachar(config, "portal_cancelamento", "cancelamento",
                          texto_cancelamento_pendente(envio, motivo, erro), f"cancelamento:{envio['id']}",
                          grupo_id=grupo, **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def _qtd_devolucao(v) -> str:
+    """Quantidade sem zeros decimais desnecessarios: 4.0 -> 4, 2.5 -> 2,5."""
+    try:
+        return f"{float(v):g}".replace(".", ",")
+    except (TypeError, ValueError):
+        return str(v or "?")
+
+
+def texto_devolucao_galpao(id_stokki: int, embarcador: str, itens: list) -> str:
+    """Pedido cancelado cujo saldo o robo devolveu ao estoque: o galpao guarda a caixa no endereco
+    novo (o robo so mexe no sistema). Uma linha por item; cabe em MAX_MENSAGEM e, se nao couber,
+    corta em linha inteira com '… e mais N'."""
+    cab = f"Pedido cancelado PS-{id_stokki} · {(embarcador or '')[:30]} — guardar de volta:"
+    linhas = [f"• {str(i.get('sku') or '?')[:20]} {str(i.get('nome') or '')[:40]} — "
+              f"{_qtd_devolucao(i.get('movido'))} → {str(i.get('destino') or '?')[:30]}".replace("  ", " ")
+              for i in itens or []]
+    for n_mostrar in range(len(linhas), -1, -1):
+        corpo = linhas[:n_mostrar]
+        resto = len(linhas) - n_mostrar
+        texto = "\n".join([cab] + corpo + ([f"… e mais {resto}"] if resto else []))
+        if len(texto) <= MAX_MENSAGEM:
+            return texto
+    return texto[:MAX_MENSAGEM - 1] + "…"
+
+
+def avisar_devolucao_galpao(id_stokki: int, embarcador: str, itens: list, config: dict, **kw) -> str:
+    """Grupo PEDIDOS CANCELADOS (grupo_cancelados_id); sem ele devolve 'desligado' (o chamador loga os
+    enderecos). A assinatura leva um hash dos itens: devolucao parcial retomada no mesmo dia avisa de
+    novo os itens novos, e o mesmo aviso repetido nao reenvia."""
+    try:
+        grupo = _cfg(config).get("grupo_cancelados_id")
+        if not grupo:
+            return "desligado"
+        chave = "|".join(sorted(f"{i.get('sku')}@{i.get('destino')}={i.get('movido')}" for i in itens))
+        hash_itens = hashlib.sha1(chave.encode("utf-8")).hexdigest()[:8]
+        return despachar(config, "devolucao_estoque", "devolucao",
+                         texto_devolucao_galpao(id_stokki, embarcador, itens),
+                         f"devolucao:{id_stokki}:{hash_itens}", grupo_id=grupo, **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def texto_devolucao_pendente(id_stokki: int, embarcador: str, motivo: str) -> str:
+    """Devolucao de estoque que falhou, ficou parcial ou caiu em duvida. Cabe em MAX_MENSAGEM."""
+    texto = f"Devolução de estoque do PS-{id_stokki} · {(embarcador or '')[:30]} precisa de conferência: {motivo}"
+    return texto[:MAX_MENSAGEM - 1] + "…" if len(texto) > MAX_MENSAGEM else texto
+
+
+def avisar_devolucao_pendente(id_stokki: int, embarcador: str, motivo: str, config: dict, **kw) -> str:
+    """Grupo do ATENDIMENTO (grupo_atendimento_id). Assinatura por pedido: nao repete dentro da janela."""
+    try:
+        grupo = _cfg(config).get("grupo_atendimento_id")
+        if not grupo:
+            return "desligado"
+        return despachar(config, "devolucao_estoque", "devolucao_pendente",
+                         texto_devolucao_pendente(id_stokki, embarcador, motivo),
+                         f"devolucao_pendente:{id_stokki}", grupo_id=grupo, **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"
