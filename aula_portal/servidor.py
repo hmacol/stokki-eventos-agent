@@ -8,7 +8,7 @@ o chat sair igual em toda gravacao, sem Claude e sem Vuupt:
 O resto (telas, API, banco ficticio) e o portal de verdade.
 
 Guarda de rede do processo (o navegador tem a dele): SMTP recusado e socket
-so pra loopback; cada tentativa vai pra ARQ_BLOQUEIOS e o gravar reprova o video.
+so pra loopback (menos o proxy morto, que tambem conta como tentativa de sair); cada tentativa vai pra ARQ_BLOQUEIOS e o gravar reprova o video.
 
     py -3.11 -m aula_portal.servidor --porta 8097   (de dentro de portal_cliente/)
 """
@@ -24,6 +24,7 @@ from types import SimpleNamespace
 from aula_portal import RAIZ, dados_teste as dt
 
 ARQ_BLOQUEIOS = RAIZ / "dados" / "aula_bloqueios.log"
+PORTA_PROXY_MORTO = 9   # ambiente.PROXY_MORTO
 
 ATENDENTE = {"nome": "Juliana", "usuario": "juliana"}
 RESPOSTA_ASSISTENTE = {
@@ -93,7 +94,10 @@ def guarda_rede(arquivo=ARQ_BLOQUEIOS):
     smtp, smtp_ssl = smtplib.SMTP, smtplib.SMTP_SSL
 
     def barrar(sock, endereco):
-        if sock.family in (socket.AF_INET, socket.AF_INET6) and not _loopback(endereco):
+        if sock.family not in (socket.AF_INET, socket.AF_INET6):
+            return
+        # o proxy morto (ambiente.PROXY_MORTO, 127.0.0.1:9) e loopback, mas quem bate nele queria sair
+        if not _loopback(endereco) or (len(endereco) > 1 and endereco[1] == PORTA_PROXY_MORTO):
             _registrar(arquivo, f"socket {endereco}")
             raise OSError(f"aula: conexao pra fora bloqueada na gravacao ({endereco})")
 

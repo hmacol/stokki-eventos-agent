@@ -20,6 +20,9 @@
 
   `badge` liga o item ao contador de mesmo nome em contadores_menu.py
   (vem por JS depois do load, nunca na renderização).
+
+  `todos` (Aula, 13/11): item que todo login vê, inclusive o acesso
+  personalizado (a rota está em acesso_telas.CAMINHOS_COMUNS).
 #}
 {% set NIVEIS_ROTAS = ('total', 'operador', 'leitura') %}
 {% set GRUPOS_MENU = [
@@ -99,12 +102,16 @@
     {'rota': 'notificacoes', 'rotulo': 'Notificações', 'titulo': 'Liga, pilota ou desliga os envios a embarcadores e transportadoras', 'niveis': ('total',), 'badge': none,
      'icone': '<path d="M5 8.2a5 5 0 0 1 10 0c0 3.4 1.4 4.4 1.4 4.4H3.6S5 11.6 5 8.2z"/><path d="M8.3 15.5a1.8 1.8 0 0 0 3.4 0"/>'},
   ]),
+  ('Ajuda', [
+    {'rota': 'aula_equipe', 'rotulo': 'Aula (vídeos)', 'titulo': 'Vídeos curtos mostrando como usar cada tela', 'todos': true, 'badge': none,
+     'icone': '<circle cx="10" cy="10" r="7"/><path d="M8.5 7.2l4.3 2.8-4.3 2.8z"/>'},
+  ]),
 ] %}
 {% set nivel = session.get('nivel_acesso') %}
 <nav aria-label="Telas do painel">
   {% for titulo_grupo, itens in GRUPOS_MENU %}
     {% set visiveis = [] %}
-    {% for item in itens %}{% if (telas_liberadas is not none and item.rota in telas_liberadas) or (telas_liberadas is none and nivel in item.niveis) %}{% set _ = visiveis.append(item) %}{% endif %}{% endfor %}
+    {% for item in itens %}{% if item.todos or (telas_liberadas is not none and item.rota in telas_liberadas) or (telas_liberadas is none and nivel in item.niveis) %}{% set _ = visiveis.append(item) %}{% endif %}{% endfor %}
     {# Grupo que ficou sem nenhum item pro nível do usuário não
        desenha nem o cabeçalho (ex: "Sistema" fora do nível total). #}
     {% if visiveis %}
