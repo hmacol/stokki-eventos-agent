@@ -124,6 +124,12 @@ class LinhaDoTempoTest(unittest.TestCase):
         self.assertEqual(gravar.linha_do_tempo([0, 2, 3], [4, 1, 1]), [0, 4, 5])
         self.assertEqual(gravar.linha_do_tempo([0, 10], [2, 2]), [0, 10])
 
+    def test_capa_mostra_a_tela_e_nao_o_cartao_de_titulo(self):
+        # o cartao de abertura fica ~3 s no ar; a capa sai do meio do video, com a tela do assunto
+        tempos = [0.0, 3.4, 9.0, 15.0, 22.0]
+        self.assertEqual(gravar.momento_capa(tempos, total=60.0), 22.0)    # passo a 40% do video
+        self.assertEqual(gravar.momento_capa([0.0, 3.4], total=8.0), 3.4)  # nunca antes do 2o passo
+
 
 class FfmpegTest(unittest.TestCase):
     def test_comando_ffmpeg(self):
@@ -171,7 +177,8 @@ class NarracaoTest(unittest.TestCase):
             a = narracao.gerar("Bom dia.", Path(tmp))
             b = narracao.gerar("Bom dia.", Path(tmp))
         self.assertEqual(a, b)
-        self.assertEqual(chamadas, [("Bom dia.", "pt-BR-ThalitaMultilingualNeural")])
+        # Francisca: so portugues. A Thalita (multilingue) virava espanhol/italiano em frases fixas (12/11)
+        self.assertEqual(chamadas, [("Bom dia.", "pt-BR-FranciscaNeural")])
 
     def test_narracao_tenta_de_novo(self):
         falhas = [narracao.edge_tts.exceptions.NoAudioReceived("sem audio")]
@@ -208,16 +215,21 @@ class RoteirosTest(unittest.TestCase):
 
     def test_roteiros_numeracao(self):
         numeros = [v.numero for v in roteiro.VIDEOS]
-        self.assertEqual(sorted(numeros), list(range(1, 12)))
+        self.assertEqual(sorted(numeros), list(range(1, 13)))
         self.assertEqual(len({v.slug for v in roteiro.VIDEOS}), len(roteiro.VIDEOS))
 
-    def test_video3_pede_nao_altera(self):
-        v3 = next(v for v in roteiro.VIDEOS if v.numero == 3)
+    def test_video3_endereco_na_previa_e_agendado_alterado_na_hora(self):
+        # regra de 12/11 (6feeb7a, na master): o cliente altera sozinho; publicado junto com o deploy dela
+        v3 = next(v for v in roteiro.VIDEOS if v.slug == "alterar-endereco-e-agendados")
         falas = " ".join(p.fala for p in v3.passos).lower()
-        self.assertTrue("pedido" in falas or "pedir" in falas)
-        self.assertNotIn("você altera", falas)
-        self.assertNotIn("alterar sozinho", falas)
-        self.assertFalse(v3.publicar)
+        seletores = " ".join(str(a[1]) for p in v3.passos for a in p.acoes if len(a) > 1)
+        self.assertIn("[data-ent='abrir']", seletores)            # previa do envio: Alterar endereco de entrega
+        self.assertIn("a[data-alterar='9011']", seletores)        # acompanhamento: o pedido agendado
+        self.assertIn("vale na hora", falas)
+        self.assertIn("atrasar", falas)
+        self.assertNotIn("atendimento", falas)                    # nada de "enviar ao atendimento"
+        self.assertIn("**/api/envios/cep/*", v3.intercepta)       # CEP nunca sai pra consulta de verdade
+        self.assertTrue(v3.publicar)
 
     def test_fecho_anuncia_o_proximo_publicado(self):
         # a pagina so lista os publicados: anunciar o 3 ou o 10 antes da liberacao confunde
@@ -230,14 +242,31 @@ class RoteirosTest(unittest.TestCase):
             else:
                 self.assertTrue(fala.startswith("Pronto!"), f"video {v.numero}")
 
+    def test_video_status_mostra_cada_situacao_e_cada_status_de_envio(self):
+        import dados_cliente
+        import envio_pedidos
+        v = next(v for v in roteiro.VIDEOS if v.slug == "status-do-pedido")
+        self.assertEqual(v.numero, 3)        # logo depois de "Acompanhar o dia"
+        self.assertEqual(v.estado, "status")  # banco com um envio em cada status
+        destacados = {a[1] for p in v.passos for a in p.acoes if a[0] == "destacar"}
+        for sit in dados_cliente.ROTULOS:
+            self.assertIn(f"#tabela .badge.b-{sit}", destacados, sit)
+        for st in envio_pedidos.ROTULOS_STATUS:
+            self.assertIn(f"#env-tabela .badge.b-{st}", destacados, st)
+        falas = " ".join(p.fala for p in v.passos)
+        for rotulo in list(dados_cliente.ROTULOS.values()) + ["Na fila", "Criado na Stokki", "Erro", "Cancelado",
+                                                               "Aguardando liberação", "Retomando", "Cancelando"]:
+            self.assertIn(rotulo, falas, rotulo)
+
     def test_video4_canhoto_abre_em_nova_aba(self):
         # no portal real o link do canhoto tem target=_blank (so a gravacao abre na mesma aba)
-        falas = " ".join(p.fala for p in next(v for v in roteiro.VIDEOS if v.numero == 4).passos).lower()
+        falas = " ".join(p.fala for p in next(v for v in roteiro.VIDEOS if v.slug == "canhoto-e-planilha").passos).lower()
         self.assertIn("nova aba", falas)
         self.assertNotIn("botão voltar", falas)
 
-    def test_video10_espera_liberacao(self):
-        self.assertFalse(next(v for v in roteiro.VIDEOS if v.numero == 10).publicar)
+    def test_todos_os_videos_publicados(self):
+        # Hugo, 12/11: "colocar todos em prod" (3 com a regra nova da alteracao, 10 com a tela de notificacoes)
+        self.assertEqual([v.numero for v in roteiro.VIDEOS if not v.publicar], [])
 
     def test_acoes_conhecidas(self):
         for v in roteiro.VIDEOS:

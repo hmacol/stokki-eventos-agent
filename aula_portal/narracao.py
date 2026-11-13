@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Narracao da aula: uma fala por passo, voz neural da Thalita (edge-tts),
-com cache por hash de voz+texto (regravar nao sintetiza de novo)."""
+"""Narracao da aula: uma fala por passo, voz neural da Francisca (edge-tts),
+com cache por hash de voz+texto (regravar nao sintetiza de novo).
+Nao usar voz "Multilingual": a Thalita trocava de lingua (espanhol, italiano)
+sempre nas mesmas frases e o servico ignora xml:lang/<lang> (testado 12/11)."""
 import asyncio
 import hashlib
 import re
@@ -11,7 +13,7 @@ from pathlib import Path
 import edge_tts
 import imageio_ffmpeg
 
-VOZ = "pt-BR-ThalitaMultilingualNeural"
+VOZ = "pt-BR-FranciscaNeural"
 
 
 def gerar(texto: str, pasta_cache: Path) -> Path:

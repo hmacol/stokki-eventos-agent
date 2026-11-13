@@ -8,7 +8,7 @@ Grava os videos da aula do portal (/cliente/aula).
 
 Para cada video: semeia o banco ficticio, sobe o portal deste checkout
 (ambiente.py), roda o roteiro no Chromium gravando a tela, narra cada passo
-com a Thalita e junta tudo no ffmpeg. Saida em aula_portal/saida/
+com a Francisca e junta tudo no ffmpeg. Saida em aula_portal/saida/
 (<slug>.mp4, <slug>.jpg, <slug>.json e aula.json). Qualquer requisicao pra
 fora da maquina (Stokki, Vuupt, freshhub...) e bloqueada e FALHA a gravacao.
 """
@@ -109,6 +109,13 @@ def linha_do_tempo(inicios: list[float], duracoes: list[float]) -> list[float]:
         saida.append(comeco)
         fim = comeco + dur
     return saida
+
+
+def momento_capa(tempos: list[float], total: float) -> float:
+    """Inicio do passo em ~40% do video (a tela do assunto, nao o cartao de
+    titulo do 1o passo); nunca antes do 2o passo."""
+    alvo = total * 0.4
+    return max([t for t in tempos if t <= alvo] + [tempos[min(1, len(tempos) - 1)]])
 
 
 def comando_ffmpeg(webm: Path, falas: list[tuple[Path, float]], saida: Path, corte: float, total: float) -> list[str]:
@@ -330,7 +337,8 @@ def gravar_video(video: Video, raiz: Path = RAIZ, porta: int = ambiente.PORTA_PA
     mp4 = saida / f"{video.slug}.mp4"
     total = min(narracao.duracao(webm) - corte, tempos[-1] + duracoes[-1] + FOLGA_FALA + 0.6)
     subprocess.run(comando_ffmpeg(webm, list(zip(falas, tempos)), mp4, corte, total), check=True)
-    subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-ss", "1.2", "-i", str(mp4),
+    capa = min(momento_capa(tempos, total) + 1.5, total - 0.5)   # 1,5 s depois: a acao do passo ja na tela
+    subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-ss", f"{capa:.2f}", "-i", str(mp4),
                     "-frames:v", "1", "-vf", "scale=640:-2", "-q:v", "3", str(saida / f"{video.slug}.jpg")], check=True)
     shutil.rmtree(tmp, ignore_errors=True)
     meta = {"numero": video.numero, "slug": video.slug, "duracao_s": round(total),

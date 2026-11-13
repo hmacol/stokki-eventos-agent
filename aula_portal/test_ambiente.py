@@ -8,7 +8,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import yaml
@@ -34,6 +34,8 @@ class AmbienteTest(unittest.TestCase):
         self.assertGreaterEqual(len(cfg["portal_cliente"]["secret_key"]), 32)
         self.assertTrue(cfg["portal_cliente"]["alteracao_entrega"]["ativo"])
         self.assertFalse(cfg["portal_cliente"]["envios"]["bloqueio_area_ativo"])
+        # ligado pra todos em producao desde 12/11: a previa mostra "Endereco de entrega"
+        self.assertTrue(cfg["portal_cliente"]["envios"]["endereco_entrega_ativo"])
 
     def test_config_nao_sobrescreve_config_real(self):
         real = self.raiz / "config.yaml"
@@ -70,6 +72,24 @@ class AmbienteTest(unittest.TestCase):
         conn.close()
         self.assertTrue(ambiente.pin_confere(db, dados_teste.PIN_GRAVACAO))
         self.assertFalse(ambiente.pin_confere(db, "123456"))
+
+    def test_banco_status_tem_um_envio_em_cada_status(self):
+        # video "Status do pedido": todo rotulo que a lista de envios pode mostrar aparece numa linha
+        import envio_pedidos
+        db = ambiente.semear_banco(self.raiz, "status", esquema=None)
+        conn = sqlite3.connect(db)
+        status = {r[0] for r in conn.execute("SELECT status FROM portal_envios")}
+        bloqueio = conn.execute("SELECT bloqueio_motivo FROM portal_envios WHERE status = 'AGUARDANDO_LIBERACAO'").fetchone()
+        conn.close()
+        self.assertEqual(status, set(envio_pedidos.ROTULOS_STATUS))
+        self.assertEqual(bloqueio[0], "sp_nao_atendido")
+
+    def test_banco_padrao_nao_ganha_os_envios_do_video_de_status(self):
+        db = ambiente.semear_banco(self.raiz, "padrao", esquema=None)
+        conn = sqlite3.connect(db)
+        n = conn.execute("SELECT COUNT(*) FROM portal_envios").fetchone()[0]
+        conn.close()
+        self.assertEqual(n, 4)   # o video 7 conta linhas da tabela (nth-child)
 
     def test_banco_primeiro_acesso(self):
         db = ambiente.semear_banco(self.raiz, "primeiro_acesso", esquema=None)
@@ -139,6 +159,35 @@ class AmbienteTest(unittest.TestCase):
         self.assertTrue(a["pode"])
         self.assertEqual(set(a["atual"]), {"endereco", "data", "horario"})
         self.assertEqual(set(a["atual"]["horario"]), {"inicio", "fim"})
+
+    def test_alteracao_do_agendado_traz_a_data_agendada(self):
+        hoje = date.today()
+        a = dados_teste.alteracao(9011)   # PS-90112, aba Agendados
+        self.assertEqual(a["destinatario"], "Pizzaria Forno a Lenha")
+        self.assertEqual(a["atual"]["data"], (hoje + timedelta(days=4)).isoformat())
+        self.assertFalse(a["em_rota"])
+
+    def test_alteracao_do_programado_esta_em_rota(self):
+        self.assertTrue(dados_teste.alteracao(9007)["em_rota"])   # PS-90108, rota que ainda nao saiu
+
+    def test_salvar_em_rota_pede_confirmacao_e_depois_aplica(self):
+        corpo = {"horario": {"inicio": "15:00", "fim": "18:00"}}
+        r = dados_teste.resposta_alteracao(9007, corpo)
+        self.assertTrue(r["precisa_confirmar"])
+        self.assertIn("atrasar 1 dia", r["avisos"][0]["texto"])
+        r = dados_teste.resposta_alteracao(9007, dict(corpo, confirmar=True))
+        self.assertTrue(r["ok"])
+        self.assertIn("saiu da rota", r["mensagem"])
+
+    def test_salvar_agendado_aplica_na_hora_com_a_mensagem_do_portal(self):
+        nova = date(2026, 11, 20)
+        r = dados_teste.resposta_alteracao(9011, {"data": nova.isoformat(),
+                                                   "horario": {"inicio": "14:00", "fim": "18:00"}})
+        self.assertEqual(r, {"ok": True, "mensagem": "Alteração feita. Entrega em 20/11, "
+                                                     "recebimento das 14:00 às 18:00.", "feito": []})
+
+    def test_cep_no_formato_da_api(self):
+        self.assertEqual(set(dados_teste.cep("05425000")), {"cep", "logradouro", "bairro", "cidade", "uf"})
 
     def test_canhoto_e_png_ficticio(self):
         png = dados_teste.canhoto_png("5100")

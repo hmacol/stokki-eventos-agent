@@ -140,10 +140,63 @@ _V2 = Video(
 )
 
 
-# ── 4. Canhoto e planilha ──────────────────────────────────────────────────────
+# ── 3. Status do pedido ────────────────────────────────────────────────────────
+# Banco no estado "status" (ambiente._ENVIOS_STATUS): um envio em cada status.
+
+def _st(situacao: str) -> tuple:
+    return ("destacar", f"#tabela .badge.b-{situacao}")
+
+
+def _env(status: str) -> tuple:
+    return ("destacar", f"#env-tabela .badge.b-{status}")
+
+
+_V_STATUS = Video(
+    numero=3, slug="status-do-pedido", titulo="Status do pedido",
+    resumo="O que quer dizer cada situação do acompanhamento e cada status da lista de envios.",
+    estado="status",
+    passos=[
+        _abertura("Status do pedido"),
+        Passo("Na tela de acompanhamento, cada pedido mostra a sua situação. Veja o que cada uma quer dizer.",
+              [("fechar_cartao",), ("rolar", "#tabela")]),
+        Passo("Aguardando saída: o pedido está no armazém, esperando entrar numa rota.",
+              [_st("aguardando_saida")]),
+        Passo("Programado: ele já está numa rota, que ainda não saiu para entrega.",
+              [_st("programado")]),
+        Passo("Em rota: o motorista já saiu, e o pedido está a caminho.",
+              [_st("em_rota")]),
+        Passo("Entregue: a entrega foi concluída, e o canhoto fica disponível.",
+              [_st("entregue")]),
+        Passo("Insucesso: a entrega não deu certo. O motivo aparece ao lado, e às vezes a Fresh Log "
+              "pergunta o que fazer.",
+              [_st("insucesso")]),
+        Passo("Agendado: a entrega tem data marcada para os próximos dias. Esses pedidos ficam na aba Agendados.",
+              [("clicar", "#abas button[data-aba='agendados']"), _st("agendado")]),
+        Passo("Agora, a lista da aba Enviar pedidos. Ela mostra o caminho de cada nota até virar um pedido de entrega.",
+              [("clicar", "button[data-vista='envios']"), ("rolar", "#env-tabela")]),
+        Passo("Na fila e Enviando à Stokki: o pedido está sendo criado no sistema do armazém. Leva poucos minutos.",
+              [_env("NA_FILA"), _env("ENVIANDO")]),
+        Passo("Criado na Stokki: deu certo, o pedido já existe e entra na programação de entregas. "
+              "Já existia na Stokki quer dizer que essa nota já tinha sido enviada antes.",
+              [_env("CRIADO"), _env("DUPLICADO")]),
+        Passo("Erro: algo impediu a criação do pedido. O motivo aparece logo abaixo. Depois de resolver, é só reenviar.",
+              [_env("ERRO")]),
+        Passo("Aguardando liberação: o endereço fica fora da área que atendemos. O pedido fica retido "
+              "até a nossa equipe avaliar e falar com você.",
+              [_env("AGUARDANDO_LIBERACAO")]),
+        Passo("Em espera, a seu pedido: você pediu para segurar o pedido. Retomando: você pediu para liberar, "
+              "e ele está voltando para a fila de entregas.",
+              [_env("EM_ESPERA_CLIENTE"), _env("RETOMANDO")]),
+        Passo("Cancelando: o cancelamento foi pedido e está sendo feito. Cancelado: pronto, o pedido não sai mais.",
+              [_env("CANCELANDO"), _env("CANCELADO")]),
+    ],
+)
+
+
+# ── 5. Canhoto e planilha ──────────────────────────────────────────────────────
 
 _V4 = Video(
-    numero=4, slug="canhoto-e-planilha", titulo="Canhoto e planilha",
+    numero=5, slug="canhoto-e-planilha", titulo="Canhoto e planilha",
     resumo="Abrir a foto do canhoto assinado e exportar os pedidos do período para o Excel.",
     estado="padrao",
     intercepta={"**/api/canhoto/*": arquivo_fixo(dt.canhoto_png("5100"), "image/png"),
@@ -172,7 +225,7 @@ _V4 = Video(
 )
 
 
-# ── 5. Enviar pedidos ──────────────────────────────────────────────────────────
+# ── 6. Enviar pedidos ──────────────────────────────────────────────────────────
 # Roda de verdade contra o banco ficticio: sem worker, nada vai pra Stokki.
 
 _ABA_ENVIOS = "button[data-vista='envios']"
@@ -184,7 +237,7 @@ def _dest(n: int, campo: str) -> str:
 
 
 _V5 = Video(
-    numero=5, slug="enviar-pedidos", titulo="Enviar pedidos",
+    numero=6, slug="enviar-pedidos", titulo="Enviar pedidos",
     resumo="Subir os XMLs das notas (ou a planilha), conferir a prévia e confirmar o envio.",
     estado="padrao",
     passos=[
@@ -221,12 +274,12 @@ _V5 = Video(
 )
 
 
-# ── 7. Cancelar um pedido ──────────────────────────────────────────────────────
+# ── 8. Cancelar um pedido ──────────────────────────────────────────────────────
 
 _LINHA_CRIADO = "#env-tabela tbody tr:nth-child(3)"   # NF 5151, ja criado (semeado em ambiente._ENVIOS)
 
 _V7 = Video(
-    numero=7, slug="cancelar-pedido", titulo="Cancelar um pedido",
+    numero=8, slug="cancelar-pedido", titulo="Cancelar um pedido",
     resumo="Pedir o cancelamento de um pedido enviado e acompanhar até a Fresh Log concluir.",
     estado="padrao",
     passos=[
@@ -249,10 +302,10 @@ _V7 = Video(
 )
 
 
-# ── 8. Retomar um pedido em espera ─────────────────────────────────────────────
+# ── 9. Retomar um pedido em espera ─────────────────────────────────────────────
 
 _V8 = Video(
-    numero=8, slug="retomar-em-espera", titulo="Retomar um pedido em espera",
+    numero=9, slug="retomar-em-espera", titulo="Retomar um pedido em espera",
     resumo="Segurar um pedido (tirar da rota) e liberar de novo quando quiser.",
     estado="padrao",
     passos=[
@@ -274,47 +327,76 @@ _V8 = Video(
 )
 
 
-# ── 3. Pedir alteracao da entrega ──────────────────────────────────────────────
-# So vai pra pagina quando a alteracao estiver ligada pra todos (Hugo, 06/11).
+# ── 4. Alterar endereco e pedidos agendados ────────────────────────────────────
+# Regra de 12/11: o cliente altera sozinho (6feeb7a, tela "Alterar entrega").
 
 def _alteracao(route, request):
-    if request.method == "POST":   # o real abriria um chamado na area Entrega
-        corpo = {"ok": True, "chamado_id": 101,
-                 "mensagem": "Pedido de alteração enviado ao atendimento (chamado #101). "
-                             "A equipe confere e responde pelo chat do portal e por e-mail."}
+    sid = int(request.url.rstrip("/").split("/")[-2])
+    if request.method == "POST":
+        corpo = dt.resposta_alteracao(sid, json.loads(request.post_data or "{}"))
     else:
-        corpo = dt.alteracao(int(request.url.rstrip("/").split("/")[-2]))
+        corpo = dt.alteracao(sid)
     route.fulfill(status=200, content_type="application/json", body=json.dumps(corpo, ensure_ascii=False))
 
 
+_NOVA_DATA = (date.today() + timedelta(days=6)).isoformat()
+_END = "#previa-tabela td.c-end"
+
 _V3 = Video(
-    numero=3, slug="pedir-alteracao", titulo="Pedir alteração da entrega",
-    resumo="Pedir para mudar o endereço, a data ou o horário de uma entrega que ainda não saiu.",
-    estado="padrao", publicar=False,
-    intercepta={"**/api/pedidos/*/alteracao": _alteracao},
+    numero=4, slug="alterar-endereco-e-agendados", titulo="Alterar endereço e pedidos agendados",
+    resumo="Mudar o endereço de entrega no envio e alterar endereço, data ou horário de um pedido já enviado.",
+    estado="padrao",
+    intercepta={"**/api/pedidos/*/alteracao": _alteracao,
+                "**/api/envios/cep/*": json_fixo(lambda req: dt.cep(req.url.rstrip("/").split("/")[-1]))},
     passos=[
-        _abertura("Pedir alteração da entrega"),
-        Passo("Precisa mudar o endereço, a data ou o horário de uma entrega? Primeiro, encontre o pedido na lista.",
-              [("fechar_cartao",), ("clicar", ".tile[data-aba='pendentes']"), ("rolar", "#tabela")]),
-        Passo("Na linha do pedido, clique em Pedir alteração.",
-              [("clicar", "#tabela a[data-alterar]"), ("esperar", "[data-alt-toggle='hor']")]),
-        Passo("Aparece o que está combinado hoje: endereço, data e horário. Clique em Alterar no que você quer mudar.",
-              [("destacar", "#alt-caixa"), ("clicar", "[data-alt-toggle='hor']")]),
-        Passo("Informe o novo horário de recebimento.",
-              [("preencher", "[data-f='hini']", "14:00"), ("preencher", "[data-f='hfim']", "18:00")]),
-        Passo("Clique em Enviar ao atendimento.",
-              [("clicar", "#alt-salvar"), ("pausa", 1)]),
-        Passo("Atenção: a entrega não muda na hora. O seu pedido de alteração vai para a nossa equipe, "
-              "que confere com a rota e responde pelo chat do portal e por e-mail.",
-              [("destacar", "#alt-msg")]),
-        Passo("Dá para pedir alteração enquanto o pedido ainda não saiu para entrega. "
-              "Se ele já estiver na rua, fale com a gente pelo chat.",
+        _abertura("Alterar endereço e agendamento"),
+        Passo("Dá para mudar o endereço de entrega em dois momentos: no envio do pedido, "
+              "e depois, enquanto ele ainda não saiu para entrega. Primeiro, no envio.",
+              [("fechar_cartao",), ("clicar", _ABA_ENVIOS)]),
+        Passo("Suba as notas como sempre. Na prévia, a coluna Endereço de entrega mostra o endereço da nota.",
+              [("enviar_nfe", "#arquivos", "#zona"), ("esperar", "#previa-tabela tbody tr"), ("destacar", _END)]),
+        Passo("Se a entrega for em outro lugar, clique em Alterar endereço de entrega.",
+              [("clicar", f"{_END} [data-ent='abrir']")]),
+        Passo("Digite o CEP: a rua, o bairro e a cidade vêm sozinhos. Complete com o número e, se quiser, uma referência.",
+              [("digitar", f"{_END} [data-f='cep']", "05425000"), ("pausa", 1),
+               ("digitar", f"{_END} [data-f='numero']", "300"),
+               ("digitar", f"{_END} [data-f='complemento']", "Entrada pela doca 2")]),
+        Passo("Clique em Usar este endereço. O pedido vai para o endereço novo, e o da nota fica riscado, só para conferência.",
+              [("clicar", f"{_END} [data-ent='usar']"), ("destacar", _END)]),
+        Passo("Se o destinatário já recebeu em outro endereço, o portal pergunta onde entregar desta vez. "
+              "Depois, é só confirmar o envio.",
+              [("destacar", "#btn-confirmar")]),
+        Passo("E depois que o pedido foi enviado? Volte ao acompanhamento e abra a aba Agendados.",
+              [("clicar", "button[data-vista='acompanhamento']"), ("esperar", "#tabela"),
+               ("clicar", "#abas button[data-aba='agendados']"), ("rolar", "#tabela")]),
+        Passo("Na linha do pedido, clique em Alterar entrega.",
+              [("clicar", "#tabela a[data-alterar='9011']"), ("esperar", "[data-alt-toggle='data']")]),
+        Passo("Aparece o que está combinado: endereço, data e horário. Clique em Alterar no que quer mudar. "
+              "Aqui, a data da entrega.",
+              [("destacar", "#alt-caixa"), ("clicar", "[data-alt-toggle='data']"),
+               ("preencher", "[data-f='data']", _NOVA_DATA)]),
+        Passo("E o horário de recebimento. Ele passa a valer também para os próximos pedidos desse destinatário.",
+              [("clicar", "[data-alt-toggle='hor']"), ("preencher", "[data-f='hini']", "14:00"),
+               ("preencher", "[data-f='hfim']", "18:00")]),
+        Passo("Clique em Salvar. A alteração vale na hora.",
+              [("clicar", "#alt-salvar"), ("esperar", ".alt-msg.ok:not(.pulsando)"), ("destacar", "#alt-msg")]),
+        Passo("Agora, um pedido que já está numa rota que ainda não saiu. Mudamos o horário e clicamos em Salvar.",
+              [("clicar", "[data-alt-fechar]"), ("clicar", "#abas button[data-aba='todos']"),
+               ("clicar", "#tabela a[data-alterar='9007']"), ("esperar", "[data-alt-toggle='hor']"),
+               ("clicar", "[data-alt-toggle='hor']"), ("preencher", "[data-f='hini']", "15:00"),
+               ("preencher", "[data-f='hfim']", "18:00"), ("clicar", "#alt-salvar"), ("esperar", ".alt-avisos")]),
+        Passo("O portal avisa: o pedido sai da rota, e a entrega pode atrasar um dia. "
+              "Se estiver de acordo, clique em Alterar mesmo assim.",
+              [("destacar", ".alt-avisos"), ("destacar", "#alt-salvar")],
+              legenda="Pedido em rota: a entrega pode atrasar 1 dia. Você decide."),
+        Passo("Dá para alterar enquanto o pedido não saiu para entrega. Se ele já estiver na rua, "
+              "fale com a gente pelo chat.",
               [("clicar", "[data-alt-fechar]")]),
     ],
 )
 
 
-# ── 6. Responder a um insucesso ────────────────────────────────────────────────
+# ── 7. Responder a um insucesso ────────────────────────────────────────────────
 
 _REAGENDAR_PARA = (date.today() + timedelta(days=2)).isoformat()
 _insucesso = {"respondido": False}
@@ -339,7 +421,7 @@ def _zerar_insucesso():
 
 
 _V6 = Video(
-    numero=6, slug="responder-insucesso", titulo="Responder a um insucesso",
+    numero=7, slug="responder-insucesso", titulo="Responder a um insucesso",
     resumo="Quando uma entrega não dá certo: reentregar, escolher outra data ou não reenviar.",
     estado="padrao",
     intercepta={"**/api/dia*": _dia_insucesso, "**/api/responder": _responder},
@@ -362,7 +444,7 @@ _V6 = Video(
 )
 
 
-# ── 9. Chat e chamados ─────────────────────────────────────────────────────────
+# ── 10. Chat e chamados ─────────────────────────────────────────────────────────
 # O portal da gravacao (aula_portal.servidor) roteiriza a fala do assistente.
 
 def _equipe_responde():
@@ -377,7 +459,7 @@ def _equipe_responde():
 
 
 _V9 = Video(
-    numero=9, slug="chat-e-chamados", titulo="Chat e chamados",
+    numero=10, slug="chat-e-chamados", titulo="Chat e chamados",
     resumo="Falar com a Fresh Log pelo chat do portal e acompanhar os chamados.",
     estado="padrao", mostrar_chat=True,
     passos=[
@@ -401,13 +483,12 @@ _V9 = Video(
 )
 
 
-# ── 10. Notificacoes ───────────────────────────────────────────────────────────
-# So vai pra pagina quando os 8 avisos estiverem chegando aos clientes (Hugo, 06/11).
+# ── 11. Notificacoes ───────────────────────────────────────────────────────────
 
 _V10 = Video(
-    numero=10, slug="notificacoes", titulo="Notificações",
+    numero=11, slug="notificacoes", titulo="Notificações",
     resumo="Escolher quais e-mails a sua empresa recebe e em qual endereço.",
-    estado="padrao", publicar=False,
+    estado="padrao",
     passos=[
         _abertura("Notificações"),
         Passo("Para escolher quais avisos a sua empresa recebe, clique em Notificações, no topo do portal.",
@@ -431,10 +512,10 @@ _V10 = Video(
 )
 
 
-# ── 11. Regioes e dias de atendimento ──────────────────────────────────────────
+# ── 12. Regioes e dias de atendimento ──────────────────────────────────────────
 
 _V11 = Video(
-    numero=11, slug="regioes-e-dias", titulo="Regiões e dias de atendimento",
+    numero=12, slug="regioes-e-dias", titulo="Regiões e dias de atendimento",
     resumo="Onde a Fresh Log entrega, em que dias passa em cada região e o calendário do mês.",
     estado="padrao",
     passos=[
@@ -454,7 +535,7 @@ _V11 = Video(
     ],
 )
 
-VIDEOS: list[Video] = [_V1, _V2, _V3, _V4, _V5, _V6, _V7, _V8, _V9, _V10, _V11]
+VIDEOS: list[Video] = [_V1, _V2, _V_STATUS, _V3, _V4, _V5, _V6, _V7, _V8, _V9, _V10, _V11]
 
 
 def _amarrar_fechos(videos: list[Video]) -> None:

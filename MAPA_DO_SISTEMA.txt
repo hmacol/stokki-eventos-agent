@@ -1292,10 +1292,14 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            Sobe o portal DESTE checkout na porta 8097 com config.yaml e
                            dados/dados.db FICTÍCIOS (marca própria: recusa sobrescrever os reais;
                            use um worktree, nunca a raiz), cliente "Mercado Exemplo"
-                           (dados_teste.py). servidor.py roteiriza só o assistente do chat;
-                           roteiro.py tem os 11 vídeos (3 e 10 com publicar=False até o Hugo
-                           liberar). Rede: DNS bloqueado no Chromium + falha se algo tentar sair.
-                           Narração edge-tts (Thalita), ffmpeg do imageio-ffmpeg. Saída em
+                           (dados_teste.py). servidor.py roda o portal com guarda de rede
+                           (socket só loopback, SMTP recusado) e roteiriza o assistente do chat;
+                           roteiro.py tem os 12 vídeos, todos publicados (3 = status do pedido,
+                           banco no estado "status" com um envio em cada status; 4 = endereço na
+                           prévia + alterar entrega pela regra de 12/11; CEP e alteração interceptados).
+                           Rede: DNS bloqueado no Chromium + falha se algo tentar sair.
+                           Narração edge-tts (Francisca; NUNCA voz "Multilingual": a Thalita
+                           trocava de língua em frases fixas), ffmpeg do imageio-ffmpeg. Saída em
                            aula_portal/saida/ (gitignored) -> scp pra dados/aula/ na VPS.
  auth_cliente.py           CNPJ + PIN, grupos econômicos. Conta criada com
                            PIN padrão (clientes_portal.trocar_pin=1) só

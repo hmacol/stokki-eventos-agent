@@ -124,13 +124,47 @@ def dia(hoje: date, dias: int | None = None) -> dict:
     }
 
 
+_SID_AGENDADO, _SID_EM_ROTA = 9011, 9007   # PS-90112 (aba Agendados) e PS-90108 (rota que ainda nao saiu)
+# mesmo texto de portal_cliente/alterar_entrega.TEXTO_ATRASO (regra de 12/11, ramo alteracao-automatica)
+TEXTO_ATRASO = ("As rotas do dia seguinte são fechadas às 16h e esse pedido já está numa rota. "
+                "Para alterar, ele sai da rota e volta para a programação, e a entrega pode atrasar 1 dia.")
+
+
 def alteracao(service_id: int) -> dict:
-    """O que GET /api/pedidos/<id>/alteracao devolve pro pedido programado
-    (PS-90108): o que esta combinado hoje e que da pra pedir mudanca."""
-    _codigo, nome, endereco, _vol = _DESTINOS[7]
-    return {"pode": True, "motivo": "", "em_rota": False, "destinatario": nome,
-            "atual": {"endereco": endereco.rsplit(",", 1)[0], "data": date.today().isoformat(),
-                      "horario": {"inicio": "08:00", "fim": "18:00"}}}
+    """O que GET /api/pedidos/<id>/alteracao devolve: o que esta combinado
+    hoje. O agendado traz a data marcada; o programado esta numa rota."""
+    hoje = date.today()
+    agendado = service_id == _SID_AGENDADO
+    _codigo, nome, endereco, _vol = _DESTINOS[11 if agendado else 7]
+    return {"pode": True, "motivo": "", "em_rota": service_id == _SID_EM_ROTA, "destinatario": nome,
+            "atual": {"endereco": endereco.rsplit(",", 1)[0],
+                      "data": (hoje + timedelta(days=4) if agendado else hoje).isoformat(),
+                      "horario": {"inicio": "14:00" if agendado else "08:00", "fim": "18:00"}}}
+
+
+def resposta_alteracao(service_id: int, corpo: dict) -> dict:
+    """O que o POST devolve na regra nova (o cliente altera sozinho): pedido
+    em rota pede confirmacao do atraso; depois, a mensagem do portal."""
+    em_rota = service_id == _SID_EM_ROTA
+    if em_rota and not corpo.get("confirmar"):
+        return {"ok": False, "precisa_confirmar": True, "avisos": [{"codigo": "atraso", "texto": TEXTO_ATRASO}]}
+    partes = []
+    if corpo.get("endereco"):
+        partes.append("endereço atualizado")
+    if corpo.get("data"):
+        partes.append(f"entrega em {date.fromisoformat(corpo['data']).strftime('%d/%m')}")
+    if corpo.get("horario"):
+        partes.append(f"recebimento das {corpo['horario']['inicio']} às {corpo['horario']['fim']}")
+    mensagem = f"Alteração feita. {', '.join(partes).capitalize()}."
+    if em_rota:
+        mensagem += " O pedido saiu da rota e volta na próxima programação."
+    return {"ok": True, "mensagem": mensagem, "feito": []}
+
+
+def cep(digitos: str) -> dict:
+    """/api/envios/cep/<cep> sem sair pra consulta de CEP de verdade."""
+    return {"cep": digitos, "logradouro": "Rua das Laranjeiras", "bairro": "Pinheiros",
+            "cidade": "São Paulo", "uf": "SP"}
 
 
 # ── NF-e de exemplo (envio de pedidos) ─────────────────────────────────────────

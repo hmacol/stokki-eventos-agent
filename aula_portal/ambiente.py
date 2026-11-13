@@ -21,7 +21,7 @@ from pathlib import Path
 
 from aula_portal import RAIZ, dados_teste as dt
 
-ESTADOS = ("primeiro_acesso", "padrao")
+ESTADOS = ("primeiro_acesso", "padrao", "status")
 PORTA_PADRAO = 8097
 MARCA_CONFIG = "# aula_portal: config de gravacao (ficticio, sem segredos)"
 TABELA_MARCA = "aula_gravacao"
@@ -49,7 +49,8 @@ def escrever_config(raiz: Path) -> Path:
         "  alteracao_entrega:\n"
         "    ativo: true\n"
         "  envios:\n"
-        "    bloqueio_area_ativo: false\n",
+        "    bloqueio_area_ativo: false\n"
+        "    endereco_entrega_ativo: true\n",
         encoding="utf-8")
     return caminho
 
@@ -112,6 +113,16 @@ _ENVIOS = [
      "A Stokki recusou o pedido: produto MX-114 não cadastrado. Fale com a Fresh Log ou reenvie."),
     ("5153", "Pizzaria Forno a Lenha", "66777888000133", "EM_ESPERA_CLIENTE", "PS-90112", None),
 ]
+# so no estado "status" (video Status do pedido): um envio em cada status que falta
+_ENVIOS_STATUS = [
+    ("5154", "Mercadinho Estrela", "12121212000112", "NA_FILA", None, None),
+    ("5155", "Quitanda do Bairro", "23232323000123", "ENVIANDO", None, None),
+    ("5156", "Restaurante Sabor da Vila", "11222333000181", "DUPLICADO", "PS-90102", None),
+    ("5157", "Café Central", "34343434000134", "CANCELANDO", "PS-90106", None),
+    ("5158", "Bistrô Jardim", "77888999000163", "CANCELADO", None, None),
+    ("5159", "Empório Boa Mesa", "45454545000145", "RETOMANDO", "PS-90101", None),
+    ("5160", "Sítio Boa Vista", "56565656000156", "AGUARDANDO_LIBERACAO", None, None),
+]
 
 
 def semear_banco(raiz: Path, estado: str, esquema: Path | None | str = "padrao") -> Path:
@@ -165,18 +176,22 @@ def semear_banco(raiz: Path, estado: str, esquema: Path | None | str = "padrao")
         if estado == "primeiro_acesso":
             cad_emb.registrar(conn, dt.CNPJ, dt.STKKC_ID, cad_emb.PENDENTE, celular="11999990000", email=dt.EMAIL)
         else:
-            _semear_envios(conn, pasta)
+            _semear_envios(conn, pasta, _ENVIOS + (_ENVIOS_STATUS if estado == "status" else []))
+            if estado == "status":   # area nao atendida: retido ate a Fresh Log liberar
+                conn.execute("UPDATE portal_envios SET bloqueio_motivo = 'sp_nao_atendido', "
+                             "destinatario_municipio = 'Bragança Paulista' WHERE status = 'AGUARDANDO_LIBERACAO'")
+                conn.commit()
     finally:
         conn.close()
     return db
 
 
-def _semear_envios(conn: sqlite3.Connection, pasta: Path) -> None:
+def _semear_envios(conn: sqlite3.Connection, pasta: Path, envios: list) -> None:
     hoje = datetime.now()
     ontem = (hoje - timedelta(days=1)).replace(hour=15, minute=40, second=0, microsecond=0)
     xml_dir = pasta / "aula_nfe"
     xml_dir.mkdir(exist_ok=True)
-    for i, (nf, nome, doc, status, codigo, erro) in enumerate(_ENVIOS):
+    for i, (nf, nome, doc, status, codigo, erro) in enumerate(envios):
         chave = (f"3526110{dt.CNPJ}55001{int(nf):09d}2" + "0" * 44)[:44]
         xml = xml_dir / f"{chave}.xml"
         xml.write_text(f"<nfe-ficticia numero='{nf}'/>", encoding="utf-8")
