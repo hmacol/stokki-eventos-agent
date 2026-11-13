@@ -996,6 +996,13 @@ def _nome_embarcador_stokki(conn, cliente_id) -> str:
         return f"#stkkc-{cid}"
 
 
+def _qtd_log(v) -> str:
+    try:
+        return f"{float(v):g}".replace(".", ",")
+    except (TypeError, ValueError):
+        return str(v)
+
+
 def _avisar_devolucao_galpao(conn, config: dict, id_stokki: int, cliente_id, itens: list) -> bool:
     """Aviso ao grupo PEDIDOS CANCELADOS: onde guardar a caixa devolvida. Sem o grupo no config, ou com o
     teto/janela do WhatsApp barrando, a devolucao ja aconteceu: o PS e os enderecos vao pro log pra equipe
@@ -1009,6 +1016,10 @@ def _avisar_devolucao_galpao(conn, config: dict, id_stokki: int, cliente_id, ite
     onde = "; ".join(f"{i.get('sku')} {i.get('movido')} -> {i.get('destino')}" for i in itens)
     logger.warning(f"devolução PS-{id_stokki} ({embarcador}): aviso ao galpão {situacao}; guardar a caixa em: {onde}")
     if situacao in ("falhou", "nao_enviado"):
+        # devolução FEITA não avisa a operação e o status é final: a equipe recebe a lista pra avisar o galpão
+        trechos = [f"{i.get('sku')} {i.get('nome') or ''}: {_qtd_log(i.get('movido'))} -> {i.get('destino')}" for i in itens]
+        _avisar_devolucao_operacao(config, id_stokki, embarcador,
+                                   " | ".join([f"aviso ao galpao nao saiu ({situacao}): avisar a equipe para guardar"] + trechos))
         raise RuntimeError(f"aviso ao galpão {situacao}")
     return True
 

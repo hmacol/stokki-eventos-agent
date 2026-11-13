@@ -68,6 +68,27 @@ class AvisoGalpao(unittest.TestCase):
             self.assertIn("FABENNE-1", lg.output[0])
 
 
+class AvisoGalpaoNaoSaiu(unittest.TestCase):
+    ITENS2 = [{"sku": "FABMLT", "nome": "Fabenne Merlot", "movido": 4.0, "destino": "FABENNE-1"},
+              {"sku": "FABMO1", "nome": "Fabenne Moscato", "movido": 2.5, "destino": "FABENNE-2"}]
+
+    def test_nao_enviado_avisa_operacao_com_tudo(self):
+        with mock.patch("notificar_whatsapp.avisar_devolucao_galpao", return_value="nao_enviado"),                 mock.patch.object(es, "_avisar_devolucao_operacao") as op:
+            with self.assertRaises(RuntimeError):
+                es._avisar_devolucao_galpao(_conn(), CONFIG, 43101, 777, self.ITENS2)
+        op.assert_called_once()
+        motivo = op.call_args.args[3]
+        self.assertTrue(motivo.startswith("aviso ao galpao nao saiu (nao_enviado): avisar a equipe para guardar"))
+        for trecho in ("FABMLT", "FABENNE-1", "FABMO1", "FABENNE-2", "2,5"):
+            self.assertIn(trecho, motivo)
+        self.assertEqual(motivo.count(" | "), 2)
+
+    def test_desligado_nao_avisa_operacao(self):
+        with mock.patch("notificar_whatsapp.avisar_devolucao_galpao", return_value="desligado"),                 mock.patch.object(es, "_avisar_devolucao_operacao") as op:
+            es._avisar_devolucao_galpao(_conn(), CONFIG, 43101, 777, self.ITENS2)
+        op.assert_not_called()
+
+
 class AvisoOperacao(unittest.TestCase):
     def test_email_e_whatsapp_com_escape(self):
         with mock.patch.object(es, "enviar_email") as em, \

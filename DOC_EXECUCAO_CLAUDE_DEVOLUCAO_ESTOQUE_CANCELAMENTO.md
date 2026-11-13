@@ -154,11 +154,16 @@ O robô só move o saldo no sistema; a caixa continua na área de expedição. A
 devolução feita (inteira ou parcial), mandar mensagem no grupo de WhatsApp
 **❌PEDIDOS CANCELADOS❌**, uma por pedido, dizendo o PS, o embarcador e, por item:
 produto (SKU e nome), quantidade e **endereço onde guardar**.
+Pedido com muitos itens sai em mais de uma mensagem numerada `(1/N)`, porque o WhatsApp do
+sistema limita cada mensagem a 200 caracteres e todo item precisa aparecer com o endereço
+(ajustado em 13/11 na revisão).
 
 - Envio por `notificar_whatsapp.py` (OpenWA), no padrão dos outros grupos, com chave
   nova `whatsapp_notificacoes.grupo_cancelados_id`. O grupo ainda não está no
   código: o número do OpenWA precisa estar nele e o id entra no config da VPS (tarefa
   do Hugo). Sem o id, a devolução acontece igual e o log registra que o aviso não saiu.
+- Se o aviso não sair por falha ou limite do WhatsApp (gateway fora, teto diário, canal em
+  pausa), a operação recebe a lista (SKU, quantidade, endereço) para avisar o galpão à mão.
 - "Nada a devolver", "já devolvido" e "cancelamento antigo" não geram mensagem.
 - O Hugo aprovou a regra da dúvida (não mover e avisar a operação).
 
