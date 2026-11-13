@@ -31,6 +31,15 @@ def _so_digitos(valor) -> str:
     return re.sub(r"\D", "", str(valor or ""))
 
 
+# XML 1.0 não aceita controle (fora tab/quebra) nem surrogate solto do JSON:
+# o XML pra Stokki ficaria inválido (revisão de segurança 30/10, item 3)
+_FORA_DO_XML = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff]")
+
+
+def _texto(valor) -> str:
+    return _FORA_DO_XML.sub("", str(valor or "")).strip()
+
+
 def entrega_ativa(config: dict | None) -> bool:
     envios = (((config or {}).get("portal_cliente") or {}).get("envios") or {})
     return bool(envios.get("endereco_entrega_ativo", False))
@@ -43,6 +52,8 @@ def montar_endereco(campos: dict, consultar=None) -> dict:
     geral de cidade não traz rua)."""
     if consultar is None:
         from cotacao import consultar_cep as consultar
+    if not isinstance(campos, dict):   # string/lista do navegador virava 500 (revisão 30/10, item 5)
+        campos = {}
     cep = _so_digitos(campos.get("cep"))
     info = consultar(cep) if len(cep) == 8 else None
     if not info:
@@ -50,16 +61,16 @@ def montar_endereco(campos: dict, consultar=None) -> dict:
     cmun = _so_digitos(info.get("ibge"))
     if len(cmun) != 7:
         raise ErroEndereco("CEP sem código de município: tente de novo em instantes")
-    logradouro = str(campos.get("logradouro") or "").strip() or info.get("logradouro") or ""
+    logradouro = _texto(campos.get("logradouro")) or info.get("logradouro") or ""
     if not logradouro:
         raise ErroEndereco("Informe a rua")
-    numero = str(campos.get("numero") or "").strip()
+    numero = _texto(campos.get("numero"))
     if not numero:
         raise ErroEndereco("Informe o número")
     end = {
         "cep": cep, "logradouro": logradouro, "numero": numero,
-        "complemento": str(campos.get("complemento") or "").strip(),
-        "bairro": str(campos.get("bairro") or "").strip() or info.get("bairro") or "",
+        "complemento": _texto(campos.get("complemento")),
+        "bairro": _texto(campos.get("bairro")) or info.get("bairro") or "",
         "municipio": info.get("cidade") or "", "uf": info.get("uf") or "", "cmun": cmun,
     }
     # o que o cliente vê tem de ser o que vai no XML: recusa em vez de cortar
