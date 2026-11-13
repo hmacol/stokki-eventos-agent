@@ -4,6 +4,7 @@ move pelo provider e avisa. Regras puras, leituras, plano e a fila ficam em stok
 
 Movimento nao confirmado (adjust_id sem confirmacao, ou marcado `incerto`) nunca e repetido: o pedido vai
 a DUVIDA e a operacao confere na Stokki. Erro tecnico (sessao caiu etc.) conta tentativa e volta pra fila.
+Com a provider na mao, a prova de "ja devolvido" e relida pela admin logo antes de mover (linha nova = DUVIDA).
 """
 import contextlib
 import json
@@ -12,7 +13,7 @@ import os
 from datetime import datetime
 
 from stokki import contas, sessao_uso
-from stokki.devolucao_estoque import garantir_tabela, gravar, ligado, montar_plano, pendentes
+from stokki.devolucao_estoque import garantir_tabela, gravar, ler_devolucoes, ligado, montar_plano, pendentes
 
 logger = logging.getLogger(__name__)
 
@@ -163,9 +164,27 @@ def _encerrar(conn, id_stokki, cliente_id, status, itens, motivo, avisar_galpao,
         if _avisar(avisar_galpao, id_stokki, cliente_id, feitos):
             for _, m in novos:
                 m["avisado"] = True
-            gravar(conn, id_stokki, itens=itens)
+            try:   # o status final ja esta gravado: nao gravar o `avisado` nao impede o aviso da operacao
+                gravar(conn, id_stokki, itens=itens)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"devolucao_estoque: PS-{id_stokki} avisado ao galpao, mas a fila nao gravou: {e}")
     if avisar_op:
         _avisar(avisar_operacao, id_stokki, cliente_id, texto)
+
+
+FILA_NAO_GRAVOU = "movimentacao feita mas a fila nao gravou; conferir na Stokki"
+
+
+def _fila_nao_gravou(conn, id_stokki, cliente_id, itens, avisar_galpao, avisar_operacao) -> bool:
+    """Movimento feito ou incerto que so existe em memoria (a fila nao gravou): tenta DUVIDA + aviso, para
+    nunca repetir. True se o DUVIDA ficou gravado; senao avisa a operacao mesmo assim e devolve False."""
+    try:
+        _encerrar(conn, id_stokki, cliente_id, "DUVIDA", itens, FILA_NAO_GRAVOU, avisar_galpao, avisar_operacao)
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"devolucao_estoque: PS-{id_stokki} {FILA_NAO_GRAVOU} (nem o DUVIDA gravou: {e})")
+        _avisar(avisar_operacao, id_stokki, cliente_id, f"{FILA_NAO_GRAVOU} | {_resumo(itens)}")
+        return False
 
 
 def _provider_ocupada_por_outro() -> bool:
@@ -229,6 +248,33 @@ def _processar_um(conn, config, row, simular, abrir_admin, mover, avisar_galpao,
                    "destinos": list(p["destinos"])}
                   for i, p in zip(itens_fila, plano["itens"])
                   if i["situacao"] == "mover" and i["qtd"] - i["movido"] > TOL_QTD]
+    estado = {"falta_gravar": False}   # movimento feito/incerto que so esta em memoria
+    try:
+        return _mover_e_fechar(conn, config, row, plano, itens_fila, movimentos, ignorar, abrir_admin, mover,
+                               avisar_galpao, avisar_operacao, cont, estado)
+    except Exception:
+        if estado["falta_gravar"] and _fila_nao_gravou(conn, id_stokki, cliente_id, itens_fila, avisar_galpao,
+                                                       avisar_operacao):
+            cont["falhas"] += 1
+            return "ok"
+        raise
+
+
+def _devolucao_nova(abrir_admin, plano, movimentos, ignorar) -> str:
+    """Reconfere a prova logo antes de mover (a provider ja esta na mao): SKU do primeiro produto com linha
+    `Virtual -> endereco fisico` que o plano nao viu, ou ''. ContaOcupada sobe; a admin fecha antes de voltar."""
+    vistas = {i.get("product_id"): set(i.get("devolucoes_vistas") or []) for i in plano["itens"]}
+    with abrir_admin() as sess:
+        for m in movimentos:
+            for d in ler_devolucoes(sess, m["product_id"], plano["cancelado_em"], None, ignorar):
+                if d["id"] not in vistas.get(m["product_id"], set()):
+                    return m["sku"]
+    return ""
+
+
+def _mover_e_fechar(conn, config, row, plano, itens_fila, movimentos, ignorar, abrir_admin, mover, avisar_galpao,
+                    avisar_operacao, cont, estado) -> str:
+    id_stokki, cliente_id = row["id_stokki"], row["cliente_id"]
     rodada = []
     if movimentos:
         por_produto = {i["product_id"]: i for i in itens_fila}
@@ -245,9 +291,15 @@ def _processar_um(conn, config, row, simular, abrir_admin, mover, avisar_galpao,
             for marca in ("incerto", "tecnico"):
                 if r.get(marca):
                     mov[marca] = True
-            item["movimentos"].append(mov)
+            item["movimentos"].append(mov)   # em memoria ANTES de gravar
             item["movido"] = sum(m.get("movido") or 0 for m in item["movimentos"])
-            gravar(conn, id_stokki, itens=itens_fila)   # a cada movimento: nova tentativa nao repete o feito
+            importa = _confirmado(mov) or mov.get("incerto") or mov["adjust_id"] is not None
+            try:
+                gravar(conn, id_stokki, itens=itens_fila)   # a cada movimento: nova tentativa nao repete o feito
+                estado["falta_gravar"] = False
+            except Exception as e:  # noqa: BLE001 -- o encerramento regrava o estado em memoria
+                logger.error(f"devolucao_estoque: PS-{id_stokki} movimento nao gravado na fila: {e}")
+                estado["falta_gravar"] = estado["falta_gravar"] or bool(importa)
 
         dono = _dono_provider()
         conta = sessao_uso.adquirir(dono, ttl_segundos=600, esperar_segundos=ESPERA_CONTA_SEGUNDOS,
@@ -255,16 +307,34 @@ def _processar_um(conn, config, row, simular, abrir_admin, mover, avisar_galpao,
         if not conta:
             logger.info(f"devolucao_estoque: conta provider ocupada, PS-{id_stokki} espera o proximo ciclo")
             return "ocupada"
+        nova = ""
         try:
             if _linha_mudou(conn, id_stokki, row):
                 logger.info(f"devolucao_estoque: PS-{id_stokki} mudou na fila entre o plano e a provider; nao move")
                 return "mudou"
-            resultados = mover(config, cliente_id, movimentos, f"Retorno ao estoque do PS-{id_stokki} cancelado",
-                               ao_concluir=aplicar)
+            try:
+                nova = _devolucao_nova(abrir_admin, plano, movimentos, ignorar)
+            except ContaOcupada as e:
+                logger.info(f"devolucao_estoque: conta admin ocupada na reconferencia, PS-{id_stokki} espera ({e})")
+                return "ocupada"
+            resultados = [] if nova else mover(config, cliente_id, movimentos,
+                                               f"Retorno ao estoque do PS-{id_stokki} cancelado", ao_concluir=aplicar)
         finally:
             sessao_uso.liberar(dono)
+        if nova:
+            _encerrar(conn, id_stokki, cliente_id, "DUVIDA", itens_fila,
+                      f"devolucao manual apareceu entre o plano e a movimentacao (produto {nova})",
+                      avisar_galpao, avisar_operacao)
+            cont["falhas"] += 1
+            return "ok"
         for r in resultados or []:
             aplicar(r)
+        if estado["falta_gravar"]:
+            try:
+                gravar(conn, id_stokki, itens=itens_fila)
+                estado["falta_gravar"] = False
+            except Exception as e:  # noqa: BLE001 -- o fechamento abaixo tenta de novo com o status
+                logger.error(f"devolucao_estoque: PS-{id_stokki} fila ainda sem os movimentos: {e}")
     incertos = _incertos(itens_fila)
     passou = [i["sku"] for i in itens_fila if i["movido"] > i["qtd"] + TOL_QTD]
     if incertos or passou:
@@ -299,12 +369,11 @@ def processar_pendentes(conn, config, *, simular: bool, abrir_admin, mover, avis
     cont = {"feitas": 0, "parciais": 0, "nada": 0, "falhas": 0, "esperando": 0}
     if not ligado(config):
         return cont
-    agora = agora or datetime.now()
     for row in pendentes(conn)[:MAX_POR_CICLO]:
         id_stokki = row["id_stokki"]
         try:
             res = _processar_um(conn, config, row, simular, abrir_admin, mover, avisar_galpao, avisar_operacao,
-                                agora, cont)
+                                agora or datetime.now(), cont)   # sem `agora` (teste): relogio por pedido
             if res == "ocupada":
                 cont["esperando"] += 1
                 break   # conta ocupada vale para os proximos tambem

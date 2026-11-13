@@ -306,15 +306,17 @@ def ler_origem(sess, product_id: int, inicio, fim, qtd: float) -> list:
     return []
 
 
-def ler_devolucoes(sess, product_id: int, desde: datetime, ate: datetime, ignorar=frozenset()) -> list:
+def ler_devolucoes(sess, product_id: int, desde: datetime, ate=None, ignorar=frozenset()) -> list:
     """Prova de devolucao ja feita: linhas `Virtual -> <endereco fisico>` do produto criadas de `desde` (inclusive,
-    mesmo minuto conta) ate `ate`, no formato que ja_devolvido entende (mais o `id` do movimento). E o que a
-    devolucao manual gera. Linhas cujo id esta em `ignorar` (devolucoes do proprio robo, outros pedidos) ficam fora."""
+    mesmo minuto conta) em diante, no formato que ja_devolvido entende (mais o `id` do movimento). E o que a
+    devolucao manual gera. `ate` None = sem teto (a prova): le ate o mes corrente e conta toda linha posterior.
+    Linhas cujo id esta em `ignorar` (devolucoes do proprio robo, outros pedidos) ficam fora."""
+    fim = ate if ate is not None else max(desde, datetime.now())
     return [{"tipo": "Desbloqueio", "movimento": "Interno", "referencia": "", "quantidade": r["quantidade"],
              "quando": r["quando"], "concluido": r["concluido"], "id": r["id"]}
-            for r in _movimentos_entre_enderecos(sess, product_id, desde, ate)
-            if (r["quando"] and desde <= r["quando"] <= ate and r["origem"].lower() == "virtual"
-                and not _e_sistema(r["destino"]) and r["id"] not in ignorar)]
+            for r in _movimentos_entre_enderecos(sess, product_id, desde, fim)
+            if (r["quando"] and desde <= r["quando"] and (ate is None or r["quando"] <= ate)
+                and r["origem"].lower() == "virtual" and not _e_sistema(r["destino"]) and r["id"] not in ignorar)]
 
 
 # --- Plano: leituras + regras (nada de escrita aqui) ---
@@ -342,7 +344,7 @@ def _saldo_do_embarcador(sess, cliente_id: int) -> list:
 
 def _plano_do_item(sess, ped: dict, item: dict, agora: datetime, ignorar=frozenset()) -> tuple:
     """(item do plano, motivo ou ''). Erro de leitura sobe como excecao: nunca vira 'nada a devolver'."""
-    saida = {**item, "qtd": 0, "destinos": [], "situacao": "nada"}
+    saida = {**item, "qtd": 0, "destinos": [], "situacao": "nada", "devolucoes_vistas": []}
     movimentos = []
     for ano, mes in _meses_dos_movimentos(ped["cancelado_em"], agora):
         movimentos += ler_movimentos(sess, item["product_id"], ano, mes)
@@ -350,7 +352,8 @@ def _plano_do_item(sess, ped: dict, item: dict, agora: datetime, ignorar=frozens
     if bloqueado <= 0:
         return saida, ""
     saida["qtd"] = bloqueado
-    devolucoes = ler_devolucoes(sess, item["product_id"], ped["cancelado_em"], max(agora, ped["cancelado_em"]), ignorar)
+    devolucoes = ler_devolucoes(sess, item["product_id"], ped["cancelado_em"], None, ignorar)   # sem teto de horario
+    saida["devolucoes_vistas"] = [d["id"] for d in devolucoes]   # o executor reconfere antes de mover
     ja = ja_devolvido(devolucoes, bloqueado, ped["cancelado_em"])
     if ja == "sim":
         saida["situacao"] = "ja_devolvido"
@@ -379,10 +382,11 @@ def montar_plano(sess, id_stokki: int, agora: datetime, ja_estava: bool = False,
     Na duvida nada se move (o plano inteiro vira DUVIDA). Falha de leitura levanta excecao.
     `ignorar_movimentos`: ids (#A-<n>) de devolucoes do proprio robo para outros pedidos, que nao provam nada."""
     ped = {**ler_pedido(sess, id_stokki), "id_stokki": int(id_stokki)}
-    vazios = [{**i, "qtd": 0, "destinos": [], "situacao": "nada"} for i in ped["itens"]]
+    vazios = [{**i, "qtd": 0, "destinos": [], "situacao": "nada", "devolucoes_vistas": []} for i in ped["itens"]]
 
     def plano(status, itens, motivo=""):
-        return {"status": status, "cliente_id": ped["cliente_id"], "itens": itens, "motivo": motivo}
+        return {"status": status, "cliente_id": ped["cliente_id"], "itens": itens, "motivo": motivo,
+                "cancelado_em": ped["cancelado_em"]}
 
     if cancelamento_antigo(ped["cancelado_em"], agora, ja_estava):
         return plano("ANTIGO", vazios, "cancelamento de 24 h ou mais (ou sem data) que ja existia: avisar a operacao")

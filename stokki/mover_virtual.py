@@ -4,7 +4,8 @@
 Segue o script provado em 03/11 (PS-43101, adjust_id 110832/110833): pagina `adjust`, busca do
 Virtual, do destino, do produto, check do destino, POST adjust/store/process e poll adjust/processed.
 Um login para todos os itens. NAO pega trava: quem chama ja esta com a conta provider.
-Nunca levanta por resposta da Stokki (vira `erro` no resultado); so deixa subir falha de login/navegador.
+Nunca levanta por resposta da Stokki (vira `erro` no resultado); so deixa subir falha de login/navegador
+ANTES do envio. Do envio ao fim do poll, qualquer excecao vira resultado `incerto` (nao repetir).
 Nunca move mais que `qtd` de um item nem mais que a tela oferece. Poll sem confirmacao = nao concluido.
 """
 import json
@@ -115,7 +116,10 @@ def _executar(api, cliente_id: int, movimentos: list, motivo: str, ao_concluir=N
     def fim(r):
         resultados.append(r)
         if ao_concluir:
-            ao_concluir(r)
+            try:   # falha de quem chama (banco travado) nao interrompe nem muda o resultado
+                ao_concluir(r)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"mover_virtual: ao_concluir falhou ({r.get('product_id')} -> {r.get('destino')}): {e}")
 
     st, orig = api.get(f"adjust/location/search/{cliente_id}/VIRTUAL")
     id_virtual = _id_local(orig) if st == 200 else None
@@ -155,11 +159,23 @@ def _executar(api, cliente_id: int, movimentos: list, motivo: str, ao_concluir=N
                 continue
             campos = montar_campos(cliente_id, id_virtual, m["product_id"], oferecido, quantidade, id_destino, motivo)
             campos = {"_token": api.token, **{k: _txt(v) for k, v in campos.items()}}
-            st, corpo = api.post(campos)
-            try:
-                adjust_id = _int(json.loads(corpo).get("adjust_id"))
-            except (ValueError, TypeError, AttributeError):
-                adjust_id = None
+            adjust_id, confirmado = None, False
+            try:   # do envio ao fim do poll, excecao (rede, navegador caiu) = nao se sabe se gravou: incerto
+                st, corpo = api.post(campos)
+                try:
+                    adjust_id = _int(json.loads(corpo).get("adjust_id"))
+                except (ValueError, TypeError, AttributeError):
+                    adjust_id = None
+                for _ in range(POLL_TENTATIVAS if adjust_id is not None else 0):
+                    dormir(POLL_INTERVALO)
+                    st_poll, proc = api.get(f"adjust/processed/{adjust_id}")
+                    if st_poll == 200 and _concluido(proc):
+                        confirmado = True
+                        break
+            except Exception as e:  # noqa: BLE001
+                fim(_res(m, endereco, alvo, 0, adjust_id, f"movimentacao enviada sem resposta da Stokki ({e})",
+                         incerto=True))
+                return resultados   # nao repetir nem seguir para outros itens
             if adjust_id is None:
                 if st in (401, 403, 419, 429):
                     fim(_res(m, endereco, alvo, tecnico=True, erro=f"store/process negado (status {st}); nada gravado"))
@@ -170,13 +186,6 @@ def _executar(api, cliente_id: int, movimentos: list, motivo: str, ao_concluir=N
                 fim(_res(m, endereco, alvo, incerto=True,
                          erro=f"store/process sem resposta clara (status {st}): {str(corpo)[:200]}"))
                 return resultados   # nao se sabe se gravou: nao repetir
-            confirmado = False
-            for _ in range(POLL_TENTATIVAS):
-                dormir(POLL_INTERVALO)
-                st, proc = api.get(f"adjust/processed/{adjust_id}")
-                if st == 200 and _concluido(proc):
-                    confirmado = True
-                    break
             if not confirmado:
                 fim(_res(m, endereco, alvo, 0, adjust_id, f"movimentacao {adjust_id} ainda em processamento",
                          incerto=True))

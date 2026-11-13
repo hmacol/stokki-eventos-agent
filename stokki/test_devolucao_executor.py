@@ -9,6 +9,8 @@ from unittest import mock
 
 from stokki import devolucao_estoque as de
 from stokki import devolucao_executor as ex
+from stokki import mover_virtual as mv
+from stokki.test_mover_virtual import ApiQueLevanta
 
 LIGADO = {"stokki": {"devolucao_cancelamento": {"ativo": True}}}
 
@@ -20,15 +22,19 @@ def _item(pid=1, sku="A", qtd=4, destinos=(("E1", 4),), situacao="mover"):
             "situacao": situacao}
 
 
+CANCELADO = datetime(2026, 11, 3, 12, 12)
+
+
 def _plano(status="MOVER", itens=None, motivo=""):
-    return {"status": status, "cliente_id": 100, "itens": itens if itens is not None else [_item()], "motivo": motivo}
+    return {"status": status, "cliente_id": 100, "itens": itens if itens is not None else [_item()], "motivo": motivo,
+            "cancelado_em": CANCELADO}
 
 
 class TestExecutor(unittest.TestCase):
     def setUp(self):
         self.conn = sqlite3.connect(":memory:")
         self.conn.row_factory = sqlite3.Row
-        self.galpao, self.operacao, self.chamadas_mover, self.planos = [], [], [], []
+        self.galpao, self.operacao, self.chamadas_mover, self.planos, self.agoras = [], [], [], [], []
         self.admin_abriu = 0
         self.admin_ocupado = False
         self.plano = _plano()
@@ -46,9 +52,20 @@ class TestExecutor(unittest.TestCase):
         ocup = mock.patch.object(ex.sessao_uso, "ocupante_externo", return_value=None)
         self.mock_ocup = ocup.start()
         self.addCleanup(ocup.stop)
+        self.admin_aberta = False
+        self.reconferencias, self.devolucoes_novas = [], {}   # product_id -> linhas que a reconferencia ve
+        rec = mock.patch.object(ex, "ler_devolucoes", side_effect=self._ler_devolucoes)
+        rec.start()
+        self.addCleanup(rec.stop)
+
+    def _ler_devolucoes(self, sess, product_id, desde, ate=None, ignorar=frozenset()):
+        assert self.admin_aberta, "reconferencia fora da sessao admin"
+        self.reconferencias.append((product_id, desde, ate, frozenset(ignorar)))
+        return self.devolucoes_novas.get(product_id, [])
 
     def _montar_plano(self, sess, id_stokki, agora, ja_estava=False, ignorar_movimentos=frozenset()):
         self.planos.append((id_stokki, ja_estava, frozenset(ignorar_movimentos)))
+        self.agoras.append(agora)
         if self.plano_levanta:
             raise self.plano_levanta
         return self.plano
@@ -58,9 +75,14 @@ class TestExecutor(unittest.TestCase):
         if self.admin_ocupado:
             raise ex.ContaOcupada("ocupada")
         self.admin_abriu += 1
-        yield object()
+        self.admin_aberta = True
+        try:
+            yield object()
+        finally:
+            self.admin_aberta = False
 
     def mover(self, config, cliente_id, movimentos, motivo, headless=True, ao_concluir=None):
+        assert not self.admin_aberta, "admin aberta durante o mover"
         self.chamadas_mover.append((cliente_id, movimentos, motivo))
         if self.retorno_mover is None:
             res = [{"product_id": m["product_id"], "destino": m["destinos"][0][0], "pedido": m["qtd"],
@@ -491,6 +513,173 @@ class TestExecutor(unittest.TestCase):
         self.mock_ocup.side_effect = OSError("banco")
         r = self.rodar()
         self.assertEqual(r["feitas"], 1)
+
+    # --- revisao final ---
+
+    def rodar_sem_agora(self, mover=None, **kw):
+        return ex.processar_pendentes(
+            self.conn, LIGADO, simular=False, abrir_admin=self.abrir_admin, mover=mover or self.mover,
+            avisar_galpao=lambda *a: self.galpao.append(a), avisar_operacao=lambda *a: self.operacao.append(a), **kw)
+
+    def test_c1_agora_e_recalculado_por_pedido(self):
+        self.fila(1, 2)
+        horas = iter([datetime(2026, 11, 3, 13, 0), datetime(2026, 11, 3, 13, 5), datetime(2026, 11, 3, 13, 9)])
+        with mock.patch.object(ex, "datetime") as dt:
+            dt.now.side_effect = lambda: next(horas)
+            self.rodar_sem_agora()
+        self.assertEqual(len(self.agoras), 2)
+        self.assertNotEqual(self.agoras[0], self.agoras[1])
+
+    def test_c1_agora_passado_vale_para_todos(self):
+        self.fila(1, 2)
+        self.rodar()
+        self.assertEqual(self.agoras, [datetime(2026, 11, 3, 13, 0)] * 2)
+
+    def mover_pela_tela(self, api):
+        """mover de verdade (mover_virtual._executar) contra uma tela falsa."""
+        def mover(config, cliente_id, movimentos, motivo, headless=True, ao_concluir=None):
+            self.chamadas_mover.append((cliente_id, movimentos, motivo))
+            return mv._executar(api, cliente_id, movimentos, motivo, ao_concluir, dormir=lambda s: None)
+        self.plano = _plano(itens=[_item(2278, "FABMLT", 4, (("FAB-1", 4), ("FAB-2", 4))),
+                                   _item(2282, "FABMO1", 2, (("FAB-1", 2),))])
+        return mover
+
+    def test_c2_poll_que_levanta_vira_duvida_com_o_adjust_id(self):
+        self.fila(1)
+        api = ApiQueLevanta("adjust/processed/")
+        r = self.rodar(mover=self.mover_pela_tela(api))
+        l = self.linha(1)
+        self.assertEqual((l["status"], l["tentativas"], r["falhas"]), ("DUVIDA", 0, 1))
+        self.assertEqual(len(api.posts), 1)   # nem outro destino nem o outro produto
+        (m,) = json.loads(l["itens_json"])[0]["movimentos"]
+        self.assertEqual((m["adjust_id"], m["movido"], m.get("incerto")), (110001, 0, True))
+        (op,) = self.operacao
+        self.assertIn("110001", op[2])
+        self.rodar(mover=self.mover_pela_tela(api))
+        self.assertEqual(len(api.posts), 1)
+
+    def test_c2_post_que_levanta_vira_duvida_sem_adjust_id(self):
+        self.fila(1)
+        api = ApiQueLevanta("post")
+        self.rodar(mover=self.mover_pela_tela(api))
+        l = self.linha(1)
+        self.assertEqual((l["status"], l["tentativas"]), ("DUVIDA", 0))
+        self.assertIn("produto FABMLT", self.operacao[0][2])
+
+    def gravar_que_falha(self, falha):
+        real = de.gravar
+
+        def gravar(conn, id_stokki, **kw):
+            if falha(kw):
+                raise sqlite3.OperationalError("database is locked")
+            return real(conn, id_stokki, **kw)
+        p = mock.patch.object(ex, "gravar", side_effect=gravar)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_c2_gravar_que_falha_no_aplicar_e_regravado_no_encerramento(self):
+        self.fila(1)
+        n = []
+        self.gravar_que_falha(lambda kw: not n and not n.append(1))   # so a primeira chamada falha
+        r = self.rodar()
+        l = self.linha(1)
+        self.assertEqual((l["status"], r["feitas"]), ("FEITA", 1))
+        self.assertEqual(json.loads(l["itens_json"])[0]["movimentos"][0]["adjust_id"], 901)
+
+    def test_c2_fila_que_nao_grava_nem_no_encerramento_vai_a_duvida_com_aviso(self):
+        self.fila(1)
+        self.gravar_que_falha(lambda kw: kw.get("status") != "DUVIDA")
+        r = self.rodar()
+        l = self.linha(1)
+        self.assertEqual((l["status"], l["tentativas"], r["falhas"]), ("DUVIDA", 0, 1))
+        self.assertEqual(json.loads(l["itens_json"])[0]["movimentos"][0]["adjust_id"], 901)
+        (op,) = self.operacao
+        self.assertIn("movimentacao feita mas a fila nao gravou; conferir na Stokki", op[2])
+        self.assertEqual(len(self.galpao), 1)
+
+    def test_c2_mover_que_cai_depois_de_movimento_nao_gravado_vai_a_duvida(self):
+        self.fila(1)
+        self.gravar_que_falha(lambda kw: kw.get("status") is None and "erro" not in kw)
+        self.mover_levanta = RuntimeError("navegador caiu")
+        self.rodar()
+        l = self.linha(1)
+        self.assertEqual((l["status"], l["tentativas"]), ("DUVIDA", 0))
+        self.assertEqual(json.loads(l["itens_json"])[0]["movimentos"][0]["adjust_id"], 901)
+
+    def test_c2_fila_sem_gravar_nada_avisa_e_sobe_como_tecnico(self):
+        self.fila(1)
+        self.gravar_que_falha(lambda kw: True)
+        self.rodar()
+        l = self.linha(1)
+        self.assertEqual((l["status"], l["tentativas"]), ("PENDENTE", 0))
+        (op,) = self.operacao
+        self.assertIn("a fila nao gravou", op[2])
+        self.assertIn("A: movido 4 de 4", op[2])
+
+    # I1: reconferencia da prova com a provider na mao, logo antes de mover
+    def devolucao(self, id_):
+        return {"tipo": "Desbloqueio", "movimento": "Interno", "referencia": "", "quantidade": 4,
+                "quando": datetime(2026, 11, 3, 13, 1), "concluido": True, "id": id_}
+
+    def test_i1_reconfere_cada_produto_desde_o_cancelamento_com_o_mesmo_ignorar(self):
+        self.fila(1, 2)
+        de.gravar(self.conn, 2, itens=[{"product_id": 7, "movimentos": [{"adjust_id": 555, "movido": 1}]}])
+        self.conn.execute("UPDATE stokki_devolucoes SET status = 'FEITA' WHERE id_stokki = 2")
+        self.plano = _plano(itens=self.itens_dois())
+        self.rodar()
+        self.assertEqual([(p, d, a) for p, d, a, _ in self.reconferencias], [(1, CANCELADO, None), (2, CANCELADO, None)])
+        self.assertEqual(self.reconferencias[0][3], self.planos[0][2])
+        self.assertIn(555, self.reconferencias[0][3])
+        self.assertEqual(self.admin_abriu, 2)   # plano + reconferencia
+        self.assertEqual(self.linha(1)["status"], "FEITA")
+
+    def test_i1_devolucao_nova_na_reconferencia_nao_move(self):
+        self.fila(1)
+        self.devolucoes_novas = {1: [self.devolucao(110900)]}
+        r = self.rodar()
+        self.assertEqual(self.chamadas_mover, [])
+        l = self.linha(1)
+        self.assertEqual((l["status"], l["tentativas"], r["falhas"]), ("DUVIDA", 0, 1))
+        (op,) = self.operacao
+        self.assertIn("devolucao manual apareceu entre o plano e a movimentacao (produto A)", op[2])
+        self.mock_adq.assert_called_once()
+        self.mock_lib.assert_called_once()
+
+    def test_i1_linha_ja_vista_no_plano_nao_impede(self):
+        self.fila(1)
+        self.plano = _plano(itens=[{**_item(), "devolucoes_vistas": [110900]}])
+        self.devolucoes_novas = {1: [self.devolucao(110900)]}
+        self.rodar()
+        self.assertEqual(self.linha(1)["status"], "FEITA")
+
+    def test_i1_admin_ocupada_na_reconferencia_espera_sem_tentativa(self):
+        self.fila(1, 2)
+        abrir = self.abrir_admin
+
+        def admin():
+            if self.admin_abriu >= 1:
+                self.admin_ocupado = True
+            return abrir()
+        r = ex.processar_pendentes(
+            self.conn, LIGADO, simular=False, abrir_admin=admin, mover=self.mover,
+            avisar_galpao=lambda *a: self.galpao.append(a), avisar_operacao=lambda *a: self.operacao.append(a),
+            agora=datetime(2026, 11, 3, 13, 0))
+        self.assertEqual(self.chamadas_mover, [])
+        self.assertEqual(r["esperando"], 1)
+        l = self.linha(1)
+        self.assertEqual((l["status"], l["tentativas"]), ("PENDENTE", 0))
+        self.mock_lib.assert_called_once()
+        self.assertEqual(len(self.planos), 1)   # conta ocupada para o ciclo
+
+    def test_i1_erro_na_reconferencia_e_tecnico_e_libera_a_provider(self):
+        self.fila(1)
+        ex.ler_devolucoes.side_effect = ValueError("tabela sem aaData")
+        self.rodar()
+        l = self.linha(1)
+        self.assertEqual((l["status"], l["tentativas"]), ("PENDENTE", 1))
+        self.assertEqual(self.chamadas_mover, [])
+        self.mock_lib.assert_called_once()
+        self.assertFalse(self.admin_aberta)
 
 
 class TestAdjustIdsDoRobo(unittest.TestCase):

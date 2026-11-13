@@ -653,5 +653,28 @@ class TestRodada2(unittest.TestCase):
         self.assertIn("produto FABMLT", p["motivo"])
 
 
+class TestRevisaoFinal(unittest.TestCase):
+    CANCELADO = datetime(2026, 11, 3, 12, 12)
+
+    # C1: a prova de ja devolvido nao tem teto de horario
+    def test_c1_devolucao_depois_do_agora_continua_sendo_prova(self):
+        # #A-110832 e das 12:48; o agora passado (12:30) e anterior a ela
+        p = de.montar_plano(_Stokki(), 43101, datetime(2026, 11, 3, 12, 30))
+        self.assertEqual(p["status"], "JA_DEVOLVIDO")
+
+    def test_c1_ler_devolucoes_sem_teto(self):
+        for r in (de.ler_devolucoes(_Stokki(), 2278, self.CANCELADO),
+                  de.ler_devolucoes(_Stokki(), 2278, self.CANCELADO, None)):
+            self.assertEqual([x["id"] for x in r], [110832])
+
+    # I1: o plano diz desde quando e o que ja viu, para a reconferencia antes de mover
+    def test_i1_plano_traz_cancelado_em_e_devolucoes_vistas(self):
+        p = de.montar_plano(_Stokki(), 43101, AGORA)
+        self.assertEqual(p["cancelado_em"], self.CANCELADO)
+        self.assertEqual([i["devolucoes_vistas"] for i in p["itens"]], [[110832], []])
+        p = de.montar_plano(TestPlano()._sem_devolucao(), 43101, AGORA)
+        self.assertEqual((p["status"], p["itens"][0]["devolucoes_vistas"]), ("MOVER", []))
+
+
 if __name__ == "__main__":
     unittest.main()

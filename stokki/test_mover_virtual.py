@@ -238,5 +238,57 @@ class Classificacao(unittest.TestCase):
         self.assertEqual(r["movido"], 4)
 
 
+class ApiQueLevanta(ApiFalsa):
+    """ApiFalsa que levanta (rede, navegador caiu) num ponto escolhido."""
+    def __init__(self, levanta_em, **kw):
+        super().__init__(**kw)
+        self.levanta_em = levanta_em
+
+    def get(self, caminho):
+        if caminho.startswith(self.levanta_em):
+            self.gets.append(caminho)
+            raise TimeoutError("navegador caiu")
+        return super().get(caminho)
+
+    def post(self, campos):
+        if self.levanta_em == "post":
+            self.posts.append(campos)
+            raise TimeoutError("page.evaluate caiu")
+        return super().post(campos)
+
+
+class ExcecaoDepoisDoEnvio(unittest.TestCase):
+    # C2: do POST ao fim do poll, excecao = incerto (nunca tecnico) e para tudo
+    def test_poll_que_levanta_e_incerto_com_o_adjust_id_e_para(self):
+        api = ApiQueLevanta("adjust/processed/")
+        r = rodar(api, [mov(4, [("FAB-1", 4), ("FAB-2", 4)]), {**mov(), "product_id": 2282, "sku": "FABMO1"}])
+        self.assertEqual(len(r), 1)
+        self.assertTrue(r[0]["incerto"])
+        self.assertFalse(r[0].get("tecnico"))
+        self.assertEqual((r[0]["movido"], r[0]["adjust_id"], len(api.posts)), (0, 110001, 1))
+        self.assertIn("navegador caiu", r[0]["erro"])
+
+    def test_post_que_levanta_e_incerto_sem_adjust_id(self):
+        api = ApiQueLevanta("post")
+        r = rodar(api, [mov(4, [("FAB-1", 4), ("FAB-2", 4)])])
+        self.assertEqual(len(r), 1)
+        self.assertTrue(r[0]["incerto"])
+        self.assertEqual((r[0]["movido"], r[0]["adjust_id"], len(api.posts)), (0, None, 1))
+
+    def test_excecao_antes_do_post_continua_subindo(self):
+        api = ApiQueLevanta("adjust/product/search/")
+        with self.assertRaises(TimeoutError):
+            rodar(api, [mov()])
+        self.assertEqual(api.posts, [])
+
+    def test_callback_que_levanta_nao_interrompe_nem_muda_o_resultado(self):
+        def ruim(r):
+            raise RuntimeError("banco travado")
+        with self.assertLogs("stokki.mover_virtual", level="ERROR"):
+            r = rodar(ApiFalsa(), [mov(4, [("FAB-1", 1), ("FAB-2", 3)])], ao_concluir=ruim)
+        self.assertEqual([(x["destino"], x["movido"]) for x in r], [("FAB-1", 1), ("FAB-2", 3)])
+        self.assertFalse(any(x.get("incerto") for x in r))
+
+
 if __name__ == "__main__":
     unittest.main()
