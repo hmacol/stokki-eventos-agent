@@ -1007,12 +1007,15 @@ def _avisar_devolucao_galpao(conn, config: dict, id_stokki: int, cliente_id, ite
     """Aviso ao grupo PEDIDOS CANCELADOS: onde guardar a caixa devolvida. Sem o grupo no config, ou com o
     teto/janela do WhatsApp barrando, a devolucao ja aconteceu: o PS e os enderecos vao pro log pra equipe
     guardar por ele. Levanta so quando o envio falhou de fato (o executor deixa os movimentos sem 'avisado'
-    e a proxima passada avisa de novo); desligado nao levanta (nao ha o que reenviar)."""
+    e a proxima passada avisa de novo); desligado por falta do id do grupo nao levanta (nao ha o que reenviar).
+    Com o id preenchido, "desligado" (WhatsApp desligado no geral) conta como falha."""
     import notificar_whatsapp
     embarcador = _nome_embarcador_stokki(conn, cliente_id)
     situacao = notificar_whatsapp.avisar_devolucao_galpao(id_stokki, embarcador, itens, config)
     if situacao in ("enviado", "modo_teste"):
         return True
+    if situacao == "desligado" and ((config or {}).get("whatsapp_notificacoes") or {}).get("grupo_cancelados_id"):
+        situacao = "falhou"   # grupo configurado, mas o WhatsApp está desligado no geral: ninguém avisou o galpão
     onde = "; ".join(f"{i.get('sku')} {i.get('movido')} -> {i.get('destino')}" for i in itens)
     logger.warning(f"devolução PS-{id_stokki} ({embarcador}): aviso ao galpão {situacao}; guardar a caixa em: {onde}")
     if situacao in ("falhou", "nao_enviado"):

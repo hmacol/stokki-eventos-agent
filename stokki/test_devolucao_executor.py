@@ -353,11 +353,13 @@ class TestExecutor(unittest.TestCase):
         self.assertEqual((self.planos, self.chamadas_mover), ([], []))
         self.assertIn("produto A", self.operacao[0][2])
 
-    def test_c1_id_nao_confirmado_nunca_entra_no_ignorar(self):
+    def test_m1_ids_de_outro_pedido_entram_no_ignorar_mesmo_sem_confirmacao(self):
+        # movimento do robo para o pedido 2 nunca prova devolucao do 1; o do proprio pedido so confirmado (R15)
         self.fila(1, 2)
-        de.gravar(self.conn, 2, itens=[{"product_id": 1, "movimentos": [
-            {"adjust_id": 777, "movido": 0}, {"adjust_id": 778, "movido": 4}]}])
-        self.assertEqual(ex.adjust_ids_do_robo(self.conn, 1), frozenset({778}))
+        itens = [{"product_id": 1, "movimentos": [{"adjust_id": 777, "movido": 0}, {"adjust_id": "778", "movido": 4}]}]
+        de.gravar(self.conn, 2, itens=itens)
+        self.assertEqual(ex.adjust_ids_do_robo(self.conn, 1), frozenset({777, 778}))
+        self.assertEqual(ex._ids_dos_itens(itens), {778})
 
     def test_i1_erro_tecnico_do_mover_conta_tentativa_e_continua_pendente(self):
         self.fila(1)
@@ -754,6 +756,31 @@ class TestExecutor(unittest.TestCase):
         self.plano = _plano("NADA", [_item(1, "A", 0, (), "nada")])
         self.rodar()
         self.assertEqual((self.linha(1)["status"], self.galpao, self.operacao), ("NADA", [], []))
+
+    # M5: o motivo fica gravado na fila em todo status final
+    def test_m5_status_sem_mover_grava_o_motivo(self):
+        for status in ("NADA", "JA_DEVOLVIDO", "ANTIGO"):
+            de.garantir_tabela(self.conn)
+            self.conn.execute("DELETE FROM stokki_devolucoes")
+            self.fila(1)
+            self.plano = _plano(status, [_item(situacao="nada")], motivo=f"motivo de {status}")
+            self.rodar()
+            self.assertEqual((self.linha(1)["status"], self.linha(1)["erro"]), (status, f"motivo de {status}"))
+
+    def test_m5_parcial_grava_o_resumo_e_diz_quando_nao_ha_endereco(self):
+        self.fila(1)
+        self.plano = _plano(itens=[_item(), _item(2, "B", 2, (), "sem_destino")])
+        self.rodar()
+        l = self.linha(1)
+        self.assertEqual(l["status"], "PARCIAL")
+        self.assertIn("A: movido 4 de 4", l["erro"])
+        self.assertIn("B: movido 0 de 2 (ficaram 2 no Virtual; nenhum endereco fisico encontrado)", l["erro"])
+        self.assertIn("nenhum endereco fisico encontrado", self.operacao[0][2])
+
+    def test_m5_feita_nao_grava_erro(self):
+        self.fila(1)
+        self.rodar()
+        self.assertEqual((self.linha(1)["status"], self.linha(1)["erro"]), ("FEITA", None))
 
 
 class TestAdjustIdsDoRobo(unittest.TestCase):

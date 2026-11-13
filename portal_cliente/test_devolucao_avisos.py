@@ -88,6 +88,20 @@ class AvisoGalpaoNaoSaiu(unittest.TestCase):
             es._avisar_devolucao_galpao(_conn(), CONFIG, 43101, 777, self.ITENS2)
         op.assert_not_called()
 
+    def test_desligado_com_o_grupo_configurado_e_falha(self):
+        # grupo no config mas WhatsApp desligado no geral (ou gateway sem configurar): ninguem avisou o galpao
+        cfg = {**CONFIG, "whatsapp_notificacoes": {"grupo_cancelados_id": "123@g.us"}}
+        with mock.patch("notificar_whatsapp.avisar_devolucao_galpao", return_value="desligado"), \
+                mock.patch.object(es, "_avisar_devolucao_operacao") as op:
+            with self.assertLogs("portal_envios", level="WARNING"):
+                with self.assertRaises(RuntimeError):
+                    es._avisar_devolucao_galpao(_conn(), cfg, 43101, 777, self.ITENS2)
+        op.assert_called_once()
+        motivo = op.call_args.args[3]
+        self.assertTrue(motivo.startswith("aviso ao galpao nao saiu (falhou): avisar a equipe para guardar"))
+        for trecho in ("FABMLT", "FABENNE-1", "FABMO1", "FABENNE-2"):
+            self.assertIn(trecho, motivo)
+
 
 class AvisoOperacao(unittest.TestCase):
     def test_email_e_whatsapp_com_escape(self):

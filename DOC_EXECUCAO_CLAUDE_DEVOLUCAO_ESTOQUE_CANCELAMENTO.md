@@ -59,6 +59,11 @@ não conta.
 Pedido sem linha de Bloqueio (cancelado antes da separação) não tem nada preso: a
 devolução termina como "nada a devolver", sem login na wms@.
 
+Sem Bloqueio nos primeiros 10 min depois do cancelamento, o robô espera (a Stokki pode
+gravar o Bloqueio com atraso): o pedido continua na fila, sem gastar tentativa nem
+avisar. Passados os 10 min sem Bloqueio, "nada a devolver". *(ajustado em 13/11 na
+revisão final)*
+
 ### Para onde
 
 Por produto, nesta ordem:
@@ -110,7 +115,7 @@ Motivo gravado na Stokki: `Retorno ao estoque do PS-<id> cancelado`.
 - O Desbloqueio feito à mão **não traz referência do pedido**, e o recebimento também gera
   `Desbloqueio | Interno` sem referência: por isso a prova de "já devolvido" NÃO é a tabela
   de movimentações. Prova = linha `Virtual -> endereço físico` do produto em "movimentos
-  entre endereçamentos", criada a partir do cancelamento (mesmo minuto conta) até agora.
+  entre endereçamentos", criada a partir do cancelamento (mesmo minuto conta), sem teto de horário.
   Quantidade igual ou soma das linhas igual ao Bloqueio = já devolvido (não move);
   linha que existe mas não fecha, ou não concluída = dúvida (avisa). Devoluções feitas pelo
   próprio robô para OUTROS pedidos são reconhecidas pelo id do movimento (`#A-<n>` = `adjust_id`)
@@ -121,6 +126,13 @@ Motivo gravado na Stokki: `Retorno ao estoque do PS-<id> cancelado`.
   qualquer leitura que não feche (data ilegível, coluna faltando, paginação que não
   fecha), vira aviso à operação em vez de movimentação. Saldo preso com aviso é
   melhor que saldo de outro pedido movido. *(decisão minha)*
+- A prova de "já devolvido" **não tem teto de horário** (toda linha `Virtual -> endereço
+  físico` a partir do cancelamento conta) e é **reconferida imediatamente antes de mover**,
+  já com a conta provider na mão: linha nova entre o plano e a movimentação = dúvida
+  (não move, avisa). Movimentações do pedido que não parecem um cancelamento simples
+  (Desbloqueio com a referência do PS, ou Bloqueio do PS a mais de 10 min do horário do
+  cancelamento) = dúvida. Vários Bloqueios do PS no horário do cancelamento somam (mesmo
+  produto em duas linhas do pedido). *(ajustado em 13/11 na revisão final)*
 - "Já estava cancelado" entra na fila, mas só é devolvido se o cancelamento for
   recente: ler a data no "Histórico do pedido" do show; cancelado há mais de 24 h
   não é movido (registra "cancelamento antigo", sem aviso). Cancelados antigos
@@ -147,6 +159,10 @@ Motivo gravado na Stokki: `Retorno ao estoque do PS-<id> cancelado`.
 - Consequência aceita pelo Hugo: com o pipeline horário ou a Estação de Impressão
   usando a Stokki, a devolução atrasa (em 12/11 uma leitura esperou mais de 30 min
   atrás do pipeline). Fora disso, minutos.
+- Por ciclo do worker, no máximo 5 pedidos e 60 s de pedidos novos (o pedido em
+  andamento termina; os outros ficam para o ciclo seguinte). A devolução roda logo
+  depois dos cancelamentos e das retomadas, antes dos lotes dos clientes. *(ajustado
+  em 13/11 na revisão final)*
 
 ### Aviso ao galpão (decisão do Hugo, 12/11)
 
@@ -164,6 +180,8 @@ sistema limita cada mensagem a 200 caracteres e todo item precisa aparecer com o
   do Hugo). Sem o id, a devolução acontece igual e o log registra que o aviso não saiu.
 - Se o aviso não sair por falha ou limite do WhatsApp (gateway fora, teto diário, canal em
   pausa), a operação recebe a lista (SKU, quantidade, endereço) para avisar o galpão à mão.
+  Com o id do grupo preenchido, WhatsApp desligado no geral conta como falha (a operação
+  recebe a lista). *(ajustado em 13/11 na revisão final)*
 - "Nada a devolver", "já devolvido" e "cancelamento antigo" não geram mensagem.
 - O Hugo aprovou a regra da dúvida (não mover e avisar a operação).
 
@@ -182,6 +200,10 @@ Desligada: nada entra na fila e nada roda. Ligar em produção é decisão do Hu
 da prova. `--simular` do worker e `--modo-teste` só registram o plano (pedido, itens,
 quantidade, destino escolhido), sem mover. Na homologação fica desligada (lá nada fala
 com a Stokki).
+
+Só o booleano `true` liga (texto "true", 1 etc. = desligada). Ao ligar ou desligar a
+chave é preciso **reiniciar o serviço `portal-cliente-envios`**: o worker lê o config uma
+vez ao subir; o painel lê a cada requisição. *(ajustado em 13/11 na revisão final)*
 
 ## Restrições do projeto
 
@@ -226,3 +248,21 @@ com a Stokki).
    disponível no destino certo, "Desbloqueio | Interno" na movimentação, Virtual dos
    outros pedidos intacto.
 4. Só então o Hugo liga a chave.
+
+O que a prova supervisionada precisa conferir *(ajustado em 13/11 na revisão final)*:
+
+1. O Bloqueio `#PS` é gravado junto com o "Cancelado"? Uma linha por linha do pedido? Quantidade = a separada, em unidade base?
+2. A linha `#A` nos movimentos entre endereços aparece já no POST ou só quando o processamento termina? `concluded` fica vazio enquanto processa?
+3. Como a equipe devolve à mão hoje e se isso gera a linha `Virtual -> endereço`. Combinar: com a chave ligada, ninguém devolve à mão pedido cancelado pelo sistema sem olhar o grupo/fila.
+4. Busca de produto: chaves `quantity` x `quantity_available` e o que significam.
+5. Busca de destino: traz `code` igual ao código do endereço? (senão todo destino é recusado; o log mostra as chaves)
+6. `adjust/check/location`: um 200 pode trazer recusa no corpo?
+7. POST: a chave da resposta é `adjust_id`?
+8. Poll: qual o sinal de concluído e quanto tempo leva?
+9. `adjust_id` == número do `#A-<n>` (provado nas amostras; reconferir).
+10. A separação aparece sempre como `<endereço> -> Virtual` entre o início da separação e o cancelamento?
+11. Paginação das tabelas (`length`, `start`, `iTotalDisplayRecords`).
+12. O histórico do pedido usa exatamente o rótulo "Cancelado"?
+13. Login da wms@: alguém da equipe usa essa conta no navegador (seria derrubado)? Existe logout?
+14. Pré-requisitos: `grupo_cancelados_id` no config e o número do OpenWA no grupo; e-mail da operação configurado; consumo do teto diário do WhatsApp.
+15. A simulação do plano na VPS chama `montar_plano(StokkiSession(...), id, datetime.now())` direto, como www-data; não rodar `--uma-vez` junto com o serviço.

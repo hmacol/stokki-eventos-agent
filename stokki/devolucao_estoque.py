@@ -38,8 +38,9 @@ def bloqueado_pelo_pedido(movimentos: list, id_stokki: int) -> float:
 
 
 def ja_devolvido(movimentos: list, qtd: float, cancelado_em: datetime) -> str:
-    """Prova de devolucao: linhas `Desbloqueio | Interno` sem referencia a partir do minuto do cancelamento
-    (na pratica, as de ler_devolucoes). 'sim' se alguma tem a mesma qtd ou se a SOMA delas e a qtd
+    """Prova de devolucao: as linhas sao os movimentos `Virtual -> endereco fisico` da tabela de movimentos
+    entre enderecos (ler_devolucoes), a partir do minuto do cancelamento; os rotulos `Desbloqueio | Interno`
+    sem referencia sao so o formato que esta funcao espera. 'sim' se alguma tem a mesma qtd ou se a SOMA delas e a qtd
     (devolucao em partes), tolerancia 0.001; 'duvida' se ha linhas que nao fecham, se nao ha data de
     cancelamento ou se a prova usa linha nao concluida (`concluido` False; sem a chave conta como concluida);
     'nao' se nao ha nenhuma. Linha sem data conta como posterior (lado seguro)."""
@@ -308,10 +309,12 @@ def ler_origem(sess, product_id: int, inicio, fim, qtd: float) -> list:
 
 
 def ler_devolucoes(sess, product_id: int, desde: datetime, ate=None, ignorar=frozenset()) -> list:
-    """Prova de devolucao ja feita: linhas `Virtual -> <endereco fisico>` do produto criadas de `desde` (inclusive,
-    mesmo minuto conta) em diante, no formato que ja_devolvido entende (mais o `id` do movimento). E o que a
-    devolucao manual gera. `ate` None = sem teto (a prova): le ate o mes corrente e conta toda linha posterior.
-    Linhas cujo id esta em `ignorar` (devolucoes do proprio robo, outros pedidos) ficam fora."""
+    """Prova de devolucao ja feita: movimentos `Virtual -> <endereco fisico>` do produto na tabela de movimentos
+    entre enderecos, criados de `desde` (inclusive, mesmo minuto conta) em diante. E o que a devolucao manual
+    gera. Saem rotulados `Desbloqueio | Interno` sem referencia (mais o `id` do movimento) so porque e o
+    formato que ja_devolvido espera: nao sao linhas da tabela de movimentacoes. `ate` None = sem teto (a prova):
+    le ate o mes corrente e conta toda linha posterior. Linhas cujo id esta em `ignorar` (devolucoes do proprio
+    robo, outros pedidos) ficam fora."""
     fim = ate if ate is not None else max(desde, datetime.now())
     return [{"tipo": "Desbloqueio", "movimento": "Interno", "referencia": "", "quantidade": r["quantidade"],
              "quando": r["quando"], "concluido": r["concluido"], "id": r["id"]}
@@ -408,7 +411,7 @@ def montar_plano(sess, id_stokki: int, agora: datetime, ja_estava: bool = False,
                 "cancelado_em": ped["cancelado_em"]}
 
     if cancelamento_antigo(ped["cancelado_em"], agora, ja_estava):
-        return plano("ANTIGO", vazios, "cancelamento de 24 h ou mais (ou sem data) que ja existia: avisar a operacao")
+        return plano("ANTIGO", vazios, "cancelamento antigo: devolucao automatica nao se aplica")
     if ped["cancelado_em"] is None:
         return plano("DUVIDA", vazios, "nao consegui ler a data do cancelamento no historico do pedido")
     if ped["cancelado_em"].replace(day=1, hour=0, minute=0) < _inicio_da_janela(agora):
@@ -427,9 +430,9 @@ def montar_plano(sess, id_stokki: int, agora: datetime, ja_estava: bool = False,
             and agora < ped["cancelado_em"] + timedelta(minutes=ESPERA_DO_BLOQUEIO_MINUTOS)):
         return plano("AGUARDAR", itens, "sem Bloqueio do pedido ainda: a Stokki pode gravar com atraso")
     if all(s == "nada" for s in situacoes):
-        return plano("NADA", itens)
+        return plano("NADA", itens, "sem Bloqueio do pedido: nada preso no Virtual")
     if all(s in ("nada", "ja_devolvido") for s in situacoes):
-        return plano("JA_DEVOLVIDO", itens)
+        return plano("JA_DEVOLVIDO", itens, "ja devolvido: movimento do Virtual para endereco fisico depois do cancelamento")
     if "mover" in situacoes:
         return plano("MOVER", itens, motivo)
     return plano("DUVIDA", itens, motivo)
@@ -441,9 +444,9 @@ STATUS = ("PENDENTE", "FEITA", "PARCIAL", "NADA", "JA_DEVOLVIDO", "ANTIGO", "DUV
 
 
 def ligado(config: dict) -> bool:
-    """Chave stokki.devolucao_cancelamento.ativo; ausente = desligada."""
+    """Chave stokki.devolucao_cancelamento.ativo; so o booleano True liga (ausente, "true", 1 = desligada)."""
     try:
-        return bool(((config or {}).get("stokki") or {}).get("devolucao_cancelamento", {}).get("ativo"))
+        return ((config or {}).get("stokki") or {}).get("devolucao_cancelamento", {}).get("ativo") is True
     except AttributeError:
         return False
 
@@ -468,7 +471,7 @@ def registrar(id_stokki: int, origem: str, config: dict, ja_estava: bool = False
     try:
         if propria:
             from stokki.sessao_uso import DB_PATH
-            conn = sqlite3.connect(DB_PATH, timeout=30)
+            conn = sqlite3.connect(DB_PATH, timeout=5)   # o cancelamento nao espera o banco travado
         garantir_tabela(conn)
         agora = _agora()
         cur = conn.execute(

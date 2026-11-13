@@ -98,7 +98,7 @@
  Tela de planejamento (HTML/JS) ............ painel_agentes/templates/planejamento_rotas.html
  Rascunhos de rota (tabelas) ............... painel_agentes/rascunhos_rota.py
  Torre de Controle ......................... painel_agentes/torre_controle.py
-Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/acoes_pedidos.py (rotas POST /api/pedidos/acao/reenvio, .../cancelar-vuupt, .../cancelar-stokki, .../endereco, .../agendar, .../checar-dia-fixo, .../marcar-entregue (multipart, helper _marcar_entregue_pelo_form da Torre), .../validar-lote-foto; GET .../comprovantes?codigo= + /pedidos/canhoto/vuupt/<checklist_id>.pdf + /pedidos/canhoto/manual/<PS-N>.pdf (leitura, canhoto Vuupt/manual/app); cancelar-stokki concluído registra o pedido na fila stokki_devolucoes (origem 'pedidos'; devolução de estoque).
+Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/acoes_pedidos.py (rotas POST /api/pedidos/acao/reenvio, .../cancelar-vuupt, .../cancelar-stokki, .../endereco, .../agendar, .../checar-dia-fixo, .../marcar-entregue (multipart, helper _marcar_entregue_pelo_form da Torre), .../validar-lote-foto; GET .../comprovantes?codigo= + /pedidos/canhoto/vuupt/<checklist_id>.pdf + /pedidos/canhoto/manual/<PS-N>.pdf (leitura, canhoto Vuupt/manual/app); cancelar-stokki concluído registra o pedido na fila stokki_devolucoes (origem 'pedidos'; devolução de estoque);
                                              confere Vuupt na hora, Stokki pela trava sessao_uso)
  Vigia de pedidos abertos (estado/prazo) ... vigia/ (regras.py = prazos; tela /vigia)
  Clientes que exigem agendamento (AGENDA) .. regras/clientes_agendamento.py; fila em
@@ -800,6 +800,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                       Movimento sem confirmação nunca é repetido (vai a DUVIDA e a
                       operação confere); erro técnico conta tentativa (máx. 3);
                       conta ocupada espera o próximo ciclo sem gastar tentativa.
+                      Sem Bloqueio nos 10 min após o cancelamento = AGUARDAR (espera,
+                      sem tentativa). Reconfere a prova pela admin logo antes de mover.
+                      Orçamento: 5 pedidos e 60 s de pedidos novos por ciclo.
  mover_virtual.py     Movimentação de Estoque Manual da área provider (POST
                       operation/inventory/adjust/store/process + poll
                       adjust/processed/:id), Virtual -> endereço. Script provado à mão
@@ -1355,10 +1358,12 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
                           destinatarios com ajuste manual de horario de recebimento sao
                           reenviados uma vez.
  enviar_stokki.py          Worker que cria o pedido na Stokki (Playwright) e, a cada
-                           ciclo, executa os cancelamentos CANCELANDO sob a trava e, no
-                           fim (processar_devolucoes_do_ciclo), devolve o saldo dos
-                           cancelados (fila stokki_devolucoes; chave desligada = não
-                           abre sessão).
+                           ciclo, executa os cancelamentos CANCELANDO sob a trava e,
+                           logo depois dos cancelamentos e das retomadas, ANTES dos
+                           lotes dos clientes (processar_devolucoes_do_ciclo), devolve
+                           o saldo dos cancelados (fila stokki_devolucoes; no máximo 5
+                           pedidos e 60 s de pedidos novos por ciclo; chave desligada =
+                           não abre sessão).
                            Fluxo Cross: converte pro item XD e enfileira a troca de NF.
  trocas_nf.py              Fila trocas_nf_pendentes (portal, importador por e-mail,
                            virada); o worker troca 3x com 10 min entre tentativas,

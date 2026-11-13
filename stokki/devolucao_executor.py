@@ -79,27 +79,27 @@ def _texto_incertos(incertos) -> str:
     return "; ".join(partes) + "; conferir na Stokki antes de qualquer nova devolucao"
 
 
-def _ids_dos_itens(itens) -> set:
-    """adjust_id (int) dos movimentos CONFIRMADOS gravados em uma lista de itens da fila. Id nao confirmado
-    nunca entra (nao prova devolucao); id em texto e normalizado."""
+def _ids_dos_itens(itens, so_confirmados: bool = True) -> set:
+    """adjust_id (int) dos movimentos gravados em uma lista de itens da fila; id em texto e normalizado.
+    Do proprio pedido, so os CONFIRMADOS (o nao confirmado leva a DUVIDA antes do plano)."""
     ids = set()
     for item in itens if isinstance(itens, list) else []:
         for m in _movs(item):
             n = _int_id(m.get("adjust_id"))
-            if n is not None and _confirmado(m):
+            if n is not None and (_confirmado(m) or not so_confirmados):
                 ids.add(n)
     return ids
 
 
 def adjust_ids_do_robo(conn, exceto_id_stokki: int) -> frozenset:
-    """adjust_id das movimentacoes confirmadas que o proprio robo fez em OUTROS pedidos (qualquer status
-    da fila): nao provam devolucao deste pedido."""
+    """adjust_id das movimentacoes que o proprio robo fez em OUTROS pedidos (qualquer status da fila,
+    confirmadas ou nao): nunca provam devolucao deste pedido."""
     garantir_tabela(conn)
     ids = set()
     for (texto,) in conn.execute("SELECT itens_json FROM stokki_devolucoes WHERE id_stokki != ?",
                                  (int(exceto_id_stokki),)).fetchall():
         try:
-            ids |= _ids_dos_itens(json.loads(texto or "[]"))
+            ids |= _ids_dos_itens(json.loads(texto or "[]"), so_confirmados=False)
         except ValueError:
             continue
     return frozenset(ids)
@@ -146,7 +146,9 @@ def _resumo(itens_fila: list) -> str:
         movido = sum(m.get("movido") or 0 for m in _movs(i))
         t = f"{i.get('sku', '?')}: movido {movido:g} de {i['qtd']:g}"
         if movido < i["qtd"] - TOL_QTD:
-            erros = "; ".join(sorted({m["erro"] for m in _movs(i) if m.get("erro")}))
+            erros = "; ".join(sorted({m["erro"] for m in _movs(i) if m.get("erro")}
+                                     | ({"nenhum endereco fisico encontrado"} if i.get("situacao") == "sem_destino"
+                                        else set())))
             t += f" (ficaram {i['qtd'] - movido:g} no Virtual" + (f"; {erros}" if erros else "") + ")"
         partes.append(t)
     return " | ".join(partes)
@@ -160,7 +162,7 @@ def _encerrar(conn, id_stokki, cliente_id, status, itens, motivo, avisar_galpao,
     texto = motivo
     if any(_movs(i) for i in itens):
         texto = f"{motivo} | {_resumo(itens)}" if _resumo(itens) else motivo
-    gravar(conn, id_stokki, status=status, itens=itens, erro=texto if status in ("DUVIDA", "FALHA") else None,
+    gravar(conn, id_stokki, status=status, itens=itens, erro=texto if status != "FEITA" else None,
            mais_uma_tentativa=tentativa)
     novos = [(i, m) for i in itens for m in _movs(i) if _confirmado(m) and not m.get("avisado")]
     if novos:
@@ -250,7 +252,7 @@ def _processar_um(conn, config, row, simular, abrir_admin, mover, avisar_galpao,
             _encerrar(conn, id_stokki, cliente_id, status, itens_fila, plano["motivo"] or status.lower(),
                       avisar_galpao, avisar_operacao)
         else:
-            gravar(conn, id_stokki, status=status, itens=itens_fila)
+            gravar(conn, id_stokki, status=status, itens=itens_fila, erro=plano["motivo"] or status.lower())
         cont["nada"] += 1
         return "ok"
     if status != "MOVER":   # DUVIDA

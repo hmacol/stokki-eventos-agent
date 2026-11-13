@@ -188,6 +188,31 @@ class TestFila(unittest.TestCase):
         de.registrar(1, "portal", LIGADO, conn=self.conn)
         self.assertEqual(de.pendentes(self.conn)[0]["itens"], [])
 
+    # M2: o caminho real dos ganchos (conn=None) abre o banco da trava com timeout curto
+    def test_m2_registrar_sem_conn_grava_no_banco_com_timeout_de_5s(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            caminho = Path(d) / "dados.db"
+            real = sqlite3.connect
+            with mock.patch("stokki.sessao_uso.DB_PATH", caminho), \
+                    mock.patch("sqlite3.connect", side_effect=real) as c:
+                self.assertTrue(de.registrar(43101, "portal", LIGADO))
+            self.assertEqual(c.call_args.kwargs.get("timeout"), 5)
+            con = real(caminho)
+            try:
+                self.assertEqual(con.execute("SELECT id_stokki, status FROM stokki_devolucoes").fetchall(),
+                                 [(43101, "PENDENTE")])
+            finally:
+                con.close()
+
+    # M3: so o booleano True liga
+    def test_m3_chave_so_liga_com_true(self):
+        for valor in ("true", "false", "sim", 1, "1", [1], {"a": 1}, None):
+            self.assertFalse(de.ligado({"stokki": {"devolucao_cancelamento": {"ativo": valor}}}), valor)
+        self.assertFalse(de.ligado({"stokki": {"devolucao_cancelamento": None}}))
+        self.assertFalse(de.ligado({"stokki": "x"}))
+        self.assertTrue(de.ligado({"stokki": {"devolucao_cancelamento": {"ativo": True}}}))
+
 
 # --- Leituras e plano, com as respostas REAIS de stokki/amostras_devolucao/ ---
 
@@ -717,6 +742,13 @@ class TestRevisaoFinal(unittest.TestCase):
         self.assertEqual(p["status"], "MOVER")
         self.assertEqual(p["itens"][0]["qtd"], 6)
         self.assertEqual(p["itens"][0]["destinos"], [("FABENNE-1", 6)])
+
+    # M5: todo status final tem motivo; ANTIGO nao promete aviso
+    def test_m5_motivos_dos_status_sem_mover(self):
+        antigo = de.montar_plano(_Stokki(), 43101, AGORA, ja_estava=True)
+        self.assertEqual(antigo["motivo"], "cancelamento antigo: devolucao automatica nao se aplica")
+        self.assertTrue(de.montar_plano(_Stokki(movimentos={}), 43101, AGORA)["motivo"])
+        self.assertTrue(de.montar_plano(_Stokki(), 43101, AGORA)["motivo"])   # JA_DEVOLVIDO
 
 
 if __name__ == "__main__":
