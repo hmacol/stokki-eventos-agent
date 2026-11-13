@@ -118,7 +118,7 @@ MESES_PARA_TRAS = 3
 COLS_MOVIMENTOS = ["date", "conclusion", "reference", "marker", "type", "motion", "quantity", "quantity_stock"]
 COLS_ORIGEM = ["id", "created", "concluded", "user", "origin", "destination", "quantity"]
 CHAVES_MOVIMENTOS = ("date", "conclusion", "reference", "type", "motion", "quantity")
-CHAVES_ORIGEM = ("created", "concluded", "origin", "destination", "quantity")
+CHAVES_ORIGEM = ("id", "created", "concluded", "origin", "destination", "quantity")
 
 
 def _ae():
@@ -266,7 +266,7 @@ def ler_saldo_enderecos(sess, product_id: int) -> list:
 
 def _movimentos_entre_enderecos(sess, product_id: int, de: datetime, ate: datetime) -> list:
     """Linhas de 'movimentos entre enderecamentos' dos meses de `de` a `ate`, normalizadas:
-    [{quando (criacao), concluido (bool), origem, destino, quantidade}]. Base de ler_origem e ler_devolucoes."""
+    [{id (do #A-<n>), quando (criacao), concluido (bool), origem, destino, quantidade}]. Base de ler_origem e ler_devolucoes."""
     ae = _ae()
     url = f"{ae.ADM}/inventory/moviment/addressing/table/moviment/table"
     referer = f"{ae.ADM}/inventory/moviment/addressing/moviment/{int(product_id)}/1"
@@ -279,7 +279,11 @@ def _movimentos_entre_enderecos(sess, product_id: int, de: datetime, ate: dateti
             params.update({f"columns[{i}][data]": nome, f"columns[{i}][name]": "",
                            f"columns[{i}][searchable]": "true", f"columns[{i}][orderable]": "true"})
         for r in _linhas_tabela(sess, url, params, referer, CHAVES_ORIGEM):
-            saida.append({"quando": _quando(r["created"]), "concluido": _quando(r["concluded"]) is not None,
+            quando = _quando(r["created"])
+            num = re.search(r"-(\d+)", ae.limpa(r["id"]))
+            if quando is None or num is None:   # leitura que nao fecha nunca vira plano
+                raise ValueError(f"movimento sem data de criacao ou sem id legivel: {url}")
+            saida.append({"id": int(num.group(1)), "quando": quando, "concluido": _quando(r["concluded"]) is not None,
                           "origem": ae.limpa(r["origin"]), "destino": ae.limpa(r["destination"]),
                           "quantidade": ae.numero(r["quantity"])})
     return saida
@@ -302,14 +306,15 @@ def ler_origem(sess, product_id: int, inicio, fim, qtd: float) -> list:
     return []
 
 
-def ler_devolucoes(sess, product_id: int, desde: datetime, ate: datetime) -> list:
+def ler_devolucoes(sess, product_id: int, desde: datetime, ate: datetime, ignorar=frozenset()) -> list:
     """Prova de devolucao ja feita: linhas `Virtual -> <endereco fisico>` do produto criadas de `desde` (inclusive,
-    mesmo minuto conta) ate `ate`, no formato que ja_devolvido entende. E o que a devolucao manual gera."""
+    mesmo minuto conta) ate `ate`, no formato que ja_devolvido entende (mais o `id` do movimento). E o que a
+    devolucao manual gera. Linhas cujo id esta em `ignorar` (devolucoes do proprio robo, outros pedidos) ficam fora."""
     return [{"tipo": "Desbloqueio", "movimento": "Interno", "referencia": "", "quantidade": r["quantidade"],
-             "quando": r["quando"], "concluido": r["concluido"]}
+             "quando": r["quando"], "concluido": r["concluido"], "id": r["id"]}
             for r in _movimentos_entre_enderecos(sess, product_id, desde, ate)
             if (r["quando"] and desde <= r["quando"] <= ate and r["origem"].lower() == "virtual"
-                and not _e_sistema(r["destino"]))]
+                and not _e_sistema(r["destino"]) and r["id"] not in ignorar)]
 
 
 # --- Plano: leituras + regras (nada de escrita aqui) ---
@@ -335,7 +340,7 @@ def _saldo_do_embarcador(sess, cliente_id: int) -> list:
     return [{"endereco": e, "estoque": q} for e, q in por_endereco.items()]
 
 
-def _plano_do_item(sess, ped: dict, item: dict, agora: datetime) -> tuple:
+def _plano_do_item(sess, ped: dict, item: dict, agora: datetime, ignorar=frozenset()) -> tuple:
     """(item do plano, motivo ou ''). Erro de leitura sobe como excecao: nunca vira 'nada a devolver'."""
     saida = {**item, "qtd": 0, "destinos": [], "situacao": "nada"}
     movimentos = []
@@ -345,14 +350,17 @@ def _plano_do_item(sess, ped: dict, item: dict, agora: datetime) -> tuple:
     if bloqueado <= 0:
         return saida, ""
     saida["qtd"] = bloqueado
-    devolucoes = ler_devolucoes(sess, item["product_id"], ped["cancelado_em"], max(agora, ped["cancelado_em"]))
+    devolucoes = ler_devolucoes(sess, item["product_id"], ped["cancelado_em"], max(agora, ped["cancelado_em"]), ignorar)
     ja = ja_devolvido(devolucoes, bloqueado, ped["cancelado_em"])
     if ja == "sim":
         saida["situacao"] = "ja_devolvido"
         return saida, ""
     if ja == "duvida":
         saida["situacao"] = "duvida"
-        return saida, f"desbloqueio manual de quantidade diferente no produto {item['sku']}"
+        if any(d.get("concluido") is False for d in devolucoes):
+            return saida, f"devolucao do Virtual ainda em andamento (produto {item['sku']})"
+        return saida, ("ha movimento do Virtual para endereco fisico depois do cancelamento que nao fecha com a "
+                       f"quantidade do pedido (produto {item['sku']})")
     origem = ler_origem(sess, item["product_id"], ped["separado_em"], ped["cancelado_em"], bloqueado)
     saldo_produto = ler_saldo_enderecos(sess, item["product_id"])
     saldo_embarcador = []
@@ -366,9 +374,10 @@ def _plano_do_item(sess, ped: dict, item: dict, agora: datetime) -> tuple:
     return saida, f"nenhum endereco fisico para devolver o produto {item['sku']}"
 
 
-def montar_plano(sess, id_stokki: int, agora: datetime, ja_estava: bool = False) -> dict:
+def montar_plano(sess, id_stokki: int, agora: datetime, ja_estava: bool = False, ignorar_movimentos=frozenset()) -> dict:
     """Le o pedido e a movimentacao e decide: MOVER / NADA / JA_DEVOLVIDO / ANTIGO / DUVIDA.
-    Na duvida nada se move (o plano inteiro vira DUVIDA). Falha de leitura levanta excecao."""
+    Na duvida nada se move (o plano inteiro vira DUVIDA). Falha de leitura levanta excecao.
+    `ignorar_movimentos`: ids (#A-<n>) de devolucoes do proprio robo para outros pedidos, que nao provam nada."""
     ped = {**ler_pedido(sess, id_stokki), "id_stokki": int(id_stokki)}
     vazios = [{**i, "qtd": 0, "destinos": [], "situacao": "nada"} for i in ped["itens"]]
 
@@ -383,7 +392,7 @@ def montar_plano(sess, id_stokki: int, agora: datetime, ja_estava: bool = False)
         return plano("DUVIDA", vazios, "cancelamento antigo demais para conferir as movimentacoes")
     itens, motivos = [], []
     for item in ped["itens"]:
-        it, motivo = _plano_do_item(sess, ped, item, agora)
+        it, motivo = _plano_do_item(sess, ped, item, agora, ignorar_movimentos)
         itens.append(it)
         if motivo:
             motivos.append(motivo)

@@ -112,11 +112,14 @@ Motivo gravado na Stokki: `Retorno ao estoque do PS-<id> cancelado`.
   de movimentações. Prova = linha `Virtual -> endereço físico` do produto em "movimentos
   entre endereçamentos", criada a partir do cancelamento (mesmo minuto conta) até agora.
   Quantidade igual ou soma das linhas igual ao Bloqueio = já devolvido (não move);
-  linha que existe mas não fecha, ou não concluída = dúvida (avisa). *(decisão minha, não do
+  linha que existe mas não fecha, ou não concluída = dúvida (avisa). Devoluções feitas pelo
+  próprio robô para OUTROS pedidos são reconhecidas pelo id do movimento (`#A-<n>` = `adjust_id`)
+  e não contam como prova. *(decisão minha, não do
   Hugo; ajustado em 13/11 na revisão: recebimento também gera Desbloqueio sem referência)*
-- Na dúvida, **não mover e avisar**: Desbloqueio sem referência depois do
-  cancelamento em quantidade diferente da do pedido, ou qualquer leitura que não
-  feche, vira aviso à operação em vez de movimentação. Saldo preso com aviso é
+- Na dúvida, **não mover e avisar**: movimento `Virtual -> endereço físico` depois do
+  cancelamento que não fecha com a quantidade do pedido, ou ainda não concluído, ou
+  qualquer leitura que não feche (data ilegível, coluna faltando, paginação que não
+  fecha), vira aviso à operação em vez de movimentação. Saldo preso com aviso é
   melhor que saldo de outro pedido movido. *(decisão minha)*
 - "Já estava cancelado" entra na fila, mas só é devolvido se o cancelamento for
   recente: ler a data no "Histórico do pedido" do show; cancelado há mais de 24 h

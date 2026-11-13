@@ -404,7 +404,8 @@ class TestPlano(unittest.TestCase):
         p = de.montar_plano(_Stokki(origem={(2278, 11): j}), 43101, AGORA)
         self.assertEqual(p["status"], "DUVIDA")
         self.assertEqual(p["itens"][0]["situacao"], "duvida")
-        self.assertIn("desbloqueio manual de quantidade diferente no produto FABMLT", p["motivo"])
+        self.assertIn("nao fecha com a quantidade do pedido", p["motivo"])
+        self.assertIn("produto FABMLT", p["motivo"])
 
     def test_antigo_nao_le_movimentos(self):
         s = _Stokki()
@@ -527,7 +528,7 @@ class TestCorrecoesRevisao(unittest.TestCase):
     def test_ler_devolucoes_real(self):
         r = de.ler_devolucoes(_Stokki(), 2278, datetime(2026, 11, 3, 12, 12), AGORA)
         self.assertEqual(r, [{"tipo": "Desbloqueio", "movimento": "Interno", "referencia": "", "quantidade": 4.0,
-                              "quando": datetime(2026, 11, 3, 12, 48), "concluido": True}])
+                              "quando": datetime(2026, 11, 3, 12, 48), "concluido": True, "id": 110832}])
 
     def test_ler_devolucoes_limites_de_horario(self):
         s = _Stokki()
@@ -590,6 +591,66 @@ class TestCorrecoesRevisao(unittest.TestCase):
     def test_recebimento_nunca_e_destino(self):
         saldo = [{"endereco": "Recebimento", "estoque": 99}, {"endereco": "A-1", "estoque": 1}]
         self.assertEqual(de.escolher_destinos(4, [("Recebimento", 4)], saldo, []), [("A-1", 4)])
+
+
+def _origem_com(**mudancas):
+    """Amostra real de origem com a linha #A-110832 alterada (campo -> valor)."""
+    j = _json("origem_2278_2026_11.json")
+    for r in j["aaData"]:
+        if r["id"] == "#A-110832":
+            r.update(mudancas)
+    return {(2278, 11): j}
+
+
+class TestRodada2(unittest.TestCase):
+    DESDE = datetime(2026, 11, 3, 12, 12)
+
+    # N1: data ou id ilegivel nunca vira plano
+    def test_criacao_ilegivel_levanta_em_ler_devolucoes(self):
+        s = _Stokki(origem=_origem_com(created="<div>ontem</div>"))
+        with self.assertRaises(ValueError) as c:
+            de.ler_devolucoes(s, 2278, self.DESDE, AGORA)
+        self.assertIn("addressing/table", str(c.exception))
+
+    def test_criacao_ilegivel_nao_vira_mover_no_plano(self):
+        with self.assertRaises(ValueError):
+            de.montar_plano(_Stokki(origem=_origem_com(created="<div>ontem</div>")), 43101, AGORA)
+
+    def test_criacao_ilegivel_levanta_em_ler_origem(self):
+        s = _Stokki(origem=_origem_com(created=""))
+        with self.assertRaises(ValueError):
+            de.ler_origem(s, 2278, datetime(2026, 11, 3, 11, 41), datetime(2026, 11, 3, 12, 12), 4)
+
+    def test_id_ilegivel_levanta(self):
+        with self.assertRaises(ValueError) as c:
+            de.ler_devolucoes(_Stokki(origem=_origem_com(id="sem numero")), 2278, self.DESDE, AGORA)
+        self.assertIn("addressing/table", str(c.exception))
+
+    # N2: devolucoes do proprio robo (outros pedidos) nao contam
+    def test_ler_devolucoes_ignora_ids(self):
+        s = _Stokki()
+        self.assertEqual(de.ler_devolucoes(s, 2278, self.DESDE, AGORA, ignorar={110832}), [])
+        self.assertEqual(de.ler_devolucoes(s, 2278, self.DESDE, AGORA, ignorar=frozenset())[0]["id"], 110832)
+
+    def test_plano_com_o_movimento_ignorado_volta_a_mover(self):
+        s = _Stokki()
+        self.assertEqual(de.montar_plano(s, 43101, AGORA)["status"], "JA_DEVOLVIDO")
+        p = de.montar_plano(_Stokki(), 43101, AGORA, ignorar_movimentos=frozenset({110832}))
+        self.assertEqual(p["status"], "MOVER")
+        self.assertEqual(p["itens"][0]["destinos"][0], ("FABENNE-1", 4))
+
+    # N3: o motivo diz o que foi visto
+    def test_motivo_quando_o_movimento_nao_fecha(self):
+        p = de.montar_plano(_Stokki(origem=_origem_com(quantity="5")), 43101, AGORA)
+        self.assertEqual(p["status"], "DUVIDA")
+        self.assertIn("nao fecha com a quantidade do pedido", p["motivo"])
+        self.assertIn("produto FABMLT", p["motivo"])
+
+    def test_motivo_quando_a_devolucao_nao_concluiu(self):
+        p = de.montar_plano(_Stokki(origem=_origem_com(concluded="")), 43101, AGORA)
+        self.assertEqual(p["status"], "DUVIDA")
+        self.assertIn("ainda em andamento", p["motivo"])
+        self.assertIn("produto FABMLT", p["motivo"])
 
 
 if __name__ == "__main__":
