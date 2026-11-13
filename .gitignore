@@ -50,3 +50,5 @@ verificador_botoes/relatorios/
 
 # Videos gerados da aula do portal (aula_portal/gravar.py); vao pra VPS por scp
 aula_portal/saida/
+# ... e da aula da equipe (aula_equipe/gravar.py); vao pra dados/aula_equipe/ na VPS
+aula_equipe/saida/

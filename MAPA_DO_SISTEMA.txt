@@ -126,6 +126,11 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  Página pública /cliente/regioes ........... portal_cliente/regioes_atendimento.py + templates/regioes.html
  Página pública /cliente/aula (vídeos) ..... portal_cliente/aula.py + templates/aula.html; vídeos gerados
                                             por aula_portal/gravar.py, servidos de dados/aula/ (aula.json)
+ Aula da equipe /painel/aula (vídeos) ...... painel_agentes.py (aula_equipe, aula_equipe_arquivo) + templates/
+                                            aula_equipe.html; SÓ COM LOGIN (qualquer nível; caminho em
+                                            acesso_telas.CAMINHOS_COMUNS; item "Aula (vídeos)" no menu pra todos).
+                                            Sem login: /login?proximo=aula e volta pros vídeos. Vídeos gerados por
+                                            aula_equipe/gravar.py, servidos de dados/aula_equipe/ (aula.json)
  Envio de pedido (XML) pelo cliente ........ portal_cliente/envio_pedidos.py + enviar_stokki.py
  Documentos (PDF) anexados ao pedido ....... portal_cliente/anexos_pedido.py (11/11): na prévia do envio (PDFs junto
                                              com os XMLs, o sistema sugere o pedido; ou "+ Anexar PDF" por pedido) e
@@ -1316,6 +1321,17 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            Narração edge-tts (Francisca; NUNCA voz "Multilingual": a Thalita
                            trocava de língua em frases fixas), ffmpeg do imageio-ffmpeg. Saída em
                            aula_portal/saida/ (gitignored) -> scp pra dados/aula/ na VPS.
+ ../aula_equipe/            Gerador da aula INTERNA (13/11), mesmo motor do aula_portal (overlay,
+                           narração, sincronia): `py -3.11 -m aula_equipe.gravar --video N | --todos`.
+                           Sobe o PAINEL deste checkout na porta 8098 com config/banco fictícios
+                           (mesma marca do aula_portal; logins fixos galpao/expedicao), login pela
+                           API (a tela inicial nem abre). servidor.py: coleta confirmada vira
+                           EXPEDIDO sem robô/Stokki, retorno não copia pro GCS, cookie sem Secure.
+                           Formatos: "retrato" (360x640 a 2x = 720x1280, tela de celular, pro
+                           WhatsApp) e "paisagem" (1024x576 a 1,25x = 1280x720; a doca aparece numa
+                           moldura de celular com a tela num iframe: ("celular",) nos roteiros).
+                           Vídeos: 1 Retornos (em pé), 2 Coletas (deitado). Saída em
+                           aula_equipe/saida/ (gitignored) -> scp pra dados/aula_equipe/ na VPS.
  auth_cliente.py           CNPJ + PIN, grupos econômicos. Conta criada com
                            PIN padrão (clientes_portal.trocar_pin=1) só
                            abre /trocar-pin até o cliente trocar.
