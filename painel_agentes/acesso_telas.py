@@ -66,6 +66,7 @@ TELAS = [
     ("laboratorio_rotas", "Laboratório", "Planejar", [r"^/laboratorio-rotas$"]),
     ("expedicao", "Expedição", "Operar", [r"^/expedicao$", r"^/api/expedicao/(romaneio|excluir-pedido)(/|$)"]),
     ("expedicao_consulta", "Consultar pedido", "Operar", [r"^/expedicao/consulta$", r"^/api/expedicao/consulta$"]),
+    ("expedicao_coletas", "Coletas", "Operar", [r"^/expedicao/coletas(/|$)", r"^/api/expedicao/coletas(/|$)"]),
     ("wms", "Galpão", "Operar", [r"^/wms(?!/estoque$)(/|$)", r"^/api/wms/"]),
     ("wms_estoque", "Estoque", "Operar", [r"^/wms/estoque$", r"^/api/wms/(pedidos|pendencias|reservas-antigas)(/|$)",
                                           r"^/api/wms/produtos(/\d+/saldo)?$"]),

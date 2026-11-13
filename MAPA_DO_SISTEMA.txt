@@ -90,6 +90,8 @@
                                              do painel o expedir_pedidos.py --pedido ... --tela-pedidos, que solta o
                                              pedido da Expedição Programada (stokki/expedicao_programada.py) e aceita
                                              retirada/coleta pela transportadora da Stokki (12/11)
+ Coletas (saída de pedido de retirada) ..... coletas/ + tela /expedicao/coletas (folha COL-n impressa; nome, placa
+                                             e FOTO da folha obrigatórios; expede pelo robô com --coleta N)
  Insucesso de entrega ...................... insucesso_entrega/ + resposta_insucesso/
  Documentos (NF, boleto) por pedido ........ documentos_pedido/processar_documentos.py
  Tela de planejamento (dados) .............. painel_agentes/planejamento_rotas.py
@@ -393,6 +395,8 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                                              embarcador; alerta à equipe após 2 dias úteis)
  08:20 e 15:20               notificar-pedidos-em-espera     notificar_pedidos_em_espera.py
  08-19h a cada 30 min        expedicao-frequente             expedir_pedidos.py
+ 07-20h a cada 10 min        expedicao-coletas-ler           coletas/ler_stokki.py (listagem "Aguardando
+                                                             Transportador" da Stokki -> expedicao_coletas_fila)
  08-17h xx:05/xx:35          acompanhar-retiradas            retiradas/acompanhar_retiradas.py
  08,10,...,20h               reconciliar-retirada            reconciliar_pedidos_retirada.py --cancelar
  seg-sex 09,11,13,15,17:10   documentos-incremental          documentos_pedido/processar_documentos.py --incremental
@@ -989,6 +993,10 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            consulta galpao_pedidos (coletor do galpao, 1 min) e
                            portal_envios (menos ERRO/DUPLICADO); cancelado antes da
                            Vuupt entra como CANCELADO. Coluna Situacao na Stokki.
+                           Status COLETADO (12/11): retirada que saiu do galpao sem
+                           Vuupt = linha do galpao cuja expedicao_coletas_fila tem
+                           retirada = 1 e saiu_em (coletas/ler_stokki.py). O painel
+                           do pedido mostra a coleta (COL-n, motorista, placa, foto).
                            Canhoto (coluna e filtro com/sem, 11/11) = mesmo criterio
                            da /canhotos-pendentes: checklist Vuupt > 0, comprovante
                            CANHOTO/ASSINATURA do app ou canhotos_manuais; "sem" = so
@@ -1171,6 +1179,13 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
    /mapa-rotas                mapa_rotas.html
    /laboratorio-rotas         laboratorio_rotas.html
    /expedicao                 expedicao.html
+   /expedicao/coletas         coletas_expedicao.html (+ /api/expedicao/coletas/...: folha,
+                              estado (a lista recarrega quando outro aparelho confirma),
+                              /expedicao/coletas/<id> = tela de UMA coleta, destino do QR;
+                              <id>/confirmar|cancelar|tentar-de-novo|retirar|andamento;
+                              <id>/folha.pdf e <id>/foto). Ver: total, operador, leitura,
+                              atendimento, logistica, expedicao, galpao. Agir: total,
+                              operador, expedicao, galpao. Homologação: conclui simulada.
    /expedicao/consulta        consulta_pedido_expedicao.html (+ /api/expedicao/consulta;
                               níveis total/operador/expedicao/galpao)
    /vigia                     vigia_pedidos.html (lista do vigia, só leitura;
@@ -1486,6 +1501,33 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
                            não confirmado. A validação de fotos do app
                            próprio está em nucleo/validacao_fotos.py.
 
+ coletas/                  Coletas da Expedição (12/11): saída de pedido de retirada
+                           (cliente ou transportadora busca no galpão) pelo painel.
+   banco.py                 Tabelas expedicao_coletas_fila (espelho da listagem
+                            "Aguardando Transportador"), expedicao_coletas (folha
+                            COL-n), expedicao_coletas_pedidos, expedicao_coletas_leituras.
+                            (galpao_coletas é outra coisa: log do coletor do Galpão 3D.)
+   ler_stokki.py            Timer expedicao-coletas-ler (10 min). O coletor do Galpão
+                            3D NÃO acompanha "Aguardando Transportador"; este sim, com
+                            a transportadora. eh_retirada() = a regra única (CLIENTE
+                            RETIRA no nome ou tipo RETIRADA no cadastro). carga_inicial
+                            = estava lá na 1a leitura (o acumulado). Sumiu da listagem
+                            = saiu_em. Leitura com erro/ocupada não grava nada.
+   regras.py                a_coletar, gerar_folha (máx. 30, 1 transportadora; Cliente
+                            Retira = 1 embarcador), confirmar (foto + nome + placa
+                            obrigatórios), aplicar_resultados, tentar_de_novo,
+                            retirar_pedido, tem_foto (o robô confere), retiradas_novas.
+   folha_pdf.py             PDF A4 da folha (PIL), 1 página até 30 pedidos, com a marca
+                            (assets/logo_freshlog.png, azul-marinho e verde-água) e QR code
+                            que abre /expedicao/coletas/<id> no celular da doca (13/11).
+   exemplo_homolog.py       SÓ na homologação: monta a fila uma vez com a cópia dos dados
+                            (galpao_pedidos + transportadora do batimento), porque a
+                            bancada nunca lê a Stokki. Em produção não faz nada.
+                           Fotos em dados/coletas/COL-<id>-<8 hex>.jpg. Retirada nova
+                           (vista depois da 1a leitura) só expede por coleta com foto:
+                           expedir_pedidos._decidir_retirada recusa sem --coleta N, e
+                           o botão "Expedir na Stokki" da /pedidos responde 400 na
+                           hora. O acumulado (carga_inicial) ainda sai pelo botão.
  galpao3d/                 Galpão 3D (visão 3D do galpão com dados da Stokki/
                            Vuupt; só nível total). Tela /galpao-3d no painel
                            (seção 10), alimentada pelo timer galpao3d-coletar.

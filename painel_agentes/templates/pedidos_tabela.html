@@ -61,6 +61,7 @@
   .barra-status[hidden] { display: none; }
   .barra-status span { min-width: 3px; }
   .barra-status .b-IMPORTADO { background: var(--remetente); }
+  .barra-status .b-COLETADO { background: var(--acento); opacity: .55; }
   .barra-status .b-ENTREGUE { background: var(--acento); }
   .barra-status .b-INSUCESSO { background: var(--erro); }
   .barra-status .b-ABERTO { background: var(--texto-suave); }
@@ -292,7 +293,7 @@
   filtros em tela cheia. Mesma rota e mesmos dados da tabela; só aparece com
   html.modo-mobile. As ações reaproveitam o menu, o lote e os modais de baixo.
 #}
-{% set abas_m = [("", "Todos"), ("IMPORTADO", "Importados"), ("ABERTO", "Abertos"), ("EM_ROTA", "Em rota"), ("ENTREGUE", "Entregues"), ("INSUCESSO", "Insucesso"), ("CANCELADO", "Cancelados")] %}
+{% set abas_m = [("", "Todos"), ("IMPORTADO", "Importados"), ("COLETADO", "Coletados"), ("ABERTO", "Abertos"), ("EM_ROTA", "Em rota"), ("ENTREGUE", "Entregues"), ("INSUCESSO", "Insucesso"), ("CANCELADO", "Cancelados")] %}
 {% set opcoes_canhoto = [('com', 'Com canhoto'), ('sem', 'Sem canhoto')] %}
 {% set n_filtros_m = [filtros.sender_id, filtros.agent_id, filtros.zona, filtros.fluxo, filtros.canhoto, request.args.get('de') or request.args.get('ate'), filtros.data_tipo != 'referencia']|select|list|length %}
 <div class="so-m" id="pm">
@@ -334,7 +335,7 @@
           <span class="pm-l1"><span class="pm-cod">{{ l.codigo }}</span><span class="pm-dest">{{ l.destinatario or '—' }}</span>{% if ordem != 'data' %}<span class="pm-data">{{ formatar('data', l.data)[:5] }}</span>{% endif %}</span>
           {%- if l.status == 'INSUCESSO' %}{% set info = [l.motivo or l.rota] %}
           {%- elif l.status in ('EM_ROTA', 'ENTREGUE') %}{% set info = [l.rota, l.motorista, formatar('conclusao', l.conclusao)[11:] if l.status == 'ENTREGUE' else ''] %}
-          {%- elif l.status == 'IMPORTADO' %}{% set info = [l.situacao_stokki, (formatar('caixas', l.caixas) ~ ' cx') if l.caixas is not none else '', l.embarcador] %}
+          {%- elif l.status in ('IMPORTADO', 'COLETADO') %}{% set info = [l.situacao_stokki, (formatar('caixas', l.caixas) ~ ' cx') if l.caixas is not none else '', l.embarcador] %}
           {%- elif l.status == 'ABERTO' and l.agendamento %}{% set info = ['agendado ' ~ formatar('agendamento', l.agendamento)[:5] ~ ' ' ~ formatar('agendamento', l.agendamento)[11:]] %}
           {%- else %}{% set info = [(formatar('caixas', l.caixas) ~ ' cx') if l.caixas is not none else '', l.zona] %}{% endif %}
           {%- set info = info|select|join(' · ') %}
@@ -1576,7 +1577,7 @@
           const n = c[a.dataset.fila];
           if (typeof n === "number") a.querySelector(".n").textContent = n.toLocaleString("pt-BR");
         });
-        const barra = $("barra-status"), nomes = { IMPORTADO: "importados (ainda não estão na Vuupt)", ENTREGUE: "entregues", INSUCESSO: "insucessos", ABERTO: "abertos", EM_ROTA: "em rota", CANCELADO: "cancelados" };
+        const barra = $("barra-status"), nomes = { IMPORTADO: "importados (ainda não estão na Vuupt)", COLETADO: "coletados no galpão", ENTREGUE: "entregues", INSUCESSO: "insucessos", ABERTO: "abertos", EM_ROTA: "em rota", CANCELADO: "cancelados" };
         if (!barra || !c.total) return;
         const partes = [];
         Object.keys(nomes).forEach((st) => {
@@ -1754,10 +1755,15 @@
     corpo.appendChild(dest);
 
     const grade = no("section", "pm-cartao pm-grade");
-    [["Embarcador", p.embarcador], ["Na Stokki", p.stokki], ["Caixas", p.caixas], ["Data", p.data], ["Rota", p.rota], ["Motorista", p.motorista],
+    [["Embarcador", p.embarcador], ["Na Stokki", p.stokki], ["Coleta", p.coleta], ["Caixas", p.caixas], ["Data", p.data], ["Rota", p.rota], ["Motorista", p.motorista],
      ["Janela", p.janela], ["Agendamento", p.agendamento], ["Zona", p.zona], ["Conclusão", p.conclusao],
      ["Serviço", p.servico && p.servico !== p.codigo ? p.servico : ""], ["Motivo", p.motivo]]
       .forEach(([r, v]) => { if (v) grade.appendChild(campo(r, v)); });
+    if (p.coleta_foto) {
+      const f = no("a", "pm-btn", "Ver foto da folha de coleta");
+      f.href = p.coleta_foto; f.target = "_blank"; f.rel = "noopener";
+      grade.appendChild(f);
+    }
     if (grade.childNodes.length) corpo.appendChild(grade);
 
     // comprovante: mesmo critério da coluna e do filtro de canhoto
