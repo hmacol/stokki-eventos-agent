@@ -799,6 +799,8 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  transportadoras.py         Tipo (ENTREGA/RETIRADA/TERCEIROS) e endereço de
                             redespacho; resolver_por_endereco.
  complexidade_entrega.py    Nível 1-4 por destinatário -> skill "{Carga}-{Nível}".
+ alteracoes_entrega.py      Registro (tabela alteracoes_entrega_portal) do endereço/data/horário
+                            que o cliente altera no portal; endereco_vigente, houve_alteracao_desde.
  categoria_cliente.py       Categoria do destinatário pelo CNAE (restaurante,
                             comércio pequeno, supermercado, atacado, pessoa
                             física, outros); tabela clientes_cnae. Ainda não
@@ -1314,14 +1316,18 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  endereco_entrega.py       Endereço de entrega escolhido na prévia: CEP com IBGE, última
                            entrega do destinatário (Vuupt/portal, por embarcador), <entrega>
                            inserido no XML do lote pelo worker (original intacto).
-alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horário): o cliente NÃO
-                          altera sozinho (Hugo, 01/11); o pedido vira chamado na área Entrega
-                          (mesmo caminho do "Deixar chamado") e o atendimento trata internamente.
-                          Chave portal_cliente.alteracao_entrega. Rotas em app.py:
-                          GET/POST /api/pedidos/<id>/alteracao (404 com a chave desligada; POST
-                          reavalia o pedido, 409 bloqueado, 400 inválido, 403 equipe);
+alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (quem pode, avisos,
+                          data pelo dia fixo); chave portal_cliente.alteracao_entrega.
+                          Rotas em app.py: GET/POST /api/pedidos/<id>/alteracao (404 com a chave
+                          desligada; POST reavalia na Vuupt, 409 bloqueado, 400 fora da area);
                           /api/dia traz alteracao_entrega.
-                          Nada muda na Vuupt; deploy so reinicia portal-cliente.
+                          Toda alteração avisa o grupo de WhatsApp do atendimento
+                          (notificar_whatsapp.avisar_alteracao_entrega; Hugo, 12/11).
+                          DEPLOY: reiniciar portal-cliente E painel-agentes (nucleo/pool.py e
+                          importado por painel_agentes/planejamento_rotas.py, no web do painel).
+                          Na 1a importacao horaria apos o deploy, os pedidos ainda sem rota de
+                          destinatarios com ajuste manual de horario de recebimento sao
+                          reenviados uma vez.
  enviar_stokki.py          Worker que cria o pedido na Stokki (Playwright) e, a cada
                            ciclo, executa os cancelamentos CANCELANDO sob a trava.
                            Fluxo Cross: converte pro item XD e enfileira a troca de NF.
@@ -1615,6 +1621,7 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
    clientes_portal, portal_* portal_cliente/ (envios, chamados, cotações)
    confirmacoes_rota, ofertas_rota, ofertas_avisos,
    disponibilidade_motoristas, ajustes_complexidade_cliente   regras/
+   alteracoes_entrega_portal  regras/alteracoes_entrega.py (alterações de entrega do cliente no portal)
    pedidos_roteirizados, pedidos_area_notificada,
    pedidos_segurados, agendamentos_origem, avisos_fora_dia_fixo
                              roteirizacao/
@@ -1715,6 +1722,12 @@ alterar_entrega.py        "Pedir alteração" da entrega (endereço, data, horá
    outra sessão e entrar"): todo login Playwright novo tem que passar por
    stokki/auth.aguardar_saida_do_login (o importador tem a sua cópia).
  - Chamada manual ao DataTables da Stokki dá 500; use as funções de stokki/.
+ - Importação horária (pipeline.aplicar_alteracoes_do_cliente): o endereço que
+   o cliente alterou no portal (alteracoes_entrega_portal) vence o da NF, com as
+   coordenadas gravadas (sem geocodificar), e o ajuste manual de horário de
+   recebimento (ajustes_complexidade_cliente, inclusive os feitos no
+   Planejamento) vence o horário extraído das mensagens da Stokki. Teste:
+   test_pipeline_alteracao_portal.py.
  - Vuupt: created_at/start_at em UTC SEM fuso. Use nucleo/normalizacao.py.
  - Códigos de pedido variam (#PS-1, PS-1, #PS-1-R2): normalize antes de
    comparar (nucleo/normalizacao.normalizar_codigo; normalizar_order_number
