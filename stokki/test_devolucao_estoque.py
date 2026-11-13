@@ -675,6 +675,49 @@ class TestRevisaoFinal(unittest.TestCase):
         p = de.montar_plano(TestPlano()._sem_devolucao(), 43101, AGORA)
         self.assertEqual((p["status"], p["itens"][0]["devolucoes_vistas"]), ("MOVER", []))
 
+    # I2: sem Bloqueio logo depois do cancelamento, espera (a Stokki pode gravar com atraso)
+    def test_i2_sem_bloqueio_nos_primeiros_10_min_aguarda(self):
+        p = de.montar_plano(_Stokki(movimentos={}), 43101, datetime(2026, 11, 3, 12, 14))
+        self.assertEqual(p["status"], "AGUARDAR")
+
+    def test_i2_sem_bloqueio_depois_de_10_min_e_nada(self):
+        p = de.montar_plano(_Stokki(movimentos={}), 43101, datetime(2026, 11, 3, 12, 23))
+        self.assertEqual(p["status"], "NADA")
+
+    def test_i2_ja_estava_nao_aguarda(self):
+        p = de.montar_plano(_Stokki(movimentos={}), 43101, datetime(2026, 11, 3, 12, 14), ja_estava=True)
+        self.assertEqual(p["status"], "NADA")
+
+    # I3: movimentacao do pedido que nao parece um cancelamento simples = duvida
+    def plano_com(self, *extras):
+        """Plano sobre a amostra real sem devolucao, com linhas extras do PS-43101 nas movimentacoes:
+        extras = (tipo, hora 'HH:MM', quantidade)."""
+        j = _json("movimentos_2278_2026_11.json")
+        base = next(r for r in j["aaData"] if "#PS-43101" in r["reference"])
+        for tipo, hora, q in extras:
+            quando = f'<div class="text-left-center">03/11/2026<br><span class="text-muted">{hora}</span></div>'
+            j["aaData"].append({**base, "date": quando, "conclusion": quando, "quantity": f"<h6>{q}</h6>",
+                                "type": f'<h6><span class="badge">{tipo}</span></h6>'})
+        j["iTotalDisplayRecords"] = len(j["aaData"])
+        return de.montar_plano(TestPlano()._sem_devolucao(movimentos={(2278, 11): j}), 43101, AGORA)
+
+    def test_i3_desbloqueio_com_a_referencia_do_pedido_e_duvida(self):
+        p = self.plano_com(("Desbloqueio", "12:30", 4))
+        self.assertEqual(p["status"], "DUVIDA")
+        self.assertIn("movimentacoes do pedido nao batem com um cancelamento simples (produto FABMLT)", p["motivo"])
+
+    def test_i3_bloqueio_do_pedido_longe_do_cancelamento_e_duvida(self):
+        p = self.plano_com(("Bloqueio", "09:12", 4))
+        self.assertEqual(p["status"], "DUVIDA")
+        self.assertEqual(p["itens"][0]["situacao"], "duvida")
+        self.assertIn("cancelamento simples (produto FABMLT)", p["motivo"])
+
+    def test_i3_dois_bloqueios_no_minuto_do_cancelamento_somam_e_movem(self):
+        p = self.plano_com(("Bloqueio", "12:12", 2))
+        self.assertEqual(p["status"], "MOVER")
+        self.assertEqual(p["itens"][0]["qtd"], 6)
+        self.assertEqual(p["itens"][0]["destinos"], [("FABENNE-1", 6)])
+
 
 if __name__ == "__main__":
     unittest.main()

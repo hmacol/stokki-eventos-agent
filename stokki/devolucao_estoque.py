@@ -115,6 +115,7 @@ def cancelamento_antigo(cancelado_em, agora: datetime, ja_estava: bool) -> bool:
 
 TOLERANCIA_ORIGEM = timedelta(minutes=2)
 MESES_PARA_TRAS = 3
+ESPERA_DO_BLOQUEIO_MINUTOS = 10   # sem Bloqueio ate 10 min depois do cancelamento: AGUARDAR, nao NADA
 COLS_MOVIMENTOS = ["date", "conclusion", "reference", "marker", "type", "motion", "quantity", "quantity_stock"]
 COLS_ORIGEM = ["id", "created", "concluded", "user", "origin", "destination", "quantity"]
 CHAVES_MOVIMENTOS = ("date", "conclusion", "reference", "type", "motion", "quantity")
@@ -342,12 +343,29 @@ def _saldo_do_embarcador(sess, cliente_id: int) -> list:
     return [{"endereco": e, "estoque": q} for e, q in por_endereco.items()]
 
 
+def _fora_do_padrao(movimentos: list, id_stokki: int, cancelado_em: datetime) -> bool:
+    """Movimentacao do pedido que nao parece um cancelamento simples: Desbloqueio com a referencia do PS, ou
+    Bloqueio do PS sem data ou a mais de ESPERA_DO_BLOQUEIO_MINUTOS do cancelamento (antes ou depois)."""
+    janela = timedelta(minutes=ESPERA_DO_BLOQUEIO_MINUTOS)
+    for m in movimentos:
+        if _ref_pedido(m.get("referencia")) != f"ps-{id_stokki}":
+            continue
+        if m.get("tipo") == "Desbloqueio":
+            return True
+        if m.get("tipo") == "Bloqueio" and (m.get("quando") is None or abs(m["quando"] - cancelado_em) > janela):
+            return True
+    return False
+
+
 def _plano_do_item(sess, ped: dict, item: dict, agora: datetime, ignorar=frozenset()) -> tuple:
     """(item do plano, motivo ou ''). Erro de leitura sobe como excecao: nunca vira 'nada a devolver'."""
     saida = {**item, "qtd": 0, "destinos": [], "situacao": "nada", "devolucoes_vistas": []}
     movimentos = []
     for ano, mes in _meses_dos_movimentos(ped["cancelado_em"], agora):
         movimentos += ler_movimentos(sess, item["product_id"], ano, mes)
+    if _fora_do_padrao(movimentos, ped["id_stokki"], ped["cancelado_em"]):
+        saida["situacao"] = "duvida"
+        return saida, f"movimentacoes do pedido nao batem com um cancelamento simples (produto {item['sku']})"
     bloqueado = bloqueado_pelo_pedido(movimentos, ped["id_stokki"])
     if bloqueado <= 0:
         return saida, ""
@@ -378,7 +396,8 @@ def _plano_do_item(sess, ped: dict, item: dict, agora: datetime, ignorar=frozens
 
 
 def montar_plano(sess, id_stokki: int, agora: datetime, ja_estava: bool = False, ignorar_movimentos=frozenset()) -> dict:
-    """Le o pedido e a movimentacao e decide: MOVER / NADA / JA_DEVOLVIDO / ANTIGO / DUVIDA.
+    """Le o pedido e a movimentacao e decide: MOVER / NADA / JA_DEVOLVIDO / ANTIGO / DUVIDA / AGUARDAR
+    (sem Bloqueio nos primeiros ESPERA_DO_BLOQUEIO_MINUTOS: tentar no proximo ciclo).
     Na duvida nada se move (o plano inteiro vira DUVIDA). Falha de leitura levanta excecao.
     `ignorar_movimentos`: ids (#A-<n>) de devolucoes do proprio robo para outros pedidos, que nao provam nada."""
     ped = {**ler_pedido(sess, id_stokki), "id_stokki": int(id_stokki)}
@@ -404,6 +423,9 @@ def montar_plano(sess, id_stokki: int, agora: datetime, ja_estava: bool = False,
     motivo = "; ".join(motivos)
     if "duvida" in situacoes:
         return plano("DUVIDA", itens, motivo)
+    if (all(s == "nada" for s in situacoes) and not ja_estava
+            and agora < ped["cancelado_em"] + timedelta(minutes=ESPERA_DO_BLOQUEIO_MINUTOS)):
+        return plano("AGUARDAR", itens, "sem Bloqueio do pedido ainda: a Stokki pode gravar com atraso")
     if all(s == "nada" for s in situacoes):
         return plano("NADA", itens)
     if all(s in ("nada", "ja_devolvido") for s in situacoes):

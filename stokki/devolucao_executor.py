@@ -10,6 +10,7 @@ import contextlib
 import json
 import logging
 import os
+import time
 from datetime import datetime
 
 from stokki import contas, sessao_uso
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 MAX_TENTATIVAS = 3          # so para erro tecnico; conta ocupada nao conta
 ESPERA_CONTA_SEGUNDOS = 20  # espera curta: o ciclo do worker nao pode ficar preso
 MAX_POR_CICLO = 5
+ORCAMENTO_SEGUNDOS = 60     # nao comeca pedido novo depois disso no mesmo ciclo (o que esta em andamento termina)
 SEM_PLANO_DE_MOVER = ("NADA", "JA_DEVOLVIDO", "ANTIGO")
 TOL_QTD = 0.001
 
@@ -137,7 +139,9 @@ def _resumo(itens_fila: list) -> str:
     """O que foi movido e o que ficou no Virtual, por produto."""
     partes = []
     for i in itens_fila:
-        if not isinstance(i, dict) or i.get("qtd") is None or i.get("situacao", "mover") not in ("mover", "sem_destino"):
+        if not isinstance(i, dict) or i.get("qtd") is None:
+            continue
+        if i.get("situacao", "mover") not in ("mover", "sem_destino") and not _movs(i):
             continue
         movido = sum(m.get("movido") or 0 for m in _movs(i))
         t = f"{i.get('sku', '?')}: movido {movido:g} de {i['qtd']:g}"
@@ -150,7 +154,8 @@ def _resumo(itens_fila: list) -> str:
 
 def _encerrar(conn, id_stokki, cliente_id, status, itens, motivo, avisar_galpao, avisar_operacao,
               avisar_op=True, tentativa=False) -> None:
-    """Status final (FEITA, PARCIAL, DUVIDA, FALHA): grava, avisa o galpao do que foi movido e ainda nao foi
+    """Status final (FEITA, PARCIAL, DUVIDA, FALHA; ou NADA/JA_DEVOLVIDO/ANTIGO depois de ja ter movido algo):
+    grava, avisa o galpao do que foi movido e ainda nao foi
     avisado (marca `avisado` nos movimentos) e, fora FEITA, a operacao com o que foi movido e o que ficou."""
     texto = motivo
     if any(_movs(i) for i in itens):
@@ -236,8 +241,16 @@ def _processar_um(conn, config, row, simular, abrir_admin, mover, avisar_galpao,
         resumo = "; ".join(f"{i['sku']} qtd {i['qtd']:g} {i['situacao']} -> {i['destinos']}" for i in itens_fila)
         logger.info(f"devolucao_estoque SIMULACAO: PS-{id_stokki} plano {status} ({plano['motivo']}) {resumo}")
         return "ok"
+    if status == "AGUARDAR":   # Bloqueio ainda nao apareceu: continua PENDENTE, sem tentativa nem aviso
+        logger.info(f"devolucao_estoque: PS-{id_stokki} sem Bloqueio ainda, espera o proximo ciclo")
+        return "aguardar"
     if status in SEM_PLANO_DE_MOVER:
-        gravar(conn, id_stokki, status=status, itens=itens_fila)
+        if any(_confirmado(m) and not m.get("avisado") for i in itens_fila for m in _movs(i)):
+            # ja tinha movido algo numa tentativa anterior: galpao e operacao precisam saber
+            _encerrar(conn, id_stokki, cliente_id, status, itens_fila, plano["motivo"] or status.lower(),
+                      avisar_galpao, avisar_operacao)
+        else:
+            gravar(conn, id_stokki, status=status, itens=itens_fila)
         cont["nada"] += 1
         return "ok"
     if status != "MOVER":   # DUVIDA
@@ -359,8 +372,9 @@ def _mover_e_fechar(conn, config, row, plano, itens_fila, movimentos, ignorar, a
 
 
 def processar_pendentes(conn, config, *, simular: bool, abrir_admin, mover, avisar_galpao, avisar_operacao,
-                        agora=None) -> dict:
-    """Atende a fila (ate MAX_POR_CICLO pedidos por chamada). `abrir_admin()` e um gerenciador de contexto
+                        agora=None, relogio=time.monotonic) -> dict:
+    """Atende a fila (ate MAX_POR_CICLO pedidos por chamada; passados ORCAMENTO_SEGUNDOS desde o inicio, nao
+    comeca pedido novo: o envio dos clientes espera). `abrir_admin()` e um gerenciador de contexto
     que entrega a sessao admin ou levanta ContaOcupada se a conta esta ocupada (qualquer outro erro e tecnico).
     Conta ocupada (admin ou provider) = pedido continua PENDENTE sem gastar tentativa e o ciclo para. Erro
     tecnico: conta tentativa; na MAX_TENTATIVAS vira FALHA com um aviso. Um pedido com erro nunca impede os
@@ -369,15 +383,20 @@ def processar_pendentes(conn, config, *, simular: bool, abrir_admin, mover, avis
     cont = {"feitas": 0, "parciais": 0, "nada": 0, "falhas": 0, "esperando": 0}
     if not ligado(config):
         return cont
+    inicio = relogio()
     for row in pendentes(conn)[:MAX_POR_CICLO]:
         id_stokki = row["id_stokki"]
+        if relogio() - inicio >= ORCAMENTO_SEGUNDOS:
+            logger.info(f"devolucao_estoque: orcamento de {ORCAMENTO_SEGUNDOS} s do ciclo esgotado; PS-{id_stokki} "
+                        "e os seguintes ficam para o proximo ciclo")
+            break
         try:
             res = _processar_um(conn, config, row, simular, abrir_admin, mover, avisar_galpao, avisar_operacao,
                                 agora or datetime.now(), cont)   # sem `agora` (teste): relogio por pedido
             if res == "ocupada":
                 cont["esperando"] += 1
                 break   # conta ocupada vale para os proximos tambem
-            if res == "mudou":
+            if res in ("mudou", "aguardar"):
                 cont["esperando"] += 1
         except Exception as e:  # noqa: BLE001 -- um pedido nunca derruba a fila
             logger.error(f"devolucao_estoque: PS-{id_stokki} falhou: {e}")

@@ -681,6 +681,80 @@ class TestExecutor(unittest.TestCase):
         self.mock_lib.assert_called_once()
         self.assertFalse(self.admin_aberta)
 
+    # I2: AGUARDAR = esperando, sem tentativa, sem aviso, e o laco segue
+    def test_i2_aguardar_fica_pendente_e_segue_para_o_proximo(self):
+        self.fila(1, 2)
+
+        def plano(sess, id_stokki, agora, ja_estava=False, ignorar_movimentos=frozenset()):
+            self.planos.append(id_stokki)
+            return _plano("AGUARDAR", [_item(situacao="nada")]) if id_stokki == 1 else self.plano
+        ex.montar_plano.side_effect = plano
+        r = self.rodar()
+        l = self.linha(1)
+        self.assertEqual((l["status"], l["tentativas"], l["itens_json"]), ("PENDENTE", 0, None))
+        self.assertEqual((r["esperando"], r["feitas"], r["nada"]), (1, 1, 0))
+        self.assertEqual(self.linha(2)["status"], "FEITA")
+        self.assertEqual(self.operacao, [])
+        self.assertEqual([c[0] for c in self.chamadas_mover], [100])
+
+    # I4: orcamento de tempo por ciclo: nao comeca pedido novo depois de 60 s
+    def test_i4_passou_do_orcamento_nao_comeca_o_proximo(self):
+        self.fila(1, 2, 3)
+        relogio = [1000.0]
+
+        def plano(sess, id_stokki, agora, ja_estava=False, ignorar_movimentos=frozenset()):
+            self.planos.append(id_stokki)
+            relogio[0] += 70   # o primeiro pedido demora 70 s
+            return self.plano
+        ex.montar_plano.side_effect = plano
+        r = self.rodar_sem_agora(relogio=lambda: relogio[0])
+        self.assertEqual((self.planos, r["feitas"]), ([1], 1))
+        self.assertEqual(self.linha(1)["status"], "FEITA")
+        for i in (2, 3):
+            l = self.linha(i)
+            self.assertEqual((l["status"], l["tentativas"], l["itens_json"]), ("PENDENTE", 0, None))
+
+    def test_i4_dentro_do_orcamento_segue(self):
+        self.fila(1, 2)
+        relogio = [0.0]
+
+        def plano(sess, id_stokki, agora, ja_estava=False, ignorar_movimentos=frozenset()):
+            self.planos.append(id_stokki)
+            relogio[0] += 25
+            return self.plano
+        ex.montar_plano.side_effect = plano
+        r = self.rodar_sem_agora(relogio=lambda: relogio[0])
+        self.assertEqual(r["feitas"], 2)
+        self.assertEqual(ex.ORCAMENTO_SEGUNDOS, 60)
+
+    # I5: fechamento sem plano de mover depois de ja ter movido avisa o galpao e a operacao
+    def test_i5_retomada_que_vira_ja_devolvido_avisa_o_galpao_uma_vez(self):
+        self.fila(1)
+        feito = [{"product_id": 1, "sku": "A", "nome": "prod A", "qtd": 4, "situacao": "mover", "movido": 4,
+                  "cliente_id": 100,
+                  "movimentos": [{"destino": "E1", "pedido": 4, "movido": 4, "adjust_id": 555, "erro": ""}]}]
+        de.gravar(self.conn, 1, itens=feito, mais_uma_tentativa=True)
+        self.plano = _plano("JA_DEVOLVIDO", [_item(1, "A", 4, (), "ja_devolvido"), _item(2, "B", 0, (), "nada")])
+        r = self.rodar()
+        l = self.linha(1)
+        self.assertEqual((l["status"], r["nada"]), ("JA_DEVOLVIDO", 1))
+        self.assertEqual(self.galpao, [(1, 100, [{"sku": "A", "nome": "prod A", "movido": 4, "destino": "E1"}])])
+        (op,) = self.operacao
+        self.assertIn("A: movido 4 de 4", op[2])
+        self.assertTrue(json.loads(l["itens_json"])[0]["movimentos"][0]["avisado"])
+        self.assertEqual(self.chamadas_mover, [])
+        self.rodar()
+        self.assertEqual((len(self.galpao), len(self.operacao)), (1, 1))
+
+    def test_i5_movimento_ja_avisado_nao_repete(self):
+        self.fila(1)
+        feito = [{"product_id": 1, "sku": "A", "nome": "prod A", "qtd": 4, "movido": 4, "cliente_id": 100,
+                  "movimentos": [{"destino": "E1", "movido": 4, "adjust_id": 555, "erro": "", "avisado": True}]}]
+        de.gravar(self.conn, 1, itens=feito)
+        self.plano = _plano("NADA", [_item(1, "A", 0, (), "nada")])
+        self.rodar()
+        self.assertEqual((self.linha(1)["status"], self.galpao, self.operacao), ("NADA", [], []))
+
 
 class TestAdjustIdsDoRobo(unittest.TestCase):
     def test_junta_os_ids_das_outras_linhas_de_qualquer_status(self):
