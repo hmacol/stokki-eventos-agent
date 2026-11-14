@@ -7,6 +7,8 @@
     // guia da tela (tour) nao abre sozinho no meio do video
     for (const id of ['portal', 'cotacao', 'acompanhamento', 'envios']) localStorage.setItem('tour_visto:' + id, '1');
   } catch (e) {}
+  // tela dentro da moldura de celular (aula da equipe): a camada mora so na pagina de cima
+  if (window.top !== window) return;
 
   const CSS = `
     /* reset do popover (UA poe inset:0/margin:auto/borda): vem antes, as regras abaixo ganham */
@@ -34,6 +36,15 @@
     #aula-cartao .sub { font: 700 18px 'Segoe UI', Arial, sans-serif; letter-spacing: .16em; text-transform: uppercase; color: #00C896; }
     #aula-cartao .tit { font: 800 60px/1.08 'Segoe UI', Arial, sans-serif; color: #fff; margin-top: 14px; max-width: 900px; }
     ${cfg.semDica ? '.atd-balao .dica { display: none !important; }' : ''}
+    ${cfg.legendaBaixo ? `#aula-legenda { bottom: ${cfg.legendaBaixo}px; }` : ''}
+    /* video em pe (celular, 360 px): mesma camada, em escala de celular */
+    @media (max-width: 500px) {
+      #aula-legenda { font-size: 17px; max-width: 92%; width: max-content; padding: 10px 14px; border-radius: 10px; }
+      #aula-cartao { padding: 0 28px; }
+      #aula-cartao::after { right: -120px; top: -120px; width: 320px; height: 320px; }
+      #aula-cartao .sub { font-size: 13px; letter-spacing: .12em; }
+      #aula-cartao .tit { font-size: 38px; }
+    }
   `;
 
   // <dialog> aberto com showModal() fica na "camada de topo", acima de qualquer
@@ -71,8 +82,11 @@
     },
     // move o cursor ate o centro do elemento e desenha o anel; devolve o centro
     destacar(sel, anel = true) {
+      return window.aula.destacarCaixa(el(sel).getBoundingClientRect(), anel);
+    },
+    // o mesmo, com o retangulo ja medido (elemento dentro da moldura de celular)
+    destacarCaixa(r, anel = true) {
       montar();
-      const r = el(sel).getBoundingClientRect();
       const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
       const cur = document.getElementById('aula-cursor');
       cur.style.transition = ''; cur.style.left = x + 'px'; cur.style.top = y + 'px';

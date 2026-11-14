@@ -92,9 +92,11 @@ def achar_marcas(cores: list, fps: int, n: int) -> list[float]:
     return tempos
 
 
-def cores_do_canto(webm: Path) -> list[tuple]:
-    """Cor media do quadrado da marca em cada quadro (FPS) do video bruto."""
-    m, lado = MARCA_X + 2, MARCA_LADO - 4
+def cores_do_canto(webm: Path, escala: float = 1) -> list[tuple]:
+    """Cor media do quadrado da marca em cada quadro (FPS) do video bruto.
+    escala = pixels do video por pixel da pagina (2 no video em pe, 1,25 no
+    deitado da aula da equipe)."""
+    m, lado = round((MARCA_X + 2) * escala), round((MARCA_LADO - 4) * escala)
     r = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-loglevel", "error", "-i", str(webm), "-vf",
                         f"fps={FPS},crop={lado}:{lado}:{m}:{m},scale=1:1:flags=area", "-f", "rawvideo",
                         "-pix_fmt", "rgb24", "-"], capture_output=True, check=True)
@@ -118,15 +120,18 @@ def momento_capa(tempos: list[float], total: float) -> float:
     return max([t for t in tempos if t <= alvo] + [tempos[min(1, len(tempos) - 1)]])
 
 
-def comando_ffmpeg(webm: Path, falas: list[tuple[Path, float]], saida: Path, corte: float, total: float) -> list[str]:
+def comando_ffmpeg(webm: Path, falas: list[tuple[Path, float]], saida: Path, corte: float, total: float,
+                   escala: float = 1) -> list[str]:
     """Video cortado em `corte` s + cada fala atrasada pro seu instante
     (relativo ao corte), misturadas sem normalizar o volume."""
+    mx, my, lado = (round((MARCA_X - 2) * escala), round((MARCA_Y - 2) * escala),
+                    round((MARCA_LADO + 4) * escala))
     cmd = [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-ss", f"{corte:.3f}", "-i", str(webm)]
     for mp3, _ in falas:
         cmd += ["-i", str(mp3)]
     filtros = [f"[{i + 1}:a]adelay={int(round(t * 1000))}|{int(round(t * 1000))}[a{i}]" for i, (_, t) in enumerate(falas)]
     filtros.append("".join(f"[a{i}]" for i in range(len(falas))) + f"amix=inputs={len(falas)}:normalize=0[aout]")
-    filtros.append(f"[0:v]delogo=x={MARCA_X - 2}:y={MARCA_Y - 2}:w={MARCA_LADO + 4}:h={MARCA_LADO + 4}[vout]")
+    filtros.append(f"[0:v]delogo=x={mx}:y={my}:w={lado}:h={lado}[vout]")
     cmd += ["-filter_complex", ";".join(filtros), "-map", "[vout]", "-map", "[aout]", "-t", f"{total:.3f}",
             "-c:v", "libx264", "-preset", "medium", "-crf", "23", "-pix_fmt", "yuv420p", "-r", "25",
             "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(saida)]

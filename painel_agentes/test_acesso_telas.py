@@ -124,7 +124,8 @@ class TestAcessoPersonalizado(unittest.TestCase):
         html = r.get_data(as_text=True)
         nav = html[html.index('aria-label="Telas do painel"'):]
         nav = nav[:nav.index("</nav>")]
-        self.assertEqual(set(re.findall(r'<span class="rotulo">([^<]+)</span>', nav)), {"Agentes", "Tratativas"})
+        self.assertEqual(set(re.findall(r'<span class="rotulo">([^<]+)</span>', nav)),
+                         {"Agentes", "Tratativas", "Aula (vídeos)"})   # a Aula todo login ve (13/11)
         self.assertIn("personalizado", html)
         for url in ("/inicio", "/torre", "/acessos", "/historico"):
             self.assertEqual(cliente.get(url).status_code, 403, url)
