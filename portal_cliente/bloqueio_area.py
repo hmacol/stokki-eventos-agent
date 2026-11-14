@@ -86,6 +86,32 @@ def avisar_cancelamento(envio: dict, por: str) -> bool:
         return False
 
 
+def avisar_endereco_alterado(envio: dict, resultado: dict, por: str) -> bool:
+    """Cliente trocou o endereco de entrega de um envio bloqueado (Hugo, 13/11):
+    mensagem de sistema no chamado do bloqueio. Falha nao derruba a acao."""
+    chamado_id = envio.get("bloqueio_chamado_id")
+    if not chamado_id:
+        return False
+    try:
+        ch = _chamados()
+        conn_ch = ch.conectar()
+        try:
+            chamado = ch.buscar_chamado(conn_ch, chamado_id)
+            if not chamado:
+                return False
+            quem = "pela equipe Fresh Log" if str(por).startswith("equipe") else "pelo cliente"
+            fim = ("A região é atendida: o pedido segue para a Stokki." if resultado.get("liberado")
+                   else "A região também não é atendida: continua aguardando liberação.")
+            ch.mensagem_sistema(conn_ch, chamado, f"Endereço de entrega da NF {_rotulo(envio)} alterado {quem} pela aba Envios "
+                                                  f"para {resultado.get('endereco') or '?'}. {fim}")
+            return True
+        finally:
+            conn_ch.close()
+    except Exception as e:
+        logger.warning(f"bloqueio: nao registrou a troca de endereco no chamado {chamado_id}: {e}")
+        return False
+
+
 TIPOS_SEM_AREA = ("RETIRADA", "TERCEIROS")
 _ROTULO_TIPO = {"RETIRADA": "retirada no galpão", "TERCEIROS": "redespacho"}
 

@@ -996,6 +996,7 @@ def api_envios_listar():
     return jsonify({"envios": lista, "resumo": envios.resumo_envios(lista), "dias": envios.DIAS_LISTAGEM,
                     "regra_xml": cfg["regra_xml"], "regra_xml_rotulo": envios.REGRAS_XML.get(cfg["regra_xml"], ""),
                     "envio_ativo": cfg["envio_ativo"], "client_id": cfg["client_id"], "fila": fila,
+                    "endereco_entrega_ativo": endereco_entrega.entrega_ativa(_CONFIG),
                     "atualizado_em": datetime.now().strftime("%H:%M")})
 
 
@@ -1391,12 +1392,19 @@ def api_envios_acao(envio_id):
         envio = envios.buscar_envio(conn, envio_id, _empresa_envio()['cnpj'])
         if not envio:
             return jsonify({"erro": "Pedido não encontrado."}), 404
-        resultado = envios.aplicar_acao(conn, envio, tipo, corpo, _quem_envia())
+        if tipo == "alterar_endereco":
+            # pedido barrado pela area (13/11): troca o endereco e reavalia a regiao
+            resultado = envios.alterar_endereco_bloqueado(conn, envio, corpo.get("endereco"), _CONFIG, _quem_envia())
+        else:
+            resultado = envios.aplicar_acao(conn, envio, tipo, corpo, _quem_envia())
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     finally:
         conn.close()
     logger.info(f"acao cnpj={_empresa_envio()['cnpj']} envio={envio_id} tipo={tipo} por={_quem_envia()} -> {resultado}")
+    if tipo == "alterar_endereco" and envio.get("bloqueio_chamado_id"):
+        import bloqueio_area
+        bloqueio_area.avisar_endereco_alterado(envio, resultado, _quem_envia())
     if resultado.get("precisa_operacao"):
         _avisar_operacao_solicitacao(envio, tipo, corpo)
     # cancelamento de envio bloqueado por área (23/09): registra no chamado do chat

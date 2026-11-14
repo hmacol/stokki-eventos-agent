@@ -116,6 +116,7 @@ ROTULOS_SOLICITACAO = {
     "em_espera": "Tirar da rota (em espera)",
     "reagendar": "Reagendamento",
     "reenviar": "Reenvio",
+    "alterar_endereco": "Alteração do endereço de entrega",
 }
 
 # Regras de transformação do XML (as MESMAS do importador por e-mail,
@@ -1538,6 +1539,7 @@ def _linha(r: sqlite3.Row, solicitacoes: dict[int, list]) -> dict:
         "pode_em_espera": d["status"] in (STATUS_CRIADO, STATUS_DUPLICADO) and not any(s["tipo"] in ("em_espera", "cancelar") for s in pend),
         "pode_reagendar": _pode_reagendar(d["status"], cancelamento_pedido),
         "pode_reenviar": d["status"] in (STATUS_ERRO, STATUS_CANCELADO),
+        "pode_alterar_endereco": _pode_alterar_endereco(d),
     })
     d.pop("xml_path", None)
     d.pop("itens_json", None)
@@ -1750,6 +1752,59 @@ def aplicar_acao(conn: sqlite3.Connection, envio: dict, tipo: str, dados: dict, 
     conn.commit()
     return {"aplicado": False, "precisa_operacao": True,
             "mensagem": f"Reagendamento pra {detalhe} registrado -- a Fresh Log aplica assim que o pedido estiver identificado."}
+
+
+def _pode_alterar_endereco(d: dict) -> bool:
+    """Botao 'Alterar endereco de entrega' do pedido barrado pela area (Hugo,
+    13/11). So XML (planilha nao leva <entrega>) e so nota sem <entrega> proprio."""
+    return (d["status"] == STATUS_AGUARDANDO_LIBERACAO and (d.get("origem") or ORIGEM_XML) == ORIGEM_XML
+            and (d.get("endereco_entrega_origem") in ("cliente", "ultima_entrega") or not d.get("endereco_fiscal")))
+
+
+def alterar_endereco_bloqueado(conn: sqlite3.Connection, envio: dict, campos: dict, config: dict | None, por: str) -> dict:
+    """Cliente troca o endereco de entrega de um pedido AGUARDANDO_LIBERACAO
+    (Hugo, 13/11). Parte sempre do XML original, valida pelo CEP e reavalia a
+    area com o endereco novo: atendida -> NA_FILA; senao continua aguardando,
+    ja com o endereco novo pra equipe decidir."""
+    if not _pode_alterar_endereco(envio):
+        raise ErroEnvio("Só um pedido aguardando liberação por região não atendida aceita troca de endereço por aqui.")
+    if not endereco_entrega.entrega_ativa(config):
+        raise ErroEnvio("A troca de endereço de entrega não está disponível. Fale com a equipe Fresh Log.")
+    try:
+        nfe = ler_nfe(caminho_xml(envio).read_bytes())
+    except OSError:
+        raise ErroEnvio("Não foi possível ler o XML deste pedido. Fale com a equipe Fresh Log.")
+    if nfe.get("endereco_fiscal"):
+        raise ErroEnvio("A nota já traz o local de entrega: este pedido não aceita troca de endereço.")
+    try:
+        end = endereco_entrega.montar_endereco(campos)
+    except endereco_entrega.ErroEndereco as e:
+        raise ErroEnvio(str(e))
+    novo = endereco_entrega.aplicar_entrega(nfe, end)
+    # antes de escrever: a geocodificacao grava cache por outra conexao (ver confirmar_envios)
+    motivo = classificar_area_envio(novo, config)
+    gravado = {**end, "documento": nfe["destinatario_doc"], "nome": nfe["destinatario_nome"]}
+    texto = endereco_entrega.linha_fiscal(novo)
+    # WHERE status: a equipe pode ter liberado (ou o cliente cancelado) com o modal aberto
+    cur = conn.execute("""
+        UPDATE portal_envios SET destinatario_endereco = ?, destinatario_bairro = ?, destinatario_municipio = ?,
+            destinatario_uf = ?, destinatario_cep = ?, endereco_fiscal = ?, endereco_entrega_origem = 'cliente',
+            endereco_entrega_json = ?, bloqueio_motivo = ?, status = ?, atualizado_em = ?
+         WHERE id = ? AND status = ?
+    """, (novo["destinatario_endereco"], novo["destinatario_bairro"], novo["destinatario_municipio"], novo["destinatario_uf"],
+          novo["destinatario_cep"], novo["endereco_fiscal"], json.dumps(gravado, ensure_ascii=False), motivo,
+          STATUS_AGUARDANDO_LIBERACAO if motivo else STATUS_NA_FILA, _agora(), envio["id"], STATUS_AGUARDANDO_LIBERACAO))
+    if cur.rowcount == 0:
+        conn.rollback()
+        raise ErroEnvio("Esse pedido não está mais aguardando liberação -- atualize a página.")
+    _registrar_solicitacao(conn, envio, "alterar_endereco", texto, por, status="CONCLUIDA")
+    conn.commit()
+    if motivo:
+        return {"aplicado": False, "precisa_operacao": False, "liberado": False, "endereco": texto,
+                "mensagem": f"Endereço alterado, mas {end['municipio']}/{end['uf']} também não é região atendida -- "
+                            f"o pedido continua aguardando liberação da Fresh Log."}
+    return {"aplicado": True, "precisa_operacao": False, "liberado": True, "endereco": texto,
+            "mensagem": "Endereço de entrega alterado -- a região é atendida e o pedido será enviado à Stokki em instantes."}
 
 
 def reenviar_erros(conn: sqlite3.Connection, cnpj_embarcador: str, por: str) -> dict:
