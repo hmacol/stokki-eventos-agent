@@ -1387,6 +1387,9 @@ def api_envios_acao(envio_id):
     _exige_pode_enviar()
     corpo = request.get_json(silent=True) or {}
     tipo = corpo.get("tipo")
+    # cada troca consulta CEP, geocodifica e escreve no chamado: mesmo limite por minuto do CEP
+    if tipo == "alterar_endereco" and _cep_acima_do_limite(g.cliente["cnpj"]):
+        return jsonify({"erro": "Muitas tentativas. Tente de novo em um minuto."}), 429
     conn = envios.conectar()
     try:
         envio = envios.buscar_envio(conn, envio_id, _empresa_envio()['cnpj'])

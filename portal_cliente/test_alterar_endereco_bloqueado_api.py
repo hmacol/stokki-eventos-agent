@@ -133,6 +133,12 @@ class AlterarEnderecoBloqueadoApiTest(unittest.TestCase):
         self.assertEqual(self._linha()["status"], "AGUARDANDO_LIBERACAO")
         self.aviso.assert_not_called()
 
+    def test_limite_por_minuto(self):
+        with mock.patch.object(self.portal, "_cep_acima_do_limite", return_value=True):
+            r = self._logar(DONO).post("/api/envios/1/acao", json=CORPO, base_url=HTTPS)
+        self.assertEqual(r.status_code, 429)
+        self.assertEqual(self._linha()["status"], "AGUARDANDO_LIBERACAO")
+
     def test_endereco_que_nao_e_objeto_vira_erro_do_cliente(self):
         r = self._logar(DONO).post("/api/envios/1/acao", json={"tipo": "alterar_endereco", "endereco": "x"}, base_url=HTTPS)
         self.assertEqual(r.status_code, 400, r.get_data(as_text=True))
