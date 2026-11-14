@@ -101,6 +101,7 @@ import consulta_expedicao
 from coletas import banco as coletas_banco, folha_pdf as coletas_folha_pdf, ler_stokki as coletas_ler_stokki, \
     regras as coletas_regras, exemplo_homolog as coletas_exemplo_homolog
 import acoes_pedidos
+import documentos_email
 import contadores_menu
 import pagina_inicial
 import wms
@@ -3296,6 +3297,101 @@ def api_pedidos_acao_comprovantes():
         logging.getLogger(__name__).exception("comprovantes pela tela Pedidos falhou")
         return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
     return jsonify({"ok": True, "comprovantes": itens})
+
+
+# Documentos fiscais do pedido (XML, DANFE, boleto): conferir, baixar e mandar por e-mail (Hugo, 13/11).
+def _itens_documentos(body):
+    """(itens, erro): [{"codigo", "destinatario"}] do corpo, so com codigo no formato da tela."""
+    bruto = body.get("itens")
+    if not isinstance(bruto, list) or not bruto:
+        return None, (jsonify({"erro": "Nenhum pedido selecionado."}), 400)
+    if len(bruto) > documentos_email.MAX_PEDIDOS:
+        return None, (jsonify({"erro": f"No máximo {documentos_email.MAX_PEDIDOS} pedidos por envio."}), 400)
+    itens = []
+    for it in bruto:
+        codigo = str((it or {}).get("codigo") or "").strip().lstrip("#").upper() if isinstance(it, dict) else ""
+        if not _RE_CODIGO_CANHOTO.fullmatch(codigo):
+            return None, (jsonify({"erro": "codigo ausente ou inválido."}), 400)
+        itens.append({"codigo": codigo, "destinatario": str(it.get("destinatario") or "")[:200]})
+    return itens, None
+
+
+@app.route("/api/pedidos/documentos/conferir", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_documentos_conferir():
+    """O que ha guardado de cada pedido (com link pra baixar), o que falta e o e-mail usado da ultima vez."""
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    itens, erro = _itens_documentos(body)
+    if erro:
+        return erro
+    from nucleo import banco as nucleo_banco
+    try:
+        conn = nucleo_banco.conectar()
+        try:
+            documentos_email.garantir_tabelas(conn)
+            r = documentos_email.resumo(documentos_email.levantar(conn, [it["codigo"] for it in itens]))
+            r["emails_lembrados"] = documentos_email.lembrados(conn, itens)
+        finally:
+            conn.close()
+    except Exception:
+        logging.getLogger(__name__).exception("conferencia de documentos pela tela Pedidos falhou")
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+    for p in r["pedidos"]:
+        for a in p["arquivos"]:
+            a["url"] = url_for("api_pedidos_documentos_arquivo", codigo=p["codigo"], ref=a["ref"])
+    return jsonify({"ok": True, **r})
+
+
+@app.route("/api/pedidos/documentos/arquivo", methods=["GET"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+def api_pedidos_documentos_arquivo():
+    """Download de um documento do pedido, ja com o nome XML_NF/DANFE_NF/BOLETO_NF."""
+    codigo = (request.args.get("codigo") or "").strip().lstrip("#").upper()
+    ref = (request.args.get("ref") or "").strip()
+    if not _RE_CODIGO_CANHOTO.fullmatch(codigo) or not ref or len(ref) > 100:
+        abort(404)
+    from nucleo import banco as nucleo_banco
+    conn = nucleo_banco.conectar()
+    try:
+        achado = documentos_email.arquivo(conn, codigo, ref)
+    finally:
+        conn.close()
+    if achado is None:
+        abort(404)
+    caminho, nome = achado
+    return send_file(caminho, as_attachment=True, download_name=nome)
+
+
+@app.route("/api/pedidos/documentos/enviar", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_documentos_enviar():
+    """Manda os documentos guardados dos pedidos pro e-mail informado (envio real)."""
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    itens, erro = _itens_documentos(body)
+    if erro:
+        return erro
+    from nucleo import banco as nucleo_banco
+    try:
+        conn = nucleo_banco.conectar()
+        try:
+            r = documentos_email.enviar(conn, itens, body.get("emails"), _autor_acao_pedidos(),
+                                        _carregar_config().get("email") or {})
+        finally:
+            conn.close()
+    except documentos_email.ErroDocumentos as e:
+        return jsonify({"erro": str(e)}), 400
+    except _EnvioBloqueadoHomolog:
+        raise
+    except Exception:
+        logging.getLogger(__name__).exception("envio de documentos pela tela Pedidos falhou")
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+    return jsonify(r)
 
 
 @app.route("/pedidos/canhoto/vuupt/<int:checklist_id>.pdf")
