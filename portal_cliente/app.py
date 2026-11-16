@@ -1057,6 +1057,16 @@ def api_envios_analisar():
     itens, rejeitados, vistos = [], [], set()
     anexos = []  # PDFs do lote: documentos dos pedidos (anexos_pedido.py, 11/11)
     n_planilhas = 0
+    # Colunas da planilha indicadas na tela (16/11): {arquivo: {"linha", "colunas"}}.
+    # `indicar=1`: o cliente pediu pra indicar mesmo que os nomes sejam conhecidos.
+    try:
+        colunas_indicadas = json.loads(request.form.get("colunas") or "{}")
+    except ValueError:
+        colunas_indicadas = {}
+    if not isinstance(colunas_indicadas, dict):
+        colunas_indicadas = {}
+    pedir_indicacao = request.form.get("indicar") == "1"
+    indicar = []  # planilhas esperando o cliente dizer as colunas
     entrega_ativa = endereco_entrega.entrega_ativa(_CONFIG)
     conn = envios.conectar()
     try:
@@ -1095,12 +1105,22 @@ def api_envios_analisar():
                     # arquivo; cada pedido vira um item da prévia com token
                     # próprio (JSON temporário) apontando pra planilha original.
                     n_planilhas += 1
+                    indicado = colunas_indicadas.get(nome)
+                    mapa_usado: dict = {}
                     try:
-                        pedidos, rej = envios.ler_planilha(conteudo, nome, padrao,
-                                                           {c: e["nome"] for c, e in grupo.items()} if grupo else None)
+                        pedidos, rej = envios.ler_planilha(
+                            conteudo, nome, padrao, {c: e["nome"] for c, e in grupo.items()} if grupo else None,
+                            guardado=envios.carregar_mapa_planilha(conn, g.cliente["cnpj"]),
+                            indicado=indicado if isinstance(indicado, dict) else None,
+                            pedir_indicacao=pedir_indicacao, mapa_usado=mapa_usado)
+                    except envios.ColunasPorIndicar as e:
+                        indicar.append(e.dados)
+                        continue
                     except envios.ErroEnvio as e:
                         rejeitados.append({"arquivo": nome, "erro": str(e)})
                         continue
+                    if mapa_usado:   # lida com as colunas indicadas: valem pras próximas planilhas deste login
+                        envios.guardar_mapa_planilha(conn, g.cliente["cnpj"], mapa_usado, _quem_envia())
                     rejeitados.extend(rej)
                     token_plan = envios.guardar_temporario(conteudo, Path(nome).suffix.lstrip(".") or "xlsx")
                     for ped in pedidos:
@@ -1182,6 +1202,7 @@ def api_envios_analisar():
     logger.info(f"analisar cnpj={','.join(usadas)} por={_quem_envia()} validos={len(itens)} rejeitados={len(rejeitados)} "
                 f"planilhas={n_planilhas} anexos={len(anexos)}")
     return jsonify({"itens": itens, "rejeitados": rejeitados, "destinatarios": destinatarios, "anexos": anexos,
+                    "indicar": indicar,
                     "regra_xml": cfg["regra_xml"], "regra_xml_rotulo": envios.REGRAS_XML.get(cfg["regra_xml"], ""),
                     "envio_ativo": cfg["envio_ativo"], "hoje": date.today().isoformat(), "entrega_ativa": entrega_ativa,
                     "fluxos_disponiveis": fluxos_disp, "fluxo_rotulos": envios.FLUXO_ROTULOS, "xd": xd})

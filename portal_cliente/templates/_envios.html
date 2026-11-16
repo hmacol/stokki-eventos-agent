@@ -88,6 +88,12 @@
   .modal label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; }
   .modal .pe { display: flex; justify-content: flex-end; gap: 8px; }
   .modal textarea { min-height: 60px; resize: vertical; }
+  /* Colunas da planilha indicadas pelo cliente (16/11) */
+  .modal.largo { max-width: 680px; }
+  .map-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; max-height: 58vh; overflow: auto; padding-right: 4px; }
+  .map-cols select { font-family: inherit; font-size: 12.5px; font-weight: 400; color: var(--texto); background: var(--superficie); border: 1px solid var(--borda); border-radius: 6px; padding: 5px 8px; width: 100%; }
+  .map-cols label.falta select { border-color: var(--st-falha); }
+  @media (max-width: 560px) { .map-cols { grid-template-columns: 1fr; } }
   .lista-env .linha .suave { color: var(--texto-suave); }
   .atencao-env { border-color: var(--rodando-borda); background: var(--rodando-bg); }
   .atencao-env h3 { color: var(--rodando-texto); }
@@ -125,13 +131,14 @@
           <input type="file" id="arquivos" multiple accept=".xml,.zip,.xlsx,.xls,.pdf,application/pdf,text/xml,application/xml,application/zip,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
           <div><b>Arraste os XMLs das notas ou a planilha de pedidos aqui</b> ou clique pra escolher</div>
-          <div style="font-size:11.5px; margin-top:4px;">XML: vários .xml de uma vez ou um .zip (só NF-e de saída da sua empresa). Planilha: .xlsx no modelo Fresh Log, uma linha por item.</div>
+          <div style="font-size:11.5px; margin-top:4px;">XML: vários .xml de uma vez ou um .zip (só NF-e de saída da sua empresa). Planilha: .xlsx no modelo Fresh Log ou a sua, uma linha por item (se os nomes das colunas forem outros, você indica qual é qual).</div>
           <div style="font-size:11.5px; margin-top:4px;">Documentos dos pedidos (boleto e outros, em PDF) podem vir juntos: o sistema coloca cada um no pedido certo e você confere antes de enviar. Eles saem impressos com a nota na entrega.</div>
         </label>
         <input type="file" id="anx-arquivo" multiple accept=".pdf,application/pdf" hidden>
         <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:12px; color:var(--texto-suave);">
           <a class="botao-linha" id="btn-modelo" href="{{ request.script_root }}/api/envios/modelo-planilha" download style="text-decoration:none;">Baixar modelo de planilha (.xlsx)</a>
           <span>Sem XML da nota? Preencha o modelo e suba aqui -- os pedidos são criados do mesmo jeito.</span>
+          <button type="button" class="botao-linha" id="btn-indicar" title="Suba a planilha que você já usa e diga qual coluna é cada informação">Usar a minha planilha (indicar colunas)</button>
           {% if empresas_envio | length > 1 %}
           {# Login de grupo (12/11): sem seletor -- a planilha diz a empresa de cada pedido; o XML vai pelo emitente #}
           <span>Seu acesso tem {{ empresas_envio | length }} empresas: na planilha, preencha a coluna "CNPJ da empresa (quem envia)" em cada pedido (o modelo já vem com ela). No XML, a empresa é a emitente da nota.</span>
@@ -370,8 +377,14 @@
   // ── Upload → prévia ────────────────────────────────────────────────────────
   function mensagem(texto, tipo) { const m = $('env-msg'); m.className = 'msg' + (texto ? ' ' + tipo : ''); m.textContent = texto || ''; }
 
-  async function analisar(arquivos) {
+  // Colunas da planilha indicadas pelo cliente (16/11): o lote fica guardado pra
+  // reler depois que ele disser qual coluna é cada informação.
+  let arquivosLote = [], colunasLote = {}, pedirIndicacao = false;
+
+  async function analisar(arquivos, relendo) {
     if (!arquivos || !arquivos.length) return;
+    if (!relendo) { arquivosLote = [...arquivos]; colunasLote = {}; }
+    arquivos = arquivosLote;
     // Só PDFs: são documentos de pedidos. Com prévia aberta entram nela;
     // sem prévia não há pedido pra receber.
     if ([...arquivos].every(f => /\.pdf$/i.test(f.name))) {
@@ -382,19 +395,60 @@
     }
     const fd = new FormData();
     for (const f of arquivos) fd.append('arquivos', f);
+    if (Object.keys(colunasLote).length) fd.append('colunas', JSON.stringify(colunasLote));
+    if (pedirIndicacao) fd.append('indicar', '1');
     mensagem(`Lendo ${arquivos.length} arquivo${arquivos.length > 1 ? 's' : ''}…`, 'info');
     try {
       const r = await fetch(`${BASE}/api/envios/analisar`, { method: 'POST', credentials: 'same-origin', body: fd });
       const j = await r.json();
       if (!r.ok) throw new Error(j.erro || 'Falha ao ler os arquivos.');
+      if ((j.indicar || []).length) {   // falta dizer as colunas de uma planilha: a prévia vem depois
+        mensagem('', '');
+        $('arquivos').value = '';
+        indicarColunas(j.indicar[0]);
+        return;
+      }
+      pedirIndicacao = false;
       previa = j;
       previa.anexos = j.anexos || [];
       mensagem(previa.anexos.length && !j.itens.length ? 'Nenhum pedido válido neste lote: os documentos em PDF não foram anexados.' : '', 'info');
       renderPrevia();
     } catch (e) {
+      pedirIndicacao = false;
       mensagem(e.message, 'erro');
     }
     $('arquivos').value = '';
+  }
+
+  function indicarColunas(d) {
+    pedirIndicacao = false;   // só a primeira planilha do lote é forçada
+    const opcoes = sel => '<option value="">— não tem —</option>' + d.colunas.map(c =>
+      `<option value="${c.indice}"${sel === c.indice ? ' selected' : ''}>${esc(c.nome)}${c.exemplos.length ? ' · ex.: ' + esc(c.exemplos[0]) : ''}</option>`).join('');
+    modal(`<h3>Colunas da planilha</h3>
+      <p><b>${esc(d.arquivo)}</b>: diga qual coluna da sua planilha é cada informação. Os campos com * são obrigatórios. Sua escolha fica guardada pras próximas planilhas.</p>
+      <div class="map-cols">${d.campos.map(c => `<label data-obrig="${c.obrigatoria ? 1 : ''}">${esc(c.rotulo)}${c.obrigatoria ? ' *' : ''}<select data-campo="${esc(c.chave)}">${opcoes(d.sugestao[c.chave])}</select></label>`).join('')}</div>
+      <div class="msg" id="m-msg"></div>
+      <div class="pe"><button type="button" class="botao-linha" data-fechar>Voltar</button><button type="button" class="botao" id="m-ok">Ler a planilha</button></div>`, true);
+    $('modal-caixa').querySelectorAll('.map-cols select').forEach(el => el.addEventListener('change', () => el.closest('label').classList.remove('falta')));
+    $('m-ok').addEventListener('click', () => {
+      const colunas = {};
+      let faltam = 0;
+      $('modal-caixa').querySelectorAll('.map-cols label').forEach(l => {
+        const s = l.querySelector('select');
+        if (s.value !== '') colunas[s.dataset.campo] = Number(s.value);
+        const falta = l.dataset.obrig && s.value === '';
+        l.classList.toggle('falta', !!falta);
+        if (falta) faltam++;
+      });
+      if (faltam) {
+        const m = $('m-msg'); m.className = 'msg erro';
+        m.textContent = `Falta indicar ${faltam} coluna${faltam > 1 ? 's' : ''} obrigatória${faltam > 1 ? 's' : ''}. Se a sua planilha não tem essa informação, inclua uma coluna com ela.`;
+        return;
+      }
+      colunasLote[d.arquivo] = { linha: d.linha, colunas };
+      fecharModal();
+      analisar(arquivosLote, true);
+    });
   }
 
   function renderPrevia() {
@@ -805,7 +859,7 @@
   }
 
   // ── Ações sobre pedidos ────────────────────────────────────────────────────
-  function modal(html) { $('modal-caixa').innerHTML = html; $('modal').classList.add('aberto'); }
+  function modal(html, largo) { $('modal-caixa').innerHTML = html; $('modal-caixa').classList.toggle('largo', !!largo); $('modal').classList.add('aberto'); }
   function fecharModal() { $('modal').classList.remove('aberto'); }
   $('modal').addEventListener('click', e => { if (e.target === $('modal') || e.target.closest('[data-fechar]')) fecharModal(); });
 
@@ -946,6 +1000,8 @@
   // ── Eventos ────────────────────────────────────────────────────────────────
   const zona = $('zona');
   $('btn-modelo').addEventListener('click', e => e.stopPropagation());
+  $('btn-indicar').addEventListener('click', () => { pedirIndicacao = true; $('arquivos').click(); });
+  $('arquivos').addEventListener('cancel', () => { pedirIndicacao = false; });
   $('arquivos').addEventListener('change', e => analisar(e.target.files));
   ['dragenter', 'dragover'].forEach(ev => zona.addEventListener(ev, e => { e.preventDefault(); zona.classList.add('sobre'); }));
   ['dragleave', 'drop'].forEach(ev => zona.addEventListener(ev, e => { e.preventDefault(); zona.classList.remove('sobre'); }));

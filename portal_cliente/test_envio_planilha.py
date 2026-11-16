@@ -143,7 +143,8 @@ def test_rejeita_pedido_com_problema_mas_mantem_os_outros():
 
 def test_falta_coluna_obrigatoria_e_arquivo_nao_planilha():
     cab = ["Pedido", "CNPJ", "Cliente", "SKU", "Qtd"]
-    with pytest.raises(ep.ErroEnvio, match="faltam colunas obrigatórias"):
+    # faltando coluna obrigatória a planilha não é mais recusada: pede pra indicar (16/11)
+    with pytest.raises(ep.ColunasPorIndicar, match="faltam: CEP"):
         ep.ler_planilha(_planilha([{"Pedido": 1}], cab), "x.xlsx", CNPJ)
     with pytest.raises(ep.ErroEnvio):
         ep.ler_planilha(b"isso nao e xlsx", "x.xlsx", CNPJ)
@@ -345,8 +346,9 @@ def test_planilha_do_grupo_recusa_pedido_sem_empresa_de_fora_ou_misturado():
 
 
 def test_planilha_do_grupo_sem_a_coluna_e_recusada_inteira():
-    with pytest.raises(ep.ErroEnvio, match="falta a coluna"):
+    with pytest.raises(ep.ColunasPorIndicar, match="faltam: CNPJ da empresa") as e:
         ep.ler_planilha(_planilha([_linha()]), "antiga.xlsx", EMP_A, EMPRESAS)
+    assert e.value.dados["campos"][0]["chave"] == "empresa_cnpj"   # o campo da empresa entra na tela de indicar
     # login de uma empresa so: a coluna nao e exigida e, se vier, e ignorada
     pedidos, _ = ep.ler_planilha(_planilha_grupo([_linha(empresa_cnpj=EMP_B)]), "p.xlsx", CNPJ)
     assert pedidos[0]["emitente_cnpj"] == CNPJ
@@ -389,3 +391,110 @@ def test_confirmar_do_grupo_com_empresa_de_fora_nao_grava_nada(ambiente):
     with pytest.raises(ep.ErroEnvio, match="não é de uma empresa do seu acesso"):
         _confirmar_grupo(conn, conteudo, {EMP_A: ctx})   # EMP_B saiu do acesso entre a previa e o confirmar
     assert conn.execute("SELECT COUNT(*) FROM portal_envios").fetchone()[0] == 0
+
+
+# ── Colunas indicadas pelo cliente (16/11) ─────────────────────────────────────
+
+CAB_ANTIGA = ["Empresa CNPJ", "Nr Doc", "CNPJ", "Razão do cliente", "CEP entrega", "Rua", "Nr", "Bairro", "Município", "UF",
+              "Cod. item", "Qt", "Extra"]
+CAMPOS_ANTIGA = ["empresa_cnpj", "referencia", "destinatario_doc", "destinatario_nome", "cep", "logradouro", "numero", "bairro",
+                 "cidade", "uf", "sku", "quantidade"]
+
+
+def _planilha_antiga(linhas: list[dict], titulo: bool = False) -> bytes:
+    """Planilha do cliente: nomes de coluna dele (alguns desconhecidos) e,
+    opcionalmente, uma linha de título antes do cabeçalho."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    if titulo:
+        ws.append(["Pedidos da semana"])
+    ws.append(CAB_ANTIGA)
+    for l in linhas:
+        ws.append([l.get(k, "") for k in CAMPOS_ANTIGA] + ["x"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _indicado(linha: int = 0) -> dict:
+    return {"linha": linha, "colunas": {k: j for j, k in enumerate(CAMPOS_ANTIGA)}}
+
+
+def test_planilha_do_cliente_pede_pra_indicar_e_depois_le_sozinha():
+    conteudo = _planilha_antiga([_linha(empresa_cnpj=EMP_B), _linha(referencia="PED-2", empresa_cnpj=EMP_A)], titulo=True)
+    with pytest.raises(ep.ColunasPorIndicar) as e:
+        ep.ler_planilha(conteudo, "minha.xlsx", EMP_A, EMPRESAS)
+    d = e.value.dados
+    assert d["linha"] == 1 and [c["nome"] for c in d["colunas"]] == CAB_ANTIGA
+    assert d["colunas"][1]["exemplos"] == ["PED-1", "PED-2"]
+    assert d["sugestao"]["uf"] == 9 and d["sugestao"]["bairro"] == 7    # o que tem nome conhecido já vem sugerido
+    assert "referencia" not in d["sugestao"] and "Pedido (nº ou referência)" in d["faltando"]
+
+    mapa: dict = {}
+    pedidos, rej = ep.ler_planilha(conteudo, "minha.xlsx", EMP_A, EMPRESAS, indicado=_indicado(1), mapa_usado=mapa)
+    assert rej == [] and {p["referencia"]: p["emitente_cnpj"] for p in pedidos} == {"PED-1": EMP_B, "PED-2": EMP_A}
+    assert pedidos[0]["destinatario_doc"] == DEST and pedidos[0]["itens_lista"][0]["sku"] == "SKU-A"
+    assert mapa["referencia"] == {"nome": "nr doc", "pos": 1} and mapa["numero_nf"] is None
+
+    # a próxima planilha com os mesmos nomes (até com as colunas em outra posição) entra direto
+    outra = _planilha_antiga([_linha(referencia="PED-9", empresa_cnpj=EMP_A)])
+    pedidos, rej = ep.ler_planilha(outra, "minha2.xlsx", EMP_A, EMPRESAS, guardado=mapa)
+    assert rej == [] and pedidos[0]["referencia"] == "PED-9" and pedidos[0]["emitente_cnpj"] == EMP_A
+
+
+def test_duas_colunas_com_o_mesmo_nome_valem_pela_posicao_guardada():
+    wb = openpyxl.Workbook()
+    wb.active.append(["CNPJ", "Pedido", "CNPJ", "Nome", "CEP", "Endereço", "Número", "Bairro", "Cidade", "UF", "SKU", "Quantidade"])
+    wb.active.append([EMP_B, "P-1", DEST, "Mercado", "01310100", "Av. Paulista", "10", "Bela Vista", "São Paulo", "SP", "A", 1])
+    buf = io.BytesIO()
+    wb.save(buf)
+    campos = ["empresa_cnpj", "referencia", "destinatario_doc", "destinatario_nome", "cep", "logradouro", "numero", "bairro",
+              "cidade", "uf", "sku", "quantidade"]
+    mapa: dict = {}
+    pedidos, _ = ep.ler_planilha(buf.getvalue(), "p.xlsx", EMP_A, EMPRESAS,
+                                 indicado={"linha": 0, "colunas": {k: j for j, k in enumerate(campos)}}, mapa_usado=mapa)
+    assert (pedidos[0]["emitente_cnpj"], pedidos[0]["destinatario_doc"]) == (EMP_B, DEST)
+    pedidos, _ = ep.ler_planilha(buf.getvalue(), "p.xlsx", EMP_A, EMPRESAS, guardado=mapa)
+    assert (pedidos[0]["emitente_cnpj"], pedidos[0]["destinatario_doc"]) == (EMP_B, DEST)
+
+
+def test_indicar_a_pedido_campo_sem_coluna_e_escolha_invalida():
+    modelo = _planilha([_linha(numero_nf="123")])
+    with pytest.raises(ep.ColunasPorIndicar) as e:          # nomes conhecidos, mas o cliente pediu pra indicar
+        ep.ler_planilha(modelo, "p.xlsx", CNPJ, pedir_indicacao=True)
+    sugestao = e.value.dados["sugestao"]
+    assert e.value.dados["faltando"] == [] and sugestao["referencia"] == 0 and sugestao["numero_nf"] == 1
+    # "não tem" na NF: fica guardado e o apelido conhecido não traz a coluna de volta
+    mapa: dict = {}
+    escolhas = {k: v for k, v in sugestao.items() if k != "numero_nf"}
+    pedidos, _ = ep.ler_planilha(modelo, "p.xlsx", CNPJ, indicado={"linha": 0, "colunas": escolhas}, mapa_usado=mapa)
+    assert pedidos[0]["numero_nf"] == "" and mapa["numero_nf"] is None
+    assert ep.ler_planilha(modelo, "p.xlsx", CNPJ, guardado=mapa)[0][0]["numero_nf"] == ""
+    assert ep.ler_planilha(modelo, "p.xlsx", CNPJ)[0][0]["numero_nf"] == "123"
+    # obrigatória sem coluna: pede de novo; escolha fora da planilha: erro
+    sem_cep = {k: v for k, v in sugestao.items() if k != "cep"}
+    with pytest.raises(ep.ColunasPorIndicar, match="faltam: CEP"):
+        ep.ler_planilha(modelo, "p.xlsx", CNPJ, indicado={"linha": 0, "colunas": sem_cep})
+    for ruim in ({"linha": 99, "colunas": sugestao}, {"linha": "x", "colunas": sugestao}, {"colunas": sugestao}, {"linha": 0, "colunas": "x"}):
+        with pytest.raises(ep.ErroEnvio, match="colunas indicadas inválidas"):
+            ep.ler_planilha(modelo, "p.xlsx", CNPJ, indicado=ruim)
+    with pytest.raises(ep.ColunasPorIndicar):               # coluna que não existe é ignorada: o campo fica faltando
+        ep.ler_planilha(modelo, "p.xlsx", CNPJ, indicado={"linha": 0, "colunas": {**sugestao, "cep": 500}})
+
+
+def test_mesma_coluna_em_dois_campos_continua_valendo_no_mapa_guardado():
+    conteudo = _planilha_antiga([_linha(empresa_cnpj=EMP_A, numero_nf="")])
+    escolhas = {**_indicado()["colunas"], "numero_nf": 1}      # "Nr Doc" é o pedido E o número da NF
+    mapa: dict = {}
+    pedidos, _ = ep.ler_planilha(conteudo, "p.xlsx", EMP_A, EMPRESAS, indicado={"linha": 0, "colunas": escolhas}, mapa_usado=mapa)
+    assert (pedidos[0]["referencia"], pedidos[0]["numero_nf"]) == ("PED-1", "1")
+    pedidos, _ = ep.ler_planilha(conteudo, "p.xlsx", EMP_A, EMPRESAS, guardado=mapa)
+    assert (pedidos[0]["referencia"], pedidos[0]["numero_nf"]) == ("PED-1", "1")
+
+
+def test_mapa_de_colunas_e_guardado_por_login(ambiente):
+    assert ep.carregar_mapa_planilha(ambiente, CNPJ) is None
+    ep.guardar_mapa_planilha(ambiente, CNPJ, {"referencia": {"nome": "nr doc", "pos": 1}, "numero_nf": None}, "cliente")
+    ep.guardar_mapa_planilha(ambiente, "12.345.678/0001-95", {"referencia": {"nome": "doc", "pos": 0}}, "cliente")
+    assert ep.carregar_mapa_planilha(ambiente, CNPJ) == {"referencia": {"nome": "doc", "pos": 0}}
+    assert ep.carregar_mapa_planilha(ambiente, EMP_A) is None
