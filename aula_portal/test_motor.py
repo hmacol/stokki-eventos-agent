@@ -161,6 +161,18 @@ class ManifestoTest(unittest.TestCase):
                                               "duracao_s": 101, "video": "um.mp4", "capa": "um.jpg"})
         self.assertIn("gerado_em", dados)
 
+    def test_manifesto_leva_a_tela_que_o_video_exige(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            saida = Path(tmp)
+            for slug in ("um", "dois"):
+                (saida / f"{slug}.mp4").write_bytes(b"x")
+                (saida / f"{slug}.json").write_text(json.dumps({"duracao_s": 60}), encoding="utf-8")
+            videos = [_video(1, "um"), _video(2, "dois")]
+            videos[1].requer = "cotacao"
+            itens = json.loads(gravar.escrever_manifesto(videos, saida).read_text(encoding="utf-8"))["videos"]
+        self.assertNotIn("requer", itens[0])
+        self.assertEqual(itens[1]["requer"], "cotacao")
+
 
 class NarracaoTest(unittest.TestCase):
     def test_narracao_cache(self):
@@ -215,7 +227,7 @@ class RoteirosTest(unittest.TestCase):
 
     def test_roteiros_numeracao(self):
         numeros = [v.numero for v in roteiro.VIDEOS]
-        self.assertEqual(sorted(numeros), list(range(1, 13)))
+        self.assertEqual(sorted(numeros), list(range(1, 14)))
         self.assertEqual(len({v.slug for v in roteiro.VIDEOS}), len(roteiro.VIDEOS))
 
     def test_video3_endereco_na_previa_e_agendado_alterado_na_hora(self):
@@ -232,10 +244,11 @@ class RoteirosTest(unittest.TestCase):
         self.assertTrue(v3.publicar)
 
     def test_fecho_anuncia_o_proximo_publicado(self):
-        # a pagina so lista os publicados: anunciar o 3 ou o 10 antes da liberacao confunde
+        # a pagina so lista os publicados: anunciar o 3 ou o 10 antes da liberacao confunde.
+        # Video que depende de tela liberada (requer) pode estar escondido: ninguem anuncia ele.
         videos = sorted(roteiro.VIDEOS, key=lambda v: v.numero)
         for v in videos:
-            seguinte = next((o for o in videos if o.numero > v.numero and o.publicar), None)
+            seguinte = next((o for o in videos if o.numero > v.numero and o.publicar and not o.requer), None)
             fala = v.passos[-1].fala
             if seguinte:
                 self.assertEqual(fala, f"No próximo vídeo: {seguinte.titulo}.", f"video {v.numero}")
@@ -267,6 +280,22 @@ class RoteirosTest(unittest.TestCase):
     def test_todos_os_videos_publicados(self):
         # Hugo, 12/11: "colocar todos em prod" (3 com a regra nova da alteracao, 10 com a tela de notificacoes)
         self.assertEqual([v.numero for v in roteiro.VIDEOS if not v.publicar], [])
+
+    def test_cotacao_cobre_digitar_lista_resultado_proposta_pdf_e_aceite(self):
+        v = next(v for v in roteiro.VIDEOS if v.slug == "cotacao-de-frete")
+        self.assertEqual(v.requer, "cotacao")   # so aparece na pagina quando a cotacao for liberada aos clientes
+        acoes = [a for p in v.passos for a in p.acoes]
+        alvos = {a[1] for a in acoes if len(a) > 1 and isinstance(a[1], str)}
+        for sel in ("[data-k='cep']", "#add-entrega", "#calcular", ".veiculo", "#res-comp", "#btn-proposta", "#btn-pdf",
+                    "#card-historico"):
+            self.assertTrue(any(sel in a for a in alvos), sel)
+        self.assertTrue(any(a[0] == "arquivo" and a[1] == "#arquivo-lista" for a in acoes))
+        self.assertIn(("clicar", "a[href*='/cotacao/aceite/']"), acoes)   # aprovar pelo link do e-mail
+        for padrao in ("**/cotacao/*/pdf", "**/__aula/email*"):
+            self.assertIn(padrao, v.intercepta)
+        falas = " ".join(p.fala for p in v.passos).lower()
+        for trecho in ("cep", "lista", "veículo", "pedágio", "ida e a volta", "pdf", "aprovar"):
+            self.assertIn(trecho, falas, trecho)
 
     def test_acoes_conhecidas(self):
         for v in roteiro.VIDEOS:
@@ -325,6 +354,23 @@ class OverlayTest(unittest.TestCase):
         pg.wait_for_timeout(400)  # a legenda entra com transicao de opacidade (0,25 s)
         png = pg.screenshot(clip={"x": ponto[0], "y": ponto[1], "width": 1, "height": 1})
         self.assertLess(sum(Image.open(_io.BytesIO(png)).convert("RGB").getpixel((0, 0))), 200)  # escuro = legenda por cima
+
+    def _base_da_legenda(self, pg):
+        return pg.evaluate("document.getElementById('aula-legenda').getBoundingClientRect().bottom")
+
+    def test_legenda_sobe_quando_cobre_o_destaque_e_volta_no_passo_seguinte(self):
+        # cotacao (16/11): a legenda escondia o endereco que o CEP preenche e os botoes do resultado
+        pg = self._pagina()
+        pg.evaluate("document.body.insertAdjacentHTML('beforeend', \"<button id='embaixo' style='position:fixed;"
+                    "left:600px;top:650px;width:80px;height:30px'>x</button><button id='em-cima' "
+                    "style='position:fixed;left:600px;top:200px;width:80px;height:30px'>y</button>\")")
+        pg.evaluate("window.aula.legenda('Um texto de legenda')")
+        pg.evaluate("window.aula.destacar('#em-cima')")
+        self.assertAlmostEqual(self._base_da_legenda(pg), 720 - 28, delta=2)   # nao cobre: fica embaixo
+        pg.evaluate("window.aula.destacar('#embaixo')")
+        self.assertLess(self._base_da_legenda(pg), 200)                          # cobria: foi pro topo
+        pg.evaluate("window.aula.legenda('Outro passo')")
+        self.assertAlmostEqual(self._base_da_legenda(pg), 720 - 28, delta=2)   # passo novo: volta embaixo
 
     def test_marca_no_canto_por_cima_de_tudo(self):
         import io as _io

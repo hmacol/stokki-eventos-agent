@@ -704,19 +704,26 @@ def regioes_logo():
 
 # ── Página pública: aula em vídeo (Hugo, 06/11) ────────────────────────────────
 
+def _aula_videos() -> list[dict]:
+    """O vídeo da cotação (Hugo, 16/11) só aparece quando a calculadora for
+    liberada pra todos os clientes (portal_cliente.cotacao.visivel_cliente)."""
+    liberadas = {"cotacao"} if cotacao.regras_de(_CONFIG).get("visivel_cliente") else set()
+    return aula_info.carregar_manifesto(liberadas=liberadas)
+
+
 @app.route("/aula")
 def aula():
     """Videos curtos de treinamento do portal, sem login (o link vai por
     WhatsApp ate pra quem ainda nao entrou). So lista o que esta no
     manifesto gerado pelo aula_portal/gravar.py."""
-    return render_template("aula.html", videos=aula_info.carregar_manifesto(),
+    return render_template("aula.html", videos=_aula_videos(),
                            logo_src=url_for("regioes_logo"))
 
 
 @app.route("/aula/arquivo/<nome>")
 def aula_arquivo(nome):
     # conditional=True responde Range com 206: o Safari do iPhone so toca mp4 assim.
-    if not aula_info.arquivo_permitido(nome, aula_info.carregar_manifesto()):
+    if not aula_info.arquivo_permitido(nome, _aula_videos()):
         abort(404)
     resp = send_from_directory(aula_info.PASTA_AULA, nome, conditional=True, max_age=3600)
     resp.headers["Cache-Control"] = "public, max-age=3600"

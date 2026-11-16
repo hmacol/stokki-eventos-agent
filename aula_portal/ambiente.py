@@ -36,9 +36,11 @@ class AmbienteRecusado(RuntimeError):
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-def escrever_config(raiz: Path) -> Path:
+def escrever_config(raiz: Path, porta: int | None = None, cotacao: bool = False) -> Path:
     """config.yaml minimo: so o segredo da sessao (aleatorio) e as chaves que
-    mudam a tela. Sem email, vuupt_api, stokki, freshhub_api, Claude..."""
+    mudam a tela. Sem email, vuupt_api, stokki, freshhub_api, Claude...
+    porta: links dos e-mails (aceite da cotacao) voltam pro portal da gravacao.
+    cotacao: so o video da cotacao ve a tela (os outros ficam sem o link)."""
     caminho = Path(raiz) / "config.yaml"
     if caminho.exists() and not caminho.read_text(encoding="utf-8").startswith(MARCA_CONFIG):
         raise AmbienteRecusado(f"{caminho} existe e nao e de gravacao: nao sobrescrevo.")
@@ -46,11 +48,13 @@ def escrever_config(raiz: Path) -> Path:
         f"{MARCA_CONFIG}\n"
         "portal_cliente:\n"
         f"  secret_key: {secrets.token_hex(32)}\n"
-        "  alteracao_entrega:\n"
+        + (f"  url_base: http://127.0.0.1:{int(porta)}\n" if porta else "")
+        + "  alteracao_entrega:\n"
         "    ativo: true\n"
         "  envios:\n"
         "    bloqueio_area_ativo: false\n"
-        "    endereco_entrega_ativo: true\n",
+        "    endereco_entrega_ativo: true\n"
+        + ("  cotacao:\n    visivel_cliente: true\n" if cotacao else ""),
         encoding="utf-8")
     return caminho
 
