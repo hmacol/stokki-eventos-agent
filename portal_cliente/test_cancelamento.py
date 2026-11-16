@@ -7,6 +7,7 @@ Cancelamento de pedido pelo portal (DOC_EXECUCAO_CLAUDE_CANCELAMENTO_PORTAL.md).
 import sqlite3
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 _AQUI = Path(__file__).parent
@@ -305,6 +306,31 @@ class Processar(unittest.TestCase):
         self.assertEqual(self.rodar(conn)["cancelados"], 1)
         self.assertEqual(self.vuupt_chamadas, [])
 
+    def test_cancelamento_ok_registra_na_fila_de_devolucao(self):
+        conn = self.preparar()
+        cfg = {"lalamove": {"agent_id_vuupt": 99}, "stokki": {"devolucao_cancelamento": {"ativo": True}}}
+        with mock.patch("stokki.devolucao_estoque.registrar") as reg:
+            r = cm.processar_cancelamentos(conn, cfg, self.cancelar_vuupt, self.cancelar_stokki, self.avisar,
+                                           buscar_vuupt=self.buscar_vuupt)
+        self.assertEqual(r["cancelados"], 1)
+        reg.assert_called_once()
+        self.assertEqual(reg.call_args.args[:2], (39959, "portal"))
+        self.assertIs(reg.call_args.args[2], cfg)
+
+    def test_cancelamento_com_falha_nao_registra(self):
+        conn = self.preparar()
+        self.stokki_ok = False
+        with mock.patch("stokki.devolucao_estoque.registrar") as reg:
+            self.rodar(conn)
+        reg.assert_not_called()
+
+    def test_registro_que_levanta_nao_muda_o_cancelamento(self):
+        conn = self.preparar()
+        with mock.patch("stokki.devolucao_estoque.registrar", side_effect=RuntimeError("banco")):
+            r = self.rodar(conn)
+        self.assertEqual(r, {"cancelados": 1, "operacao": 0, "falhas": 0})
+        self.assertEqual(envio(conn, 50)["status"], ep.STATUS_CANCELADO)
+
 
 class AvisarOperacao(unittest.TestCase):
     def test_manda_email_e_whatsapp_e_nunca_levanta(self):
@@ -379,6 +405,113 @@ class Worker(unittest.TestCase):
         # a operacao fica sabendo que o cancelamento nao saiu (Stokki ocupada / worker parado)
         self.assertEqual(avisos[0][0], 50)
         self.assertIn("30 min", avisos[0][1])
+
+
+class DevolucaoNoWorker(unittest.TestCase):
+    LIGADO = {"stokki": {"devolucao_cancelamento": {"ativo": True}}}
+    ZEROS = {"feitas": 0, "parciais": 0, "nada": 0, "falhas": 0, "esperando": 0}
+
+    def test_ciclo_sobrevive_a_devolucao_que_levanta(self):
+        import types
+        import enviar_stokki as es
+        conn = conn_completo()
+        fake = types.SimpleNamespace(execute=conn.execute, commit=conn.commit, close=lambda: None)
+        with mock.patch.object(es.ep, "conectar", return_value=fake), \
+             mock.patch.object(es.ep, "limpar_temporarios"), \
+             mock.patch.object(es, "processar_cancelamentos_do_ciclo", return_value={}), \
+             mock.patch.object(es, "processar_retomadas_do_ciclo", return_value={}), \
+             mock.patch.object(es, "processar_devolucoes_do_ciclo", side_effect=RuntimeError("x")), \
+             mock.patch.object(es.tq, "processar_pendentes", return_value={}), \
+             mock.patch.object(es, "reconciliar_codigos", return_value=0):
+            conn.execute("INSERT INTO portal_envios (id, cnpj_embarcador, status, criado_em) VALUES (1, '111', 'NA_FILA', 'x')")
+            with mock.patch.object(es, "processar_lote", return_value={}) as lote:
+                r = es.ciclo({})
+        lote.assert_called_once()
+        self.assertNotIn("devolucoes", r)
+
+    def test_ciclo_guarda_o_resumo_da_devolucao(self):
+        import types
+        import enviar_stokki as es
+        conn = conn_completo()
+        fake = types.SimpleNamespace(execute=conn.execute, commit=conn.commit, close=lambda: None)
+        with mock.patch.object(es.ep, "conectar", return_value=fake), \
+             mock.patch.object(es.ep, "limpar_temporarios"), \
+             mock.patch.object(es, "processar_cancelamentos_do_ciclo", return_value={}), \
+             mock.patch.object(es, "processar_retomadas_do_ciclo", return_value={}), \
+             mock.patch.object(es, "processar_devolucoes_do_ciclo", return_value={"feitas": 1}), \
+             mock.patch.object(es.tq, "processar_pendentes", return_value={}), \
+             mock.patch.object(es, "reconciliar_codigos", return_value=0):
+            r = es.ciclo({})
+        self.assertEqual(r["devolucoes"], {"feitas": 1})
+
+    def test_desligada_ou_sem_pendente_nao_abre_conta_nenhuma(self):
+        import enviar_stokki as es
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        with mock.patch.object(es, "StokkiSession") as sess, mock.patch.object(es.sessao_uso, "adquirir") as adq:
+            self.assertEqual(es.processar_devolucoes_do_ciclo(conn, {}), self.ZEROS)
+            self.assertEqual(es.processar_devolucoes_do_ciclo(conn, self.LIGADO), self.ZEROS)   # ligada, fila vazia
+        sess.assert_not_called()
+        adq.assert_not_called()
+
+    def test_abrir_admin_usa_a_trava_e_libera_ao_sair(self):
+        import enviar_stokki as es
+        from stokki import devolucao_estoque as de
+        from stokki import devolucao_executor as ex
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        de.registrar(5, "portal", self.LIGADO, conn=conn)
+        visto = {}
+
+        def processar(conn_, config, **kw):
+            with kw["abrir_admin"]() as s:
+                visto["sessao"] = s
+            return self.ZEROS
+        with mock.patch.object(es.sessao_uso, "adquirir", return_value="principal") as adq, \
+             mock.patch.object(es.sessao_uso, "liberar") as lib, \
+             mock.patch.object(es, "StokkiSession") as sess, \
+             mock.patch.object(ex, "processar_pendentes", side_effect=processar):
+            es.processar_devolucoes_do_ciclo(conn, self.LIGADO)
+        self.assertEqual(adq.call_args.kwargs["esperar_segundos"], ex.ESPERA_CONTA_SEGUNDOS)
+        self.assertTrue(adq.call_args.kwargs["alternativa"])
+        sess.assert_called_once_with(self.LIGADO, conta="principal")
+        lib.assert_called_once_with(es.DONO_TRAVA)
+
+    def test_simular_nao_abre_sessao_nem_chama_o_executor(self):
+        import enviar_stokki as es
+        from stokki import devolucao_estoque as de
+        from stokki import devolucao_executor as ex
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        de.registrar(5, "portal", self.LIGADO, conn=conn)
+        with mock.patch.object(es, "StokkiSession") as sess, mock.patch.object(es.sessao_uso, "adquirir") as adq,              mock.patch.object(ex, "processar_pendentes") as proc, self.assertLogs("portal_envios", level="INFO") as cap:
+            r = es.processar_devolucoes_do_ciclo(conn, self.LIGADO, simular=True)
+        self.assertEqual(r, self.ZEROS)
+        sess.assert_not_called()
+        adq.assert_not_called()
+        proc.assert_not_called()
+        self.assertTrue(any("SIMULAÇÃO: 1 devolução(ões) ficam como estão." in l for l in cap.output))
+
+    def test_abrir_admin_com_conta_ocupada_levanta_runtime_error(self):
+        import enviar_stokki as es
+        from stokki import devolucao_estoque as de
+        from stokki import devolucao_executor as ex
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        de.registrar(5, "portal", self.LIGADO, conn=conn)
+
+        def processar(conn_, config, **kw):
+            with self.assertRaises(ex.ContaOcupada):
+                with kw["abrir_admin"]():
+                    pass
+            return self.ZEROS
+        with mock.patch.object(es.sessao_uso, "adquirir", return_value=False), \
+             mock.patch.object(es.sessao_uso, "liberar") as lib, \
+             mock.patch.object(es, "StokkiSession") as sess, \
+             mock.patch.object(ex, "processar_pendentes", side_effect=processar):
+            es.processar_devolucoes_do_ciclo(conn, self.LIGADO)
+        sess.assert_not_called()
+        lib.assert_not_called()
 
 
 if __name__ == "__main__":
