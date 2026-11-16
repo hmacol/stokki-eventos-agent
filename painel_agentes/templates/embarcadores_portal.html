@@ -40,8 +40,9 @@
   PIN provisório de 6 dígitos, que aparece aqui uma única vez, e <strong>mandam um e-mail de verdade</strong> pros
   e-mails do cadastro com o link pra ele definir o PIN. Sem e-mail no cadastro, passe o PIN pro cliente: ele escolhe o
   dele no primeiro acesso.
-  <strong>Inativar</strong> bloqueia o login na hora e guarda a conta. <strong>Excluir</strong> apaga a conta; o embarcador
-  continua na operação e dá pra criar de novo depois.
+  <strong>Inativar</strong> bloqueia o login na hora e guarda a conta. <strong>Excluir</strong> apaga a conta, mas
+  <strong>não bloqueia</strong>: o cliente consegue criar outra sozinho pelo “Primeiro acesso” do portal. Pra tirar o
+  acesso de alguém, use Inativar.
 </p>
 
 <div class="barra">
@@ -58,7 +59,7 @@
     </thead>
     <tbody>
       {% for e in linhas %}
-      <tr data-cnpj="{{ e.cnpj }}" data-nome="{{ e.nome }}" data-emails="{{ e.emails|join(', ') }}" data-busca="{{ (e.nome ~ ' ' ~ e.cnpj ~ ' ' ~ e.cnpj_formatado)|lower }}">
+      <tr data-cnpj="{{ e.cnpj }}" data-nome="{{ e.nome }}" data-emails="{{ e.emails|join(', ') }}" data-estado="{{ e.estado }}" data-busca="{{ (e.nome ~ ' ' ~ e.cnpj ~ ' ' ~ e.cnpj_formatado)|lower }}">
         <td>{{ e.nome }}{% if e.emails %}<br><span class="nota">{{ e.emails|join(', ') }}</span>{% endif %}</td>
         <td class="mono">{{ e.cnpj_formatado }}</td>
         <td>
@@ -91,9 +92,10 @@
   const email = (m) => m ? `Um e-mail com o link de definir PIN vai agora pra: ${m}.` : "Sem e-mail no cadastro: só o PIN na tela.";
   const CONFIRMA = {
     criar: (n, m) => `Criar a conta de ${n} no portal? ${email(m)}`,
-    resetar: (n, m) => `Resetar o PIN de ${n}? O PIN atual para de valer e a sessão aberta cai. ${email(m)}`,
+    resetar: (n, m, inativa) => `Resetar o PIN de ${n}? O PIN atual para de valer e a sessão aberta cai. `
+      + (inativa ? "Conta inativa: nenhum e-mail é enviado." : email(m)),
     desativar: (n) => `Inativar a conta de ${n}? O cliente não entra mais no portal até reativar.`,
-    excluir: (n) => `EXCLUIR a conta de ${n} no portal? O login deixa de existir. O embarcador continua na operação.`,
+    excluir: (n) => `EXCLUIR a conta de ${n} no portal? Isso NÃO bloqueia o cliente: ele pode criar outra pelo "Primeiro acesso". Pra bloquear, cancele e use Inativar.`,
   };
   const CHAVE_PIN = "embarcadores_pin_novo";
   const caixaPin = document.getElementById("pin-novo");
@@ -121,7 +123,7 @@
     botao.addEventListener("click", async () => {
       const tr = botao.closest("tr");
       const acao = botao.dataset.acao;
-      if (CONFIRMA[acao] && !window.confirm(CONFIRMA[acao](tr.dataset.nome, tr.dataset.emails))) return;
+      if (CONFIRMA[acao] && !window.confirm(CONFIRMA[acao](tr.dataset.nome, tr.dataset.emails, tr.dataset.estado === 'inativa'))) return;
       botao.disabled = true;
       erro.hidden = true;
       try {

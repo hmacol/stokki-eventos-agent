@@ -2299,7 +2299,8 @@ def api_embarcadores_conta():
         emb = contas.buscar_embarcador(conn, body.get("cnpj"))
         if not emb:
             return jsonify({"erro": "CNPJ não está cadastrado como embarcador."}), 400
-        tem_conta = contas.buscar_conta(conn, emb["cnpj"]) is not None
+        conta = contas.buscar_conta(conn, emb["cnpj"])
+        tem_conta = conta is not None
         if acao == "criar" and tem_conta:
             return jsonify({"erro": "Esse embarcador já tem conta no portal."}), 400
         if acao != "criar" and not tem_conta:
@@ -2312,8 +2313,10 @@ def api_embarcadores_conta():
             # E-mail com o link de definir PIN pros e-mails do cadastro (16/11, Hugo:
             # "enviamos por e-mail e mostramos na tela tambem"). Falha no envio nao
             # desfaz o PIN: a tela mostra e a equipe repassa.
+            # Conta inativa nao recebe e-mail: o link diria "acesso liberado" e o
+            # login continuaria barrado.
             resposta["email_para"] = []
-            if emb["emails"]:
+            if emb["emails"] and (conta is None or conta["ativo"]):
                 try:
                     from portal_cliente.gerenciar_clientes import enviar_convite
                     ok, destinos = enviar_convite(conn, _carregar_config(), emb)

@@ -140,6 +140,7 @@ class TestEmbarcadoresPortal(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         conta = self._conta(COM_CONTA)
         self.assertEqual((conta["ativo"], conta["trocar_pin"]), (0, 1))
+        self.enviar_email.assert_not_called()  # inativa nao recebe "acesso liberado"
         conn = contas.conectar()
         try:
             with self.assertRaises(contas.AutenticacaoInvalida):
@@ -157,6 +158,27 @@ class TestEmbarcadoresPortal(unittest.TestCase):
         self.assertEqual(self._acao("excluir", COM_CONTA).status_code, 200)
         self.assertIsNone(self._conta(COM_CONTA))
         self.assertIn("COM CONTA", self._cliente().get("/embarcadores").get_data(as_text=True))
+
+    def test_link_de_pin_antigo_nao_recria_conta_excluida(self):
+        conn = contas.conectar()
+        try:
+            antigo = contas.gerar_token_definir_pin("segredo", conn, SEM_CONTA)  # versao "novo"
+            self.assertEqual(contas.validar_token_definir_pin("segredo", conn, antigo)["estado"], "ok")
+        finally:
+            conn.close()
+        self._acao("criar", SEM_CONTA)
+        self._acao("excluir", SEM_CONTA)
+        conn = contas.conectar()
+        try:
+            self.assertEqual(contas.validar_token_definir_pin("segredo", conn, antigo)["estado"], "usado")
+            # link pedido depois da exclusao (marca recuada 1 min) continua valendo
+            conn.execute("UPDATE portal_tentativas SET criado_em = datetime(criado_em, '-1 minute') "
+                         "WHERE escopo = 'conta_excluida'")
+            conn.commit()
+            novo = contas.gerar_token_definir_pin("segredo", conn, SEM_CONTA)
+            self.assertEqual(contas.validar_token_definir_pin("segredo", conn, novo)["estado"], "ok")
+        finally:
+            conn.close()
 
     def test_recusa_sem_conta_cnpj_de_fora_e_acao_estranha(self):
         self.assertEqual(self._acao("resetar", SEM_CONTA).status_code, 400)
