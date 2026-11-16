@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -47,6 +48,15 @@ class AmbienteTest(unittest.TestCase):
     def test_config_regrava_o_proprio(self):
         ambiente.escrever_config(self.raiz)
         ambiente.escrever_config(self.raiz)  # segunda vez: e o nosso, pode
+
+    def test_config_padrao_nao_mostra_a_cotacao(self):
+        cfg = yaml.safe_load(ambiente.escrever_config(self.raiz).read_text(encoding="utf-8"))
+        self.assertNotIn("cotacao", cfg["portal_cliente"])   # os outros videos sem o link "Cotacao de frete"
+
+    def test_config_da_cotacao_libera_a_tela_e_o_aceite_volta_pro_portal_local(self):
+        cfg = yaml.safe_load(ambiente.escrever_config(self.raiz, porta=8097, cotacao=True).read_text(encoding="utf-8"))
+        self.assertTrue(cfg["portal_cliente"]["cotacao"]["visivel_cliente"])
+        self.assertEqual(cfg["portal_cliente"]["url_base"], "http://127.0.0.1:8097")
 
     def test_banco_nao_apaga_banco_real(self):
         (self.raiz / "dados").mkdir()
@@ -189,6 +199,16 @@ class AmbienteTest(unittest.TestCase):
     def test_cep_no_formato_da_api(self):
         self.assertEqual(set(dados_teste.cep("05425000")), {"cep", "logradouro", "bairro", "cidade", "uf"})
 
+    def test_lista_da_cotacao_e_lida_pelo_portal(self):
+        import cotacao
+        with tempfile.TemporaryDirectory() as tmp:
+            arq = dados_teste.lista_cotacao_xlsx(Path(tmp))
+            paradas = cotacao.ler_lista(arq.read_bytes(), arq.name)
+        self.assertEqual(len(paradas), len(dados_teste.LISTA_COTACAO))
+        for p in paradas:   # o CEP de cada linha tem endereco na consulta ficticia
+            self.assertIn(cotacao.normalizar_cep(p["cep"]), dados_teste.CEPS_COTACAO)
+            self.assertTrue(p["numero"] and p["referencia"])
+
     def test_canhoto_e_png_ficticio(self):
         png = dados_teste.canhoto_png("5100")
         self.assertEqual(png[1:4], b"PNG")
@@ -226,10 +246,37 @@ class ServidorGravacaoTest(unittest.TestCase):
     def test_roteirizado_desfaz_ao_sair(self):
         from aula_portal import servidor
         import assistente
-        original = assistente._cliente_anthropic
+        import cotacao
+        originais = (assistente._cliente_anthropic, cotacao.calcular_trajeto, cotacao.enviar_email)
         with servidor.roteirizado():
             pass
-        self.assertIs(assistente._cliente_anthropic, original)
+        self.assertEqual((assistente._cliente_anthropic, cotacao.calcular_trajeto, cotacao.enviar_email), originais)
+
+    def test_cotacao_acha_cep_endereco_e_trajeto_sem_sair(self):
+        from aula_portal import servidor
+        import cotacao
+        with servidor.roteirizado():
+            achado = cotacao.consultar_cep("04538132")
+            paradas = cotacao.resolver_coordenadas([{"ordem": 1, "endereco": "x"}, {"ordem": 2, "endereco": "y"}], {})
+            trajeto = cotacao.calcular_trajeto(paradas, cotacao.regras_de({}), {})
+        self.assertEqual((achado["cidade"], achado["uf"]), ("São Paulo", "SP"))
+        self.assertTrue(achado["logradouro"])
+        self.assertTrue(all("lat" in p and "lng" in p for p in paradas))
+        self.assertGreaterEqual(len(trajeto["pernas_km"]), 2)
+        self.assertAlmostEqual(trajeto["km_total"], trajeto["km_ida"] + trajeto["km_volta"], places=1)
+        self.assertGreater(trajeto["pedagio_brl"], 0)
+
+    def test_email_da_proposta_fica_guardado_pra_tela_e_o_do_aceite_nao(self):
+        from aula_portal import servidor
+        import cotacao
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(servidor, "ARQ_EMAIL", Path(tmp) / "email.html"):
+            with servidor.roteirizado():
+                self.assertTrue(cotacao.enviar_email(["a@example.com"], "Fresh Log · Proposta de frete COT-00001 · R$ 1,00",
+                                                     "<p>proposta</p>", {}))
+                self.assertTrue(cotacao.enviar_email(["a@example.com"], "Fresh Log · Proposta COT-00001 aprovada",
+                                                     "<p>aprovada</p>", {}))
+            self.assertEqual(servidor.ARQ_EMAIL.read_text(encoding="utf-8"), "<p>proposta</p>")
 
 
 class GuardaRedeServidorTest(unittest.TestCase):

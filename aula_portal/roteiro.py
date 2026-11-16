@@ -15,8 +15,10 @@ Interceptacoes: {padrao_glob_do_playwright ("**/api/x*"): handler(route, request
 json_fixo/arquivo_fixo.
 """
 import json
+import tempfile
 from datetime import date, timedelta
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
 
 from aula_portal import dados_teste as dt
@@ -42,6 +44,7 @@ class Video:
     entrar: bool = True          # login invisivel antes do primeiro passo (cortado do video)
     inicio: str = "/login"       # sem login invisivel, o video comeca nesta pagina
     mostrar_chat: bool = False   # balao "Precisa de ajuda?" (texto muda com a hora)
+    requer: str | None = None    # tela oculta do cliente (ex.: "cotacao"): a pagina so lista com ela liberada
 
 
 def json_fixo(dados) -> Callable:
@@ -535,14 +538,149 @@ _V11 = Video(
     ],
 )
 
-VIDEOS: list[Video] = [_V1, _V2, _V_STATUS, _V3, _V4, _V5, _V6, _V7, _V8, _V9, _V10, _V11]
+# ── 13. Cotacao de frete ───────────────────────────────────────────────────────
+# Hugo, 16/11: video pros clientes, escondido da pagina (requer) enquanto a
+# calculadora for oculta (portal_cliente.cotacao.visivel_cliente). CEP, rota e
+# e-mail sao ficticios no portal da gravacao (servidor.roteirizado).
+
+PASTA_LISTA = Path(tempfile.gettempdir()) / "aula_cotacao"
+
+
+def _gerar_lista():
+    dt.lista_cotacao_xlsx(PASTA_LISTA)
+
+
+def _pdf_na_tela(route, request):
+    """O Chromium da gravacao nao mostra PDF: o PDF de verdade da proposta vira
+    imagem num leitor de PDF montado aqui."""
+    import base64
+    import io
+    import re
+
+    import pypdfium2 as pdfium
+    resp = route.fetch()
+    nome = (re.search(r'filename="?([^";]+)', resp.headers.get("content-disposition", "")) or [None, "proposta.pdf"])[1]
+    paginas = []
+    doc = pdfium.PdfDocument(resp.body())
+    try:
+        for pagina in doc:
+            buf = io.BytesIO()
+            pagina.render(scale=1.6).to_pil().save(buf, format="PNG")
+            paginas.append(f'<img src="data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}" alt="">')
+    finally:
+        doc.close()
+    html = ("<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'><title>" + nome + "</title><style>"
+            "body{margin:0;background:#525659;font-family:'Segoe UI',Arial,sans-serif}"
+            ".barra{position:sticky;top:0;height:44px;background:#323639;color:#fff;display:flex;align-items:center;"
+            "padding:0 18px;font-size:14px;box-shadow:0 1px 4px rgba(0,0,0,.4)}"
+            "img{display:block;margin:18px auto;width:780px;box-shadow:0 2px 10px rgba(0,0,0,.5)}</style></head>"
+            f"<body><div class='barra'>{nome}</div>{''.join(paginas)}</body></html>")
+    route.fulfill(status=200, content_type="text/html; charset=utf-8", body=html)
+
+
+def _email_na_tela(route, request):
+    """O e-mail da proposta (guardado pelo portal da gravacao em vez de sair)
+    aberto como numa caixa de entrada, com o logo embutido."""
+    import base64
+    import re
+
+    from aula_portal import RAIZ, servidor
+    corpo = servidor.ARQ_EMAIL.read_text(encoding="utf-8")
+    logo = base64.b64encode((RAIZ / "assets" / "logo_freshlog.png").read_bytes()).decode()
+    corpo = corpo.replace("cid:logo_freshlog", f"data:image/png;base64,{logo}")
+    numero = (re.search(r"COT-\d+", corpo) or [""])[0]
+    topo = ("<div style=\"font-family:'Segoe UI',Arial,sans-serif;background:#fff;border-bottom:1px solid #E5E7EB;"
+            "padding:14px 24px;\"><div style='font-size:12px;color:#6B7280;'>Caixa de entrada</div>"
+            f"<div style='font-size:17px;font-weight:700;color:#141428;margin-top:2px;'>Fresh Log · Proposta de frete {numero}</div>"
+            f"<div style='font-size:13px;color:#6B7280;margin-top:2px;'>De: Fresh Log · Para: {dt.EMAIL} · "
+            f"Anexo: {numero}.pdf</div></div>")
+    html = re.sub(r"(<body[^>]*>)", lambda m: m.group(1) + topo, corpo, count=1)
+    route.fulfill(status=200, content_type="text/html; charset=utf-8", body=html)
+
+
+def _entrega(n: int, campo: str) -> str:
+    return f"#entregas .entrega:nth-child({n}) [data-k='{campo}']"
+
+
+def _end(n: int, trecho: str) -> str:
+    return f"#entregas .entrega:nth-child({n}) .end:has-text('{trecho}')"
+
+
+_V12 = Video(
+    numero=13, slug="cotacao-de-frete", titulo="Cotação de frete",
+    resumo="Calcular o frete dedicado: a carga, as entregas (digitadas ou por planilha), o resultado e a "
+           "proposta em PDF para aprovar.",
+    estado="padrao", requer="cotacao",
+    intercepta={"**/cotacao/*/pdf": _pdf_na_tela, "**/__aula/email*": _email_na_tela},
+    passos=[
+        _abertura("Cotação de frete"),
+        Passo("Para cotar um frete dedicado, com um veículo só para a sua carga, clique em Cotação de frete, "
+              "no topo do portal.",
+              [("fechar_cartao",), ("clicar", "a[href$='/cotacao']"), ("esperar", "#card-carga")]),
+        Passo("Primeiro, a carga: quantas caixas, o peso total e, se quiser, o valor da nota fiscal.",
+              [("digitar", "#caixas", "180"), ("digitar", "#peso", "950"), ("digitar", "#valor-nf", "18.500,00")]),
+        Passo("Escolha o tipo de carga. A carga seca sai mais barata. Se a entrega for para hoje, marque same-day: "
+              "tem um acréscimo de quarenta por cento.",
+              [("clicar", "#tipo-carga button[data-v='REFRIGERADO']"), ("destacar", "label.check:has(#urgente)")],
+              legenda="Tipo de carga: seca sai mais barata. Same-day (hoje): +40%."),
+        Passo("Agora, as entregas, na ordem em que o veículo vai passar. Digite o CEP: a rua, o bairro e a cidade "
+              "aparecem sozinhos.",
+              [("rolar", "#card-entregas"), ("digitar", _entrega(1, "cep"), "04538132"),
+               ("esperar", _end(1, "Faria Lima")), ("pausa", 0.6)]),
+        Passo("Complete com o número e, se quiser, o nome de quem recebe.",
+              [("digitar", _entrega(1, "numero"), "1500"), ("digitar", _entrega(1, "referencia"), "Restaurante Itaim")]),
+        Passo("Para outro endereço, clique em Adicionar entrega e faça o mesmo.",
+              [("clicar", "#add-entrega"), ("rolar", "#entregas .entrega:nth-child(2)"),
+               ("digitar", _entrega(2, "cep"), "01310100"), ("esperar", _end(2, "Paulista")),
+               ("digitar", _entrega(2, "numero"), "1578")]),
+        Passo("Tem muitas entregas? Baixe o modelo de planilha e preencha uma linha por entrega: o CEP, o número, "
+              "o complemento e o destinatário.",
+              [("destacar", "#btn-modelo")]),
+        Passo("Depois, clique em Subir lista e escolha o arquivo. A lista entra no lugar das entregas digitadas: "
+              "confira os endereços antes de calcular.",
+              [("py", _gerar_lista), ("arquivo", "#arquivo-lista", [PASTA_LISTA / "entregas.xlsx"], "#btn-lista"),
+               ("esperar", "#aviso-lista.ok"), ("rolar", "#entregas"), ("destacar", "#aviso-lista")]),
+        Passo("Tudo certo? Clique em Calcular frete.",
+              [("clicar", "#calcular"), ("esperar", "#res:not(.oculto)")]),
+        Passo("O resultado aparece ao lado. O veículo é escolhido pelas caixas e pelo peso: aqui, uma van.",
+              [("js", "window.scrollTo({top: 0, behavior: 'smooth'})"), ("pausa", 0.6), ("destacar", ".veiculo")]),
+        Passo("A distância conta a ida e a volta ao galpão da Fresh Log. E o frete já inclui o pedágio estimado "
+              "do trajeto.",
+              [("destacar", "#res-comp tr:nth-child(1)"), ("destacar", "#res-comp tr:nth-child(2)")]),
+        Passo("O ad valorem e os impostos aparecem separados. Embaixo, o total e até quando a proposta vale.",
+              [("destacar", "#res-comp tr:nth-child(3)"), ("destacar", "#res-total"), ("destacar", "#res-validade")]),
+        Passo("Para receber a proposta, confira os e-mails e clique em Enviar proposta por e-mail.",
+              [("destacar", "#res-emails"), ("clicar", "#btn-proposta"), ("esperar", "#aviso-res.ok")]),
+        Passo("Em Ver PDF, você abre a proposta completa.",
+              [("clicar", "#btn-pdf"), ("esperar", "img")]),
+        Passo("Nela estão as entregas, na ordem, a composição do frete e as condições da proposta.",
+              [("pausa", 1.5), ("js", "window.scrollBy({top: 420, behavior: 'smooth'})"), ("pausa", 1.5)]),
+        Passo("O e-mail chega assim: o valor final e o botão Aprovar proposta. Dá para aprovar direto por ele, "
+              "sem entrar no portal.",
+              [("ir", "/__aula/email"), ("destacar", "a[href*='/cotacao/aceite/']")]),
+        Passo("Clique em Aprovar proposta, digite o seu nome e confirme.",
+              [("clicar", "a[href*='/cotacao/aceite/']"), ("digitar", "#nome", "Marina Costa"),
+               ("clicar", "button.principal")]),
+        Passo("Pronto: a proposta está aprovada. A Fresh Log recebe na hora e entra em contato para programar a coleta.",
+              [("esperar", "h1"), ("destacar", "h1")]),
+        Passo("No portal, as cotações ficam em Cotações anteriores, com a situação de cada uma.",
+              [("clicar", ".links a"), ("esperar", "#hist-corpo [data-ver]"), ("rolar", "#card-historico"),
+               ("destacar", "#hist-corpo tr:nth-child(1) .status-cot")]),
+        Passo("Em Ver, você reabre a cotação. Quem está no portal também pode aprovar por aqui, no botão Aprovar proposta.",
+              [("clicar", "#hist-corpo [data-ver]"), ("pausa", 0.8), ("destacar", "#btn-aceitar")]),
+    ],
+)
+
+VIDEOS: list[Video] = [_V1, _V2, _V_STATUS, _V3, _V4, _V5, _V6, _V7, _V8, _V9, _V10, _V11, _V12]
 
 
 def _amarrar_fechos(videos: list[Video]) -> None:
     """Cada video termina anunciando o proximo PUBLICADO (a pagina so lista
-    esses). Liberou o 3 ou o 10: regravar o anterior a ele."""
+    esses). Liberou o 3 ou o 10: regravar o anterior a ele. Video com requer
+    nunca e anunciado (some da pagina enquanto a tela dele estiver oculta)."""
     for v in videos:
-        seguinte = next((o for o in sorted(videos, key=lambda o: o.numero) if o.numero > v.numero and o.publicar), None)
+        seguinte = next((o for o in sorted(videos, key=lambda o: o.numero)
+                         if o.numero > v.numero and o.publicar and not o.requer), None)   # o com requer pode estar escondido
         v.passos.append(_fecho(seguinte.titulo if seguinte else None))
 
 

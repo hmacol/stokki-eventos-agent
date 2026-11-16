@@ -70,7 +70,7 @@ export default function Rotas() {
                     {r.total_paradas} parada(s) · {r.entregues} entregue(s) · {r.insucessos} insucesso(s)
                     {r.start_at ? ` · saída ${r.start_at.slice(11, 16)}` : ''}
                   </Text>
-                  {r.provedor === 'VUUPT' ? <Text style={s.vuupt}>Operada pelo app da VUUPT — aqui só consulta e aceite.</Text> : null}
+                  {!r.editavel ? <Text style={s.vuupt}>Operada pelo app da VUUPT — aqui só consulta e aceite.</Text> : null}
                   {r.status === 'PLANEJADA' ? <Text style={s.chamada}>Toque para aceitar ou recusar →</Text> : null}
                 </Cartao>
               </Pressable>
