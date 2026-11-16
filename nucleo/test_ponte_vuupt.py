@@ -251,5 +251,29 @@ class TestPonteVuupt(unittest.TestCase):
         self.assertEqual((p1["situacao"], p1["completed_at"]), ("ENTREGUE", "2026-11-16 12:00:00"))   # UTC -> local
 
 
+    def test_acao_nao_vale_se_a_rota_trocou_de_motorista_ou_o_servico_saiu_dela(self):
+        self._evento(self.p1, "ENTREGUE", "u1")
+        self._evento(self.p2, "ENTREGUE", "u2")
+        self.vuupt.servicos[9001]["route_id"] = 777          # a torre tirou o pedido da rota
+        self.assertEqual(self._processar()["desistiu"], 1)
+        conn = banco.conectar()
+        conn.execute("UPDATE nucleo_ponte_vuupt SET status = 'PENDENTE', tentativas = 0, proxima_em = NULL")
+        conn.execute("UPDATE nucleo_rotas SET agent_id = 5555 WHERE id = ?", (self.rota_id,))   # rota foi pra outro motorista
+        conn.commit()
+        conn.close()
+        self.assertEqual(self._processar()["desistiu"], 2)
+        self.assertEqual(self.vuupt.chamadas, [("concluir", 9002, True, None, [])])
+
+    def test_juntar_fotos_nunca_amplia(self):
+        from PIL import Image
+        def foto(w, h):
+            buf = io.BytesIO()
+            Image.new("RGB", (w, h), "white").save(buf, "JPEG")
+            return buf.getvalue()
+        junta = Image.open(io.BytesIO(ponte_vuupt._juntar_fotos([foto(40, 30), foto(4000, 3000)] + [foto(40, 30)] * 10)))
+        self.assertEqual(junta.width, 40)
+        self.assertEqual(junta.height, 30 * ponte_vuupt.MAX_FOTOS_JUNTAS)
+
+
 if __name__ == "__main__":
     unittest.main()

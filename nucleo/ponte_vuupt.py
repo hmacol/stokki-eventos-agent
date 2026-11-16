@@ -67,6 +67,10 @@ class _Adiar(Exception):
     """Ainda nao da pra executar (foto a caminho): espera sem contar tentativa."""
 
 
+class _Desistir(Exception):
+    """A acao nao vale mais (rota mudou de dono ou o servico saiu dela): nao tenta de novo."""
+
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 _config: dict | None = None
@@ -116,7 +120,7 @@ def enfileirar(conn: sqlite3.Connection, rota, acao: str, parada=None, dados: di
         "INSERT INTO nucleo_ponte_vuupt (rota_id, parada_id, service_id, acao, dados_json, criado_em) VALUES (?, ?, ?, ?, ?, ?)",
         (rota["id"], parada["id"] if parada is not None else None,
          parada["service_id"] if parada is not None else None, acao,
-         json.dumps(dados, ensure_ascii=False, default=str) if dados else None, banco.agora()))
+         json.dumps({**(dados or {}), "agent_id": rota["agent_id"]}, ensure_ascii=False, default=str), banco.agora()))
 
 
 def marcar_operada(conn: sqlite3.Connection, rota_id: int) -> None:
@@ -146,13 +150,13 @@ def _status_pronto(vuupt, servico: dict, agent_id: int | None) -> str:
     status = str(servico.get("status") or "")
     if status in ("", "not_assigned"):
         from nucleo import baixa_sem_app
-        if servico.get("route_id"):
-            baixa_sem_app._liberar_rota_agendada(vuupt, int(servico["route_id"]))
-            status = str(_ler_servico(vuupt, int(servico["id"])).get("status") or "")
-        elif agent_id:
-            vuupt.atribuir_agente(int(servico["id"]), agent_id)
-            status = "assigned"
+        baixa_sem_app._liberar_rota_agendada(vuupt, int(servico["route_id"]))
+        status = str(_ler_servico(vuupt, int(servico["id"])).get("status") or "")
     return status
+
+
+MAX_FOTOS_JUNTAS = 6
+LARGURA_MAX = 1280
 
 
 def _juntar_fotos(conteudos: list[bytes]) -> bytes:
@@ -162,8 +166,10 @@ def _juntar_fotos(conteudos: list[bytes]) -> bytes:
     if len(conteudos) == 1:
         return para_jpeg(conteudos[0])
     from PIL import Image
-    imagens = [Image.open(io.BytesIO(para_jpeg(c))) for c in conteudos]
-    largura = max(i.width for i in imagens)
+    # Nunca amplia: tudo desce pra largura da menor foto (teto LARGURA_MAX) e
+    # so entram as primeiras MAX_FOTOS_JUNTAS, senao poucas fotos viram uma tela enorme.
+    imagens = [Image.open(io.BytesIO(para_jpeg(c))) for c in conteudos[:MAX_FOTOS_JUNTAS]]
+    largura = min(LARGURA_MAX, min(i.width for i in imagens))
     imagens = [i if i.width == largura else i.resize((largura, round(i.height * largura / i.width))) for i in imagens]
     tela = Image.new("RGB", (largura, sum(i.height for i in imagens)), "white")
     y = 0
@@ -203,6 +209,12 @@ def _executar(conn: sqlite3.Connection, vuupt, cfg: dict, item, raiz: Path, agor
     if rota is None:
         return "rota_sumiu"
     dados = json.loads(item["dados_json"]) if item["dados_json"] else {}
+    # A acao e executada depois: so vale se a rota continua operavel pelo app e
+    # com o mesmo motorista que a registrou.
+    if not rota_operavel(rota, cfg):
+        raise _Desistir("rota nao e mais operada pelo app (ponte desligada pro motorista ou rota mudou)")
+    if dados.get("agent_id") is not None and dados["agent_id"] != rota["agent_id"]:
+        raise _Desistir(f"rota trocou de motorista ({dados['agent_id']} -> {rota['agent_id']})")
 
     if item["acao"] == ACAO_ACEITAR:
         # So aceita o que ja esta atribuido: liberar rota agendada mudaria o start_at na vespera.
@@ -220,6 +232,8 @@ def _executar(conn: sqlite3.Connection, vuupt, cfg: dict, item, raiz: Path, agor
     servico = _ler_servico(vuupt, service_id)
     if str(servico.get("status") or "") in STATUS_FECHADO:
         return "ja_fechado"
+    if int(servico.get("route_id") or 0) != int(rota["vuupt_route_id"]):
+        raise _Desistir(f"servico saiu da rota {rota['vuupt_route_id']} na Vuupt (esta em {servico.get('route_id')})")
 
     if item["acao"] in (ACAO_DESLOCAMENTO, ACAO_CHEGADA):
         status = _status_pronto(vuupt, servico, rota["agent_id"])
@@ -243,7 +257,7 @@ def _executar(conn: sqlite3.Connection, vuupt, cfg: dict, item, raiz: Path, agor
             failed_reason_id = m["vuupt_failed_reason_id"] if m else None
         info: dict = {}
         try:
-            r = baixa_sem_app.concluir_servico(vuupt, service_id, sucesso, failed_reason_id, rota["agent_id"],
+            r = baixa_sem_app.concluir_servico(vuupt, service_id, sucesso, failed_reason_id, None,
                                                fotos=fotos or None, info=info)
         except Exception as e:  # noqa: BLE001
             # Checklist que a Vuupt recusa nao pode segurar a entrega pra sempre:
@@ -252,7 +266,7 @@ def _executar(conn: sqlite3.Connection, vuupt, cfg: dict, item, raiz: Path, agor
                     and item["tentativas"] + 1 >= TENTATIVAS_COM_CHECKLIST):
                 raise
             logger.warning("Ponte: checklist do servico %s recusado (%s); concluindo sem foto na Vuupt.", service_id, e)
-            r = baixa_sem_app.concluir_servico(vuupt, service_id, sucesso, failed_reason_id, rota["agent_id"])
+            r = baixa_sem_app.concluir_servico(vuupt, service_id, sucesso, failed_reason_id, None)
             return f"{r} sem_checklist"
         if not sucesso:
             return r
@@ -292,7 +306,7 @@ def processar_fila(conn: sqlite3.Connection, vuupt, cfg: dict | None = None, rai
             continue
         except Exception as e:  # noqa: BLE001 -- um item com erro nao para a fila
             tentativas = item["tentativas"] + 1
-            desistiu = tentativas >= MAX_TENTATIVAS
+            desistiu = isinstance(e, _Desistir) or tentativas >= MAX_TENTATIVAS
             proxima = agora + timedelta(minutes=RECUO_MIN[min(tentativas, len(RECUO_MIN)) - 1])
             conn.execute("UPDATE nucleo_ponte_vuupt SET tentativas = ?, ultimo_erro = ?, proxima_em = ?, status = ? WHERE id = ?",
                          (tentativas, str(e)[:500], proxima.strftime(FMT),
