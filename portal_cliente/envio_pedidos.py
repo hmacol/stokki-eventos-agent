@@ -1761,11 +1761,53 @@ def _pode_alterar_endereco(d: dict) -> bool:
             and (d.get("endereco_entrega_origem") in ("cliente", "ultima_entrega") or not d.get("endereco_fiscal")))
 
 
-def alterar_endereco_bloqueado(conn: sqlite3.Connection, envio: dict, campos: dict, config: dict | None, por: str) -> dict:
+class ForaDiaFixo(ErroEnvio):
+    """Data de agendamento fora do dia de visita da regiao do endereco novo;
+    .aviso leva regiao, dias e a proxima data de visita pra tela perguntar."""
+    def __init__(self, aviso: dict):
+        super().__init__(f"A data {aviso['data_br']} cai fora do dia de visita de {aviso['regiao']} ({aviso['dias']}).")
+        self.aviso = aviso
+
+
+def _agendamento_no_endereco_novo(envio: dict, novo: dict, dados: dict) -> str | None:
+    """Data de agendamento que fica no pedido depois da troca de endereco
+    (Hugo, 16/11: a regiao nova pode ter outro dia de visita). Mesma regra da
+    previa do envio (avisos_fora_dia_fixo): data fora do dia de visita levanta
+    ForaDiaFixo, e o cliente manda outra data (dados.agendamento_data) ou
+    confirma assim mesmo (dados.aceita_fora_dia_fixo -> envio dedicado). Sem
+    data, pendente ou data passada: nada a conferir."""
+    atual = envio.get("agendamento_data")
+    if envio.get("agendamento_pendente") or not atual:
+        return atual
+    if dados.get("agendamento_data"):
+        data = _validar_agendamento({}, {"data": dados["agendamento_data"], "hora_inicio": "08:00", "hora_fim": "18:00"})[0]
+    else:
+        try:
+            data = date.fromisoformat(str(atual))
+        except ValueError:
+            return atual
+        if data < date.today():
+            return atual
+    if not dados.get("aceita_fora_dia_fixo"):
+        rdf = _regioes_dia_fixo()
+        regra = rdf.regra_dia_fixo_do_servico({"address": _endereco_sintetico(novo)})
+        if regra and not rdf.data_valida_na_regiao(regra, data):
+            try:
+                sugestao = rdf.proxima_data_valida(regra, date.today()).isoformat()
+            except ValueError:
+                sugestao = ""
+            raise ForaDiaFixo({"data_br": data.strftime("%d/%m/%Y"), "regiao": regra.get("regiao") or regra["nome"],
+                               "dias": rdf.descricao_dias(regra), "sugestao": sugestao})
+    return data.isoformat()
+
+
+def alterar_endereco_bloqueado(conn: sqlite3.Connection, envio: dict, campos: dict, config: dict | None, por: str,
+                               dados: dict | None = None) -> dict:
     """Cliente troca o endereco de entrega de um pedido AGUARDANDO_LIBERACAO
     (Hugo, 13/11). Parte sempre do XML original, valida pelo CEP e reavalia a
     area com o endereco novo: atendida -> NA_FILA; senao continua aguardando,
-    ja com o endereco novo pra equipe decidir."""
+    ja com o endereco novo pra equipe decidir. dados: agendamento_data e
+    aceita_fora_dia_fixo (ver _agendamento_no_endereco_novo)."""
     if not _pode_alterar_endereco(envio):
         raise ErroEnvio("Só um pedido aguardando liberação por região não atendida aceita troca de endereço por aqui.")
     if not endereco_entrega.entrega_ativa(config):
@@ -1781,18 +1823,23 @@ def alterar_endereco_bloqueado(conn: sqlite3.Connection, envio: dict, campos: di
     except endereco_entrega.ErroEndereco as e:
         raise ErroEnvio(str(e))
     novo = endereco_entrega.aplicar_entrega(nfe, end)
+    ag_data = _agendamento_no_endereco_novo(envio, novo, dados or {})
     # antes de escrever: a geocodificacao grava cache por outra conexao (ver confirmar_envios)
     motivo = classificar_area_envio(novo, config)
     gravado = {**end, "documento": nfe["destinatario_doc"], "nome": nfe["destinatario_nome"]}
     texto = endereco_entrega.linha_fiscal(novo)
+    if ag_data != envio.get("agendamento_data"):
+        texto += f" · entrega reagendada para {'/'.join(reversed(ag_data.split('-')))}"
+    elif ag_data and (dados or {}).get("aceita_fora_dia_fixo"):
+        texto += " · data mantida fora do dia de visita da região (envio dedicado)"
     # WHERE status: a equipe pode ter liberado (ou o cliente cancelado) com o modal aberto
     cur = conn.execute("""
         UPDATE portal_envios SET destinatario_endereco = ?, destinatario_bairro = ?, destinatario_municipio = ?,
             destinatario_uf = ?, destinatario_cep = ?, endereco_fiscal = ?, endereco_entrega_origem = 'cliente',
-            endereco_entrega_json = ?, bloqueio_motivo = ?, status = ?, atualizado_em = ?
+            endereco_entrega_json = ?, agendamento_data = ?, bloqueio_motivo = ?, status = ?, atualizado_em = ?
          WHERE id = ? AND status = ?
     """, (novo["destinatario_endereco"], novo["destinatario_bairro"], novo["destinatario_municipio"], novo["destinatario_uf"],
-          novo["destinatario_cep"], novo["endereco_fiscal"], json.dumps(gravado, ensure_ascii=False), motivo,
+          novo["destinatario_cep"], novo["endereco_fiscal"], json.dumps(gravado, ensure_ascii=False), ag_data, motivo,
           STATUS_AGUARDANDO_LIBERACAO if motivo else STATUS_NA_FILA, _agora(), envio["id"], STATUS_AGUARDANDO_LIBERACAO))
     if cur.rowcount == 0:
         conn.rollback()

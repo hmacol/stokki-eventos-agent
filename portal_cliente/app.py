@@ -1397,9 +1397,12 @@ def api_envios_acao(envio_id):
             return jsonify({"erro": "Pedido não encontrado."}), 404
         if tipo == "alterar_endereco":
             # pedido barrado pela area (13/11): troca o endereco e reavalia a regiao
-            resultado = envios.alterar_endereco_bloqueado(conn, envio, corpo.get("endereco"), _CONFIG, _quem_envia())
+            resultado = envios.alterar_endereco_bloqueado(conn, envio, corpo.get("endereco"), _CONFIG, _quem_envia(), corpo)
         else:
             resultado = envios.aplicar_acao(conn, envio, tipo, corpo, _quem_envia())
+    except envios.ForaDiaFixo as e:
+        # regiao nova com outro dia de visita (16/11): a tela pede nova data ou a confirmacao
+        return jsonify({"erro": str(e), "fora_dia_fixo": e.aviso}), 409
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     finally:
