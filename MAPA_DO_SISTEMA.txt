@@ -1318,7 +1318,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            Lê dados/aula/aula.json (gerado por aula_portal/gravar.py)
                            e só entrega /aula/arquivo/<nome> que está no manifesto
                            (Range -> 206, o Safari precisa). Link no login e no
-                           cabeçalho (botão "Aula").
+                           cabeçalho (botão "Aula"). Vídeo com "requer" no manifesto
+                           (13 = cotação) só aparece com a tela liberada
+                           (portal_cliente.cotacao.visivel_cliente: true).
  ../aula_portal/            Gerador dos vídeos da aula (roda na máquina do Hugo, nunca na VPS):
                            `py -3.11 -m aula_portal.gravar --video N | --todos | --manifesto`.
                            Sobe o portal DESTE checkout na porta 8097 com config.yaml e
@@ -1326,7 +1328,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            use um worktree, nunca a raiz), cliente "Mercado Exemplo"
                            (dados_teste.py). servidor.py roda o portal com guarda de rede
                            (socket só loopback, SMTP recusado) e roteiriza o assistente do chat;
-                           roteiro.py tem os 12 vídeos, todos publicados (3 = status do pedido,
+                           roteiro.py tem os 13 vídeos, todos publicados (13 = cotação, escondido
+                           na página até a cotação ser liberada; CEP, rota e e-mail fictícios no
+                           servidor.py; 3 = status do pedido,
                            banco no estado "status" com um envio em cada status; 4 = endereço na
                            prévia + alterar entrega pela regra de 12/11; CEP e alteração interceptados).
                            Rede: DNS bloqueado no Chromium + falha se algo tentar sair.

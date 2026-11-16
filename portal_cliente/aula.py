@@ -12,13 +12,16 @@ _RAIZ = Path(__file__).resolve().parent.parent
 PASTA_AULA = _RAIZ / "dados" / "aula"
 
 
-def carregar_manifesto(pasta: Path | None = None) -> list[dict]:
+def carregar_manifesto(pasta: Path | None = None, liberadas: frozenset | set = frozenset()) -> list[dict]:
     """Videos do manifesto em ordem de numero; lista vazia se o arquivo nao
-    existe ou nao e um JSON valido (a pagina mostra "sendo preparados")."""
+    existe ou nao e um JSON valido (a pagina mostra "sendo preparados").
+    Video com "requer" (tela oculta do cliente, ex.: "cotacao") so entra se
+    essa tela estiver em `liberadas`."""
     pasta = pasta or PASTA_AULA
     try:
         dados = json.loads((pasta / "aula.json").read_text(encoding="utf-8"))
-        videos = [v for v in dados.get("videos", []) if isinstance(v, dict) and v.get("video")]
+        videos = [v for v in dados.get("videos", []) if isinstance(v, dict) and v.get("video")
+                  and (not v.get("requer") or v["requer"] in liberadas)]
         return sorted(videos, key=lambda v: int(v.get("numero") or 0))
     except (OSError, ValueError, AttributeError, TypeError):
         return []
