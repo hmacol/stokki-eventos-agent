@@ -364,6 +364,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                 29/10, login nominal com "Portal do cliente" marcado na /acessos
                 (coluna painel_usuarios.portal_equipe; entra como operador,
                 reconfere a cada request: desmarcar/desativar/redefinir derruba).
+                Do painel pro portal sem senha (16/11): /painel/torre/cotacao assina
+                um passe de 60 s (portal_cliente/entrada_equipe.py) e o portal abre a
+                sessão em /equipe/entrar, com as mesmas regras do /equipe.
    app/API   -> CPF + PIN, token Bearer (nucleo/auth_motorista.py).
    atendimento -> usuários próprios em dados/atendimento.db (admin/atendente).
    links públicos (canhoto, insucesso, aceite de cotação, confirmação)
@@ -1186,6 +1189,8 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                               total/operador/leitura/atendimento; números via
                               /api/inicio/dados depois do load)
    /torre, /torre/mobile      torre_controle.html, torre_mobile.html
+   /torre/cotacao             botão "Cotação": redireciona pro portal como equipe
+                              (/cliente/equipe/entrar -> escolhe o cliente -> /cotacao)
    /planejamento              planejamento_rotas.html (maior arquivo do repo;
                               ?modo=mobile para celular; dia passado = só leitura)
    /mapa-rotas                mapa_rotas.html
@@ -1352,7 +1357,12 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            "Não coletado" (5744) some pro cliente; só ele = Aguardando
                            saída. `codigo` = código base, `codigo_servico` = o do serviço.
                            E-mails 07h/20h ainda usam linhas_das_rotas sem unir.
- envio_pedidos.py          "Máscara de envio": valida XML/planilha, fila.
+ envio_pedidos.py          "Máscara de envio": valida XML/planilha, fila. Login de grupo
+                           (12/11): sem seletor de empresa na tela; a planilha traz a
+                           coluna "CNPJ da empresa (quem envia)" por pedido (obrigatória
+                           só no grupo; o modelo do grupo já vem com ela), o XML vai
+                           pelo emitente e a lista junta todas as empresas. Rotas em
+                           app.py: _grupo_sem_seletor / _empresa_do_envio.
  anexos_pedido.py          PDFs anexados ao pedido (prévia e lista): lê, sugere o
                            pedido, grava e registra pro romaneio quando sai o PS.
  endereco_entrega.py       Endereço de entrega escolhido na prévia: CEP com IBGE, última
@@ -1403,6 +1413,8 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
  assistente.py             Triagem com Claude no chat.
  cotacao.py, cotacao_web.py, cotacao_pdf.py  Calculadora de frete dedicado
                            (oculta do cliente por padrão).
+ entrada_equipe.py         Passe assinado painel -> portal (botão Cotação da Torre);
+                           quem entra é decidido em app.py (_equipe_do_passe).
  link_canhoto.py           /c/<token>: canhoto sem login.
  consulta_transportadora_web.py  /transportadora/<token>: embarcador responde (retirada, redespacho,
                            entrega) sobre transportadora nova, sem login; template consulta_transportadora.html.

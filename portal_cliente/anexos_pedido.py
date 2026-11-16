@@ -203,16 +203,17 @@ def validar_tokens(tokens: list[str], cnpj: str) -> None:
 
 # ── Gravacao ──────────────────────────────────────────────────────────────────
 
-def anexar(conn: sqlite3.Connection, envio: dict, anexos: list[dict], por: str) -> list[dict]:
+def anexar(conn: sqlite3.Connection, envio: dict, anexos: list[dict], por: str, dono: str | None = None) -> list[dict]:
     """anexos: [{token, casado_por?}] ja conferidos pelo usuario. Move cada PDF
     pro definitivo, grava a linha e, se o envio ja tem codigo PS, registra pro
-    romaneio. Nao faz commit."""
+    romaneio. Nao faz commit. `dono`: CNPJ que guardou os tokens (o do login,
+    no grupo); sem ele vale o embarcador do envio."""
     garantir_tabela(conn)
     emb = ep._so_digitos(envio["cnpj_embarcador"])
     ja = conn.execute("SELECT COUNT(*) FROM portal_envios_anexos WHERE envio_id = ?", (envio["id"],)).fetchone()[0]
     if ja + len(anexos) > MAX_ANEXOS_POR_PEDIDO:
         raise ep.ErroEnvio(f"{ep.rotulo_envio(envio)}: no máximo {MAX_ANEXOS_POR_PEDIDO} documentos por pedido.")
-    lidos = [(a, *_ler_temporario(a.get("token", ""), emb)) for a in anexos]
+    lidos = [(a, *_ler_temporario(a.get("token", ""), dono or emb)) for a in anexos]
     vistos = set()
     for _a, info, _c in lidos:
         if info["hash"] in vistos:

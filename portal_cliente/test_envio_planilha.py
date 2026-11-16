@@ -280,3 +280,112 @@ def test_worker_planilha_sem_itens_vira_erro(ambiente, monkeypatch, tmp_path):
     assert resumo["erros"] == 1
     r = conn.execute("SELECT status, erro FROM portal_envios").fetchone()
     assert r["status"] == "ERRO" and "sem itens" in r["erro"]
+
+
+# ── Login de grupo: a planilha diz a empresa de cada pedido (12/11) ────────────
+
+EMP_A, EMP_B, EMP_ZERO = "54993021000184", "48654566000163", "04565018000272"
+EMPRESAS = {EMP_A: "MARCHEF", EMP_B: "ITAUEIRA", EMP_ZERO: "TRES M"}
+
+
+def _planilha_grupo(linhas: list[dict]) -> bytes:
+    colunas = [ep.COLUNA_EMPRESA] + ep.COLUNAS_PLANILHA
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append([c[1] for c in colunas])
+    for l in linhas:
+        ws.append([l.get(c[0], "") for c in colunas])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_modelo_do_grupo_tem_a_coluna_da_empresa_e_e_lido_de_volta():
+    conteudo = ep.gerar_modelo_planilha("Marchef", EMPRESAS)
+    wb = openpyxl.load_workbook(io.BytesIO(conteudo))
+    cab = [c.value for c in wb["Pedidos"][1]]
+    assert cab == [ep.COLUNA_EMPRESA[1]] + [c[1] for c in ep.COLUNAS_PLANILHA]
+    instrucoes = " ".join(str(c.value or "") for c in wb["Instruções"]["A"])
+    assert "48.654.566/0001-63" in instrucoes and "ITAUEIRA" in instrucoes
+    pedidos, rejeitados = ep.ler_planilha(conteudo, "modelo.xlsx", EMP_A, EMPRESAS)
+    assert rejeitados == [] and [p["emitente_cnpj"] for p in pedidos] == [EMP_A, EMP_A]
+    # o modelo dos outros clientes continua sem a coluna
+    assert ep.COLUNA_EMPRESA[1] not in [c.value for c in openpyxl.load_workbook(io.BytesIO(ep.gerar_modelo_planilha("X")))["Pedidos"][1]]
+
+
+def test_planilha_do_grupo_separa_os_pedidos_pela_coluna_da_empresa():
+    conteudo = _planilha_grupo([
+        _linha(referencia="P-A", empresa_cnpj="54.993.021/0001-84"),
+        _linha(referencia="P-A", empresa_cnpj="", sku="SKU-B"),            # 2a linha do pedido: empresa em branco
+        _linha(referencia="P-B", empresa_cnpj=EMP_B),
+        _linha(referencia="P-Z", empresa_cnpj=4565018000272),              # Excel comeu o zero a esquerda
+    ])
+    pedidos, rejeitados = ep.ler_planilha(conteudo, "p.xlsx", EMP_A, EMPRESAS)
+    assert rejeitados == []
+    assert {p["referencia"]: p["emitente_cnpj"] for p in pedidos} == {"P-A": EMP_A, "P-B": EMP_B, "P-Z": EMP_ZERO}
+    assert pedidos[0]["itens"] == 2 and pedidos[1]["emitente_nome"] == "ITAUEIRA"
+    # a chave do pedido leva a empresa: a mesma referencia em outra empresa nao e duplicada
+    assert pedidos[1]["chave_nfe"] == ep.chave_planilha(EMP_B, "P-B") != ep.chave_planilha(EMP_A, "P-B")
+
+
+def test_planilha_do_grupo_recusa_pedido_sem_empresa_de_fora_ou_misturado():
+    conteudo = _planilha_grupo([
+        _linha(referencia="SEM", empresa_cnpj=""),
+        _linha(referencia="FORA", empresa_cnpj=CNPJ),
+        _linha(referencia="MIX", empresa_cnpj=EMP_A),
+        _linha(referencia="MIX", empresa_cnpj=EMP_B, sku="SKU-B"),
+        _linha(referencia="OK", empresa_cnpj=EMP_B),
+    ])
+    pedidos, rejeitados = ep.ler_planilha(conteudo, "p.xlsx", EMP_A, EMPRESAS)
+    assert [p["referencia"] for p in pedidos] == ["OK"]
+    erros = {r["rotulo"]: r["erro"] for r in rejeitados}
+    assert "Sem o CNPJ da empresa" in erros["Pedido SEM"]
+    assert "não faz parte do seu acesso" in erros["Pedido FORA"]
+    assert "empresa diferente da primeira linha" in erros["Pedido MIX"]
+
+
+def test_planilha_do_grupo_sem_a_coluna_e_recusada_inteira():
+    with pytest.raises(ep.ErroEnvio, match="falta a coluna"):
+        ep.ler_planilha(_planilha([_linha()]), "antiga.xlsx", EMP_A, EMPRESAS)
+    # login de uma empresa so: a coluna nao e exigida e, se vier, e ignorada
+    pedidos, _ = ep.ler_planilha(_planilha_grupo([_linha(empresa_cnpj=EMP_B)]), "p.xlsx", CNPJ)
+    assert pedidos[0]["emitente_cnpj"] == CNPJ
+
+
+def _confirmar_grupo(conn, conteudo, por_empresa):
+    pedidos, rejeitados = ep.ler_planilha(conteudo, "grupo.xlsx", EMP_A, EMPRESAS)
+    assert rejeitados == []
+    token_plan = ep.guardar_temporario(conteudo, "xlsx")
+    itens = [{"token": ep.guardar_temporario_pedido(p, token_plan), "horario_inicio": "08:00", "horario_fim": "17:00"}
+             for p in pedidos]
+    return ep.confirmar_envios(conn, EMP_A, itens, "cliente", {}, "nenhuma", por_empresa=por_empresa)
+
+
+def test_confirmar_do_grupo_grava_cada_pedido_na_empresa_dele(ambiente):
+    conn = ambiente
+    conteudo = _planilha_grupo([_linha(referencia="P-A", empresa_cnpj=EMP_A), _linha(referencia="P-B", empresa_cnpj=EMP_B),
+                                _linha(referencia="P-B2", empresa_cnpj=EMP_B)])
+    ctx = {"regra_xml": "nenhuma", "fluxos": ["armazenagem"], "sender_id": 1}
+    criados = _confirmar_grupo(conn, conteudo, {EMP_A: ctx, EMP_B: ctx})
+    assert [c["cnpj_embarcador"] for c in criados] == [EMP_A, EMP_B, EMP_B]
+    rows = [dict(r) for r in conn.execute("SELECT * FROM portal_envios ORDER BY id")]
+    assert [(r["referencia"], r["cnpj_embarcador"], r["status"]) for r in rows] == [
+        ("P-A", EMP_A, "NA_FILA"), ("P-B", EMP_B, "NA_FILA"), ("P-B2", EMP_B, "NA_FILA")]
+    # uma copia da planilha por empresa (a pasta e por CNPJ) e nenhum temporario sobrando
+    assert rows[0]["xml_path"] != rows[1]["xml_path"] == rows[2]["xml_path"]
+    assert all((ep._RAIZ / r["xml_path"]).is_file() for r in rows)
+    assert not list(ep.PASTA_TEMP.glob("*"))
+    # cada empresa so enxerga os dela
+    assert [l["referencia"] for l in ep.listar_envios(conn, EMP_A)] == ["P-A"]
+    assert sorted(l["referencia"] for l in ep.listar_envios(conn, EMP_B)) == ["P-B", "P-B2"]
+    # horario do destinatario fica guardado na empresa do pedido
+    assert {r[0] for r in conn.execute("SELECT cnpj_embarcador FROM portal_destinatarios")} == {EMP_A, EMP_B}
+
+
+def test_confirmar_do_grupo_com_empresa_de_fora_nao_grava_nada(ambiente):
+    conn = ambiente
+    conteudo = _planilha_grupo([_linha(referencia="P-A", empresa_cnpj=EMP_A), _linha(referencia="P-B", empresa_cnpj=EMP_B)])
+    ctx = {"regra_xml": "nenhuma", "fluxos": ["armazenagem"], "sender_id": 1}
+    with pytest.raises(ep.ErroEnvio, match="não é de uma empresa do seu acesso"):
+        _confirmar_grupo(conn, conteudo, {EMP_A: ctx})   # EMP_B saiu do acesso entre a previa e o confirmar
+    assert conn.execute("SELECT COUNT(*) FROM portal_envios").fetchone()[0] == 0
