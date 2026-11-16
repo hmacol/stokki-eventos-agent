@@ -109,6 +109,36 @@ class AulaTest(unittest.TestCase):
         self.assertEqual(self.cli.get("/aula/arquivo/..%2Fconfig.yaml", base_url=HTTPS).status_code, 404)
         self.assertEqual(self.cli.get("/aula/arquivo/aula.json", base_url=HTTPS).status_code, 404)
 
+    def _manifesto_com_cotacao(self):
+        cot = dict(_video(13, "cotacao-de-frete", "Cotação de frete"), requer="cotacao")
+        self._gravar_manifesto(json.dumps(_manifesto(_video(1, "primeiro-acesso", "Primeiro acesso"), cot)))
+        (self.pasta / "cotacao-de-frete.mp4").write_bytes(b"x")
+
+    def test_video_da_cotacao_escondido_enquanto_a_tela_e_oculta(self):
+        # Hugo, 16/11: o video fica gravado, mas so aparece quando a cotacao for liberada aos clientes
+        self._manifesto_com_cotacao()
+        with self._cotacao_visivel(False):
+            html = self.cli.get("/aula", base_url=HTTPS).get_data(as_text=True)
+            self.assertIn("Primeiro acesso", html)
+            self.assertNotIn("Cotação de frete", html)
+            self.assertEqual(self.cli.get("/aula/arquivo/cotacao-de-frete.mp4", base_url=HTTPS).status_code, 404)
+
+    def _cotacao_visivel(self, visivel: bool):
+        # fixa a chave: o worktree pode ter o config.yaml da gravacao (cotacao liberada)
+        cfg = dict(self.portal._CONFIG.get("portal_cliente") or {}, cotacao={"visivel_cliente": visivel})
+        return mock.patch.dict(self.portal._CONFIG, {"portal_cliente": cfg})
+
+    def test_video_da_cotacao_aparece_com_a_tela_liberada(self):
+        self._manifesto_com_cotacao()
+        with self._cotacao_visivel(True):
+            html = self.cli.get("/aula", base_url=HTTPS).get_data(as_text=True)
+            self.assertIn("Cotação de frete", html)
+            self.assertEqual(self.cli.get("/aula/arquivo/cotacao-de-frete.mp4", base_url=HTTPS).status_code, 200)
+
+    def test_requer_desconhecido_nunca_aparece(self):
+        self._gravar_manifesto(json.dumps(_manifesto(dict(_video(1, "x", "Tela futura"), requer="outra-tela"))))
+        self.assertNotIn("Tela futura", self.cli.get("/aula", base_url=HTTPS).get_data(as_text=True))
+
     def test_cliente_com_troca_pendente_abre_aula(self):
         conn = auth.conectar()
         conn.execute("CREATE TABLE interno (cnpj_embarcador TEXT, sender_id INTEGER, nome_remetente TEXT, "

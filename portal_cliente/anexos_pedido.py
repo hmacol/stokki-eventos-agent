@@ -203,16 +203,17 @@ def validar_tokens(tokens: list[str], cnpj: str) -> None:
 
 # ── Gravacao ──────────────────────────────────────────────────────────────────
 
-def anexar(conn: sqlite3.Connection, envio: dict, anexos: list[dict], por: str) -> list[dict]:
+def anexar(conn: sqlite3.Connection, envio: dict, anexos: list[dict], por: str, dono: str | None = None) -> list[dict]:
     """anexos: [{token, casado_por?}] ja conferidos pelo usuario. Move cada PDF
     pro definitivo, grava a linha e, se o envio ja tem codigo PS, registra pro
-    romaneio. Nao faz commit."""
+    romaneio. Nao faz commit. `dono`: CNPJ que guardou os tokens (o do login,
+    no grupo); sem ele vale o embarcador do envio."""
     garantir_tabela(conn)
     emb = ep._so_digitos(envio["cnpj_embarcador"])
     ja = conn.execute("SELECT COUNT(*) FROM portal_envios_anexos WHERE envio_id = ?", (envio["id"],)).fetchone()[0]
     if ja + len(anexos) > MAX_ANEXOS_POR_PEDIDO:
         raise ep.ErroEnvio(f"{ep.rotulo_envio(envio)}: no máximo {MAX_ANEXOS_POR_PEDIDO} documentos por pedido.")
-    lidos = [(a, *_ler_temporario(a.get("token", ""), emb)) for a in anexos]
+    lidos = [(a, *_ler_temporario(a.get("token", ""), dono or emb)) for a in anexos]
     vistos = set()
     for _a, info, _c in lidos:
         if info["hash"] in vistos:
@@ -284,18 +285,22 @@ def registrar_no_romaneio(conn: sqlite3.Connection, envio_id: int) -> int:
     for a in conn.execute(f"SELECT {cols} FROM portal_envios_anexos WHERE envio_id = ? AND registrado_em IS NULL",
                           (envio_id,)).fetchall():
         aid, arquivo, hash_, tipo, numero_nf, parcela, total, cnpj = a
-        existente = conn.execute("SELECT origem, status, codigo_pedido FROM documentos_processados WHERE hash_conteudo = ?",
-                                 (hash_,)).fetchone()
-        # O hash e a chave da tabela: o portal nunca toma o documento de outro
-        # dono (revisao de seguranca, 11/11). So grava quando nao ha linha, ou
-        # quando a linha nao e da Stokki e ainda nao tem pedido (nao casou com
-        # ninguem) ou ja e deste mesmo pedido. Qualquer outra -- de outro
-        # pedido ou cliente, em qualquer status -- fica como esta.
-        dono_alheio = existente and (existente[0] == "stokki" or existente[2] not in (None, "", codigo))
-        if dono_alheio:
-            logger.warning(f"anexo {arquivo} (envio {envio_id}): arquivo identico ja registrado em {existente[2]} "
-                           f"({existente[0]}); nao registrado pro romaneio de {codigo}")
-        else:
+        existente = conn.execute("SELECT origem, status, codigo_pedido, nome_arquivo FROM documentos_processados "
+                                 "WHERE hash_conteudo = ?", (hash_,)).fetchone()
+        # O hash e a chave da tabela e o portal nunca mexe na linha de outro
+        # dono (revisao de seguranca, 11/11). Arquivo identico ja registrado:
+        #  - neste mesmo pedido e valendo (veio da Stokki/e-mail): ja sai no
+        #    romaneio, nao registra de novo;
+        #  - em outro pedido, de outro cliente ou sem pedido: este anexo entra
+        #    numa linha propria, com chave hash-portal-<id> (16/11) -- antes
+        #    so o primeiro saia no romaneio.
+        chave = hash_
+        if existente and not (existente[0] == ORIGEM_DOCUMENTO and existente[3] == arquivo):
+            if existente[2] == codigo and existente[1] == "ENVIADO":
+                chave = None
+            else:
+                chave = f"{hash_}-portal-{aid}"
+        if chave:
             # 'Nota Fiscal' do portal entra como 'Outro' e sem numero: quem diz
             # qual e a NF do pedido e a Stokki. Senao o PDF do cliente entraria
             # no indice NF->pedido (puxando boleto de outro cliente) e faria o
@@ -306,7 +311,7 @@ def registrar_no_romaneio(conn: sqlite3.Connection, envio_id: int) -> int:
                 "INSERT OR REPLACE INTO documentos_processados (hash_conteudo, origem, nome_arquivo, tipo, codigo_pedido, "
                 "status, motivo, gcs_path, processado_em, numero_parcela, total_parcelas, numero_nf, cnpj_contraparte) "
                 "VALUES (?,?,?,?,?,'ENVIADO',NULL,NULL,?,?,?,?,?)",
-                (hash_, ORIGEM_DOCUMENTO, arquivo, tipo or "Outro", codigo, ep._agora(), parcela, total, numero_nf, cnpj))
+                (chave, ORIGEM_DOCUMENTO, arquivo, tipo or "Outro", codigo, ep._agora(), parcela, total, numero_nf, cnpj))
         conn.execute("UPDATE portal_envios_anexos SET registrado_em = ? WHERE id = ?", (ep._agora(), aid))
         n += 1
     return n
@@ -360,6 +365,7 @@ def remover(conn: sqlite3.Connection, anexo: dict) -> None:
     """Tira o documento do pedido (e do romaneio). Nao faz commit."""
     conn.execute("DELETE FROM portal_envios_anexos WHERE id = ?", (anexo["id"],))
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'documentos_processados'").fetchone():
-        conn.execute("DELETE FROM documentos_processados WHERE hash_conteudo = ? AND origem = ? AND nome_arquivo = ?",
-                     (anexo["hash_conteudo"], ORIGEM_DOCUMENTO, anexo["arquivo"]))
+        # pelo arquivo (unico por anexo): a chave pode ser o hash ou hash-portal-<id>
+        conn.execute("DELETE FROM documentos_processados WHERE origem = ? AND nome_arquivo = ?",
+                     (ORIGEM_DOCUMENTO, anexo["arquivo"]))
     caminho(anexo).unlink(missing_ok=True)

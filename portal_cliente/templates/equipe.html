@@ -5,7 +5,7 @@
 <h1>Acesso da equipe Fresh Log</h1>
 <p class="suave">Use o mesmo usuário e senha do painel interno. Depois você escolhe em nome de qual cliente vai operar.</p>
 {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
-<form method="post" autocomplete="off">
+<form method="post" action="{{ url_for('equipe_login', proximo=proximo or None) }}" autocomplete="off">
   <label for="usuario">Usuário</label>
   <input type="text" id="usuario" name="usuario" required autofocus>
   <label for="senha">Senha</label>
@@ -17,6 +17,7 @@
 <h1>Em nome de qual cliente?</h1>
 <p class="suave">Logado como <b>{{ equipe.usuario }}</b> ({{ equipe.nivel }}). Tudo que você fizer na tela fica registrado como “equipe”.</p>
 <form method="post">
+  <input type="hidden" name="proximo" value="{{ proximo }}">
   <label for="cnpj">Cliente (embarcador)</label>
   <select id="cnpj" name="cnpj" required style="width:100%; padding:10px 12px; border:1px solid var(--borda); border-radius:7px; font-size:14px; margin-bottom:16px; font-family:inherit;">
     <option value="">— escolha —</option>
