@@ -972,7 +972,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  cancelar_rotas_sem_motorista.py  15h45; só avisa rotas passadas sem baixa (28/10), não devolve.
  finalizar_rotas_entregues.py  23h30; finaliza na Vuupt (PUT /routes/{id}/finish) a rota iniciada
                            pelo motorista com tudo entregue (11/11). Rota nunca iniciada a
-                           Vuupt não deixa fechar pela conta: só sai no log.
+                           Vuupt não deixa fechar pela conta: só sai no log. Exceção (16/11):
+                           rota da Lalamove fecha pela troca de agente (passa pro agente do
+                           token, accept + start, devolve, finish).
  cancelar_servico.py       Cancela 1 serviço na Vuupt onde estiver (pool, rascunho,
                            rota enviada) fora do painel; sempre PUT /cancel. Usado
                            pelo portal. O Planejamento NÃO usa (escopo B, 06/10).
