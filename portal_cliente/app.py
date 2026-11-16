@@ -44,7 +44,8 @@ from homologacao import ambiente as _ambiente
 _ambiente.exigir_coerencia(_RAIZ)
 
 import yaml
-from flask import Flask, Response, abort, g, jsonify, redirect, render_template, request, send_file, session, url_for
+from flask import (Flask, Response, abort, g, jsonify, redirect, render_template, request, send_file,
+                   send_from_directory, session, url_for)
 from jinja2 import ChoiceLoader, FileSystemLoader
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -60,6 +61,7 @@ from email_utils import enviar_email, envelope_html
 import preferencias_notificacao as preferencias
 import cadastro_embarcador as cad_emb
 import regioes_atendimento as regioes_info
+import aula as aula_info
 from fingerprint_aguardando_resposta import buscar_pendentes_por_grupo
 import aplicar_resposta_insucesso as logica_insucesso
 from painel_agentes import acesso_telas
@@ -174,7 +176,7 @@ def _carregar_cliente():
             return redirect(url_for("completar_cadastro"))
 
 
-_LIVRES_ANTES_DA_TROCA = {"trocar_pin", "sair", "static", "saude", "regioes", "regioes_logo"}
+_LIVRES_ANTES_DA_TROCA = {"trocar_pin", "sair", "static", "saude", "regioes", "regioes_logo", "aula", "aula_arquivo"}
 _LIVRES_ANTES_DO_CADASTRO = _LIVRES_ANTES_DA_TROCA | {"completar_cadastro"}
 
 
@@ -633,6 +635,27 @@ def regioes_logo():
     return send_file(_RAIZ / "assets" / "logo_freshlog.png", mimetype="image/png", max_age=86400)
 
 
+# ── Página pública: aula em vídeo (Hugo, 06/11) ────────────────────────────────
+
+@app.route("/aula")
+def aula():
+    """Videos curtos de treinamento do portal, sem login (o link vai por
+    WhatsApp ate pra quem ainda nao entrou). So lista o que esta no
+    manifesto gerado pelo aula_portal/gravar.py."""
+    return render_template("aula.html", videos=aula_info.carregar_manifesto(),
+                           logo_src=url_for("regioes_logo"))
+
+
+@app.route("/aula/arquivo/<nome>")
+def aula_arquivo(nome):
+    # conditional=True responde Range com 206: o Safari do iPhone so toca mp4 assim.
+    if not aula_info.arquivo_permitido(nome, aula_info.carregar_manifesto()):
+        abort(404)
+    resp = send_from_directory(aula_info.PASTA_AULA, nome, conditional=True, max_age=3600)
+    resp.headers["Cache-Control"] = "public, max-age=3600"
+    return resp
+
+
 # ── API ────────────────────────────────────────────────────────────────────────
 
 @app.route("/api/dia")
@@ -973,6 +996,7 @@ def api_envios_listar():
     return jsonify({"envios": lista, "resumo": envios.resumo_envios(lista), "dias": envios.DIAS_LISTAGEM,
                     "regra_xml": cfg["regra_xml"], "regra_xml_rotulo": envios.REGRAS_XML.get(cfg["regra_xml"], ""),
                     "envio_ativo": cfg["envio_ativo"], "client_id": cfg["client_id"], "fila": fila,
+                    "endereco_entrega_ativo": endereco_entrega.entrega_ativa(_CONFIG),
                     "atualizado_em": datetime.now().strftime("%H:%M")})
 
 
@@ -1363,17 +1387,27 @@ def api_envios_acao(envio_id):
     _exige_pode_enviar()
     corpo = request.get_json(silent=True) or {}
     tipo = corpo.get("tipo")
+    # cada troca consulta CEP, geocodifica e escreve no chamado: mesmo limite por minuto do CEP
+    if tipo == "alterar_endereco" and _cep_acima_do_limite(g.cliente["cnpj"]):
+        return jsonify({"erro": "Muitas tentativas. Tente de novo em um minuto."}), 429
     conn = envios.conectar()
     try:
         envio = envios.buscar_envio(conn, envio_id, _empresa_envio()['cnpj'])
         if not envio:
             return jsonify({"erro": "Pedido não encontrado."}), 404
-        resultado = envios.aplicar_acao(conn, envio, tipo, corpo, _quem_envia())
+        if tipo == "alterar_endereco":
+            # pedido barrado pela area (13/11): troca o endereco e reavalia a regiao
+            resultado = envios.alterar_endereco_bloqueado(conn, envio, corpo.get("endereco"), _CONFIG, _quem_envia())
+        else:
+            resultado = envios.aplicar_acao(conn, envio, tipo, corpo, _quem_envia())
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     finally:
         conn.close()
     logger.info(f"acao cnpj={_empresa_envio()['cnpj']} envio={envio_id} tipo={tipo} por={_quem_envia()} -> {resultado}")
+    if tipo == "alterar_endereco" and envio.get("bloqueio_chamado_id"):
+        import bloqueio_area
+        bloqueio_area.avisar_endereco_alterado(envio, resultado, _quem_envia())
     if resultado.get("precisa_operacao"):
         _avisar_operacao_solicitacao(envio, tipo, corpo)
     # cancelamento de envio bloqueado por área (23/09): registra no chamado do chat

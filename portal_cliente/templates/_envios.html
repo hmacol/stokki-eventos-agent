@@ -334,6 +334,7 @@
       <td class="nw">${entrega(x)}</td>
       <td><div class="acoes-linha">
         ${x.status === 'AGUARDANDO_LIBERACAO' && x.bloqueio_chamado_id ? `<button type="button" class="cotacao" data-acao="cotacao" data-id="${x.id}" data-chamado="${x.bloqueio_chamado_id}">Solicitar cotação de envio dedicado</button><button type="button" data-acao="chat" data-id="${x.id}" data-chamado="${x.bloqueio_chamado_id}">Falar com a equipe Fresh Log</button>` : ''}
+        ${PODE_ENVIAR && dados.endereco_entrega_ativo && x.pode_alterar_endereco ? `<button type="button" data-acao="alterar_endereco" data-id="${x.id}" title="A entrega é em outro endereço? Informe aqui e a região é conferida de novo">Alterar endereço de entrega</button>` : ''}
         ${PODE_ENVIAR && x.pode_reagendar ? `<button type="button" data-acao="reagendar" data-id="${x.id}">${x.agendamento_pendente ? 'Definir agendamento' : 'Reagendar'}</button>` : ''}
         ${PODE_ENVIAR && x.pode_retomar ? `<button type="button" data-acao="retomar" data-id="${x.id}">Retomar entrega</button>` : ''}
         ${PODE_ENVIAR && x.pode_em_espera ? `<button type="button" data-acao="em_espera" data-id="${x.id}">Tirar da rota</button>` : ''}
@@ -842,10 +843,63 @@
     });
   }
 
+  // Pedido barrado pela área (13/11): troca o endereço de entrega; o servidor
+  // valida pelo CEP e confere a região de novo.
+  function alterarEndereco(x) {
+    modal(`<h3>Alterar endereço de entrega</h3>
+      <p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}</p>
+      <p>${esc(x.bloqueio_texto)} Se a entrega for em outro endereço, informe abaixo: a região é conferida de novo e, se for atendida, o pedido segue pra Stokki.</p>
+      <label>CEP <input id="m-cep" inputmode="numeric" maxlength="9" placeholder="00000-000"></label>
+      <label>Rua / Avenida <input id="m-logradouro" maxlength="60" placeholder="preenche pelo CEP"></label>
+      <div style="display:flex;gap:8px;"><label style="flex:1">Número <input id="m-numero" maxlength="60"></label><label style="flex:2">Bairro <input id="m-bairro" maxlength="60"></label></div>
+      <label>Cidade / UF <input id="m-cidade" readonly tabindex="-1"></label>
+      <label>Complemento / referência <input id="m-complemento" maxlength="60" placeholder="ex.: doca 2, entrada pela Rua X"></label>
+      <div class="msg" id="m-msg"></div>
+      <div class="pe"><button type="button" class="botao-linha" data-fechar>Voltar</button><button type="button" class="botao" id="m-ok">Alterar endereço</button></div>`);
+    const erro = t => { const m = $('m-msg'); m.className = t ? 'msg erro' : 'msg'; m.textContent = t; };
+    const digitos = () => $('m-cep').value.replace(/\D/g, '');
+    $('m-cep').addEventListener('input', async () => {
+      const d = digitos();
+      $('m-cidade').value = '';
+      if (d.length !== 8) return;
+      erro('');
+      try {
+        const r = await fetch(`${BASE}/api/envios/cep/${d}`, { credentials: 'same-origin' });
+        const j = await r.json();
+        if (!$('m-cep') || digitos() !== d) return;   // fechou o modal ou corrigiu o CEP antes da resposta
+        if (!r.ok) throw new Error(r.status === 429 ? j.erro : 'CEP não encontrado');
+        if (j.logradouro) $('m-logradouro').value = j.logradouro;
+        if (j.bairro) $('m-bairro').value = j.bairro;
+        $('m-cidade').value = `${j.cidade}/${j.uf}`;
+        $(j.logradouro ? 'm-numero' : 'm-logradouro').focus();
+      } catch (e) {
+        if ($('m-cep') && digitos() === d) erro(e.message || 'CEP não encontrado');
+      }
+    });
+    $('m-ok').addEventListener('click', async () => {
+      const v = c => $('m-' + c).value.trim();
+      if (digitos().length !== 8 || !$('m-cidade').value) { erro('CEP não encontrado'); return; }
+      if (!v('logradouro')) { erro('Informe a rua'); return; }
+      if (!v('numero')) { erro('Informe o número'); return; }
+      $('m-ok').disabled = true;
+      try {
+        const j = await enviarAcao(x.id, { tipo: 'alterar_endereco', endereco: { cep: digitos(), logradouro: v('logradouro'),
+          numero: v('numero'), bairro: v('bairro'), complemento: v('complemento') } });
+        fecharModal();
+        mensagem(j.mensagem, j.aplicado ? 'ok' : 'info');
+        carregar();
+      } catch (e) {
+        erro(e.message); $('m-ok').disabled = false;
+      }
+    });
+    $('m-cep').focus();
+  }
+
   function abrirAcao(tipo, id) {
     if (tipo === 'reenviar-todos') { reenviarTodos(); return; }
     const x = dados.envios.find(e => e.id === Number(id));
     if (!x) return;
+    if (tipo === 'alterar_endereco') { alterarEndereco(x); return; }
     if (tipo === 'xml') { window.open(comEmpresa(`${BASE}/api/envios/${id}/xml`), '_blank'); return; }
     if (tipo === 'documentos') { docNovos = []; abrirDocumentos(x.id); return; }
     const cab = `<p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}</p>`;

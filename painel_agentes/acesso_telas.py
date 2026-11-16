@@ -96,7 +96,8 @@ _PADROES = {chave: [re.compile(p) for p in caminhos] for chave, _, _, caminhos i
 # Usadas por qualquer tela (badges do menu, deslogar por inatividade, aviso
 # sonoro de demanda nova -- 25/10).
 CAMINHOS_COMUNS = [re.compile(r"^/api/sidebar/contadores$"), re.compile(r"^/api/avisos/ignorar$"),
-                    re.compile(r"^/api/sessao/(atividade|estado)$"), re.compile(r"^/api/demandas/avisos$")]
+                    re.compile(r"^/api/sessao/(atividade|estado)$"), re.compile(r"^/api/demandas/avisos$"),
+                    re.compile(r"^/aula(/arquivo/[^/]+)?$")]   # aula em video da equipe (13/11): todo login
 
 
 def caminho_liberado(caminho: str, telas) -> bool:

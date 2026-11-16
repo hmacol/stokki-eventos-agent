@@ -57,7 +57,7 @@ from urllib.parse import urlparse
 import yaml
 from flask import (
     Flask, Response, abort, g, redirect, render_template, request, url_for,
-    jsonify, send_file, session,
+    jsonify, send_file, send_from_directory, session,
 )
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.routing import BuildError
@@ -88,6 +88,7 @@ from expedicao import listar_rotas_do_dia, gerar_romaneio_rota, excluir_pedido_d
 # Página pública do portal com regiões, dias de visita e calendário (Hugo, 14/10:
 # botão na Torre pra consulta interna). Mesma constante que a página usa.
 from portal_cliente.regioes_atendimento import URL_PUBLICA as URL_PAGINA_REGIOES
+from portal_cliente import aula as aula_videos
 # Calculadora de frete dedicado do portal (Hugo, 14/10: botão na Torre). Oculta
 # dos clientes; abre com o login do cliente teste (portal_cliente.cotacao.cnpjs_liberados).
 URL_PAGINA_COTACAO = "https://app.freshhub.com.br/cliente/cotacao"
@@ -100,6 +101,7 @@ import consulta_expedicao
 from coletas import banco as coletas_banco, folha_pdf as coletas_folha_pdf, ler_stokki as coletas_ler_stokki, \
     regras as coletas_regras, exemplo_homolog as coletas_exemplo_homolog
 import acoes_pedidos
+import documentos_email
 import contadores_menu
 import pagina_inicial
 import wms
@@ -520,6 +522,9 @@ def login():
                 session["versao_senha"] = conta["versao_senha"]
             if conta and conta["trocar_senha"]:
                 return redirect(url_for("trocar_senha"))
+            # Exceção: o link da aula (WhatsApp da equipe) volta pros vídeos.
+            if request.args.get("proximo") == "aula":
+                return redirect(url_for("aula_equipe"))
             # Todo acesso cai no Inicio (24/10, Hugo), nao na tela que a pessoa
             # tentava abrir. Galpao, expedicao e personalizado sem o Inicio
             # vao pra tela deles (_pagina_inicial).
@@ -1855,6 +1860,37 @@ def retornos_arquivo(descarga_id: int, nome: str):
     if not caminho:
         abort(404)
     return send_file(caminho, max_age=3600)
+
+
+# ── Aula da equipe: vídeos curtos das telas (Hugo, 13/11) ──────────────────────
+# Gerados por aula_equipe/gravar.py e copiados pra dados/aula_equipe/ no deploy.
+# Só com login (Hugo, 13/11), qualquer nível: o link vai no WhatsApp da equipe.
+PASTA_AULA_EQUIPE = _RAIZ / "dados" / "aula_equipe"
+
+
+@app.route("/aula")
+def aula_equipe():
+    # Quem abre o link sem estar logado entra e volta direto pros vídeos.
+    if session.get("nivel_acesso") is None:
+        return redirect(url_for("login", proximo="aula"))
+    return _aula_equipe_tela()
+
+
+@requer_auth(niveis=acesso_telas.NIVEIS)
+def _aula_equipe_tela():
+    return render_template("aula_equipe.html", videos=aula_videos.carregar_manifesto(PASTA_AULA_EQUIPE),
+                           voltar=_pagina_inicial(session.get("nivel_acesso"), g.telas_liberadas))
+
+
+@app.route("/aula/arquivo/<nome>")
+@requer_auth(niveis=acesso_telas.NIVEIS)
+def aula_equipe_arquivo(nome: str):
+    # Só o que está no manifesto; conditional=True responde Range com 206 (o Safari do iPhone exige).
+    if not aula_videos.arquivo_permitido(nome, aula_videos.carregar_manifesto(PASTA_AULA_EQUIPE)):
+        abort(404)
+    resp = send_from_directory(PASTA_AULA_EQUIPE, nome, conditional=True, max_age=3600)
+    resp.headers["Cache-Control"] = "private, max-age=3600"
+    return resp
 
 
 @app.route("/canhotos-pendentes")
@@ -3261,6 +3297,101 @@ def api_pedidos_acao_comprovantes():
         logging.getLogger(__name__).exception("comprovantes pela tela Pedidos falhou")
         return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
     return jsonify({"ok": True, "comprovantes": itens})
+
+
+# Documentos fiscais do pedido (XML, DANFE, boleto): conferir, baixar e mandar por e-mail (Hugo, 13/11).
+def _itens_documentos(body):
+    """(itens, erro): [{"codigo", "destinatario"}] do corpo, so com codigo no formato da tela."""
+    bruto = body.get("itens")
+    if not isinstance(bruto, list) or not bruto:
+        return None, (jsonify({"erro": "Nenhum pedido selecionado."}), 400)
+    if len(bruto) > documentos_email.MAX_PEDIDOS:
+        return None, (jsonify({"erro": f"No máximo {documentos_email.MAX_PEDIDOS} pedidos por envio."}), 400)
+    itens = []
+    for it in bruto:
+        codigo = str((it or {}).get("codigo") or "").strip().lstrip("#").upper() if isinstance(it, dict) else ""
+        if not _RE_CODIGO_CANHOTO.fullmatch(codigo):
+            return None, (jsonify({"erro": "codigo ausente ou inválido."}), 400)
+        itens.append({"codigo": codigo, "destinatario": str(it.get("destinatario") or "")[:200]})
+    return itens, None
+
+
+@app.route("/api/pedidos/documentos/conferir", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_documentos_conferir():
+    """O que ha guardado de cada pedido (com link pra baixar), o que falta e o e-mail usado da ultima vez."""
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    itens, erro = _itens_documentos(body)
+    if erro:
+        return erro
+    from nucleo import banco as nucleo_banco
+    try:
+        conn = nucleo_banco.conectar()
+        try:
+            documentos_email.garantir_tabelas(conn)
+            r = documentos_email.resumo(documentos_email.levantar(conn, [it["codigo"] for it in itens]))
+            r["emails_lembrados"] = documentos_email.lembrados(conn, itens)
+        finally:
+            conn.close()
+    except Exception:
+        logging.getLogger(__name__).exception("conferencia de documentos pela tela Pedidos falhou")
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+    for p in r["pedidos"]:
+        for a in p["arquivos"]:
+            a["url"] = url_for("api_pedidos_documentos_arquivo", codigo=p["codigo"], ref=a["ref"])
+    return jsonify({"ok": True, **r})
+
+
+@app.route("/api/pedidos/documentos/arquivo", methods=["GET"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+def api_pedidos_documentos_arquivo():
+    """Download de um documento do pedido, ja com o nome XML_NF/DANFE_NF/BOLETO_NF."""
+    codigo = (request.args.get("codigo") or "").strip().lstrip("#").upper()
+    ref = (request.args.get("ref") or "").strip()
+    if not _RE_CODIGO_CANHOTO.fullmatch(codigo) or not ref or len(ref) > 100:
+        abort(404)
+    from nucleo import banco as nucleo_banco
+    conn = nucleo_banco.conectar()
+    try:
+        achado = documentos_email.arquivo(conn, codigo, ref)
+    finally:
+        conn.close()
+    if achado is None:
+        abort(404)
+    caminho, nome = achado
+    return send_file(caminho, as_attachment=True, download_name=nome)
+
+
+@app.route("/api/pedidos/documentos/enviar", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_documentos_enviar():
+    """Manda os documentos guardados dos pedidos pro e-mail informado (envio real)."""
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    itens, erro = _itens_documentos(body)
+    if erro:
+        return erro
+    from nucleo import banco as nucleo_banco
+    try:
+        conn = nucleo_banco.conectar()
+        try:
+            r = documentos_email.enviar(conn, itens, body.get("emails"), _autor_acao_pedidos(),
+                                        _carregar_config().get("email") or {})
+        finally:
+            conn.close()
+    except documentos_email.ErroDocumentos as e:
+        return jsonify({"erro": str(e)}), 400
+    except _EnvioBloqueadoHomolog:
+        raise
+    except Exception:
+        logging.getLogger(__name__).exception("envio de documentos pela tela Pedidos falhou")
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+    return jsonify(r)
 
 
 @app.route("/pedidos/canhoto/vuupt/<int:checklist_id>.pdf")

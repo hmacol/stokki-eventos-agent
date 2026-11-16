@@ -300,6 +300,105 @@ class LinhaEAcao(unittest.TestCase):
         self.assertIsNone(ep.listar_envios(conn, "1")[0]["dedicado"])
 
 
+class AlterarEnderecoBloqueado(unittest.TestCase):
+    """Hugo 13/11: pedido barrado pela area aceita troca do endereco de entrega
+    na aba Envios; a area e reavaliada com o endereco novo."""
+    CFG = {"portal_cliente": {"envios": {"endereco_entrega_ativo": True}}}
+    CAMPOS = {"cep": "01310-100", "numero": "1000", "complemento": "doca 2"}
+    CEP = {"cep": "01310-100", "logradouro": "Avenida Paulista", "bairro": "Bela Vista", "cidade": "São Paulo",
+           "uf": "SP", "ibge": "3550308"}
+
+    def setUp(self):
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(
+            "CREATE TABLE portal_envios (id INTEGER PRIMARY KEY, cnpj_embarcador TEXT, status TEXT, atualizado_em TEXT, "
+            "destinatario_endereco TEXT, destinatario_bairro TEXT, destinatario_municipio TEXT, destinatario_uf TEXT, "
+            "destinatario_cep TEXT, endereco_fiscal TEXT, endereco_entrega_origem TEXT, endereco_entrega_json TEXT, bloqueio_motivo TEXT);"
+            "CREATE TABLE portal_solicitacoes (id INTEGER PRIMARY KEY, envio_id, cnpj_embarcador, tipo, detalhes, status, solicitado_por, criado_em, concluido_em, resposta);"
+            "INSERT INTO portal_envios (id, cnpj_embarcador, status, bloqueio_motivo) VALUES (1, '1', 'AGUARDANDO_LIBERACAO', 'fora_sp');")
+
+    def _alterar(self, motivo_novo, envio=None, campos=None, nfe=None, cfg=None):
+        nfe = nfe or _nfe_fake("1", "Curitiba", "PR")
+        with mock.patch.object(ep, "caminho_xml", return_value=mock.Mock(read_bytes=lambda: b"")), \
+             mock.patch.object(ep, "ler_nfe", return_value=nfe), \
+             mock.patch("cotacao.consultar_cep", return_value=dict(self.CEP)), \
+             mock.patch.object(ep, "classificar_area_envio", return_value=motivo_novo) as area:
+            r = ep.alterar_endereco_bloqueado(self.conn, envio or _envio(ep.STATUS_AGUARDANDO_LIBERACAO),
+                                              self.CAMPOS if campos is None else campos, self.CFG if cfg is None else cfg, "cliente")
+        return r, area
+
+    def _linha_banco(self):
+        return dict(self.conn.execute("SELECT * FROM portal_envios").fetchone())
+
+    def test_endereco_na_area_vai_pra_fila(self):
+        r, area = self._alterar(None)
+        self.assertTrue(r["aplicado"])
+        self.assertTrue(r["liberado"])
+        b = self._linha_banco()
+        self.assertEqual(b["status"], "NA_FILA")
+        self.assertIsNone(b["bloqueio_motivo"])
+        self.assertEqual((b["destinatario_endereco"], b["destinatario_municipio"], b["destinatario_uf"], b["destinatario_cep"]),
+                         ("Avenida Paulista, 1000 - doca 2", "São Paulo", "SP", "01310100"))
+        self.assertEqual(b["endereco_entrega_origem"], "cliente")
+        self.assertIn("Curitiba/PR", b["endereco_fiscal"])
+        import json
+        gravado = json.loads(b["endereco_entrega_json"])
+        self.assertEqual((gravado["cmun"], gravado["documento"], gravado["nome"]), ("3550308", "09014480000467", "Cliente X"))
+        # a area e avaliada com o endereco NOVO
+        self.assertEqual(area.call_args[0][0]["destinatario_municipio"], "São Paulo")
+        sol = self.conn.execute("SELECT tipo, status FROM portal_solicitacoes").fetchone()
+        self.assertEqual(tuple(sol), ("alterar_endereco", "CONCLUIDA"))
+
+    def test_endereco_ainda_fora_continua_bloqueado_com_endereco_novo(self):
+        r, _ = self._alterar("sp_nao_atendido")
+        self.assertFalse(r["aplicado"])
+        self.assertFalse(r["liberado"])
+        b = self._linha_banco()
+        self.assertEqual((b["status"], b["bloqueio_motivo"]), ("AGUARDANDO_LIBERACAO", "sp_nao_atendido"))
+        self.assertEqual(b["destinatario_municipio"], "São Paulo")
+        self.assertIn("continua aguardando liberação", r["mensagem"])
+
+    def test_so_aguardando_liberacao(self):
+        with self.assertRaises(ep.ErroEnvio):
+            self._alterar(None, envio=_envio(ep.STATUS_NA_FILA))
+
+    def test_planilha_nao_aceita(self):
+        with self.assertRaises(ep.ErroEnvio):
+            self._alterar(None, envio=_envio(ep.STATUS_AGUARDANDO_LIBERACAO, origem="planilha"))
+
+    def test_nota_com_local_de_entrega_nao_aceita(self):
+        nfe = {**_nfe_fake("1", "Curitiba", "PR"), "endereco_fiscal": "Rua B, 2, Curitiba/PR"}
+        with self.assertRaises(ep.ErroEnvio):
+            self._alterar(None, nfe=nfe)
+        self.assertEqual(self._linha_banco()["status"], "AGUARDANDO_LIBERACAO")
+
+    def test_chave_desligada_nao_aceita(self):
+        with self.assertRaises(ep.ErroEnvio):
+            self._alterar(None, cfg={"portal_cliente": {"envios": {}}})
+
+    def test_endereco_invalido_vira_erro_do_cliente(self):
+        with self.assertRaises(ep.ErroEnvio) as e:
+            self._alterar(None, campos={"cep": "01310-100"})
+        self.assertIn("número", str(e.exception))
+        self.assertEqual(self._linha_banco()["status"], "AGUARDANDO_LIBERACAO")
+
+    def test_liberado_no_meio_nao_sobrescreve(self):
+        """A equipe liberou (ou o cliente cancelou) enquanto o modal estava aberto."""
+        self.conn.execute("UPDATE portal_envios SET status = 'NA_FILA'")
+        with self.assertRaises(ep.ErroEnvio):
+            self._alterar(None)
+        self.assertIsNone(self._linha_banco()["destinatario_endereco"])
+
+    def test_linha_oferece_o_botao(self):
+        self.assertTrue(ep._linha(_envio(ep.STATUS_AGUARDANDO_LIBERACAO), {})["pode_alterar_endereco"])
+        self.assertFalse(ep._linha(_envio(ep.STATUS_NA_FILA), {})["pode_alterar_endereco"])
+        self.assertFalse(ep._linha(_envio(ep.STATUS_AGUARDANDO_LIBERACAO, origem="planilha"), {})["pode_alterar_endereco"])
+        # nota que ja traz <entrega>: endereco_fiscal preenchido sem troca do cliente
+        self.assertFalse(ep._linha(_envio(ep.STATUS_AGUARDANDO_LIBERACAO, endereco_fiscal="Rua B", endereco_entrega_origem="nota"), {})["pode_alterar_endereco"])
+        self.assertTrue(ep._linha(_envio(ep.STATUS_AGUARDANDO_LIBERACAO, endereco_fiscal="Rua B", endereco_entrega_origem="cliente"), {})["pode_alterar_endereco"])
+
+
 class AbrirBloqueio(unittest.TestCase):
     def setUp(self):
         # a tela de Notificacoes (controle_notificacoes) nunca le o dados.db real aqui
