@@ -136,25 +136,36 @@ class Gravacao(Base):
         with self.assertRaises(ep.ErroEnvio):
             ax.anexar(conn, e2, [{"token": ax.guardar_previa("a.pdf", _pdf(), CNPJ)["token"]}], "cliente")
 
-    def test_nao_toma_documento_ja_enviado_de_outro_pedido(self):
-        """Revisao de seguranca 11/11: arquivo identico ja ENVIADO a outro pedido
-        (e-mail, outro cliente) continua do dono; so a linha sem dono e assumida."""
+    def test_nao_mexe_na_linha_de_outro_dono_e_registra_a_propria(self):
+        """Revisao de seguranca 11/11: a linha de arquivo identico (e-mail, outro
+        pedido, sem pedido) fica como esta. 16/11: o anexo ganha linha propria,
+        pra sair tambem no romaneio deste pedido."""
         conn = self._conn()
         envio = self._envio(conn, "1", codigo="PS-7", status="CRIADO")
-        for cor, status, codigo, esperado in ((61, "ENVIADO", "PS-999", ("email", "PS-999")),
-                                              (64, "REVISAO_MANUAL", "PS-999", ("email", "PS-999")),
-                                              (62, "REVISAO_MANUAL", None, ("portal", "PS-7"))):
+        for cor, status, codigo in ((61, "ENVIADO", "PS-999"), (64, "REVISAO_MANUAL", "PS-999"), (62, "REVISAO_MANUAL", None)):
             previa = ax.guardar_previa(f"boleto{cor}.pdf", _pdf(cor), CNPJ)
             hash_ = ax._ler_temporario(previa["token"], CNPJ)[0]["hash"]
             conn.execute("INSERT INTO documentos_processados (hash_conteudo, origem, nome_arquivo, tipo, codigo_pedido, status, "
                          "processado_em) VALUES (?, 'email', 'b.pdf', 'Boleto', ?, ?, '2026-11-10')", (hash_, codigo, status))
             ax.anexar(conn, envio, [{"token": previa["token"]}], "cliente")
-            linha = conn.execute("SELECT origem, codigo_pedido FROM documentos_processados WHERE hash_conteudo = ?", (hash_,)).fetchone()
-            self.assertEqual(tuple(linha), esperado)
+            linhas = conn.execute("SELECT origem, codigo_pedido, status FROM documentos_processados WHERE hash_conteudo LIKE ? "
+                                  "ORDER BY length(hash_conteudo)", (hash_ + "%",)).fetchall()
+            self.assertEqual([tuple(l) for l in linhas], [("email", codigo, status), ("portal", "PS-7", "ENVIADO")])
 
-    def test_mesmo_arquivo_em_outro_embarcador_nao_avisa_nem_toma_o_registro(self):
+    def test_arquivo_ja_valendo_no_mesmo_pedido_nao_registra_de_novo(self):
+        conn = self._conn()
+        envio = self._envio(conn, "1", codigo="PS-7", status="CRIADO")
+        previa = ax.guardar_previa("boleto65.pdf", _pdf(65), CNPJ)
+        hash_ = ax._ler_temporario(previa["token"], CNPJ)[0]["hash"]
+        conn.execute("INSERT INTO documentos_processados (hash_conteudo, origem, nome_arquivo, tipo, codigo_pedido, status, "
+                     "processado_em) VALUES (?, 'email', 'b.pdf', 'Boleto', 'PS-7', 'ENVIADO', '2026-11-10')", (hash_,))
+        ax.anexar(conn, envio, [{"token": previa["token"]}], "cliente")
+        self.assertEqual([tuple(l) for l in conn.execute("SELECT origem FROM documentos_processados")], [("email",)])
+
+    def test_mesmo_arquivo_em_outro_embarcador_sai_nos_dois_romaneios_sem_avisar(self):
         """Revisao de seguranca 11/11: a resposta nao muda por causa do arquivo de
-        outro cliente (nada de sondar), e o registro do romaneio fica com o primeiro."""
+        outro cliente (nada de sondar). 16/11: cada pedido tem o seu registro, e
+        remover um nao tira o do outro."""
         conn = self._conn()
         conn.execute("INSERT INTO portal_envios (cnpj_embarcador, chave_nfe, numero_nf, xml_path, status, codigo_pedido, criado_em, "
                      "atualizado_em) VALUES ('99999999000199', 'z', '4242', 'x.xml', 'CRIADO', 'PS-900', '2026-11-11', '2026-11-11')")
@@ -162,7 +173,15 @@ class Gravacao(Base):
         ax.anexar(conn, alheio, [{"token": ax.guardar_previa("a.pdf", _pdf(63), "99999999000199")["token"]}], "cliente")
         meu = self._envio(conn, "1", codigo="PS-7", status="CRIADO")
         ax.anexar(conn, meu, [{"token": ax.guardar_previa("a.pdf", _pdf(63), CNPJ)["token"]}], "cliente")  # aceita, sem erro
-        self.assertEqual([r[0] for r in conn.execute("SELECT codigo_pedido FROM documentos_processados")], ["PS-900"])
+        pedidos = lambda: sorted(r[0] for r in conn.execute("SELECT codigo_pedido FROM documentos_processados"))  # noqa: E731
+        self.assertEqual(pedidos(), ["PS-7", "PS-900"])
+        linhas = [dict(meu)]
+        ax.anotar(conn, linhas)
+        ax.remover(conn, ax.buscar(conn, meu["id"], linhas[0]["anexos"][0]["id"]))
+        self.assertEqual(pedidos(), ["PS-900"])
+        linhas = [dict(alheio)]
+        ax.anotar(conn, linhas)
+        self.assertTrue(ax.caminho(ax.buscar(conn, alheio["id"], linhas[0]["anexos"][0]["id"])).is_file())
 
     def test_nao_sobrescreve_documento_que_veio_da_stokki(self):
         conn = self._conn()
