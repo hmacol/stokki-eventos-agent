@@ -13,10 +13,12 @@ as mesmas funções (ex.: operador registrando insucesso por telefone).
 
 Regras fixas:
 - O motorista só enxerga/mexe em rota cujo agent_id é o dele.
-- Escrita de operação (iniciar, eventos, finalizar) só em rota com
-  provedor=APP. Rota VUUPT é somente leitura aqui (o motorista opera no
-  app da VUUPT enquanto ela existir) -- exceto aceitar/recusar, que
-  também alimenta `confirmacoes_rota` pro badge do Planejamento.
+- Escrita de operação (iniciar, eventos, finalizar) em rota com
+  provedor=APP, ou em rota VUUPT de motorista com a ponte ligada
+  (nucleo/ponte_vuupt.py, 12/11): o app grava aqui e a ponte repete na
+  Vuupt. Rota VUUPT sem ponte segue somente leitura -- exceto
+  aceitar/recusar, que alimenta `confirmacoes_rota` pro badge do
+  Planejamento.
 - Todo evento que vem do app carrega `uuid` gerado no aparelho: a fila
   offline reenvia à vontade, o banco ignora repetido.
 """
@@ -25,7 +27,7 @@ import math
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
-from nucleo import banco, pedidos as nucleo_pedidos, tempos, validacao_fotos
+from nucleo import banco, pedidos as nucleo_pedidos, ponte_vuupt, tempos, validacao_fotos
 from nucleo.rotas import registrar_evento
 
 # Passos da parada no app (Hugo, 26/08): DESLOCAMENTO ("Iniciar deslocamento",
@@ -97,8 +99,12 @@ def eh_rota_replica(rota: sqlite3.Row) -> bool:
     return "replica_de" in _ler_json(rota["dados_json"])
 
 
+def rota_editavel(rota: sqlite3.Row) -> bool:
+    return rota["provedor"] == banco.PROVEDOR_APP or ponte_vuupt.rota_operavel(rota)
+
+
 def _exigir_provedor_app(rota: sqlite3.Row):
-    if rota["provedor"] != banco.PROVEDOR_APP:
+    if not rota_editavel(rota):
         raise OperacaoInvalida("Essa rota é operada pelo app da VUUPT -- registre a entrega por lá.", 409)
 
 
@@ -116,7 +122,7 @@ def listar_rotas_motorista(conn: sqlite3.Connection, agent_id: int | None, de: d
 def montar_rota(conn: sqlite3.Connection, rota: sqlite3.Row) -> dict:
     d = dict(rota)
     d.pop("dados_json", None)
-    d["editavel"] = rota["provedor"] == banco.PROVEDOR_APP
+    d["editavel"] = rota_editavel(rota)
     paradas = conn.execute("SELECT * FROM nucleo_paradas WHERE rota_id = ? ORDER BY ordem", (rota["id"],)).fetchall()
     d["paradas"] = [montar_parada(conn, p) for p in paradas]
     d["pedagios"] = listar_pedagios(conn, rota["id"])
@@ -378,6 +384,8 @@ def aceitar_rota(conn: sqlite3.Connection, rota_id: int, agent_id: int, ocorrido
     registrar_evento(conn, "ROTA_ACEITA", banco.ORIGEM_APP, ocorrido_em, rota_id=rota_id, agent_id=agent_id,
                      latitude=latitude, longitude=longitude, uuid=uuid)
     _atualizar_confirmacao_vuupt(conn, rota, "CONFIRMADO", None)
+    if rota["status"] == banco.ROTA_PLANEJADA and ponte_vuupt.rota_operavel(rota):
+        ponte_vuupt.enfileirar(conn, rota, ponte_vuupt.ACAO_ACEITAR)
     conn.commit()
     return montar_rota(conn, conn.execute("SELECT * FROM nucleo_rotas WHERE id = ?", (rota_id,)).fetchone())
 
@@ -410,6 +418,8 @@ def iniciar_rota(conn: sqlite3.Connection, rota_id: int, agent_id: int, ocorrido
                  (banco.ROTA_EM_ROTA, ocorrido_em or agora, agora, rota_id))
     registrar_evento(conn, "ROTA_EM_ROTA", banco.ORIGEM_APP, ocorrido_em, rota_id=rota_id, agent_id=agent_id,
                      latitude=latitude, longitude=longitude, uuid=uuid)
+    if ponte_vuupt.rota_operavel(rota):
+        ponte_vuupt.marcar_operada(conn, rota_id)
     conn.commit()
     return montar_rota(conn, conn.execute("SELECT * FROM nucleo_rotas WHERE id = ?", (rota_id,)).fetchone())
 
@@ -526,6 +536,17 @@ def registrar_evento_parada(conn: sqlite3.Connection, parada_id: int, agent_id: 
                "novo_horario": novo_horario, "tentativa": dados.get("tentativa")},
         uuid=uuid,
     )
+
+    # Rota da Vuupt operada pelo app: a ponte repete o passo lá (mesma transação).
+    if ponte_vuupt.rota_operavel(rota):
+        ponte_vuupt.marcar_operada(conn, rota["id"])
+        if p["service_id"] and tipo in (ponte_vuupt.ACAO_DESLOCAMENTO, ponte_vuupt.ACAO_CHEGADA):
+            ponte_vuupt.enfileirar(conn, rota, tipo, p)
+        elif p["service_id"] and tipo in _SITUACAO_DO_EVENTO:
+            fotos_qtd = (dados.get("checklist") or {}).get("fotos_qtd")
+            ponte_vuupt.enfileirar(conn, rota, ponte_vuupt.ACAO_CONCLUIR, p, {
+                "situacao": _SITUACAO_DO_EVENTO[tipo], "motivo_id": motivo_id, "uuid": uuid,
+                "fotos_esperadas": sum(int(v or 0) for v in fotos_qtd.values()) if isinstance(fotos_qtd, dict) else 0})
 
     contadores = _recalcular_contadores(conn, rota["id"])
     status_rota = conn.execute("SELECT status FROM nucleo_rotas WHERE id = ?", (rota["id"],)).fetchone()["status"]

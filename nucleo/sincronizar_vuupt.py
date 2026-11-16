@@ -55,6 +55,10 @@ _STATUS_ROTA_VUUPT = {
     "accepted": banco.ROTA_ACEITA,
 }
 
+_SITUACOES_FINAIS = (banco.PARADA_ENTREGUE, banco.PARADA_PARCIAL, banco.PARADA_INSUCESSO)
+_SITUACOES_FECHADAS = (banco.PARADA_ENTREGUE, banco.PARADA_INSUCESSO, banco.PARADA_CANCELADA)
+_ORDEM_STATUS_ROTA = {banco.ROTA_PLANEJADA: 0, banco.ROTA_ACEITA: 1, banco.ROTA_EM_ROTA: 2, banco.ROTA_CONCLUIDA: 3}
+
 _SITUACAO_PARA_PEDIDO = {
     banco.PARADA_ENTREGUE: banco.PEDIDO_ENTREGUE,
     banco.PARADA_INSUCESSO: banco.PEDIDO_INSUCESSO,
@@ -232,14 +236,35 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
             "SELECT id, service_id, situacao, completed_at FROM nucleo_paradas WHERE rota_id = ?", (rota_id,)
         ).fetchall()
     }
+    # Rota da Vuupt operada pelo NOSSO app (nucleo/ponte_vuupt.py, 12/11): o
+    # resultado e os horarios reais sao os do aparelho. A Vuupt so recebe a
+    # copia depois (fila da ponte), com o horario da copia -- sobrescrever
+    # aqui apagaria o dado bom e voltaria pra PENDENTE o que a ponte ainda
+    # nao repetiu.
+    operada_app = bool(existente and existente["operada_app"])
     for ordem, s in enumerate(servicos, start=1):
         service_id = s.get("id")
         situacao = banco.PARADA_CANCELADA if rota_cancelada else situacao_do_servico(s)
+        anterior = paradas_existentes.get(service_id)
+        # So cede pra Vuupt quando ela fechou/cancelou algo que o app ainda nao
+        # tinha resultado (baixa pela Torre, cancelamento pelo painel).
+        preserva_app = bool(operada_app and anterior and anterior["situacao"] != banco.PARADA_CANCELADA
+                            and (anterior["situacao"] in _SITUACOES_FINAIS or situacao not in _SITUACOES_FECHADAS))
+        if preserva_app:
+            situacao = anterior["situacao"]
+            conn.execute("""
+                UPDATE nucleo_paradas SET ordem = ?, status_provedor = ?, status_done_provedor = ?,
+                       failed_reason_id = COALESCE(?, failed_reason_id), dados_json = ?, atualizado_em = ?
+                WHERE id = ?
+            """, (ordem, s.get("status"), s.get("status_done"), s.get("failed_reason_id"), _json(s), agora,
+                  anterior["id"]))
         situacoes.append(situacao)
-        if situacao == banco.PARADA_ENTREGUE:
+        if situacao in (banco.PARADA_ENTREGUE, banco.PARADA_PARCIAL):
             entregues += 1
         elif situacao == banco.PARADA_INSUCESSO:
             insucessos += 1
+        if preserva_app:
+            continue
         completed_at = vuupt_para_local(s.get("completed_at"))
         if completed_at and (completed_max is None or completed_at > completed_max):
             completed_max = completed_at
@@ -264,7 +289,6 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
             started_at, vuupt_para_local(s.get("arrived_at")), completed_at, _json(s), agora,
             destinatario_nome, remetente_nome, nivel, caixas, s.get("customer_id"),
         )
-        anterior = paradas_existentes.get(service_id)
         if anterior is None:
             cur = conn.execute("""
                 INSERT INTO nucleo_paradas (rota_id, ordem, service_id, codigo, titulo, endereco, latitude, longitude,
@@ -347,6 +371,11 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
     # done_finished_at / canceled_at, confirmados no payload real) --
     # preferidos ao min/max das paradas, que sofrem da confirmação em lote.
     status_novo = _derivar_status_rota(rota.get("status"), situacoes)
+    # Operada pelo app: a rota so anda pra frente (a Vuupt nao sabe que ela
+    # foi iniciada/concluida no nosso app); cancelamento la continua valendo.
+    if operada_app and status_novo != banco.ROTA_CANCELADA and \
+            _ORDEM_STATUS_ROTA.get(status_anterior, 0) > _ORDEM_STATUS_ROTA.get(status_novo, 0):
+        status_novo = status_anterior
     total_ativas = len(situacoes) if rota_cancelada else sum(1 for x in situacoes if x != banco.PARADA_CANCELADA)
     iniciada = vuupt_para_local(rota.get("started_at") or rota.get("done_started_at")) or started_min
     concluida = vuupt_para_local(rota.get("finished_at") or rota.get("done_finished_at")) or completed_max
