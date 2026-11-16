@@ -167,6 +167,62 @@ def cep(digitos: str) -> dict:
             "cidade": "São Paulo", "uf": "SP"}
 
 
+# ── Cotacao de frete (video 13) ────────────────────────────────────────────────
+# CEP -> (logradouro, bairro, cidade). Consulta de CEP, geocodificacao e rota da
+# gravacao saem daqui (aula_portal.servidor): nada vai pro ViaCEP nem pro Google.
+
+CEPS_COTACAO = {
+    "04538132": ("Avenida Brigadeiro Faria Lima", "Itaim Bibi", "São Paulo"),
+    "01310100": ("Avenida Paulista", "Bela Vista", "São Paulo"),
+    "06454000": ("Alameda Rio Negro", "Alphaville", "Barueri"),
+    "09721000": ("Rua Marechal Deodoro", "Centro", "São Bernardo do Campo"),
+    "07110000": ("Avenida Paulo Faccini", "Macedo", "Guarulhos"),
+    "05425070": ("Rua dos Pinheiros", "Pinheiros", "São Paulo"),
+}
+
+# (CEP, numero, complemento, referencia): a planilha que o cliente sobe no video
+LISTA_COTACAO = [
+    ("06454-000", "1200", "Loja 4", "Empório Alphaville"),
+    ("09721-000", "455", "", "Padaria Central SBC"),
+    ("07110-000", "980", "Galpão 2", "Atacado Guarulhos"),
+    ("05425-070", "310", "", "Bistrô Pinheiros"),
+]
+
+# rota fixa (km e pedagio do Google na vida real): ida pelas entregas + volta ao galpao
+KM_IDA, KM_VOLTA, PEDAGIO = 96.4, 21.3, 18.40
+
+
+def cep_cotacao(digitos: str) -> dict | None:
+    d = "".join(c for c in str(digitos) if c.isdigit())
+    if d not in CEPS_COTACAO:
+        return None
+    logradouro, bairro, cidade = CEPS_COTACAO[d]
+    return {"cep": f"{d[:5]}-{d[5:]}", "logradouro": logradouro, "bairro": bairro, "cidade": cidade, "uf": "SP",
+            "ibge": "3550308"}
+
+
+def trajeto_cotacao(n_paradas: int) -> dict:
+    n = max(1, n_paradas)
+    pernas = [round(KM_IDA / n, 1)] * n + [KM_VOLTA]
+    return {"km_total": round(KM_IDA + KM_VOLTA, 1), "km_ida": KM_IDA, "km_volta": KM_VOLTA, "pernas_km": pernas,
+            "pedagio_brl": PEDAGIO, "fonte": "GOOGLE_ROUTES"}
+
+
+def lista_cotacao_xlsx(pasta: Path) -> Path:
+    """A planilha do video, nas colunas do modelo do portal (cotacao.modelo_lista)."""
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Entregas"
+    ws.append(["CEP", "Número", "Complemento", "Referência / destinatário"])
+    for linha in LISTA_COTACAO:
+        ws.append(list(linha))
+    pasta.mkdir(parents=True, exist_ok=True)
+    caminho = pasta / "entregas.xlsx"
+    wb.save(caminho)
+    return caminho
+
+
 # ── NF-e de exemplo (envio de pedidos) ─────────────────────────────────────────
 
 _NFE = """<?xml version="1.0" encoding="UTF-8"?>

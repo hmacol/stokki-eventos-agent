@@ -166,9 +166,12 @@ def escrever_manifesto(videos: list[Video], saida: Path = SAIDA) -> Path:
         meta = saida / f"{v.slug}.json"
         if not v.publicar or not (saida / f"{v.slug}.mp4").exists() or not meta.exists():
             continue
-        itens.append({"numero": v.numero, "slug": v.slug, "titulo": v.titulo, "resumo": v.resumo,
-                      "duracao_s": int(json.loads(meta.read_text(encoding="utf-8"))["duracao_s"]),
-                      "video": f"{v.slug}.mp4", "capa": f"{v.slug}.jpg"})
+        item = {"numero": v.numero, "slug": v.slug, "titulo": v.titulo, "resumo": v.resumo,
+                "duracao_s": int(json.loads(meta.read_text(encoding="utf-8"))["duracao_s"]),
+                "video": f"{v.slug}.mp4", "capa": f"{v.slug}.jpg"}
+        if v.requer:
+            item["requer"] = v.requer   # portal_cliente/aula.py esconde enquanto a tela for oculta
+        itens.append(item)
     caminho = saida / "aula.json"
     caminho.write_text(json.dumps({"gerado_em": datetime.now().strftime("%Y-%m-%dT%H:%M"), "videos": itens},
                                   ensure_ascii=False, indent=1), encoding="utf-8")
@@ -281,9 +284,10 @@ def gravar_video(video: Video, raiz: Path = RAIZ, porta: int = ambiente.PORTA_PA
     falas = [narracao.gerar(p.fala, cache_voz) for p in video.passos]
     duracoes = [narracao.duracao(f) for f in falas]
 
-    ambiente.escrever_config(raiz)
+    ambiente.escrever_config(raiz, porta=porta, cotacao=video.requer == "cotacao")
     ambiente.semear_banco(raiz, video.estado)
     servidor.ARQ_BLOQUEIOS.unlink(missing_ok=True)
+    servidor.ARQ_EMAIL.unlink(missing_ok=True)
     proc = ambiente.subir_portal(raiz, porta)
     base = f"http://127.0.0.1:{porta}"
     proibidas: list[str] = []
