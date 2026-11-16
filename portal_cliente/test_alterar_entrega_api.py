@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Rotas do portal para o cliente pedir alteracao de endereco, data e horario de
-um pedido (GET/POST /api/pedidos/<id>/alteracao; o POST vira chamado pro
-atendimento) e a flag em /api/dia.
+Rotas do portal para o cliente alterar endereco, data e horario de um pedido
+(GET/POST /api/pedidos/<id>/alteracao) e a flag em /api/dia.
 
     py -3.11 -m unittest portal_cliente.test_alterar_entrega_api
 """
@@ -99,14 +98,19 @@ class AlterarEntregaApiTest(unittest.TestCase):
             s["cnpj_equipe"] = PRINCIPAL
         return cli
 
-    def _fakes(self, servico=None, nucleo=None):
-        self.abrir = mock.Mock(return_value=77)
+    def _fakes(self, servico=None, nucleo=None, area=()):
+        deps = mock.Mock(name="deps")
+        aplicar = self.aplicar = mock.Mock(return_value={"ok": True, "mensagem": "Alteração feita.", "feito": []})
         return [
             mock.patch.object(self.portal.dados, "buscar_servico", return_value=servico or _servico()),
+            mock.patch.object(self.portal.dados, "invalidar_cache"),
             mock.patch.object(self.portal.cancelamento, "servicos_do_pedido", return_value=nucleo or _nucleo()),
-            mock.patch.object(self.portal.alterar_entrega, "abrir_chamado", self.abrir),
+            mock.patch.object(self.portal.alterar_entrega, "dependencias_reais", return_value=deps),
+            mock.patch.object(self.portal.alterar_entrega, "aplicar", aplicar),
+            mock.patch.object(self.portal.envios, "_identificar_area", return_value=list(area)),
             mock.patch.object(self.portal, "_mapa_horarios", return_value={}),
             mock.patch("regras.complexidade_entrega.carregar_ajustes_manuais", return_value={}),
+            mock.patch("registro_dia_fixo.conectar", return_value=self.conn),
         ]
 
     def _com(self, patches):
@@ -156,49 +160,77 @@ class AlterarEntregaApiTest(unittest.TestCase):
         self.assertFalse(j["pode"])
         self.assertIn("Fale com a Fresh Log pelo chat do portal.", j["motivo"])
 
-    def test_post_abre_chamado_com_o_pedido_e_nao_mexe_na_vuupt(self):
-        self._com(self._fakes())
-        corpo = {"endereco": {"cep": "01310-100", "numero": "10"}, "data": AMANHA,
-                 "horario": {"inicio": "08:00", "fim": "12:00"}}
-        with mock.patch("cotacao.consultar_cep", return_value=CEP_OK), \
-                mock.patch.object(self.portal.dados, "invalidar_cache") as invalidar:
-            r = self.cli.post("/api/pedidos/10/alteracao", json=corpo, base_url=HTTPS)
+    def test_post_em_rota_pede_confirmacao_e_depois_aplica(self):
+        fakes = self._fakes()
+        aplicar = self.aplicar
+        self._com(fakes)
+        r = self.cli.post("/api/pedidos/10/alteracao", json={"data": AMANHA}, base_url=HTTPS)
         j = r.get_json()
         self.assertEqual(r.status_code, 200)
-        self.assertEqual((j["ok"], j["chamado_id"]), (True, 77))
-        self.assertIn("chamado #77", j["mensagem"])
-        cliente, codigo, texto, _cfg = self.abrir.call_args.args
-        self.assertEqual(cliente, {"cnpj": PRINCIPAL, "sender_id": 100, "nome": "MARCHEF"})
-        self.assertEqual(codigo, "PS-1234")
-        self.assertTrue(texto.startswith("Quero alterar a entrega do pedido PS-1234 (Loja X):"))
-        self.assertIn("Avenida Paulista, 10", texto)
-        self.assertIn("- Horário de recebimento: 08:00 às 12:00 (hoje: dia todo)", texto)
-        invalidar.assert_not_called()
-
-    def test_post_empresa_do_grupo_chamado_no_cnpj_do_login(self):
-        self._com(self._fakes(servico=_servico(sender_id=101)))
-        r = self.cli.post("/api/pedidos/10/alteracao", json={"data": AMANHA}, base_url=HTTPS)
+        self.assertFalse(j["ok"])
+        self.assertTrue(j["precisa_confirmar"])
+        self.assertEqual([a["codigo"] for a in j["avisos"]], ["atraso"])
+        aplicar.assert_not_called()
+        r = self.cli.post("/api/pedidos/10/alteracao", json={"data": AMANHA, "confirmar": True}, base_url=HTTPS)
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(self.abrir.call_args.args[0], {"cnpj": PRINCIPAL, "sender_id": 101, "nome": "ITAUEIRA"})
+        self.assertTrue(r.get_json()["ok"])
+        aplicar.assert_called_once()
+        contexto = aplicar.call_args.args[4]
+        self.assertEqual((contexto["cnpj_embarcador"], contexto["sender_id"], contexto["por"]), (PRINCIPAL, 100, "cliente"))
+        self.assertEqual((contexto["destinatario_doc"], contexto["destinatario_nome"]), ("12345678000190", "Loja X"))
+        self.portal.dados.invalidar_cache.assert_called_with(100)
+
+    def test_post_so_horario_aplica_direto_sem_aviso(self):
+        fakes = self._fakes()
+        aplicar = self.aplicar
+        self._com(fakes)
+        r = self.cli.post("/api/pedidos/10/alteracao", json={"horario": {"inicio": "08:00", "fim": "12:00"}}, base_url=HTTPS)
+        self.assertTrue(r.get_json()["ok"])
+        aplicar.assert_called_once()
 
     def test_post_bloqueado_409(self):
-        self._com(self._fakes(servico=_servico(status="done")))
-        r = self.cli.post("/api/pedidos/10/alteracao", json={"data": AMANHA}, base_url=HTTPS)
+        fakes = self._fakes(servico=_servico(status="done"))
+        aplicar = self.aplicar
+        self._com(fakes)
+        r = self.cli.post("/api/pedidos/10/alteracao", json={"data": AMANHA, "confirmar": True}, base_url=HTTPS)
         self.assertEqual(r.status_code, 409)
-        self.abrir.assert_not_called()
+        aplicar.assert_not_called()
 
     def test_post_invalido_400(self):
         self._com(self._fakes())
         r = self.cli.post("/api/pedidos/10/alteracao", json={"data": "2020-01-01"}, base_url=HTTPS)
         self.assertEqual(r.status_code, 400)
-        self.abrir.assert_not_called()
 
-    def test_post_chamado_que_falha_502_sem_detalhe(self):
-        self._com(self._fakes())
-        self.abrir.side_effect = RuntimeError("boom")
-        r = self.cli.post("/api/pedidos/10/alteracao", json={"data": AMANHA}, base_url=HTTPS)
+    def test_post_falha_do_aplicar_502(self):
+        fakes = self._fakes()
+        aplicar = self.aplicar
+        self._com(fakes)
+        aplicar.return_value = {"ok": False, "mensagem": "Não conseguimos concluir.", "feito": []}
+        r = self.cli.post("/api/pedidos/10/alteracao", json={"horario": {"inicio": "08:00", "fim": "12:00"}}, base_url=HTTPS)
         self.assertEqual(r.status_code, 502)
-        self.assertNotIn("boom", r.get_json()["erro"])
+        self.assertEqual(r.get_json()["erro"], "Não conseguimos concluir.")
+
+    def test_post_endereco_fora_da_area_400(self):
+        fakes = self._fakes(area=[({"id": 0}, "sp_nao_atendido")])
+        aplicar = self.aplicar
+        self._com(fakes)
+        corpo = {"endereco": {"cep": "01310-100", "numero": "10"}, "confirmar": True}
+        with mock.patch("cotacao.consultar_cep", return_value=CEP_OK):
+            r = self.cli.post("/api/pedidos/10/alteracao", json=corpo, base_url=HTTPS)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json()["erro"],
+                         "Esse endereço fica fora da área atendida. Fale com a Fresh Log pelo chat do portal.")
+        aplicar.assert_not_called()
+
+    def test_post_endereco_dentro_da_area_aplica(self):
+        fakes = self._fakes()
+        aplicar = self.aplicar
+        self._com(fakes)
+        corpo = {"endereco": {"cep": "01310-100", "numero": "10"}, "confirmar": True}
+        with mock.patch("cotacao.consultar_cep", return_value=CEP_OK):
+            r = self.cli.post("/api/pedidos/10/alteracao", json=corpo, base_url=HTTPS)
+        self.assertEqual(r.status_code, 200)
+        aplicar.assert_called_once()
 
     def test_post_corpo_que_nao_e_objeto_400(self):
         self._com(self._fakes())
@@ -214,18 +246,36 @@ class AlterarEntregaApiTest(unittest.TestCase):
         self.assertTrue(r.get_json()["erro"].endswith("Fale com a Fresh Log pelo chat do portal."))
         self.assertNotIn("boom", r.get_json()["erro"])
 
+    def test_dependencias_reais_que_falha_502_sem_aplicar(self):
+        self._com(self._fakes())
+        with mock.patch.object(self.portal.alterar_entrega, "dependencias_reais", side_effect=ImportError("boom")):
+            r = self.cli.post("/api/pedidos/10/alteracao", json={"horario": {"inicio": "08:00", "fim": "12:00"}}, base_url=HTTPS)
+        self.assertEqual(r.status_code, 502)
+        self.assertNotIn("boom", r.get_json()["erro"])
+        self.aplicar.assert_not_called()
+
+    def test_aplicar_que_estoura_ainda_limpa_o_cache(self):
+        self._com(self._fakes())
+        self.aplicar.side_effect = RuntimeError("boom")
+        r = self.cli.post("/api/pedidos/10/alteracao", json={"horario": {"inicio": "08:00", "fim": "12:00"}}, base_url=HTTPS)
+        self.assertEqual(r.status_code, 502)
+        self.portal.dados.invalidar_cache.assert_called_with(100)
+
     def test_post_de_outra_origem_403(self):
         self._com(self._fakes())
         r = self.cli.post("/api/pedidos/10/alteracao", json={"data": AMANHA}, base_url=HTTPS,
                           headers={"Origin": "https://evil.example"})
         self.assertEqual(r.status_code, 403)
-        self.abrir.assert_not_called()
+        self.aplicar.assert_not_called()
 
-    def test_post_equipe_403(self):
-        self._com(self._fakes())
-        r = self._equipe_leitura().post("/api/pedidos/10/alteracao", json={"data": AMANHA}, base_url=HTTPS)
+    def test_post_equipe_so_leitura_403(self):
+        fakes = self._fakes()
+        aplicar = self.aplicar
+        self._com(fakes)
+        cli = self._equipe_leitura()
+        r = cli.post("/api/pedidos/10/alteracao", json={"data": AMANHA, "confirmar": True}, base_url=HTTPS)
         self.assertEqual(r.status_code, 403)
-        self.abrir.assert_not_called()
+        aplicar.assert_not_called()
 
     def test_api_dia_informa_chave(self):
         with mock.patch.object(self.portal.dados, "montar_dia", return_value={"pedidos": []}):

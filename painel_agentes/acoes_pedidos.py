@@ -299,7 +299,7 @@ def cancelar_stokki(codigo: str, motivo: str, usuario: str, *, abrir_sessao=None
             "erro": "; ".join(f"PS-{x['id_stokki']}: {x['erro']}" for x in falhas)}
 
 
-def expedir_stokki(codigos, usuario: str, *, iniciar, pasta) -> dict:
+def expedir_stokki(codigos, usuario: str, *, iniciar, pasta, coleta: int | None = None) -> dict:
     """Expedir na Stokki (Hugo, 12/11): poe na fila de execucoes do painel o
     expedir_pedidos.py so dos pedidos pedidos, no modo --tela-pedidos (solta da
     Expedicao Programada e aceita retirada/coleta pela transportadora). Quem
@@ -314,10 +314,14 @@ def expedir_stokki(codigos, usuario: str, *, iniciar, pasta) -> dict:
         return {"ok": False, "erro": f"no máximo {_MAX_EXPEDIR} pedidos por vez."}
     token = uuid.uuid4().hex
     arquivo = Path(pasta) / f"expedir_tela_{token}.json"
-    execucao_id, na_fila = iniciar(["--pedido", *bases, "--tela-pedidos", "--resultado-json", str(arquivo)])
+    # coleta = COL-n da tela /expedicao/coletas, ja confirmada com foto: so assim retirada nova expede
+    args_coleta = ["--coleta", str(int(coleta))] if coleta else []
+    execucao_id, na_fila = iniciar(["--pedido", *bases, "--tela-pedidos", *args_coleta,
+                                    "--resultado-json", str(arquivo)])
     for base in bases:
         tratativas.registrar_evento(base, "PEDIDOS", "EXPEDIR_STOKKI",
-                                    texto=f"{usuario}: pediu a expedição na Stokki pela tela Pedidos")
+                                    texto=(f"{usuario}: confirmou a coleta COL-{int(coleta)} na Expedição (com foto)"
+                                           if coleta else f"{usuario}: pediu a expedição na Stokki pela tela Pedidos"))
     return {"ok": True, "execucao_id": execucao_id, "token": token, "na_fila": bool(na_fila), "codigos": bases}
 
 

@@ -1,0 +1,10 @@
+[Unit]
+Description=Coletas da Expedicao - le a listagem Aguardando Transportador da Stokki (grava expedicao_coletas_fila; fonte da tela /expedicao/coletas e do status Coletado da /pedidos)
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=10min
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python -m coletas.ler_stokki

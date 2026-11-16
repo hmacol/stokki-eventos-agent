@@ -44,7 +44,8 @@ from homologacao import ambiente as _ambiente
 _ambiente.exigir_coerencia(_RAIZ)
 
 import yaml
-from flask import Flask, Response, abort, g, jsonify, redirect, render_template, request, send_file, session, url_for
+from flask import (Flask, Response, abort, g, jsonify, redirect, render_template, request, send_file,
+                   send_from_directory, session, url_for)
 from jinja2 import ChoiceLoader, FileSystemLoader
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -60,6 +61,7 @@ from email_utils import enviar_email, envelope_html
 import preferencias_notificacao as preferencias
 import cadastro_embarcador as cad_emb
 import regioes_atendimento as regioes_info
+import aula as aula_info
 from fingerprint_aguardando_resposta import buscar_pendentes_por_grupo
 import aplicar_resposta_insucesso as logica_insucesso
 from painel_agentes import acesso_telas
@@ -174,7 +176,7 @@ def _carregar_cliente():
             return redirect(url_for("completar_cadastro"))
 
 
-_LIVRES_ANTES_DA_TROCA = {"trocar_pin", "sair", "static", "saude", "regioes", "regioes_logo"}
+_LIVRES_ANTES_DA_TROCA = {"trocar_pin", "sair", "static", "saude", "regioes", "regioes_logo", "aula", "aula_arquivo"}
 _LIVRES_ANTES_DO_CADASTRO = _LIVRES_ANTES_DA_TROCA | {"completar_cadastro"}
 
 
@@ -633,6 +635,27 @@ def regioes_logo():
     return send_file(_RAIZ / "assets" / "logo_freshlog.png", mimetype="image/png", max_age=86400)
 
 
+# ── Página pública: aula em vídeo (Hugo, 06/11) ────────────────────────────────
+
+@app.route("/aula")
+def aula():
+    """Videos curtos de treinamento do portal, sem login (o link vai por
+    WhatsApp ate pra quem ainda nao entrou). So lista o que esta no
+    manifesto gerado pelo aula_portal/gravar.py."""
+    return render_template("aula.html", videos=aula_info.carregar_manifesto(),
+                           logo_src=url_for("regioes_logo"))
+
+
+@app.route("/aula/arquivo/<nome>")
+def aula_arquivo(nome):
+    # conditional=True responde Range com 206: o Safari do iPhone so toca mp4 assim.
+    if not aula_info.arquivo_permitido(nome, aula_info.carregar_manifesto()):
+        abort(404)
+    resp = send_from_directory(aula_info.PASTA_AULA, nome, conditional=True, max_age=3600)
+    resp.headers["Cache-Control"] = "public, max-age=3600"
+    return resp
+
+
 # ── API ────────────────────────────────────────────────────────────────────────
 
 @app.route("/api/dia")
@@ -677,7 +700,8 @@ def api_canhoto(service_id):
 
 
 # ── Alteração de entrega (endereço, data, horário de recebimento) ──────────────
-# O cliente não altera sozinho (Hugo, 01/11): o pedido vira chamado pro atendimento.
+
+_FORA_DA_AREA = f"Esse endereço fica fora da área atendida. {alterar_entrega.CHAT}"
 
 
 def _mapa_horarios() -> dict:
@@ -713,14 +737,9 @@ def _avaliar_alteracao(conn, servico: dict) -> alterar_entrega.Avaliacao:
     return alterar_entrega.avaliar(servico, rotas, status_nucleo, lalamove)
 
 
-def _entrega_atual(servico: dict) -> tuple[str, dict]:
-    """(nome do destinatário, {endereco, data, horario}) do pedido hoje."""
-    from regras.complexidade_entrega import carregar_ajustes_manuais, horario_efetivo
+def _destinatario(servico: dict) -> tuple[str, str]:
     cli = dados._desembrulhar(servico, "customer")
-    doc = alterar_entrega._digitos(cli.get("code"))
-    return cli.get("name") or "", {"endereco": servico.get("address") or "",
-                                   "data": alterar_entrega._data_agendada(servico),
-                                   "horario": horario_efetivo(doc, _mapa_horarios(), carregar_ajustes_manuais())}
+    return alterar_entrega._digitos(cli.get("code")), cli.get("name") or ""
 
 
 @app.route("/api/pedidos/<int:service_id>/alteracao")
@@ -733,52 +752,74 @@ def api_alteracao(service_id):
             av = _avaliar_alteracao(conn, servico)
         finally:
             conn.close()
-        nome, atual = _entrega_atual(servico)
+        from regras.complexidade_entrega import carregar_ajustes_manuais, horario_efetivo
+        doc, nome = _destinatario(servico)
+        ini, fim = horario_efetivo(doc, _mapa_horarios(), carregar_ajustes_manuais())
+        data = alterar_entrega._data_agendada(servico)
     except Exception:
         logger.exception(f"alteracao (consulta) sid={service_id} -> erro")
         return jsonify({"erro": f"Não foi possível consultar o pedido agora. {alterar_entrega.CHAT}"}), 502
-    ini, fim = atual["horario"]
     return jsonify({"pode": av.pode, "motivo": av.motivo, "em_rota": av.em_rota, "destinatario": nome,
-                    "atual": {"endereco": atual["endereco"], "data": atual["data"].isoformat() if atual["data"] else None,
+                    "atual": {"endereco": servico.get("address") or "", "data": data.isoformat() if data else None,
                               "horario": {"inicio": ini, "fim": fim}}})
 
 
 @app.route("/api/pedidos/<int:service_id>/alteracao", methods=["POST"])
 @requer_cliente
 @exige_mesma_origem
-def api_alteracao_solicitar(service_id):
-    """Abre um chamado na área Entrega com o que o cliente pediu; nada muda na Vuupt."""
-    if g.get("equipe"):
-        return jsonify({"erro": "A equipe altera a entrega pelo painel."}), 403
+def api_alteracao_aplicar(service_id):
+    _exige_pode_enviar()
     servico, empresa = _servico_alteravel(service_id)
     corpo = request.get_json(silent=True)
     if not isinstance(corpo, dict):
         corpo = {}
+    por = _quem_envia()
+    conn = envios.conectar()
+    conn_registro = None
+    chamou_aplicar = False
     try:
-        conn = envios.conectar()
-        try:
-            av = _avaliar_alteracao(conn, servico)   # sempre de novo: nunca confia no GET
-        finally:
-            conn.close()
+        av = _avaliar_alteracao(conn, servico)   # sempre de novo: nunca confia no GET
         if not av.pode:
             return jsonify({"erro": av.motivo}), 409
         try:
             validado = alterar_entrega.validar(corpo, date.today())
         except alterar_entrega.ErroAlteracao as e:
             return jsonify({"erro": str(e)}), 400
-        nome, atual = _entrega_atual(servico)
-        codigo = str(servico.get("code") or service_id).lstrip("#")
-        # CNPJ do LOGIN: o widget do chat busca o chamado pelo CNPJ logado (login de grupo)
-        chamado_id = alterar_entrega.abrir_chamado(
-            {"cnpj": g.cliente["cnpj"], "sender_id": servico.get("sender_id"), "nome": empresa["nome"]},
-            codigo, alterar_entrega.texto_chamado(codigo, nome, atual, validado), _CONFIG)
+        if validado["endereco"]:
+            try:
+                fora = envios._identificar_area(
+                    [{"id": 0, "address": alterar_entrega.endereco_vuupt(validado["endereco"])}],
+                    (_CONFIG.get("google_maps") or {}).get("api_key") or "")
+            except Exception as e:  # noqa: BLE001 -- mesma regra do envio: sem checagem nao segura
+                logger.warning(f"alteracao: checagem de area falhou ({e}); deixando passar")
+                fora = []
+            if any(tipo for _s, tipo in fora):
+                return jsonify({"erro": _FORA_DA_AREA}), 400
+        import registro_dia_fixo
+        conn_registro = registro_dia_fixo.conectar()
+        plano = alterar_entrega.planejar(servico, validado, av, conn_registro, date.today())
+        if plano.avisos and not corpo.get("confirmar"):
+            return jsonify({"ok": False, "precisa_confirmar": True, "avisos": plano.avisos})
+        doc, nome = _destinatario(servico)
+        contexto = {"cnpj_embarcador": empresa["cnpj"], "sender_id": servico.get("sender_id"), "por": por,
+                    "destinatario_doc": doc, "destinatario_nome": nome, "config": _CONFIG,
+                    "mapa_horarios": _mapa_horarios(), "empresa_nome": empresa["nome"]}
+        chamou_aplicar = True
+        resultado = alterar_entrega.aplicar(conn, servico, validado, plano, contexto,
+                                            alterar_entrega.dependencias_reais(_CONFIG, por))
     except Exception:
-        logger.exception(f"alteracao cnpj={empresa['cnpj']} sid={service_id} -> erro")
-        return jsonify({"erro": f"Não foi possível registrar o pedido agora. {alterar_entrega.CHAT}"}), 502
-    logger.info(f"alteracao cnpj={empresa['cnpj']} sid={service_id} -> chamado {chamado_id}")
-    return jsonify({"ok": True, "chamado_id": chamado_id,
-                    "mensagem": f"Pedido de alteração enviado ao atendimento (chamado #{chamado_id}). "
-                                "A equipe confere e responde pelo chat do portal e por e-mail."})
+        logger.exception(f"alteracao cnpj={empresa['cnpj']} sid={service_id} por={por} -> erro")
+        return jsonify({"erro": f"Não foi possível alterar agora. {alterar_entrega.CHAT}"}), 502
+    finally:
+        conn.close()
+        if conn_registro is not None:
+            conn_registro.close()
+        if chamou_aplicar:  # a Vuupt pode ter mudado mesmo se o aplicar estourou
+            dados.invalidar_cache(servico["sender_id"])
+    logger.info(f"alteracao cnpj={empresa['cnpj']} sid={service_id} por={por} -> {'ok' if resultado['ok'] else 'erro'}")
+    if not resultado["ok"]:
+        return jsonify({"erro": resultado["mensagem"]}), 502
+    return jsonify({"ok": True, "mensagem": resultado["mensagem"]})
 
 
 @app.route("/api/responder", methods=["POST"])
@@ -998,6 +1039,7 @@ def api_envios_listar():
     return jsonify({"envios": lista, "resumo": envios.resumo_envios(lista), "dias": envios.DIAS_LISTAGEM,
                     "regra_xml": cfg["regra_xml"], "regra_xml_rotulo": envios.REGRAS_XML.get(cfg["regra_xml"], ""),
                     "envio_ativo": cfg["envio_ativo"], "client_id": cfg["client_id"], "fila": fila,
+                    "endereco_entrega_ativo": endereco_entrega.entrega_ativa(_CONFIG),
                     "atualizado_em": datetime.now().strftime("%H:%M")})
 
 
@@ -1439,17 +1481,27 @@ def api_envios_acao(envio_id):
     _exige_pode_enviar()
     corpo = request.get_json(silent=True) or {}
     tipo = corpo.get("tipo")
+    # cada troca consulta CEP, geocodifica e escreve no chamado: mesmo limite por minuto do CEP
+    if tipo == "alterar_endereco" and _cep_acima_do_limite(g.cliente["cnpj"]):
+        return jsonify({"erro": "Muitas tentativas. Tente de novo em um minuto."}), 429
     conn = envios.conectar()
     try:
         envio = envios.buscar_envio(conn, envio_id, _empresa_envio()['cnpj'])
         if not envio:
             return jsonify({"erro": "Pedido não encontrado."}), 404
-        resultado = envios.aplicar_acao(conn, envio, tipo, corpo, _quem_envia())
+        if tipo == "alterar_endereco":
+            # pedido barrado pela area (13/11): troca o endereco e reavalia a regiao
+            resultado = envios.alterar_endereco_bloqueado(conn, envio, corpo.get("endereco"), _CONFIG, _quem_envia())
+        else:
+            resultado = envios.aplicar_acao(conn, envio, tipo, corpo, _quem_envia())
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     finally:
         conn.close()
     logger.info(f"acao cnpj={_empresa_envio()['cnpj']} envio={envio_id} tipo={tipo} por={_quem_envia()} -> {resultado}")
+    if tipo == "alterar_endereco" and envio.get("bloqueio_chamado_id"):
+        import bloqueio_area
+        bloqueio_area.avisar_endereco_alterado(envio, resultado, _quem_envia())
     if resultado.get("precisa_operacao"):
         _avisar_operacao_solicitacao(envio, tipo, corpo)
     # cancelamento de envio bloqueado por área (23/09): registra no chamado do chat

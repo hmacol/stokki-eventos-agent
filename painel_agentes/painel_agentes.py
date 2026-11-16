@@ -15,6 +15,7 @@ COMO USAR (produção):
     py -3.11 -m waitress --host=0.0.0.0 --port=8070 painel_agentes:app
 """
 import hmac
+import io
 import json
 import logging
 import math
@@ -33,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from homologacao import ambiente as _ambiente
 _ambiente.exigir_coerencia(_RAIZ)
 from homologacao.guarda import EnvioBloqueadoHomolog as _EnvioBloqueadoHomolog
+from homologacao.ambiente import DesligadoNaHomologacao as _DesligadoNaHomologacao, homolog_ativo as _homolog_ativo
 
 (Path(__file__).parent / "dados").mkdir(parents=True, exist_ok=True)
 
@@ -55,7 +57,7 @@ from urllib.parse import urlparse
 import yaml
 from flask import (
     Flask, Response, abort, g, redirect, render_template, request, url_for,
-    jsonify, send_file, session,
+    jsonify, send_file, send_from_directory, session,
 )
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.routing import BuildError
@@ -86,6 +88,7 @@ from expedicao import listar_rotas_do_dia, gerar_romaneio_rota, excluir_pedido_d
 # Página pública do portal com regiões, dias de visita e calendário (Hugo, 14/10:
 # botão na Torre pra consulta interna). Mesma constante que a página usa.
 from portal_cliente.regioes_atendimento import URL_PUBLICA as URL_PAGINA_REGIOES
+from portal_cliente import aula as aula_videos
 # Calculadora de frete dedicado do portal (Hugo, 14/10: botão na Torre). Oculta
 # dos clientes; abre com o login do cliente teste (portal_cliente.cotacao.cnpjs_liberados).
 URL_PAGINA_COTACAO = "https://app.freshhub.com.br/cliente/cotacao"
@@ -95,7 +98,10 @@ from nucleo import justificativas_sem_canhoto
 import tratativas
 import pedidos_parados_triagem
 import consulta_expedicao
+from coletas import banco as coletas_banco, folha_pdf as coletas_folha_pdf, ler_stokki as coletas_ler_stokki, \
+    regras as coletas_regras, exemplo_homolog as coletas_exemplo_homolog
 import acoes_pedidos
+import documentos_email
 import contadores_menu
 import pagina_inicial
 import wms
@@ -516,6 +522,9 @@ def login():
                 session["versao_senha"] = conta["versao_senha"]
             if conta and conta["trocar_senha"]:
                 return redirect(url_for("trocar_senha"))
+            # Exceção: o link da aula (WhatsApp da equipe) volta pros vídeos.
+            if request.args.get("proximo") == "aula":
+                return redirect(url_for("aula_equipe"))
             # Todo acesso cai no Inicio (24/10, Hugo), nao na tela que a pessoa
             # tentava abrir. Galpao, expedicao e personalizado sem o Inicio
             # vao pra tela deles (_pagina_inicial).
@@ -1041,6 +1050,274 @@ def api_expedicao_consulta():
     except Exception as e:
         logging.getLogger(__name__).exception("Falha na consulta de pedido da expedição")
         return jsonify({"erro": f"Falha na consulta: {e}"}), 500
+
+
+# ── Coletas da Expedicao (Hugo, 12/11) ───────────────────────────────────────
+# Pedido de retirada sai por aqui: folha impressa (COL-n), o motorista preenche,
+# e nome, placa e a FOTO da folha sao obrigatorios pra confirmar. A lista vem
+# de coletas/ler_stokki.py (timer de 10 min); quem expede e o robo
+# (expedir_pedidos.py --coleta N), que confere a foto de novo.
+NIVEIS_COLETA_VER = ("total", "operador", "leitura", "atendimento", "logistica", "expedicao", "galpao")
+NIVEIS_COLETA_AGIR = ("total", "operador", "expedicao", "galpao")
+_COLETA_FOTO_MAX = 12 * 1024 * 1024
+_COLETA_LEITURA_ATRASADA_MIN = 30
+
+
+def _coletas_pasta_fotos() -> Path:
+    return coletas_banco.DB_PATH.parent / "coletas"
+
+
+def _coletas_erro(e):
+    return jsonify({"erro": str(e)}), (404 if "não encontrada" in str(e) else 400)
+
+
+def _coletas_despachar(conn, coleta_id: int, codigos: list) -> dict:
+    """Poe o robo na fila de execucoes. Homologacao: nada vai a Stokki, a coleta conclui simulada."""
+    agente = buscar_agente(acoes_pedidos.AGENTE_EXPEDICAO)
+
+    def iniciar(args_extra):
+        return iniciar_execucao_com_fila(agente, modo_teste=False, ids_do_grupo=AGENTES_PLANEJAMENTO_IDS,
+                                         args_extra=args_extra)
+    try:
+        r = acoes_pedidos.expedir_stokki(codigos, _autor_acao_pedidos(), iniciar=iniciar, pasta=_LOGS_EXECUCOES,
+                                         coleta=coleta_id)
+    except (_EnvioBloqueadoHomolog, _DesligadoNaHomologacao):   # a fila de agentes e desligada na bancada
+        coletas_regras.aplicar_resultados(
+            conn, coleta_id, {c: {"ok": True, "mensagem": "homologação: registrado, nada foi à Stokki"} for c in codigos},
+            simulada=True)
+        return {"ok": True, "simulada": True}
+    except Exception:
+        logging.getLogger(__name__).exception("coleta %s: falha ao por a expedicao na fila", coleta_id)
+        r = {"ok": False, "erro": "não consegui pôr a expedição na fila"}
+    if not r.get("ok"):   # a coleta fica confirmada (a foto vale); os pedidos ficam em "falhou" pra tentar de novo
+        coletas_regras.aplicar_resultados(conn, coleta_id, {c: {"ok": False, "mensagem": r.get("erro")} for c in codigos})
+        return {"ok": True, "aviso": r.get("erro")}
+    coletas_regras.registrar_execucao(conn, coleta_id, r["execucao_id"], r["token"])
+    return {"ok": True, "execucao_id": r["execucao_id"], "na_fila": r["na_fila"]}
+
+
+@app.route("/expedicao/coletas")
+@requer_auth(niveis=NIVEIS_COLETA_VER)
+def expedicao_coletas():
+    conn = coletas_banco.conectar()
+    try:
+        exemplo = _homolog_ativo()
+        if exemplo:   # a bancada nunca le a Stokki: lista de exemplo com a copia dos dados
+            coletas_exemplo_homolog.preencher(conn, forcar=True)   # a rota ja conferiu o ambiente
+        lista = coletas_regras.a_coletar(conn)
+        folhas = [coletas_regras.coleta(conn, c["id"]) for c in coletas_regras.abertas(conn)]
+        historico = coletas_regras.historico(conn)
+        ultima = coletas_ler_stokki.ultima_leitura(conn)
+        assinatura = coletas_regras.assinatura(conn)
+    finally:
+        conn.close()
+    atrasada = not exemplo
+    if ultima and not exemplo:
+        atrasada = (datetime.now() - datetime.strptime(ultima, coletas_banco.FMT)).total_seconds() > 60 * _COLETA_LEITURA_ATRASADA_MIN
+    return render_template("coletas_expedicao.html", grupos=lista["grupos"], sem_cadastro=lista["sem_cadastro"],
+                           folhas=folhas, historico=historico, ultima_leitura=ultima, leitura_atrasada=atrasada,
+                           pode_agir=g.nivel_acesso in NIVEIS_COLETA_AGIR, max_pedidos=coletas_regras.MAX_PEDIDOS,
+                           exemplo=exemplo, foco=None, assinatura=assinatura)
+
+
+@app.route("/expedicao/coletas/<int:coleta_id>")
+@requer_auth(niveis=NIVEIS_COLETA_VER)
+def expedicao_coleta_tela(coleta_id: int):
+    """Uma coleta so: e onde o QR code da folha impressa cai. O celular da doca
+    tira a foto, digita nome e placa e confirma daqui (Hugo, 13/11)."""
+    conn = coletas_banco.conectar()
+    try:
+        c = coletas_regras.coleta(conn, coleta_id)
+    except coletas_regras.ErroColeta:
+        abort(404)
+    finally:
+        conn.close()
+    return render_template("coletas_expedicao.html", foco=c, folhas=[c], grupos=[], sem_cadastro=[], historico=[],
+                           ultima_leitura=None, leitura_atrasada=False, exemplo=_homolog_ativo(),
+                           pode_agir=g.nivel_acesso in NIVEIS_COLETA_AGIR, max_pedidos=coletas_regras.MAX_PEDIDOS)
+
+
+@app.route("/api/expedicao/coletas/estado")
+@requer_auth(niveis=NIVEIS_COLETA_VER)
+def api_expedicao_coletas_estado():
+    conn = coletas_banco.conectar()
+    try:
+        return jsonify({"assinatura": coletas_regras.assinatura(conn)})
+    finally:
+        conn.close()
+
+
+@app.route("/api/expedicao/coletas/folha", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COLETA_AGIR)
+@exige_mesma_origem
+def api_expedicao_coletas_folha():
+    """Gera a folha de coleta: JSON {ids: [id_stokki]} -> {coleta_id, numero}."""
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    conn = coletas_banco.conectar()
+    try:
+        ids = body.get("ids")
+        if not isinstance(ids, list) or not all(isinstance(i, int) for i in ids):
+            return jsonify({"erro": "ids inválidos."}), 400
+        coleta_id = coletas_regras.gerar_folha(conn, ids, _autor_acao_pedidos())
+    except coletas_regras.ErroColeta as e:
+        return _coletas_erro(e)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "coleta_id": coleta_id, "numero": coletas_banco.numero(coleta_id)})
+
+
+@app.route("/expedicao/coletas/<int:coleta_id>/folha.pdf")
+@requer_auth(niveis=NIVEIS_COLETA_VER)
+def expedicao_coleta_folha(coleta_id: int):
+    conn = coletas_banco.conectar()
+    try:
+        c = coletas_regras.coleta(conn, coleta_id)
+    except coletas_regras.ErroColeta:
+        abort(404)
+    finally:
+        conn.close()
+    # o QR da folha abre esta coleta no celular da doca (endereco publico, via ProxyFix)
+    url = url_for("expedicao_coleta_tela", coleta_id=coleta_id, _external=True)
+    return Response(coletas_folha_pdf.gerar(c, url=url), mimetype="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{c["numero"]}.pdf"'})
+
+
+@app.route("/expedicao/coletas/<int:coleta_id>/foto")
+@requer_auth(niveis=NIVEIS_COLETA_VER)
+def expedicao_coleta_foto(coleta_id: int):
+    conn = coletas_banco.conectar()
+    try:
+        c = coletas_regras.coleta(conn, coleta_id)
+    except coletas_regras.ErroColeta:
+        abort(404)
+    finally:
+        conn.close()
+    nome = c.get("foto_arquivo") or ""
+    caminho = _coletas_pasta_fotos() / nome
+    if not re.fullmatch(r"COL-\d+-[0-9a-f]{8}\.jpg", nome) or not caminho.is_file():
+        abort(404)
+    return send_file(caminho, max_age=3600)
+
+
+def _coletas_salvar_foto(coleta_id: int, arquivo) -> str:
+    """Valida (imagem de verdade, ate 12 MB) e regrava como JPEG. Devolve o nome do arquivo."""
+    from PIL import Image, ImageOps
+    dados = arquivo.read(_COLETA_FOTO_MAX + 1) if arquivo else b""
+    if not dados:
+        raise coletas_regras.ErroColeta("A foto da folha preenchida é obrigatória.")
+    if len(dados) > _COLETA_FOTO_MAX:
+        raise coletas_regras.ErroColeta("Foto grande demais (máximo 12 MB).")
+    try:
+        img = ImageOps.exif_transpose(Image.open(io.BytesIO(dados)))
+        img.thumbnail((2200, 2200))
+        img = img.convert("RGB")
+    except Exception:
+        raise coletas_regras.ErroColeta("O arquivo enviado não é uma foto.")
+    pasta = _coletas_pasta_fotos()
+    pasta.mkdir(parents=True, exist_ok=True)
+    nome = f"COL-{coleta_id}-{uuid.uuid4().hex[:8]}.jpg"
+    img.save(pasta / nome, format="JPEG", quality=85)
+    return nome
+
+
+@app.route("/api/expedicao/coletas/<int:coleta_id>/confirmar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COLETA_AGIR)
+@exige_mesma_origem
+def api_expedicao_coleta_confirmar(coleta_id: int):
+    """multipart: ids (id_stokki dos que sairam, separados por virgula), motorista_nome, placa, foto.
+    Nenhum id = cancela a folha. Foto, nome e placa obrigatorios (Hugo, 12/11)."""
+    ids = [int(i) for i in re.findall(r"\d+", request.form.get("ids", ""))]
+    nome_motorista, placa = request.form.get("motorista_nome", ""), request.form.get("placa", "")
+    usuario = _autor_acao_pedidos()
+    conn = coletas_banco.conectar()
+    foto = ""
+    try:
+        c = coletas_regras.coleta(conn, coleta_id)
+        if not ids or c["status"] != "ABERTA":   # cancelar, ou recusar sem gravar foto
+            codigos = coletas_regras.confirmar(conn, coleta_id, ids, nome_motorista, placa, "", usuario)
+            return jsonify({"ok": True, "cancelada": True})
+        if not nome_motorista.strip() or not placa.strip():
+            coletas_regras.confirmar(conn, coleta_id, ids, nome_motorista, placa, "x", usuario)   # levanta o erro certo
+        foto = _coletas_salvar_foto(coleta_id, request.files.get("foto"))
+        codigos = coletas_regras.confirmar(conn, coleta_id, ids, nome_motorista, placa, foto, usuario)
+        foto = ""   # daqui pra frente a foto pertence a coleta
+        return jsonify(_coletas_despachar(conn, coleta_id, codigos))
+    except coletas_regras.ErroColeta as e:
+        return _coletas_erro(e)
+    finally:
+        if foto:
+            (_coletas_pasta_fotos() / foto).unlink(missing_ok=True)
+        conn.close()
+
+
+@app.route("/api/expedicao/coletas/<int:coleta_id>/cancelar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COLETA_AGIR)
+@exige_mesma_origem
+def api_expedicao_coleta_cancelar(coleta_id: int):
+    conn = coletas_banco.conectar()
+    try:
+        coletas_regras.cancelar_folha(conn, coleta_id, _autor_acao_pedidos())
+    except coletas_regras.ErroColeta as e:
+        return _coletas_erro(e)
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/expedicao/coletas/<int:coleta_id>/tentar-de-novo", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COLETA_AGIR)
+@exige_mesma_origem
+def api_expedicao_coleta_tentar(coleta_id: int):
+    conn = coletas_banco.conectar()
+    try:
+        return jsonify(_coletas_despachar(conn, coleta_id, coletas_regras.tentar_de_novo(conn, coleta_id)))
+    except coletas_regras.ErroColeta as e:
+        return _coletas_erro(e)
+    finally:
+        conn.close()
+
+
+@app.route("/api/expedicao/coletas/<int:coleta_id>/retirar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COLETA_AGIR)
+@exige_mesma_origem
+def api_expedicao_coleta_retirar(coleta_id: int):
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    conn = coletas_banco.conectar()
+    try:
+        coletas_regras.retirar_pedido(conn, coleta_id, int(body.get("id_stokki") or 0), _autor_acao_pedidos())
+    except coletas_regras.ErroColeta as e:
+        return _coletas_erro(e)
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/expedicao/coletas/<int:coleta_id>/andamento")
+@requer_auth(niveis=NIVEIS_COLETA_VER)
+def api_expedicao_coleta_andamento(coleta_id: int):
+    """Estado da coleta. Quando o robo termina, grava o resultado por pedido (uma vez)."""
+    conn = coletas_banco.conectar()
+    try:
+        c = coletas_regras.coleta(conn, coleta_id)
+        rodando = any(p["estado"] == "EXPEDINDO" for p in c["pedidos"])
+        if rodando and c["status"] == "CONFIRMADA":
+            execucao = buscar_execucao(c["execucao_id"]) if c["execucao_id"] else None
+            r = acoes_pedidos.andamento_expedicao(execucao, c["token"] or "", _LOGS_EXECUCOES)
+            if not r.get("ok") or r.get("estado") == "fim":
+                coletas_regras.aplicar_resultados(conn, coleta_id, r.get("resultados") or {})
+                c = coletas_regras.coleta(conn, coleta_id)
+                rodando = False
+    except coletas_regras.ErroColeta as e:
+        return _coletas_erro(e)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "status": c["status"], "rodando": rodando,
+                    "pedidos": [{"codigo": p["codigo"], "estado": p["estado"], "mensagem": p["mensagem"]}
+                                for p in c["pedidos"]]})
 
 
 def _parse_data_param(padrao_amanha: bool = False) -> date:
@@ -1583,6 +1860,37 @@ def retornos_arquivo(descarga_id: int, nome: str):
     if not caminho:
         abort(404)
     return send_file(caminho, max_age=3600)
+
+
+# ── Aula da equipe: vídeos curtos das telas (Hugo, 13/11) ──────────────────────
+# Gerados por aula_equipe/gravar.py e copiados pra dados/aula_equipe/ no deploy.
+# Só com login (Hugo, 13/11), qualquer nível: o link vai no WhatsApp da equipe.
+PASTA_AULA_EQUIPE = _RAIZ / "dados" / "aula_equipe"
+
+
+@app.route("/aula")
+def aula_equipe():
+    # Quem abre o link sem estar logado entra e volta direto pros vídeos.
+    if session.get("nivel_acesso") is None:
+        return redirect(url_for("login", proximo="aula"))
+    return _aula_equipe_tela()
+
+
+@requer_auth(niveis=acesso_telas.NIVEIS)
+def _aula_equipe_tela():
+    return render_template("aula_equipe.html", videos=aula_videos.carregar_manifesto(PASTA_AULA_EQUIPE),
+                           voltar=_pagina_inicial(session.get("nivel_acesso"), g.telas_liberadas))
+
+
+@app.route("/aula/arquivo/<nome>")
+@requer_auth(niveis=acesso_telas.NIVEIS)
+def aula_equipe_arquivo(nome: str):
+    # Só o que está no manifesto; conditional=True responde Range com 206 (o Safari do iPhone exige).
+    if not aula_videos.arquivo_permitido(nome, aula_videos.carregar_manifesto(PASTA_AULA_EQUIPE)):
+        abort(404)
+    resp = send_from_directory(PASTA_AULA_EQUIPE, nome, conditional=True, max_age=3600)
+    resp.headers["Cache-Control"] = "private, max-age=3600"
+    return resp
 
 
 @app.route("/canhotos-pendentes")
@@ -2907,6 +3215,22 @@ def api_pedidos_acao_expedir_stokki():
     if erro:
         return erro
     agente = buscar_agente(acoes_pedidos.AGENTE_EXPEDICAO)
+    # Retirada nova so sai pela aba Coletas da Expedicao, com foto (Hugo, 12/11). O robo recusa de
+    # qualquer jeito (expedir_pedidos._decidir_retirada); aqui a resposta vem na hora, sem fila.
+    try:
+        from nucleo import banco as nucleo_banco
+        conn = coletas_banco.conectar(nucleo_banco.DB_PATH)
+        try:
+            novas = coletas_regras.retiradas_novas(
+                conn, [m.upper() for c in (body.get("codigos") or []) for m in re.findall(r"PS-\d+", str(c), re.I)])
+        finally:
+            conn.close()
+    except Exception:
+        logging.getLogger(__name__).exception("conferencia de retirada nova indisponivel")
+        novas = []
+    if novas:
+        return jsonify({"erro": f"{', '.join(novas)}: pedido de retirada sai pela tela Coletas (Expedição), "
+                                "com a folha e a foto."}), 400
 
     def iniciar(args_extra):
         return iniciar_execucao_com_fila(agente, modo_teste=False, ids_do_grupo=AGENTES_PLANEJAMENTO_IDS,
@@ -2973,6 +3297,101 @@ def api_pedidos_acao_comprovantes():
         logging.getLogger(__name__).exception("comprovantes pela tela Pedidos falhou")
         return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
     return jsonify({"ok": True, "comprovantes": itens})
+
+
+# Documentos fiscais do pedido (XML, DANFE, boleto): conferir, baixar e mandar por e-mail (Hugo, 13/11).
+def _itens_documentos(body):
+    """(itens, erro): [{"codigo", "destinatario"}] do corpo, so com codigo no formato da tela."""
+    bruto = body.get("itens")
+    if not isinstance(bruto, list) or not bruto:
+        return None, (jsonify({"erro": "Nenhum pedido selecionado."}), 400)
+    if len(bruto) > documentos_email.MAX_PEDIDOS:
+        return None, (jsonify({"erro": f"No máximo {documentos_email.MAX_PEDIDOS} pedidos por envio."}), 400)
+    itens = []
+    for it in bruto:
+        codigo = str((it or {}).get("codigo") or "").strip().lstrip("#").upper() if isinstance(it, dict) else ""
+        if not _RE_CODIGO_CANHOTO.fullmatch(codigo):
+            return None, (jsonify({"erro": "codigo ausente ou inválido."}), 400)
+        itens.append({"codigo": codigo, "destinatario": str(it.get("destinatario") or "")[:200]})
+    return itens, None
+
+
+@app.route("/api/pedidos/documentos/conferir", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_documentos_conferir():
+    """O que ha guardado de cada pedido (com link pra baixar), o que falta e o e-mail usado da ultima vez."""
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    itens, erro = _itens_documentos(body)
+    if erro:
+        return erro
+    from nucleo import banco as nucleo_banco
+    try:
+        conn = nucleo_banco.conectar()
+        try:
+            documentos_email.garantir_tabelas(conn)
+            r = documentos_email.resumo(documentos_email.levantar(conn, [it["codigo"] for it in itens]))
+            r["emails_lembrados"] = documentos_email.lembrados(conn, itens)
+        finally:
+            conn.close()
+    except Exception:
+        logging.getLogger(__name__).exception("conferencia de documentos pela tela Pedidos falhou")
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+    for p in r["pedidos"]:
+        for a in p["arquivos"]:
+            a["url"] = url_for("api_pedidos_documentos_arquivo", codigo=p["codigo"], ref=a["ref"])
+    return jsonify({"ok": True, **r})
+
+
+@app.route("/api/pedidos/documentos/arquivo", methods=["GET"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+def api_pedidos_documentos_arquivo():
+    """Download de um documento do pedido, ja com o nome XML_NF/DANFE_NF/BOLETO_NF."""
+    codigo = (request.args.get("codigo") or "").strip().lstrip("#").upper()
+    ref = (request.args.get("ref") or "").strip()
+    if not _RE_CODIGO_CANHOTO.fullmatch(codigo) or not ref or len(ref) > 100:
+        abort(404)
+    from nucleo import banco as nucleo_banco
+    conn = nucleo_banco.conectar()
+    try:
+        achado = documentos_email.arquivo(conn, codigo, ref)
+    finally:
+        conn.close()
+    if achado is None:
+        abort(404)
+    caminho, nome = achado
+    return send_file(caminho, as_attachment=True, download_name=nome)
+
+
+@app.route("/api/pedidos/documentos/enviar", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_documentos_enviar():
+    """Manda os documentos guardados dos pedidos pro e-mail informado (envio real)."""
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    itens, erro = _itens_documentos(body)
+    if erro:
+        return erro
+    from nucleo import banco as nucleo_banco
+    try:
+        conn = nucleo_banco.conectar()
+        try:
+            r = documentos_email.enviar(conn, itens, body.get("emails"), _autor_acao_pedidos(),
+                                        _carregar_config().get("email") or {})
+        finally:
+            conn.close()
+    except documentos_email.ErroDocumentos as e:
+        return jsonify({"erro": str(e)}), 400
+    except _EnvioBloqueadoHomolog:
+        raise
+    except Exception:
+        logging.getLogger(__name__).exception("envio de documentos pela tela Pedidos falhou")
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+    return jsonify(r)
 
 
 @app.route("/pedidos/canhoto/vuupt/<int:checklist_id>.pdf")
@@ -4081,6 +4500,24 @@ def _pedidos_celular(linhas: list, formatar) -> list:
     operador, logística; acesso personalizado chega aqui como total)."""
     pode = getattr(g, "nivel_acesso", None) in ("total", "operador", "logistica")
     saida = [_pedido_celular(l, formatar) for l in linhas]
+    # quem saiu por coleta da Expedicao (12/11): numero, quem levou e a foto da folha
+    try:
+        from nucleo import banco as nucleo_banco
+        conn = coletas_banco.conectar(nucleo_banco.DB_PATH)   # mesmo dados.db da tela
+        try:
+            coletas = coletas_regras.coletas_dos_pedidos(conn, [p["codigo"].lstrip("#") for p in saida])
+        finally:
+            conn.close()
+    except Exception:
+        logging.getLogger(__name__).exception("coletas dos pedidos indisponivel")
+        coletas = {}
+    for p in saida:
+        c = coletas.get(p["codigo"].lstrip("#"))
+        if c:
+            quando = c["confirmada_em"] or ""
+            p["coleta"] = (f"{c['numero']} · {c['motorista_nome']} · placa {c['placa']} · "
+                           f"{quando[8:10]}/{quando[5:7]} {quando[11:16]}")
+            p["coleta_foto"] = url_for("expedicao_coleta_foto", coleta_id=c["id"]) if c["foto_arquivo"] else ""
     if not pode:
         for p in saida:
             p["pendentes"] = ""

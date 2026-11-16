@@ -403,6 +403,26 @@ def texto_chamado(chamado: dict, link: str, agora: datetime | None = None) -> st
     return "\n".join(linhas)
 
 
+def texto_alteracao_entrega(info: dict, agora: datetime | None = None) -> str:
+    """Cliente alterou a entrega sozinho pelo portal (Hugo, 12/11): o que mudou,
+    se saiu da rota e se parou no meio. info = o dict do alterar_entrega._avisar.
+    Cabe em MAX_MENSAGEM: o antes/depois completo fica em alteracoes_entrega_portal."""
+    quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
+    titulo = "⚠️ *Alteração de entrega parou no meio*" if info.get("falha") else "✏️ *Cliente alterou a entrega*"
+    linhas = [f"{titulo} · {quando}",
+              f"Pedido {_uma_linha(info.get('codigo'), 20)} · {_uma_linha(info.get('empresa'), 30)}"]
+    mudou = ", ".join(_uma_linha(m, 30) for m in info.get("mudancas") or [])
+    if mudou:
+        linhas.append(f"Mudou: {mudou}")
+    if info.get("rota_id"):
+        linhas.append(f"Saiu da rota #{info['rota_id']}")
+    if info.get("falha"):
+        linhas.append("Conferir na Vuupt")
+    while len(linhas) > 2 and _tamanho(linhas) > MAX_MENSAGEM:
+        linhas.pop(2)
+    return "\n".join(linhas)
+
+
 def texto_clientes_agenda(novos: int, total: int, link: str, agora: datetime | None = None) -> str:
     """Destinatarios com data de agendamento informada esperando o Hugo
     autorizar a marcacao AGENDA (marcar_clientes_agenda.py). So contagens;
@@ -1166,6 +1186,19 @@ def avisar_chamado(chamado: dict, link: str, config: dict, **kw) -> str:
             return "desligado"
         return despachar(config, "atendimento", "chamado", texto_chamado(chamado, link, kw.get("agora")),
                          f"chamado:{chamado['id']}", grupo_id=_cfg(config)["grupo_atendimento_id"], **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def avisar_alteracao_entrega(info: dict, config: dict, **kw) -> str:
+    """Alteração de entrega feita pelo cliente no portal: grupo do atendimento,
+    uma mensagem por alteração (sem janela de repetição)."""
+    try:
+        if not chamados_ligado(config):
+            return "desligado"
+        return despachar(config, "atendimento", "alteracao_entrega", texto_alteracao_entrega(info, kw.get("agora")),
+                         grupo_id=_cfg(config)["grupo_atendimento_id"], **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"

@@ -537,6 +537,40 @@ class TestTextoChamado(unittest.TestCase):
         self.assertNotIn("nao chegou", nw.texto_chamado(_chamado(), LINK, agora=AGORA))
 
 
+_ALTERACAO = {"codigo": "PS-43210", "empresa": "Padaria Bom Dia", "rota_id": None, "falha": "",
+              "mudancas": ["endereço", "data 15/11", "recebimento 08:00-12:00"]}
+
+
+class TestAlteracaoEntrega(_ComBanco):
+    def test_texto_diz_pedido_cliente_e_o_que_mudou(self):
+        self.assertEqual(nw.texto_alteracao_entrega(_ALTERACAO, agora=AGORA).split("\n")[1:], [
+            "Pedido PS-43210 · Padaria Bom Dia", "Mudou: endereço, data 15/11, recebimento 08:00-12:00"])
+
+    def test_texto_saiu_da_rota_e_parou_no_meio(self):
+        texto = nw.texto_alteracao_entrega(dict(_ALTERACAO, rota_id=987, falha="Vuupt 500"), agora=AGORA)
+        self.assertIn("parou no meio", texto)
+        self.assertIn("Saiu da rota #987", texto)
+        self.assertIn("Conferir na Vuupt", texto)
+        self.assertNotIn("Vuupt 500", texto)
+
+    def test_texto_cabe_no_limite(self):
+        info = dict(_ALTERACAO, codigo="P" * 90, empresa="E" * 300, rota_id=123456789, falha="x",
+                    mudancas=["m" * 90] * 3)
+        self.assertLessEqual(len(nw.texto_alteracao_entrega(info, agora=AGORA)), nw.MAX_MENSAGEM)
+
+    def test_vai_pro_grupo_do_atendimento_e_nao_tem_janela(self):
+        config = _config(grupo_atendimento_id="2@g.us")
+        for minuto in (0, 1):
+            self.assertEqual(nw.avisar_alteracao_entrega(_ALTERACAO, config, conn=self.conn, dormir=self.dormir,
+                                                         agora=AGORA + timedelta(minutes=minuto)), "enviado")
+        self.assertEqual(self.enviar.call_args[0][1], "2@g.us")
+        self.assertEqual(self.enviar.call_count, 2)
+
+    def test_sem_grupo_do_atendimento_fica_desligado(self):
+        self.assertEqual(nw.avisar_alteracao_entrega(_ALTERACAO, _config(), conn=self.conn), "desligado")
+        self.enviar.assert_not_called()
+
+
 class TestAvisarChamado(_ComBanco):
     def avisar(self, config=None, chamado=None, agora=AGORA):
         return nw.avisar_chamado(chamado or _chamado(), LINK,

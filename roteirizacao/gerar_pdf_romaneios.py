@@ -30,10 +30,11 @@ os documentos):
      Estrelas ou Pedramoura): tabela na ordem da rota com campos de
      recebedor/data/assinatura, identificando motorista, rota e dia.
   4. CANHOTEIRA DE TRANSPORTADORA (pedido do Hugo, 10/09): 1 folha por
-     transportadora de redespacho presente na rota, listando só os
-     pedidos que o motorista entrega naquele galpão (pedido, NF,
-     embarcador, destinatário final, volumes) com bloco de recebimento
-     (nome, documento, data/hora, assinatura e carimbo). O pedido é
+     transportadora de redespacho presente na rota e, dentro dela, por
+     EMBARCADOR (12/11): todos os pedidos e NFs que o motorista entrega
+     naquele galpão (pedido, NF, destinatário final, volumes) e o bloco
+     de recebimento (nome, documento, data/hora, assinatura e carimbo)
+     na MESMA folha (a linha encolhe ou a lista vira 2 colunas). O pedido é
      "via transportadora" quando o ENDEREÇO do serviço na VUUPT bate
      com um ponto de redespacho TERCEIROS do cadastro de transportadoras
      (regras/transportadoras.py::resolver_por_endereco -- o mesmo
@@ -824,11 +825,16 @@ def gerar_canhoteira(rota: dict, entregas: list[dict], nome_motorista: str,
     return paginas
 
 
-# Colunas da canhoteira de transportadora (retrato, página de 1240).
-_CT_COL_N, _CT_COL_PED, _CT_COL_EMB, _CT_COL_DEST = 118, 170, 470, 690
-_CT_COL_VOL_CX, _CT_COL_OK_CX = 1010, 1100
-_CT_LARG_PED, _CT_LARG_EMB, _CT_LARG_DEST = 285, 205, 280
-_CT_ALTURA_LINHA = 72
+# Canhoteira de transportadora (retrato, página de 1240). A linha encolhe
+# pra caber tudo numa folha; passou do que cabe em 1 coluna, vira 2 colunas
+# (sem destinatário). Cada coluna: (x de #, PEDIDO, NF, DESTINATÁRIO, centro
+# de VOL, centro de OK, largura de PEDIDO, de NF, de DESTINATÁRIO).
+_CT_COLS_1 = [(118, 170, 370, 640, 1010, 1100, 190, 260, 320)]
+_CT_COLS_2 = [(108, 150, 315, None, 520, 585, 160, 170, 0),
+              (638, 680, 845, None, 1050, 1115, 160, 170, 0)]
+_CT_ALTURA_LINHA = 72          # folga máxima (poucos pedidos)
+_CT_ALTURA_MIN_1COL = 30
+_CT_ALTURA_MIN_2COL = 28
 _CT_ALTURA_RECEBIMENTO = 300
 
 
@@ -842,118 +848,149 @@ def _somar_volumes(entregas: list[dict]) -> str:
     return total if len(conhecidos) == len(entregas) else f"{total} (parcial)"
 
 
+def _agrupar_por_embarcador(entregas: list[dict]) -> list[list[dict]]:
+    """Entregas de um galpão separadas por embarcador, na ordem em que
+    cada embarcador aparece na rota."""
+    grupos: dict = {}
+    for e in entregas:
+        grupos.setdefault(e.get("sender_id") or e.get("embarcador") or "", []).append(e)
+    return list(grupos.values())
+
+
 def gerar_canhoteira_transportadora(rota: dict, ponto: PontoRedespacho, entregas: list[dict],
                                     nome_motorista: str, data_alvo: date) -> list[Image.Image]:
-    """Folha(s) de canhoteira de UMA transportadora de redespacho: só os
-    pedidos da rota que o motorista entrega naquele galpão, na ordem da
-    rota, com pedido/NF, embarcador, destinatário final e volumes, e um
-    bloco de recebimento (nome, documento, data/hora, assinatura e
-    carimbo) no fim -- a transportadora assina o lote inteiro, e a
-    coluna OK serve pra ela conferir pedido a pedido (pedido do Hugo,
-    10/09: 1 canhoteira por transportadora)."""
+    """Canhoteira de UMA transportadora de redespacho: 1 folha POR
+    EMBARCADOR, e na mesma folha TODOS os pedidos e NFs daquele embarcador
+    naquele galpão mais o bloco de recebimento (nome, documento, data/hora,
+    assinatura e carimbo) -- a foto de uma folha comprova a entrega de
+    tudo que está nela (pedido do Hugo, 12/11; antes era 1 lista por
+    transportadora que quebrava em várias folhas e só a última tinha
+    assinatura). A linha encolhe conforme a quantidade e, se preciso, a
+    lista vira 2 colunas; só acima disso (dezenas de pedidos do mesmo
+    embarcador) abre outra folha, também com assinatura."""
+    paginas: list[Image.Image] = []
+    for do_embarcador in _agrupar_por_embarcador(entregas):
+        paginas.extend(_folhas_canhoteira_transportadora(rota, ponto, do_embarcador,
+                                                         nome_motorista, data_alvo))
+    return paginas
+
+
+def _folhas_canhoteira_transportadora(rota: dict, ponto: PontoRedespacho, entregas: list[dict],
+                                      nome_motorista: str, data_alvo: date) -> list[Image.Image]:
     data_br = data_alvo.strftime("%d/%m/%Y")
     nome_rota = rota.get("name") or f"Rota {rota.get('id')}"
     nome_transp = (ponto.nome or "").strip().upper() or "TRANSPORTADORA"
     endereco_galpao = str(ponto.endereco)
-    total_volumes = _somar_volumes(entregas)
+    embarcador = (entregas[0].get("embarcador") or "").strip() or "—"
+    limite_y = A4_RETRATO[1] - 130
+    x_dir = A4_RETRATO[0] - MARGEM
+    largura = A4_RETRATO[0] - 2 * MARGEM
 
-    def _nova_pagina(continuacao: bool = False):
-        img, draw = _pagina_branca()
-        titulo = "CANHOTEIRA · TRANSPORTADORA" + (" (cont.)" if continuacao else "")
-        y = _cabecalho(img, draw, titulo, nome_rota)
-        largura = A4_RETRATO[0] - 2 * MARGEM
+    def _topo(draw, y: int, parte: list[dict], continuacao: bool) -> int:
         draw.text((MARGEM, y + 24), _truncar(draw, nome_transp, _fonte(36, True), largura),
                   font=_fonte(36, True), fill=NAVY, anchor="ls")
         draw.text((MARGEM, y + 60), _truncar(draw, endereco_galpao, _fonte(21), largura),
                   font=_fonte(21), fill=CINZA_TXT, anchor="ls")
+        draw.text((MARGEM, y + 106),
+                  _truncar(draw, f"Embarcador: {embarcador}" + (" (cont.)" if continuacao else ""),
+                           _fonte(30, True), largura),
+                  font=_fonte(30, True), fill=NAVY, anchor="ls")
         # a rota já está no subtítulo do cabeçalho -- aqui só motorista e dia
-        draw.text((MARGEM, y + 104),
+        draw.text((MARGEM, y + 144),
                   _truncar(draw, f"Motorista: {nome_motorista}   ·   {data_br}",
                            _fonte(24, True), largura),
                   font=_fonte(24, True), fill=NAVY, anchor="ls")
-        draw.text((MARGEM, y + 140),
+        draw.text((MARGEM, y + 178),
                   f"Conferir e assinar o recebimento dos pedidos abaixo — "
-                  f"{len(entregas)} pedido(s), {total_volumes} volume(s)",
+                  f"{len(parte)} pedido(s), {_somar_volumes(parte)} volume(s)",
                   font=_fonte(21), fill=CINZA_TXT, anchor="ls")
-        y += 170
-        draw.rectangle([(MARGEM, y), (A4_RETRATO[0] - MARGEM, y + 48)], fill=NAVY)
+        return y + 206
+
+    def _recebimento(draw, y: int, parte: list[dict]) -> None:
+        y += 40
+        fonte_rotulo = _fonte(20)
+        draw.text((MARGEM, y), "RECEBIMENTO PELA TRANSPORTADORA", font=_fonte(22, True),
+                  fill=NAVY, anchor="ls")
+        draw.text((x_dir, y), f"Total: {len(parte)} pedido(s) · {_somar_volumes(parte)} volume(s)",
+                  font=_fonte(20, True), fill=NAVY, anchor="rs")
+        draw.line([(MARGEM, y + 12), (x_dir, y + 12)], fill=TEAL, width=3)
+        y += 70
+        draw.text((MARGEM, y), "Recebido por (nome legível):", font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
+        draw.line([(MARGEM + 270, y + 4), (MARGEM + 620, y + 4)], fill=CINZA_LINHA, width=2)
+        draw.text((MARGEM + 650, y), "Documento:", font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
+        draw.line([(MARGEM + 760, y + 4), (x_dir, y + 4)], fill=CINZA_LINHA, width=2)
+        y += 70
+        draw.text((MARGEM, y), "Data:  ____ / ____ / ________      Hora:  ____ : ____",
+                  font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
+        draw.text((MARGEM + 650, y), "Assinatura e carimbo:", font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
+        draw.rectangle([(MARGEM + 650, y + 20), (x_dir, y + 130)], outline=CINZA_LINHA, width=2)
+        y += 70
+        draw.text((MARGEM, y), "Ocorrências (avaria, falta, recusa):", font=fonte_rotulo,
+                  fill=CINZA_TXT, anchor="ls")
+        draw.line([(MARGEM, y + 44), (MARGEM + 600, y + 44)], fill=CINZA_LINHA, width=2)
+        draw.line([(MARGEM, y + 84), (MARGEM + 600, y + 84)], fill=CINZA_LINHA, width=2)
+
+    def _folha(parte: list[dict], continuacao: bool, max_1col: int, altura_util: int) -> Image.Image:
+        img, draw = _pagina_branca()
+        y = _cabecalho(img, draw, "CANHOTEIRA · TRANSPORTADORA", nome_rota)
+        y = _topo(draw, y, parte, continuacao)
+        colunas = _CT_COLS_1 if len(parte) <= max_1col else _CT_COLS_2
+        linhas = -(-len(parte) // len(colunas))
+        altura = min(_CT_ALTURA_LINHA, altura_util // linhas)
+        fonte_ped = _fonte(min(23, altura - 6), True)
+        fonte_txt = _fonte(min(21, altura - 8))
+
+        draw.rectangle([(MARGEM, y), (x_dir, y + 48)], fill=NAVY)
         f = _fonte(22, True)
-        meio = y + 24
-        draw.text((_CT_COL_N, meio), "#", font=f, fill="white", anchor="lm")
-        draw.text((_CT_COL_PED, meio), "PEDIDO / NF", font=f, fill="white", anchor="lm")
-        draw.text((_CT_COL_EMB, meio), "EMBARCADOR", font=f, fill="white", anchor="lm")
-        draw.text((_CT_COL_DEST, meio), "DESTINATÁRIO", font=f, fill="white", anchor="lm")
-        draw.text((_CT_COL_VOL_CX, meio), "VOL", font=f, fill="white", anchor="mm")
-        draw.text((_CT_COL_OK_CX, meio), "OK", font=f, fill="white", anchor="mm")
-        return img, draw, y + 48
+        for x_n, x_ped, x_nf, x_dest, x_vol, x_ok, *_l in colunas:
+            draw.text((x_n, y + 24), "#", font=f, fill="white", anchor="lm")
+            draw.text((x_ped, y + 24), "PEDIDO", font=f, fill="white", anchor="lm")
+            draw.text((x_nf, y + 24), "NF", font=f, fill="white", anchor="lm")
+            if x_dest:
+                draw.text((x_dest, y + 24), "DESTINATÁRIO", font=f, fill="white", anchor="lm")
+            draw.text((x_vol, y + 24), "VOL", font=f, fill="white", anchor="mm")
+            draw.text((x_ok, y + 24), "OK", font=f, fill="white", anchor="mm")
+        y += 48
 
-    paginas = []
-    img, draw, y = _nova_pagina()
-    paginas.append(img)
-    limite_y = A4_RETRATO[1] - 130
-    fonte_ped, fonte_nf, fonte_txt = _fonte(23, True), _fonte(19), _fonte(21)
-
-    for n, entrega in enumerate(entregas):
-        if y + _CT_ALTURA_LINHA > limite_y:
-            _rodape(img, draw)
-            img, draw, y = _nova_pagina(continuacao=True)
-            paginas.append(img)
-        if n % 2 == 0:
-            draw.rectangle([(MARGEM, y), (A4_RETRATO[0] - MARGEM, y + _CT_ALTURA_LINHA)],
-                           fill=CINZA_ZEBRA)
-        meio = y + _CT_ALTURA_LINHA // 2
-        draw.text((_CT_COL_N, meio), str(entrega["posicao"]), font=fonte_txt,
-                  fill=CINZA_TXT, anchor="lm")
-        draw.text((_CT_COL_PED, y + 30), _truncar(draw, entrega["codigo"], fonte_ped, _CT_LARG_PED),
-                  font=fonte_ped, fill=NAVY, anchor="ls")
-        rotulo_nf = "PV" if entrega.get("veio_de_pedido_venda") else "NF"
-        draw.text((_CT_COL_PED, y + 56),
-                  _truncar(draw, f"{rotulo_nf} {entrega['nfs']}" if entrega["nfs"] else "sem NF",
-                           fonte_nf, _CT_LARG_PED),
-                  font=fonte_nf, fill=CINZA_TXT, anchor="ls")
-        draw.text((_CT_COL_EMB, meio), _truncar(draw, entrega["embarcador"], fonte_txt, _CT_LARG_EMB),
-                  font=fonte_txt, fill=NAVY, anchor="lm")
-        draw.text((_CT_COL_DEST, meio), _truncar(draw, entrega["cliente"], fonte_txt, _CT_LARG_DEST),
-                  font=fonte_txt, fill=NAVY, anchor="lm")
-        draw.text((_CT_COL_VOL_CX, meio), str(entrega["volumes"]) if entrega["volumes"] else "—",
-                  font=fonte_txt, fill=NAVY, anchor="mm")
-        draw.rectangle([(_CT_COL_OK_CX - 15, meio - 15), (_CT_COL_OK_CX + 15, meio + 15)],
-                       outline=CINZA_TXT, width=2)
-        draw.line([(MARGEM, y + _CT_ALTURA_LINHA), (A4_RETRATO[0] - MARGEM, y + _CT_ALTURA_LINHA)],
-                  fill=CINZA_LINHA, width=1)
-        y += _CT_ALTURA_LINHA
-
-    # Bloco de recebimento -- sempre na última folha, inteiro.
-    if y + _CT_ALTURA_RECEBIMENTO > limite_y:
+        for linha in range(linhas):
+            topo = y + linha * altura
+            if linha % 2 == 0:
+                draw.rectangle([(MARGEM, topo), (x_dir, topo + altura)], fill=CINZA_ZEBRA)
+            draw.line([(MARGEM, topo + altura), (x_dir, topo + altura)], fill=CINZA_LINHA, width=1)
+        if len(colunas) > 1:
+            draw.line([(A4_RETRATO[0] // 2, y), (A4_RETRATO[0] // 2, y + linhas * altura)],
+                      fill=CINZA_LINHA, width=2)
+        caixa = min(15, altura // 2 - 3)
+        for n, entrega in enumerate(parte):          # preenche coluna a coluna
+            x_n, x_ped, x_nf, x_dest, x_vol, x_ok, l_ped, l_nf, l_dest = colunas[n // linhas]
+            meio = y + (n % linhas) * altura + altura // 2
+            draw.text((x_n, meio), str(entrega["posicao"]), font=fonte_txt, fill=CINZA_TXT, anchor="lm")
+            draw.text((x_ped, meio), _truncar(draw, entrega["codigo"], fonte_ped, l_ped),
+                      font=fonte_ped, fill=NAVY, anchor="lm")
+            rotulo_nf = "PV " if entrega.get("veio_de_pedido_venda") else ""
+            draw.text((x_nf, meio),
+                      _truncar(draw, f"{rotulo_nf}{entrega['nfs']}" if entrega["nfs"] else "sem NF",
+                               fonte_ped, l_nf),
+                      font=fonte_ped, fill=NAVY if entrega["nfs"] else CINZA_TXT, anchor="lm")
+            if x_dest:
+                draw.text((x_dest, meio), _truncar(draw, entrega["cliente"], fonte_txt, l_dest),
+                          font=fonte_txt, fill=NAVY, anchor="lm")
+            draw.text((x_vol, meio), str(entrega["volumes"]) if entrega["volumes"] else "—",
+                      font=fonte_txt, fill=NAVY, anchor="mm")
+            draw.rectangle([(x_ok - caixa, meio - caixa), (x_ok + caixa, meio + caixa)],
+                           outline=CINZA_TXT, width=2)
+        _recebimento(draw, y + linhas * altura, parte)
         _rodape(img, draw)
-        img, draw, y = _nova_pagina(continuacao=True)
-        paginas.append(img)
-    y += 40
-    fonte_rotulo = _fonte(20)
-    x_dir = A4_RETRATO[0] - MARGEM
-    draw.text((MARGEM, y), "RECEBIMENTO PELA TRANSPORTADORA", font=_fonte(22, True),
-              fill=NAVY, anchor="ls")
-    draw.text((x_dir, y), f"Total: {len(entregas)} pedido(s) · {total_volumes} volume(s)",
-              font=_fonte(20, True), fill=NAVY, anchor="rs")
-    draw.line([(MARGEM, y + 12), (x_dir, y + 12)], fill=TEAL, width=3)
-    y += 70
-    draw.text((MARGEM, y), "Recebido por (nome legível):", font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
-    draw.line([(MARGEM + 270, y + 4), (MARGEM + 620, y + 4)], fill=CINZA_LINHA, width=2)
-    draw.text((MARGEM + 650, y), "Documento:", font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
-    draw.line([(MARGEM + 760, y + 4), (x_dir, y + 4)], fill=CINZA_LINHA, width=2)
-    y += 70
-    draw.text((MARGEM, y), "Data:  ____ / ____ / ________      Hora:  ____ : ____",
-              font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
-    draw.text((MARGEM + 650, y), "Assinatura e carimbo:", font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
-    draw.rectangle([(MARGEM + 650, y + 20), (x_dir, y + 130)], outline=CINZA_LINHA, width=2)
-    y += 70
-    draw.text((MARGEM, y), "Ocorrências (avaria, falta, recusa):", font=fonte_rotulo,
-              fill=CINZA_TXT, anchor="ls")
-    draw.line([(MARGEM, y + 44), (MARGEM + 600, y + 44)], fill=CINZA_LINHA, width=2)
-    draw.line([(MARGEM, y + 84), (MARGEM + 600, y + 84)], fill=CINZA_LINHA, width=2)
+        return img
 
-    _rodape(img, draw)
-    return paginas
+    # Altura útil pra lista = da 1ª linha até onde o bloco de recebimento ainda cabe.
+    img, draw = _pagina_branca()
+    y_lista = _topo(draw, _cabecalho(img, draw, "", nome_rota), entregas, False) + 48
+    altura_util = limite_y - _CT_ALTURA_RECEBIMENTO - y_lista
+    max_1col = altura_util // _CT_ALTURA_MIN_1COL
+    por_folha = 2 * (altura_util // _CT_ALTURA_MIN_2COL)
+    return [_folha(entregas[i:i + por_folha], i > 0, max_1col, altura_util)
+            for i in range(0, len(entregas), por_folha)]
 
 
 def _paginas_pillow(imagens: list[Image.Image], buffers_vivos: list) -> list:

@@ -1275,18 +1275,46 @@ def _anotar(codigo: str, ok: bool, mensagem: str):
         _RESULTADOS[base] = {"ok": ok, "mensagem": mensagem}
 
 
-def _retiradas_pela_transportadora(config: dict, codigos: set[str]) -> tuple[dict, dict]:
+def _decidir_retirada(conn, codigo: str, nome: str, catalogo, coleta: int | None) -> tuple[bool, str]:
+    """Pedido sem entrega na VUUPT pode expedir? (sim/nao, motivo da recusa).
+    So retirada/coleta no galpao ("CLIENTE RETIRA" ou tipo RETIRADA no
+    cadastro). Desde a aba Coletas da Expedicao (Hugo, 12/11): retirada so
+    sai por coleta confirmada com foto (--coleta N); sem coleta, so o
+    acumulado que ja estava na Stokki na 1a leitura da aba (carga_inicial).
+    Enquanto a aba nunca leu a Stokki (antes do deploy), vale a regra antiga."""
+    from coletas import regras as coletas_regras
+    from coletas.ler_stokki import eh_retirada, ultima_leitura
+    if not eh_retirada(nome, catalogo):
+        return False, (f"não está entregue na Vuupt e a transportadora na Stokki "
+                       f"({nome or 'não informada'}) não é de retirada/coleta no galpão")
+    base = f"PS-{_extrair_id(codigo)}"
+    if coleta:
+        if coletas_regras.tem_foto(conn, coleta, [base]):
+            return True, ""
+        return False, "coleta sem foto confirmada para este pedido"
+    if not ultima_leitura(conn):
+        return True, ""
+    fila = conn.execute("SELECT carga_inicial FROM expedicao_coletas_fila WHERE codigo = ?", (base,)).fetchone()
+    if fila is None:
+        return False, "retirada ainda não lida pela aba Coletas da Expedição: tente por lá em 10 minutos"
+    if not fila["carga_inicial"]:
+        return False, "retirada sai pela aba Coletas da Expedição (com a folha e a foto)"
+    return True, ""
+
+
+def _retiradas_pela_transportadora(config: dict, codigos: set[str], coleta: int | None = None) -> tuple[dict, dict]:
     """Codigos sem entrega na VUUPT: le a transportadora do pedido na Stokki
-    (conta admin, so leitura). Retirada/coleta no galpao ("CLIENTE RETIRA"
-    ou tipo RETIRADA no cadastro de transportadoras) pode expedir sem
-    entrega -- desde 06/11 esse pedido nem sobe pra VUUPT. Devolve
-    ({codigo: transportadora} das retiradas, {codigo: motivo} dos outros)."""
+    (conta admin, so leitura) e pergunta a _decidir_retirada. Desde 06/11
+    retirada nem sobe pra VUUPT. Devolve ({codigo: transportadora} das
+    retiradas que podem sair, {codigo: motivo} dos outros)."""
     try:
         from stokki.auth import StokkiSession
         from stokki import pedidos as stokki_pedidos
         from regras.transportadoras import CatalogoTransportadoras
+        from coletas import banco as coletas_banco
         sessao = StokkiSession(config)
         catalogo = CatalogoTransportadoras.carregar_do_banco(_RAIZ / "dados" / "dados.db")
+        conn_coletas = coletas_banco.conectar(_RAIZ / "dados" / "dados.db")
     except Exception as e:
         logger.warning(f"Leitura da transportadora na Stokki indisponivel ({e}).")
         return {}, {c: "não está entregue na Vuupt e não consegui ler a transportadora na Stokki" for c in codigos}
@@ -1295,16 +1323,16 @@ def _retiradas_pela_transportadora(config: dict, codigos: set[str]) -> tuple[dic
         try:
             detalhe = stokki_pedidos.obter_detalhe(sessao, int(_extrair_id(codigo)))
             nome = ((detalhe.get("transportadora") or {}).get("nome") or "").strip()
-            eh_retirada = "CLIENTE RETIRA" in nome.upper() or (bool(nome) and catalogo.resolver(nome).tipo == "RETIRADA")
+            pode, motivo = _decidir_retirada(conn_coletas, codigo, nome, catalogo, coleta)
         except Exception as e:
             logger.warning(f"  {codigo}: leitura da transportadora na Stokki falhou ({e}).")
             recusas[codigo] = "não está entregue na Vuupt e não consegui ler a transportadora na Stokki"
             continue
-        if eh_retirada:
+        if pode:
             retiradas[codigo] = nome
         else:
-            recusas[codigo] = (f"não está entregue na Vuupt e a transportadora na Stokki "
-                               f"({nome or 'não informada'}) não é de retirada/coleta no galpão")
+            recusas[codigo] = motivo
+    conn_coletas.close()
     return retiradas, recusas
 
 
@@ -1341,7 +1369,7 @@ def _soltar_da_oe_e_expedir(page, codigo_ps: str) -> tuple[str, str]:
 
 def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
          forcar: list = None, horas_entregues: int = HORAS_ENTREGUES,
-         pedidos: list = None, tela_pedidos: bool = False):
+         pedidos: list = None, tela_pedidos: bool = False, coleta: int | None = None):
     prefixo = "[MODO TESTE] " if modo_teste else ""
     logger.info(f"{prefixo}Expedicao iniciada (janela entregues: {horas_entregues}h | insucessos: {horas}h)")
 
@@ -1407,7 +1435,7 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
         if faltando and tela_pedidos:
             # Retirada/coleta no galpao sem servico na VUUPT (Hugo, 12/11): quem
             # diz e a transportadora do pedido na Stokki.
-            pela_transportadora, recusas = _retiradas_pela_transportadora(config, faltando)
+            pela_transportadora, recusas = _retiradas_pela_transportadora(config, faltando, coleta)
             for codigo, nome in pela_transportadora.items():
                 logger.info(f"  {codigo}: retirada/coleta no galpao pela transportadora ({nome}) -- expede sem entrega na VUUPT.")
                 validados.append({"code": codigo, "id": None, "_retirada": True, "_sem_vuupt": True,
@@ -1813,13 +1841,16 @@ if __name__ == "__main__":
                         help="com --pedido (botao 'Expedir na Stokki' da tela /pedidos): solta o pedido "
                              "da Expedicao Programada (OE) que trava a expedicao e aceita retirada/coleta "
                              "no galpao pela transportadora da Stokki, sem entrega na VUUPT")
+    parser.add_argument("--coleta", type=int, metavar="N",
+                        help="com --pedido --tela-pedidos: os pedidos vem da coleta COL-N da tela "
+                             "/expedicao/coletas, confirmada com foto (retirada nova so expede assim)")
     parser.add_argument("--resultado-json", metavar="ARQUIVO",
                         help="grava o resultado por pedido ({PS-N: {ok, mensagem}}) neste arquivo")
     args = parser.parse_args()
     try:
         main(horas=args.horas, modo_teste=args.modo_teste, limite=args.limite,
              forcar=args.forcar, horas_entregues=args.horas_entregues, pedidos=args.pedido,
-             tela_pedidos=args.tela_pedidos)
+             tela_pedidos=args.tela_pedidos, coleta=args.coleta)
     finally:
         if args.resultado_json:
             import json
