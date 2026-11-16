@@ -456,11 +456,11 @@ def expandir_upload(nome: str, conteudo: bytes) -> list[tuple[str, bytes]]:
 # (chave, rótulo no modelo, obrigatória, apelidos aceitos no cabeçalho, largura, exemplo)
 COLUNAS_PLANILHA: list[tuple[str, str, bool, tuple[str, ...], int, str]] = [
     ("referencia", "Pedido (nº ou referência)", True,
-     ("pedido", "n pedido", "numero do pedido", "num pedido", "referencia", "po", "ordem", "order", "codigo do pedido"), 22, "PED-1001"),
+     ("pedido", "n pedido", "numero do pedido", "num pedido", "referencia", "po", "numero da po", "ordem", "order", "codigo do pedido"), 22, "PED-1001"),
     ("numero_nf", "Nº da NF (opcional)", False,
      ("nf", "n nf", "numero nf", "numero da nf", "nota", "nota fiscal", "n da nf", "nfe", "nf e"), 16, "45120"),
     ("destinatario_doc", "CNPJ/CPF do destinatário", True,
-     ("cnpj", "cpf", "cnpj cpf", "cnpj/cpf", "documento", "cnpj/cpf do destinatario", "cnpj destinatario", "cpf cnpj", "doc"), 22, "12.345.678/0001-90"),
+     ("cnpj", "cpf", "cnpj cpf", "cnpj/cpf", "cpf/cnpj", "documento", "cnpj/cpf do destinatario", "cnpj destinatario", "cpf cnpj", "doc"), 22, "12.345.678/0001-90"),
     ("destinatario_nome", "Nome do destinatário", True,
      ("destinatario", "nome", "cliente", "razao social", "nome do destinatario", "nome fantasia", "loja"), 30, "Mercado Bom Preço Ltda"),
     ("cep", "CEP", True, ("cep",), 12, "01310-100"),
@@ -625,13 +625,34 @@ def _colunas_pelos_nomes(linha: list, guardado: dict | None) -> dict[str, int]:
         achadas = [j for j, n in enumerate(nomes) if n == alvo["nome"]]
         if achadas:
             col_de[chave] = alvo["pos"] if alvo.get("pos") in achadas else achadas[0]
-    fechados = set(guardado or {})
+    fechados = {k for k, v in (guardado or {}).items() if v is None}
     usadas = set(col_de.values())
     for j, n in enumerate(nomes):
         chave = _APELIDOS_NORMALIZADOS.get(n)
         if chave and j not in usadas and chave not in col_de and chave not in fechados:
             col_de[chave] = j
     return col_de
+
+
+# Planilha com um pedido por linha e os itens em pares de colunas numeradas
+# (Sku1 | Quantidade1 | Sku2 | Quantidade2 ...), como a que a Marchef usa (16/11).
+_CAMPOS_ITEM = ("sku", "quantidade", "valor_unitario")
+_RE_PAR_SKU = re.compile(r"^(?:sku|produto|codigo|cod|item) ?(\d+)$")
+_RE_PAR_QTD = re.compile(r"^(?:quantidade|qtd|qtde|quant) ?(\d+)$")
+
+
+def _pares_de_itens(cabecalho: list) -> list[tuple[int, int]]:
+    """[(coluna do SKU, coluna da quantidade)] dos pares numerados do cabeçalho,
+    na ordem do número; vazio quando a planilha é de uma linha por item."""
+    skus: dict[int, int] = {}
+    qtds: dict[int, int] = {}
+    for j, v in enumerate(cabecalho):
+        n = _normalizar_texto(v)
+        for padrao, destino in ((_RE_PAR_SKU, skus), (_RE_PAR_QTD, qtds)):
+            m = padrao.match(n)
+            if m:
+                destino.setdefault(int(m.group(1)), j)
+    return [(skus[k], qtds[k]) for k in sorted(skus) if k in qtds]
 
 
 def _achar_cabecalho(linhas: list[list], guardado: dict | None = None) -> tuple[int, dict[str, int]]:
@@ -668,18 +689,20 @@ def _campos_planilha(com_empresa: bool) -> list[tuple]:
     return ([COLUNA_EMPRESA] if com_empresa else []) + COLUNAS_PLANILHA
 
 
-def _pedido_de_indicacao(nome: str, linhas: list[list], i_cab: int, col_de: dict[str, int], com_empresa: bool,
-                         faltando: list[str]) -> ColunasPorIndicar:
+def _pedido_de_indicacao(nome: str, linhas: list[list], i_cab: int, col_de: dict[str, int], campos: list[tuple],
+                         faltando: list[str], pares: list[tuple[int, int]]) -> ColunasPorIndicar:
     cab = linhas[i_cab]
+    dos_pares = {j for par in pares for j in par}   # as colunas dos itens não entram na escolha
     amostra = [l for l in linhas[i_cab + 1:] if any(_celula_texto(v) for v in l)][:3]
     colunas = [{"indice": j, "nome": _celula_texto(v)[:60],
                 "exemplos": [_celula_texto(l[j])[:40] for l in amostra if j < len(l) and _celula_texto(l[j])]}
-               for j, v in enumerate(cab) if _celula_texto(v)]
+               for j, v in enumerate(cab) if _celula_texto(v) and j not in dos_pares]
     return ColunasPorIndicar(
         f"{nome}: indique qual coluna da sua planilha é cada informação"
         + (f" (faltam: {', '.join(faltando)})." if faltando else "."),
         {"arquivo": nome, "linha": i_cab, "colunas": colunas, "sugestao": dict(col_de), "faltando": faltando,
-         "campos": [{"chave": c[0], "rotulo": c[1], "obrigatoria": bool(c[2])} for c in _campos_planilha(com_empresa)]})
+         "pares": len(pares),
+         "campos": [{"chave": c[0], "rotulo": c[1], "obrigatoria": bool(c[2])} for c in campos]})
 
 
 def carregar_mapa_planilha(conn: sqlite3.Connection, cnpj_login: str) -> dict | None:
@@ -716,11 +739,14 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
     {chave: índice}} é o que ele acabou de escolher na tela e vale sozinho;
     lido sem faltar coluna, sai em `mapa_usado` (dict de quem chama) pra guardar.
     Faltando coluna obrigatória (ou com `pedir_indicacao`), levanta
-    ColunasPorIndicar no lugar de recusar a planilha."""
+    ColunasPorIndicar no lugar de recusar a planilha.
+    Cabeçalho com pares numerados (Sku1 | Quantidade1 | Sku2 ...): cada linha é
+    um pedido e os itens saem dos pares preenchidos; as colunas de SKU e
+    quantidade do modelo deixam de valer."""
     linhas = _abrir_planilha(conteudo, nome)
     if not linhas:
         raise ErroEnvio(f"{nome}: a planilha está vazia.")
-    campos_validos = _campos_planilha(empresas is not None)
+    escolhas = None
     if indicado is not None:
         try:
             i_cab = int(indicado["linha"])
@@ -729,17 +755,21 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
             raise ErroEnvio(f"{nome}: colunas indicadas inválidas -- envie a planilha de novo.")
         if not 0 <= i_cab < min(len(linhas), 15):
             raise ErroEnvio(f"{nome}: colunas indicadas inválidas -- envie a planilha de novo.")
-        chaves = {c[0] for c in campos_validos}
-        mapa = {}
-        for chave, j in escolhas.items():   # uma coluna pode servir a dois campos; o inverso não
-            if chave in chaves and 0 <= j < len(linhas[i_cab]):
-                mapa.setdefault(chave, j)
-        col_de = mapa
     else:
         i_cab, col_de = _achar_cabecalho(linhas, guardado)
+    pares = _pares_de_itens(linhas[i_cab])
+    campos_validos = [c for c in _campos_planilha(empresas is not None) if not (pares and c[0] in _CAMPOS_ITEM)]
+    chaves = {c[0] for c in campos_validos}
+    if escolhas is not None:
+        col_de = {}
+        for chave, j in escolhas.items():   # uma coluna pode servir a dois campos; o inverso não
+            if chave in chaves and 0 <= j < len(linhas[i_cab]):
+                col_de.setdefault(chave, j)
+    else:
+        col_de = {k: j for k, j in col_de.items() if k in chaves}
     faltando = [c[1] for c in campos_validos if c[2] and c[0] not in col_de]
     if faltando or (pedir_indicacao and indicado is None):
-        raise _pedido_de_indicacao(nome, linhas, i_cab, col_de, empresas is not None, faltando)
+        raise _pedido_de_indicacao(nome, linhas, i_cab, col_de, campos_validos, faltando, pares)
     if indicado is not None and mapa_usado is not None:
         cab = linhas[i_cab]
         mapa_usado.update({c[0]: ({"nome": _normalizar_texto(cab[col_de[c[0]]]), "pos": col_de[c[0]]} if c[0] in col_de else None)
@@ -752,7 +782,12 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
     total_linhas = 0
     for n, linha in enumerate(linhas[i_cab + 1:], start=i_cab + 2):
         campos = {chave: (linha[j] if j < len(linha) else None) for chave, j in col_de.items()}
-        if not any(_celula_texto(v) for v in campos.values()):
+        if pares:
+            brutos = [(linha[js] if js < len(linha) else None, linha[jq] if jq < len(linha) else None, None) for js, jq in pares]
+            brutos = [b for b in brutos if _celula_texto(b[0]) or _celula_texto(b[1])]
+        else:
+            brutos = [(campos.get("sku"), campos.get("quantidade"), campos.get("valor_unitario"))]
+        if not any(_celula_texto(v) for v in campos.values()) and not (pares and brutos):
             continue
         total_linhas += 1
         if total_linhas > MAX_LINHAS_PLANILHA:
@@ -762,29 +797,32 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
             rejeitados.append({"arquivo": nome, "rotulo": f"linha {n}", "linha": n, "erro": "Sem o número/referência do pedido."})
             continue
         chave_grupo = ref.strip().upper()
-        sku = _celula_texto(campos.get("sku"))
-        try:
-            qtd = _numero_br(campos.get("quantidade"))
-        except ValueError:
-            qtd = None
-            erros_grupo.setdefault(chave_grupo, []).append(f"linha {n}: quantidade inválida ({_celula_texto(campos.get('quantidade'))}).")
-        try:
-            vu = _numero_br(campos.get("valor_unitario"))
-        except ValueError:
-            vu = None
-            erros_grupo.setdefault(chave_grupo, []).append(f"linha {n}: valor unitário inválido ({_celula_texto(campos.get('valor_unitario'))}).")
-        if not sku:
-            erros_grupo.setdefault(chave_grupo, []).append(f"linha {n}: sem SKU.")
-        elif qtd is None or qtd <= 0:
-            erros_grupo.setdefault(chave_grupo, []).append(f"linha {n}: quantidade precisa ser maior que zero.")
-        item = {"sku": sku, "quantidade": qtd or 0, "valor_unitario": vu, "linha": n}
+        itens_linha = []
+        for bruto_sku, bruto_qtd, bruto_vu in brutos:
+            sku = _celula_texto(bruto_sku)
+            de = f"linha {n}" + (f" ({sku})" if pares and sku else "")
+            try:
+                qtd = _numero_br(bruto_qtd)
+            except ValueError:
+                qtd = None
+                erros_grupo.setdefault(chave_grupo, []).append(f"{de}: quantidade inválida ({_celula_texto(bruto_qtd)}).")
+            try:
+                vu = _numero_br(bruto_vu)
+            except ValueError:
+                vu = None
+                erros_grupo.setdefault(chave_grupo, []).append(f"{de}: valor unitário inválido ({_celula_texto(bruto_vu)}).")
+            if not sku:
+                erros_grupo.setdefault(chave_grupo, []).append(f"{de}: sem SKU.")
+            elif qtd is None or qtd <= 0:
+                erros_grupo.setdefault(chave_grupo, []).append(f"{de}: quantidade precisa ser maior que zero.")
+            itens_linha.append({"sku": sku, "quantidade": qtd or 0, "valor_unitario": vu, "linha": n})
 
         g = grupos.get(chave_grupo)
         if g is None:
             doc = _so_digitos(campos.get("destinatario_doc"))
             cep = _so_digitos(campos.get("cep"))
             uf = _celula_texto(campos.get("uf")).upper()[:2]
-            logradouro = _celula_texto(campos.get("logradouro"))
+            logradouro = _celula_texto(campos.get("logradouro")).rstrip(" ,")
             numero = _celula_texto(campos.get("numero"))
             compl = _celula_texto(campos.get("complemento"))
             endereco = ", ".join(p for p in (logradouro, numero) if p)
@@ -870,7 +908,7 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
                 if emb_linha and emb_linha.zfill(14) != g["emitente_cnpj"]:
                     erros_grupo.setdefault(chave_grupo, []).append(
                         f"linha {n}: empresa diferente da primeira linha do pedido {ref} -- use outra referência.")
-        g["itens_lista"].append(item)
+        g["itens_lista"].extend(itens_linha)
         g["linhas"].append(n)
 
     pedidos = []

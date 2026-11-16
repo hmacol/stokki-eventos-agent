@@ -426,6 +426,7 @@
       `<option value="${c.indice}"${sel === c.indice ? ' selected' : ''}>${esc(c.nome)}${c.exemplos.length ? ' · ex.: ' + esc(c.exemplos[0]) : ''}</option>`).join('');
     modal(`<h3>Colunas da planilha</h3>
       <p><b>${esc(d.arquivo)}</b>: diga qual coluna da sua planilha é cada informação. Os campos com * são obrigatórios. Sua escolha fica guardada pras próximas planilhas.</p>
+      ${d.pares ? `<p>Os produtos já foram reconhecidos: ${d.pares} par${d.pares > 1 ? 'es' : ''} de colunas de SKU e quantidade, um pedido por linha.</p>` : ''}
       <div class="map-cols">${d.campos.map(c => `<label data-obrig="${c.obrigatoria ? 1 : ''}">${esc(c.rotulo)}${c.obrigatoria ? ' *' : ''}<select data-campo="${esc(c.chave)}">${opcoes(d.sugestao[c.chave])}</select></label>`).join('')}</div>
       <div class="msg" id="m-msg"></div>
       <div class="pe"><button type="button" class="botao-linha" data-fechar>Voltar</button><button type="button" class="botao" id="m-ok">Ler a planilha</button></div>`, true);

@@ -498,3 +498,65 @@ def test_mapa_de_colunas_e_guardado_por_login(ambiente):
     ep.guardar_mapa_planilha(ambiente, "12.345.678/0001-95", {"referencia": {"nome": "doc", "pos": 0}}, "cliente")
     assert ep.carregar_mapa_planilha(ambiente, CNPJ) == {"referencia": {"nome": "doc", "pos": 0}}
     assert ep.carregar_mapa_planilha(ambiente, EMP_A) is None
+
+
+# ── Um pedido por linha, itens em pares Sku N / Quantidade N (planilha da Marchef, 16/11) ──
+
+CAB_PARES = ["Número da PO", "Nome do Destino/Nome da Empresa", "Telefone", "E-mail", "CPF/CNPJ", "Sobrenome/Razão Social",
+             "cep", "Rua", "Número", "Complemento", "Bairro", "Cidade", "Estado", "País", "Armazém de Origem", "Tipo de Conta"]
+
+
+def _planilha_pares(linhas: list[list], n_pares: int = 100, extra: list[str] | None = None) -> bytes:
+    """`linhas` = [valores das colunas fixas (+ extras), [(sku, qtd), ...]]."""
+    wb = openpyxl.Workbook()
+    cab = CAB_PARES + (extra or [])
+    wb.active.append(cab + [t for k in range(1, n_pares + 1) for t in (f"Sku{k}", f"Quantidade{k}")])
+    for fixos, itens in linhas:
+        wb.active.append(list(fixos) + [None] * (len(cab) - len(fixos)) + [v for par in itens for v in par])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _fixos(po, extra=()):
+    return [po, "PADARIA TESTE", "(11) 99999-0000", "compras@teste.com.br", "98.765.432/0001-10", "PADARIA TESTE LTDA",
+            "02221-001", "AVENIDA TESTE, ", 1298, None, "JARDIM TESTE", "SÃO PAULO", "SP", "Brasil", "#stkkw-1",
+            "Pessoa Jurídica", *extra]
+
+
+def test_pares_de_sku_e_quantidade_um_pedido_por_linha():
+    conteudo = _planilha_pares([(_fixos(7878), [("D21TCI30510D", 2), ("ABC", "1,5"), (None, None), ("XYZ", 3)]),
+                                (_fixos(7879), [("ABC", 4)])])
+    # só falta dizer qual dos dois nomes é o do destinatário; SKU e quantidade nem aparecem na janela
+    with pytest.raises(ep.ColunasPorIndicar) as e:
+        ep.ler_planilha(conteudo, "m.xlsx", CNPJ)
+    d = e.value.dados
+    assert d["faltando"] == ["Nome do destinatário"] and d["pares"] == 100
+    assert [c["nome"] for c in d["colunas"]] == CAB_PARES
+    assert not {"sku", "quantidade", "valor_unitario"} & {c["chave"] for c in d["campos"]}
+    mapa: dict = {}
+    pedidos, rej = ep.ler_planilha(conteudo, "m.xlsx", CNPJ, mapa_usado=mapa,
+                                   indicado={"linha": 0, "colunas": {**d["sugestao"], "destinatario_nome": 5}})
+    assert rej == [] and [p["referencia"] for p in pedidos] == ["7878", "7879"]
+    assert [(i["sku"], i["quantidade"]) for i in pedidos[0]["itens_lista"]] == [("D21TCI30510D", 2), ("ABC", 1.5), ("XYZ", 3)]
+    assert pedidos[0]["itens"] == 3 and pedidos[1]["itens"] == 1
+    assert (pedidos[0]["destinatario_nome"], pedidos[0]["destinatario_doc"], pedidos[0]["destinatario_numero"]) == \
+        ("PADARIA TESTE LTDA", "98765432000110", "1298")
+    # a escolha guardada não fecha SKU/quantidade: a planilha do modelo (uma linha por item) continua entrando
+    assert "sku" not in mapa and "quantidade" not in mapa
+    assert len(ep.ler_planilha(conteudo, "m.xlsx", CNPJ, guardado=mapa)[0]) == 2
+    assert len(ep.ler_planilha(_planilha([_linha()]), "p.xlsx", CNPJ, guardado=mapa)[0]) == 1
+
+
+def test_pares_com_problema_recusam_so_o_pedido_e_grupo_usa_a_coluna_da_empresa():
+    conteudo = _planilha_pares([(_fixos("A1", [EMP_A]), [("ABC", 2)]),
+                                (_fixos("A2", [EMP_B]), [("ABC", None), (None, 5), ("XYZ", "dois")]),
+                                (_fixos("A3", [EMP_A]), [])], n_pares=3, extra=["CNPJ da empresa"])
+    col = {"referencia": 0, "destinatario_nome": 1, "destinatario_doc": 4, "cep": 6, "logradouro": 7, "numero": 8, "bairro": 10,
+           "cidade": 11, "uf": 12, "empresa_cnpj": 16}
+    pedidos, rej = ep.ler_planilha(conteudo, "m.xlsx", EMP_A, EMPRESAS, indicado={"linha": 0, "colunas": col})
+    assert [(p["referencia"], p["emitente_cnpj"]) for p in pedidos] == [("A1", EMP_A)]
+    erros = {r["rotulo"]: r["erro"] for r in rej}
+    assert "linha 3 (ABC): quantidade precisa ser maior que zero." in erros["Pedido A2"]
+    assert "linha 3: sem SKU." in erros["Pedido A2"] and "linha 3 (XYZ): quantidade inválida (dois)." in erros["Pedido A2"]
+    assert "Nenhum item válido" in erros["Pedido A3"]

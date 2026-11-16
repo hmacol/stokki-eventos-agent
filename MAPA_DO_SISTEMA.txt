@@ -1363,6 +1363,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            tela abre a janela pra dizer qual coluna é cada campo
                            (ColunasPorIndicar); a escolha fica por login em
                            portal_mapa_planilha e vale pras próximas planilhas.
+                           Cabeçalho com pares numerados (Sku1 | Quantidade1 | Sku2 ...,
+                           planilha da Marchef): um pedido por linha, itens saem dos
+                           pares preenchidos (_pares_de_itens), sem precisar indicar.
  anexos_pedido.py          PDFs anexados ao pedido (prévia e lista): lê, sugere o
                            pedido, grava e registra pro romaneio quando sai o PS.
  endereco_entrega.py       Endereço de entrega escolhido na prévia: CEP com IBGE, última
