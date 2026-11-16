@@ -560,3 +560,13 @@ def test_pares_com_problema_recusam_so_o_pedido_e_grupo_usa_a_coluna_da_empresa(
     assert "linha 3 (ABC): quantidade precisa ser maior que zero." in erros["Pedido A2"]
     assert "linha 3: sem SKU." in erros["Pedido A2"] and "linha 3 (XYZ): quantidade inválida (dois)." in erros["Pedido A2"]
     assert "Nenhum item válido" in erros["Pedido A3"]
+
+
+def test_pares_tem_teto_de_itens_e_numero_absurdo_no_cabecalho_nao_derruba(monkeypatch):
+    monkeypatch.setattr(ep, "MAX_ITENS_PLANILHA", 3)
+    col = {"referencia": 0, "destinatario_nome": 1, "destinatario_doc": 4, "cep": 6, "logradouro": 7, "numero": 8, "bairro": 10,
+           "cidade": 11, "uf": 12}
+    conteudo = _planilha_pares([(_fixos("A1"), [("A", 1), ("B", 1)]), (_fixos("A2"), [("A", 1), ("B", 1)])], n_pares=2)
+    with pytest.raises(ep.ErroEnvio, match="mais de 3 itens"):
+        ep.ler_planilha(conteudo, "m.xlsx", CNPJ, indicado={"linha": 0, "colunas": col})
+    assert ep._pares_de_itens(["Sku" + "9" * 5000, "Quantidade" + "9" * 5000, "Sku1", "Qtd 1"]) == [(2, 3)]

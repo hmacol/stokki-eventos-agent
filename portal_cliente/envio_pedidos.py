@@ -492,6 +492,7 @@ COLUNA_EMPRESA: tuple[str, str, bool, tuple[str, ...], int, str] = (
     ("cnpj da empresa", "cnpj empresa", "empresa", "cnpj do embarcador", "cnpj embarcador", "embarcador",
      "cnpj do remetente", "cnpj remetente", "remetente"), 26, "")
 MAX_LINHAS_PLANILHA = 2000
+MAX_ITENS_PLANILHA = 10000   # planilha de pares (um pedido por linha) multiplica itens por linha
 UFS = {"AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ",
        "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"}
 NOMES_UF = {"AC": "Acre", "AL": "Alagoas", "AP": "Amapá", "AM": "Amazonas", "BA": "Bahia", "CE": "Ceará", "DF": "Distrito Federal",
@@ -637,8 +638,8 @@ def _colunas_pelos_nomes(linha: list, guardado: dict | None) -> dict[str, int]:
 # Planilha com um pedido por linha e os itens em pares de colunas numeradas
 # (Sku1 | Quantidade1 | Sku2 | Quantidade2 ...), como a que a Marchef usa (16/11).
 _CAMPOS_ITEM = ("sku", "quantidade", "valor_unitario")
-_RE_PAR_SKU = re.compile(r"^(?:sku|produto|codigo|cod|item) ?(\d+)$")
-_RE_PAR_QTD = re.compile(r"^(?:quantidade|qtd|qtde|quant) ?(\d+)$")
+_RE_PAR_SKU = re.compile(r"^(?:sku|produto|codigo|cod|item) ?(\d{1,3})$")
+_RE_PAR_QTD = re.compile(r"^(?:quantidade|qtd|qtde|quant) ?(\d{1,3})$")
 
 
 def _pares_de_itens(cabecalho: list) -> list[tuple[int, int]]:
@@ -779,7 +780,7 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
     grupos: dict[str, dict] = {}
     rejeitados: list[dict] = []
     erros_grupo: dict[str, list[str]] = {}
-    total_linhas = 0
+    total_linhas = total_itens = 0
     for n, linha in enumerate(linhas[i_cab + 1:], start=i_cab + 2):
         campos = {chave: (linha[j] if j < len(linha) else None) for chave, j in col_de.items()}
         if pares:
@@ -797,6 +798,9 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
             rejeitados.append({"arquivo": nome, "rotulo": f"linha {n}", "linha": n, "erro": "Sem o número/referência do pedido."})
             continue
         chave_grupo = ref.strip().upper()
+        total_itens += len(brutos)
+        if total_itens > MAX_ITENS_PLANILHA:
+            raise ErroEnvio(f"{nome}: a planilha tem mais de {MAX_ITENS_PLANILHA} itens -- divida em arquivos menores.")
         itens_linha = []
         for bruto_sku, bruto_qtd, bruto_vu in brutos:
             sku = _celula_texto(bruto_sku)
