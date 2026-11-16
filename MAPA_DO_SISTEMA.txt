@@ -444,6 +444,8 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                                              aberto, até 20 tentativas; desligado = nada)
  a cada 15 min               nucleo-sincronizar-servicos     nucleo/sincronizar_servicos_vuupt.py
  xx:15 e xx:45               nucleo-sincronizar-vuupt        nucleo/sincronizar_vuupt.py
+ 30 s após cada rodada       ponte-vuupt                     nucleo/ponte_vuupt.py (repete na Vuupt o que o
+                                                             motorista fez no app próprio; sem fila = sai na hora)
  a cada 15 min               sincronizar-confirmacoes        roteirizacao/sincronizar_respostas_confirmacao.py
  a cada 15 min               sincronizar-lalamove            nucleo/sincronizar_lalamove.py
  a cada minuto               lancar-lalamove                 nucleo/lancar_lalamove_programados.py
@@ -979,6 +981,14 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  Espelhamento e conferência
  sincronizar_vuupt.py      Rotas/paradas da Vuupt -> núcleo (30 min).
  sincronizar_servicos_vuupt.py  Pedidos fora de rota -> núcleo (15 min).
+ ponte_vuupt.py            Núcleo -> Vuupt (12/11): rota da Vuupt operada pelo NOSSO app. O app
+                           grava no núcleo e enfileira em nucleo_ponte_vuupt; a ponte repete lá
+                           (aceitar, deslocamento, chegada, resultado com canhoto no checklist).
+                           Liga em api_motorista.ponte_vuupt (ativo + agentes/todos); desligada
+                           = rota da Vuupt segue só leitura no app. Rota operada pelo app fica
+                           com nucleo_rotas.operada_app=1 e o sync não sobrescreve o que o app
+                           registrou. Fila: python nucleo/ponte_vuupt.py --situacao.
+                           NÃO fecha a rota na Vuupt (só os serviços).
  comparar_pool.py          Sombra: pool Vuupt x núcleo.
  comparar_vuupt.py         Rotas Vuupt x núcleo.
  exportar_historico_vuupt.py  Exporta histórico da Vuupt para o GCS.
