@@ -111,6 +111,7 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  Clientes que exigem agendamento (AGENDA) .. regras/clientes_agendamento.py; fila em
                                              marcar_clientes_agenda.py + tela /clientes-agenda
  Quem usa o portal / importa por lá ........ painel_agentes/adesao_portal.py (tela /adesao-portal)
+ Conta do embarcador no portal (criar, PIN) tela /embarcadores do painel (só total) ou portal_cliente/gerenciar_clientes.py
  Telas liberadas por usuário (personalizado) painel_agentes/acesso_telas.py (tela /acessos)
  Logins nominais (cadastro, nível, nome, equipe) painel_agentes/acesso_telas.py, tabela painel_usuarios (tela /acessos;
                                             equipe = lista fixa EQUIPES, obrigatória desde 25/10, só informativa)
@@ -1235,6 +1236,12 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                               desativa/reativa,
                               telas de cada um / nível personalizado,
                               caixa "Portal do cliente" = entra no /cliente/equipe)
+   /embarcadores              embarcadores_portal.html, rotas no painel_agentes.py (só total:
+                              conta do portal por embarcador de `interno` com sender_id;
+                              cria e reseta com PIN provisório mostrado na tela + e-mail REAL
+                              com o link de definir PIN pros e-mails do cadastro
+                              (gerenciar_clientes.enviar_convite), inativa/reativa e
+                              exclui; só clientes_portal, via portal_cliente/auth_cliente.py)
    /notificacoes              notificacoes.html + notificacoes_tela.py (só total: liga,
                               pilota ou desliga os envios a embarcador/transportadora;
                               geral, tipo, exceção, piloto, histórico, e-mails do

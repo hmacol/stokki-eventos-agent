@@ -177,7 +177,7 @@ def listar_embarcadores(conn: sqlite3.Connection) -> list[dict]:
     (pra CLI de gestão)."""
     rows = conn.execute("""
         SELECT i.cnpj_embarcador AS cnpj, i.sender_id, i.apelido, i.nome_remetente, i.email,
-               c.pin_hash, c.ativo, c.ultimo_login_em
+               c.pin_hash, c.ativo, c.ultimo_login_em, c.trocar_pin
         FROM interno i LEFT JOIN clientes_portal c ON c.cnpj = i.cnpj_embarcador
         WHERE i.sender_id IS NOT NULL
         ORDER BY COALESCE(i.apelido, i.nome_remetente)
@@ -189,6 +189,7 @@ def listar_embarcadores(conn: sqlite3.Connection) -> list[dict]:
         "tem_pin": bool(r["pin_hash"]),
         "ativo": r["ativo"] if r["ativo"] is not None else None,
         "ultimo_login_em": r["ultimo_login_em"],
+        "trocar_pin": bool(r["trocar_pin"]),
     } for r in rows]
 
 
@@ -332,6 +333,16 @@ def trocar_pin_obrigatorio(conn: sqlite3.Connection, cnpj: str, pin_novo: str) -
 def definir_ativo(conn: sqlite3.Connection, cnpj: str, ativo: bool) -> bool:
     cur = conn.execute("UPDATE clientes_portal SET ativo = ?, atualizado_em = ? WHERE cnpj = ?",
                        (int(ativo), _agora(), normalizar_cnpj(cnpj)))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def excluir_conta(conn: sqlite3.Connection, cnpj: str) -> bool:
+    """Apaga a conta do portal (16/11, tela /embarcadores do painel): o login
+    para de existir e a sessao aberta cai no proximo request. O embarcador
+    continua em `interno` e o grupo economico (portal_grupos) fica como esta,
+    entao criar a conta de novo devolve o mesmo acesso."""
+    cur = conn.execute("DELETE FROM clientes_portal WHERE cnpj = ?", (normalizar_cnpj(cnpj),))
     conn.commit()
     return cur.rowcount > 0
 

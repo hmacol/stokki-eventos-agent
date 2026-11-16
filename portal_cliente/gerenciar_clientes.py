@@ -140,6 +140,36 @@ def _link(conn, cfg, cnpj) -> str:
     return f"{url_base}/definir-pin/{auth.gerar_token_definir_pin(secret, conn, cnpj)}"
 
 
+def enviar_convite(conn, cfg, emb: dict, para: str = "", cc: list | None = None) -> tuple[bool, list[str]]:
+    """Manda o e-mail com o link de definir PIN. Sem `para` vai pros e-mails do
+    cadastro (cliente de verdade); com `para` vira "convite pra repassar".
+    Usado pelo CLI (enviar-link) e pela tela /embarcadores do painel (16/11).
+    Devolve (enviou, destinos)."""
+    from email_utils import enviar_email, envelope_html
+    link = _link(conn, cfg, emb["cnpj"])
+    destinos = [para] if para else emb["emails"]
+    # Convite pra repassar (17/09, Hugo: "mandar pra mim os convites"): o
+    # topo diz de quem é e pra quem vai; o resto é o e-mail que o cliente receberia.
+    aviso = (f"<p style='background:#FEF3C7;border:1px solid #FCD34D;border-radius:7px;padding:10px 12px;font-size:13px'>"
+             f"<b>Convite pra repassar.</b> Acesso de <b>{emb['nome']}</b> (CNPJ {auth.formatar_cnpj(emb['cnpj'])}). "
+             f"E-mail do cadastro: {', '.join(emb['emails']) or '(nenhum)'}. "
+             f"O link abaixo vale 24 horas e só funciona uma vez -- quem abrir primeiro define o PIN.</p>") if para else ""
+    corpo = envelope_html(
+        aviso +
+        f"<p>Olá, <strong>{emb['nome']}</strong>.</p>"
+        f"<p>A Fresh Log liberou o acesso ao portal de acompanhamento de entregas "
+        f"(CNPJ {auth.formatar_cnpj(emb['cnpj'])}). Defina seu PIN pelo botão abaixo:</p>"
+        f"<p style='margin:24px 0'><a href='{link}' style='background:#0EA575;color:#fff;padding:12px 22px;"
+        f"border-radius:7px;text-decoration:none;font-weight:700'>Definir meu PIN</a></p>"
+        f"<p style='color:#6B7280;font-size:13px'>O link vale por 24 horas. Depois é só entrar com CNPJ + PIN em "
+        f"{cfg.get('portal_cliente', {}).get('url_base', 'https://app.freshhub.com.br/cliente')}.</p>",
+        rodape="Fresh Log · Portal de acompanhamento de entregas")
+    assunto = (f"[Convite pra repassar] {emb['nome']} · acesso ao portal de entregas" if para
+               else "Fresh Log · Seu acesso ao portal de entregas")
+    ok = enviar_email(destinos, assunto, corpo, cfg.get("email", {}), cc=cc or None)
+    return ok, destinos
+
+
 def _sem_acento(texto: str) -> str:
     return unicodedata.normalize("NFKD", texto or "").encode("ascii", "ignore").decode().lower()
 
@@ -444,28 +474,7 @@ def main(argv=None) -> int:
             if not para and not emb["emails"]:
                 print("Embarcador sem e-mail em `interno`.")
                 return 2
-            from email_utils import enviar_email, envelope_html
-            link = _link(conn, cfg, emb["cnpj"])
-            destinos = [para] if para else emb["emails"]
-            # Convite pra repassar (17/09, Hugo: "mandar pra mim os convites"): o
-            # topo diz de quem é e pra quem vai; o resto é o e-mail que o cliente receberia.
-            aviso = (f"<p style='background:#FEF3C7;border:1px solid #FCD34D;border-radius:7px;padding:10px 12px;font-size:13px'>"
-                     f"<b>Convite pra repassar.</b> Acesso de <b>{emb['nome']}</b> (CNPJ {auth.formatar_cnpj(emb['cnpj'])}). "
-                     f"E-mail do cadastro: {', '.join(emb['emails']) or '(nenhum)'}. "
-                     f"O link abaixo vale 24 horas e só funciona uma vez -- quem abrir primeiro define o PIN.</p>") if para else ""
-            corpo = envelope_html(
-                aviso +
-                f"<p>Olá, <strong>{emb['nome']}</strong>.</p>"
-                f"<p>A Fresh Log liberou o acesso ao portal de acompanhamento de entregas "
-                f"(CNPJ {auth.formatar_cnpj(emb['cnpj'])}). Defina seu PIN pelo botão abaixo:</p>"
-                f"<p style='margin:24px 0'><a href='{link}' style='background:#0EA575;color:#fff;padding:12px 22px;"
-                f"border-radius:7px;text-decoration:none;font-weight:700'>Definir meu PIN</a></p>"
-                f"<p style='color:#6B7280;font-size:13px'>O link vale por 24 horas. Depois é só entrar com CNPJ + PIN em "
-                f"{cfg.get('portal_cliente', {}).get('url_base', 'https://app.freshhub.com.br/cliente')}.</p>",
-                rodape="Fresh Log · Portal de acompanhamento de entregas")
-            assunto = (f"[Convite pra repassar] {emb['nome']} · acesso ao portal de entregas" if para
-                       else "Fresh Log · Seu acesso ao portal de entregas")
-            ok = enviar_email(destinos, assunto, corpo, cfg.get("email", {}), cc=cc or None)
+            ok, destinos = enviar_convite(conn, cfg, emb, para, cc)
             print(("Enviado pra " if ok else "FALHOU ao enviar pra ") + ", ".join(destinos)
                   + (f" (cc: {', '.join(cc)})" if cc else ""))
             return 0 if ok else 1

@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block titulo %}Embarcadores{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  main { max-width: 1100px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  .sub { color: var(--texto-suave); font-size: 13px; margin: 0 0 14px; line-height: 1.5; }
+  .barra { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; }
+  .barra input { font: inherit; font-size: 13px; padding: 7px 10px; border: 1px solid var(--borda); border-radius: 6px;
+                 background: var(--superficie); color: inherit; min-width: 260px; }
+  .barra .conta { font-size: 13px; color: var(--texto-suave); }
+  .pin-novo { background: var(--teste-bg); color: var(--teste-texto); border-radius: 10px; padding: 12px 14px; margin: 0 0 12px; font-size: 14px; }
+  .pin-novo strong.pin { font-size: 20px; letter-spacing: 3px; margin: 0 6px; }
+  .msg-erro { color: var(--erro); font-size: 13px; margin: 0 0 12px; }
+  .tabela-wrap { overflow-x: auto; background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; min-width: 820px; }
+  th, td { text-align: left; padding: 10px 12px; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: middle; }
+  th { color: var(--texto-suave); font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-size: 12px; white-space: nowrap; color: var(--texto-suave); }
+  .nota { font-size: 12px; color: var(--texto-suave); }
+  .pilula { display: inline-block; padding: 2px 8px; border-radius: 100px; font-size: 11px; font-weight: 700;
+            letter-spacing: 0.3px; text-transform: uppercase; white-space: nowrap; background: var(--teste-bg); color: var(--teste-texto); }
+  .pilula.ativa { background: var(--ok-bg, #e6f4ea); color: var(--ok, #1e7e34); }
+  .pilula.inativa { background: var(--erro-bg); color: var(--erro); }
+  .acoes { display: flex; gap: 6px; flex-wrap: wrap; }
+  .acoes button { font: inherit; font-size: 12px; padding: 5px 9px; border: 1px solid var(--borda); border-radius: 6px;
+                  background: var(--superficie); color: inherit; cursor: pointer; }
+  .acoes button:hover { border-color: var(--texto-suave); }
+  .acoes button.perigo { color: var(--erro); }
+  .acoes button:disabled { opacity: 0.5; cursor: default; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<h1>Embarcadores</h1>
+<p class="sub">
+  Conta de cada embarcador no portal do cliente. <strong>Criar conta</strong> e <strong>Resetar PIN</strong> sorteiam um
+  PIN provisório de 6 dígitos, que aparece aqui uma única vez, e <strong>mandam um e-mail de verdade</strong> pros
+  e-mails do cadastro com o link pra ele definir o PIN. Sem e-mail no cadastro, passe o PIN pro cliente: ele escolhe o
+  dele no primeiro acesso.
+  <strong>Inativar</strong> bloqueia o login na hora e guarda a conta. <strong>Excluir</strong> apaga a conta; o embarcador
+  continua na operação e dá pra criar de novo depois.
+</p>
+
+<div class="barra">
+  <input type="search" id="busca" placeholder="Buscar por nome ou CNPJ" autocomplete="off">
+  <span class="conta">{{ linhas|length }} embarcadores, {{ com_conta }} com conta</span>
+</div>
+<div class="pin-novo" id="pin-novo" hidden></div>
+<p class="msg-erro" id="msg-erro" hidden></p>
+
+<div class="tabela-wrap">
+  <table>
+    <thead>
+      <tr><th>Embarcador</th><th>CNPJ</th><th>Conta</th><th>Último acesso</th><th>Ações</th></tr>
+    </thead>
+    <tbody>
+      {% for e in linhas %}
+      <tr data-cnpj="{{ e.cnpj }}" data-nome="{{ e.nome }}" data-emails="{{ e.emails|join(', ') }}" data-busca="{{ (e.nome ~ ' ' ~ e.cnpj ~ ' ' ~ e.cnpj_formatado)|lower }}">
+        <td>{{ e.nome }}{% if e.emails %}<br><span class="nota">{{ e.emails|join(', ') }}</span>{% endif %}</td>
+        <td class="mono">{{ e.cnpj_formatado }}</td>
+        <td>
+          {% if e.estado == 'sem_conta' %}<span class="pilula">sem conta</span>
+          {% else %}<span class="pilula {{ e.estado }}">{{ e.estado }}</span>
+            {% if e.trocar_pin %}<br><span class="nota">PIN provisório</span>{% endif %}
+          {% endif %}
+        </td>
+        <td class="mono">{{ e.ultimo_login_em or '-' }}</td>
+        <td>
+          <div class="acoes">
+            {% if e.estado == 'sem_conta' %}
+            <button type="button" data-acao="criar">Criar conta</button>
+            {% else %}
+            <button type="button" data-acao="resetar">Resetar PIN</button>
+            {% if e.estado == 'ativa' %}<button type="button" data-acao="desativar">Inativar</button>
+            {% else %}<button type="button" data-acao="ativar">Reativar</button>{% endif %}
+            <button type="button" class="perigo" data-acao="excluir">Excluir</button>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script>
+(function () {
+  const email = (m) => m ? `Um e-mail com o link de definir PIN vai agora pra: ${m}.` : "Sem e-mail no cadastro: só o PIN na tela.";
+  const CONFIRMA = {
+    criar: (n, m) => `Criar a conta de ${n} no portal? ${email(m)}`,
+    resetar: (n, m) => `Resetar o PIN de ${n}? O PIN atual para de valer e a sessão aberta cai. ${email(m)}`,
+    desativar: (n) => `Inativar a conta de ${n}? O cliente não entra mais no portal até reativar.`,
+    excluir: (n) => `EXCLUIR a conta de ${n} no portal? O login deixa de existir. O embarcador continua na operação.`,
+  };
+  const CHAVE_PIN = "embarcadores_pin_novo";
+  const caixaPin = document.getElementById("pin-novo");
+  const erro = document.getElementById("msg-erro");
+
+  // O PIN sorteado sobrevive ao reload (que atualiza a tabela) e some depois de mostrado.
+  const guardado = sessionStorage.getItem(CHAVE_PIN);
+  if (guardado) {
+    sessionStorage.removeItem(CHAVE_PIN);
+    const d = JSON.parse(guardado);
+    caixaPin.append("PIN provisório de ", Object.assign(document.createElement("strong"), { textContent: d.nome }), ":");
+    caixaPin.append(Object.assign(document.createElement("strong"), { className: "pin", textContent: d.pin }));
+    caixaPin.append("Anote agora: ele não aparece de novo. " + (d.email && d.email.length
+      ? "E-mail com o link enviado pra " + d.email.join(", ") + "."
+      : "NENHUM e-mail foi enviado (sem e-mail no cadastro ou o envio falhou): passe o PIN pro cliente."));
+    caixaPin.hidden = false;
+  }
+
+  document.getElementById("busca").addEventListener("input", (ev) => {
+    const termo = ev.target.value.trim().toLowerCase();
+    document.querySelectorAll("tbody tr").forEach((tr) => { tr.hidden = !!termo && !tr.dataset.busca.includes(termo); });
+  });
+
+  document.querySelectorAll("tbody button[data-acao]").forEach((botao) => {
+    botao.addEventListener("click", async () => {
+      const tr = botao.closest("tr");
+      const acao = botao.dataset.acao;
+      if (CONFIRMA[acao] && !window.confirm(CONFIRMA[acao](tr.dataset.nome, tr.dataset.emails))) return;
+      botao.disabled = true;
+      erro.hidden = true;
+      try {
+        const resp = await fetch(BASE_PATH + "/api/embarcadores/conta", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cnpj: tr.dataset.cnpj, acao }),
+        });
+        const dados = await resp.json();
+        if (!resp.ok) throw new Error(dados.erro || "Falha ao gravar.");
+        if (dados.pin) sessionStorage.setItem(CHAVE_PIN, JSON.stringify({ nome: dados.nome, pin: dados.pin, email: dados.email_para }));
+        window.location.reload();
+      } catch (e) {
+        erro.textContent = e.message;
+        erro.hidden = false;
+        botao.disabled = false;
+      }
+    });
+  });
+})();
+</script>
+{% endblock %}
