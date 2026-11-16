@@ -73,7 +73,7 @@
   <div class="cliente">
     <span class="rot">{% if equipe %}Cliente · operando como equipe ({{ equipe.usuario }}){% else %}Cliente{% endif %}</span>
     {% if equipe %}
-    <a class="nm" href="{{ url_for('equipe_cliente') }}" title="Trocar de cliente" style="color:#fff;">{{ cliente.nome }} <span style="color:#A3A3C2;font-size:11px;">▾ trocar</span></a>
+    <a class="nm" href="{{ url_for('equipe_cliente', proximo=request.path) }}" title="Trocar de cliente" style="color:#fff;">{{ cliente.nome }} <span style="color:#A3A3C2;font-size:11px;">▾ trocar</span></a>
     {% else %}
     <span class="nm" title="CNPJ {{ cliente.cnpj_formatado }}">{{ cliente.nome }}</span>
     {% endif %}
