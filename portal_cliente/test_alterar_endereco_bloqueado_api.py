@@ -127,6 +127,18 @@ class AlterarEnderecoBloqueadoApiTest(unittest.TestCase):
         self.assertFalse(r.get_json()["liberado"])
         self.assertEqual(self._linha()["status"], "AGUARDANDO_LIBERACAO")
 
+    def test_data_fora_do_dia_de_visita_devolve_409_com_o_aviso(self):
+        aviso = {"data_br": "08/01/2099", "regiao": "Campinas", "dias": "Quartas", "sugestao": "2099-01-07"}
+        with mock.patch.object(self.portal.envios, "_agendamento_no_endereco_novo",
+                               side_effect=self.portal.envios.ForaDiaFixo(aviso)) as ag:
+            r = self._logar(DONO).post("/api/envios/1/acao", json={**CORPO, "agendamento_data": "2099-01-09"}, base_url=HTTPS)
+        self.assertEqual(r.status_code, 409, r.get_data(as_text=True))
+        self.assertEqual(r.get_json()["fora_dia_fixo"], aviso)
+        # a data escolhida na tela chega na conferencia
+        self.assertEqual(ag.call_args[0][2]["agendamento_data"], "2099-01-09")
+        self.assertEqual(self._linha()["status"], "AGUARDANDO_LIBERACAO")
+        self.aviso.assert_not_called()
+
     def test_outro_embarcador_nao_alcanca(self):
         r = self._logar(OUTRO).post("/api/envios/1/acao", json=CORPO, base_url=HTTPS)
         self.assertEqual(r.status_code, 404)

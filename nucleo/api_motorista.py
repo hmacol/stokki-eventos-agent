@@ -44,7 +44,8 @@ from flask import Flask, g, jsonify, render_template, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
-from nucleo import auth_motorista as auth, banco, cadastro_motorista as cadastro, financeiro, operacao, validacao_fotos
+from nucleo import (auth_motorista as auth, banco, cadastro_motorista as cadastro, financeiro, operacao,
+                    ponte_vuupt, validacao_fotos)
 from nucleo.marketplace_remoto import ClienteMarketplace
 from nucleo.auth_motorista import AutenticacaoInvalida
 from nucleo.operacao import OperacaoInvalida
@@ -96,6 +97,12 @@ def criar_app(config: dict | None = None) -> Flask:
     # Validação automática de nitidez/NF das fotos (Hugo, 12/09):
     # DESLIGADA por padrão -- liga em api_motorista.validacao_fotos.ativo.
     app.config["VALIDACAO_FOTOS"] = validacao_fotos.config_validacao(config)
+    # Ponte núcleo -> Vuupt (12/11): rota da Vuupt operável pelo nosso app,
+    # DESLIGADA por padrão -- liga em api_motorista.ponte_vuupt (ver o módulo).
+    ponte_vuupt.definir_config(config)
+    _ponte = ponte_vuupt.config_ponte(config)
+    if _ponte["ativo"]:
+        logger.info("Ponte Vuupt LIGADA (todos=%s, agentes=%s).", _ponte["todos"], sorted(_ponte["agentes"]))
     if app.config["VALIDACAO_FOTOS"]["ativo"]:
         logger.info("Validação automática de fotos LIGADA (modelo %s, nitidez mínima %s).",
                     app.config["VALIDACAO_FOTOS"]["modelo"], app.config["VALIDACAO_FOTOS"]["nitidez_minima"])

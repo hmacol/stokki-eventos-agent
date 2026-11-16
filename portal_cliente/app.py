@@ -54,6 +54,7 @@ import dados_cliente as dados
 import envio_pedidos as envios
 import anexos_pedido
 import cotacao
+import entrada_equipe
 import endereco_entrega
 import alterar_entrega
 import cancelamento
@@ -322,10 +323,76 @@ def equipe_login():
                     session["equipe"] = equipe
                     session.permanent = True
                     logger.info(f"equipe login usuario={usuario} nivel={nivel}")
-                    return redirect(url_for("equipe_cliente"))
+                    return redirect(url_for("equipe_cliente", proximo=request.args.get("proximo") or None))
         finally:
             conn.close()
-    return render_template("equipe.html", erro=erro, modo="login"), status
+    return render_template("equipe.html", erro=erro, modo="login", proximo=request.args.get("proximo") or ""), status
+
+
+def _equipe_do_passe(dados: dict) -> dict | None:
+    """Sessão de equipe pra quem chegou do painel com o passe assinado
+    (entrada_equipe.py). Mesmas regras do login /equipe, sem a senha: login
+    nominal só com "Portal do cliente" marcado na /acessos; par fixo do
+    config só total/operador/leitura."""
+    usuario, nivel = dados["usuario"], dados["nivel"]
+    c = acesso_telas.conta(usuario)
+    if c:
+        if not (c["ativo"] and c["portal_equipe"] and not c["trocar_senha"]):
+            return None
+        return {"usuario": c["usuario"], "nivel": "operador", "nominal": True, "v": c["versao_senha"],
+                "r": acesso_telas.rodada_sessoes()["rodada"]}
+    import hmac
+    chave = {"total": "usuario", "operador": "usuario_operador", "leitura": "usuario_leitura"}.get(nivel)
+    esperado = (_carregar_config().get("painel_agentes", {}) or {}).get(chave) if chave else None
+    if esperado and hmac.compare_digest(usuario, str(esperado)):
+        return {"usuario": usuario, "nivel": nivel}
+    return None
+
+
+# Passes do painel ja usados (numero unico -> hora): cada um so abre uma
+# sessao. Em memoria, como o teto de CEP: o waitress e um processo so, e um
+# restart no meio so reabre a janela dos 60 s de validade do passe.
+_PASSES_USADOS: dict[str, float] = {}
+_TRAVA_PASSES = threading.Lock()
+
+
+def _passe_ja_usado(unico: str) -> bool:
+    """Marca o passe como usado; True se ja tinha sido."""
+    agora = time.time()
+    with _TRAVA_PASSES:
+        for k in [k for k, t in _PASSES_USADOS.items() if agora - t > entrada_equipe.VALIDADE_SEGUNDOS + 5]:
+            del _PASSES_USADOS[k]
+        if unico in _PASSES_USADOS:
+            return True
+        _PASSES_USADOS[unico] = agora
+        return False
+
+
+@app.route("/equipe/entrar")
+def equipe_entrar():
+    """Chegada do painel interno (botão Cotação da Torre, 16/11): abre a
+    sessão de equipe pelo passe e manda escolher o cliente, sempre -- pra
+    ninguém cotar em nome do cliente da vez anterior sem perceber."""
+    proximo = request.args.get("proximo") or ""
+    dados = entrada_equipe.ler(_SECRET, request.args.get("t") or "")
+    if dados and _passe_ja_usado(dados["unico"]):
+        logger.warning(f"equipe entrada pelo painel: passe repetido usuario={dados['usuario']} ip={_ip_cliente()}")
+        dados = None
+    equipe = _equipe_do_passe(dados) if dados else None
+    if equipe is None:
+        erro = ("Seu usuário não tem o Portal do cliente liberado. Peça ao Hugo pra marcar em Acessos."
+                if dados else "A entrada pelo painel venceu. Volte no painel e clique de novo, ou entre com usuário e senha.")
+        logger.warning(f"equipe entrada pelo painel recusada usuario={(dados or {}).get('usuario', '?')} ip={_ip_cliente()}")
+        return render_template("equipe.html", erro=erro, modo="login", proximo=proximo), 403
+    anterior = session.get("equipe") or {}
+    cnpj_anterior = session.get("cnpj_equipe") if anterior.get("usuario") == equipe["usuario"] else None
+    session.clear()
+    session["equipe"] = equipe
+    session.permanent = True
+    if cnpj_anterior:
+        session["cnpj_equipe"] = cnpj_anterior   # só pré-seleciona na lista
+    logger.info(f"equipe entrada pelo painel usuario={equipe['usuario']} nivel={equipe['nivel']}")
+    return redirect(url_for("equipe_cliente", proximo=proximo or None))
 
 
 @app.route("/equipe/cliente", methods=["GET", "POST"])
@@ -344,7 +411,7 @@ def equipe_cliente():
             proximo = request.form.get("proximo") or ""
             return redirect(_proximo_seguro(proximo) if proximo else url_for("inicio"))
     return render_template("equipe.html", modo="cliente", embarcadores=embarcadores,
-                           cnpj_atual=session.get("cnpj_equipe", ""))
+                           cnpj_atual=session.get("cnpj_equipe", ""), proximo=request.values.get("proximo") or "")
 
 
 # ── Login / acesso ─────────────────────────────────────────────────────────────
@@ -637,19 +704,26 @@ def regioes_logo():
 
 # ── Página pública: aula em vídeo (Hugo, 06/11) ────────────────────────────────
 
+def _aula_videos() -> list[dict]:
+    """O vídeo da cotação (Hugo, 16/11) só aparece quando a calculadora for
+    liberada pra todos os clientes (portal_cliente.cotacao.visivel_cliente)."""
+    liberadas = {"cotacao"} if cotacao.regras_de(_CONFIG).get("visivel_cliente") else set()
+    return aula_info.carregar_manifesto(liberadas=liberadas)
+
+
 @app.route("/aula")
 def aula():
     """Videos curtos de treinamento do portal, sem login (o link vai por
     WhatsApp ate pra quem ainda nao entrou). So lista o que esta no
     manifesto gerado pelo aula_portal/gravar.py."""
-    return render_template("aula.html", videos=aula_info.carregar_manifesto(),
+    return render_template("aula.html", videos=_aula_videos(),
                            logo_src=url_for("regioes_logo"))
 
 
 @app.route("/aula/arquivo/<nome>")
 def aula_arquivo(nome):
     # conditional=True responde Range com 206: o Safari do iPhone so toca mp4 assim.
-    if not aula_info.arquivo_permitido(nome, aula_info.carregar_manifesto()):
+    if not aula_info.arquivo_permitido(nome, _aula_videos()):
         abort(404)
     resp = send_from_directory(aula_info.PASTA_AULA, nome, conditional=True, max_age=3600)
     resp.headers["Cache-Control"] = "public, max-age=3600"
@@ -1491,9 +1565,12 @@ def api_envios_acao(envio_id):
             return jsonify({"erro": "Pedido não encontrado."}), 404
         if tipo == "alterar_endereco":
             # pedido barrado pela area (13/11): troca o endereco e reavalia a regiao
-            resultado = envios.alterar_endereco_bloqueado(conn, envio, corpo.get("endereco"), _CONFIG, _quem_envia())
+            resultado = envios.alterar_endereco_bloqueado(conn, envio, corpo.get("endereco"), _CONFIG, _quem_envia(), corpo)
         else:
             resultado = envios.aplicar_acao(conn, envio, tipo, corpo, _quem_envia())
+    except envios.ForaDiaFixo as e:
+        # regiao nova com outro dia de visita (16/11): a tela pede nova data ou a confirmacao
+        return jsonify({"erro": str(e), "fora_dia_fixo": e.aviso}), 409
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     finally:

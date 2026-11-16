@@ -16,6 +16,12 @@ fechar pela conta: PUT /finish devolve 409 "orders.cannot_update" e o
 /start so aceita o proprio motorista (403). Provado em 11/11; essas ficam
 de fora e so aparecem no log.
 
+16/11 (Hugo): a excecao e a rota da LALAMOVE (agente virtual, nunca inicia).
+Essa fecha pela troca de agente provada em 11/11: passa a rota pro agente do
+token, accept + start, DEVOLVE pra Lalamove e finish. Se a devolucao falhar,
+para as trocas da rodada e sai com erro (alerta). So a Lalamove: com motorista
+de verdade nao foi medido se a troca manda aviso no app.
+
 Uso: python finalizar_rotas_entregues.py [--modo-teste]
 """
 import argparse
@@ -37,12 +43,15 @@ if hasattr(sys.stderr, "reconfigure"):
 
 import yaml
 
-from rotas_client import finalizar_rota, listar_rotas
+from rotas_client import buscar_rota, comando_rota, finalizar_rota, listar_rotas, trocar_agente_rota
 
 logger = logging.getLogger("finalizar_rotas_entregues")
 
 DIAS_ATRAS = 14
 STATUS_SERVICO_CANCELADO = {"canceled", "cancelled"}
+STATUS_ROTA_NAO_INICIADA = ("assigned", "not_started")
+AGENTE_LALAMOVE = 50258
+AGENTE_DO_TOKEN = 28438   # agente "TESTE", dono do token da conta
 
 
 def _carregar_config() -> dict:
@@ -66,6 +75,47 @@ def rotas_para_finalizar(rotas: list[dict]) -> list[dict]:
     return [r for r in rotas if r.get("status") == "started" and _tudo_entregue(r)]
 
 
+def rotas_lalamove_para_finalizar(rotas: list[dict]) -> list[dict]:
+    return [r for r in rotas if r.get("status") in STATUS_ROTA_NAO_INICIADA
+            and r.get("agent_id") == AGENTE_LALAMOVE and _tudo_entregue(r)]
+
+
+class DevolucaoFalhou(Exception):
+    """A rota ficou no agente do token: ninguem mais troca nada nesta rodada."""
+
+
+def _ler_rota(token: str, route_id: int) -> dict:
+    corpo = buscar_rota(token, route_id, include=["services"])
+    return corpo.get("route", corpo)
+
+
+def finalizar_rota_lalamove(token: str, route_id: int) -> bool:
+    """Devolve False (sem mexer) se a rota mudou desde a listagem."""
+    if not rotas_lalamove_para_finalizar([_ler_rota(token, route_id)]):
+        return False
+    trocar_agente_rota(token, route_id, AGENTE_DO_TOKEN)
+    erro = None
+    try:
+        try:
+            comando_rota(token, route_id, "accept")
+        except Exception as e:   # ja aceita: o start decide
+            logger.info(f"rota {route_id}: accept recusado ({e})")
+        comando_rota(token, route_id, "start")
+    except Exception as e:
+        erro = e
+    try:
+        trocar_agente_rota(token, route_id, AGENTE_LALAMOVE)
+        voltou = _ler_rota(token, route_id).get("agent_id") == AGENTE_LALAMOVE
+    except Exception as e:
+        raise DevolucaoFalhou(f"rota {route_id} NAO voltou pra Lalamove: {e}") from e
+    if not voltou:
+        raise DevolucaoFalhou(f"rota {route_id} NAO voltou pra Lalamove")
+    if erro:
+        raise erro
+    finalizar_rota(token, route_id)
+    return True
+
+
 def main(modo_teste: bool = False, hoje: date | None = None) -> int:
     prefixo = "[MODO TESTE] " if modo_teste else ""
     hoje = hoje or date.today()
@@ -80,7 +130,9 @@ def main(modo_teste: bool = False, hoje: date | None = None) -> int:
     ]
     rotas = listar_rotas(token, include=["services"], filtro=filtro)
 
-    presas = [r for r in rotas if r.get("status") in ("assigned", "not_started") and _tudo_entregue(r)]
+    lalamove = rotas_lalamove_para_finalizar(rotas)
+    presas = [r for r in rotas if r.get("status") in STATUS_ROTA_NAO_INICIADA and _tudo_entregue(r)
+              and r not in lalamove]
     if presas:
         logger.info(f"{len(presas)} rota(s) com tudo entregue que o motorista nunca iniciou (a Vuupt nao deixa "
                     f"fechar pela conta): {', '.join(str(r.get('id')) for r in presas)}")
@@ -98,7 +150,25 @@ def main(modo_teste: bool = False, hoje: date | None = None) -> int:
         except Exception as e:
             falhas += 1
             logger.error(f"falha ao finalizar {descricao}: {e}")
-    logger.info(f"{prefixo}{len(alvo)} rota(s) iniciada(s) com tudo entregue, {falhas} falha(s).")
+    for rota in lalamove:
+        descricao = f"{rota.get('id')} {rota.get('name')} ({len(_servicos(rota))} servico(s))"
+        if modo_teste:
+            logger.info(f"{prefixo}finalizaria (Lalamove, pela troca) {descricao}")
+            continue
+        try:
+            if finalizar_rota_lalamove(token, rota["id"]):
+                logger.info(f"finalizada (Lalamove, pela troca) {descricao}")
+            else:
+                logger.info(f"pulada, mudou desde a listagem: {descricao}")
+        except DevolucaoFalhou as e:
+            falhas += 1
+            logger.error(f"PAREI as trocas: {e}")
+            break
+        except Exception as e:
+            falhas += 1
+            logger.error(f"falha ao finalizar (Lalamove) {descricao}: {e}")
+    logger.info(f"{prefixo}{len(alvo)} rota(s) iniciada(s) e {len(lalamove)} da Lalamove com tudo entregue, "
+                f"{falhas} falha(s).")
     return falhas
 
 

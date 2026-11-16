@@ -280,6 +280,13 @@ def cancelar_stokki(codigo: str, motivo: str, usuario: str, *, abrir_sessao=None
                     r = {"ok": False, "situacao": "", "erro": f"falha ao falar com a Stokki: {e}"}
                 resultados.append({"id_stokki": id_stokki, "ok": bool(r.get("ok")),
                                    "situacao": r.get("situacao") or "", "erro": r.get("erro") or ""})
+                if r.get("ok"):
+                    try:
+                        from stokki import devolucao_estoque
+                        devolucao_estoque.registrar(id_stokki, "pedidos", torre_controle._carregar_config(),
+                                                    ja_estava=bool(r.get("ja_estava")))
+                    except Exception as e:  # noqa: BLE001 -- a fila de devolucao nunca trava o cancelamento
+                        logger.warning(f"[acoes_pedidos] PS-{id_stokki}: nao registrou na fila de devolucao: {e}")
                 if r.get("ok") and r.get("ja_estava"):
                     # repetir depois de um poll perdido: a tratativa ainda guarda quem pediu
                     tratativas.registrar_evento(

@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-Portal da gravacao da aula: o app real, com tres pecas roteirizadas pra
-o chat sair igual em toda gravacao, sem Claude e sem Vuupt:
+Portal da gravacao da aula: o app real, com pecas roteirizadas pra
+o video sair igual em toda gravacao, sem Claude, sem Vuupt e sem Google:
   - assistente._pedidos_do_cliente -> pedidos do dia ficticio;
   - assistente._cliente_anthropic  -> "modelo" que devolve a fala do roteiro;
-  - chamados: atendimento em horario e com uma atendente online.
+  - chamados: atendimento em horario e com uma atendente online;
+  - cotacao: CEP, coordenadas e rota (km + pedagio) ficticios; o e-mail da
+    proposta nao sai, fica em ARQ_EMAIL pro video mostrar.
 O resto (telas, API, banco ficticio) e o portal de verdade.
 
 Guarda de rede do processo (o navegador tem a dele): SMTP recusado e socket
@@ -24,6 +26,7 @@ from types import SimpleNamespace
 from aula_portal import RAIZ, dados_teste as dt
 
 ARQ_BLOQUEIOS = RAIZ / "dados" / "aula_bloqueios.log"
+ARQ_EMAIL = RAIZ / "dados" / "aula_email_proposta.html"   # corpo do e-mail da proposta (video da cotacao)
 PORTA_PROXY_MORTO = 9   # ambiente.PROXY_MORTO
 
 ATENDENTE = {"nome": "Juliana", "usuario": "juliana"}
@@ -50,14 +53,32 @@ def _pedidos(_cliente, _config):
     return d["pedidos"] + d["agendados_futuros"], d["kpis"]
 
 
+def _coordenadas(paradas, _config):
+    for i, p in enumerate(paradas):
+        p["lat"], p["lng"] = -23.55 + 0.03 * i, -46.65 + 0.02 * i
+    return paradas
+
+
+def _email(_destinos, assunto, corpo_html, _config_email, **_kw) -> bool:
+    """Nenhum e-mail sai; o da proposta fica guardado pro video abrir."""
+    if "Proposta de frete" in assunto:
+        ARQ_EMAIL.write_text(corpo_html, encoding="utf-8")
+    return True
+
+
 @contextmanager
 def roteirizado():
     import assistente
     import chamados
+    import cotacao
     trocas = [(assistente, "_pedidos_do_cliente", _pedidos),
               (assistente, "_cliente_anthropic", lambda _config: _ModeloRoteirizado()),
               (chamados, "atendentes_online", lambda _conn: [dict(ATENDENTE)]),
-              (chamados, "situacao_horario", lambda *_a, **_k: {"dentro": True, "motivo": None, "volta_em": ""})]
+              (chamados, "situacao_horario", lambda *_a, **_k: {"dentro": True, "motivo": None, "volta_em": ""}),
+              (cotacao, "consultar_cep", dt.cep_cotacao),
+              (cotacao, "resolver_coordenadas", _coordenadas),
+              (cotacao, "calcular_trajeto", lambda paradas, _regras, _config: dt.trajeto_cotacao(len(paradas))),
+              (cotacao, "enviar_email", _email)]
     antigos = [(m, nome, getattr(m, nome)) for m, nome, _ in trocas]
     for m, nome, novo in trocas:
         setattr(m, nome, novo)

@@ -314,18 +314,20 @@ class AlterarEnderecoBloqueado(unittest.TestCase):
         self.conn.executescript(
             "CREATE TABLE portal_envios (id INTEGER PRIMARY KEY, cnpj_embarcador TEXT, status TEXT, atualizado_em TEXT, "
             "destinatario_endereco TEXT, destinatario_bairro TEXT, destinatario_municipio TEXT, destinatario_uf TEXT, "
-            "destinatario_cep TEXT, endereco_fiscal TEXT, endereco_entrega_origem TEXT, endereco_entrega_json TEXT, bloqueio_motivo TEXT);"
+            "destinatario_cep TEXT, endereco_fiscal TEXT, endereco_entrega_origem TEXT, endereco_entrega_json TEXT, bloqueio_motivo TEXT, "
+            "agendamento_data TEXT);"
             "CREATE TABLE portal_solicitacoes (id INTEGER PRIMARY KEY, envio_id, cnpj_embarcador, tipo, detalhes, status, solicitado_por, criado_em, concluido_em, resposta);"
             "INSERT INTO portal_envios (id, cnpj_embarcador, status, bloqueio_motivo) VALUES (1, '1', 'AGUARDANDO_LIBERACAO', 'fora_sp');")
 
-    def _alterar(self, motivo_novo, envio=None, campos=None, nfe=None, cfg=None):
+    def _alterar(self, motivo_novo, envio=None, campos=None, nfe=None, cfg=None, dados=None):
         nfe = nfe or _nfe_fake("1", "Curitiba", "PR")
         with mock.patch.object(ep, "caminho_xml", return_value=mock.Mock(read_bytes=lambda: b"")), \
              mock.patch.object(ep, "ler_nfe", return_value=nfe), \
              mock.patch("cotacao.consultar_cep", return_value=dict(self.CEP)), \
              mock.patch.object(ep, "classificar_area_envio", return_value=motivo_novo) as area:
             r = ep.alterar_endereco_bloqueado(self.conn, envio or _envio(ep.STATUS_AGUARDANDO_LIBERACAO),
-                                              self.CAMPOS if campos is None else campos, self.CFG if cfg is None else cfg, "cliente")
+                                              self.CAMPOS if campos is None else campos, self.CFG if cfg is None else cfg, "cliente",
+                                              dados)
         return r, area
 
     def _linha_banco(self):
@@ -389,6 +391,81 @@ class AlterarEnderecoBloqueado(unittest.TestCase):
         with self.assertRaises(ep.ErroEnvio):
             self._alterar(None)
         self.assertIsNone(self._linha_banco()["destinatario_endereco"])
+
+    # Hugo 16/11: a regiao do endereco novo pode ter outro dia de visita
+    def _rdf(self, datas_validas=()):
+        """regioes_dia_fixo de mentira: regiao so com as datas dadas como dia de visita."""
+        from datetime import date
+        rdf = mock.Mock()
+        rdf.regra_dia_fixo_do_servico.return_value = {"nome": "Campinas", "regiao": "Campinas", "dias": [2]}
+        rdf.data_valida_na_regiao.side_effect = lambda regra, d: d.isoformat() in datas_validas
+        rdf.proxima_data_valida.return_value = date(2099, 1, 7)
+        rdf.descricao_dias.return_value = "Quartas"
+        return mock.patch.object(ep, "_regioes_dia_fixo", return_value=rdf), rdf
+
+    def _agendado(self, data="2099-01-08"):
+        self.conn.execute("UPDATE portal_envios SET agendamento_data = ?", (data,))
+        return _envio(ep.STATUS_AGUARDANDO_LIBERACAO, agendamento_data=data)
+
+    def test_data_fora_do_dia_de_visita_pede_nova_data(self):
+        p, rdf = self._rdf()
+        with p, self.assertRaises(ep.ForaDiaFixo) as e:
+            self._alterar(None, envio=self._agendado())
+        self.assertEqual(e.exception.aviso, {"data_br": "08/01/2099", "regiao": "Campinas", "dias": "Quartas", "sugestao": "2099-01-07"})
+        # conferiu com o endereco NOVO e nao gravou nada
+        self.assertIn("São Paulo - SP", rdf.regra_dia_fixo_do_servico.call_args[0][0]["address"])
+        b = self._linha_banco()
+        self.assertEqual((b["status"], b["destinatario_endereco"], b["agendamento_data"]), ("AGUARDANDO_LIBERACAO", None, "2099-01-08"))
+
+    def test_nova_data_no_dia_de_visita_grava_a_data(self):
+        from datetime import date, timedelta
+        nova = (date.today() + timedelta(days=5)).isoformat()
+        p, _ = self._rdf(datas_validas=(nova,))
+        with p:
+            r, _ = self._alterar(None, envio=self._agendado(), dados={"agendamento_data": nova})
+        self.assertTrue(r["liberado"])
+        b = self._linha_banco()
+        self.assertEqual((b["status"], b["agendamento_data"]), ("NA_FILA", nova))
+        self.assertIn("reagendada", r["endereco"])
+
+    def test_nova_data_tambem_fora_pede_de_novo(self):
+        from datetime import date, timedelta
+        nova = (date.today() + timedelta(days=5)).isoformat()
+        p, _ = self._rdf()
+        with p, self.assertRaises(ep.ForaDiaFixo):
+            self._alterar(None, envio=self._agendado(), dados={"agendamento_data": nova})
+
+    def test_nova_data_passada_e_recusada(self):
+        p, _ = self._rdf()
+        with p, self.assertRaises(ep.ErroEnvio) as e:
+            self._alterar(None, envio=self._agendado(), dados={"agendamento_data": "2020-01-01"})
+        self.assertNotIsInstance(e.exception, ep.ForaDiaFixo)
+
+    def test_manter_a_data_segue_como_esta(self):
+        p, _ = self._rdf()
+        with p:
+            r, _ = self._alterar(None, envio=self._agendado(), dados={"aceita_fora_dia_fixo": True})
+        self.assertTrue(r["liberado"])
+        self.assertEqual(self._linha_banco()["agendamento_data"], "2099-01-08")
+        self.assertIn("envio dedicado", r["endereco"])
+
+    def test_data_no_dia_de_visita_nao_pergunta(self):
+        p, _ = self._rdf(datas_validas=("2099-01-08",))
+        with p:
+            r, _ = self._alterar(None, envio=self._agendado())
+        self.assertTrue(r["liberado"])
+        self.assertEqual(self._linha_banco()["agendamento_data"], "2099-01-08")
+        self.assertNotIn("reagendada", r["endereco"])
+
+    def test_sem_data_ou_pendente_nao_confere_dia_fixo(self):
+        p, rdf = self._rdf()
+        with p:
+            self._alterar(None)
+            self.conn.execute("UPDATE portal_envios SET status = 'AGUARDANDO_LIBERACAO'")
+            # data nova mandada pelo navegador nao cria agendamento em pedido que nao tinha
+            self._alterar(None, envio=_envio(ep.STATUS_AGUARDANDO_LIBERACAO, agendamento_pendente=1), dados={"agendamento_data": "2099-01-07"})
+        rdf.regra_dia_fixo_do_servico.assert_not_called()
+        self.assertIsNone(self._linha_banco()["agendamento_data"])
 
     def test_linha_oferece_o_botao(self):
         self.assertTrue(ep._linha(_envio(ep.STATUS_AGUARDANDO_LIBERACAO), {})["pode_alterar_endereco"])
