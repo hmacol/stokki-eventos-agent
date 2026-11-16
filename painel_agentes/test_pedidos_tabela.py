@@ -66,6 +66,20 @@ class TestTelaPedidos(unittest.TestCase):
         # Link de página/ordem mantém o filtro de coluna
         self.assertIn("f_destinatario=pada", html)
 
+    def test_busca_pelo_codigo_mostra_pedido_fora_do_periodo_com_aviso(self):
+        conn = banco.conectar()
+        conn.execute("""INSERT INTO nucleo_pedidos (codigo, titulo, status, destinatario_nome, remetente_nome,
+                                                    sender_id, caixas, criado_em_provedor)
+                        VALUES ('PS-42692', '#PS-42692 - NF1 / FF / HOTEL', 'INSUCESSO', 'HOTEL', 'FRUTA FINA',
+                                10, 1, '2026-01-05 08:00:00')""")
+        conn.commit()
+        conn.close()
+        self._logar("leitura")
+        html = self.cliente.get("/pedidos?q=42692").get_data(as_text=True)
+        self.assertIn(">PS-42692<", html)
+        self.assertIn("PS-42692 está fora do período", html)
+        self.assertNotIn("fora do período", self.cliente.get("/pedidos").get_data(as_text=True))
+
     def test_csv_com_colunas_escolhidas(self):
         self._logar("atendimento")
         r = self.cliente.get("/pedidos/exportar.csv?colunas=codigo,referencia,status&ordem=codigo&direcao=asc")
@@ -176,6 +190,166 @@ class TestTelaPedidos(unittest.TestCase):
         self._logar("galpao")
         self.assertNotEqual(self.cliente.get("/pedidos").status_code, 200)
         self.assertNotEqual(self.cliente.get("/pedidos/exportar.csv").status_code, 200)
+        self.assertNotEqual(self.cliente.get("/api/pedidos/contagem").status_code, 200)
+        self.assertNotEqual(self.cliente.get("/api/pedidos/filas").status_code, 200)
+
+    # ── celular (Hugo, 11/11): lista compacta + abas + tela do pedido ──
+    def test_contagem_das_abas_ignora_o_status_escolhido(self):
+        self._logar("leitura")
+        r = self.cliente.get("/api/pedidos/contagem?status=ENTREGUE&embarcador=10")
+        self.assertEqual(r.status_code, 200)
+        d = r.get_json()
+        self.assertEqual((d["ENTREGUE"], d["INSUCESSO"], d["ABERTO"], d["total"]), (1, 1, 0, 2))
+
+    def test_celular_tem_lista_compacta_com_os_dados_do_pedido(self):
+        self._logar("operador")
+        html = self.cliente.get("/pedidos").get_data(as_text=True)
+        itens = re.findall(r'<li class="pm"[^>]*>', html)
+        self.assertEqual(len(itens), 2)
+        self.assertRegex(html, r'<li class="pm"[^>]*data-codigo="PS-2"[^>]*data-status="INSUCESSO"[^>]*data-sender-id="10"')
+        self.assertEqual(html.count('name="sel-m"'), 2)
+        self.assertIn('id="m-selecionar"', html)
+        dados = re.search(r'<script type="application/json" id="dados-m">(.*?)</script>', html, re.S)
+        self.assertIsNotNone(dados)
+        self.assertIn('"PS-1"', dados.group(1))
+        # a tabela do computador continua com as mesmas contas
+        self.assertEqual(html.count('class="menu-acoes"'), 2)
+        self.assertEqual(html.count('name="sel"'), 2)
+
+    def test_celular_filtros_tem_status(self):
+        self._logar("leitura")
+        html = self.cliente.get("/pedidos?status=INSUCESSO").get_data(as_text=True)
+        form = re.search(r'<form[^>]*id="pm-form-filtros".*?</form>', html, re.S).group(0)
+        self.assertRegex(form, r'<select[^>]*id="pm-status"[^>]*name="status"')
+        self.assertRegex(form, r'<option value="INSUCESSO" selected>')
+        self.assertRegex(form, r'<option value="">Todos</option>')
+        # o status vem so do select (sem hidden duplicado no mesmo form)
+        self.assertNotIn('type="hidden" name="status"', form)
+
+    def test_filtro_canhoto_no_computador_e_no_celular(self):
+        conn = banco.conectar()
+        conn.execute("UPDATE nucleo_pedidos SET qtd_checklists = 0")
+        conn.commit()
+        conn.close()
+        self._logar("leitura")
+        html = self.cliente.get("/pedidos?canhoto=sem").get_data(as_text=True)
+        # PS-1 é o entregue sem comprovante; PS-2 (insucesso) não entra
+        self.assertEqual(re.findall(r'<li class="pm"[^>]*data-codigo="([^"]+)"', html), ["PS-1"])
+        self.assertRegex(html, r'<select id="f-canhoto" name="canhoto"')
+        form = re.search(r'<form[^>]*id="pm-form-filtros".*?</form>', html, re.S).group(0)
+        self.assertRegex(form, r'<select id="pm-canhoto" name="canhoto">')
+        self.assertEqual(html.count('<option value="sem" selected>Sem canhoto</option>'), 2)
+        self.assertRegex(html, r'id="pm-abrir-filtros" aria-label="Filtros \(1 ativos\)"')
+        html = self.cliente.get("/pedidos?canhoto=com").get_data(as_text=True)
+        self.assertEqual(re.findall(r'<li class="pm"[^>]*data-codigo="([^"]+)"', html), [])
+        d = self.cliente.get("/api/pedidos/contagem?canhoto=sem").get_json()
+        self.assertEqual((d["ENTREGUE"], d["total"]), (1, 1))
+
+    def test_pedido_importado_aparece_antes_de_chegar_na_vuupt(self):
+        """Hugo, 12/11: pedido que só existe na Stokki (coletor do galpão)
+        entra na tela como Importado, com fila e aba próprias."""
+        from galpao3d import banco as galpao
+        conn = banco.conectar()
+        galpao.garantir_esquema(conn)
+        conn.execute("INSERT INTO galpao_pedidos (id_stokki, codigo, embarcador, situacao, atualizado_em) "
+                     "VALUES (900, 'PS-900', 'CLIENTE NOVO ... #stkkc-7', 'Em separação', datetime('now', 'localtime'))")
+        conn.commit()
+        conn.close()
+        self._logar("operador")
+        html = self.cliente.get("/pedidos?status=IMPORTADO").get_data(as_text=True)
+        linha = re.search(r'<tr[^>]*data-codigo="PS-900"[^>]*>', html)
+        self.assertIsNotNone(linha)
+        self.assertIn('data-status="IMPORTADO"', linha.group(0))
+        self.assertIn('<span class="chip">Importado</span>', html)
+        self.assertIn('data-fila="IMPORTADO"', html)
+        self.assertIn('"stokki": "Em separa', html)
+        self.assertIn(">Importados<", html)   # aba do celular e fila do computador
+        self.assertEqual(self.cliente.get("/api/pedidos/filas").get_json()["IMPORTADO"], 1)
+        self.assertEqual(self.cliente.get("/api/pedidos/contagem").get_json()["IMPORTADO"], 1)
+        self.assertIn("PS-900", self.cliente.get("/pedidos").get_data(as_text=True))
+
+    def test_retirada_coletada_aparece_como_coletado_com_a_coleta(self):
+        """Hugo, 12/11: retirada que saiu pela tela Coletas da Expedicao vira
+        Coletado na /pedidos, com a coleta no painel do pedido; retirada nova
+        nao sai pelo botao Expedir na Stokki."""
+        from galpao3d import banco as galpao
+        from coletas import banco as coletas_banco, regras
+        conn = banco.conectar()
+        galpao.garantir_esquema(conn)
+        coletas_banco.garantir_esquema(conn)
+        for i in (900, 901):
+            conn.execute("INSERT INTO galpao_pedidos (id_stokki, codigo, embarcador, situacao, atualizado_em) "
+                         "VALUES (?, ?, 'NONNA ... #stkkc-1', 'Aguardando Transportador', datetime('now', 'localtime'))",
+                         (i, f"PS-{i}"))
+            conn.execute("INSERT INTO expedicao_coletas_fila (id_stokki, codigo, embarcador, transportadora, retirada,"
+                         " carga_inicial) VALUES (?, ?, 'NONNA', 'J3 FLEX', 1, 0)", (i, f"PS-{i}"))
+        conn.commit()
+        cid = regras.gerar_folha(conn, [900], "expedicao")
+        regras.confirmar(conn, cid, [900], "JOSE DA SILVA", "ABC1D23", "COL-1-0123abcd.jpg", "expedicao")
+        regras.aplicar_resultados(conn, cid, {"PS-900": {"ok": True, "mensagem": "expedido"}})
+        conn.close()
+        self._logar("operador")
+        html = self.cliente.get("/pedidos").get_data(as_text=True)
+        linha = re.search(r'<tr[^>]*data-codigo="PS-900"[^>]*>', html)
+        self.assertIn('data-status="COLETADO"', linha.group(0))
+        self.assertIn('data-status="IMPORTADO"', re.search(r'<tr[^>]*data-codigo="PS-901"[^>]*>', html).group(0))
+        self.assertIn('"coleta": "COL-1 \\u00b7 JOSE DA SILVA \\u00b7 placa ABC1D23', html)
+        self.assertIn("/expedicao/coletas/1/foto", html)
+        self.assertIn(">Coletados<", html)
+        self.assertEqual(self.cliente.get("/api/pedidos/contagem").get_json()["COLETADO"], 1)
+        origem = {"Origin": "http://localhost"}
+        with mock.patch.object(painel_agentes, "iniciar_execucao_com_fila") as iniciar:
+            r = self.cliente.post("/api/pedidos/acao/expedir-stokki", json={"codigos": ["PS-901"]}, headers=origem)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("Coletas", r.get_json()["erro"])
+        iniciar.assert_not_called()
+
+    def test_filas_etiquetas_e_painel_do_pedido_no_computador(self):
+        """Hugo, 11/11: filas no topo, filtros ligados como etiquetas e o
+        pedido abrindo ao lado (a mesma tela do pedido do celular)."""
+        conn = banco.conectar()
+        conn.execute("UPDATE nucleo_pedidos SET qtd_checklists = 0")
+        conn.commit()
+        conn.close()
+        self._logar("operador")
+        d = self.cliente.get("/api/pedidos/filas?status=INSUCESSO&canhoto=com").get_json()
+        self.assertEqual((d["total"], d["ENTREGUE"], d["INSUCESSO"], d["sem_canhoto"]), (2, 1, 1, 1))
+        html = self.cliente.get("/pedidos?status=INSUCESSO&f_destinatario=pad").get_data(as_text=True)
+        filas = re.findall(r'<a class="fila" data-fila="([^"]+)" href="([^"]+)"( aria-current="true")?', html)
+        self.assertEqual([f[0] for f in filas], ["total", "IMPORTADO", "sem_canhoto", "INSUCESSO", "ABERTO", "EM_ROTA"])
+        # Salvar esta visão (12/11): botão + formulário ao lado das filas, guardado no navegador
+        self.assertIn('id="visao-salvar"', html)
+        self.assertIn('id="visao-form" hidden', html)
+        self.assertIn('"pedidos.visoes"', html)
+        self.assertEqual([f[0] for f in filas if f[2]], ["INSUCESSO"])
+        sem = dict((f[0], f[1]) for f in filas)["sem_canhoto"]
+        self.assertIn("canhoto=sem", sem)
+        self.assertNotIn("status=", sem)           # a fila troca o status, não soma
+        self.assertIn("f_destinatario=pad", sem)   # e mantém os outros filtros
+        etiquetas = re.findall(r'<a class="etiqueta" href="([^"]+)" aria-label="Tirar o filtro ([^"]+)"', html)
+        self.assertEqual([e[1] for e in etiquetas], ["Status: Insucesso", "Destinatário: “pad”"])
+        self.assertNotIn("status=", etiquetas[0][0])
+        self.assertNotIn("f_destinatario", etiquetas[1][0])
+        self.assertIn('<span class="etiqueta">Últimos 7 dias</span>', html)
+        self.assertIn('<details class="mais-filtros" id="mais-filtros">', html)
+        # painel: a linha da tabela aponta pro mesmo dado da tela do pedido, que saiu do bloco só-celular
+        self.assertRegex(html, r'<tr[^>]*data-codigo="PS-2"[^>]*data-chave="10\|PS-2"')
+        self.assertLess(html.index('id="pm-filtros"'), html.index('id="pm-det"'))
+        self.assertIn('\n<section class="pm-tela" id="pm-det"', html)   # sem recuo = fora do #pm
+        dados = re.search(r'<script type="application/json" id="dados-m">(.*?)</script>', html, re.S).group(1)
+        self.assertIn('"canhoto": "N\\u00e3o"', dados)
+        # entregue sem canhoto ganha o link pra /canhotos-pendentes; leitura não
+        html = self.cliente.get("/pedidos?canhoto=sem").get_data(as_text=True)
+        self.assertIn('/canhotos-pendentes?busca=PS-1', html)
+        self._logar("leitura")
+        self.assertNotIn('/canhotos-pendentes?busca=', self.cliente.get("/pedidos?canhoto=sem").get_data(as_text=True))
+
+    def test_celular_leitura_nao_seleciona(self):
+        self._logar("leitura")
+        html = self.cliente.get("/pedidos").get_data(as_text=True)
+        self.assertEqual(len(re.findall(r'<li class="pm"', html)), 2)
+        self.assertNotIn('name="sel-m"', html)
+        self.assertNotIn('id="m-selecionar"', html)
 
 
 if __name__ == "__main__":

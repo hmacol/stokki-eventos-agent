@@ -180,6 +180,27 @@ class RevisaoFinal(unittest.TestCase):
         end = ee.montar_endereco({"cep": "01414001", "numero": "1", "complemento": "x" * 60}, consultar=_consulta(CEP_HADDOCK))
         self.assertEqual(len(end["complemento"]), 60)
 
+    def test_caractere_de_controle_sai_e_xml_continua_valido(self):
+        """Revisao de seguranca 30/10, item 3: \\x01 ou surrogate solto vindo do
+        JSON deixavam o XML invalido (ou UnicodeEncodeError) e a Stokki recusava."""
+        end = ee.montar_endereco({"cep": "01414001", "numero": "1\x0b0", "logradouro": "Rua \x01Haddock\x1f Lobo",
+                                  "complemento": "Sala \ud8003", "bairro": "Cerq\x00ueira"},
+                                 consultar=_consulta(CEP_HADDOCK))
+        self.assertEqual((end["logradouro"], end["numero"], end["complemento"], end["bairro"]),
+                         ("Rua Haddock Lobo", "10", "Sala 3", "Cerqueira"))
+        xml = ee.inserir_entrega_xml(_xml(""), end, "12345678000195", "Cliente X")
+        ET.fromstring(xml)
+
+    def test_campo_vazio_so_com_controle_pede_o_campo(self):
+        with self.assertRaisesRegex(ee.ErroEndereco, "Informe o número"):
+            ee.montar_endereco({"cep": "01414001", "numero": "\x01"}, consultar=_consulta(CEP_HADDOCK))
+
+    def test_entrega_endereco_que_nao_e_objeto_vira_erro_de_cep(self):
+        """Item 5: string ou lista no lugar do objeto dava AttributeError (500)."""
+        for valor in ("01414001", ["01414001"], 7):
+            with self.subTest(valor=valor), self.assertRaisesRegex(ee.ErroEndereco, "CEP não encontrado"):
+                ee.montar_endereco(valor, consultar=_consulta(CEP_HADDOCK))
+
 
 class Chave(unittest.TestCase):
     def test_entrega_ativa_padrao_desligada(self):

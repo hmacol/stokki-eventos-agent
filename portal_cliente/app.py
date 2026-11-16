@@ -22,6 +22,7 @@ COMO RODAR (produção -- ver infra/portal-cliente.service):
 """
 import html as html_mod
 import io
+import json
 import logging
 import os
 import sys
@@ -43,14 +44,17 @@ from homologacao import ambiente as _ambiente
 _ambiente.exigir_coerencia(_RAIZ)
 
 import yaml
-from flask import Flask, Response, abort, g, jsonify, redirect, render_template, request, send_file, session, url_for
+from flask import (Flask, Response, abort, g, jsonify, redirect, render_template, request, send_file,
+                   send_from_directory, session, url_for)
 from jinja2 import ChoiceLoader, FileSystemLoader
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 import auth_cliente as auth
 import dados_cliente as dados
 import envio_pedidos as envios
+import anexos_pedido
 import cotacao
+import entrada_equipe
 import endereco_entrega
 import alterar_entrega
 import cancelamento
@@ -58,6 +62,7 @@ from email_utils import enviar_email, envelope_html
 import preferencias_notificacao as preferencias
 import cadastro_embarcador as cad_emb
 import regioes_atendimento as regioes_info
+import aula as aula_info
 from fingerprint_aguardando_resposta import buscar_pendentes_por_grupo
 import aplicar_resposta_insucesso as logica_insucesso
 from painel_agentes import acesso_telas
@@ -172,7 +177,7 @@ def _carregar_cliente():
             return redirect(url_for("completar_cadastro"))
 
 
-_LIVRES_ANTES_DA_TROCA = {"trocar_pin", "sair", "static", "saude", "regioes", "regioes_logo"}
+_LIVRES_ANTES_DA_TROCA = {"trocar_pin", "sair", "static", "saude", "regioes", "regioes_logo", "aula", "aula_arquivo"}
 _LIVRES_ANTES_DO_CADASTRO = _LIVRES_ANTES_DA_TROCA | {"completar_cadastro"}
 
 
@@ -318,10 +323,76 @@ def equipe_login():
                     session["equipe"] = equipe
                     session.permanent = True
                     logger.info(f"equipe login usuario={usuario} nivel={nivel}")
-                    return redirect(url_for("equipe_cliente"))
+                    return redirect(url_for("equipe_cliente", proximo=request.args.get("proximo") or None))
         finally:
             conn.close()
-    return render_template("equipe.html", erro=erro, modo="login"), status
+    return render_template("equipe.html", erro=erro, modo="login", proximo=request.args.get("proximo") or ""), status
+
+
+def _equipe_do_passe(dados: dict) -> dict | None:
+    """Sessão de equipe pra quem chegou do painel com o passe assinado
+    (entrada_equipe.py). Mesmas regras do login /equipe, sem a senha: login
+    nominal só com "Portal do cliente" marcado na /acessos; par fixo do
+    config só total/operador/leitura."""
+    usuario, nivel = dados["usuario"], dados["nivel"]
+    c = acesso_telas.conta(usuario)
+    if c:
+        if not (c["ativo"] and c["portal_equipe"] and not c["trocar_senha"]):
+            return None
+        return {"usuario": c["usuario"], "nivel": "operador", "nominal": True, "v": c["versao_senha"],
+                "r": acesso_telas.rodada_sessoes()["rodada"]}
+    import hmac
+    chave = {"total": "usuario", "operador": "usuario_operador", "leitura": "usuario_leitura"}.get(nivel)
+    esperado = (_carregar_config().get("painel_agentes", {}) or {}).get(chave) if chave else None
+    if esperado and hmac.compare_digest(usuario, str(esperado)):
+        return {"usuario": usuario, "nivel": nivel}
+    return None
+
+
+# Passes do painel ja usados (numero unico -> hora): cada um so abre uma
+# sessao. Em memoria, como o teto de CEP: o waitress e um processo so, e um
+# restart no meio so reabre a janela dos 60 s de validade do passe.
+_PASSES_USADOS: dict[str, float] = {}
+_TRAVA_PASSES = threading.Lock()
+
+
+def _passe_ja_usado(unico: str) -> bool:
+    """Marca o passe como usado; True se ja tinha sido."""
+    agora = time.time()
+    with _TRAVA_PASSES:
+        for k in [k for k, t in _PASSES_USADOS.items() if agora - t > entrada_equipe.VALIDADE_SEGUNDOS + 5]:
+            del _PASSES_USADOS[k]
+        if unico in _PASSES_USADOS:
+            return True
+        _PASSES_USADOS[unico] = agora
+        return False
+
+
+@app.route("/equipe/entrar")
+def equipe_entrar():
+    """Chegada do painel interno (botão Cotação da Torre, 16/11): abre a
+    sessão de equipe pelo passe e manda escolher o cliente, sempre -- pra
+    ninguém cotar em nome do cliente da vez anterior sem perceber."""
+    proximo = request.args.get("proximo") or ""
+    dados = entrada_equipe.ler(_SECRET, request.args.get("t") or "")
+    if dados and _passe_ja_usado(dados["unico"]):
+        logger.warning(f"equipe entrada pelo painel: passe repetido usuario={dados['usuario']} ip={_ip_cliente()}")
+        dados = None
+    equipe = _equipe_do_passe(dados) if dados else None
+    if equipe is None:
+        erro = ("Seu usuário não tem o Portal do cliente liberado. Peça ao Hugo pra marcar em Acessos."
+                if dados else "A entrada pelo painel venceu. Volte no painel e clique de novo, ou entre com usuário e senha.")
+        logger.warning(f"equipe entrada pelo painel recusada usuario={(dados or {}).get('usuario', '?')} ip={_ip_cliente()}")
+        return render_template("equipe.html", erro=erro, modo="login", proximo=proximo), 403
+    anterior = session.get("equipe") or {}
+    cnpj_anterior = session.get("cnpj_equipe") if anterior.get("usuario") == equipe["usuario"] else None
+    session.clear()
+    session["equipe"] = equipe
+    session.permanent = True
+    if cnpj_anterior:
+        session["cnpj_equipe"] = cnpj_anterior   # só pré-seleciona na lista
+    logger.info(f"equipe entrada pelo painel usuario={equipe['usuario']} nivel={equipe['nivel']}")
+    return redirect(url_for("equipe_cliente", proximo=proximo or None))
 
 
 @app.route("/equipe/cliente", methods=["GET", "POST"])
@@ -340,7 +411,7 @@ def equipe_cliente():
             proximo = request.form.get("proximo") or ""
             return redirect(_proximo_seguro(proximo) if proximo else url_for("inicio"))
     return render_template("equipe.html", modo="cliente", embarcadores=embarcadores,
-                           cnpj_atual=session.get("cnpj_equipe", ""))
+                           cnpj_atual=session.get("cnpj_equipe", ""), proximo=request.values.get("proximo") or "")
 
 
 # ── Login / acesso ─────────────────────────────────────────────────────────────
@@ -631,6 +702,27 @@ def regioes_logo():
     return send_file(_RAIZ / "assets" / "logo_freshlog.png", mimetype="image/png", max_age=86400)
 
 
+# ── Página pública: aula em vídeo (Hugo, 06/11) ────────────────────────────────
+
+@app.route("/aula")
+def aula():
+    """Videos curtos de treinamento do portal, sem login (o link vai por
+    WhatsApp ate pra quem ainda nao entrou). So lista o que esta no
+    manifesto gerado pelo aula_portal/gravar.py."""
+    return render_template("aula.html", videos=aula_info.carregar_manifesto(),
+                           logo_src=url_for("regioes_logo"))
+
+
+@app.route("/aula/arquivo/<nome>")
+def aula_arquivo(nome):
+    # conditional=True responde Range com 206: o Safari do iPhone so toca mp4 assim.
+    if not aula_info.arquivo_permitido(nome, aula_info.carregar_manifesto()):
+        abort(404)
+    resp = send_from_directory(aula_info.PASTA_AULA, nome, conditional=True, max_age=3600)
+    resp.headers["Cache-Control"] = "public, max-age=3600"
+    return resp
+
+
 # ── API ────────────────────────────────────────────────────────────────────────
 
 @app.route("/api/dia")
@@ -675,7 +767,8 @@ def api_canhoto(service_id):
 
 
 # ── Alteração de entrega (endereço, data, horário de recebimento) ──────────────
-# O cliente não altera sozinho (Hugo, 01/11): o pedido vira chamado pro atendimento.
+
+_FORA_DA_AREA = f"Esse endereço fica fora da área atendida. {alterar_entrega.CHAT}"
 
 
 def _mapa_horarios() -> dict:
@@ -711,14 +804,9 @@ def _avaliar_alteracao(conn, servico: dict) -> alterar_entrega.Avaliacao:
     return alterar_entrega.avaliar(servico, rotas, status_nucleo, lalamove)
 
 
-def _entrega_atual(servico: dict) -> tuple[str, dict]:
-    """(nome do destinatário, {endereco, data, horario}) do pedido hoje."""
-    from regras.complexidade_entrega import carregar_ajustes_manuais, horario_efetivo
+def _destinatario(servico: dict) -> tuple[str, str]:
     cli = dados._desembrulhar(servico, "customer")
-    doc = alterar_entrega._digitos(cli.get("code"))
-    return cli.get("name") or "", {"endereco": servico.get("address") or "",
-                                   "data": alterar_entrega._data_agendada(servico),
-                                   "horario": horario_efetivo(doc, _mapa_horarios(), carregar_ajustes_manuais())}
+    return alterar_entrega._digitos(cli.get("code")), cli.get("name") or ""
 
 
 @app.route("/api/pedidos/<int:service_id>/alteracao")
@@ -731,52 +819,74 @@ def api_alteracao(service_id):
             av = _avaliar_alteracao(conn, servico)
         finally:
             conn.close()
-        nome, atual = _entrega_atual(servico)
+        from regras.complexidade_entrega import carregar_ajustes_manuais, horario_efetivo
+        doc, nome = _destinatario(servico)
+        ini, fim = horario_efetivo(doc, _mapa_horarios(), carregar_ajustes_manuais())
+        data = alterar_entrega._data_agendada(servico)
     except Exception:
         logger.exception(f"alteracao (consulta) sid={service_id} -> erro")
         return jsonify({"erro": f"Não foi possível consultar o pedido agora. {alterar_entrega.CHAT}"}), 502
-    ini, fim = atual["horario"]
     return jsonify({"pode": av.pode, "motivo": av.motivo, "em_rota": av.em_rota, "destinatario": nome,
-                    "atual": {"endereco": atual["endereco"], "data": atual["data"].isoformat() if atual["data"] else None,
+                    "atual": {"endereco": servico.get("address") or "", "data": data.isoformat() if data else None,
                               "horario": {"inicio": ini, "fim": fim}}})
 
 
 @app.route("/api/pedidos/<int:service_id>/alteracao", methods=["POST"])
 @requer_cliente
 @exige_mesma_origem
-def api_alteracao_solicitar(service_id):
-    """Abre um chamado na área Entrega com o que o cliente pediu; nada muda na Vuupt."""
-    if g.get("equipe"):
-        return jsonify({"erro": "A equipe altera a entrega pelo painel."}), 403
+def api_alteracao_aplicar(service_id):
+    _exige_pode_enviar()
     servico, empresa = _servico_alteravel(service_id)
     corpo = request.get_json(silent=True)
     if not isinstance(corpo, dict):
         corpo = {}
+    por = _quem_envia()
+    conn = envios.conectar()
+    conn_registro = None
+    chamou_aplicar = False
     try:
-        conn = envios.conectar()
-        try:
-            av = _avaliar_alteracao(conn, servico)   # sempre de novo: nunca confia no GET
-        finally:
-            conn.close()
+        av = _avaliar_alteracao(conn, servico)   # sempre de novo: nunca confia no GET
         if not av.pode:
             return jsonify({"erro": av.motivo}), 409
         try:
             validado = alterar_entrega.validar(corpo, date.today())
         except alterar_entrega.ErroAlteracao as e:
             return jsonify({"erro": str(e)}), 400
-        nome, atual = _entrega_atual(servico)
-        codigo = str(servico.get("code") or service_id).lstrip("#")
-        # CNPJ do LOGIN: o widget do chat busca o chamado pelo CNPJ logado (login de grupo)
-        chamado_id = alterar_entrega.abrir_chamado(
-            {"cnpj": g.cliente["cnpj"], "sender_id": servico.get("sender_id"), "nome": empresa["nome"]},
-            codigo, alterar_entrega.texto_chamado(codigo, nome, atual, validado), _CONFIG)
+        if validado["endereco"]:
+            try:
+                fora = envios._identificar_area(
+                    [{"id": 0, "address": alterar_entrega.endereco_vuupt(validado["endereco"])}],
+                    (_CONFIG.get("google_maps") or {}).get("api_key") or "")
+            except Exception as e:  # noqa: BLE001 -- mesma regra do envio: sem checagem nao segura
+                logger.warning(f"alteracao: checagem de area falhou ({e}); deixando passar")
+                fora = []
+            if any(tipo for _s, tipo in fora):
+                return jsonify({"erro": _FORA_DA_AREA}), 400
+        import registro_dia_fixo
+        conn_registro = registro_dia_fixo.conectar()
+        plano = alterar_entrega.planejar(servico, validado, av, conn_registro, date.today())
+        if plano.avisos and not corpo.get("confirmar"):
+            return jsonify({"ok": False, "precisa_confirmar": True, "avisos": plano.avisos})
+        doc, nome = _destinatario(servico)
+        contexto = {"cnpj_embarcador": empresa["cnpj"], "sender_id": servico.get("sender_id"), "por": por,
+                    "destinatario_doc": doc, "destinatario_nome": nome, "config": _CONFIG,
+                    "mapa_horarios": _mapa_horarios(), "empresa_nome": empresa["nome"]}
+        chamou_aplicar = True
+        resultado = alterar_entrega.aplicar(conn, servico, validado, plano, contexto,
+                                            alterar_entrega.dependencias_reais(_CONFIG, por))
     except Exception:
-        logger.exception(f"alteracao cnpj={empresa['cnpj']} sid={service_id} -> erro")
-        return jsonify({"erro": f"Não foi possível registrar o pedido agora. {alterar_entrega.CHAT}"}), 502
-    logger.info(f"alteracao cnpj={empresa['cnpj']} sid={service_id} -> chamado {chamado_id}")
-    return jsonify({"ok": True, "chamado_id": chamado_id,
-                    "mensagem": f"Pedido de alteração enviado ao atendimento (chamado #{chamado_id}). "
-                                "A equipe confere e responde pelo chat do portal e por e-mail."})
+        logger.exception(f"alteracao cnpj={empresa['cnpj']} sid={service_id} por={por} -> erro")
+        return jsonify({"erro": f"Não foi possível alterar agora. {alterar_entrega.CHAT}"}), 502
+    finally:
+        conn.close()
+        if conn_registro is not None:
+            conn_registro.close()
+        if chamou_aplicar:  # a Vuupt pode ter mudado mesmo se o aplicar estourou
+            dados.invalidar_cache(servico["sender_id"])
+    logger.info(f"alteracao cnpj={empresa['cnpj']} sid={service_id} por={por} -> {'ok' if resultado['ok'] else 'erro'}")
+    if not resultado["ok"]:
+        return jsonify({"erro": resultado["mensagem"]}), 502
+    return jsonify({"ok": True, "mensagem": resultado["mensagem"]})
 
 
 @app.route("/api/responder", methods=["POST"])
@@ -890,17 +1000,55 @@ def api_notificacoes_salvar():
 
 def _empresa_envio() -> dict:
     """Empresa em que o envio acontece. Login avulso: a própria. Login de
-    grupo: a do seletor da tela (cabeçalho X-Portal-Empresa; `?empresa=` nos
-    links de download) -- cada empresa é um cliente diferente na Stokki, então
-    fila, destinatários e validação do emitente são por empresa."""
+    grupo: a informada na chamada (cabeçalho X-Portal-Empresa ou `?empresa=`);
+    sem ela, a dona do pedido da rota ou a primeira que é cliente na Stokki
+    (rotas de lote usam _grupo_sem_seletor) -- cada empresa é um cliente
+    diferente na Stokki, então fila, destinatários e emitente são por empresa."""
     pedido = auth.normalizar_cnpj(request.headers.get("X-Portal-Empresa") or request.args.get("empresa"))
     if not pedido:
-        return g.cliente["empresas"][0]
+        # Grupo sem seletor (12/11): rota de um pedido já enviado vale pra empresa dona dele
+        envio_id = (request.view_args or {}).get("envio_id")
+        if len(g.cliente["empresas"]) < 2:
+            return g.cliente["empresas"][0]
+        if envio_id is not None:
+            return _empresa_do_envio(envio_id)
+        if "empresa_padrao_envio" not in g:   # grupo em que a do login não é cliente na Stokki
+            primeira = _empresas_com_envio()[0]["cnpj"]
+            g.empresa_padrao_envio = next(e for e in g.cliente["empresas"] if e["cnpj"] == primeira)
+        return g.empresa_padrao_envio
     for e in g.cliente["empresas"]:
         if e["cnpj"] == pedido:
             return e
     abort(Response(jsonify({"erro": "Essa empresa não faz parte do seu acesso."}).get_data(), status=403,
                    mimetype="application/json"))
+
+
+def _empresa_do_envio(envio_id: int) -> dict:
+    """Empresa do login dona do envio; envio de fora (ou inexistente) cai na
+    do login, e a busca do envio por CNPJ dá 404 como sempre."""
+    if g.get("empresa_do_envio", (None,))[0] != envio_id:
+        conn = envios.conectar()
+        try:
+            r = conn.execute("SELECT cnpj_embarcador FROM portal_envios WHERE id = ?", (envio_id,)).fetchone()
+        finally:
+            conn.close()
+        dono = r["cnpj_embarcador"] if r else None
+        g.empresa_do_envio = (envio_id, next((e for e in g.cliente["empresas"] if e["cnpj"] == dono),
+                                             g.cliente["empresas"][0]))
+    return g.empresa_do_envio[1]
+
+
+def _grupo_sem_seletor() -> dict[str, dict] | None:
+    """Login de grupo sem empresa informada na chamada (12/11, pedido do Hugo:
+    a tela não tem mais seletor; a planilha diz a empresa de cada pedido e o
+    XML vai pelo emitente): {cnpj: empresa} das que são cliente na Stokki.
+    None = uma empresa só (login avulso, ou X-Portal-Empresa/?empresa= mandado)."""
+    if request.headers.get("X-Portal-Empresa") or request.args.get("empresa") or len(g.cliente["empresas"]) < 2:
+        return None
+    if "grupo_envio" not in g:
+        com_envio = {e["cnpj"] for e in _empresas_com_envio()}
+        g.grupo_envio = {e["cnpj"]: e for e in g.cliente["empresas"] if e["cnpj"] in com_envio}
+    return g.grupo_envio if len(g.grupo_envio) > 1 else None
 
 
 def _outras_empresas_envio() -> dict[str, str]:
@@ -938,7 +1086,13 @@ def _avisar_xd_ausente(nome: str, erro: str) -> None:
 def api_envios_listar():
     conn = envios.conectar()
     try:
-        lista = envios.listar_envios(conn, _empresa_envio()['cnpj'])
+        grupo = _grupo_sem_seletor()
+        if grupo:   # todas as empresas juntas, com o nome de cada uma na linha
+            lista = [{**l, "empresa": e["nome"]} for e in grupo.values() for l in envios.listar_envios(conn, e["cnpj"])]
+            lista.sort(key=lambda l: (l.get("criado_em") or "", l.get("id") or 0), reverse=True)
+        else:
+            lista = envios.listar_envios(conn, _empresa_envio()['cnpj'])
+        anexos_pedido.anotar(conn, lista)
         cfg = envios.config_stokki_cliente(conn, _empresa_envio()['cnpj'], _CONFIG)
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
@@ -952,6 +1106,7 @@ def api_envios_listar():
     return jsonify({"envios": lista, "resumo": envios.resumo_envios(lista), "dias": envios.DIAS_LISTAGEM,
                     "regra_xml": cfg["regra_xml"], "regra_xml_rotulo": envios.REGRAS_XML.get(cfg["regra_xml"], ""),
                     "envio_ativo": cfg["envio_ativo"], "client_id": cfg["client_id"], "fila": fila,
+                    "endereco_entrega_ativo": endereco_entrega.entrega_ativa(_CONFIG),
                     "atualizado_em": datetime.now().strftime("%H:%M")})
 
 
@@ -967,12 +1122,25 @@ def api_envios_analisar():
     if not arquivos:
         return jsonify({"erro": "Selecione pelo menos um arquivo: XML da NF-e (ou ZIP com XMLs) ou planilha .xlsx no modelo Fresh Log."}), 400
     itens, rejeitados, vistos = [], [], set()
+    anexos = []  # PDFs do lote: documentos dos pedidos (anexos_pedido.py, 11/11)
     n_planilhas = 0
     entrega_ativa = endereco_entrega.entrega_ativa(_CONFIG)
     conn = envios.conectar()
     try:
-        cfg = envios.config_stokki_cliente(conn, _empresa_envio()['cnpj'], _CONFIG)
-        fluxos_disp, xd = envios.fluxos_para_envio(conn, _empresa_envio()['cnpj'])
+        # Cada item da prévia tem a empresa dele (grupo sem seletor: a da coluna
+        # da planilha ou o emitente do XML); `ctx` guarda o que é por empresa.
+        grupo = _grupo_sem_seletor()
+        padrao = _empresa_envio()['cnpj']
+        ctxs: dict[str, dict] = {}
+
+        def ctx(cnpj: str) -> dict:
+            if cnpj not in ctxs:
+                fl, xd_ = envios.fluxos_para_envio(conn, cnpj)
+                ctxs[cnpj] = {"cfg": envios.config_stokki_cliente(conn, cnpj, _CONFIG), "fluxos": fl, "xd": xd_,
+                              "nome": ((grupo or {}).get(cnpj) or _empresa_envio())["nome"]}
+            return ctxs[cnpj]
+
+        cfg = ctx(padrao)["cfg"]
         for f in arquivos:
             try:
                 partes = envios.expandir_upload(f.filename or "", f.read())
@@ -980,13 +1148,23 @@ def api_envios_analisar():
                 rejeitados.append({"arquivo": f.filename or "arquivo", "erro": str(e)})
                 continue
             for nome, conteudo in partes:
+                if anexos_pedido.e_pdf(nome, conteudo):
+                    if len(anexos) >= anexos_pedido.MAX_PDFS_POR_ENVIO:
+                        rejeitados.append({"arquivo": nome, "erro": f"{nome}: no máximo {anexos_pedido.MAX_PDFS_POR_ENVIO} PDFs por envio."})
+                        continue
+                    try:
+                        anexos.append(anexos_pedido.guardar_previa(nome, conteudo, g.cliente["cnpj"]))
+                    except envios.ErroEnvio as e:
+                        rejeitados.append({"arquivo": nome, "erro": str(e)})
+                    continue
                 if envios.e_planilha(nome, conteudo):
                     # Planilha no modelo Fresh Log (09/09): vários pedidos por
                     # arquivo; cada pedido vira um item da prévia com token
                     # próprio (JSON temporário) apontando pra planilha original.
                     n_planilhas += 1
                     try:
-                        pedidos, rej = envios.ler_planilha(conteudo, nome, _empresa_envio()['cnpj'])
+                        pedidos, rej = envios.ler_planilha(conteudo, nome, padrao,
+                                                           {c: e["nome"] for c, e in grupo.items()} if grupo else None)
                     except envios.ErroEnvio as e:
                         rejeitados.append({"arquivo": nome, "erro": str(e)})
                         continue
@@ -998,14 +1176,16 @@ def api_envios_analisar():
                             rejeitados.append({"arquivo": nome, "rotulo": rotulo, "erro": "Repetido dentro do mesmo envio."})
                             continue
                         vistos.add(ped["chave_nfe"])
-                        v = envios.validar_item(conn, ped, _empresa_envio()['cnpj'], _outras_empresas_envio())
-                        erros_sku, avisos_sku = envios.validar_skus(conn, ped, cfg)
+                        emp = ped["emitente_cnpj"]
+                        v = envios.validar_item(conn, ped, emp, _outras_empresas_envio())
+                        erros_sku, avisos_sku = envios.validar_skus(conn, ped, ctx(emp)["cfg"])
                         if not v["ok"] or erros_sku:
                             rejeitados.append({"arquivo": nome, "rotulo": rotulo, "erro": " ".join(v["erros"] + erros_sku)})
                             continue
                         token = envios.guardar_temporario_pedido(ped, token_plan)
                         item = {k: v_ for k, v_ in ped.items() if k not in ("emitente_cnpj",)}
                         item.update({"token": token, "avisos": v["avisos"] + avisos_sku, "rotulo": rotulo,
+                                     "empresa_cnpj": emp, "empresa": ctx(emp)["nome"] if grupo else "",
                                      "destinatario_doc_formatado": envios.formatar_documento(ped["destinatario_doc"])})
                         itens.append(item)
                     continue
@@ -1020,7 +1200,8 @@ def api_envios_analisar():
                                        "erro": "Repetida dentro do mesmo envio."})
                     continue
                 vistos.add(nfe["chave_nfe"])
-                v = envios.validar_item(conn, nfe, _empresa_envio()['cnpj'], _outras_empresas_envio())
+                emp = nfe["emitente_cnpj"] if grupo and nfe["emitente_cnpj"] in grupo else padrao
+                v = envios.validar_item(conn, nfe, emp, _outras_empresas_envio())
                 if not v["ok"]:
                     rejeitados.append({"arquivo": nome, "numero_nf": nfe["numero_nf"], "rotulo": f"NF {nfe['numero_nf']}",
                                        "erro": " ".join(v["erros"])})
@@ -1028,27 +1209,46 @@ def api_envios_analisar():
                 token = envios.guardar_temporario(conteudo)
                 item = {k: v_ for k, v_ in nfe.items() if k not in ("emitente_cnpj",)}
                 item.update({"token": token, "avisos": v["avisos"], "rotulo": f"NF {nfe['numero_nf']}",
+                             "empresa_cnpj": emp, "empresa": ctx(emp)["nome"] if grupo else "",
                              "destinatario_doc_formatado": envios.formatar_documento(nfe["destinatario_doc"])})
                 itens.append(item)
         if entrega_ativa:
             _casos_de_entrega(conn, itens)
-        destinatarios = envios.info_destinatarios(conn, _empresa_envio()['cnpj'], itens, _CONFIG)
+        usadas = list(dict.fromkeys(it["empresa_cnpj"] for it in itens)) or [padrao]
+        destinatarios: dict[str, dict] = {}
+        for cnpj in usadas:
+            do_cnpj = [it for it in itens if it["empresa_cnpj"] == cnpj]
+            for doc, d in envios.info_destinatarios(conn, cnpj, do_cnpj, _CONFIG).items():
+                ant = destinatarios.get(doc)
+                # mesmo destinatário em duas empresas do grupo: só é "conhecido"
+                # (não pergunta o horário) se as duas já souberem
+                destinatarios[doc] = d if ant is None else {
+                    **(ant if ant["conhecido"] else d), "conhecido": ant["conhecido"] and d["conhecido"],
+                    "requer_agendamento": ant["requer_agendamento"] or d["requer_agendamento"]}
         # XD ausente: o cliente vê na prévia; o atendimento recebe 1 e-mail por
         # embarcador por dia, e só quando o lote tem pedido que iria em Cross.
-        avisar_xd = bool(xd["erro"] and itens) and envios.primeiro_aviso_xd_do_dia(conn, _empresa_envio()['cnpj'])
+        avisar_xd = [c for c in usadas if ctx(c)["xd"]["erro"] and any(it["empresa_cnpj"] == c for it in itens)
+                     and envios.primeiro_aviso_xd_do_dia(conn, c)]
+        for it in itens:
+            it["fluxos"] = ctx(it["empresa_cnpj"])["fluxos"]
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     finally:
         conn.close()
-    if avisar_xd:
-        _avisar_xd_ausente(_empresa_envio()["nome"] or _empresa_envio()["cnpj"], xd["erro"])
-    if xd["erro"]:
-        if not fluxos_disp:  # só Cross e o XD falta: nada pode ir
-            rejeitados.extend({"arquivo": it.get("nome_arquivo") or it.get("rotulo"), "numero_nf": it.get("numero_nf"),
-                               "rotulo": it.get("rotulo"), "erro": envios.MSG_XD_AUSENTE} for it in itens)
-            itens = []
-    logger.info(f"analisar cnpj={_empresa_envio()['cnpj']} por={_quem_envia()} validos={len(itens)} rejeitados={len(rejeitados)} planilhas={n_planilhas}")
-    return jsonify({"itens": itens, "rejeitados": rejeitados, "destinatarios": destinatarios,
+    for c in avisar_xd:
+        _avisar_xd_ausente(ctxs[c]["nome"] or c, ctxs[c]["xd"]["erro"])
+    # só Cross e o XD falta: nada daquela empresa pode ir
+    sem_fluxo = {c for c in usadas if ctxs[c]["xd"]["erro"] and not ctxs[c]["fluxos"]}
+    rejeitados.extend({"arquivo": it.get("nome_arquivo") or it.get("rotulo"), "numero_nf": it.get("numero_nf"),
+                       "rotulo": it.get("rotulo"), "erro": envios.MSG_XD_AUSENTE}
+                      for it in itens if it["empresa_cnpj"] in sem_fluxo)
+    itens = [it for it in itens if it["empresa_cnpj"] not in sem_fluxo]
+    fluxos_disp = [f for f in envios.FLUXOS if any(f in ctxs[c]["fluxos"] for c in usadas)]
+    xd = next((ctxs[c]["xd"] for c in usadas if ctxs[c]["xd"]["erro"]), ctxs[usadas[0]]["xd"])
+    _sugerir_pedidos(anexos, [{**it, "chave": it["token"]} for it in itens])
+    logger.info(f"analisar cnpj={','.join(usadas)} por={_quem_envia()} validos={len(itens)} rejeitados={len(rejeitados)} "
+                f"planilhas={n_planilhas} anexos={len(anexos)}")
+    return jsonify({"itens": itens, "rejeitados": rejeitados, "destinatarios": destinatarios, "anexos": anexos,
                     "regra_xml": cfg["regra_xml"], "regra_xml_rotulo": envios.REGRAS_XML.get(cfg["regra_xml"], ""),
                     "envio_ativo": cfg["envio_ativo"], "hoje": date.today().isoformat(), "entrega_ativa": entrega_ativa,
                     "fluxos_disponiveis": fluxos_disp, "fluxo_rotulos": envios.FLUXO_ROTULOS, "xd": xd})
@@ -1056,14 +1256,15 @@ def api_envios_analisar():
 
 def _casos_de_entrega(conn, itens: list[dict]) -> None:
     """Caso do endereço de entrega de cada XML da prévia (27/10, item["entrega"]):
-    memória pela empresa do envio (login de grupo: a do seletor). Mesmo
-    destinatário/endereço no lote calcula uma vez só."""
-    emp = _empresa_envio()
+    memória pela empresa do item (login de grupo: a emitente do XML). Mesmo
+    destinatário/endereço da mesma empresa no lote calcula uma vez só."""
+    empresas = {e["cnpj"]: e for e in g.cliente["empresas"]}
     casos: dict[tuple, dict] = {}
     for it in itens:
         if it.get("origem") != envios.ORIGEM_XML:
             continue
-        chave = tuple(it.get(k) or "" for k in ("destinatario_doc", "destinatario_cep", "destinatario_endereco",
+        emp = empresas.get(it.get("empresa_cnpj")) or _empresa_envio()
+        chave = tuple(it.get(k) or "" for k in ("empresa_cnpj", "destinatario_doc", "destinatario_cep", "destinatario_endereco",
                                                 "endereco_fiscal", "transportadora_nome", "transportadora_cnpj"))
         if chave not in casos:
             casos[chave] = endereco_entrega.classificar_entrega(conn, it, emp["cnpj"], emp.get("sender_id"))
@@ -1106,9 +1307,119 @@ def api_envios_cep(cep):
 @requer_cliente
 def api_envios_modelo_planilha():
     """Modelo .xlsx da Fresh Log pra importação por planilha (09/09)."""
-    conteudo = envios.gerar_modelo_planilha(_empresa_envio()["nome"] or "")
+    grupo = _grupo_sem_seletor()
+    conteudo = envios.gerar_modelo_planilha(_empresa_envio()["nome"] or "",
+                                            {c: e["nome"] for c, e in grupo.items()} if grupo else None)
     return send_file(io.BytesIO(conteudo), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name="modelo_pedidos_freshlog.xlsx", max_age=0)
+
+def _sugerir_pedidos(anexos: list[dict], pedidos: list[dict]) -> None:
+    """Poe em cada anexo o pedido sugerido (`pedido` = chave, ou None) e o
+    motivo. E so sugestao: o usuario confere antes de enviar."""
+    for a in anexos:
+        a["pedido"], a["motivo"] = anexos_pedido.sugerir_pedido(a, pedidos)
+
+
+@app.route("/api/envios/anexos/ler", methods=["POST"])
+@requer_cliente
+@exige_mesma_origem
+def api_envios_anexos_ler():
+    """So PDFs: le cada um, guarda no temporario e sugere o pedido entre os
+    que a tela mandou em `pedidos` (JSON [{chave, numero_nf, destinatario_doc,
+    referencia}]) -- os da previa ou um pedido ja enviado. Nada e anexado
+    aqui; quem anexa e o confirmar (previa) ou POST /api/envios/<id>/anexos."""
+    _exige_pode_enviar()
+    arquivos = request.files.getlist("arquivos")
+    if not arquivos:
+        return jsonify({"erro": "Selecione pelo menos um PDF."}), 400
+    if len(arquivos) > anexos_pedido.MAX_PDFS_POR_ENVIO:
+        return jsonify({"erro": f"Envie no máximo {anexos_pedido.MAX_PDFS_POR_ENVIO} PDFs por vez."}), 400
+    try:
+        pedidos = [p for p in json.loads(request.form.get("pedidos") or "[]") if isinstance(p, dict) and p.get("chave")]
+    except ValueError:
+        pedidos = []
+    anexos, rejeitados = [], []
+    for f in arquivos:
+        try:
+            anexos.append(anexos_pedido.guardar_previa(f.filename or "documento.pdf", f.read(), g.cliente["cnpj"]))
+        except envios.ErroEnvio as e:
+            rejeitados.append({"arquivo": f.filename or "arquivo", "erro": str(e)})
+    _sugerir_pedidos(anexos, pedidos[:500])
+    return jsonify({"anexos": anexos, "rejeitados": rejeitados})
+
+
+def _envio_pra_anexo(conn, envio_id: int) -> dict:
+    envio = envios.buscar_envio(conn, envio_id, _empresa_envio()['cnpj'])
+    if not envio:
+        abort(404)
+    return envio
+
+
+@app.route("/api/envios/<int:envio_id>/anexos", methods=["POST"])
+@requer_cliente
+@exige_mesma_origem
+def api_envios_anexar(envio_id):
+    """Anexa a um pedido ja enviado os documentos lidos em /anexos/ler.
+    Corpo: {anexos: [token], conferido: true}."""
+    _exige_pode_enviar()
+    corpo = request.get_json(silent=True) or {}
+    tokens = [t for t in (corpo.get("anexos") or []) if isinstance(t, str)]
+    if not tokens:
+        return jsonify({"erro": "Nenhum documento pra anexar."}), 400
+    if corpo.get("conferido") is not True:
+        return jsonify({"erro": "Confirme que os documentos são deste pedido."}), 400
+    conn = envios.conectar()
+    try:
+        envio = _envio_pra_anexo(conn, envio_id)
+        if not anexos_pedido.pode_anexar(conn, envio):
+            return jsonify({"erro": "Este pedido já saiu pra entrega (ou foi encerrado) e não aceita mais documentos."}), 409
+        gravados = anexos_pedido.anexar(conn, envio, [{"token": t, "casado_por": "manual"} for t in tokens], _quem_envia(),
+                                        dono=g.cliente["cnpj"])
+        conn.commit()
+    except envios.ErroEnvio as e:
+        conn.rollback()
+        return _json_erro_envio(e)
+    finally:
+        conn.close()
+    logger.info(f"anexar envio={envio_id} por={_quem_envia()} n={len(gravados)}")
+    return jsonify({"ok": True, "anexados": gravados})
+
+
+@app.route("/api/envios/<int:envio_id>/anexos/<int:anexo_id>")
+@requer_cliente
+def api_envios_anexo_baixar(envio_id, anexo_id):
+    conn = envios.conectar()
+    try:
+        _envio_pra_anexo(conn, envio_id)
+        anexo = anexos_pedido.buscar(conn, envio_id, anexo_id)
+    finally:
+        conn.close()
+    if not anexo or not anexos_pedido.caminho(anexo).is_file():
+        abort(404)
+    resposta = send_file(anexos_pedido.caminho(anexo), mimetype="application/pdf", download_name=anexo["nome_original"], max_age=0)
+    resposta.headers["X-Content-Type-Options"] = "nosniff"
+    return resposta
+
+
+@app.route("/api/envios/<int:envio_id>/anexos/<int:anexo_id>/remover", methods=["POST"])
+@requer_cliente
+@exige_mesma_origem
+def api_envios_anexo_remover(envio_id, anexo_id):
+    _exige_pode_enviar()
+    conn = envios.conectar()
+    try:
+        envio = _envio_pra_anexo(conn, envio_id)
+        anexo = anexos_pedido.buscar(conn, envio_id, anexo_id)
+        if not anexo:
+            abort(404)
+        if not anexos_pedido.pode_anexar(conn, envio):
+            return jsonify({"erro": "Este pedido já saiu pra entrega (ou foi encerrado): o documento não pode mais ser removido."}), 409
+        anexos_pedido.remover(conn, anexo)
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info(f"remover anexo={anexo_id} envio={envio_id} por={_quem_envia()}")
+    return jsonify({"ok": True})
 
 
 @app.route("/api/envios/confirmar", methods=["POST"])
@@ -1122,28 +1433,61 @@ def api_envios_confirmar():
         return jsonify({"erro": "Nenhum pedido pra confirmar."}), 400
     if len(itens) > 200:
         return jsonify({"erro": "Envie no máximo 200 notas por vez."}), 400
+    # Documentos dos pedidos (11/11): item["anexos"] = [{token, casado_por}].
+    # So entram com a confirmacao do usuario de que cada um esta no pedido certo.
+    anexos_por_token = {it.get("token"): [a for a in (it.get("anexos") or []) if isinstance(a, dict)]
+                        for it in itens if isinstance(it, dict) and isinstance(it.get("anexos"), list) and it["anexos"]}
+    if anexos_por_token and corpo.get("anexos_conferidos") is not True:
+        return jsonify({"erro": "Confirme que cada documento está no pedido correto antes de enviar."}), 400
+    anexos_falhas = []
     conn = envios.conectar()
     try:
+        anexos_pedido.validar_tokens([a.get("token", "") for lista in anexos_por_token.values() for a in lista],
+                                     g.cliente["cnpj"])
         # Data fora do dia de visita da região (Hugo, 03/10): pergunta antes de
         # gravar; o embarcador troca a data ou confirma assim mesmo
         # (aceita_fora_dia_fixo no item) e o pedido vira envio dedicado.
         fora = envios.avisos_fora_dia_fixo(itens, _CONFIG)
         if fora:
             return jsonify({"erro": "Há pedidos com data fora do dia de visita da região.", "fora_dia_fixo": fora}), 409
-        cfg = envios.config_stokki_cliente(conn, _empresa_envio()['cnpj'], _CONFIG)
-        fluxos_disp, _xd = envios.fluxos_para_envio(conn, _empresa_envio()['cnpj'])
-        criados = envios.confirmar_envios(conn, _empresa_envio()['cnpj'], itens, _quem_envia(), _CONFIG, cfg["regra_xml"],
-                                          fluxos_disponiveis=fluxos_disp, sender_id=_empresa_envio().get("sender_id"))
+        grupo = _grupo_sem_seletor()
+        if grupo:   # a empresa de cada pedido sai do próprio temporário (emitente)
+            por_empresa = {c: {"regra_xml": envios.config_stokki_cliente(conn, c, _CONFIG)["regra_xml"],
+                               "fluxos": envios.fluxos_para_envio(conn, c)[0], "sender_id": e.get("sender_id")}
+                           for c, e in grupo.items()}
+            criados = envios.confirmar_envios(conn, g.cliente["cnpj"], itens, _quem_envia(), _CONFIG, "nenhuma",
+                                              por_empresa=por_empresa)
+        else:
+            cfg = envios.config_stokki_cliente(conn, _empresa_envio()['cnpj'], _CONFIG)
+            fluxos_disp, _xd = envios.fluxos_para_envio(conn, _empresa_envio()['cnpj'])
+            criados = envios.confirmar_envios(conn, _empresa_envio()['cnpj'], itens, _quem_envia(), _CONFIG, cfg["regra_xml"],
+                                              fluxos_disponiveis=fluxos_disp, sender_id=_empresa_envio().get("sender_id"))
+        # Os pedidos ja estao gravados: documento que falhar nao derruba o envio,
+        # vira aviso (o cliente anexa de novo pela lista).
+        for c in criados:
+            lista = anexos_por_token.get(c.pop("token", None))
+            if not lista:
+                continue
+            try:
+                anexos_pedido.anexar(conn, envios.buscar_envio(conn, c["id"], c.get("cnpj_embarcador") or _empresa_envio()['cnpj']),
+                                     lista, _quem_envia(), dono=g.cliente["cnpj"])
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                logger.exception(f"anexos do envio {c['id']} falharam")
+                anexos_falhas.append(str(e) if isinstance(e, envios.ErroEnvio)
+                                     else f"{c.get('numero_nf') or c.get('referencia')}: documentos não anexados.")
         # Área não atendida (Hugo, 23/09): 1 chamado no chat + e-mails; a
         # linha fica AGUARDANDO_LIBERACAO até a equipe liberar no painel.
         bloqueados = [c for c in criados if c.get("status") == envios.STATUS_AGUARDANDO_LIBERACAO]
         if bloqueados:
             import bloqueio_area
-            emp = _empresa_envio()
-            # CNPJ do LOGIN (g.cliente), não da empresa do seletor: o widget do
+            # CNPJ do LOGIN (g.cliente), não da empresa do pedido: o widget do
             # chat busca o chamado pelo CNPJ logado (login de grupo -- revisão 23/09)
-            bloqueio_area.abrir_bloqueio(conn, {"cnpj": g.cliente["cnpj"], "sender_id": emp.get("sender_id"), "nome": emp.get("nome")},
-                                         criados, _CONFIG)
+            for cnpj in dict.fromkeys(c.get("cnpj_embarcador") for c in bloqueados):
+                emp = (grupo or {}).get(cnpj) or _empresa_envio()
+                bloqueio_area.abrir_bloqueio(conn, {"cnpj": g.cliente["cnpj"], "sender_id": emp.get("sender_id"), "nome": emp.get("nome")},
+                                             [c for c in criados if c.get("cnpj_embarcador") == cnpj], _CONFIG)
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     except Exception as e:
@@ -1151,7 +1495,8 @@ def api_envios_confirmar():
         return jsonify({"erro": f"Não foi possível registrar os pedidos ({type(e).__name__})."}), 500
     finally:
         conn.close()
-    logger.info(f"confirmar cnpj={_empresa_envio()['cnpj']} por={_quem_envia()} n={len(criados)}")
+    logger.info(f"confirmar cnpj={','.join(dict.fromkeys(c.get('cnpj_embarcador') or _empresa_envio()['cnpj'] for c in criados))} "
+                f"por={_quem_envia()} n={len(criados)}")
     n = len(criados)
     if bloqueados:
         b = len(bloqueados)
@@ -1160,7 +1505,9 @@ def api_envios_confirmar():
     else:
         mensagem = (f"{n} pedido{'s' if n > 1 else ''} recebido{'s' if n > 1 else ''} com sucesso. "
                     f"A criação na Stokki pode levar alguns instantes -- acompanhe o status na lista abaixo.")
-    return jsonify({"ok": True, "criados": criados, "bloqueados": bloqueados, "mensagem": mensagem})
+    if anexos_falhas:
+        mensagem += " Atenção: " + " ".join(anexos_falhas) + " Anexe de novo pela lista abaixo (Documentos)."
+    return jsonify({"ok": True, "criados": criados, "bloqueados": bloqueados, "mensagem": mensagem, "anexos_falhas": anexos_falhas})
 
 
 @app.route("/api/envios/reenviar-erros", methods=["POST"])
@@ -1171,7 +1518,10 @@ def api_envios_reenviar_erros():
     _exige_pode_enviar()
     conn = envios.conectar()
     try:
-        r = envios.reenviar_erros(conn, _empresa_envio()['cnpj'], _quem_envia())
+        r = {"na_fila": 0, "liberacao": 0}
+        for cnpj in (_grupo_sem_seletor() or {_empresa_envio()['cnpj']: None}):
+            for k, v in envios.reenviar_erros(conn, cnpj, _quem_envia()).items():
+                r[k] += v
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     finally:
@@ -1198,17 +1548,30 @@ def api_envios_acao(envio_id):
     _exige_pode_enviar()
     corpo = request.get_json(silent=True) or {}
     tipo = corpo.get("tipo")
+    # cada troca consulta CEP, geocodifica e escreve no chamado: mesmo limite por minuto do CEP
+    if tipo == "alterar_endereco" and _cep_acima_do_limite(g.cliente["cnpj"]):
+        return jsonify({"erro": "Muitas tentativas. Tente de novo em um minuto."}), 429
     conn = envios.conectar()
     try:
         envio = envios.buscar_envio(conn, envio_id, _empresa_envio()['cnpj'])
         if not envio:
             return jsonify({"erro": "Pedido não encontrado."}), 404
-        resultado = envios.aplicar_acao(conn, envio, tipo, corpo, _quem_envia())
+        if tipo == "alterar_endereco":
+            # pedido barrado pela area (13/11): troca o endereco e reavalia a regiao
+            resultado = envios.alterar_endereco_bloqueado(conn, envio, corpo.get("endereco"), _CONFIG, _quem_envia(), corpo)
+        else:
+            resultado = envios.aplicar_acao(conn, envio, tipo, corpo, _quem_envia())
+    except envios.ForaDiaFixo as e:
+        # regiao nova com outro dia de visita (16/11): a tela pede nova data ou a confirmacao
+        return jsonify({"erro": str(e), "fora_dia_fixo": e.aviso}), 409
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     finally:
         conn.close()
     logger.info(f"acao cnpj={_empresa_envio()['cnpj']} envio={envio_id} tipo={tipo} por={_quem_envia()} -> {resultado}")
+    if tipo == "alterar_endereco" and envio.get("bloqueio_chamado_id"):
+        import bloqueio_area
+        bloqueio_area.avisar_endereco_alterado(envio, resultado, _quem_envia())
     if resultado.get("precisa_operacao"):
         _avisar_operacao_solicitacao(envio, tipo, corpo)
     # cancelamento de envio bloqueado por área (23/09): registra no chamado do chat

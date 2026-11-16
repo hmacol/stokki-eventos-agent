@@ -788,5 +788,91 @@ class TestRotasCorpoInvalido(unittest.TestCase):
                 self.assertIn("erro", r.get_json())
 
 
+class TestExpedirStokki(unittest.TestCase):
+    """Expedir na Stokki (Hugo, 12/11): a tela poe o expedir_pedidos.py na fila e le o resultado depois."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self._tmp.cleanup)
+        self.pasta = Path(self._tmp.name)
+        p = mock.patch.object(acoes_pedidos.tratativas, "registrar_evento")
+        self.evento = p.start()
+        self.addCleanup(p.stop)
+
+    def test_monta_a_execucao_so_com_os_codigos_base_sem_repetir(self):
+        chamadas = []
+
+        def iniciar(args):
+            chamadas.append(args)
+            return 77, True
+        r = acoes_pedidos.expedir_stokki(["#PS-43333", "PS-43333-R1", "ps-500, PS-501"], "maria",
+                                         iniciar=iniciar, pasta=self.pasta)
+        self.assertEqual((r["ok"], r["execucao_id"], r["na_fila"]), (True, 77, True))
+        self.assertEqual(r["codigos"], ["PS-43333", "PS-500", "PS-501"])
+        args = chamadas[0]
+        self.assertEqual(args[:5], ["--pedido", "PS-43333", "PS-500", "PS-501", "--tela-pedidos"])
+        self.assertEqual(args[5:], ["--resultado-json", str(self.pasta / f"expedir_tela_{r['token']}.json")])
+        self.assertEqual(self.evento.call_count, 3)
+        self.assertIn("maria", self.evento.call_args.kwargs["texto"])
+
+    def test_recusa_sem_codigo_ps_e_acima_do_teto_sem_iniciar(self):
+        iniciar = mock.Mock()
+        self.assertFalse(acoes_pedidos.expedir_stokki([], "m", iniciar=iniciar, pasta=self.pasta)["ok"])
+        self.assertFalse(acoes_pedidos.expedir_stokki("PS-1", "m", iniciar=iniciar, pasta=self.pasta)["ok"])
+        self.assertFalse(acoes_pedidos.expedir_stokki(["NF 123"], "m", iniciar=iniciar, pasta=self.pasta)["ok"])
+        muitos = [f"PS-{n}" for n in range(1000, 1000 + acoes_pedidos._MAX_EXPEDIR + 1)]
+        self.assertFalse(acoes_pedidos.expedir_stokki(muitos, "m", iniciar=iniciar, pasta=self.pasta)["ok"])
+        iniciar.assert_not_called()
+
+    def test_andamento_na_fila_rodando_e_fim_com_resultado(self):
+        token = "a" * 32
+        ex = {"id": 9, "agente_id": "somente_expedicao", "status": "NA_FILA"}
+        self.assertEqual(acoes_pedidos.andamento_expedicao(ex, token, self.pasta), {"ok": True, "estado": "na_fila"})
+        ex["status"] = "RODANDO"
+        self.assertEqual(acoes_pedidos.andamento_expedicao(ex, token, self.pasta)["estado"], "rodando")
+        ex["status"] = "SUCESSO"
+        sem = acoes_pedidos.andamento_expedicao(ex, token, self.pasta)
+        self.assertEqual((sem["estado"], sem["resultados"]), ("fim", {}))
+        self.assertIn("execução 9", sem["erro"])
+        (self.pasta / f"expedir_tela_{token}.json").write_text(
+            '{"PS-1": {"ok": true, "mensagem": "Expedido na Stokki"}}', encoding="utf-8")
+        fim = acoes_pedidos.andamento_expedicao(ex, token, self.pasta)
+        self.assertEqual(fim, {"ok": True, "estado": "fim",
+                               "resultados": {"PS-1": {"ok": True, "mensagem": "Expedido na Stokki"}}})
+
+    def test_andamento_recusa_outro_agente_e_token_fora_do_formato(self):
+        ok = {"id": 9, "agente_id": "somente_expedicao", "status": "SUCESSO"}
+        self.assertFalse(acoes_pedidos.andamento_expedicao(None, "a" * 32, self.pasta)["ok"])
+        self.assertFalse(acoes_pedidos.andamento_expedicao({**ok, "agente_id": "pipeline"}, "a" * 32, self.pasta)["ok"])
+        self.assertFalse(acoes_pedidos.andamento_expedicao(ok, "../../config", self.pasta)["ok"])
+
+    def test_rotas_iniciam_na_fila_do_planejamento_e_devolvem_o_andamento(self):
+        painel_agentes.app.config["TESTING"] = True
+        cliente = painel_agentes.app.test_client()
+        origem = {"Origin": "http://localhost"}
+        with mock.patch.object(painel_agentes, "_carregar_config",
+                               return_value={"painel_agentes": {"usuario": "u", "senha": "s"}}), \
+                mock.patch.object(painel_agentes, "_LOGS_EXECUCOES", self.pasta), \
+                mock.patch.object(painel_agentes, "iniciar_execucao_com_fila", return_value=(31, False)) as ini, \
+                mock.patch.object(painel_agentes, "buscar_execucao",
+                                  return_value={"id": 31, "agente_id": "somente_expedicao", "status": "RODANDO"}):
+            with cliente.session_transaction() as sess:
+                sess["nivel_acesso"] = "atendimento"
+                sess["usuario"] = "maria"
+            r = cliente.post("/api/pedidos/acao/expedir-stokki", json={"codigos": ["#PS-43333"]}, headers=origem)
+            self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+            d = r.get_json()
+            self.assertEqual((d["execucao_id"], d["codigos"]), (31, ["PS-43333"]))
+            self.assertEqual(ini.call_args.args[0]["id"], "somente_expedicao")
+            self.assertFalse(ini.call_args.kwargs["modo_teste"])
+            self.assertEqual(ini.call_args.kwargs["ids_do_grupo"], painel_agentes.AGENTES_PLANEJAMENTO_IDS)
+            a = cliente.get(f"/api/pedidos/acao/expedir-stokki/andamento?execucao_id=31&token={d['token']}")
+            self.assertEqual(a.get_json(), {"ok": True, "estado": "rodando"})
+            self.assertEqual(
+                cliente.get("/api/pedidos/acao/expedir-stokki/andamento?execucao_id=x&token=y").status_code, 404)
+            self.assertEqual(cliente.post("/api/pedidos/acao/expedir-stokki", json={"codigos": []},
+                                          headers=origem).status_code, 400)
+
+
 if __name__ == "__main__":
     unittest.main()

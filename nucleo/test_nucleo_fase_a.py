@@ -478,6 +478,33 @@ class TestFinanceiro(_BaseTemp):
         self.assertEqual(fechamento[0]["total_rotas"], 550.0 + 550.0)
         conn.close()
 
+    def test_valor_combinado_vence_a_tarifa(self):
+        # Hugo, 11/11: valor combinado com o motorista vale no lugar do calculo por km,
+        # inclusive pra veiculo sem tarifa; limpar volta ao calculo.
+        conn = banco.conectar()
+        r1 = rotas.materializar_rascunho(_rascunho_fake(1, km=80.0), "VUUPT", 1, conn=conn)
+        pela_tarifa = financeiro.extrato_motorista(1234, "2026-08-26", "2026-08-31", "FIORINO", conn=conn)["linhas"][0]["valor"]
+        self.assertGreater(pela_tarifa, 340.0)
+        financeiro.gravar_valor_combinado(r1, 340.0, "combinado com o Gabriel", conn=conn)
+        extrato = financeiro.extrato_motorista(1234, "2026-08-26", "2026-08-31", "FIORINO", conn=conn)
+        linha = extrato["linhas"][0]
+        self.assertEqual((linha["valor"], linha["valor_combinado"], linha["valor_combinado_motivo"]),
+                         (340.0, True, "combinado com o Gabriel"))
+        self.assertEqual(extrato["total"], 340.0)
+
+        sem = financeiro.extrato_motorista(1234, "2026-08-26", "2026-08-31", "TRUCK", conn=conn)
+        self.assertEqual((sem["total"], sem["rotas_sem_tarifa"], sem["linhas"][0]["sem_tarifa"]), (340.0, 0, False))
+
+        financeiro.gravar_valor_combinado(r1, None, None, conn=conn)
+        extrato = financeiro.extrato_motorista(1234, "2026-08-26", "2026-08-31", "FIORINO", conn=conn)
+        self.assertEqual((extrato["linhas"][0]["valor"], extrato["linhas"][0]["valor_combinado"]), (pela_tarifa, False))
+
+        with self.assertRaises(ValueError):
+            financeiro.gravar_valor_combinado(99999, 100.0, "x", conn=conn)
+        with self.assertRaises(ValueError):
+            financeiro.gravar_valor_combinado(r1, 100.0, "", conn=conn)
+        conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -25,12 +25,21 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date, timedelta
 
-from nucleo import banco
+from nucleo import banco, canhotos_manuais
 
 POR_PAGINA = 100
 DIAS_PADRAO = 7   # Hugo, 09/11: a tela abre nos últimos 7 dias
 
-STATUS = [banco.PEDIDO_ABERTO, banco.PEDIDO_EM_ROTA, banco.PEDIDO_ENTREGUE,
+# IMPORTADO (Hugo, 12/11): pedido que já está na Stokki (ou sendo enviado
+# pelo portal) e ainda não chegou à Vuupt. Não existe em nucleo_pedidos: só
+# esta tela monta, juntando galpao_pedidos e portal_envios (ver _norm).
+IMPORTADO = "IMPORTADO"
+# COLETADO (Hugo, 12/11): pedido de retirada que saiu do galpão sem passar pela
+# Vuupt -- a transportadora ou o cliente levou. Quem diz é expedicao_coletas_fila
+# (coletas/ler_stokki.py): transportadora de retirada e já fora da listagem
+# "Aguardando Transportador" da Stokki.
+COLETADO = "COLETADO"
+STATUS = [IMPORTADO, COLETADO, banco.PEDIDO_ABERTO, banco.PEDIDO_EM_ROTA, banco.PEDIDO_ENTREGUE,
           banco.PEDIDO_INSUCESSO, banco.PEDIDO_CANCELADO]
 FLUXOS = [banco.FLUXO_ENTREGA, banco.FLUXO_RETIRADA]
 
@@ -54,6 +63,15 @@ _SQL_REFERENCIA = (f"CASE WHEN instr({_SQL_CABECA}, ' - ') > 0 "
                    f"THEN trim(substr({_SQL_CABECA}, instr({_SQL_CABECA}, ' - ') + 3)) END")
 # fluxo só existe desde 16/09; nas linhas antigas sai do título.
 _SQL_FLUXO = "COALESCE(fluxo, CASE WHEN titulo LIKE '[RETIRADA]%' THEN 'RETIRADA' ELSE 'ENTREGA' END)"
+# Tem canhoto (Hugo, 11/11): o mesmo critério da /canhotos-pendentes
+# (canhotos_manuais.pendentes) -- foto no checklist da Vuupt, canhoto ou
+# assinatura do app (nucleo_comprovantes da última parada) ou canhoto subido
+# pelo painel (canhotos_manuais). Vale pra coluna Canhoto e pro filtro.
+_SQL_TEM_CANHOTO = (
+    "(COALESCE(base.qtd_checklists, 0) > 0"
+    " OR base.c IN (SELECT UPPER(LTRIM(codigo, '# ')) FROM canhotos_manuais)"
+    " OR EXISTS (SELECT 1 FROM nucleo_comprovantes cp WHERE cp.parada_id = base.parada_id"
+    " AND cp.tipo IN ('CANHOTO', 'ASSINATURA')))")
 
 
 @dataclass(frozen=True)
@@ -71,6 +89,7 @@ COLUNAS = [
     Coluna("codigo_servico", "Código do serviço", "codigo"),
     Coluna("referencia", "Referência", _SQL_REFERENCIA, True),
     Coluna("status", "Status", "status", True, "status"),
+    Coluna("situacao_stokki", "Situação na Stokki", "situacao_stokki"),
     Coluna("status_vuupt", "Status Vuupt",
            "TRIM(COALESCE(status_provedor, '') || CASE WHEN COALESCE(status_done_provedor, '') <> '' "
            "THEN ' / ' || status_done_provedor ELSE '' END)"),
@@ -100,7 +119,7 @@ COLUNAS = [
     Coluna("conclusao", "Conclusão", "conclusao", True, "data_hora"),
     Coluna("motivo", "Motivo do insucesso", "motivo", True),
     Coluna("tentativas", "Tentativas", "tentativas", False, "numero"),
-    Coluna("canhoto", "Canhoto", "CASE WHEN COALESCE(qtd_checklists, 0) > 0 THEN 'Sim' ELSE 'Não' END"),
+    Coluna("canhoto", "Canhoto", f"CASE WHEN {_SQL_TEM_CANHOTO} THEN 'Sim' ELSE 'Não' END"),
     Coluna("anexos", "Anexos", "qtd_anexos", False, "numero"),
     Coluna("origem", "Origem", "origem"),
     Coluna("nota", "Nota", "nota"),
@@ -124,7 +143,7 @@ _SQL_POS_R = "MIN(" + ", ".join(
 # (empresa, código base): duas empresas com o mesmo código não se misturam.
 _SQL_CTES = f"""
 WITH ult AS (
-    SELECT p.codigo AS u_codigo, p.ordem AS ordem, p.situacao AS situacao_parada,
+    SELECT p.codigo AS u_codigo, p.id AS parada_id, p.ordem AS ordem, p.situacao AS situacao_parada,
            p.arrived_at AS chegada, p.completed_at AS conclusao, p.motivo_texto AS motivo,
            p.tentativas AS tentativas, r.id AS rota_id, r.nome AS rota_nome, r.data_rota AS data_rota,
            r.agent_id AS agent_id, r.motorista_nome AS motorista, r.tipo_veiculo AS tipo_veiculo,
@@ -133,7 +152,7 @@ WITH ult AS (
     WHERE p.codigo IS NOT NULL
 ),
 norm AS (
-    SELECT pe.*, UPPER(LTRIM(pe.codigo, '# ')) AS c FROM nucleo_pedidos pe
+    SELECT t.*, UPPER(LTRIM(t.codigo, '# ')) AS c FROM (__NORM__) t
 ),
 base_raw AS (
     SELECT pe.*, u.*,
@@ -147,16 +166,120 @@ base_raw AS (
     FROM norm pe LEFT JOIN ult u ON u.u_codigo = pe.codigo AND u.n = 1
 )
 """
+# Campos do pedido que a tela usa, na ordem em que as três fontes do `norm`
+# devolvem (núcleo, Stokki pelo coletor do galpão, envio do portal).
+_CAMPOS = ["codigo", "vuupt_service_id", "titulo", "status", "sender_id", "remetente_nome",
+           "remetente_codigo", "destinatario_nome", "destinatario_codigo", "destinatario_telefone",
+           "endereco", "complemento", "zona", "horario_inicio", "horario_fim", "agendamento_inicio",
+           "agendamento_fim", "caixas", "fluxo", "reentrega_de_codigo", "status_provedor",
+           "status_done_provedor", "qtd_checklists", "qtd_anexos", "origem", "nota",
+           "criado_em_provedor", "criado_em", "atualizado_em_provedor", "excluido_em", "situacao_stokki"]
+_NORM_NUCLEO = "SELECT " + ", ".join(_CAMPOS[:-1]) + ", NULL AS situacao_stokki FROM nucleo_pedidos"
+# Envio do portal que vale como pedido: o último de cada código (ou o próprio
+# envio, enquanto não tem código). Erro e duplicado ficam fora (Hugo, 12/11).
+_ENVIOS = ("(SELECT * FROM portal_envios WHERE id IN (SELECT MAX(id) FROM portal_envios "
+           "WHERE status NOT IN ('ERRO', 'DUPLICADO') GROUP BY COALESCE(codigo_pedido, 'ENVIO-' || id)))")
+_ENDERECO_ENVIO = ("NULLIF(TRIM(COALESCE(e.destinatario_endereco, '') || ' ' || COALESCE(e.destinatario_bairro, '')"
+                   " || ' ' || COALESCE(e.destinatario_municipio, '') || ' ' || COALESCE(e.destinatario_uf, '')), '')")
+_AGENDA_ENVIO = "e.agendamento_data || ' ' || COALESCE(e.agendamento_hora_inicio, '00:00')"
+_TITULO_ENVIO = "'#' || {cod} || CASE WHEN e.numero_nf IS NOT NULL THEN ' - ' || e.numero_nf ELSE '' END"
+_DO_ENVIO = {
+    "destinatario_nome": "e.destinatario_nome", "destinatario_codigo": "e.destinatario_doc",
+    "destinatario_telefone": "e.destinatario_telefone", "endereco": _ENDERECO_ENVIO,
+    "horario_inicio": "e.horario_inicio", "horario_fim": "e.horario_fim",
+    "agendamento_inicio": _AGENDA_ENVIO, "caixas": "e.volumes", "nota": "e.observacoes"}
+
+
+def _fora_do_nucleo(codigo: str) -> str:
+    return f"NOT EXISTS (SELECT 1 FROM nucleo_pedidos n WHERE n.codigo IN ({codigo}, '#' || {codigo}))"
+
+
+def _campos(valores: dict) -> str:
+    """SELECT na ordem de _CAMPOS; o que não está em `valores` sai NULL."""
+    return "SELECT " + ", ".join(f"{valores.get(c, 'NULL')} AS {c}" for c in _CAMPOS)
+
+
+def _norm(conn: sqlite3.Connection) -> str:
+    """As linhas de pedido da tela: o núcleo (espelho da Vuupt) mais o que
+    ainda não chegou lá -- pedidos da Stokki vistos pelo coletor do galpão
+    (galpao_pedidos, a cada minuto) e envios do portal que o coletor ainda
+    não viu. Cancelado na Stokki/portal entra como CANCELADO; o resto, como
+    IMPORTADO. Some daqui sozinho quando o código aparece no núcleo. Só usa
+    as tabelas que existem (banco de teste pode não ter galpão nem portal)."""
+    tabelas = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN "
+        "('galpao_pedidos', 'galpao_eventos', 'portal_envios', 'clientes_portal', 'expedicao_coletas_fila')")}
+    galpao = {"galpao_pedidos", "galpao_eventos"} <= tabelas
+    portal = {"portal_envios", "clientes_portal"} <= tabelas
+    coletas = "expedicao_coletas_fila" in tabelas
+    coletado = "cf.retirada = 1 AND cf.saiu_em IS NOT NULL"
+    partes = [_NORM_NUCLEO]
+    if galpao:
+        do_envio = dict(_DO_ENVIO, titulo=_TITULO_ENVIO.format(cod="g.codigo")) if portal else {}
+        ou = (lambda sql: f", {sql}") if portal else (lambda sql: "")
+        partes.append(_campos({
+            **do_envio,
+            "codigo": "g.codigo",
+            "status": ("CASE WHEN g.situacao = 'Cancelado'" + (" OR e.status = 'CANCELADO'" if portal else "")
+                       + " THEN 'CANCELADO'" + (f" WHEN {coletado} THEN '{COLETADO}'" if coletas else "")
+                       + f" ELSE '{IMPORTADO}' END"),
+            "sender_id": "COALESCE(m.e_sid" + ou("cp.sender_id") + ", NULL)",
+            "remetente_nome": "COALESCE(m.e_rem" + ou("cp.nome") + ", g.embarcador)",
+            "remetente_codigo": "COALESCE(m.e_cnpj" + ou("e.cnpj_embarcador") + ", NULL)",
+            "origem": "'STOKKI'",
+            "criado_em": ("COALESCE((SELECT MIN(ev.quando) FROM galpao_eventos ev WHERE ev.id_stokki = g.id_stokki)"
+                          + ou("e.criado_em") + ", g.atualizado_em)"),
+            "situacao_stokki": (f"CASE WHEN g.situacao <> 'Cancelado' AND {coletado} THEN 'Enviado' ELSE g.situacao END"
+                                if coletas else "g.situacao")})
+            + " FROM galpao_pedidos g"
+            + (" LEFT JOIN expedicao_coletas_fila cf ON cf.id_stokki = g.id_stokki" if coletas else "")
+            # embarcador do galpão ("NOME ... #stkkc-N") -> o da Vuupt, pelo pedido mais novo dele no núcleo
+            + " LEFT JOIN (SELECT g2.embarcador AS e_nome, n.sender_id AS e_sid, n.remetente_nome AS e_rem,"
+              " n.remetente_codigo AS e_cnpj, MAX(g2.id_stokki) AS e_ultimo FROM galpao_pedidos g2"
+              " JOIN nucleo_pedidos n ON n.codigo = g2.codigo WHERE n.sender_id IS NOT NULL"
+              " GROUP BY g2.embarcador) m ON m.e_nome = g.embarcador"
+            + (f" LEFT JOIN {_ENVIOS} e ON e.codigo_pedido = g.codigo"
+               " LEFT JOIN clientes_portal cp ON cp.cnpj = e.cnpj_embarcador" if portal else "")
+            + f" WHERE g.codigo IS NOT NULL AND {_fora_do_nucleo('g.codigo')}")
+    if portal:
+        cod = "COALESCE(e.codigo_pedido, 'ENVIO-' || e.id)"
+        partes.append(_campos({
+            **_DO_ENVIO,
+            "codigo": cod, "titulo": _TITULO_ENVIO.format(cod=cod),
+            "status": f"CASE WHEN e.status = 'CANCELADO' THEN 'CANCELADO' ELSE '{IMPORTADO}' END",
+            "sender_id": "cp.sender_id", "remetente_nome": "cp.nome", "remetente_codigo": "e.cnpj_embarcador",
+            "origem": "'PORTAL'", "criado_em": "e.criado_em",
+            "situacao_stokki": ("CASE e.status WHEN 'CRIADO' THEN 'Criado' WHEN 'CANCELADO' THEN 'Cancelado' "
+                                "WHEN 'EM_ESPERA_CLIENTE' THEN 'Em espera a pedido do cliente' "
+                                "ELSE 'Enviando pelo portal' END")})
+            + f" FROM {_ENVIOS} e LEFT JOIN clientes_portal cp ON cp.cnpj = e.cnpj_embarcador"
+            + " WHERE (e.codigo_pedido IS NULL OR (" + _fora_do_nucleo("e.codigo_pedido")
+            + (" AND NOT EXISTS (SELECT 1 FROM galpao_pedidos g WHERE g.codigo = e.codigo_pedido)" if galpao else "")
+            + "))")
+    return " UNION ALL ".join(partes)
+
+
 # Linha principal do grupo: 1) reentrega VIVA (aberto/em rota) com -R maior que o da tentativa
 # entregue -- é um reenvio feito depois da entrega e não pode ficar escondido (revisão final, 10/11);
 # 2) entregue (vence tentativa fechada e tentativa mais antiga); depois a data, o peso do status
 # (empate no mesmo dia), o número da reentrega e o código.
-_SQL_BASE = _SQL_CTES + """,
+# `alvo` (12/11, velocidade): só os pedidos com ALGUMA tentativa na data do
+# filtro entram no agrupamento. A linha principal do pedido é uma das
+# tentativas dele, então quem passaria no filtro de data está sempre em `alvo`
+# -- o resultado é o mesmo, mas as janelas rodam em centenas de linhas e não
+# no núcleo inteiro (em produção: de ~0,9 s pra ~0,1 s por consulta).
+# __PERIODO__ é o filtro de período (ver _periodo_sql e _consulta).
+_SQL_BASE = _SQL_CTES.rstrip() + """,
+alvo AS (
+    SELECT DISTINCT COALESCE(sender_id, -1) AS a_sid, pedido_base AS a_pb
+    FROM base_raw WHERE __PERIODO__
+),
 com_entregue AS (
     SELECT base_raw.*,
            MAX(CASE WHEN status = 'ENTREGUE' THEN sufixo_r END)
                OVER (PARTITION BY COALESCE(sender_id, -1), pedido_base) AS sufixo_r_entregue
     FROM base_raw
+    WHERE (COALESCE(sender_id, -1), pedido_base) IN (SELECT a_sid, a_pb FROM alvo)
 ),
 rank AS (
     SELECT com_entregue.*,
@@ -190,6 +313,27 @@ def periodo(de=None, ate=None) -> tuple[str, str]:
     return inicio, fim
 
 
+_RE_CODIGO = re.compile(r"^#?\s*(?:PS-)?(\d+)(?:-R\d+)?$", re.IGNORECASE)
+
+
+def _codigo_buscado(filtros: dict) -> str | None:
+    """Código base (PS-N) quando a busca é um código de pedido inteiro."""
+    m = _RE_CODIGO.match((filtros.get("q") or "").strip())
+    return f"PS-{m.group(1)}" if m else None
+
+
+def _periodo_sql(filtros: dict) -> tuple[str, list]:
+    """Filtro de período. Busca por código de pedido acha o pedido mesmo fora
+    do período (Hugo, 12/11): quem digita o código quer AQUELE pedido, e a
+    tela avisa que ele é de outra data (`fora_do_periodo` do listar)."""
+    inicio, fim = periodo(filtros.get("de"), filtros.get("ate"))
+    _, sql_data = DATAS.get(filtros.get("data_tipo") or "", DATAS["referencia"])
+    codigo = _codigo_buscado(filtros)
+    if codigo:
+        return f"({sql_data} BETWEEN ? AND ? OR pedido_base = ?)", [inicio, fim, codigo]
+    return f"{sql_data} BETWEEN ? AND ?", [inicio, fim]
+
+
 def _termo_coluna(termo: str) -> str:
     """O banco guarda data em ISO; quem filtra digita 09/11 ou 09/11/2026."""
     m = _RE_DATA_BR.match(termo)
@@ -201,12 +345,10 @@ def _termo_coluna(termo: str) -> str:
 
 def _where(filtros: dict) -> tuple[str, list]:
     """Monta o WHERE a partir do dicionário de filtros da tela. Chaves:
-    de, ate, data_tipo, status, fluxo, sender_id, agent_id, zona, q e
-    colunas = {chave_da_coluna: texto}."""
-    inicio, fim = periodo(filtros.get("de"), filtros.get("ate"))
-    _, sql_data = DATAS.get(filtros.get("data_tipo") or "", DATAS["referencia"])
-    partes = [f"{sql_data} BETWEEN ? AND ?"]
-    params: list = [inicio, fim]
+    de, ate, data_tipo, status, fluxo, sender_id, agent_id, zona, canhoto
+    (com | sem), q e colunas = {chave_da_coluna: texto}."""
+    sql_periodo, params = _periodo_sql(filtros)
+    partes = [sql_periodo]
 
     status = (filtros.get("status") or "").upper()
     if status in STATUS:
@@ -227,6 +369,13 @@ def _where(filtros: dict) -> tuple[str, list]:
     if filtros.get("zona"):
         partes.append("zona = ?")
         params.append(filtros["zona"])
+    canhoto = (filtros.get("canhoto") or "").lower()
+    if canhoto == "com":
+        partes.append(_SQL_TEM_CANHOTO)
+    elif canhoto == "sem":
+        # Só entregue (Hugo, 11/11), e checklist sem informação (NULL) fica
+        # fora, como na /canhotos-pendentes.
+        partes.append(f"status = 'ENTREGUE' AND qtd_checklists = 0 AND NOT {_SQL_TEM_CANHOTO}")
 
     q = (filtros.get("q") or "").strip().lstrip("#").strip()
     if q:
@@ -251,6 +400,16 @@ def _where(filtros: dict) -> tuple[str, list]:
     return " WHERE " + " AND ".join(partes), params
 
 
+def _consulta(filtros: dict, conn: sqlite3.Connection) -> tuple[str, str, list]:
+    """(CTEs até `base`, WHERE, parâmetros) pros filtros da tela. O período
+    entra duas vezes: no `alvo` (quem participa do agrupamento) e no WHERE
+    (a linha principal do pedido)."""
+    where, params = _where(filtros)
+    sql_periodo, params_periodo = _periodo_sql(filtros)
+    return (_SQL_BASE.replace("__PERIODO__", sql_periodo).replace("__NORM__", _norm(conn)), where,
+            params_periodo + params)
+
+
 def _order_by(ordem: str | None, direcao: str | None) -> str:
     coluna = POR_CHAVE.get(ordem or "") or POR_CHAVE["data"]
     sentido = "ASC" if (direcao or "").lower() == "asc" else "DESC"
@@ -258,9 +417,9 @@ def _order_by(ordem: str | None, direcao: str | None) -> str:
     return f" ORDER BY ({coluna.sql}) IS NULL, ({coluna.sql}) {sentido}, codigo {sentido}"
 
 
-def _select() -> str:
+def _select(extra: str = "") -> str:
     campos = ", ".join(f"({c.sql}) AS {c.chave}" for c in COLUNAS)
-    return f"SELECT {campos}, rota_id, sender_id, pedido_base, vuupt_service_id FROM base"
+    return f"SELECT {campos}, rota_id, sender_id, pedido_base, vuupt_service_id{extra} FROM base"
 
 
 def listar(filtros: dict, pagina: int = 1, por_pagina: int = POR_PAGINA, ordem: str | None = None,
@@ -268,24 +427,80 @@ def listar(filtros: dict, pagina: int = 1, por_pagina: int = POR_PAGINA, ordem: 
     fechar = conn is None
     conn = conn or banco.conectar()
     try:
-        where, params = _where(filtros)
-        tot = conn.execute(f"{_SQL_BASE} SELECT COUNT(*) n, COALESCE(SUM(caixas), 0) cx FROM base{where}",
-                           params).fetchone()
-        total = tot["n"]
+        canhotos_manuais.garantir_tabela(conn)   # a coluna Canhoto lê dela
+        base, where, params = _consulta(filtros, conn)
+        _, sql_data = DATAS.get(filtros.get("data_tipo") or "", DATAS["referencia"])
+        # Total e caixas vêm na mesma consulta da página (12/11, velocidade).
+        sql = (f"{base} {_select(', COUNT(*) OVER () AS _n, COALESCE(SUM(caixas) OVER (), 0) AS _cx, ' + sql_data + ' AS _data')}"
+               f"{where}{_order_by(ordem, direcao)} LIMIT ? OFFSET ?")
+        pagina = max(1, int(pagina or 1))
+        rows = conn.execute(sql, params + [por_pagina, (pagina - 1) * por_pagina]).fetchall()
+        if not rows and pagina > 1:
+            # Página além do fim (filtro mudou com a URL antiga): cai na última.
+            n = conn.execute(f"{base} SELECT COUNT(*) n FROM base{where}", params).fetchone()["n"]
+            pagina = max(1, -(-n // por_pagina))
+            rows = conn.execute(sql, params + [por_pagina, (pagina - 1) * por_pagina]).fetchall()
+        total, caixas = (rows[0]["_n"], rows[0]["_cx"]) if rows else (0, 0)
         paginas = max(1, -(-total // por_pagina))
-        pagina = min(max(1, int(pagina or 1)), paginas)
-        rows = conn.execute(f"{_SQL_BASE} {_select()}{where}{_order_by(ordem, direcao)} LIMIT ? OFFSET ?",
-                            params + [por_pagina, (pagina - 1) * por_pagina]).fetchall()
         inicio, fim = periodo(filtros.get("de"), filtros.get("ate"))
-        linhas = [dict(r) for r in rows]
+        linhas = [{k: r[k] for k in r.keys() if k not in ("_n", "_cx", "_data")} for r in rows]
+        # Só a busca por código traz pedido de fora do período (_periodo_sql).
+        fora = [r["codigo"] for r in rows if not inicio <= (r["_data"] or "") <= fim]
         hist = tentativas([(l["sender_id"], l["pedido_base"]) for l in linhas], conn)
         for l in linhas:
             l["historico"] = hist.get((l["sender_id"], l["pedido_base"]), [])
-        return {"linhas": linhas, "total": total, "total_caixas": tot["cx"],
-                "pagina": pagina, "paginas": paginas, "periodo": {"de": inicio, "ate": fim}}
+        return {"linhas": linhas, "total": total, "total_caixas": caixas,
+                "pagina": pagina, "paginas": paginas, "periodo": {"de": inicio, "ate": fim},
+                "fora_do_periodo": fora}
     finally:
         if fechar:
             conn.close()
+
+
+def contar_por_status(filtros: dict, conn: sqlite3.Connection | None = None) -> dict:
+    """Abas da tela no celular (Hugo, 11/11): quantos pedidos em cada status
+    com os mesmos filtros da tela, menos o de status (a aba é o status)."""
+    fechar = conn is None
+    conn = conn or banco.conectar()
+    try:
+        canhotos_manuais.garantir_tabela(conn)   # a coluna Canhoto lê dela
+        base, where, params = _consulta({**filtros, "status": ""}, conn)
+        rows = conn.execute(f"{base} SELECT status, COUNT(*) n FROM base{where} GROUP BY status",
+                            params).fetchall()
+    finally:
+        if fechar:
+            conn.close()
+    saida = {s: 0 for s in STATUS}
+    for r in rows:
+        if r["status"] in saida:
+            saida[r["status"]] = r["n"]
+    saida["total"] = sum(r["n"] for r in rows)
+    return saida
+
+
+def contar_filas(filtros: dict, conn: sqlite3.Connection | None = None) -> dict:
+    """Filas do topo da tela no computador (Hugo, 11/11): quantos pedidos por
+    status e quantos entregues sem canhoto, com os filtros da tela MENOS status
+    e canhoto (a fila é quem escolhe os dois). Uma consulta só."""
+    fechar = conn is None
+    conn = conn or banco.conectar()
+    try:
+        canhotos_manuais.garantir_tabela(conn)
+        base, where, params = _consulta({**filtros, "status": "", "canhoto": ""}, conn)
+        rows = conn.execute(
+            f"{base} SELECT status, COUNT(*) n, COALESCE(SUM(CASE WHEN status = 'ENTREGUE' "
+            f"AND qtd_checklists = 0 AND NOT {_SQL_TEM_CANHOTO} THEN 1 ELSE 0 END), 0) sc "
+            f"FROM base{where} GROUP BY status", params).fetchall()
+    finally:
+        if fechar:
+            conn.close()
+    saida = {s: 0 for s in STATUS}
+    for r in rows:
+        if r["status"] in saida:
+            saida[r["status"]] = r["n"]
+    saida["total"] = sum(r["n"] for r in rows)
+    saida["sem_canhoto"] = sum(r["sc"] for r in rows)
+    return saida
 
 
 def tentativas(chaves: list[tuple[int | None, str]], conn: sqlite3.Connection) -> dict:
@@ -300,7 +515,8 @@ def tentativas(chaves: list[tuple[int | None, str]], conn: sqlite3.Connection) -
         bloco = chaves[i:i + 500]
         alvo = ", ".join(["(?, ?)"] * len(bloco))
         params = [x for s, b in bloco for x in (-1 if s is None else s, b)]
-        rows = conn.execute(f"""{_SQL_CTES.rstrip()},
+        ctes = _SQL_CTES.rstrip().replace("__NORM__", _norm(conn))
+        rows = conn.execute(f"""{ctes},
             alvo(sid, pb) AS (VALUES {alvo})
             SELECT br.sender_id AS sender_id, br.pedido_base AS pedido_base, r.data_rota AS data,
                    br.codigo AS codigo, p.situacao AS situacao, p.motivo_texto AS motivo,
@@ -316,7 +532,7 @@ def tentativas(chaves: list[tuple[int | None, str]], conn: sqlite3.Connection) -
                    CASE WHEN br.status = 'EM_ROTA' THEN br.rota_id END,
                    CASE WHEN br.status = 'EM_ROTA' THEN br.motorista END, NULL
             FROM base_raw br JOIN alvo ON alvo.sid = COALESCE(br.sender_id, -1) AND alvo.pb = br.pedido_base
-            WHERE br.status IN ('ABERTO', 'EM_ROTA', 'CANCELADO')""", params).fetchall()
+            WHERE br.status IN ('IMPORTADO', 'ABERTO', 'EM_ROTA', 'CANCELADO')""", params).fetchall()
         vistos = set()
         for r in rows:
             item = {k: r[k] for k in ("data", "codigo", "situacao", "motivo", "rota", "rota_id",
@@ -378,8 +594,9 @@ def exportar_csv(filtros: dict, chaves: list[str] | None = None, ordem: str | No
     fechar = conn is None
     conn = conn or banco.conectar()
     try:
-        where, params = _where(filtros)
-        rows = conn.execute(f"{_SQL_BASE} {_select()}{where}{_order_by(ordem, direcao)}", params).fetchall()
+        canhotos_manuais.garantir_tabela(conn)   # a coluna Canhoto lê dela
+        base, where, params = _consulta(filtros, conn)
+        rows = conn.execute(f"{base} {_select()}{where}{_order_by(ordem, direcao)}", params).fetchall()
         hist = tentativas([(r["sender_id"], r["pedido_base"]) for r in rows], conn)
     finally:
         if fechar:

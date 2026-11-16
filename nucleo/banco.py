@@ -415,6 +415,8 @@ _COLUNAS_ROTAS_NOVAS = [
     ("km_volta_estimado", "REAL"),      # última parada -> base (mesma fonte do km_estimado)
     ("km_fonte_estimativa", "TEXT"),    # GOOGLE_ROUTES | HAVERSINE
     ("horas_estimadas", "REAL"),        # 22/09: copiada do rascunho -- rodízio de rotas longas na alocação
+    ("valor_combinado", "REAL"),        # 11/11: valor acertado com o motorista; vence a tarifa no extrato (nucleo/financeiro.py)
+    ("valor_combinado_motivo", "TEXT"),
 ]
 
 

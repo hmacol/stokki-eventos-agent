@@ -109,9 +109,25 @@ def test_agrupar_por_transportadora_ignora_endereco_comum():
     assert gpr.agrupar_por_transportadora(itens, None) == []
 
 
-def test_muitos_pedidos_quebram_pagina_e_mantem_bloco_de_recebimento():
+def test_muitos_pedidos_cabem_numa_folha_so_com_a_assinatura():
     servicos = [_servico(f"PS-{5000 + i}", f"CLIENTE {i}", END_KANEJO) for i in range(30)]
     stats, paginas = _montar(servicos, _catalogo())
-    # capa (2 páginas: 30 linhas não cabem numa) + canhoteira KANEJO em 2+ folhas
-    assert paginas >= 4
+    # capa (2 páginas: 30 linhas não cabem numa) + canhoteira KANEJO em 1 folha
+    assert paginas == 3
     assert stats["canhoteira_transportadoras"] == [("KANEJO", 30)]
+
+
+def _entregas(n, sender_id=1, embarcador="NUU"):
+    return [{"posicao": i + 1, "codigo": f"PS-{6000 + i}", "nfs": str(42000 + i),
+             "embarcador": embarcador, "sender_id": sender_id, "cliente": f"CLIENTE {i}",
+             "volumes": 3, "veio_de_pedido_venda": False} for i in range(n)]
+
+
+def test_uma_folha_por_embarcador_dentro_da_transportadora():
+    ponto = _catalogo().pontos_redespacho()[0]
+    rota = {"name": "Planejamento - 10/09/2026 - #4", "id": 999}
+    misto = _entregas(29) + _entregas(2, sender_id=2, embarcador="FRUTA FINA")
+    assert len(gpr.gerar_canhoteira_transportadora(rota, ponto, misto, "MOTORISTA", DATA)) == 2
+    # mesmo embarcador: 1 folha até dezenas de pedidos; acima disso abre outra
+    assert len(gpr.gerar_canhoteira_transportadora(rota, ponto, _entregas(45), "MOTORISTA", DATA)) == 1
+    assert len(gpr.gerar_canhoteira_transportadora(rota, ponto, _entregas(70), "MOTORISTA", DATA)) == 2

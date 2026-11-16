@@ -279,6 +279,15 @@ def atualizar_motorista_veiculo(token: str, route_id: int, agent_id: int | None,
     return resp.json()["route"]
 
 
+def finalizar_rota(token: str, route_id: int) -> dict | None:
+    """PUT /routes/{id}/finish (comando do app, fora da doc). Pela conta so
+    fecha rota "started"; rota nao iniciada da 409 "orders.cannot_update"
+    (provado 11/11)."""
+    resp = chamar_com_retry(requests.put, f"{API_BASE}/routes/{route_id}/finish", headers=_headers(token), timeout=30)
+    _verificar_resposta(resp)
+    return resp.json() if resp.text else None
+
+
 def cancelar_rota(token: str, route_id: int, services_action: str = "keep") -> dict | None:
     """DELETE /routes/{id}/cancel. services_action: "keep" (mantém status
     dos serviços), "unassign" (desatribui), "cancel" (cancela os

@@ -109,6 +109,41 @@ class TestListar(_Base):
         self.assertEqual(self._codigos({"zona": "NORTE"}), ["PS-2"])
         self.assertEqual(self._codigos({"fluxo": "RETIRADA"}), ["PS-3"])
 
+    def test_filtro_canhoto_igual_canhotos_pendentes(self):
+        """Hugo, 11/11: com canhoto = foto no checklist da Vuupt, canhoto/assinatura
+        do app ou canhoto subido pelo painel; sem canhoto = ENTREGUE sem nenhum
+        deles (checklist sem informacao fica fora, como em /canhotos-pendentes)."""
+        from nucleo import canhotos_manuais
+        canhotos_manuais.garantir_tabela(self.conn)
+        rota = self._rota(_dia(-1))
+        for codigo, status, qtd in (("PS-1", "ENTREGUE", 2), ("PS-2", "ENTREGUE", 0), ("PS-3", "ENTREGUE", 0),
+                                    ("PS-4", "ENTREGUE", 0), ("PS-5", "ENTREGUE", None), ("PS-6", "ABERTO", 0),
+                                    ("PS-7", "ENTREGUE", 0)):
+            self._pedido(codigo, status=status)
+            self.conn.execute("UPDATE nucleo_pedidos SET qtd_checklists = ? WHERE codigo = ?", (qtd, codigo))
+            self._parada(rota, codigo)
+        paradas = {c: i for c, i in self.conn.execute("SELECT codigo, id FROM nucleo_paradas")}
+        self.conn.execute("INSERT INTO nucleo_comprovantes (parada_id, tipo) VALUES (?, 'ASSINATURA')", (paradas["PS-2"],))
+        self.conn.execute("INSERT INTO nucleo_comprovantes (parada_id, tipo) VALUES (?, 'NF_DEVOLUCAO')", (paradas["PS-7"],))
+        self.conn.execute("INSERT INTO canhotos_manuais (codigo, caminho, enviado_em) VALUES ('PS-3', 'x.pdf', '2026-11-11')")
+        self.conn.commit()
+        self.assertEqual(sorted(self._codigos({"canhoto": "com"})), ["PS-1", "PS-2", "PS-3"])
+        self.assertEqual(sorted(self._codigos({"canhoto": "sem"})), ["PS-4", "PS-7"])
+        self.assertEqual(len(self._codigos({"canhoto": "qualquer"})), 7)
+        # a coluna Canhoto usa o mesmo critério
+        self.assertEqual(sorted(self._codigos({"colunas": {"canhoto": "sim"}})), ["PS-1", "PS-2", "PS-3"])
+        # as abas contam com o filtro de canhoto aplicado
+        self.assertEqual(tp.contar_por_status({"canhoto": "sem"}, conn=self.conn)["total"], 2)
+        # as filas do computador (Hugo, 11/11) ignoram status e canhoto escolhidos:
+        # cada fila mostra quanto tem no periodo, nao dentro da fila aberta
+        filas = tp.contar_filas({"canhoto": "sem", "status": "ABERTO"}, conn=self.conn)
+        self.assertEqual((filas["total"], filas["ENTREGUE"], filas["ABERTO"], filas["sem_canhoto"]), (7, 6, 1, 2))
+        self.assertEqual(tp.contar_filas({"sender_id": "999"}, conn=self.conn)["sem_canhoto"], 0)
+
+    def test_filtro_canhoto_cria_a_tabela_de_canhotos_manuais_se_faltar(self):
+        self._pedido("PS-1")
+        self.assertEqual(self._codigos({"canhoto": "sem"}), [])
+
     def test_busca_livre_aceita_cerquilha_e_cnpj_formatado(self):
         self._pedido("PS-43565")
         self._pedido("PS-2", cnpj="11222333000144", destinatario="PADARIA")
@@ -148,6 +183,23 @@ class TestListar(_Base):
         self.assertEqual(self._codigos(), ["PS-1"])
         self.assertEqual(self._codigos({"data_tipo": "criacao"}), [])
         self.assertEqual(self._codigos({"data_tipo": "criacao", "de": _dia(-31), "ate": _dia(-29)}), ["PS-1"])
+
+    def test_busca_pelo_codigo_acha_o_pedido_fora_do_periodo(self):
+        # Hugo, 12/11: buscou 42692, o PS-42692 era de antes do período e a
+        # tela só mostrou o PS-43879 (CNPJ do destinatário contém 42692).
+        self._pedido("PS-42692", criado_provedor=f"{_dia(-30)} 10:00:00")
+        self._pedido("PS-43879", cnpj="55426927000180")
+        for q in ("42692", "PS-42692", "#ps-42692"):
+            r = tp.listar({"q": q}, ordem="codigo", direcao="asc", conn=self.conn)
+            self.assertIn("PS-42692", [l["codigo"] for l in r["linhas"]], q)
+            self.assertEqual(r["fora_do_periodo"], ["PS-42692"], q)
+        self.assertEqual(self._codigos({"q": "42692"}, ordem="codigo", direcao="asc"), ["PS-42692", "PS-43879"])
+        # Pedaço do código não fura o período; e sem busca nada muda.
+        self.assertEqual(self._codigos({"q": "4269"}), ["PS-43879"])
+        self.assertEqual(self._codigos(), ["PS-43879"])
+        self.assertEqual(tp.listar({}, conn=self.conn)["fora_do_periodo"], [])
+        # As filas do topo contam o mesmo que a lista.
+        self.assertEqual(tp.contar_filas({"q": "42692"}, conn=self.conn)["total"], 2)
 
     def test_reentrega_vira_uma_linha_com_a_tentativa_mais_recente(self):
         self._pedido("PS-1", status="INSUCESSO")
@@ -193,10 +245,158 @@ class TestListar(_Base):
         self._pedido("PS-1", status="INSUCESSO"); self._pedido("PS-1-R1", status="ABERTO")
         self.assertEqual(self._codigos({"q": "PS-1-R1"}), ["PS-1"])
 
+    def test_agrupar_so_o_periodo_nao_muda_o_resultado(self):
+        """12/11 (velocidade): só os pedidos com tentativa no período entram
+        no agrupamento. O pedido cuja linha principal é de fora não aparece
+        por causa de tentativa antiga dentro do período, e o que aparece
+        continua trazendo as tentativas de fora dele."""
+        # PS-1: insucesso antigo (fora), reentrega entregue ontem (dentro) -> aparece, 2 tentativas
+        self._pedido("PS-1", status="INSUCESSO")
+        self._parada(self._rota(_dia(-30)), "PS-1", situacao="INSUCESSO", motivo="AUSENTE")
+        self._pedido("PS-1-R1", reentrega_de="PS-1")
+        self._parada(self._rota(_dia(-1)), "PS-1-R1")
+        # PS-2: entregue há 30 dias (linha principal, fora); reentrega cancelada ontem (dentro) -> não aparece
+        self._pedido("PS-2")
+        self._parada(self._rota(_dia(-30)), "PS-2")
+        self._pedido("PS-2-R1", status="CANCELADO", reentrega_de="PS-2", agendamento=f"{_dia(-1)} 08:00:00")
+        r = tp.listar({}, conn=self.conn)
+        self.assertEqual([(l["codigo"], l["codigo_servico"], len(l["historico"])) for l in r["linhas"]],
+                         [("PS-1", "PS-1-R1", 2)])
+        self.assertEqual((r["total"], r["total_caixas"]), (1, 5))
+        self.assertEqual(tp.contar_filas({}, conn=self.conn)["total"], 1)
+        self.assertEqual(self._codigos({"q": "PS-1"}), ["PS-1"])   # busca pelo código da tentativa de fora
+        antigo = {"de": _dia(-31), "ate": _dia(-29)}
+        self.assertEqual([(l["codigo"], l["status"]) for l in tp.listar(antigo, conn=self.conn)["linhas"]],
+                         [("PS-2", "ENTREGUE")])
+        self.assertEqual(tp.exportar_csv(antigo, ["codigo"], conn=self.conn).count("PS-2;"), 1)
+        self.assertEqual(tp.listar({"q": "nada-disso"}, pagina=4, conn=self.conn)["total"], 0)
+
+    def _tabelas_stokki_e_portal(self):
+        from galpao3d import banco as galpao
+        galpao.garantir_esquema(self.conn)
+        # só as colunas que a tela lê (as tabelas de verdade nascem em portal_cliente/)
+        self.conn.executescript("""
+            CREATE TABLE portal_envios (id INTEGER PRIMARY KEY AUTOINCREMENT, cnpj_embarcador TEXT,
+                numero_nf TEXT, destinatario_doc TEXT, destinatario_nome TEXT, destinatario_endereco TEXT,
+                destinatario_bairro TEXT, destinatario_municipio TEXT, destinatario_uf TEXT,
+                destinatario_telefone TEXT, volumes INTEGER, status TEXT, codigo_pedido TEXT,
+                horario_inicio TEXT, horario_fim TEXT, agendamento_data TEXT, agendamento_hora_inicio TEXT,
+                observacoes TEXT, criado_em TEXT);
+            CREATE TABLE clientes_portal (cnpj TEXT PRIMARY KEY, sender_id INTEGER, nome TEXT);
+            INSERT INTO clientes_portal VALUES ('11222333000144', 10, 'FRUTA FINA');
+        """)
+
+    def _galpao(self, id_stokki, situacao="Aberto", embarcador="FRUTA FINA ... #stkkc-9", criado=None):
+        self.conn.execute("INSERT INTO galpao_pedidos (id_stokki, codigo, embarcador, situacao, atualizado_em) "
+                          "VALUES (?, ?, ?, ?, ?)", (id_stokki, f"PS-{id_stokki}", embarcador, situacao,
+                                                     f"{_dia(0)} 09:00:00"))
+        self.conn.execute("INSERT INTO galpao_eventos (id_stokki, situacao, quando) VALUES (?, 'Aberto', ?)",
+                          (id_stokki, criado or f"{_dia(0)} 08:30:00"))
+        self.conn.commit()
+
+    def _envio(self, status="CRIADO", codigo=None, nf="100", destinatario="PADARIA DO ZE", criado=None):
+        self.conn.execute(
+            "INSERT INTO portal_envios (cnpj_embarcador, numero_nf, destinatario_doc, destinatario_nome, "
+            "destinatario_endereco, destinatario_municipio, destinatario_uf, volumes, status, codigo_pedido, "
+            "criado_em) VALUES ('11222333000144', ?, '999', ?, 'RUA A, 1', 'SAO PAULO', 'SP', 7, ?, ?, ?)",
+            (nf, destinatario, status, codigo, criado or f"{_dia(0)} 08:00:00"))
+        self.conn.commit()
+
+    def test_pedido_da_stokki_e_do_portal_aparece_antes_da_vuupt(self):
+        """Hugo, 12/11: todo pedido importado aparece na hora, com o status
+        Importado, até chegar à Vuupt (núcleo). Erro e duplicado do portal
+        ficam fora; cancelado aparece como Cancelado."""
+        self._tabelas_stokki_e_portal()
+        self._pedido("PS-1")                                    # já está na Vuupt
+        self._galpao(1, "Aguardando Transportador")             # ... então o galpão não duplica
+        self._envio(codigo="PS-1")
+        self._galpao(2, "Em separação")                         # só na Stokki, veio pelo portal
+        self._envio(codigo="PS-2", nf="200")
+        self._galpao(3)                                         # só na Stokki, entrou por fora do portal
+        self._galpao(4, "Cancelado")
+        self._envio(status="ENVIANDO", nf="500")                # portal ainda enviando: sem código
+        self._envio(status="CRIADO", codigo="PS-6", nf="600")   # criado, coletor ainda não viu
+        self._envio(status="CANCELADO", nf="700")
+        self._envio(status="ERRO", nf="800")
+        self._envio(status="DUPLICADO", codigo="PS-2", nf="200")
+        r = tp.listar({}, ordem="codigo", direcao="asc", conn=self.conn)
+        por = {l["codigo"]: l for l in r["linhas"]}
+        self.assertEqual({c: l["status"] for c, l in por.items()},
+                         {"ENVIO-3": "IMPORTADO", "ENVIO-5": "CANCELADO", "PS-1": "ENTREGUE", "PS-2": "IMPORTADO",
+                          "PS-3": "IMPORTADO", "PS-4": "CANCELADO", "PS-6": "IMPORTADO"})
+        ps2 = por["PS-2"]
+        self.assertEqual((ps2["destinatario"], ps2["caixas"], ps2["referencia"], ps2["situacao_stokki"],
+                          ps2["embarcador"], ps2["sender_id"], ps2["endereco"], ps2["data"], ps2["origem"]),
+                         ("PADARIA DO ZE", 7, "200", "Em separação", "FRUTA FINA", 10, "RUA A, 1  SAO PAULO SP",
+                          _dia(0), "STOKKI"))
+        self.assertEqual(len(ps2["historico"]), 1)
+        self.assertIsNone(ps2["service_id"])
+        # sem portal: embarcador vem do nome do galpão; com pedido dele no núcleo, vira o da Vuupt
+        self.assertEqual((por["PS-3"]["embarcador"], por["PS-3"]["sender_id"]), ("FRUTA FINA", 10))
+        self.assertEqual((por["ENVIO-3"]["situacao_stokki"], por["ENVIO-3"]["referencia"], por["ENVIO-3"]["origem"]),
+                         ("Enviando pelo portal", "500", "PORTAL"))
+        self.assertEqual(self._codigos({"status": "IMPORTADO"}, ordem="codigo", direcao="asc"),
+                         ["ENVIO-3", "PS-2", "PS-3", "PS-6"])
+        self.assertEqual(self._codigos({"sender_id": "10", "status": "CANCELADO"}, ordem="codigo", direcao="asc"),
+                         ["ENVIO-5", "PS-4"])
+        filas = tp.contar_filas({}, conn=self.conn)
+        self.assertEqual((filas["IMPORTADO"], filas["CANCELADO"], filas["ENTREGUE"], filas["total"]), (4, 2, 1, 7))
+        self.assertEqual(tp.contar_por_status({}, conn=self.conn)["IMPORTADO"], 4)
+        self.assertIn("PS-3;Importado", tp.exportar_csv({}, ["codigo", "status"], conn=self.conn))
+        # chegou à Vuupt: sai de Importado sozinho, sem linha repetida
+        self._pedido("PS-2", status="ABERTO")
+        self.assertEqual([l["status"] for l in tp.listar({"q": "PS-2"}, conn=self.conn)["linhas"]], ["ABERTO"])
+
+    def test_retirada_que_saiu_do_galpao_vira_coletado(self):
+        """Hugo, 12/11: retirada que sumiu da listagem "Aguardando Transportador"
+        da Stokki (expedicao_coletas_fila, lida por coletas/ler_stokki.py) sai
+        de Importado e vira Coletado. Cancelado e o nucleo continuam vencendo."""
+        from coletas import banco as coletas_banco
+        self._tabelas_stokki_e_portal()
+        coletas_banco.garantir_esquema(self.conn)
+        self._pedido("PS-6")
+        for i in (2, 3, 5, 6):
+            self._galpao(i, "Aguardando Transportador")
+        self._galpao(4, "Cancelado")
+        for i, retirada, saiu in ((2, 1, "x"), (3, 1, None), (4, 1, "x"), (5, 0, "x"), (6, 1, "x")):
+            self.conn.execute("INSERT INTO expedicao_coletas_fila (id_stokki, codigo, retirada, saiu_em) "
+                              "VALUES (?, ?, ?, ?)", (i, f"PS-{i}", retirada, saiu))
+        self.conn.commit()
+        por = {l["codigo"]: l for l in tp.listar({}, conn=self.conn)["linhas"]}
+        self.assertEqual({c: l["status"] for c, l in por.items()},
+                         {"PS-2": "COLETADO", "PS-3": "IMPORTADO", "PS-4": "CANCELADO", "PS-5": "IMPORTADO",
+                          "PS-6": "ENTREGUE"})
+        self.assertEqual((por["PS-2"]["situacao_stokki"], por["PS-3"]["situacao_stokki"]),
+                         ("Enviado", "Aguardando Transportador"))
+        self.assertEqual(self._codigos({"status": "COLETADO"}), ["PS-2"])
+        c = tp.contar_por_status({}, conn=self.conn)
+        self.assertEqual((c["COLETADO"], c["IMPORTADO"]), (1, 2))
+        self.assertEqual(tp.contar_filas({}, conn=self.conn)["IMPORTADO"], 2)
+        self.assertIn("PS-2;Coletado", tp.exportar_csv({}, ["codigo", "status"], conn=self.conn))
+
+    def test_importado_sem_embarcador_conhecido_e_fora_do_periodo(self):
+        self._tabelas_stokki_e_portal()
+        self._galpao(8, embarcador="NOVO CLIENTE ... #stkkc-77", criado=f"{_dia(-20)} 10:00:00")
+        self.assertEqual(self._codigos(), [])                   # criado há 20 dias: fora dos últimos 7
+        l = tp.listar({"de": _dia(-21), "ate": _dia(-19)}, conn=self.conn)["linhas"][0]
+        self.assertEqual((l["codigo"], l["status"], l["embarcador"], l["sender_id"]),
+                         ("PS-8", "IMPORTADO", "NOVO CLIENTE ... #stkkc-77", None))
+
     def test_total_e_caixas_contam_pedidos(self):
         self._pedido("PS-1", status="INSUCESSO", caixas=4); self._pedido("PS-1-R1", status="ABERTO", caixas=4)
         r = tp.listar({}, conn=self.conn)
         self.assertEqual((r["total"], r["total_caixas"]), (1, 4))
+
+    def test_contagem_por_status_conta_pedidos_e_ignora_o_filtro_de_status(self):
+        # Abas do celular (11/11): uma por status, todas com os mesmos filtros.
+        self._pedido("PS-1", status="INSUCESSO"); self._pedido("PS-1-R1", status="ABERTO")   # 1 pedido, ABERTO
+        self._pedido("PS-2", status="ENTREGUE")
+        self._pedido("PS-3", status="ENTREGUE", sender_id=20, remetente="OUTRO")
+        self._pedido("PS-4", status="CANCELADO", criado_provedor=f"{_dia(-30)} 08:00:00")   # fora do período
+        c = tp.contar_por_status({"status": "ENTREGUE"}, conn=self.conn)
+        self.assertEqual(c, {"IMPORTADO": 0, "COLETADO": 0, "ABERTO": 1, "EM_ROTA": 0, "ENTREGUE": 2, "INSUCESSO": 0, "CANCELADO": 0,
+                             "total": 3})
+        self.assertEqual(tp.contar_por_status({"sender_id": "20"}, conn=self.conn)["total"], 1)
 
     def test_tentativas_do_grupo(self):
         self._pedido("PS-1", status="INSUCESSO")
