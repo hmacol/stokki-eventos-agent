@@ -1005,7 +1005,7 @@
     <h1>Inventário</h1>
     <div class="cartao atencao"><div class="valor">Caixas desligadas</div></div>`;
     const p = INV.produto;
-    const fora = !!p && Number(p.embarcador_id) !== Number(BOOT.piloto_id);
+    const fora = !!p && !(BOOT.caixas_embarcadores || []).includes(Number(p.embarcador_id));
     const passo2 = !INV.posicao ? '' : (!p ? `
       <div class="cartao"><div class="rotulo">2. Produto</div>
         <div class="sub">Bipe o produto (EAN ou SKU) ou busque pelo nome.</div>
