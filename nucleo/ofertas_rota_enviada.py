@@ -385,7 +385,7 @@ def rodar(conn: sqlite3.Connection, config: dict, agora: datetime | None = None,
           elegiveis=elegiveis_reais, resumo=montar_resumo, despachar=None) -> dict:
     cfg = config_ofertas(config)
     stats = {"publicadas": 0, "aplicadas": 0, "retiradas": 0, "disponivel": 0, "escolhida": 0}
-    if not cfg["ativo"]:
+    if not cfg["ativo"] and not modo_teste:      # o ensaio roda mesmo desligado
         return stats
     agora = agora or datetime.now()
     if not modo_teste:
@@ -427,7 +427,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  rota={o['rota_id']} {o['motivo']} {o['status']} original={o['agent_original']} "
                       f"escolhido_por={o['escolhido_por']} elegiveis={o['elegiveis_json']} retirada={o['motivo_retirada']}")
             return 0
-        if not cfg["ativo"]:
+        if not cfg["ativo"] and not args.modo_teste:
             return 0
         stats = rodar(conn, config, modo_teste=args.modo_teste)
         if any(stats.values()):
