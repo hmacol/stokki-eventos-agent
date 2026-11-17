@@ -1458,8 +1458,11 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
 
  Templates compartilhados
    base.html, base_mobile.html
-   _menu_lateral_nav.html     Itens do menu. O `niveis` de cada item deve
-                              bater com o @requer_auth da rota.
+   _menu_lateral_nav.html     Itens do menu, por área (AREAS_MENU, 17/11): Entregas, Rotas,
+                              Galpão, Clientes, Motoristas, Sistema; cada área é uma sanfona
+                              e só a da tela aberta nasce expandida. Tela nova entra na área
+                              dela (e no mesmo grupo em acesso_telas.TELAS). O `niveis` de
+                              cada item deve bater com o @requer_auth da rota.
    _menu_lateral_estilo.html, _menu_lateral_script.html
    _tour*.html                Tours guiados.
 
