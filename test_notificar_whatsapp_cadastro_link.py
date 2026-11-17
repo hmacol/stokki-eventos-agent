@@ -103,6 +103,51 @@ class BoasVindas(unittest.TestCase):
             self.assertEqual(nw.avisar_motorista_boas_vindas(7, "11998765432", "oi", config), "indeterminado")
 
 
+class PedidoGrupo(unittest.TestCase):
+    BASE = {"ativo": True, "base_url": "http://x", "api_key": "k", "sessao": "s", "grupo_id": "g@g.us"}
+
+    def test_nome_do_grupo(self):
+        self.assertEqual(nw.nome_grupo_motorista("  joão  pedro dos   santos ", "Fiorino", 1),
+                         "FRESH + joão santos - Fiorino (Refrigerado)")
+        self.assertEqual(nw.nome_grupo_motorista("Madonna", "VAN/HR", 0), "FRESH + Madonna - VAN/HR (Seco)")
+        self.assertEqual(nw.nome_grupo_motorista("", "", None), "FRESH + Motorista - Carro (Seco)")
+
+    def test_texto(self):
+        t = nw.texto_pedido_grupo_motorista("João Pedro Santos", "(11) 99876-5432", "Fiorino", True)
+        self.assertEqual(t.split("\n"), [
+            "👥 Criar grupo do motorista novo",
+            "Nome do grupo: FRESH + João Santos - Fiorino (Refrigerado)",
+            "Motorista: João Pedro Santos · (11) 99876-5432",
+            "Adicionar: https://wa.me/5511998765432"])
+
+    def test_envio_real_vai_pro_atendimento(self):
+        config = {"whatsapp_notificacoes": dict(self.BASE),
+                  "cadastro_motorista_link": {"forcar_destino_whatsapp": "",
+                                              "atendimento_whatsapp": "+55 11 99388-6669"}}
+        with mock.patch.object(nw, "despachar", return_value="enviado") as d:
+            self.assertEqual(nw.avisar_atendimento_pedido_grupo(7, "oi", config), "enviado")
+        self.assertEqual(d.call_args.kwargs["grupo_id"], "5511993886669@c.us")
+        self.assertEqual(d.call_args.args[1:5], (nw.ORIGEM_MOTORISTA, "pedido_grupo", "oi",
+                                                 "cadastro_link:7:pedido_grupo"))
+
+    def test_piloto_vai_pro_hugo_com_marca(self):
+        config = {"whatsapp_notificacoes": dict(self.BASE),
+                  "cadastro_motorista_link": {"forcar_destino_whatsapp": "5511900000000",
+                                              "atendimento_whatsapp": "11993886669"}}
+        with mock.patch.object(nw, "despachar", return_value="enviado") as d:
+            nw.avisar_atendimento_pedido_grupo(7, "oi", config)
+        self.assertEqual(d.call_args.kwargs["grupo_id"], "5511900000000@c.us")
+        self.assertEqual(d.call_args.args[3], "[teste → +5511993886669]\noi")
+
+    def test_sem_numero_do_atendimento_ou_sem_trava_nao_manda(self):
+        for cad in ({"forcar_destino_whatsapp": ""},                       # sem atendimento_whatsapp
+                    {"atendimento_whatsapp": "11993886669"}):              # sem a trava de piloto
+            config = {"whatsapp_notificacoes": dict(self.BASE), "cadastro_motorista_link": cad}
+            with mock.patch.object(nw, "despachar", return_value="enviado") as d:
+                self.assertEqual(nw.avisar_atendimento_pedido_grupo(7, "oi", config), "desligado")
+            d.assert_not_called()
+
+
 class Teto(unittest.TestCase):
     def test_teto_proprio_nao_trava_o_grupo(self):
         config = {"whatsapp_notificacoes": {"ativo": True, "base_url": "http://x", "api_key": "k", "sessao": "s",

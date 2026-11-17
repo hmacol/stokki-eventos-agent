@@ -90,6 +90,8 @@ config.yaml:
     cadastro_motorista_link:
       forcar_destino_whatsapp: ""  # numero do Hugo enquanto for piloto; vazio = envio real;
                                    # ausente = vale clientes.forcar_destino (sem ele: nao manda)
+      atendimento_whatsapp: ""     # numero do Atendimento: recebe o pedido de criar o grupo do
+                                   # motorista novo (avisar_atendimento_pedido_grupo); vazio = nao manda
 """
 import hashlib
 import logging
@@ -185,6 +187,7 @@ NOMES_DAS_TAREFAS = {
     "cadastro-motorista-link": "Cadastro do motorista novo na Vuupt",
     "cancelar-rotas-sem-motorista": "Aviso das rotas sem baixa",
     "coleta-emporio-quatro-estrelas": "Coleta diária do Empório Quatro Estrelas",
+    "coletar-xml-nfe": "Coleta noturna do XML das notas na Stokki",
     "comparar-pool": "Conferência dos pedidos que aguardam rota",
     "comparar-vuupt": "Conferência entre a Vuupt e o nosso sistema",
     "consulta-transportadora": "Lembrete de transportadora sem resposta",
@@ -193,6 +196,7 @@ NOMES_DAS_TAREFAS = {
     "embarcadores-novos": "Pré-cadastro de embarcador novo da Stokki",
     "ensaio-restauracao": "Teste semanal da cópia de segurança",
     "expedicao-frequente": "Baixa das entregas na Stokki",
+    "finalizar-rotas-entregues": "Fechamento das rotas com tudo entregue",
     "informativo-mensal": "Informativo mensal de dias de entrega",
     "exportar-vuupt": "Cópia do histórico da Vuupt",
     "lancar-lalamove": "Pedido de corridas na Lalamove",
@@ -203,6 +207,7 @@ NOMES_DAS_TAREFAS = {
     "nucleo-sincronizar-servicos": "Atualização dos pedidos fora de rota",
     "nucleo-sincronizar-vuupt": "Atualização das rotas no app dos motoristas",
     "pipeline-horario": "Importação de pedidos de hora em hora",
+    "ponte-vuupt": "Envio pra Vuupt do que o motorista fez no app",
     "reconciliar-retirada": "Conferência dos pedidos que o cliente retira",
     "resumo-diario-embarcador": "E-mail da noite com o resumo do dia",
     "resumo-email-whatsapp": "Resumo do e-mail no WhatsApp",
@@ -217,6 +222,7 @@ NOMES_DAS_TAREFAS = {
     "vigia-documentos": "Vigia dos documentos dos pedidos",
     "vigia-fila-impressao": "Vigia da fila de impressão",
     "vigia-pedidos": "Vigia dos pedidos em aberto",
+    "wms-checar-caixas": "Conferência diária das caixas do galpão",
     "wms-recebimentos": "Atualização dos recebimentos do estoque",
     "wms-reservar-pedidos": "Reserva de estoque para os pedidos",
     "wms-sincronizar-produtos": "Atualização do cadastro de produtos do galpão",
@@ -551,6 +557,27 @@ def texto_boas_vindas_motorista(primeiro_nome: str, email: str, senha: str, link
             f"E-mail: {email}\n"
             f"Senha: {senha}\n"
             "Qualquer dúvida, é só responder aqui.")
+
+
+def nome_grupo_motorista(nome: str, carro: str, refrigerado) -> str:
+    """Nome do grupo de WhatsApp do motorista novo (padrao do Hugo, 16/11):
+    FRESH + <Primeiro e Ultimo Nome> - <Carro> (<temperatura>)."""
+    partes = str(nome or "").split()
+    quem = " ".join(partes[:1] + partes[-1:] if len(partes) > 1 else partes) or "Motorista"
+    return f"FRESH + {quem} - {_uma_linha(carro, 20) or 'Carro'} ({'Refrigerado' if refrigerado else 'Seco'})"
+
+
+def texto_pedido_grupo_motorista(nome: str, telefone: str, carro: str, refrigerado) -> str:
+    """Pedido ao Atendimento: criar a mao o grupo do motorista novo (o sistema
+    nao cria grupo: risco de banimento do numero). Sem limite de 200."""
+    digitos = re.sub(r"\D", "", str(telefone or ""))
+    if len(digitos) in (10, 11):
+        digitos = "55" + digitos
+    return "\n".join(["👥 Criar grupo do motorista novo",
+                      f"Nome do grupo: {nome_grupo_motorista(nome, carro, refrigerado)}",
+                      f"Motorista: {_uma_linha(' '.join(str(nome or '').split()), 60) or 'Motorista'} · "
+                      f"{_uma_linha(telefone, 20)}",
+                      f"Adicionar: https://wa.me/{digitos}"])
 
 
 def texto_alteracao_cadastro(nome: str, mudancas: list[dict], agora: datetime | None = None) -> str:
@@ -1221,6 +1248,39 @@ def avisar_motorista_boas_vindas(cadastro_id: int, telefone: str, texto: str, co
                 logger.info(f"WhatsApp nao enviado (motorista {cadastro_id}): numero sem WhatsApp.")
                 return "numero_sem_whatsapp"
         return despachar(config, ORIGEM_MOTORISTA, "boas_vindas", texto, f"cadastro_link:{cadastro_id}:boas_vindas",
+                         modo_teste=modo_teste, grupo_id=f"{destino}@c.us", **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def avisar_atendimento_pedido_grupo(cadastro_id: int, texto: str, config: dict,
+                                    modo_teste: bool = False, **kw) -> str:
+    """Pedido de criacao do grupo do motorista novo, no privado do Atendimento
+    (cadastro_motorista_link.atendimento_whatsapp; ausente = "desligado").
+    Uma tentativa por cadastro (assinatura cadastro_link:<id>:pedido_grupo).
+    Mesma trava de piloto das boas-vindas: forcar_destino_whatsapp com numero
+    manda pra la com o destino real na primeira linha; "" = envio real;
+    ausente vale clientes.forcar_destino e, sem ele, nao manda."""
+    try:
+        cfg_cad = (config or {}).get("cadastro_motorista_link") or {}
+        atendimento = re.sub(r"\D", "", str(cfg_cad.get("atendimento_whatsapp") or ""))
+        if not atendimento or not gateway_clientes_ok(config):
+            return "desligado"
+        if len(atendimento) in (10, 11):
+            atendimento = "55" + atendimento
+        if "forcar_destino_whatsapp" in cfg_cad:
+            destino = re.sub(r"\D", "", str(cfg_cad["forcar_destino_whatsapp"] or ""))
+        else:
+            destino = re.sub(r"\D", "", str(_cfg_clientes(config).get("forcar_destino") or ""))
+            if not destino:
+                logger.info(f"WhatsApp nao enviado (pedido de grupo {cadastro_id}): forcar_destino_whatsapp ausente.")
+                return "desligado"
+        if destino:
+            texto = f"[teste → +{atendimento}]\n{texto}"
+        else:
+            destino = atendimento
+        return despachar(config, ORIGEM_MOTORISTA, "pedido_grupo", texto, f"cadastro_link:{cadastro_id}:pedido_grupo",
                          modo_teste=modo_teste, grupo_id=f"{destino}@c.us", **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
