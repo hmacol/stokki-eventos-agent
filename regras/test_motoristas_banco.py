@@ -186,6 +186,18 @@ class TestMotoristasBanco(unittest.TestCase):
         with self.assertRaises(ValueError):
             mb.liberar_cpf(self.conn, 9999, "teste")
 
+    def test_apagar_remove_linha_e_registra_excluido_com_nome(self):
+        mid = mb.inserir(self.conn, _linha(AGENT_ID_VUUPT=1, NOME_MOTORISTA="Ana", ATIVO="SIM"), "teste")
+        outro = mb.inserir(self.conn, _linha(AGENT_ID_VUUPT=2, NOME_MOTORISTA="Beto", ATIVO="SIM"), "teste")
+        apagada = mb.apagar(self.conn, mid, "painel:hugo")
+        self.assertEqual(apagada["NOME_MOTORISTA"], "Ana")
+        self.assertEqual([r["id"] for r in mb.listar(self.conn)], [outro])
+        h = self.conn.execute("SELECT agent_id, valor_antigo, valor_novo, origem FROM bd_motoristas_alteracoes"
+                              " WHERE motorista_id = ? AND campo = 'EXCLUIDO'", (mid,)).fetchall()
+        self.assertEqual([tuple(x) for x in h], [(1, "Ana", None, "painel:hugo")])
+        with self.assertRaises(ValueError):
+            mb.apagar(self.conn, mid, "painel:hugo")
+
     def test_caminho_espelho_segue_db_path(self):
         with mock.patch.object(banco, "DB_PATH", self.dir / "t.db"):
             self.assertEqual(mb.caminho_espelho(), self.dir / "BD_MOTORISTAS.xlsx")

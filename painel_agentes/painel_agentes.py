@@ -81,9 +81,11 @@ from planejamento_rotas import (
     salvar_disponibilidade_dia, marcar_disponibilidade_periodo, limpar_disponibilidade_dia,
     publicar_oferta_rascunho, publicar_ofertas_em_lote, despublicar_oferta_rascunho, despublicar_ofertas_em_lote,
     ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento, SITUACAO_STOKKI_NAO_PRONTA,
+    placas_veiculos_vuupt, seletor_veiculos, confirmar_envio_rascunhos,
 )
+from regras import veiculos as veiculos_regras
 from avisar_motoristas_rotas import notificar_oferta_motoristas, push_ofertas_vps
-from motoristas import dados_pagina_motoristas, listar_agentes_vuupt_nao_cadastrados, cadastrar_motorista, editar_motorista, MotoristaNaoEncontrado
+from motoristas import dados_pagina_motoristas, url_app_motorista, listar_agentes_vuupt_nao_cadastrados, cadastrar_motorista, editar_motorista, MotoristaNaoEncontrado
 from expedicao import listar_rotas_do_dia, gerar_romaneio_rota, excluir_pedido_da_rota, MOTIVOS_EXCLUSAO
 # Página pública do portal com regiões, dias de visita e calendário (Hugo, 14/10:
 # botão na Torre pra consulta interna). Mesma constante que a página usa.
@@ -1353,6 +1355,10 @@ def planejamento():
         pode_editar=g.nivel_acesso in ("total", "operador", "logistica") and data_alvo >= date.today(),
         justificativas=justificativas_sem_canhoto.JUSTIFICATIVAS,
         motivos_sem_sucesso=torre_controle.motivos_sem_sucesso(),
+        # "Tirar da rota" no card da rota enviada (10/11): mesma lista da Torre
+        motivos_exclusao=MOTIVOS_EXCLUSAO,
+        # selo "sem carro" recalculado no card depois de trocar motorista/carro
+        agentes_sem_carro=sorted(veiculos_regras.AGENTES_SEM_CARRO),
     )
 
 
@@ -1801,9 +1807,11 @@ def api_retornos_descarga():
         assinatura = request.files.get("assinatura")
         nome_assinatura = retornos.salvar_arquivo(descarga_id, "assinatura", assinatura.read()) if assinatura else ""
         for item in itens:
+            # chave da tela: parada_id, ou "r<retornando_id>" pro Retornando sem parada no núcleo
             pid = item.get("parada_id")
-            item["fotos_avaria"] = [retornos.salvar_arquivo(descarga_id, f"avaria_{int(pid)}", f.read())
-                                    for f in request.files.getlist(f"foto_avaria_{pid}")]
+            chave = str(int(pid)) if pid not in (None, "") else f"r{int(item.get('retornando_id'))}"
+            item["fotos_avaria"] = [retornos.salvar_arquivo(descarga_id, f"avaria_{chave}", f.read())
+                                    for f in request.files.getlist(f"foto_avaria_{chave}")]
         resultado = retornos.registrar_descarga(
             conn, descarga_id=descarga_id, itens=itens, recebedor=dados.get("recebedor") or "",
             usuario=session.get("usuario") or g.nivel_acesso, fotos_carga=fotos_carga, assinatura=nome_assinatura)
@@ -3765,16 +3773,23 @@ def api_fundir_rotas():
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_remover_parada():
+    """Rota ENVIADA (editar rota enviada, 10/11): exige `motivo` (expedicao.MOTIVOS_EXCLUSAO),
+    tira o pedido na Vuupt pela regra de status ao vivo e, com a rota iniciada, marca
+    Retornando (ver rascunhos_rota.remover_de_rota_enviada)."""
     body = request.get_json(force=True)
     try:
-        parada_removida = rascunhos_rota.remover_parada(body["rascunho_id"], body["service_id"])
-    except (KeyError, ValueError) as e:
+        rascunho_id = int(body["rascunho_id"])
+        service_id = int(body["service_id"])
+        rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
+        if rascunho and rascunho["status"] == rascunhos_rota.STATUS_ENVIADO:
+            resultado = rascunhos_rota.remover_de_rota_enviada(
+                rascunho_id, service_id, body.get("motivo"), (body.get("observacao") or "").strip(),
+                _carregar_config().get("vuupt_api", {}).get("token", ""), session.get("usuario", ""))
+        else:
+            resultado = {"parada_removida": rascunhos_rota.remover_parada(rascunho_id, service_id)}
+    except (KeyError, ValueError, TypeError) as e:
         return jsonify({"erro": str(e)}), 400
-    return jsonify({
-        "ok": True,
-        "rascunho": _rascunho_ou_404(body["rascunho_id"]),
-        "parada_removida": parada_removida,
-    })
+    return jsonify({**resultado, "ok": True, "rascunho": _rascunho_ou_404(rascunho_id)})
 
 
 @app.route("/api/planejamento/adicionar-parada", methods=["POST"])
@@ -3782,12 +3797,22 @@ def api_remover_parada():
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_adicionar_parada():
+    """Rota ENVIADA (10/11): inclui o pedido na Vuupt antes de gravar
+    (rascunhos_rota.adicionar_em_rota_enviada)."""
     body = request.get_json(force=True)
     try:
-        rascunhos_rota.adicionar_parada(body["rascunho_id"], body["parada"], body.get("ordem"))
-    except (KeyError, ValueError) as e:
+        rascunho_id = int(body["rascunho_id"])
+        parada = {**body["parada"], "service_id": int(body["parada"]["service_id"])}
+        rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
+        if rascunho and rascunho["status"] == rascunhos_rota.STATUS_ENVIADO:
+            rascunhos_rota.adicionar_em_rota_enviada(
+                rascunho_id, parada, _carregar_config().get("vuupt_api", {}).get("token", ""),
+                session.get("usuario", ""))
+        else:
+            rascunhos_rota.adicionar_parada(rascunho_id, parada, body.get("ordem"))
+    except (KeyError, ValueError, TypeError) as e:
         return jsonify({"erro": str(e)}), 400
-    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
+    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(rascunho_id)})
 
 
 @app.route("/api/planejamento/trocar-motorista", methods=["POST"])
@@ -3795,14 +3820,28 @@ def api_adicionar_parada():
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_trocar_motorista():
+    """Rota ENVIADA (10/11): a troca vai pra Vuupt antes de gravar; rota iniciada só troca
+    o carro. Ids viram int (edicao_rota compara agent_id com ==)."""
     body = request.get_json(force=True)
     try:
-        rascunhos_rota.trocar_motorista(
-            body["rascunho_id"], body.get("agent_id"), body.get("vehicle_id"), body.get("motorista_nome"),
-        )
-    except (KeyError, ValueError) as e:
+        rascunho_id = int(body["rascunho_id"])
+        agent_id = int(body["agent_id"]) if body.get("agent_id") not in (None, "") else None
+        vehicle_id = int(body["vehicle_id"]) if body.get("vehicle_id") not in (None, "") else None
+        rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
+        enviado = bool(rascunho and rascunho["status"] == rascunhos_rota.STATUS_ENVIADO)
+        config = _carregar_config() if enviado else {}
+        # ENVIADO: motorista de verdade sem carro recusa (planejamento.trava_sem_carro) ou só avisa
+        resultado = rascunhos_rota.trocar_motorista(
+            rascunho_id, agent_id, vehicle_id, body.get("motorista_nome"),
+            token=config.get("vuupt_api", {}).get("token", "") if enviado else None,
+            placas=placas_veiculos_vuupt(config) if enviado else None,
+            trava_sem_carro=veiculos_regras.trava_sem_carro_ligada(config))
+    except (KeyError, ValueError, TypeError) as e:
         return jsonify({"erro": str(e)}), 400
-    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
+    resposta = {"ok": True, "rascunho": _rascunho_ou_404(rascunho_id)}
+    if resultado.get("aviso"):
+        resposta["aviso"] = resultado["aviso"]
+    return jsonify(resposta)
 
 
 @app.route("/api/planejamento/lalamove-veiculo", methods=["POST"])
@@ -4731,6 +4770,297 @@ def api_editar_motorista(motorista_id):
     return jsonify({"ok": True, "mudancas": resultado["mudancas"], "motorista": resultado["motorista"]})
 
 
+def _acao_motorista(funcao, *args):
+    """Roda uma ação de nucleo/acoes_motorista.py com a conexão do banco e traduz os erros."""
+    from nucleo import acoes_motorista
+    conn = _cadastro_conn()
+    try:
+        return jsonify(getattr(acoes_motorista, funcao)(conn, *args))
+    except MotoristaNaoEncontrado as e:
+        return jsonify({"erro": str(e)}), 404
+    except acoes_motorista.AcaoRecusada as e:
+        return jsonify({"erro": e.mensagem}), e.codigo
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha na ação %s do motorista", funcao)
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route("/api/motoristas/<int:motorista_id>/ativo", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+def api_motorista_ativo(motorista_id):
+    """Inativa/reativa a linha ({"ativo": bool}); ao inativar a última linha ativa da pessoa, cancela o link dela."""
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get("ativo"), bool):
+        return jsonify({"erro": "Corpo inválido: esperado {\"ativo\": true|false}."}), 400
+    usuario = session.get("usuario") or g.nivel_acesso
+    return _acao_motorista("definir_ativo", _carregar_config(), motorista_id, body["ativo"], usuario)
+
+
+@app.route("/api/motoristas/<int:motorista_id>/resetar-pin", methods=["POST"])
+@requer_auth(niveis=("total",))   # o PIN provisório aparece na tela: quem vê entra no app como o motorista
+@exige_mesma_origem
+def api_motorista_resetar_pin(motorista_id):
+    """Sorteia um PIN provisório (aparece uma vez só na resposta) e derruba as sessões do app."""
+    return _acao_motorista("resetar_pin", motorista_id, session.get("usuario") or g.nivel_acesso)
+
+
+@app.route("/api/motoristas/<int:motorista_id>", methods=["DELETE"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_excluir_motorista(motorista_id):
+    """Exclui a linha (e o login/fichas se era a última da pessoa). Recusa com 409 se há rotas no histórico."""
+    return _acao_motorista("excluir", _carregar_config(), motorista_id, session.get("usuario") or g.nivel_acesso)
+
+
+# ── Padrão único de cadastro (16/11): ficha, link de atualização e grupos do WhatsApp ──
+_MSG_PAGINA_ATUALIZACAO_OFF = ("A página de atualização está desligada (atualizacao_motoristas.ativo). "
+                               "Ligue antes de enviar links.")
+
+
+def _cfg_atualizacao(config):
+    return (config or {}).get("atualizacao_motoristas") or {}
+
+
+def _pagina_atualizacao_ligada(config) -> bool:
+    from regras.preferencias_motoristas import _parse_bool
+    return _parse_bool(_cfg_atualizacao(config).get("ativo"))
+
+
+def _validade_link_dias(config) -> int:
+    """atualizacao_motoristas.validade_dias; ausente, zero ou malformado = 15."""
+    try:
+        dias = int(_cfg_atualizacao(config).get("validade_dias") or 0)
+    except (TypeError, ValueError):
+        dias = 0
+    return dias if dias > 0 else 15
+
+
+# Campos da ficha que o modal "Ver ficha" mostra (lista fechada: coluna nova não vaza sozinha).
+_CAMPOS_FICHA_TELA = ("id", "origem", "nome", "cpf", "telefone", "email", "placa", "tipo_veiculo", "veiculo_modelo",
+                      "veiculo_ano", "refrigerado", "emite_nf", "dono_veiculo", "criado_em", "revisado_em",
+                      "concluido_em", "tem_cnh", "tem_crlv", "tem_selfie", "tem_antt", "tem_residencia")
+_CAMPOS_FICHA_SO_TOTAL = ("chave_pix", "data_nascimento")
+
+
+def _pessoa_da_linha(conn, motorista_id):
+    from nucleo import atualizacao_motorista as atu
+    return next((p for p in atu.pessoas(conn) if motorista_id in p["ids"]), None)
+
+
+def _ids_do_corpo(chave):
+    """Lista de inteiros em body[chave] ou None se o corpo não serve."""
+    body = request.get_json(force=True, silent=True)
+    ids = body.get(chave) if isinstance(body, dict) else None
+    if not isinstance(ids, list) or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+        return None
+    return ids
+
+
+@app.route("/api/motoristas/<int:motorista_id>/ficha")
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+def api_motorista_ficha(motorista_id):
+    """Botão "Ver ficha": ficha vigente (cadastro APROVADO mais recente) da pessoa + pendências.
+    Só os campos que o modal mostra; PIX, nascimento e os documentos (rota só do nível total)
+    ficam pro nível total, como nos cartões de cadastro pelo link."""
+    from nucleo import atualizacao_motorista as atu
+    conn = _cadastro_conn()
+    try:
+        pessoa = _pessoa_da_linha(conn, motorista_id)
+        if not pessoa:
+            return jsonify({"erro": "Motorista não encontrado."}), 404
+        ficha = atu.ficha_vigente(conn, pessoa["principal_id"])
+        pend = atu.pendencias(conn, pessoa)
+        pix = atu.pix_vigente(conn, pessoa, ficha)
+        pedido_pix = atu.pix_pendente(conn, pessoa)
+    finally:
+        conn.close()
+    total = g.nivel_acesso == "total"
+    if ficha:
+        campos = _CAMPOS_FICHA_TELA + (_CAMPOS_FICHA_SO_TOTAL if total else ())
+        # PIX vigente = o do login do app (trocado em "Meus dados"); o da ficha é o reserva
+        ficha = {c: (pix if c == "chave_pix" else ficha.get(c)) for c in campos}
+    return jsonify({"nome": pessoa["nome"], "ficha": ficha, "pendencias": pend, "documentos_visiveis": total,
+                    "pix_pendente": ({"novo": pedido_pix["novo"], "atual": pix, "pedido_em": pedido_pix["pedido_em"]}
+                                     if total and pedido_pix else None)})
+
+
+@app.route("/api/motoristas/<int:motorista_id>/pix-pendente", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_motorista_pix_pendente(motorista_id):
+    """Aprova ou recusa ({"aprovar": bool}) a troca de PIX que o motorista pediu pelo link."""
+    from nucleo import atualizacao_motorista as atu
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get("aprovar"), bool):
+        return jsonify({"erro": "Corpo inválido: esperado {\"aprovar\": true|false}."}), 400
+    conn = _cadastro_conn()
+    try:
+        return jsonify(atu.decidir_pix(conn, motorista_id, body["aprovar"], session.get("usuario") or g.nivel_acesso))
+    except atu.LinkInvalido as exc:
+        return jsonify({"erro": str(exc)}), 404
+    finally:
+        conn.close()
+
+
+@app.route("/api/motoristas/<int:motorista_id>/link-atualizacao", methods=["POST"])
+@requer_auth(niveis=("total",))   # quem tem o link e sabe o CPF preenche no lugar do motorista
+@exige_mesma_origem
+def api_motorista_link_atualizacao(motorista_id):
+    """Botão "Copiar link": link novo da pessoa (cancela os anteriores). O link só sai nesta
+    resposta; com a página desligada ele é gerado mesmo assim e `pagina_ligada` vem false."""
+    from nucleo import atualizacao_motorista as atu
+    config = _carregar_config()
+    conn = _cadastro_conn()
+    try:
+        pessoa = _pessoa_da_linha(conn, motorista_id)
+        if not pessoa:
+            return jsonify({"erro": "Motorista não encontrado."}), 404
+        if not pessoa["ativo"]:
+            return jsonify({"erro": "Motorista inativo: reative antes de gerar o link."}), 409
+        link = atu.gerar_link(conn, pessoa["principal_id"], session.get("usuario") or g.nivel_acesso,
+                              validade_dias=_validade_link_dias(config))
+    finally:
+        conn.close()
+    return jsonify({"url": f"{url_app_motorista(config)}/atualizar/{link['token']}", "expira_em": link["expira_em"],
+                    "pagina_ligada": _pagina_atualizacao_ligada(config)})
+
+
+@app.route("/api/motoristas/grupos/sugestoes")
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_motoristas_grupos_sugestoes():
+    """"Identificar grupos": lê os grupos do gateway e sugere um por motorista. Não grava."""
+    from nucleo import grupos_motoristas as grupos
+    config = _carregar_config()
+    conn = _cadastro_conn()
+    try:
+        return jsonify(grupos.sugerir(conn, config.get("whatsapp_notificacoes") or {}))
+    finally:
+        conn.close()
+
+
+@app.route("/api/motoristas/grupos/confirmar", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_motoristas_grupos_confirmar():
+    """Grava o grupo escolhido por motorista ({"itens": [{principal_id, grupo_id, grupo_nome, como}]});
+    grupo_id vazio desfaz o vínculo."""
+    from nucleo import grupos_motoristas as grupos
+    body = request.get_json(force=True, silent=True)
+    itens = body.get("itens") if isinstance(body, dict) else None
+    if not isinstance(itens, list) or not all(
+            isinstance(i, dict) and isinstance(i.get("principal_id"), int) and isinstance(i.get("grupo_id"), str)
+            for i in itens):
+        return jsonify({"erro": "Corpo inválido: esperado {\"itens\": [{principal_id, grupo_id, grupo_nome, como}]}."}), 400
+    usuario = session.get("usuario") or g.nivel_acesso
+    conn = _cadastro_conn()
+    try:
+        from nucleo import atualizacao_motorista as atu
+        principais = {p["principal_id"] for p in atu.pessoas(conn)}
+        for i in itens:   # confere tudo antes de gravar qualquer um
+            if i["principal_id"] not in principais:
+                return jsonify({"erro": f"Item inválido: {i['principal_id']} não é o id principal de um motorista. "
+                                        "Nada foi gravado."}), 400
+            if i["grupo_id"] and i.get("como") not in ("telefone", "nome", "manual"):
+                return jsonify({"erro": f"Item inválido: 'como' de {i['principal_id']} deve ser telefone, nome ou "
+                                        "manual. Nada foi gravado."}), 400
+        for i in itens:
+            grupos.confirmar(conn, i["principal_id"], i["grupo_id"], str(i.get("grupo_nome") or ""),
+                             str(i.get("como") or "manual"), usuario)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "gravados": len(itens)})
+
+
+@app.route("/api/motoristas/grupos/previa-renomear")
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_motoristas_grupos_previa_renomear():
+    """Nome atual -> novo de cada grupo confirmado; `ligado` = atualizacao_motoristas.renomear_grupos;
+    `modo` = desligado | piloto (só a prévia) | real (o botão de aplicar só habilita em real)."""
+    from nucleo import grupos_motoristas as grupos
+    from regras.preferencias_motoristas import _parse_bool
+    config = _carregar_config()
+    conn = _cadastro_conn()
+    try:
+        previa = grupos.previa_renomear(conn, config.get("whatsapp_notificacoes") or {})
+    finally:
+        conn.close()
+    return jsonify({"ligado": _parse_bool(_cfg_atualizacao(config).get("renomear_grupos")),
+                    "modo": grupos.modo_renomear(config), "previa": previa})
+
+
+@app.route("/api/motoristas/grupos/renomear", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_motoristas_grupos_renomear():
+    """Renomeia os grupos dos motoristas pedidos ({"principal_ids": [...]}); fora do modo real
+    devolve 'desligado' ou 'piloto' pra todos sem chamar o gateway."""
+    from nucleo import grupos_motoristas as grupos
+    ids = _ids_do_corpo("principal_ids")
+    if ids is None:
+        return jsonify({"erro": "Corpo inválido: esperado {\"principal_ids\": [...]}."}), 400
+    conn = _cadastro_conn()
+    try:
+        return jsonify({"resultado": grupos.renomear(conn, _carregar_config(), session.get("usuario") or g.nivel_acesso,
+                                                     ids)})
+    finally:
+        conn.close()
+
+
+@app.route("/api/motoristas/envio-links/candidatos")
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_motoristas_envio_links_candidatos():
+    """Quem pode receber o link no grupo (mais rotas primeiro) e o modo do envio: desligado (página
+    ou WhatsApp desligado, ou forcar_destino_whatsapp ausente), piloto (número de teste) ou real."""
+    import notificar_whatsapp
+    from nucleo import grupos_motoristas as grupos
+    config = _carregar_config()
+    destino = notificar_whatsapp.destino_link_atualizacao(config)
+    if destino is None or not _pagina_atualizacao_ligada(config) or not notificar_whatsapp.gateway_clientes_ok(config):
+        modo = "desligado"
+    else:
+        modo = "piloto" if destino else "real"
+    conn = _cadastro_conn()
+    try:
+        candidatos = grupos.candidatos_envio(conn)
+    finally:
+        conn.close()
+    return jsonify({"modo": modo, "candidatos": candidatos})
+
+
+@app.route("/api/motoristas/envio-links", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_motoristas_envio_links():
+    """Gera e manda o link de cada motorista pedido ({"principal_ids": [...]}) no grupo dele.
+    Recusa com a página de atualização desligada (o link cairia num 503)."""
+    from nucleo import grupos_motoristas as grupos
+    config = _carregar_config()
+    if not _pagina_atualizacao_ligada(config):
+        return jsonify({"erro": _MSG_PAGINA_ATUALIZACAO_OFF}), 409
+    ids = _ids_do_corpo("principal_ids")
+    if ids is None:
+        return jsonify({"erro": "Corpo inválido: esperado {\"principal_ids\": [...]}."}), 400
+    conn = _cadastro_conn()
+    try:
+        # validade já conferida aqui: valor malformado no config vira 15 em vez de quebrar o lote
+        config_envio = {**config, "atualizacao_motoristas": {**_cfg_atualizacao(config),
+                                                             "validade_dias": _validade_link_dias(config)}}
+        resultado = grupos.enviar_lote(conn, config_envio, ids, session.get("usuario") or g.nivel_acesso,
+                                       url_app_motorista(config))
+    finally:
+        conn.close()
+    return jsonify({"resultado": resultado})
+
+
 @app.route("/api/planejamento/nova-rota", methods=["POST"])
 @requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
@@ -4906,9 +5236,23 @@ def api_confirmar_envio():
     except KeyError as e:
         return jsonify({"erro": str(e)}), 400
 
-    token = _carregar_config().get("vuupt_api", {}).get("token", "")
-    resultados = [rascunhos_rota.enviar_rascunho(rid, token) for rid in rascunho_ids]
-    return jsonify({"ok": True, "resultados": resultados})
+    return jsonify({"ok": True, "resultados": confirmar_envio_rascunhos(rascunho_ids, _carregar_config())})
+
+
+@app.route("/api/planejamento/veiculos")
+@requer_auth(niveis=("total", "operador", "logistica"))
+def api_planejamento_veiculos():
+    """Carros pro seletor do card (sem generico/excluido, dono primeiro, com
+    rodizio_no_dia). Lista da Vuupt com cache de 10 min."""
+    try:
+        data_alvo = date.fromisoformat(request.args.get("data") or date.today().isoformat())
+    except ValueError:
+        return jsonify({"erro": "data invalida (use AAAA-MM-DD)"}), 400
+    try:
+        return jsonify({"veiculos": seletor_veiculos(_carregar_config(), data_alvo)})
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao listar veiculos da Vuupt")
+        return jsonify({"erro": str(e)}), 502
 
 
 @app.route("/api/planejamento/cancelar-rota", methods=["POST"])
@@ -4979,9 +5323,9 @@ def api_cancelar_pedido():
     rascunho_id = body.get("rascunho_id")
     rascunho_id = int(rascunho_id) if rascunho_id is not None else None
 
-    resultado = cancelar_pedido(service_id, rascunho_id)
+    resultado = cancelar_pedido(service_id, rascunho_id, usuario=session.get("usuario") or g.nivel_acesso)
     if not resultado["ok"]:
-        return jsonify({"erro": resultado["erro"]}), 400
+        return jsonify({k: v for k, v in resultado.items() if k in ("erro", "aviso")}), 400
     return jsonify({"ok": True})
 
 

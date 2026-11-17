@@ -6,7 +6,7 @@ import * as local from '../../src/local';
 import { useSessao } from '../../src/sessao';
 import { Cartao, Linha, Vazio } from '../../src/componentes';
 import { LancarPedagio, aceitaPedagio } from '../../src/pedagios';
-import { cores, formatarData, formatarReal, hoje, somarDias } from '../../src/tema';
+import { cores, FINANCEIRO_OCULTO, formatarData, formatarReal, hoje, somarDias } from '../../src/tema';
 import type { Extrato, Rota } from '../../src/tipos';
 
 // Rotas que aparecem no lançamento de pedágio: recibo costuma ser
@@ -48,7 +48,7 @@ export default function Financeiro() {
 
   // Dirige carro de outro (Hugo, 08/10): sem extrato, a tela é só o lançamento de despesas.
   const { motorista } = useSessao();
-  const soDespesas = motorista?.ve_financeiro === false;
+  const soDespesas = FINANCEIRO_OCULTO || motorista?.ve_financeiro === false;
 
   const carregar = useCallback(async () => {
     setErro(null);
@@ -70,7 +70,7 @@ export default function Financeiro() {
       refreshControl={<RefreshControl refreshing={carregando} onRefresh={carregar} />}>
       {/* Pedágio e despesas ficam aqui, com a rota escolhida no cartão (Hugo, 14/09). */}
       <LancarPedagio rotas={rotasPedagio} rotaInicial={rotaParam ? Number(rotaParam) : null} aoMudar={carregar} />
-      {soDespesas ? <Text style={s.soDespesas}>O extrato das rotas vai pro dono do veículo. Aqui você lança pedágio e despesas pra reembolso.</Text> : null}
+      {soDespesas ? <Text style={s.soDespesas}>{FINANCEIRO_OCULTO ? '' : 'O extrato das rotas vai pro dono do veículo. '}Aqui você lança pedágio e despesas pra reembolso.</Text> : null}
       <View style={[s.abas, soDespesas && { display: 'none' }]}>
         {(['semana', 'mes', 'anterior'] as Periodo[]).map((p) => (
           <Pressable key={p} onPress={() => setPeriodo(p)} style={[s.aba, periodo === p && s.abaAtiva]}>

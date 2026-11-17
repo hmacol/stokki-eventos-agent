@@ -65,6 +65,14 @@
   })();
 </script>
 <script>
+  // Sanfona por area (17/11): com a area aberta a lista pode passar da
+  // altura da tela; garante que a tela atual nasce visivel no menu.
+  (function() {
+    var ativo = document.querySelector(".sidebar nav a.ativo");
+    if (ativo) ativo.scrollIntoView({ block: "nearest" });
+  })();
+</script>
+<script>
   // Badges do menu (11/09): quantos itens esperam ação em cada tela.
   // Busca DEPOIS do load e nunca na renderização -- o menu está em toda
   // página do painel e não pode atrasar nenhuma (ver contadores_menu.py).
@@ -92,6 +100,21 @@
         el.textContent = qtd > 99 ? "99+" : qtd;
         el.classList.toggle("critico", (dado.criticas || 0) > 0);
         el.title = qtd + " " + (ROTULOS[el.dataset.contador] || "");
+        el.dataset.qtd = qtd;
+        el.dataset.critico = (dado.criticas || 0) > 0 ? "1" : "";
+      });
+      // Sanfona por area (17/11): o cabecalho mostra a soma dos badges
+      // das telas de dentro (o CSS esconde enquanto a area esta aberta).
+      document.querySelectorAll(".sidebar nav details.grupo").forEach(function(area) {
+        var soma = 0, critico = false;
+        area.querySelectorAll("a .badge[data-qtd]").forEach(function(b) {
+          soma += Number(b.dataset.qtd) || 0;
+          if (b.dataset.critico && Number(b.dataset.qtd)) critico = true;
+        });
+        var el = area.querySelector("summary .badge");
+        el.hidden = soma === 0;
+        el.textContent = soma > 99 ? "99+" : soma;
+        el.classList.toggle("critico", critico);
       });
     }
 

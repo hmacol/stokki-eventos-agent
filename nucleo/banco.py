@@ -513,6 +513,40 @@ CREATE TABLE IF NOT EXISTS bd_motoristas_alteracoes (
 CREATE INDEX IF NOT EXISTS idx_bd_motoristas_alt_mot ON bd_motoristas_alteracoes(motorista_id);
 """
 
+# Atualização cadastral do motorista já existente (link por WhatsApp) e o
+# grupo de WhatsApp de cada motorista.
+_DDL_ATUALIZACAO_MOTORISTA = """
+CREATE TABLE IF NOT EXISTS motoristas_links_atualizacao (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    bd_motorista_id  INTEGER NOT NULL,
+    token_hash       TEXT NOT NULL UNIQUE,
+    criado_em        TEXT,
+    criado_por       TEXT,
+    expira_em        TEXT,
+    aberto_em        TEXT,
+    concluido_em     TEXT,
+    cancelado_em     TEXT,
+    tentativas_cpf   INTEGER NOT NULL DEFAULT 0,
+    cadastro_id      INTEGER,
+    envio_destino    TEXT,
+    envio_situacao   TEXT,
+    enviado_em       TEXT,
+    piloto           INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_links_atualizacao_mot ON motoristas_links_atualizacao(bd_motorista_id);
+
+CREATE TABLE IF NOT EXISTS motoristas_grupos_whatsapp (
+    bd_motorista_id  INTEGER PRIMARY KEY,
+    grupo_id         TEXT NOT NULL,
+    grupo_nome       TEXT,
+    nome_anterior    TEXT,
+    como             TEXT NOT NULL,
+    confirmado_por   TEXT,
+    confirmado_em    TEXT,
+    renomeado_em     TEXT
+);
+"""
+
 
 def agora() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -532,6 +566,7 @@ def garantir_esquema(conn: sqlite3.Connection):
     conn.executescript(_DDL)
     conn.executescript(_DDL_CADASTRO)
     conn.executescript(_DDL_BD_MOTORISTAS)
+    conn.executescript(_DDL_ATUALIZACAO_MOTORISTA)
     _migrar_colunas(conn, "motoristas", _COLUNAS_MOTORISTAS_NOVAS)
     _migrar_colunas(conn, "bd_motoristas", [("POSICAO", "TEXT")])   # FIXO | ESPORADICO
     # Tabela de 08/10 já existia na VPS quando dono_veiculo entrou no DDL:
@@ -539,6 +574,9 @@ def garantir_esquema(conn: sqlite3.Connection):
     _migrar_colunas(conn, "motoristas_cadastros", [("dono_veiculo", "INTEGER NOT NULL DEFAULT 1")])
     # Cadastro pelo link público (Hugo, 02/11/2026): mesma tabela, origem 'link'.
     _migrar_colunas(conn, "motoristas_cadastros", _COLUNAS_CADASTRO_LINK)
+    # PIX que veio pré-preenchido no rascunho do link de atualização: o login só muda se o
+    # motorista digitou outro (tabela pode já existir de uma rodada anterior deste ramo)
+    _migrar_colunas(conn, "motoristas_links_atualizacao", [("pix_inicial", "TEXT"), ("pix_pendente", "TEXT")])
     _migrar_colunas(conn, "nucleo_pedidos", _COLUNAS_PEDIDOS_NOVAS)
     _migrar_colunas(conn, "nucleo_paradas", _COLUNAS_PARADAS_NOVAS)
     _migrar_colunas(conn, "nucleo_rotas", _COLUNAS_ROTAS_NOVAS)

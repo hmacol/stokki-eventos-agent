@@ -73,3 +73,61 @@ def numero_existe(cfg: dict, numero: str) -> bool | None:
     if not isinstance(dados, dict) or "exists" not in dados:
         return None
     return bool(dados["exists"])
+
+
+def listar_grupos(cfg: dict) -> list[dict] | None:
+    """GET /sessions/{sessao}/groups: lista de {id, name, ...}. Aceita lista
+    pura ou envelope {"data": [...]}. None quando o gateway nao respondeu
+    (diferente de lista vazia)."""
+    if not configurado(cfg):
+        return None
+    url = f"{cfg['base_url'].rstrip('/')}/sessions/{cfg['sessao']}/groups"
+    try:
+        resp = requests.get(url, headers={"X-API-Key": cfg["api_key"]}, timeout=_TIMEOUT)
+        resp.raise_for_status()
+        dados = resp.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning(f"Falha ao listar grupos no OpenWA: {exc}")
+        return None
+    if isinstance(dados, dict):
+        dados = dados.get("data")
+    return dados if isinstance(dados, list) else None
+
+
+def grupo(cfg: dict, grupo_id: str) -> dict | None:
+    """GET /sessions/{sessao}/groups/{id}: name, locked, participants
+    [{id, number, isAdmin}]. None quando o gateway nao soube responder."""
+    if not configurado(cfg) or not grupo_id:
+        return None
+    url = f"{cfg['base_url'].rstrip('/')}/sessions/{cfg['sessao']}/groups/{grupo_id}"
+    try:
+        resp = requests.get(url, headers={"X-API-Key": cfg["api_key"]}, timeout=_TIMEOUT)
+        resp.raise_for_status()
+        dados = resp.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning(f"Falha ao ler grupo no OpenWA: {exc}")
+        return None
+    return dados if isinstance(dados, dict) else None
+
+
+def renomear_grupo(cfg: dict, grupo_id: str, nome: str) -> tuple[bool, str | None]:
+    """PUT /sessions/{sessao}/groups/{id}/subject com {"subject": nome}.
+    Nunca levanta excecao. Retorna (sucesso, motivo da falha): motivo
+    "sem_permissao" (403, exige admin), "incerto" (503, o WhatsApp nao
+    confirmou: a troca pode ou nao ter sido feita) ou o texto curto do erro."""
+    if not configurado(cfg) or not grupo_id or not nome:
+        return False, "sem config, grupo ou nome"
+    url = f"{cfg['base_url'].rstrip('/')}/sessions/{cfg['sessao']}/groups/{grupo_id}/subject"
+    try:
+        resp = requests.put(url, json={"subject": nome},
+                            headers={"X-API-Key": cfg["api_key"]}, timeout=_TIMEOUT)
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        logger.warning(f"Falha ao renomear grupo no OpenWA: {exc}")
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status == 403:
+            return False, "sem_permissao"
+        if status == 503:
+            return False, "incerto"
+        return False, str(exc)
+    return True, None

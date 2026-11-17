@@ -603,3 +603,25 @@ abaixo de 30 s é confirmação em lote da VUUPT). `--recalcular` faz o backfill
   "Dono do veículo" pré-marcado pela resposta dele. Também: olho pra ver o
   PIN (`src/campoPin.tsx`, OTA a8105ca2) e player/miniatura no
   /atendimento (commit 47f57b9).
+- **16/11 — Ponte app próprio → Vuupt: rota da Vuupt operável pelo
+  nosso app.** Hugo (12/11): retomar o app e pôr no ar até 16/11,
+  "replicando tudo o que acontece nele para a Vuupt, depois desconectar".
+  Desenho: a rota continua nascendo na Vuupt (provedor VUUPT); com
+  `api_motorista.ponte_vuupt` (`ativo` + `agentes: [...]` ou `todos`) ela
+  sai `editavel` no app. Aceite, deslocamento, chegada e resultado gravam
+  no núcleo e entram na fila `nucleo_ponte_vuupt` na mesma transação;
+  `nucleo/ponte_vuupt.py` (timer `stokki-ponte-vuupt`, 30 s) repete na
+  Vuupt pelos comandos de agente, com o canhoto no checklist (campo
+  15086). `nucleo_rotas.operada_app = 1` faz o sync não sobrescrever
+  resultado/horário do app. Escolhas: PARCIAL vai como sucesso; foto que
+  não chega em 30 min conclui sem checklist lá; vários canhotos viram uma
+  imagem (até 6, nunca amplia); 10 falhas = item DESISTIU e o unit falha
+  (alerta); ação desiste se a rota trocou de motorista ou o serviço saiu
+  dela. Prova real em 16/11 com o agente TESTE (rota 5472713: entrega com
+  checklist 38051230 e insucesso com motivo 5431). PR #29 (`dfa6d3e`),
+  DEPLOYADO e ligado pra Vinícius (47084), Clayson (42642), Renato Forte
+  (48907) e Erick (47424); Caio (46454, 2º carro do Erick) fica de fora
+  até decidir login e financeiro. OTA `f40a8f9f` (runtime 1.1.1).
+  **Em aberto:** a rota fica `assigned` na Vuupt mesmo com tudo fechado:
+  no piloto fecha-se à mão (`.claude/scripts/vuupt_fechar_rotas.py`);
+  envio de foto pelo celular ainda sem uso em campo; 1ª rota real em 17/11.

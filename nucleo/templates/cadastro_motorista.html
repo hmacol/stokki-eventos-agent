@@ -1,3 +1,5 @@
+{#- modo="atualizar": motorista que já existe abre o link pessoal (/atualizar/<token>); sem modo = cadastro novo. -#}
+{%- set atualizar = (modo == 'atualizar') -%}
 <!doctype html>
 <html lang="pt-BR">
 <head>
@@ -56,6 +58,19 @@
   <button type="button" id="retomar-btn">Tentar de novo</button>
 </div>
 
+{% if atualizar %}
+<div id="tela-cpf" hidden>
+  <h1>Atualize seu cadastro</h1>
+  <p class="passo">Para começar, confirme o seu CPF.</p>
+  <div class="erro" id="erro-cpf" role="alert"></div>
+  <form id="fcpf" novalidate autocomplete="off">
+    <label class="campo" for="cpf-conf">CPF</label>
+    <input type="tel" id="cpf-conf" name="cpf-conf" inputmode="numeric" maxlength="14" autocomplete="off" required>
+    <button type="submit" id="enviar-cpf">Continuar</button>
+  </form>
+</div>
+{% endif %}
+
 <div id="tela-1" hidden>
   <h1>Seus dados</h1>
   <p class="passo">Passo 1 de 3</p>
@@ -65,14 +80,21 @@
     <label class="campo" for="nome">Nome completo</label>
     <input type="text" id="nome" name="nome" autocomplete="name" required>
 
+    {% if not atualizar %}
     <label class="campo" for="cpf">CPF</label>
     <input type="tel" id="cpf" name="cpf" inputmode="numeric" maxlength="14" autocomplete="off" required>
+    {% endif %}
 
     <label class="campo" for="data_nascimento">Data de nascimento</label>
     <input type="date" id="data_nascimento" name="data_nascimento" autocomplete="bday" required>
 
     <label class="campo" for="telefone">Telefone / WhatsApp <span class="dica">Com DDD</span></label>
     <input type="tel" id="telefone" name="telefone" inputmode="tel" autocomplete="tel" required>
+
+    {% if atualizar %}
+    <label class="campo" for="email">E-mail <span class="dica">Opcional</span></label>
+    <input type="text" id="email" name="email" inputmode="email" autocomplete="email" autocapitalize="none">
+    {% endif %}
 
     <label class="campo" for="chave_pix">Chave Pix</label>
     <input type="text" id="chave_pix" name="chave_pix" autocomplete="off" required>
@@ -83,6 +105,7 @@
       <label><input type="radio" name="emite_nf" value="0"> Não</label>
     </div>
 
+    {% if not atualizar %}
     <label class="campo">Seu celular é Android ou iPhone?</label>
     <div class="opcoes">
       <label><input type="radio" name="celular" value="ANDROID"> Android</label>
@@ -108,6 +131,7 @@
       <label><input type="radio" name="posicao" value="FIXO"><span>Fixo<small>roda com a gente todo dia que marcou</small></span></label>
       <label><input type="radio" name="posicao" value="ESPORADICO"><span>Esporádico<small>roda quando tiver rota sobrando</small></span></label>
     </div>
+    {% endif %}
 
     <button type="submit">Continuar</button>
   </form>
@@ -164,8 +188,8 @@
   <div class="barra"><i style="transform:scaleX(1)"></i></div>
   <div class="erro" id="erro-3" role="alert"></div>
   <div id="docs"></div>
-  <button type="button" id="concluir" disabled>Enviar cadastro</button>
-  <button type="button" class="volta" id="recomecar">Começar de novo</button>
+  <button type="button" id="concluir" disabled>{{ 'Enviar atualização' if atualizar else 'Enviar cadastro' }}</button>
+  {% if not atualizar %}<button type="button" class="volta" id="recomecar">Começar de novo</button>{% endif %}
 </div>
 
 <div id="tela-fim" hidden class="final">
@@ -181,6 +205,13 @@
   var URL_DOC = "{{ url_for('cadastro_documento', cadastro_id=0) }}";
   var URL_SIT = "{{ url_for('cadastro_link_situacao', cadastro_id=0) }}";
   var URL_FIM = "{{ url_for('cadastro_link_concluir', cadastro_id=0) }}";
+  var ATUALIZAR = {{ 'true' if atualizar else 'false' }};
+  {% if atualizar %}
+  var URL_ABRIR = {{ url_for('atualizacao_abrir', token=token)|tojson }};
+  var URL_DADOS = {{ url_for('atualizacao_dados', token=token)|tojson }};
+  var URL_CONCLUIR = {{ url_for('atualizacao_concluir', token=token)|tojson }};
+  {% endif %}
+  var MINIMOS = ['cnh', 'crlv', 'selfie'];   // na atualização, ANTT e residência podem ficar pra depois
   var DOCS = [
     ['selfie', 'Selfie', 'Uma foto do seu rosto, tirada agora.'],
     ['cnh', 'CNH', 'Foto da carteira de motorista (frente e verso, se couber).'],
@@ -200,7 +231,9 @@
   function apagar(k) { try { localStorage.removeItem(k); } catch (e) {} }
 
   function mostrar(qual) {
-    ['carregando', 'tela-retomar', 'tela-1', 'tela-2', 'tela-3', 'tela-fim'].forEach(function (t) { $(t).hidden = (t !== qual); });
+    ['carregando', 'tela-retomar', 'tela-cpf', 'tela-1', 'tela-2', 'tela-3', 'tela-fim'].forEach(function (t) {
+      if ($(t)) { $(t).hidden = (t !== qual); }
+    });
     window.scrollTo(0, 0);
   }
   function erro(n, texto) {
@@ -237,6 +270,7 @@
     return Array.prototype.map.call(document.querySelectorAll('input[name=' + nome + ']:checked'), function (e) { return e.value; });
   }
   function salvarCampos() {
+    if (ATUALIZAR) { return; }   // a ficha fica no servidor; o CPF é pedido de novo a cada abertura
     var o = {};
     CAMPOS.forEach(function (c) { o[c] = $(c).value; });
     RADIOS.forEach(function (c) { o[c] = radio(c); });
@@ -244,6 +278,7 @@
     guardar('cm_campos', JSON.stringify(o));
   }
   function restaurarCampos() {
+    if (ATUALIZAR) { return; }
     var o;
     try { o = JSON.parse(ler('cm_campos') || 'null'); } catch (e) { o = null; }
     if (!o) { return; }
@@ -259,17 +294,52 @@
   }
   function atualizarTemp() { $('bloco-temp').hidden = (radio('refrigerado') !== '1'); }
 
+  // ── atualização: CPF -> abre a ficha já preenchida com o que a Fresh tem ──
+  function marcarRadio(nome, valor) {
+    Array.prototype.forEach.call(document.querySelectorAll('input[name=' + nome + ']'), function (e) {
+      e.checked = (valor != null && e.value === (valor ? '1' : '0'));
+    });
+  }
+  function preencher(d) {
+    ['nome', 'data_nascimento', 'telefone', 'email', 'chave_pix', 'tipo_veiculo', 'placa', 'veiculo_modelo',
+     'veiculo_ano', 'temp_min_c'].forEach(function (c) {
+      if (d[c] != null) { $(c).value = (c === 'tipo_veiculo' ? String(d[c]).toUpperCase() : d[c]); }
+    });
+    ['emite_nf', 'refrigerado', 'dono_veiculo'].forEach(function (c) { marcarRadio(c, d[c] == null ? null : !!d[c]); });
+    atualizarTemp();
+  }
+  if (ATUALIZAR) {
+    $('fcpf').addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      erro('cpf', '');
+      if (!$('cpf-conf').value.trim()) { $('cpf-conf').focus(); erro('cpf', 'Digite o seu CPF.'); return; }
+      var btn = $('enviar-cpf');
+      btn.disabled = true;
+      chamar('POST', URL_ABRIR, {cpf: $('cpf-conf').value}).then(function (r) {
+        btn.disabled = false;
+        if (!r.ok) { erro('cpf', textoErro(r)); return; }
+        envio = {id: r.j.cadastro_id, chave: r.j.chave_envio};
+        enviados = r.j.documentos || {};
+        preencher(r.j.dados || {});
+        mostrar('tela-1');
+      });
+    });
+  }
+
   // ── passo 1 -> 2 ──
   $('f1').addEventListener('submit', function (ev) {
     ev.preventDefault();
     erro(1, '');
-    var falta = ['nome', 'cpf', 'data_nascimento', 'telefone', 'chave_pix'].filter(function (c) { return !$(c).value.trim(); });
+    var falta = (ATUALIZAR ? ['nome', 'data_nascimento', 'telefone', 'chave_pix'] : ['nome', 'cpf', 'data_nascimento', 'telefone', 'chave_pix'])
+      .filter(function (c) { return !$(c).value.trim(); });
     if (falta.length) { $(falta[0]).focus(); erro(1, 'Preencha todos os campos.'); return; }
     if (radio('emite_nf') === null) { erro(1, 'Diga se você emite nota fiscal.'); return; }
-    if (radio('celular') === null) { erro(1, 'Diga se o seu celular é Android ou iPhone.'); return; }
-    if (!marcados('dias').length) { erro(1, 'Marque pelo menos um dia da semana.'); return; }
-    if (!marcados('zonas').length) { erro(1, 'Marque pelo menos uma região que você atende.'); return; }
-    if (radio('posicao') === null) { erro(1, 'Escolha Fixo ou Esporádico.'); return; }
+    if (!ATUALIZAR) {
+      if (radio('celular') === null) { erro(1, 'Diga se o seu celular é Android ou iPhone.'); return; }
+      if (!marcados('dias').length) { erro(1, 'Marque pelo menos um dia da semana.'); return; }
+      if (!marcados('zonas').length) { erro(1, 'Marque pelo menos uma região que você atende.'); return; }
+      if (radio('posicao') === null) { erro(1, 'Escolha Fixo ou Esporádico.'); return; }
+    }
     salvarCampos();
     mostrar('tela-2');
   });
@@ -294,19 +364,29 @@
     var btn = $('enviar-2');
     btn.disabled = true;
     var dados = {
-      nome: $('nome').value, cpf: $('cpf').value, data_nascimento: $('data_nascimento').value,
+      nome: $('nome').value, data_nascimento: $('data_nascimento').value,
       telefone: $('telefone').value, chave_pix: $('chave_pix').value, emite_nf: radio('emite_nf') === '1',
-      celular: radio('celular'), dias: marcados('dias'), zonas: marcados('zonas'), posicao: radio('posicao'),
       tipo_veiculo: $('tipo_veiculo').value, placa: $('placa').value, veiculo_modelo: $('veiculo_modelo').value,
       veiculo_ano: $('veiculo_ano').value, refrigerado: radio('refrigerado') === '1',
       temp_min_c: radio('refrigerado') === '1' ? $('temp_min_c').value : null, dono_veiculo: radio('dono_veiculo') === '1'
     };
-    chamar('POST', URL_NOVO, dados).then(function (r) {
+    if (ATUALIZAR) {
+      dados.email = $('email').value;
+      dados.chave_envio = envio.chave;
+    } else {
+      dados.cpf = $('cpf').value; dados.celular = radio('celular'); dados.dias = marcados('dias');
+      dados.zonas = marcados('zonas'); dados.posicao = radio('posicao');
+    }
+    chamar('POST', ATUALIZAR ? URL_DADOS : URL_NOVO, dados).then(function (r) {
       btn.disabled = false;
       if (!r.ok) { erro(2, textoErro(r)); return; }
-      envio = {id: r.j.id, chave: r.j.chave_envio};
-      guardar('cm_envio', JSON.stringify(envio));
-      enviados = {};
+      if (ATUALIZAR) {
+        enviados = r.j.documentos || enviados;
+      } else {
+        envio = {id: r.j.id, chave: r.j.chave_envio};
+        guardar('cm_envio', JSON.stringify(envio));
+        enviados = {};
+      }
       montarDocs();
       mostrar('tela-3');
     });
@@ -351,6 +431,12 @@
       else { inp.accept = 'image/*,application/pdf'; }
       inp.addEventListener('change', function () { subir(tipo, inp); });
       div.appendChild(t); div.appendChild(est); div.appendChild(inp);
+      if (ATUALIZAR) {
+        var troca = document.createElement('button');
+        troca.type = 'button'; troca.className = 'volta'; troca.id = 'trocar-' + tipo; troca.textContent = 'Trocar';
+        troca.addEventListener('click', function () { troca.hidden = true; inp.hidden = false; });
+        div.appendChild(troca);
+      }
       box.appendChild(div);
       marcarDoc(tipo, !!enviados[tipo], d[2]);
     });
@@ -360,6 +446,13 @@
     var est = $('est-' + tipo);
     $('doc-' + tipo).classList.toggle('ok', !!feito);
     est.classList.toggle('falha', !!falha);
+    if (ATUALIZAR) {
+      // documento já recebido: não precisa mandar de novo; "Trocar" abre o campo do arquivo
+      est.textContent = feito ? 'Já recebido.' : (dica || '');
+      $('arq-' + tipo).hidden = !!feito;
+      $('trocar-' + tipo).hidden = !feito;
+      return;
+    }
     est.textContent = feito ? 'Enviado. Se quiser trocar, escolha outra foto.' : (dica || '');
   }
 
@@ -387,20 +480,33 @@
     });
   }
   function atualizarConcluir() {
-    $('concluir').disabled = !DOCS.every(function (d) { return enviados[d[0]]; });
+    var exigidos = ATUALIZAR ? MINIMOS : DOCS.map(function (d) { return d[0]; });
+    $('concluir').disabled = !exigidos.every(function (t) { return enviados[t]; });
   }
 
   $('concluir').addEventListener('click', function () {
     var btn = $('concluir');
+    var rotulo = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Enviando...';
     erro(3, '');
-    chamar('POST', url(URL_FIM, envio.id), {chave_envio: envio.chave}).then(function (r) {
-      btn.textContent = 'Enviar cadastro';
+    chamar('POST', ATUALIZAR ? URL_CONCLUIR : url(URL_FIM, envio.id), {chave_envio: envio.chave}).then(function (r) {
+      btn.textContent = rotulo;
       if (!r.ok) { erro(3, textoErro(r)); atualizarConcluir(); return; }
+      if (ATUALIZAR) { fimAtualizacao(r.j.pendentes || [], r.j.pix_em_analise); return; }
       esperarResultado(envio, r.j.primeiro_nome);
     });
   });
+
+  function fimAtualizacao(pendentes, pixEmAnalise) {
+    var nomes = pendentes.map(function (t) {
+      return DOCS.filter(function (d) { return d[0] === t; })[0][1];
+    });
+    $('msg-fim').textContent = 'Cadastro atualizado! Obrigado.' +
+      (nomes.length ? ' Faltou: ' + nomes.join(', ') + '. Você pode mandar depois, peça um link novo à Fresh Log.' : '') +
+      (pixEmAnalise ? ' A troca da chave PIX será confirmada pela equipe da Fresh Log antes de valer; até lá, vale a chave anterior.' : '');
+    mostrar('tela-fim');
+  }
 
   // O cadastro é processado em segundo plano: pergunta a situação por até ~24 s.
   // Sem resposta de "liberado" nesse tempo, vale "em avaliação" (Hugo, 02/11).
@@ -425,9 +531,11 @@
     mostrar('tela-1');
     erro(1, aviso || '');
   }
-  $('recomecar').addEventListener('click', function () {
-    if (confirm('Começar o cadastro de novo? Os documentos enviados até agora serão descartados.')) { recomecar(); }
-  });
+  if ($('recomecar')) {
+    $('recomecar').addEventListener('click', function () {
+      if (confirm('Começar o cadastro de novo? Os documentos enviados até agora serão descartados.')) { recomecar(); }
+    });
+  }
 
   function fim(nome, liberado) {
     apagar('cm_envio'); apagar('cm_campos');
@@ -441,6 +549,7 @@
 
   // ── abertura: retoma de onde parou, se este aparelho já começou ──
   function retomar() {
+    if (ATUALIZAR) { mostrar('tela-cpf'); return; }
     var salvo;
     try { salvo = JSON.parse(ler('cm_envio') || 'null'); } catch (e) { salvo = null; }
     if (!(salvo && salvo.id && salvo.chave)) { mostrar('tela-1'); return; }
