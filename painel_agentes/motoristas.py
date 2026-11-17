@@ -151,7 +151,8 @@ def _padrao_por_linha() -> tuple[dict, int]:
             for p in atu.pessoas(conn):
                 pid = p["principal_id"]
                 pend = atu.pendencias(conn, p) if p["ativo"] else {}
-                tem = bool(pend.get("documentos") or pend.get("campos") or pend.get("veiculo_diferente"))
+                tem = bool(pend.get("documentos") or pend.get("campos") or pend.get("veiculo_diferente")
+                           or pend.get("pix_pendente"))
                 total += tem
                 estado = atu.estado_link(conn, pid)
                 aberto = atu.link_em_aberto(conn, pid) if estado == "enviado" else None

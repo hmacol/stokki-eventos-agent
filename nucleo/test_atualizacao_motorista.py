@@ -375,7 +375,7 @@ class TestAtualizacaoMotorista(unittest.TestCase):
         lid = self._linha(cpf=CPF_X)
         token, r = self._pronto(lid)
         self.assertEqual(atu.concluir(self.conn, {}, token, r["chave_envio"]),
-                         {"ok": True, "pendentes": ["antt", "residencia"]})
+                         {"ok": True, "pendentes": ["antt", "residencia"], "pix_em_analise": False})
         c = self._cadastro_row(r["cadastro_id"])
         self.assertEqual(c["status"], "APROVADO")
         self.assertIsNotNone(c["enviado_em"])
@@ -412,8 +412,11 @@ class TestAtualizacaoMotorista(unittest.TestCase):
         self.assertEqual({h["origem"] for h in hist}, {"link_atualizacao"})
 
         login = dict(self.conn.execute("SELECT * FROM motoristas WHERE cpf = ?", (CPF_X,)).fetchone())
-        self.assertEqual(login["chave_pix"], "pix-novo@exemplo.com")
+        self.assertEqual(login["chave_pix"], "pix-antigo")   # troca de PIX espera a equipe
         self.assertEqual(login["telefone"], "11998765432")   # mesmo repasse da edição pelo painel
+        pessoa = next(p for p in atu.pessoas(self.conn) if lid in p["ids"])
+        self.assertEqual(atu.pix_pendente(self.conn, pessoa)["novo"], "pix-novo@exemplo.com")
+        atu.decidir_pix(self.conn, lid, True, "hugo")
         alt = self.conn.execute("SELECT valor_antigo, valor_novo FROM motoristas_alteracoes "
                                 "WHERE cpf = ? AND campo = 'chave_pix'", (CPF_X,)).fetchone()
         self.assertEqual(tuple(alt), ("pix-antigo", "pix-novo@exemplo.com"))
@@ -489,7 +492,8 @@ class TestAtualizacaoMotorista(unittest.TestCase):
         self.assertEqual((r2["cadastro_id"], r2["dados"]["cpf"]), (r["cadastro_id"], CPF_X))
         atu.concluir(self.conn, {}, token, r["chave_envio"])
         pix = dict(self.conn.execute("SELECT cpf, chave_pix FROM motoristas").fetchall())
-        self.assertEqual(pix, {CPF_X: "pix-novo@exemplo.com", CPF_Y: "pix-do-y"})
+        # trocar PIX que já existia espera a aprovação da equipe; o de Y nunca é tocado
+        self.assertEqual(pix, {CPF_X: "pix-antigo", CPF_Y: "pix-do-y"})
 
     def test_dois_links_disputando_o_mesmo_cpf(self):
         p = self._linha("P", agent=7)
@@ -796,7 +800,8 @@ class TestAtualizacaoMotorista(unittest.TestCase):
         self.assertEqual(self._pix_login(), "pix-C")
         self.assertEqual(self._cadastro_row(r["cadastro_id"])["chave_pix"], "pix-C")
 
-    def test_pix_digitado_no_formulario_vai_pro_login(self):
+    def _troca_pedida(self):
+        """Login com pix-C, motorista digita pix-D no link. Devolve (lid, token, abrir, resultado)."""
         lid = self._linha("Fulano de Tal", cpf=CPF_X, agent=7)
         self._ficha(agent_id=7, bd_id=lid, chave_pix="pix-A")
         self._login(CPF_X, agent_id=7, chave_pix="pix-B")
@@ -806,9 +811,65 @@ class TestAtualizacaoMotorista(unittest.TestCase):
         self.conn.commit()
         atu.gravar(self.conn, token, r["chave_envio"], _dados_ficha(chave_pix="pix-D"))
         self._docs(r, ("cnh", "crlv", "selfie"))
-        atu.concluir(self.conn, {}, token, r["chave_envio"])
+        return lid, token, r, atu.concluir(self.conn, {}, token, r["chave_envio"])
+
+    def _pessoa(self, lid):
+        return next(p for p in atu.pessoas(self.conn) if lid in p["ids"])
+
+    def test_pix_digitado_no_formulario_espera_a_aprovacao(self):
+        lid, token, r, fim = self._troca_pedida()
+        self.assertTrue(fim["pix_em_analise"])
+        self.assertTrue(atu.concluir(self.conn, {}, token, r["chave_envio"])["pix_em_analise"])   # repetir não muda
+        self.assertEqual(self._pix_login(), "pix-C")
+        self.assertEqual(self._cadastro_row(r["cadastro_id"])["chave_pix"], "pix-C")
+        self.assertEqual(atu.pix_pendente(self.conn, self._pessoa(lid))["novo"], "pix-D")
+        self.assertTrue(atu.pendencias(self.conn, self._pessoa(lid))["pix_pendente"])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM motoristas_alteracoes WHERE campo = 'chave_pix'")
+                         .fetchone()[0], 0)
+
+    def test_aprovar_a_troca_grava_no_login_e_na_ficha(self):
+        lid, token, r, _ = self._troca_pedida()
+        self.assertEqual(atu.decidir_pix(self.conn, lid, True, "hugo"), {"ok": True, "aprovado": True})
         self.assertEqual(self._pix_login(), "pix-D")
         self.assertEqual(self._cadastro_row(r["cadastro_id"])["chave_pix"], "pix-D")
+        alt = self.conn.execute("SELECT valor_antigo, valor_novo FROM motoristas_alteracoes WHERE campo = 'chave_pix'").fetchone()
+        self.assertEqual(tuple(alt), ("pix-C", "pix-D"))
+        self.assertIsNone(atu.pix_pendente(self.conn, self._pessoa(lid)))
+        with self.assertRaises(atu.LinkInvalido) as cx:   # segundo clique não repete
+            atu.decidir_pix(self.conn, lid, True, "hugo")
+        self.assertEqual(cx.exception.codigo, 404)
+
+    def test_recusar_a_troca_mantem_o_pix_atual(self):
+        lid, token, r, _ = self._troca_pedida()
+        self.assertEqual(atu.decidir_pix(self.conn, lid, False, "hugo"), {"ok": True, "aprovado": False})
+        self.assertEqual(self._pix_login(), "pix-C")
+        self.assertEqual(self._cadastro_row(r["cadastro_id"])["chave_pix"], "pix-C")
+        self.assertIsNone(atu.pix_pendente(self.conn, self._pessoa(lid)))
+        self.assertFalse(atu.pendencias(self.conn, self._pessoa(lid))["pix_pendente"])
+
+    def test_sem_login_trocar_o_pix_da_ficha_antiga_tambem_espera(self):
+        lid = self._linha("Fulano de Tal", cpf=CPF_X, agent=7)
+        self._ficha(agent_id=7, bd_id=lid, chave_pix="pix-A")
+        token = atu.gerar_link(self.conn, lid, "hugo")["token"]
+        r = atu.abrir(self.conn, token, CPF_X)
+        atu.gravar(self.conn, token, r["chave_envio"], _dados_ficha(chave_pix="pix-D"))
+        self._docs(r, ("cnh", "crlv", "selfie"))
+        self.assertTrue(atu.concluir(self.conn, {}, token, r["chave_envio"])["pix_em_analise"])
+        self.assertEqual(self._cadastro_row(r["cadastro_id"])["chave_pix"], "pix-A")
+        atu.decidir_pix(self.conn, lid, True, "hugo")
+        self.assertEqual(self._cadastro_row(r["cadastro_id"])["chave_pix"], "pix-D")
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM motoristas").fetchone()[0], 0)
+
+    def test_primeiro_pix_entra_direto(self):
+        lid = self._linha("Fulano de Tal", cpf=CPF_X, agent=7)
+        self._login(CPF_X, agent_id=7)   # login sem PIX
+        token = atu.gerar_link(self.conn, lid, "hugo")["token"]
+        r = atu.abrir(self.conn, token, CPF_X)
+        atu.gravar(self.conn, token, r["chave_envio"], _dados_ficha(chave_pix="pix-D"))
+        self._docs(r, ("cnh", "crlv", "selfie"))
+        self.assertFalse(atu.concluir(self.conn, {}, token, r["chave_envio"])["pix_em_analise"])
+        self.assertEqual(self._pix_login(), "pix-D")
+        self.assertIsNone(atu.pix_pendente(self.conn, self._pessoa(lid)))
 
     def test_sem_login_a_ficha_fica_com_o_do_formulario_e_nao_cria_login(self):
         lid = self._linha("Fulano de Tal", cpf=CPF_X, agent=7)

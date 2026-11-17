@@ -171,7 +171,58 @@ def pendencias(conn: sqlite3.Connection, pessoa: dict) -> dict:
         "veiculo_diferente": bool(tipo_ficha and tipo_linha and _codigo_tipo(tipo_ficha) != _codigo_tipo(tipo_linha)),
         # mesma regra do candidatos_envio: sem CPF na tabela a pessoa fica fora do lote do grupo
         "falta_cpf": not pessoa["cpf"],
+        "pix_pendente": bool(pix_pendente(conn, pessoa)),
     }
+
+
+def pix_pendente(conn: sqlite3.Connection, pessoa: dict) -> dict | None:
+    """Troca de PIX pedida pelo link e ainda sem decisão da equipe (a mais recente da pessoa)."""
+    marcas = ",".join("?" * len(pessoa["ids"]))
+    r = conn.execute(f"SELECT id, pix_pendente, concluido_em FROM motoristas_links_atualizacao "
+                     f"WHERE bd_motorista_id IN ({marcas}) AND COALESCE(pix_pendente, '') <> '' "
+                     "ORDER BY id DESC LIMIT 1", pessoa["ids"]).fetchone()
+    return {"link_id": r["id"], "novo": r["pix_pendente"], "pedido_em": r["concluido_em"]} if r else None
+
+
+def decidir_pix(conn: sqlite3.Connection, bd_motorista_id: int, aprovar: bool, usuario: str) -> dict:
+    """Equipe (nível total) aprova ou recusa a troca de PIX pedida pelo link. Aprovar grava
+    no login do app (se existe) e na ficha vigente; recusar só apaga o pedido."""
+    pessoa = next((p for p in pessoas(conn) if bd_motorista_id in p["ids"]), None)
+    pedido = pix_pendente(conn, pessoa) if pessoa else None
+    if not pedido:
+        raise LinkInvalido(MSG_SEM_PIX_PENDENTE, 404)
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        cur = conn.execute("UPDATE motoristas_links_atualizacao SET pix_pendente = NULL WHERE id = ? AND pix_pendente = ?",
+                           (pedido["link_id"], pedido["novo"]))
+        if cur.rowcount != 1:   # outro clique decidiu antes
+            raise LinkInvalido(MSG_SEM_PIX_PENDENTE, 404)
+        # pedidos mais antigos da mesma pessoa caem junto: vale a decisão sobre o mais recente
+        marcas = ",".join("?" * len(pessoa["ids"]))
+        conn.execute(f"UPDATE motoristas_links_atualizacao SET pix_pendente = NULL WHERE bd_motorista_id IN ({marcas})",
+                     pessoa["ids"])
+        if aprovar:
+            agora = banco.agora()
+            ficha = _ficha_vigente_ids(conn, pessoa["ids"], pessoa["cpf"]) or {}
+            cpf = _digitos(_primeiro(pessoa["cpf"], ficha.get("cpf")))
+            login = auth.buscar_motorista(conn, cpf) if cpf else None
+            if login:
+                conn.execute("UPDATE motoristas SET chave_pix = ?, atualizado_em = ? WHERE cpf = ?",
+                             (pedido["novo"], agora, cpf))
+                conn.execute("INSERT INTO motoristas_alteracoes (cpf, campo, valor_antigo, valor_novo, alterado_em) "
+                             "VALUES (?, 'chave_pix', ?, ?, ?)", (cpf, login.get("chave_pix"), pedido["novo"], agora))
+            if ficha:
+                conn.execute("UPDATE motoristas_cadastros SET chave_pix = ? WHERE id = ?", (pedido["novo"], ficha["id"]))
+        conn.commit()
+    except BaseException:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+    logger.info("troca de PIX pelo link %s por %s (bd_motoristas id=%s, link #%s)",
+                "aprovada" if aprovar else "recusada", usuario, pessoa["principal_id"], pedido["link_id"])
+    return {"ok": True, "aprovado": bool(aprovar)}
 
 
 # ── Link pessoal ──────────────────────────────────────────────────────────────
@@ -182,6 +233,7 @@ def pendencias(conn: sqlite3.Connection, pessoa: dict) -> dict:
 VALIDADE_DIAS = 15
 MAX_TENTATIVAS_CPF = 5
 ORIGEM_REPASSE = "link_atualizacao"
+MSG_SEM_PIX_PENDENTE = "Não há troca de PIX aguardando aprovação."
 _FMT = "%Y-%m-%d %H:%M:%S"
 _CAMPOS_FICHA = ("cpf", "nome", "data_nascimento", "telefone", "email", "chave_pix", "placa", "tipo_veiculo",
                  "veiculo_modelo", "veiculo_ano", "refrigerado", "temp_min_c", "emite_nf", "dono_veiculo")
@@ -473,8 +525,9 @@ def gravar(conn: sqlite3.Connection, token: str, chave_envio: str, dados: dict) 
     return _resposta(conn, row["id"])
 
 
-def _resultado(ficha) -> dict:
-    return {"ok": True, "pendentes": [t for t in cad.DOCUMENTOS if not ficha[f"{t}_arquivo"]]}
+def _resultado(ficha, pix_em_analise: bool = False) -> dict:
+    return {"ok": True, "pendentes": [t for t in cad.DOCUMENTOS if not ficha[f"{t}_arquivo"]],
+            "pix_em_analise": pix_em_analise}
 
 
 def _repassar(conn: sqlite3.Connection, pessoa: dict, ficha: dict, *, repassar_pix: bool = False) -> None:
@@ -542,7 +595,7 @@ def concluir(conn: sqlite3.Connection, config: dict, token: str, chave_envio: st
             # rascunho encerrado sem este link concluir (ex.: SUBSTITUIDO pelo cadastro novo do mesmo CPF)
             raise LinkInvalido(MSG_LINK_INVALIDO, 410)
     if link["concluido_em"]:
-        return _resultado(ficha)
+        return _resultado(ficha, bool(link.get("pix_pendente")))
     faltam = [t for t in DOCUMENTOS_MINIMOS if not ficha[f"{t}_arquivo"]]
     if faltam:
         raise cad.CadastroInvalido("Faltam documentos: " + ", ".join(_ROTULOS_DOCUMENTO[t] for t in faltam) + ".")
@@ -560,12 +613,20 @@ def concluir(conn: sqlite3.Connection, config: dict, token: str, chave_envio: st
         conhecido = _cpf_conhecido(conn, pessoa)
         if (conhecido and conhecido != cpf) or (not conhecido and not _cpf_livre(conn, pessoa, cpf, ts)):
             raise LinkInvalido(MSG_CPF_DE_OUTRO, 409)
-        # PIX só vai ao login se o motorista digitou outro no formulário (comparado com o que veio
+        # PIX só muda se o motorista digitou outro no formulário (comparado com o que veio
         # pré-preenchido; sem referência gravada, não mexe). Sem mudança, a ficha fica com o PIX
         # atual do login (ele pode ter trocado no app durante o link): ficha e login não divergem.
+        # Trocar um PIX que já existia NÃO vale na hora: o link vai no grupo e só pede o CPF, então
+        # a chave nova fica em pix_pendente até a equipe aprovar (decidir_pix). Só o primeiro PIX
+        # (não havia nenhum) entra direto.
         repassar_pix = link.get("pix_inicial") is not None and (valores["chave_pix"] or "") != link["pix_inicial"]
         login = auth.buscar_motorista(conn, cpf)
-        if not repassar_pix and login and str(login.get("chave_pix") or "").strip():
+        pix_atual = str(_primeiro((login or {}).get("chave_pix"), link.get("pix_inicial")) or "").strip()
+        pix_novo = None
+        if repassar_pix and pix_atual:
+            pix_novo, repassar_pix = (valores["chave_pix"] or None), False
+            valores["chave_pix"] = pix_atual
+        elif not repassar_pix and login and str(login.get("chave_pix") or "").strip():
             valores["chave_pix"] = login["chave_pix"]
         # condicional: dois "Enviar" ao mesmo tempo, só um grava e repassa
         cur = conn.execute(f"UPDATE motoristas_cadastros SET {', '.join(f'{c} = ?' for c in valores)}, status = ?, "
@@ -574,7 +635,8 @@ def concluir(conn: sqlite3.Connection, config: dict, token: str, chave_envio: st
                             cad.STATUS_PENDENTE))
         ganhou = cur.rowcount == 1
         if ganhou:
-            conn.execute("UPDATE motoristas_links_atualizacao SET concluido_em = ? WHERE id = ?", (ts, link["id"]))
+            conn.execute("UPDATE motoristas_links_atualizacao SET concluido_em = ?, pix_pendente = ? WHERE id = ?",
+                         (ts, pix_novo, link["id"]))
         conn.commit()
     except BaseException:
         if conn.in_transaction:
@@ -583,4 +645,5 @@ def concluir(conn: sqlite3.Connection, config: dict, token: str, chave_envio: st
     if ganhou:
         _repassar(conn, pessoa, {**valores, "cpf": cpf}, repassar_pix=repassar_pix)
         logger.info("ficha de atualizacao #%s concluida (bd_motoristas id=%s)", ficha["id"], pessoa["principal_id"])
-    return _resultado(ficha)
+        return _resultado(ficha, bool(pix_novo))
+    return _resultado(ficha, bool(_link(conn, token).get("pix_pendente")))

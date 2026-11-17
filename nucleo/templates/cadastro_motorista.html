@@ -493,17 +493,18 @@
     chamar('POST', ATUALIZAR ? URL_CONCLUIR : url(URL_FIM, envio.id), {chave_envio: envio.chave}).then(function (r) {
       btn.textContent = rotulo;
       if (!r.ok) { erro(3, textoErro(r)); atualizarConcluir(); return; }
-      if (ATUALIZAR) { fimAtualizacao(r.j.pendentes || []); return; }
+      if (ATUALIZAR) { fimAtualizacao(r.j.pendentes || [], r.j.pix_em_analise); return; }
       esperarResultado(envio, r.j.primeiro_nome);
     });
   });
 
-  function fimAtualizacao(pendentes) {
+  function fimAtualizacao(pendentes, pixEmAnalise) {
     var nomes = pendentes.map(function (t) {
       return DOCS.filter(function (d) { return d[0] === t; })[0][1];
     });
     $('msg-fim').textContent = 'Cadastro atualizado! Obrigado.' +
-      (nomes.length ? ' Faltou: ' + nomes.join(', ') + '. Você pode mandar depois, peça um link novo à Fresh Log.' : '');
+      (nomes.length ? ' Faltou: ' + nomes.join(', ') + '. Você pode mandar depois, peça um link novo à Fresh Log.' : '') +
+      (pixEmAnalise ? ' A troca da chave PIX será confirmada pela equipe da Fresh Log antes de valer; até lá, vale a chave anterior.' : '');
     mostrar('tela-fim');
   }
 

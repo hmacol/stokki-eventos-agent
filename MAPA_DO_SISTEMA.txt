@@ -1398,9 +1398,11 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                               uma vez) e Excluir (só total; pede o nome). Bloco WhatsApp (só total): Identificar
                               grupos, Renomear grupos confirmados (prévia "atual → novo") e Enviar links de
                               atualização (modal diz o modo: desligado, piloto ou REAL). APIs novas em
-                              painel_agentes.py: POST /api/motoristas/<id>/{ativo, resetar-pin,
-                              link-atualizacao}, DELETE /api/motoristas/<id>, GET .../<id>/ficha (total,
-                              operador, logística; operador e logística não veem PIX/nascimento/documentos),
+                              painel_agentes.py: POST /api/motoristas/<id>/ativo, POST .../<id>/{resetar-pin,
+                              link-atualizacao, pix-pendente} (só total; pix-pendente aprova/recusa a troca
+                              de PIX pedida pelo link, que nunca vale na hora), DELETE /api/motoristas/<id>,
+                              GET .../<id>/ficha (total, operador, logística; operador e logística não veem
+                              PIX/nascimento/documentos),
                               GET .../grupos/{sugestoes, previa-renomear}, POST .../grupos/{confirmar,
                               renomear}, GET .../envio-links/candidatos e POST .../envio-links (só total;
                               o envio responde 409 com a chave desligada). acesso_telas.TELAS já cobre

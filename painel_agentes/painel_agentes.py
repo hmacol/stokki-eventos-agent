@@ -4763,7 +4763,7 @@ def api_motorista_ativo(motorista_id):
 
 
 @app.route("/api/motoristas/<int:motorista_id>/resetar-pin", methods=["POST"])
-@requer_auth(niveis=("total", "operador", "logistica"))
+@requer_auth(niveis=("total",))   # o PIN provisório aparece na tela: quem vê entra no app como o motorista
 @exige_mesma_origem
 def api_motorista_resetar_pin(motorista_id):
     """Sorteia um PIN provisório (aparece uma vez só na resposta) e derruba as sessões do app."""
@@ -4838,6 +4838,7 @@ def api_motorista_ficha(motorista_id):
         ficha = atu.ficha_vigente(conn, pessoa["principal_id"])
         pend = atu.pendencias(conn, pessoa)
         pix = atu.pix_vigente(conn, pessoa, ficha)
+        pedido_pix = atu.pix_pendente(conn, pessoa)
     finally:
         conn.close()
     total = g.nivel_acesso == "total"
@@ -4845,11 +4846,31 @@ def api_motorista_ficha(motorista_id):
         campos = _CAMPOS_FICHA_TELA + (_CAMPOS_FICHA_SO_TOTAL if total else ())
         # PIX vigente = o do login do app (trocado em "Meus dados"); o da ficha é o reserva
         ficha = {c: (pix if c == "chave_pix" else ficha.get(c)) for c in campos}
-    return jsonify({"nome": pessoa["nome"], "ficha": ficha, "pendencias": pend, "documentos_visiveis": total})
+    return jsonify({"nome": pessoa["nome"], "ficha": ficha, "pendencias": pend, "documentos_visiveis": total,
+                    "pix_pendente": ({"novo": pedido_pix["novo"], "atual": pix, "pedido_em": pedido_pix["pedido_em"]}
+                                     if total and pedido_pix else None)})
+
+
+@app.route("/api/motoristas/<int:motorista_id>/pix-pendente", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_motorista_pix_pendente(motorista_id):
+    """Aprova ou recusa ({"aprovar": bool}) a troca de PIX que o motorista pediu pelo link."""
+    from nucleo import atualizacao_motorista as atu
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get("aprovar"), bool):
+        return jsonify({"erro": "Corpo inválido: esperado {\"aprovar\": true|false}."}), 400
+    conn = _cadastro_conn()
+    try:
+        return jsonify(atu.decidir_pix(conn, motorista_id, body["aprovar"], session.get("usuario") or g.nivel_acesso))
+    except atu.LinkInvalido as exc:
+        return jsonify({"erro": str(exc)}), 404
+    finally:
+        conn.close()
 
 
 @app.route("/api/motoristas/<int:motorista_id>/link-atualizacao", methods=["POST"])
-@requer_auth(niveis=("total", "operador", "logistica"))
+@requer_auth(niveis=("total",))   # quem tem o link e sabe o CPF preenche no lugar do motorista
 @exige_mesma_origem
 def api_motorista_link_atualizacao(motorista_id):
     """Botão "Copiar link": link novo da pessoa (cancela os anteriores). O link só sai nesta

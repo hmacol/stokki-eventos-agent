@@ -109,7 +109,7 @@ class TestApiAtualizacaoMotorista(unittest.TestCase):
             self.assertEqual(r.status_code, 200, r.get_json())
         r = self.cli.post(f"/api/atualizacao/{token}/concluir", json={"chave_envio": chave})
         self.assertEqual(r.status_code, 200, r.get_json())
-        self.assertEqual(r.get_json(), {"ok": True, "pendentes": ["antt", "residencia"]})
+        self.assertEqual(r.get_json(), {"ok": True, "pendentes": ["antt", "residencia"], "pix_em_analise": False})
         status = self.conn.execute("SELECT status FROM motoristas_cadastros WHERE id = ?", (cid,)).fetchone()[0]
         self.assertEqual(status, "APROVADO")
 

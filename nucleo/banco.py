@@ -554,7 +554,7 @@ def garantir_esquema(conn: sqlite3.Connection):
     _migrar_colunas(conn, "motoristas_cadastros", _COLUNAS_CADASTRO_LINK)
     # PIX que veio pré-preenchido no rascunho do link de atualização: o login só muda se o
     # motorista digitou outro (tabela pode já existir de uma rodada anterior deste ramo)
-    _migrar_colunas(conn, "motoristas_links_atualizacao", [("pix_inicial", "TEXT")])
+    _migrar_colunas(conn, "motoristas_links_atualizacao", [("pix_inicial", "TEXT"), ("pix_pendente", "TEXT")])
     _migrar_colunas(conn, "nucleo_pedidos", _COLUNAS_PEDIDOS_NOVAS)
     _migrar_colunas(conn, "nucleo_paradas", _COLUNAS_PARADAS_NOVAS)
     _migrar_colunas(conn, "nucleo_rotas", _COLUNAS_ROTAS_NOVAS)

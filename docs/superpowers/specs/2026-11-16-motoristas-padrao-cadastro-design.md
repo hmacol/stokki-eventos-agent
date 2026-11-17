@@ -129,9 +129,14 @@ linha de comando ou não existem.
   linha operacional; se o tipo informado for diferente do da tabela, a tela do
   painel mostra o selo "veículo diferente" para a equipe decidir.
 - Ao enviar: grava a ficha; repassa para a `bd_motoristas` (com histórico,
-  origem `link_atualizacao`) CPF se estava vazio, telefone, e-mail e placa; e
-  repassa a chave PIX ao login do app, se existir. É a mesma regra do "Meus
-  dados" do app, que já vale na hora.
+  origem `link_atualizacao`) CPF se estava vazio, telefone, e-mail e placa.
+- **Troca de PIX espera a equipe (Hugo, 17/11).** O link vai no grupo e só
+  pede o CPF, então trocar um PIX que já existia não vale na hora: a chave
+  nova fica guardada (`motoristas_links_atualizacao.pix_pendente`), a linha
+  ganha o selo "PIX novo aguardando aprovação" e, em "Ver ficha", o nível
+  total aprova (grava no login do app e na ficha, com histórico) ou recusa.
+  Até lá vale a chave anterior, e o motorista lê isso na tela final. Só o
+  primeiro PIX (não havia nenhum) entra direto.
 - Respeita o mesmo freio por IP e os mesmos limites de arquivo do link atual.
 - Chave própria `atualizacao_motoristas.ativo` (padrão desligado → 503),
   independente de `cadastro_motorista_link.ativo`.
@@ -183,7 +188,8 @@ Calculadas a cada carga da tela, só para motorista ativo:
   `piloto = 1`: não conta como enviado, não gasta o teto e não tira o
   motorista do próximo lote; é cancelado quando o link de verdade for gerado.
 - Sem grupo confirmado ou fora do lote: botão "Copiar link" na linha (gera o
-  link e copia; a equipe manda por onde quiser).
+  link e copia; a equipe manda por onde quiser). Só nível total (Hugo,
+  17/11): quem tem o link e sabe o CPF preenche no lugar do motorista.
 - Grupo de dupla: cada motorista recebe a sua mensagem, com o nome dele.
 
 ### 4b. Renomear o grupo com o nome completo (pedido do Hugo, 16/11)
@@ -239,7 +245,8 @@ Calculadas a cada carga da tela, só para motorista ativo:
   **Não mexe na Vuupt.** A exceção já existe e continua onde está: cadastro
   vindo do link tem o "Desfazer", que apaga o agente e o veículo que ele
   mesmo criou. Agente de motorista antigo sai da Vuupt à mão.
-- **Resetar PIN** (níveis do Editar): sorteia PIN de 6 dígitos, grava com
+- **Resetar PIN** (só nível total, Hugo 17/11: o PIN aparece na tela e quem
+  vê entra no app como o motorista): sorteia PIN de 6 dígitos, grava com
   `trocar_pin = 1`, zera tentativas e bloqueio, mostra o PIN uma única vez na
   tela para a equipe passar ao motorista. Sessões antigas caem sozinhas (o
   hash muda). Motorista sem login e com CPF: o mesmo botão vira "Criar acesso
@@ -273,7 +280,9 @@ real. Não copie `""` para "desligar": é o valor que liga o envio real.
    equipe que solta cada lote.
 5. Teto de 15 mensagens por dia (o número é o do Hugo; risco de banimento).
 6. Excluir apaga os arquivos de documento do motorista.
-7. Resetar PIN nos mesmos níveis do Editar (total, operador, logística).
+7. Resetar PIN e "Copiar link" só no nível total; troca de PIX pelo link
+   espera aprovação do nível total (revisto em 17/11, depois da revisão de
+   segurança; antes eram os níveis do Editar e o PIX valia na hora).
 8. ANTT e comprovante de residência contam como pendência para todos, igual
    ao cadastro pelo link, mas não impedem o motorista de enviar a ficha.
 9. Motorista sem CPF na tabela não recebe o link no grupo (só por "Copiar

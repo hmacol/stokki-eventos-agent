@@ -157,12 +157,13 @@ class TestPagina(_Base):
             self.assertNotIn(escondido, html)
         self._logar("operador")
         html = self.cliente.get("/motoristas").get_data(as_text=True)
-        self.assertIn(">Resetar PIN</button>", html)     # Caio tem login
         self.assertIn("Ver ficha", html)
-        self.assertNotIn(">Excluir</button>", html)
-        self.assertNotIn("Identificar grupos", html)
+        for so_total in (">Resetar PIN</button>", ">Copiar link</button>", ">Excluir</button>", "Identificar grupos"):
+            self.assertNotIn(so_total, html)
         self._logar("total")
         html = self.cliente.get("/motoristas").get_data(as_text=True)
+        self.assertIn(">Resetar PIN</button>", html)     # Caio tem login
+        self.assertIn(">Copiar link</button>", html)
         self.assertIn(">Excluir</button>", html)
         self.assertIn("Identificar grupos", html)
         self.assertIn('title="falta o CPF"', html)        # Bia: sem CPF, botão desabilitado
@@ -180,7 +181,11 @@ class TestAcoes(_Base):
         self.assertFalse(any(l["id"] == self.bia for l in mb.listar(self.conn)))
 
     def test_resetar_pin_devolve_pin_uma_vez(self):
-        self._logar("operador")
+        for nivel in ("operador", "logistica"):   # o PIN aparece na tela: só nível total
+            self._logar(nivel)
+            self.assertIn(self._post(f"/api/motoristas/{self.ana1}/resetar-pin").status_code, (302, 403))
+        self.assertIsNone(auth.buscar_motorista(self.conn, CPF_A))
+        self._logar("total")
         r = self._post(f"/api/motoristas/{self.ana1}/resetar-pin")
         self.assertEqual(r.status_code, 200, r.get_json())
         pin = r.get_json()["pin"]
@@ -204,7 +209,11 @@ class TestAcoes(_Base):
 
 class TestLinkEFicha(_Base):
     def test_link_atualizacao_devolve_url(self):
-        self._logar("operador")
+        for nivel in ("operador", "logistica"):   # quem tem o link e o CPF preenche pelo motorista: só total
+            self._logar(nivel)
+            self.assertIn(self._post(f"/api/motoristas/{self.ana2}/link-atualizacao").status_code, (302, 403))
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM motoristas_links_atualizacao").fetchone()[0], 0)
+        self._logar("total")
         r = self._post(f"/api/motoristas/{self.ana2}/link-atualizacao")
         self.assertEqual(r.status_code, 200, r.get_json())
         d = r.get_json()
@@ -228,7 +237,7 @@ class TestLinkEFicha(_Base):
         self.assertIn(self._post(f"/api/motoristas/{self.ana1}/link-atualizacao").status_code, (302, 403))
 
     def test_validade_malformada_no_config_vale_15_dias(self):
-        self._logar("operador")
+        self._logar("total")
         for valor in ("abc", None, 0, -3, [1]):
             self.config["atualizacao_motoristas"] = {"validade_dias": valor}
             r = self._post(f"/api/motoristas/{self.ana1}/link-atualizacao")
@@ -266,6 +275,31 @@ class TestLinkEFicha(_Base):
         self.assertEqual(self.cliente.get(f"/api/motoristas/{self.ana1}/ficha").status_code, 403)   # sem Referer
         self._logar("leitura")
         self.assertIn(self._get(f"/api/motoristas/{self.ana1}/ficha").status_code, (302, 403))
+
+    def test_troca_de_pix_pendente_so_total_ve_e_decide(self):
+        self.conn.execute("INSERT INTO motoristas_cadastros (cpf, nome, chave_envio, status, origem, bd_motorista_id, "
+                          "chave_pix, criado_em) VALUES (?, 'Ana', 'k', 'APROVADO', 'app', ?, 'pix-A', ?)",
+                          (CPF_A, self.ana1, banco.agora()))
+        auth.criar_ou_atualizar_motorista(self.conn, CPF_A, "Ana Souza", pin="246802", agent_id=11)
+        self.conn.execute("UPDATE motoristas SET chave_pix = 'pix-A' WHERE cpf = ?", (CPF_A,))
+        self.conn.execute("INSERT INTO motoristas_links_atualizacao (bd_motorista_id, token_hash, criado_em, expira_em, "
+                          "concluido_em, pix_pendente) VALUES (?, 'h', ?, ?, ?, 'pix-NOVO')",
+                          (self.ana1, banco.agora(), banco.agora(), banco.agora()))
+        self.conn.commit()
+        self._logar("operador")
+        d = self._get(f"/api/motoristas/{self.ana1}/ficha").get_json()
+        self.assertIsNone(d["pix_pendente"])            # a chave nova não aparece pra quem não é total
+        self.assertTrue(d["pendencias"]["pix_pendente"])   # mas o selo sim
+        self.assertIn(self._post(f"/api/motoristas/{self.ana1}/pix-pendente", {"aprovar": True}).status_code, (302, 403))
+        self._logar("total")
+        self.assertIn("PIX novo aguardando aprovação", self.cliente.get("/motoristas").get_data(as_text=True))
+        d = self._get(f"/api/motoristas/{self.ana2}/ficha").get_json()
+        self.assertEqual((d["pix_pendente"]["novo"], d["pix_pendente"]["atual"]), ("pix-NOVO", "pix-A"))
+        self.assertEqual(self._post(f"/api/motoristas/{self.ana1}/pix-pendente", {"aprovar": "sim"}).status_code, 400)
+        r = self._post(f"/api/motoristas/{self.ana2}/pix-pendente", {"aprovar": True})
+        self.assertEqual((r.status_code, r.get_json()), (200, {"ok": True, "aprovado": True}))
+        self.assertEqual(auth.buscar_motorista(self.conn, CPF_A)["chave_pix"], "pix-NOVO")
+        self.assertEqual(self._post(f"/api/motoristas/{self.ana1}/pix-pendente", {"aprovar": True}).status_code, 404)
 
     def test_ficha_mostra_o_pix_vigente_do_login(self):
         """C1: PIX trocado no app ("Meus dados") depois da aprovação: a ficha mostra o do login."""

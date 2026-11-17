@@ -279,6 +279,7 @@
         {%- if p.campos %}<span class="badge badge-erro" title="Falta: {{ p.campos | join(', ') }}">Ficha incompleta</span>{% endif %}
         {%- if p.veiculo_diferente %}<span class="badge badge-erro" title="O tipo de veículo da ficha não bate com o da tabela">veículo diferente</span>{% endif %}
         {%- if p.falta_cpf %}<span class="badge badge-erro">falta CPF para enviar no grupo</span>{% endif %}
+        {%- if p.pix_pendente %}<span class="badge badge-erro" title="O motorista pediu a troca do PIX pelo link. Abra Ver ficha para aprovar ou recusar.">PIX novo aguardando aprovação</span>{% endif %}
         {%- if m.estado_link == "enviado" %}<span class="badge badge-nunca">link enviado {{ m.link_data or "" }}</span>
         {%- elif m.estado_link == "aberto" %}<span class="badge badge-nunca">abriu, não concluiu</span>
         {%- elif m.estado_link == "vencido" %}<span class="badge badge-nunca">link vencido</span>{% endif %}
@@ -305,9 +306,9 @@
       <td>{% if m.id %}<div class="acoes-linha" data-id="{{ m.id }}" data-nome="{{ m.nome }}" data-link="{{ m.estado_link or '' }}">
         <button type="button" class="botao botao-editar-motorista" data-id="{{ m.id }}" data-motorista='{{ m.form | tojson }}'>Editar</button>
         <button type="button" class="botao-sec botao-ver-ficha">Ver ficha</button>
-        {% if m.ativo %}<button type="button" class="botao-sec botao-copiar-link">Copiar link</button>{% endif %}
+        {% if m.ativo and pode_aprovar %}<button type="button" class="botao-sec botao-copiar-link">Copiar link</button>{% endif %}
         <button type="button" class="botao-sec botao-ativo" data-ativo="{{ 1 if m.ativo else 0 }}">{{ "Inativar" if m.ativo else "Reativar" }}</button>
-        <button type="button" class="botao-sec botao-pin" {% if not m.form.cpf %}disabled title="falta o CPF"{% endif %}>{{ "Resetar PIN" if m.tem_login else "Criar acesso ao app" }}</button>
+        {% if pode_aprovar %}<button type="button" class="botao-sec botao-pin" {% if not m.form.cpf %}disabled title="falta o CPF"{% endif %}>{{ "Resetar PIN" if m.tem_login else "Criar acesso ao app" }}</button>{% endif %}
         {% if pode_aprovar %}<button type="button" class="botao-sec perigo botao-excluir-motorista">Excluir</button>{% endif %}
       </div>{% endif %}</td>
       {% endif %}
@@ -824,6 +825,22 @@ const putJSON = (url, body) => postJSON(url, body, "PUT");
       if (p.veiculo_diferente) faltas.push("veículo diferente da tabela");
       const corpo = [el("p", { class: faltas.length ? "aviso-modal forte" : "aviso-modal" },
                         faltas.length ? `Falta: ${faltas.join(", ")}.` : "Sem pendências.")];
+      const pp = d.pix_pendente;
+      if (pp) {
+        const decidir = async (aprovar) => {
+          if (!confirm(aprovar ? `Trocar o PIX de ${nome} para ${pp.novo}? Confirme com o motorista por outro canal antes.`
+                               : `Recusar a troca de PIX de ${nome}? O PIX atual continua valendo.`)) return;
+          try { await postJSON(`/api/motoristas/${id}/pix-pendente`, { aprovar }); location.reload(); }
+          catch (e) { alert(`Falha: ${e.message}`); }
+        };
+        const sim = el("button", { type: "button", class: "botao" }, "Aprovar troca");
+        const nao = el("button", { type: "button", class: "botao-sec" }, "Recusar");
+        sim.addEventListener("click", () => decidir(true));
+        nao.addEventListener("click", () => decidir(false));
+        corpo.push(el("p", { class: "aviso-modal forte" },
+          `Troca de PIX pedida pelo link${pp.pedido_em ? " em " + ddmm(pp.pedido_em) : ""}: de ${pp.atual || "—"} para ${pp.novo}. Só vale depois de aprovada.`));
+        corpo.push(el("div", { class: "campo-copia" }, sim, nao));
+      }
       const f = d.ficha;
       if (!f) {
         corpo.push(el("p", { class: "dica" }, "Sem ficha aprovada: os dados acima vêm só da tabela."));
@@ -876,7 +893,8 @@ const putJSON = (url, body) => postJSON(url, body, "PUT");
       }
     });
 
-    caixa.querySelector(".botao-pin").addEventListener("click", async (ev) => {
+    const botaoPin = caixa.querySelector(".botao-pin");
+    if (botaoPin) botaoPin.addEventListener("click", async (ev) => {
       const botao = ev.currentTarget;
       const criar = botao.textContent.trim() === "Criar acesso ao app";
       if (!confirm(criar ? `Criar o acesso de ${nome} ao app com um PIN provisório?`
