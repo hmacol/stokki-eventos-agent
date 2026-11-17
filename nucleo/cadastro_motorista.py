@@ -307,15 +307,12 @@ def _freio_link(conn: sqlite3.Connection, ip: str | None) -> None:
         raise CadastroInvalido("Muitos pedidos de cadastro. Tente de novo mais tarde.", 429)
 
 
-def criar_cadastro_link(conn: sqlite3.Connection, dados: dict, ip: str | None = None) -> dict:
-    """Cadastro vindo do link público (sem login). Devolve {id, chave_envio}.
-    Diferente do app: pendente anterior do mesmo CPF vira SUBSTITUIDO (o
-    motorista pode refazer o formulário) em vez de barrar. Só o cadastro
-    criado conta no freio (`ip` gravado em ip_origem)."""
+def _validar_dados_pessoa_veiculo(dados: dict) -> dict:
+    """Campos comuns ao cadastro pelo link e à atualização de quem já é
+    motorista: pessoa, PIX e veículo (sem CPF, zonas, dias, posição e
+    celular). Devolve os valores já no formato das colunas de
+    motoristas_cadastros; levanta CadastroInvalido."""
     dados = dados or {}
-    cpf = auth.normalizar_cpf(dados.get("cpf"))
-    if not cpf_valido(cpf):
-        raise CadastroInvalido("CPF inválido.")
     nome = re.sub(r"\s+", " ", str(dados.get("nome") or "")).strip()
     if len(nome) < 5 or " " not in nome:
         raise CadastroInvalido("Informe o nome completo.")
@@ -328,14 +325,6 @@ def criar_cadastro_link(conn: sqlite3.Connection, dados: dict, ip: str | None = 
     chave_pix = validar_pix(dados.get("chave_pix"))
     if not chave_pix:
         raise CadastroInvalido("Chave PIX é obrigatória.")
-    zonas = _lista(dados.get("zonas"), ZONAS, "Zona")
-    if not zonas:
-        raise CadastroInvalido("Marque pelo menos uma zona que você atende.")
-    dias = _lista(dados.get("dias"), DIAS, "Dia")
-    if not dias:
-        raise CadastroInvalido("Marque pelo menos um dia da semana.")
-    posicao = _escolha(dados.get("posicao"), POSICOES, "Posição")
-    celular = _escolha(dados.get("celular"), CELULARES, "Celular")
     tipo_veiculo = str(dados.get("tipo_veiculo") or "").strip().upper()
     if not tipo_veiculo or not tipo_por_codigo(tipo_veiculo):
         raise CadastroInvalido("Escolha o tipo de veículo.")
@@ -360,6 +349,30 @@ def criar_cadastro_link(conn: sqlite3.Connection, dados: dict, ip: str | None = 
             raise CadastroInvalido("Informe a menor temperatura que o veículo mantém.")
         if not -30 <= temp_min <= 30:
             raise CadastroInvalido("Temperatura mínima deve ficar entre -30 e 30 °C.")
+    return {"nome": nome, "data_nascimento": nascimento, "telefone": telefone, "chave_pix": chave_pix,
+            "tipo_veiculo": tipo_veiculo, "placa": placa, "veiculo_modelo": modelo, "veiculo_ano": ano,
+            "refrigerado": int(refrigerado), "temp_min_c": temp_min,
+            "emite_nf": int(bool(dados.get("emite_nf"))), "dono_veiculo": int(bool(dados.get("dono_veiculo", True)))}
+
+
+def criar_cadastro_link(conn: sqlite3.Connection, dados: dict, ip: str | None = None) -> dict:
+    """Cadastro vindo do link público (sem login). Devolve {id, chave_envio}.
+    Diferente do app: pendente anterior do mesmo CPF vira SUBSTITUIDO (o
+    motorista pode refazer o formulário) em vez de barrar. Só o cadastro
+    criado conta no freio (`ip` gravado em ip_origem)."""
+    dados = dados or {}
+    cpf = auth.normalizar_cpf(dados.get("cpf"))
+    if not cpf_valido(cpf):
+        raise CadastroInvalido("CPF inválido.")
+    v = _validar_dados_pessoa_veiculo(dados)
+    zonas = _lista(dados.get("zonas"), ZONAS, "Zona")
+    if not zonas:
+        raise CadastroInvalido("Marque pelo menos uma zona que você atende.")
+    dias = _lista(dados.get("dias"), DIAS, "Dia")
+    if not dias:
+        raise CadastroInvalido("Marque pelo menos um dia da semana.")
+    posicao = _escolha(dados.get("posicao"), POSICOES, "Posição")
+    celular = _escolha(dados.get("celular"), CELULARES, "Celular")
 
     if (auth.buscar_motorista(conn, cpf) or motoristas_banco.por_cpf(conn, cpf)
             or conn.execute("SELECT 1 FROM motoristas_cadastros WHERE cpf = ? AND status = ?",
@@ -381,15 +394,15 @@ def criar_cadastro_link(conn: sqlite3.Connection, dados: dict, ip: str | None = 
                                               data_nascimento, emite_nf, posicao, celular, veiculo_modelo, veiculo_ano,
                                               refrigerado, temp_min_c, ip_origem)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (cpf, nome, telefone, chave_pix, placa, tipo_veiculo, ",".join(zonas), ",".join(dias),
-              int(bool(dados.get("dono_veiculo", True))), chave, STATUS_PENDENTE, banco.agora(), ORIGEM_LINK,
-              nascimento, int(bool(dados.get("emite_nf"))), posicao, celular, modelo, ano, int(refrigerado), temp_min,
-              ip))
+        """, (cpf, v["nome"], v["telefone"], v["chave_pix"], v["placa"], v["tipo_veiculo"], ",".join(zonas),
+              ",".join(dias), v["dono_veiculo"], chave, STATUS_PENDENTE, banco.agora(), ORIGEM_LINK,
+              v["data_nascimento"], v["emite_nf"], posicao, celular, v["veiculo_modelo"], v["veiculo_ano"],
+              v["refrigerado"], v["temp_min_c"], ip))
         conn.commit()
     except BaseException:
         conn.rollback()
         raise
-    logger.info("cadastro #%s (link) criado pra %s (%s)", cur.lastrowid, nome, tipo_veiculo)
+    logger.info("cadastro #%s (link) criado pra %s (%s)", cur.lastrowid, v["nome"], v["tipo_veiculo"])
     return {"id": cur.lastrowid, "chave_envio": chave}
 
 

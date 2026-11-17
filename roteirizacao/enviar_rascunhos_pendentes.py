@@ -72,6 +72,7 @@ import yaml
 from notificar_execucao_agente import notificar_execucao
 from criar_rotas_diarias import TZ_BRASILIA, _data_alvo_rotas
 from rascunhos_rota import listar_rascunhos_do_dia, enviar_rascunho, STATUS_RASCUNHO
+from regras.veiculos import rascunho_sem_carro
 
 # _badges_trava/_badges_lote são os mesmos cálculos que alimentam os
 # badges da tela /planejamento (Fase 0) -- reaproveitados aqui como a
@@ -97,6 +98,47 @@ except Exception:
 def _carregar_config() -> dict:
     with open(_RAIZ_PROJETO / "config.yaml", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+
+def _placas_veiculos(config: dict):
+    """{vehicle_id: placa} da Vuupt, ou None se nao deu pra carregar (aí só vale vehicle_id vazio)."""
+    try:
+        from planejamento_rotas import placas_veiculos_vuupt
+        return placas_veiculos_vuupt(config)
+    except Exception as e:
+        logger.warning(f"Lista de veiculos indisponivel pro alerta de rota sem carro: {e}")
+        return None
+
+
+def alertar_sem_carro(rascunhos_sem_carro: list, modo_teste: bool = False, postar=None) -> list:
+    """Rota que saiu sem carro (spec 4): o envio automatico segue, mas avisa o
+    grupo Alertas do /atendimento. Em modo teste so loga. Devolve os textos."""
+    textos = [
+        f"Rota {r['nome']} saiu sem carro: motorista {r.get('motorista_nome') or r.get('agent_id')} sem carro cadastrado."
+        for r in rascunhos_sem_carro
+    ]
+    if not textos:
+        return textos
+    if modo_teste:
+        for t in textos:
+            logger.info(f"[TESTE] Postaria em Alertas: {t}")
+        return textos
+    try:
+        if postar is None:
+            import grupos_equipe
+            import retornos
+            conn = grupos_equipe.conectar()
+            try:
+                for t in textos:
+                    retornos.postar_alerta(conn, t)
+            finally:
+                conn.close()
+        else:
+            for t in textos:
+                postar(t)
+    except Exception as e:
+        logger.warning(f"Falha ao postar alerta de rota sem carro (o envio ja foi feito): {e}")
+    return textos
 
 
 def main(modo_teste: bool = False):
@@ -151,15 +193,20 @@ def main(modo_teste: bool = False):
                     f"'{rascunho['nome']}' -- {'; '.join(motivos)}."
                 )
 
-            enviados, com_erro, lalamove_sem_corrida = [], [], []
+            enviados, com_erro, lalamove_sem_corrida, sem_carro = [], [], [], []
+            placas = _placas_veiculos(config) if aprovados else None
             for rascunho, _ in aprovados:
                 if modo_teste:
                     logger.info(f"{prefixo}Enviaria '{rascunho['nome']}' ({len(rascunho['paradas'])} parada(s)).")
                     enviados.append(rascunho["nome"])
+                    if rascunho_sem_carro(rascunho, placas):
+                        sem_carro.append(rascunho)
                     continue
 
                 resultado = enviar_rascunho(rascunho["id"], token)
                 if resultado.get("ok"):
+                    if rascunho_sem_carro(rascunho, placas):
+                        sem_carro.append(rascunho)
                     aviso_removidos = (f" (removidos por conflito: {resultado['codigos_removidos']})"
                                        if resultado.get("codigos_removidos") else "")
                     logger.info(f"Rascunho '{rascunho['nome']}' enviado -- rota VUUPT id={resultado['vuupt_route_id']}{aviso_removidos}.")
@@ -184,6 +231,8 @@ def main(modo_teste: bool = False):
                 else:
                     logger.error(f"Falha ao enviar rascunho '{rascunho['nome']}': {resultado.get('erro')}")
                     com_erro.append(f"{rascunho['nome']} ({resultado.get('erro')})")
+
+            alertar_sem_carro(sem_carro, modo_teste)
 
             detalhe = (
                 f"{prefixo}{len(enviados)}/{len(pendentes)} rota(s) pendente(s) aprovada(s) na nota de "

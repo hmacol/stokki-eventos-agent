@@ -559,6 +559,11 @@ def main(modo_teste: bool = False):
         from pedidos_segurados import separar_segurados
         servicos, _segurados = separar_segurados(servicos, data_alvo)
 
+        # Retornando (editar rota enviada, 10/11): pedido no carro do motorista
+        # nao e encaixado ate o galpao receber em /retornos.
+        from pedidos_retornando import separar_retornando
+        servicos, _retornando = separar_retornando(servicos)
+
         # Área não atendida (pedido do Hugo, 02/08) -- diferente do
         # agendamento pendente, esse aviso é ÚNICO (não é rate-limitado
         # por dia) e pode surgir a qualquer hora, então notifica aqui
