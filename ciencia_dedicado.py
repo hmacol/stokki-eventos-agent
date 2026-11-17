@@ -25,6 +25,7 @@ for _p in (_RAIZ, _RAIZ / "roteirizacao"):
         sys.path.insert(0, str(_p))
 from nucleo.normalizacao import normalizar_codigo  # noqa: E402  (mantem -R/-C, ao contrario de pedidos_dedicados)
 import regioes_dia_fixo  # noqa: E402
+import pedidos_dedicados  # noqa: E402
 
 DB_PATH = _RAIZ / "dados" / "dados.db"
 
@@ -34,7 +35,7 @@ REAGENDADO = "REAGENDADO"
 ENCERRADO = "ENCERRADO"
 
 # removido_por do dedicado quando o embarcador reagenda pela pagina de ciencia
-POR_REAGENDADO = "ciência: reagendado pelo embarcador"
+POR_REAGENDADO = pedidos_dedicados.POR_CIENCIA_REAGENDADO
 
 
 def conectar(db_path=DB_PATH) -> sqlite3.Connection:
