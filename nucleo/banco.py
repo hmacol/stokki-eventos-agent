@@ -381,6 +381,7 @@ _COLUNAS_CADASTRO_LINK = [
     ("aviso_grupo_em", "TEXT"),
     ("aviso_concluido_em", "TEXT"),
     ("boas_vindas_situacao", "TEXT"),
+    ("pedido_grupo_situacao", "TEXT"),           # pedido ao Atendimento pra criar o grupo do motorista
     ("ultimo_erro", "TEXT"),
     ("tentativas", "INTEGER NOT NULL DEFAULT 0"),
     ("processando_em", "TEXT"),
