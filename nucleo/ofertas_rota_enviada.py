@@ -413,6 +413,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Publica pros outros motoristas a rota que ficou sem aceite.")
     parser.add_argument("--modo-teste", action="store_true", help="mostra o que publicaria e avisaria; nao grava nem envia")
     parser.add_argument("--situacao", action="store_true", help="mostra a config e as ofertas de hoje e sai")
+    parser.add_argument("--ensaiar-rota", type=int, metavar="ROTA_ID",
+                        help="com --modo-teste: mostra elegiveis, resumo e aviso dessa rota, sem gravar nem enviar")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 
@@ -426,6 +428,24 @@ def main(argv: list[str] | None = None) -> int:
             for o in conn.execute("SELECT * FROM nucleo_ofertas_rota WHERE data_rota >= ? ORDER BY id", (date.today().isoformat(),)):
                 print(f"  rota={o['rota_id']} {o['motivo']} {o['status']} original={o['agent_original']} "
                       f"escolhido_por={o['escolhido_por']} elegiveis={o['elegiveis_json']} retirada={o['motivo_retirada']}")
+            return 0
+        if args.ensaiar_rota:
+            if not args.modo_teste:
+                parser.error("--ensaiar-rota so com --modo-teste")
+            rota = conn.execute("SELECT * FROM nucleo_rotas WHERE id = ?", (args.ensaiar_rota,)).fetchone()
+            if rota is None:
+                print("rota nao encontrada")
+                return 1
+            quem = elegiveis_reais(conn, rota, config)
+            nomes = [_nome(conn, a) for a in quem]
+            dados = montar_resumo(conn, rota, (config.get("google_maps") or {}).get("api_key", ""))
+            print(f"rota {rota['id']} {rota['nome']} | original: {_nome(conn, rota['agent_id'])}")
+            print(f"elegiveis com app ({len(quem)}): {nomes}")
+            print(f"resumo: {dados}")
+            aviso = texto_disponivel({"data_rota": rota["data_rota"], "resumo_json": json.dumps(dados, ensure_ascii=False, default=str)},
+                                     valor_aproximado(conn, rota, _tipo_veiculo_do(conn, rota["agent_id"])), cfg["link"])
+            print(f"aviso ({len(aviso)} caracteres):")
+            print(aviso)
             return 0
         if not cfg["ativo"] and not args.modo_teste:
             return 0
