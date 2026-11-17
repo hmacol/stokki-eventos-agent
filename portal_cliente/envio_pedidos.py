@@ -642,17 +642,44 @@ _RE_PAR_SKU = re.compile(r"^(?:sku|produto|codigo|cod|item) ?(\d{1,3})$")
 _RE_PAR_QTD = re.compile(r"^(?:quantidade|qtd|qtde|quant) ?(\d{1,3})$")
 
 
-def _pares_de_itens(cabecalho: list) -> list[tuple[int, int]]:
+def _pares_de_itens(cabecalho: list, ocupadas: set[int] | None = None, avisos: list[str] | None = None) -> list[tuple[int, int]]:
     """[(coluna do SKU, coluna da quantidade)] dos pares numerados do cabeçalho,
-    na ordem do número; vazio quando a planilha é de uma linha por item."""
+    na ordem do número; vazio quando a planilha é de uma linha por item.
+    Cabeçalho alterado pelo cliente não trava (17/11, pedido do Hugo): lê e
+    explica em `avisos`. SkuN sem a QuantidadeN usa a coluna logo à direita,
+    desde que ela não seja outro SKU, quantidade de outro par nem campo do
+    pedido (`ocupadas`); e as colunas de SKU/quantidade do modelo, no meio de
+    uma planilha de pares, valem como mais um item (o primeiro)."""
     skus: dict[int, int] = {}
     qtds: dict[int, int] = {}
-    for j, v in enumerate(cabecalho):
-        n = _normalizar_texto(v)
+    nomes = [_normalizar_texto(v) for v in cabecalho]
+    for j, n in enumerate(nomes):
         for padrao, destino in ((_RE_PAR_SKU, skus), (_RE_PAR_QTD, qtds)):
             m = padrao.match(n)
             if m:
                 destino.setdefault(int(m.group(1)), j)
+    if not skus:
+        return []
+    fora = set(ocupadas or ()) | set(skus.values()) | set(qtds.values())
+    notas = []
+    for k in sorted(skus):
+        j = skus[k] + 1
+        if k not in qtds and j < len(nomes) and nomes[j] and j not in fora:
+            qtds[k] = j
+            fora.add(j)
+            notas.append(f'Coluna "{_celula_texto(cabecalho[j])}" lida como a quantidade do item da coluna '
+                         f'"{_celula_texto(cabecalho[skus[k]])}" (o esperado era "Quantidade{k}").')
+    soltas = {}
+    for j, n in enumerate(nomes):
+        chave = _APELIDOS_NORMALIZADOS.get(n)
+        if chave in ("sku", "quantidade") and j not in fora:
+            soltas.setdefault(chave, j)
+    if len(soltas) == 2:
+        skus[0], qtds[0] = soltas["sku"], soltas["quantidade"]
+        notas.append(f'Colunas "{_celula_texto(cabecalho[soltas["sku"]])}" e "{_celula_texto(cabecalho[soltas["quantidade"]])}" '
+                     "lidas como um item do pedido, junto com os pares numerados.")
+    if avisos is not None:
+        avisos.extend(notas)
     return [(skus[k], qtds[k]) for k in sorted(skus) if k in qtds]
 
 
@@ -727,7 +754,7 @@ def guardar_mapa_planilha(conn: sqlite3.Connection, cnpj_login: str, mapa: dict,
 def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
                  empresas: dict[str, str] | None = None, guardado: dict | None = None,
                  indicado: dict | None = None, pedir_indicacao: bool = False,
-                 mapa_usado: dict | None = None) -> tuple[list[dict], list[dict]]:
+                 mapa_usado: dict | None = None, avisos: list[str] | None = None) -> tuple[list[dict], list[dict]]:
     """Lê a planilha de pedidos. Devolve (pedidos, rejeitados):
     cada pedido tem o MESMO formato do dict de ler_nfe (pra prévia, validação
     e gravação serem as mesmas) mais origem/referencia/itens_lista/
@@ -742,8 +769,8 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
     Faltando coluna obrigatória (ou com `pedir_indicacao`), levanta
     ColunasPorIndicar no lugar de recusar a planilha.
     Cabeçalho com pares numerados (Sku1 | Quantidade1 | Sku2 ...): cada linha é
-    um pedido e os itens saem dos pares preenchidos; as colunas de SKU e
-    quantidade do modelo deixam de valer."""
+    um pedido e os itens saem dos pares preenchidos. Coluna de item com o nome
+    alterado é lida assim mesmo e explicada em `avisos` (lista de quem chama)."""
     linhas = _abrir_planilha(conteudo, nome)
     if not linhas:
         raise ErroEnvio(f"{nome}: a planilha está vazia.")
@@ -758,7 +785,9 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
             raise ErroEnvio(f"{nome}: colunas indicadas inválidas -- envie a planilha de novo.")
     else:
         i_cab, col_de = _achar_cabecalho(linhas, guardado)
-    pares = _pares_de_itens(linhas[i_cab])
+    # colunas que já são campo do pedido não viram quantidade de item (volumes pode: é quantidade também)
+    ocupadas = {j for k, j in (escolhas if escolhas is not None else col_de).items() if k not in (*_CAMPOS_ITEM, "volumes")}
+    pares = _pares_de_itens(linhas[i_cab], ocupadas, avisos)
     campos_validos = [c for c in _campos_planilha(empresas is not None) if not (pares and c[0] in _CAMPOS_ITEM)]
     chaves = {c[0] for c in campos_validos}
     if escolhas is not None:
