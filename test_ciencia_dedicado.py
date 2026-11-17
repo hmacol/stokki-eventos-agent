@@ -108,6 +108,21 @@ class TestCienciaDedicado(unittest.TestCase):
         self.assertEqual(e[0]["codigo"], "PS-1")
         self.assertEqual(cd.rodadas_enviadas(self.conn, cid), 1)
 
+    def test_rodadas_nao_contam_piloto_e_contam_rodada_sem_canal(self):
+        cid = cd.abrir(self.conn, _item(), None, AGORA)
+        hora = lambda h: datetime(2026, 11, 17, h, 0, 0)
+        # rodada so de piloto (com um canal sem cadastro): nao conta
+        cd.registrar_envio(self.conn, cid, "email", "piloto", rodada=0, agora=hora(10))
+        cd.registrar_envio(self.conn, cid, "whatsapp", "nao_enviado", motivo="sem_whatsapp", rodada=0, agora=hora(10))
+        self.assertEqual(cd.rodadas_enviadas(self.conn, cid), 0)
+        # rodada em que nenhum canal saiu (sem cadastro): conta
+        cd.registrar_envio(self.conn, cid, "email", "nao_enviado", motivo="sem_canal", rodada=0, agora=hora(14))
+        self.assertEqual(cd.rodadas_enviadas(self.conn, cid), 1)
+        # rodada com e-mail real e WhatsApp de piloto: conta
+        cd.registrar_envio(self.conn, cid, "email", "enviado", rodada=1, agora=hora(18))
+        cd.registrar_envio(self.conn, cid, "whatsapp", "piloto", rodada=1, agora=hora(18))
+        self.assertEqual(cd.rodadas_enviadas(self.conn, cid), 2)
+
     def test_cfg_padrao_desligado_4h_janela_08_20(self):
         for vazio in (None, {}, {"ciencia_dedicado": None}):
             c = cd.cfg(vazio)

@@ -205,10 +205,22 @@ def envios(conn, ciencia_id) -> list[dict]:
 
 
 def rodadas_enviadas(conn, ciencia_id) -> int:
-    """Quantas rodadas distintas ja tiveram algum envio efetivo (enviado ou piloto)."""
-    return conn.execute(
-        "SELECT COUNT(DISTINCT rodada) FROM ciencias_dedicado_envios "
-        "WHERE ciencia_id = ? AND resultado IN ('enviado', 'piloto')", (ciencia_id,)).fetchone()[0]
+    """Numero da proxima rodada: quantas rodadas ja aconteceram fora do piloto.
+
+    Uma rodada e uma chamada de envio do embarcador; todos os envios dela gravam
+    o mesmo enviado_em, que e o que identifica a rodada (o numero gravado em
+    `rodada` se repete enquanto o piloto nao conta). Conta a rodada com algum
+    envio real ('enviado') e tambem a que so teve 'nao_enviado' (embarcador sem
+    canal: senao ficaria na rodada 0 pra sempre e alertaria a equipe a cada
+    rodada). Rodada de piloto (alguma copia 'piloto' e nenhum 'enviado', mesmo
+    com um canal 'nao_enviado') nao conta: a virada de piloto pra envio real
+    recomeca na rodada 0."""
+    return conn.execute("""
+        SELECT COUNT(*) FROM (
+            SELECT SUM(resultado = 'enviado') AS reais, SUM(resultado = 'piloto') AS pilotos
+            FROM ciencias_dedicado_envios WHERE ciencia_id = ? GROUP BY enviado_em)
+        WHERE reais > 0 OR pilotos = 0
+    """, (ciencia_id,)).fetchone()[0]
 
 
 def agendar_proximo(conn, ciencia_id, agora: datetime, intervalo_horas: int):
