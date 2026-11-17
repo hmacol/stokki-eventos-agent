@@ -105,6 +105,10 @@
                                              (documentos_processados + dados/xml_stokki), nada na Stokki. Rotas
                                              POST /api/pedidos/documentos/conferir e .../enviar, GET .../arquivo.
                                              Tabelas pedidos_documentos_envios e pedidos_documentos_destinos.
+                                             Fila "Boleto atrasado" (16/11, ?documentos=boleto_atrasado): boleto processado
+                                             depois de a rota sair (documentos_processados.processado_em > nucleo_rotas.
+                                             iniciada_em); sai da fila quando vai por e-mail. Regra em
+                                             nucleo/tabela_pedidos.py (_sql_boleto_atrasado), conta em contar_filas.
 Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/acoes_pedidos.py (rotas POST /api/pedidos/acao/reenvio, .../cancelar-vuupt, .../cancelar-stokki, .../endereco, .../agendar, .../checar-dia-fixo, .../marcar-entregue (multipart, helper _marcar_entregue_pelo_form da Torre), .../validar-lote-foto; GET .../comprovantes?codigo= + /pedidos/canhoto/vuupt/<checklist_id>.pdf + /pedidos/canhoto/manual/<PS-N>.pdf (leitura, canhoto Vuupt/manual/app); cancelar-stokki concluído registra o pedido na fila stokki_devolucoes (origem 'pedidos'; devolução de estoque);
                                              confere Vuupt na hora, Stokki pela trava sessao_uso)
  Vigia de pedidos abertos (estado/prazo) ... vigia/ (regras.py = prazos; tela /vigia)

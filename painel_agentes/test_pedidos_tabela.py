@@ -316,7 +316,17 @@ class TestTelaPedidos(unittest.TestCase):
         self.assertEqual((d["total"], d["ENTREGUE"], d["INSUCESSO"], d["sem_canhoto"]), (2, 1, 1, 1))
         html = self.cliente.get("/pedidos?status=INSUCESSO&f_destinatario=pad").get_data(as_text=True)
         filas = re.findall(r'<a class="fila" data-fila="([^"]+)" href="([^"]+)"( aria-current="true")?', html)
-        self.assertEqual([f[0] for f in filas], ["total", "IMPORTADO", "sem_canhoto", "INSUCESSO", "ABERTO", "EM_ROTA"])
+        self.assertEqual([f[0] for f in filas], ["total", "IMPORTADO", "sem_canhoto", "boleto_atrasado", "INSUCESSO", "ABERTO", "EM_ROTA"])
+        # Boleto atrasado (16/11): fila propria, que vira etiqueta e continua valendo ao filtrar de novo
+        self.assertEqual(d["boleto_atrasado"], 0)
+        atrasado = dict((f[0], f[1]) for f in filas)["boleto_atrasado"]
+        self.assertIn("documentos=boleto_atrasado", atrasado)
+        self.assertNotIn("status=", atrasado)
+        html_fila = self.cliente.get("/pedidos?documentos=boleto_atrasado").get_data(as_text=True)
+        self.assertIn('data-fila="boleto_atrasado" href="/pedidos?documentos=boleto_atrasado" aria-current="true"', html_fila)
+        self.assertIn('aria-label="Tirar o filtro Boleto atrasado"', html_fila)
+        self.assertIn('<input type="hidden" name="documentos" value="boleto_atrasado">', html_fila)
+        self.assertNotIn('name="documentos"', html)
         # Salvar esta visão (12/11): botão + formulário ao lado das filas, guardado no navegador
         self.assertIn('id="visao-salvar"', html)
         self.assertIn('id="visao-form" hidden', html)
