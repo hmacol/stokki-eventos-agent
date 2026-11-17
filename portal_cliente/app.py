@@ -1357,16 +1357,16 @@ def _sugerir_pedidos(anexos: list[dict], pedidos: list[dict]) -> None:
 @requer_cliente
 @exige_mesma_origem
 def api_envios_anexos_ler():
-    """So PDFs: le cada um, guarda no temporario e sugere o pedido entre os
+    """PDFs (ou o XML da NF-e): le cada um, guarda no temporario e sugere o pedido entre os
     que a tela mandou em `pedidos` (JSON [{chave, numero_nf, destinatario_doc,
     referencia}]) -- os da previa ou um pedido ja enviado. Nada e anexado
     aqui; quem anexa e o confirmar (previa) ou POST /api/envios/<id>/anexos."""
     _exige_pode_enviar()
     arquivos = request.files.getlist("arquivos")
     if not arquivos:
-        return jsonify({"erro": "Selecione pelo menos um PDF."}), 400
+        return jsonify({"erro": "Selecione pelo menos um arquivo."}), 400
     if len(arquivos) > anexos_pedido.MAX_PDFS_POR_ENVIO:
-        return jsonify({"erro": f"Envie no máximo {anexos_pedido.MAX_PDFS_POR_ENVIO} PDFs por vez."}), 400
+        return jsonify({"erro": f"Envie no máximo {anexos_pedido.MAX_PDFS_POR_ENVIO} arquivos por vez."}), 400
     try:
         pedidos = [p for p in json.loads(request.form.get("pedidos") or "[]") if isinstance(p, dict) and p.get("chave")]
     except ValueError:
@@ -1429,7 +1429,10 @@ def api_envios_anexo_baixar(envio_id, anexo_id):
         conn.close()
     if not anexo or not anexos_pedido.caminho(anexo).is_file():
         abort(404)
-    resposta = send_file(anexos_pedido.caminho(anexo), mimetype="application/pdf", download_name=anexo["nome_original"], max_age=0)
+    # XML sempre como download: aberto na pagina, um XML enviado pelo cliente poderia rodar script.
+    xml = anexo["tipo"] == anexos_pedido.TIPO_XML
+    resposta = send_file(anexos_pedido.caminho(anexo), mimetype="application/xml" if xml else "application/pdf",
+                         as_attachment=xml, download_name=anexo["nome_original"], max_age=0)
     resposta.headers["X-Content-Type-Options"] = "nosniff"
     return resposta
 

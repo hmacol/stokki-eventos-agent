@@ -152,6 +152,10 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              documentos_processados (origem 'portal') e o romaneio imprime:
                                              boleto/NF como tais, o resto depois dos boletos.
                                              APIs /api/envios/anexos/ler e /api/envios/<id>/anexos[/<aid>[/remover]]
+                                             XML da NF-e (17/11): tambem anexa, so pelo botao do proprio pedido (.xml
+                                             solto no lote continua sendo pedido novo); um por pedido, tipo 'XML da
+                                             NF-e'; em pedido de planilha e o XML do pedido. Fica so em
+                                             portal_envios_anexos: nao vai pro romaneio nem pra Stokki (proximas etapas)
  Endereço de entrega conferido no envio .... portal_cliente/endereco_entrega.py (prévia: casos nota/
                                              terceiros/sugestao/livre; <entrega> no XML do lote);
                                              chave portal_cliente.envios.endereco_entrega_ativo

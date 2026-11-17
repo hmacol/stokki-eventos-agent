@@ -16,6 +16,12 @@ O usuario SEMPRE confirma que cada documento esta no pedido certo (as rotas
 em app.py recusam sem `anexos_conferidos`): a sugestao do sistema e so
 sugestao.
 
+XML da NF-e (17/11): tambem entra como documento do pedido, so pelo botao de
+anexar do proprio pedido (na previa, um .xml solto no lote continua sendo
+pedido novo). Um por pedido; no pedido que nasceu de planilha ele e o XML do
+pedido. Fica guardado em portal_envios_anexos (tipo TIPO_XML) e NAO vai pro
+romaneio nem pra documentos_processados: por enquanto nada mais le.
+
 Os arquivos ficam em dados/portal_envios/_anexos/ (pasta plana, nome unico),
 que documentos_pedido/localizar_arquivos.py conhece.
 """
@@ -48,6 +54,7 @@ MAX_ANEXOS_POR_PEDIDO = 10
 MAX_PAGINAS_PDF = 30           # o anexo e impresso inteiro no romaneio
 MAX_PDFS_POR_ENVIO = 30        # por requisicao: cada PDF e aberto e lido
 ORIGEM_DOCUMENTO = "portal"
+TIPO_XML = "XML da NF-e"
 
 # Envio que ainda aceita documento (o que ja morreu nao aceita)
 _STATUS_ACEITA = (ep.STATUS_NA_FILA, ep.STATUS_ENVIANDO, ep.STATUS_CRIADO, ep.STATUS_DUPLICADO,
@@ -87,6 +94,23 @@ def _nf(valor) -> str:
 
 def e_pdf(nome: str, conteudo: bytes) -> bool:
     return (nome or "").lower().endswith(".pdf") or conteudo[:5] == b"%PDF-"
+
+
+def e_xml(nome: str, conteudo: bytes) -> bool:
+    return b"%PDF-" not in conteudo[:1024] and (
+        (nome or "").lower().endswith(".xml") or conteudo[:200].lstrip(b"\xef\xbb\xbf \t\r\n").startswith(b"<"))
+
+
+def ler_xml(nome: str, conteudo: bytes) -> dict:
+    """Valida que e o XML de uma NF-e (mesmo leitor do envio de pedidos) e
+    devolve o mesmo formato de ler_pdf."""
+    nome = Path(nome or "nota.xml").name
+    if len(conteudo) > MAX_BYTES_PDF:
+        raise ep.ErroEnvio(f"{nome}: o XML passa de {MAX_BYTES_PDF // (1024 * 1024)} MB.")
+    nfe = ep.ler_nfe(conteudo, nome)
+    return {"nome": nome, "paginas": 0, "hash": hashlib.sha256(conteudo).hexdigest(), "tipo": TIPO_XML,
+            "numero_nf": _nf(nfe["numero_nf"]) or None, "cnpj": nfe["destinatario_doc"] or None,
+            "numero_parcela": None, "total_parcelas": None}
 
 
 def ler_pdf(nome: str, conteudo: bytes) -> dict:
@@ -171,11 +195,12 @@ def sugerir_pedido(info: dict, pedidos: list[dict]) -> tuple[str | None, str]:
 # ── Temporario (entre a leitura e a confirmacao do usuario) ───────────────────
 
 def guardar_previa(nome: str, conteudo: bytes, cnpj: str) -> dict:
-    """Le o PDF e guarda no temporario do envio, amarrado ao embarcador que
-    enviou (so ele usa o token). Devolve o que a tela mostra."""
-    info = ler_pdf(nome, conteudo)
+    """Le o PDF (ou o XML da NF-e) e guarda no temporario do envio, amarrado
+    ao embarcador que enviou (so ele usa o token). Devolve o que a tela mostra."""
+    xml = e_xml(nome, conteudo)
+    info = ler_xml(nome, conteudo) if xml else ler_pdf(nome, conteudo)
     info["dono"] = ep._so_digitos(cnpj)
-    token = ep.guardar_temporario(conteudo, "pdf")
+    token = ep.guardar_temporario(conteudo, "xml" if xml else "pdf")
     (ep.PASTA_TEMP / f"{token}.meta").write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
     return {"token": token, **{k: info[k] for k in ("nome", "tipo", "numero_nf", "paginas")}}
 
@@ -186,7 +211,7 @@ def _ler_temporario(token: str, cnpj: str) -> tuple[dict, Path]:
         raise invalido
     caminho = ep._caminho_temporario(token)
     meta = ep.PASTA_TEMP / f"{token}.meta"
-    if caminho.suffix != ".pdf" or not meta.is_file():
+    if caminho.suffix not in (".pdf", ".xml") or not meta.is_file():
         raise invalido
     info = json.loads(meta.read_text(encoding="utf-8"))
     if not info.get("dono") or info["dono"] != ep._so_digitos(cnpj):
@@ -214,6 +239,10 @@ def anexar(conn: sqlite3.Connection, envio: dict, anexos: list[dict], por: str, 
     if ja + len(anexos) > MAX_ANEXOS_POR_PEDIDO:
         raise ep.ErroEnvio(f"{ep.rotulo_envio(envio)}: no máximo {MAX_ANEXOS_POR_PEDIDO} documentos por pedido.")
     lidos = [(a, *_ler_temporario(a.get("token", ""), dono or emb)) for a in anexos]
+    xmls = sum(1 for _a, info, _c in lidos if info["tipo"] == TIPO_XML)
+    if xmls > 1 or (xmls and conn.execute("SELECT 1 FROM portal_envios_anexos WHERE envio_id = ? AND tipo = ?",
+                                          (envio["id"], TIPO_XML)).fetchone()):
+        raise ep.ErroEnvio(f"{ep.rotulo_envio(envio)}: o pedido aceita um XML de NF-e só. Remova o atual pra trocar.")
     vistos = set()
     for _a, info, _c in lidos:
         if info["hash"] in vistos:
@@ -282,8 +311,9 @@ def registrar_no_romaneio(conn: sqlite3.Connection, envio_id: int) -> int:
         return 0
     cols = "id, arquivo, hash_conteudo, tipo, numero_nf, numero_parcela, total_parcelas, cnpj_contraparte"
     n = 0
-    for a in conn.execute(f"SELECT {cols} FROM portal_envios_anexos WHERE envio_id = ? AND registrado_em IS NULL",
-                          (envio_id,)).fetchall():
+    # O XML fica so em portal_envios_anexos: nao e impresso e nao entra no indice de documentos.
+    for a in conn.execute(f"SELECT {cols} FROM portal_envios_anexos WHERE envio_id = ? AND registrado_em IS NULL "
+                          "AND COALESCE(tipo, '') != ?", (envio_id, TIPO_XML)).fetchall():
         aid, arquivo, hash_, tipo, numero_nf, parcela, total, cnpj = a
         existente = conn.execute("SELECT origem, status, codigo_pedido, nome_arquivo FROM documentos_processados "
                                  "WHERE hash_conteudo = ?", (hash_,)).fetchone()
