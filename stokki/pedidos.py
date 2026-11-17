@@ -573,6 +573,24 @@ def extrair_itens_do_pedido(html: str) -> list[dict]:
     return itens
 
 
+def extrair_numero_nf(html: str) -> str:
+    """
+    Numero da NF-e do pedido, tirado da chave de 44 digitos que a pagina de detalhe
+    mostra na linha "NF-e:" (link de consulta com ?nfe=<chave>). O numero sao os 9
+    digitos da posicao 26 a 34 da chave, sem os zeros a esquerda. Devolve '' quando
+    o pedido ainda nao tem NF ou quando a chave e o marcador da Stokki (comeca com
+    99: DANFE de mentira, nao e nota).
+    """
+    m = re.search(r"[?&;]nfe=(\d{44})(?!\d)", html or "")
+    if not m:
+        return ""
+    chave = m.group(1)
+    if chave.startswith("99"):
+        return ""
+    numero = chave[25:34].lstrip("0")
+    return numero
+
+
 def extrair_itens_tabela_pedido(html: str) -> list[dict]:
     """
     Itens da tabela `#example1` (aba "Itens do pedido": NR. | ID | SKU | Nome |
