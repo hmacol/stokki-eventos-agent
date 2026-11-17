@@ -38,6 +38,16 @@ class CancelarServicoCompleto(unittest.TestCase):
         self.preparar.assert_called_once_with(7, 111, "tok")
         self.remover.assert_not_called()
 
+    def test_cancelamento_falho_apos_sair_de_rota_iniciada_marca_retornando(self):
+        self.preparar.return_value = {"ok": True, "rota_iniciada": True, "vuupt_route_id": 9, "codigo": "#PS-1"}
+        self.vuupt.cancelar_servico_oficial.side_effect = cs.VuuptAPIError("500")
+        with mock.patch.object(cs, "rascunho_do_servico", return_value=(7, "ENVIADO")), \
+                mock.patch.object(cs.rascunhos_rota, "_marcar_retornando_com_retry", return_value=True) as marcar:
+            r = cs.cancelar_servico_completo("tok", 111, vuupt=self.vuupt)
+        self.assertFalse(r["ok"])
+        self.assertIn("Retornando", r["erro"])
+        self.assertEqual(marcar.call_args.kwargs["vuupt_route_id"], 9)
+
     def test_preparo_que_falha_nao_cancela(self):
         self.preparar.return_value = {"ok": False, "erro": "rota ja iniciou"}
         with mock.patch.object(cs, "rascunho_do_servico", return_value=(7, "ENVIADO")):

@@ -351,5 +351,118 @@ class Atraso(Base):
             self.assertIn("PS-2", postados[1])
 
 
+class Retirado(Base):
+    """Pedido tirado de rota iniciada (Retornando): parada CANCELADA + linha ativa em pedidos_retornando."""
+
+    def retirar(self, motorista, codigo, *, dia=HOJE, criado_em=None, com_retornando=True):
+        pid = self.parada(motorista, codigo, dia=dia, situacao="CANCELADA", caixas=4, motivo="",
+                          failed_reason_id=None)
+        if com_retornando:
+            sid = self.conn.execute("SELECT service_id FROM nucleo_paradas WHERE id = ?", (pid,)).fetchone()[0]
+            self.conn.execute(
+                "INSERT INTO pedidos_retornando (service_id, codigo, parada_id, motivo, criado_em) VALUES (?, ?, ?, ?, ?)",
+                (sid, codigo, pid, "Cliente cancelou", criado_em or f"{dia.isoformat()} 10:00:00"))
+            self.conn.commit()
+        return pid
+
+    def test_retirado_aparece_nos_pendentes(self):
+        self.retirar("João", "PS-1")
+        p = retornos.listar_pendentes(self.conn, HOJE)[0]["pedidos"][0]
+        self.assertEqual(p["tipo"], "RETIRADO")
+        self.assertEqual(p["motivo"], "Retirado da rota: Cliente cancelou")
+        self.assertEqual(p["caixas_esperadas"], 4)
+        self.assertEqual(p["dia_insucesso"], HOJE.isoformat())
+
+    def test_retirado_recebido_sai_e_baixa_retornando(self):
+        pid = self.retirar("João", "PS-1")
+        self.receber([self.item(pid, caixas=4, motivo="Retirado da rota: Cliente cancelou")])
+        self.assertEqual(retornos.listar_pendentes(self.conn, HOJE), [])
+        row = self.conn.execute("SELECT recebido_em, descarga_id FROM pedidos_retornando").fetchone()
+        self.assertIsNotNone(row["recebido_em"])
+        self.assertIsNotNone(row["descarga_id"])
+
+    def test_retirado_entra_na_cobranca_atrasada(self):
+        self.retirar("João", "PS-1", criado_em=f"{(HOJE - timedelta(days=1)).isoformat()} 10:00:00")
+        codigos = [p["codigo"] for g in retornos.pendentes_atrasados(self.conn, HOJE) for p in g["pedidos"]]
+        self.assertEqual(codigos, ["PS-1"])
+
+    def test_cancelada_sem_retornando_continua_fora(self):
+        self.retirar("João", "PS-1", com_retornando=False)
+        self.assertEqual(retornos.listar_pendentes(self.conn, HOJE), [])
+
+    def test_retirado_ignora_filtro_nao_coletado(self):
+        pid = self.retirar("João", "PS-1")
+        self.conn.execute("UPDATE nucleo_paradas SET failed_reason_id = 5744 WHERE id = ?", (pid,))
+        self.conn.commit()
+        self.assertEqual(len(retornos.listar_pendentes(self.conn, HOJE)), 1)
+
+    def test_retirado_resolve_parada_atrasada_do_nucleo(self):
+        self.retirar("João", "PS-1")
+        self.conn.execute("UPDATE pedidos_retornando SET parada_id = NULL, vuupt_route_id = 77")
+        self.conn.execute("UPDATE nucleo_rotas SET vuupt_route_id = 77")
+        self.conn.commit()
+        self.assertEqual(len(retornos.listar_pendentes(self.conn, HOJE)), 1)
+
+    # --- revisao final: Retornando nao pode ficar preso sem saida na tela ---
+
+    def test_retirado_antigo_nao_some_pela_janela(self):
+        self.retirar("João", "PS-1", dia=HOJE - timedelta(days=10))
+        p = retornos.listar_pendentes(self.conn, HOJE)[0]["pedidos"][0]
+        self.assertEqual(p["codigo"], "PS-1")
+
+    def test_retirado_de_rota_lalamove_aparece(self):
+        self.retirar("LALAMOVE", "PS-1")
+        self.conn.execute("UPDATE nucleo_rotas SET agent_id = 77")
+        self.conn.commit()
+        grupos = retornos.listar_pendentes(self.conn, HOJE, agent_ids_excluir={77})
+        self.assertEqual([p["codigo"] for g in grupos for p in g["pedidos"]], ["PS-1"])
+
+    def _retornando_sem_parada(self, codigo="PS-9", service_id=5555):
+        cur = self.conn.execute(
+            "INSERT INTO pedidos_retornando (service_id, codigo, vuupt_route_id, parada_id, agent_id, motorista_nome, "
+            "motivo, criado_em) VALUES (?, ?, 4242, NULL, 31, 'Pedro', 'Cliente cancelou', ?)",
+            (service_id, codigo, f"{HOJE.isoformat()} 09:00:00"))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def test_retornando_sem_parada_no_nucleo_aparece_na_lista(self):
+        rid = self._retornando_sem_parada()
+        p = retornos.listar_pendentes(self.conn, HOJE)[0]["pedidos"][0]
+        self.assertIsNone(p["parada_id"])
+        self.assertEqual((p["retornando_id"], p["chave"], p["tipo"]), (rid, f"r{rid}", "RETIRADO"))
+        self.assertEqual(p["motorista_nome"], "Pedro")
+        # sem chave de "ja cobrado", fica fora da cobranca das 07h (so na lista)
+        self.assertEqual(retornos.pendentes_atrasados(self.conn, HOJE + timedelta(days=1)), [])
+
+    def test_receber_retornando_sem_parada_baixa_sem_linha_em_recebidos(self):
+        rid = self._retornando_sem_parada()
+        res = self.receber([{"parada_id": None, "retornando_id": rid, "caixas_recebidas": 3, "avaria": False,
+                             "motivo": "Retirado da rota: Cliente cancelou", "observacao": ""}])
+        row = self.conn.execute("SELECT recebido_em, descarga_id FROM pedidos_retornando WHERE id = ?",
+                                (rid,)).fetchone()
+        self.assertEqual(row["descarga_id"], res["descarga_id"])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM retornos_recebidos").fetchone()[0], 0)
+        self.assertEqual(retornos.listar_pendentes(self.conn, HOJE), [])
+        texto = retornos.texto_alerta_descarga(res, "Carlos")
+        self.assertIn("PS-9", texto)
+        self.assertIn("sem registro em Recebidos", texto)
+        with self.assertRaises(retornos.ErroRetorno):  # segunda vez: ja baixado
+            self.receber([{"parada_id": None, "retornando_id": rid, "caixas_recebidas": 3}])
+
+    def test_receber_retornando_resolve_parada_na_hora(self):
+        rid = self._retornando_sem_parada(codigo="PS-1")
+        # o nucleo espelhou a parada depois da listagem
+        pid = self.parada("Pedro", "PS-1", situacao="CANCELADA", caixas=4, motivo="", failed_reason_id=None)
+        self.conn.execute("UPDATE nucleo_rotas SET vuupt_route_id = 4242")
+        self.conn.execute("UPDATE nucleo_paradas SET service_id = 5555 WHERE id = ?", (pid,))
+        self.conn.commit()
+        res = self.receber([{"parada_id": None, "retornando_id": rid, "caixas_recebidas": 4,
+                             "motivo": "Retirado da rota: Cliente cancelou"}])
+        self.assertEqual(res["sem_parada"], [])
+        self.assertEqual(self.conn.execute("SELECT parada_id FROM retornos_recebidos").fetchone()[0], pid)
+        self.assertIsNotNone(self.conn.execute("SELECT recebido_em FROM pedidos_retornando WHERE id = ?",
+                                               (rid,)).fetchone()[0])
+
+
 if __name__ == "__main__":
     unittest.main()

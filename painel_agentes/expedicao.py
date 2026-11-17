@@ -149,6 +149,13 @@ def _registrar_exclusao(data_alvo: date, rota_id: int, rota_nome: str, service_i
         conn.close()
 
 
+def registrar_exclusao(data_alvo: date, rota_id: int, rota_nome: str, service_id: int,
+                       codigo_pedido: str, motivo: str, observacao: str, usuario: str) -> None:
+    """Mesma auditoria do "Excluir da Rota", pra quem tira pedido de rota por outra tela
+    (card da rota enviada no Planejamento, 10/11)."""
+    _registrar_exclusao(data_alvo, rota_id, rota_nome, service_id, codigo_pedido, motivo, observacao, usuario)
+
+
 def _exclusoes_por_rota(data_alvo: date, rota_id: int) -> list[dict]:
     """Pedidos já excluídos dessa rota nesse dia, mais recente primeiro
     -- listar_rotas_do_dia usa isso pra continuar mostrando o chip
@@ -368,6 +375,23 @@ def gerar_romaneio_rota(data_alvo: date, rota_id: int) -> Path:
     return caminho_saida
 
 
+def _motorista_nome_nucleo(vuupt_route_id: int) -> str | None:
+    """Nome do motorista da rota no espelho do nucleo (rota sem rascunho, ex. criada fora do
+    Planejamento) -- so pro Retornando nao nascer sem nome. Falha = None."""
+    try:
+        conn = sqlite3.connect(_DB_PATH, timeout=10)
+        try:
+            row = conn.execute("SELECT motorista_nome FROM nucleo_rotas WHERE vuupt_route_id = ? "
+                               "AND motorista_nome IS NOT NULL ORDER BY id DESC LIMIT 1",
+                               (vuupt_route_id,)).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        logging.getLogger(__name__).warning(f"Motorista da rota {vuupt_route_id} nao lido do nucleo: {e}")
+        return None
+    return row[0] if row else None
+
+
 def excluir_pedido_da_rota(data_alvo: date, rota_id: int, service_id: int,
                            motivo: str, observacao: str, usuario: str,
                            permitir_rota_em_andamento: bool = False) -> dict:
@@ -419,60 +443,48 @@ def excluir_pedido_da_rota(data_alvo: date, rota_id: int, service_id: int,
     config = _carregar_config()
     token = config.get("vuupt_api", {}).get("token", "")
 
-    from rotas_client import atualizar_rota, buscar_rota, cancelar_rota
+    import edicao_rota
+    import rascunhos_rota
+    log = logging.getLogger(__name__)
 
+    # Mesma regra do card da rota enviada no Planejamento (10/11): status AO VIVO do pedido
+    # decide (edicao_rota.tirar_pedido), DELETE em vez de PUT com a lista.
     try:
-        # include=["services"] é obrigatório aqui -- ao contrário da
-        # listagem (buscar_rotas_do_dia), GET /routes/{id} sozinho NÃO
-        # embute os serviços da rota (ver rotas_client.buscar_rota), e é
-        # exatamente a lista viva de serviços que decide ids_restantes
-        # abaixo (expedição não tem rascunho local com as paradas, ao
-        # contrário de rascunhos_rota.preparar_cancelamento_de_parada).
-        dados_rota = buscar_rota(token, rota_id, include=["services"])
-    except Exception as e:
-        resposta = getattr(e, "response", None)
-        if resposta is not None and resposta.status_code == 404:
-            return {"ok": False, "erro": f"Rota #{rota_id} não existe mais na VUUPT."}
-        return {"ok": False, "erro": f"Falha ao consultar a rota #{rota_id} na VUUPT: {e}"}
+        rota_viva = edicao_rota.ler_rota(token, rota_id)
+    except edicao_rota.ErroEdicao as e:
+        return {"ok": False, "erro": str(e)}
 
-    rota = _rota_do_corpo(dados_rota)
-    status_atual = rota.get("status")
-    if permitir_rota_em_andamento:
-        if status_atual in _STATUS_ROTA_ENCERRADA:
-            return {"ok": False,
-                    "erro": f"Rota #{rota_id} já foi encerrada (status atual na VUUPT: "
-                            f"'{status_atual}') -- não é possível alterar depois que a rota termina."}
-    elif status_atual not in _STATUS_ROTA_NAO_INICIADA:
+    status_atual = rota_viva.get("status")
+    if not permitir_rota_em_andamento and status_atual not in _STATUS_ROTA_NAO_INICIADA:
         return {"ok": False,
                 "erro": f"Rota #{rota_id} não pode ser alterada por aqui (status atual na VUUPT: "
                         f"'{status_atual}') -- só rotas que ainda não iniciaram deslocamento."}
 
-    servicos = _extrair_servicos_da_rota(rota)
-    servico_alvo = next((s for s in servicos if s.get("id") == service_id), None)
-    if servico_alvo is None:
-        return {"ok": False, "erro": f"Pedido {service_id} não está mais nessa rota."}
-    ids_restantes = [s.get("id") for s in servicos if s.get("id") != service_id]
-
+    rascunho = None
     try:
-        if not ids_restantes:
-            cancelar_rota(token, rota_id, services_action="unassign")
-        else:
-            atualizar_rota(token, rota_id, ids_restantes)
+        rascunho = rascunhos_rota.rascunho_por_vuupt_route_id(rota_id)
     except Exception as e:
-        return {"ok": False, "erro": str(e)}
+        log.warning(f"Rascunho da rota {rota_id} não lido: {e}")
 
-    _registrar_exclusao(data_alvo, rota_id, rota.get("name") or "", service_id,
-                        servico_alvo.get("code") or "", motivo, observacao, usuario)
+    resultado = edicao_rota.tirar_pedido(token, rota_id, service_id)
+    if not resultado["ok"]:
+        if resultado.get("fora_da_rota") and rascunho:
+            # card velho no Planejamento: o erro volta pra Torre, mas a parada local sai
+            try:
+                rascunhos_rota.remover_parada(rascunho["id"], service_id)
+            except Exception as e:
+                log.warning(f"Parada {service_id} não removida do rascunho {rascunho['id']}: {e}")
+        return {"ok": False, "erro": resultado["erro"]}
 
-    # Romaneio preparado em segundo plano (documentacao_rota, Hugo 09/09):
-    # rota que perdeu parada é regenerada; rota que sumiu tem o PDF
-    # descartado. Best-effort, a exclusão já aconteceu na VUUPT.
-    try:
-        import documentacao_rota
-        if ids_restantes:
-            documentacao_rota.agendar(rota_id, data_alvo, motivo="pedido excluído da rota")
-        else:
-            documentacao_rota.descartar(rota_id, data_alvo)
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"Documentação da rota {rota_id} não atualizada: {e}")
-    return {"ok": True, "rota_cancelada": not ids_restantes}
+    # Efeitos locais iguais aos do card do Planejamento (rascunhos_rota.aplicar_efeitos_pos_remocao);
+    # a auditoria leva a data que o endpoint passa (e como a Torre le de volta).
+    rota_nome = rota_viva.get("name") or (rascunho or {}).get("nome") or ""
+    efeitos = rascunhos_rota.aplicar_efeitos_pos_remocao(
+        rascunho=rascunho, resultado=resultado, vuupt_route_id=rota_id, service_id=service_id,
+        codigo=resultado["servico"].get("code") or "", agent_id=rota_viva.get("agent_id"),
+        motorista_nome=(rascunho or {}).get("motorista_nome") or _motorista_nome_nucleo(rota_id),
+        motivo=motivo, observacao=observacao, usuario=usuario, data_auditoria=data_alvo, rota_nome=rota_nome)
+    retorno = {"ok": True, "rota_cancelada": resultado["rota_cancelada"], "retornando": efeitos["retornando"]}
+    if efeitos.get("aviso"):
+        retorno["aviso"] = efeitos["aviso"]
+    return retorno

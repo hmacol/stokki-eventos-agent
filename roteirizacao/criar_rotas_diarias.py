@@ -949,6 +949,11 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         # job de novo na mesma noite recriaria a rota fraca.
         servicos_brutos, _segurados = pedidos_segurados.separar_segurados(servicos_brutos, data_alvo)
 
+        # Retornando (editar rota enviada, 10/11): pedido tirado de rota iniciada
+        # esta no carro do motorista; so volta a rota depois do recebimento em /retornos.
+        import pedidos_retornando
+        servicos_brutos, _retornando = pedidos_retornando.separar_retornando(servicos_brutos)
+
         # Área não atendida (pedido do Hugo, 02/08): pedido fora de
         # toda região com dia fixo E fora do raio da Grande SP (ou
         # fora do estado de SP) -- notifica o remetente (cotação ou
