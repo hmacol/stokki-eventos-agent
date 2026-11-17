@@ -108,6 +108,17 @@ def _exigir_provedor_app(rota: sqlite3.Row):
         raise OperacaoInvalida("Essa rota é operada pelo app da VUUPT -- registre a entrega por lá.", 409)
 
 
+def rota_liberada(rota: sqlite3.Row) -> bool:
+    """Rota so abre pro motorista as 00h do dia dela (igual a Vuupt, Hugo
+    16/11): na vespera ele so ve que tem rota confirmada, sem paradas."""
+    return str(rota["data_rota"] or "") <= date.today().isoformat()
+
+
+def _exigir_liberada(rota: sqlite3.Row):
+    if not rota_liberada(rota):
+        raise OperacaoInvalida("Essa rota ainda não foi liberada -- ela abre às 00h do dia da rota.", 409)
+
+
 def listar_rotas_motorista(conn: sqlite3.Connection, agent_id: int | None, de: date, ate: date) -> list[dict]:
     if agent_id is None:
         return []
@@ -120,8 +131,15 @@ def listar_rotas_motorista(conn: sqlite3.Connection, agent_id: int | None, de: d
 
 
 def montar_rota(conn: sqlite3.Connection, rota: sqlite3.Row) -> dict:
+    if not rota_liberada(rota):
+        # So o aviso de que ha rota no dia: nada de paradas, nome ou valores.
+        return {"id": rota["id"], "data_rota": rota["data_rota"], "start_at": rota["start_at"],
+                "status": rota["status"], "nome": None, "liberada": False, "editavel": False,
+                "total_paradas": 0, "entregues": 0, "insucessos": 0,
+                "paradas": [], "pedagios": [], "confirmacao": None}
     d = dict(rota)
     d.pop("dados_json", None)
+    d["liberada"] = True
     d["editavel"] = rota_editavel(rota)
     paradas = conn.execute("SELECT * FROM nucleo_paradas WHERE rota_id = ? ORDER BY ordem", (rota["id"],)).fetchall()
     d["paradas"] = [montar_parada(conn, p) for p in paradas]
@@ -376,6 +394,7 @@ def _atualizar_confirmacao_vuupt(conn: sqlite3.Connection, rota: sqlite3.Row, st
 def aceitar_rota(conn: sqlite3.Connection, rota_id: int, agent_id: int, ocorrido_em: str | None = None,
                  latitude=None, longitude=None, uuid: str | None = None) -> dict:
     rota = rota_do_motorista(conn, rota_id, agent_id)
+    _exigir_liberada(rota)
     if rota["status"] in (banco.ROTA_CANCELADA, banco.ROTA_CONCLUIDA):
         raise OperacaoInvalida(f"Rota já está {rota['status'].lower()}.", 409)
     if rota["status"] == banco.ROTA_PLANEJADA:
@@ -393,6 +412,7 @@ def aceitar_rota(conn: sqlite3.Connection, rota_id: int, agent_id: int, ocorrido
 def recusar_rota(conn: sqlite3.Connection, rota_id: int, agent_id: int, motivo: str | None,
                  ocorrido_em: str | None = None, uuid: str | None = None) -> dict:
     rota = rota_do_motorista(conn, rota_id, agent_id)
+    _exigir_liberada(rota)
     if rota["status"] not in (banco.ROTA_PLANEJADA, banco.ROTA_ACEITA):
         raise OperacaoInvalida(f"Rota já está {rota['status'].lower()} -- não dá mais pra recusar.", 409)
     motivo = (motivo or "").strip()[:500] or None
@@ -408,6 +428,7 @@ def recusar_rota(conn: sqlite3.Connection, rota_id: int, agent_id: int, motivo: 
 def iniciar_rota(conn: sqlite3.Connection, rota_id: int, agent_id: int, ocorrido_em: str | None = None,
                  latitude=None, longitude=None, uuid: str | None = None) -> dict:
     rota = rota_do_motorista(conn, rota_id, agent_id)
+    _exigir_liberada(rota)
     _exigir_provedor_app(rota)
     if rota["status"] == banco.ROTA_EM_ROTA:
         return montar_rota(conn, rota)
@@ -447,6 +468,7 @@ def registrar_evento_parada(conn: sqlite3.Connection, parada_id: int, agent_id: 
     if not p:
         raise OperacaoInvalida("Parada não encontrada.", 404)
     rota = rota_do_motorista(conn, p["rota_id"], agent_id)
+    _exigir_liberada(rota)
     _exigir_provedor_app(rota)
     tipo = str(dados.get("tipo") or "").upper()
     if tipo not in TIPOS_EVENTO_PARADA:
