@@ -412,7 +412,7 @@ export default function DetalheRota() {
           <Text style={s.atalhoPedagioTexto}>
             Pedágio e despesas desta rota{(rota.pedagios ?? []).filter((p) => p.status !== 'CANCELADO').length ? ` · ${(rota.pedagios ?? []).filter((p) => p.status !== 'CANCELADO').length} lançado(s)` : ''}
           </Text>
-          <Text style={s.atalhoPedagioLink}>Lançar no Financeiro ›</Text>
+          <Text style={s.atalhoPedagioLink}>Lançar ›</Text>
         </Pressable>
       ) : null}
 

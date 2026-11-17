@@ -85,3 +85,7 @@ export function somarDias(iso: string, n: number): string {
   d.setDate(d.getDate() + n);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+
+// Hugo, 16/11: no primeiro momento ninguem ve a aba Financeiro nem o extrato.
+// O lancamento de pedagio/despesas continua, aberto pelo atalho dentro da rota.
+export const FINANCEIRO_OCULTO = true;
