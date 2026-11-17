@@ -69,6 +69,8 @@ config.yaml:
       grupo_id: "...@g.us"
       grupo_atendimento_id: "...@g.us"   # grupo dos avisos de chamado
       grupo_logistica_id: "...@g.us"     # ALERTA LOGISTICA: rotas sem baixa (cancelar_rotas_sem_motorista.py)
+      grupo_cancelados_id: "...@g.us"    # "PEDIDOS CANCELADOS": onde guardar a caixa devolvida ao estoque
+                                         # (avisar_devolucao_galpao; sem ele o aviso nao sai, so o log)
       grupo_resumo_email_id: "...@g.us"  # resumo diario do Gmail (resumo_email_whatsapp.py)
       avisar_chamados: true              # desliga so o aviso de chamado
       sempre_avisar: [cancelar_rotas_sem_motorista, executar_tudo, criar_rotas_diarias]
@@ -88,7 +90,10 @@ config.yaml:
     cadastro_motorista_link:
       forcar_destino_whatsapp: ""  # numero do Hugo enquanto for piloto; vazio = envio real;
                                    # ausente = vale clientes.forcar_destino (sem ele: nao manda)
+      atendimento_whatsapp: ""     # numero do Atendimento: recebe o pedido de criar o grupo do
+                                   # motorista novo (avisar_atendimento_pedido_grupo); vazio = nao manda
 """
+import hashlib
 import logging
 import re
 import sqlite3
@@ -182,6 +187,7 @@ NOMES_DAS_TAREFAS = {
     "cadastro-motorista-link": "Cadastro do motorista novo na Vuupt",
     "cancelar-rotas-sem-motorista": "Aviso das rotas sem baixa",
     "coleta-emporio-quatro-estrelas": "Coleta diária do Empório Quatro Estrelas",
+    "coletar-xml-nfe": "Coleta noturna do XML das notas na Stokki",
     "comparar-pool": "Conferência dos pedidos que aguardam rota",
     "comparar-vuupt": "Conferência entre a Vuupt e o nosso sistema",
     "consulta-transportadora": "Lembrete de transportadora sem resposta",
@@ -190,6 +196,7 @@ NOMES_DAS_TAREFAS = {
     "embarcadores-novos": "Pré-cadastro de embarcador novo da Stokki",
     "ensaio-restauracao": "Teste semanal da cópia de segurança",
     "expedicao-frequente": "Baixa das entregas na Stokki",
+    "finalizar-rotas-entregues": "Fechamento das rotas com tudo entregue",
     "informativo-mensal": "Informativo mensal de dias de entrega",
     "exportar-vuupt": "Cópia do histórico da Vuupt",
     "lancar-lalamove": "Pedido de corridas na Lalamove",
@@ -200,6 +207,7 @@ NOMES_DAS_TAREFAS = {
     "nucleo-sincronizar-servicos": "Atualização dos pedidos fora de rota",
     "nucleo-sincronizar-vuupt": "Atualização das rotas no app dos motoristas",
     "pipeline-horario": "Importação de pedidos de hora em hora",
+    "ponte-vuupt": "Envio pra Vuupt do que o motorista fez no app",
     "reconciliar-retirada": "Conferência dos pedidos que o cliente retira",
     "resumo-diario-embarcador": "E-mail da noite com o resumo do dia",
     "resumo-email-whatsapp": "Resumo do e-mail no WhatsApp",
@@ -214,6 +222,7 @@ NOMES_DAS_TAREFAS = {
     "vigia-documentos": "Vigia dos documentos dos pedidos",
     "vigia-fila-impressao": "Vigia da fila de impressão",
     "vigia-pedidos": "Vigia dos pedidos em aberto",
+    "wms-checar-caixas": "Conferência diária das caixas do galpão",
     "wms-recebimentos": "Atualização dos recebimentos do estoque",
     "wms-reservar-pedidos": "Reserva de estoque para os pedidos",
     "wms-sincronizar-produtos": "Atualização do cadastro de produtos do galpão",
@@ -550,6 +559,27 @@ def texto_boas_vindas_motorista(primeiro_nome: str, email: str, senha: str, link
             "Qualquer dúvida, é só responder aqui.")
 
 
+def nome_grupo_motorista(nome: str, carro: str, refrigerado) -> str:
+    """Nome do grupo de WhatsApp do motorista novo (padrao do Hugo, 16/11):
+    FRESH + <Primeiro e Ultimo Nome> - <Carro> (<temperatura>)."""
+    partes = str(nome or "").split()
+    quem = " ".join(partes[:1] + partes[-1:] if len(partes) > 1 else partes) or "Motorista"
+    return f"FRESH + {quem} - {_uma_linha(carro, 20) or 'Carro'} ({'Refrigerado' if refrigerado else 'Seco'})"
+
+
+def texto_pedido_grupo_motorista(nome: str, telefone: str, carro: str, refrigerado) -> str:
+    """Pedido ao Atendimento: criar a mao o grupo do motorista novo (o sistema
+    nao cria grupo: risco de banimento do numero). Sem limite de 200."""
+    digitos = re.sub(r"\D", "", str(telefone or ""))
+    if len(digitos) in (10, 11):
+        digitos = "55" + digitos
+    return "\n".join(["👥 Criar grupo do motorista novo",
+                      f"Nome do grupo: {nome_grupo_motorista(nome, carro, refrigerado)}",
+                      f"Motorista: {_uma_linha(' '.join(str(nome or '').split()), 60) or 'Motorista'} · "
+                      f"{_uma_linha(telefone, 20)}",
+                      f"Adicionar: https://wa.me/{digitos}"])
+
+
 def texto_alteracao_cadastro(nome: str, mudancas: list[dict], agora: datetime | None = None) -> str:
     """Motorista mudou telefone/e-mail/PIX/placa pelo app. Vale na hora
     (decisao do Hugo, 08/10); o aviso e so pra ele saber."""
@@ -822,6 +852,110 @@ def avisar_cancelamento_pendente(envio: dict, motivo: str, erro: str, config: di
             return "desligado"
         return despachar(config, "portal_cancelamento", "cancelamento",
                          texto_cancelamento_pendente(envio, motivo, erro), f"cancelamento:{envio['id']}",
+                         grupo_id=grupo, **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def _qtd_devolucao(v) -> str:
+    """Quantidade sem zeros decimais desnecessarios: 4.0 -> 4, 2.5 -> 2,5."""
+    try:
+        return f"{float(v):g}".replace(".", ",")
+    except (TypeError, ValueError):
+        return str(v or "?")
+
+
+def _cortar(txt: str, limite: int) -> str:
+    return txt if len(txt) <= limite else txt[:max(0, limite - 1)] + "…"
+
+
+def textos_devolucao_galpao(id_stokki: int, embarcador: str, itens: list) -> list:
+    """Pedido cancelado cujo saldo o robo devolveu ao estoque: o galpao guarda a caixa no endereco
+    novo (o robo so mexe no sistema). TODO item aparece com o endereco: se nao couber em MAX_MENSAGEM,
+    sai em partes numeradas '(k/N)', cada uma com cabecalho e linhas inteiras, na ordem recebida.
+    Aperto: encurta o nome do embarcador e, por fim, o nome do produto; SKU, quantidade e endereco ficam."""
+    emb = _cortar(str(embarcador or ""), 30)
+
+    def cab(k, n):
+        ind = f" ({k}/{n})" if n > 1 else ""
+        return f"Pedido cancelado PS-{id_stokki} · {emb}{ind} — guardar de volta:"
+
+    def linhas(n):
+        # nome do produto limitado ao que sobra depois do cabecalho mais largo (indice n/n)
+        sobra = MAX_MENSAGEM - len(cab(n, n)) - 1
+        out = []
+        for i in itens or []:
+            sku, qtd, dest = str(i.get("sku") or "?"), _qtd_devolucao(i.get("movido")), str(i.get("destino") or "?")
+            nome = str(i.get("nome") or "")
+            fixo = f"• {sku} " + "{}" + f"— {qtd} → {dest}"
+            nome = _cortar(nome, max(0, sobra - len(fixo.replace("{}", "")) - 1))
+            out.append(fixo.replace("{}", nome + " " if nome else ""))
+        return out
+
+    todas = len(itens or [])
+    for n in range(1, max(todas, 1) + 1):
+        ls = linhas(n)
+        partes, atual = [], []
+        for l in ls:
+            if atual and len("\n".join([cab(len(partes) + 1, n)] + atual + [l])) > MAX_MENSAGEM:
+                partes.append(atual)
+                atual = []
+            atual.append(l)
+        if atual or not partes:
+            partes.append(atual)
+        if len(partes) <= n:
+            total = len(partes)
+            return [_cortar("\n".join([cab(k, total)] + p), MAX_MENSAGEM) for k, p in enumerate(partes, 1)]
+    return [_cortar("\n".join([cab(1, 1)] + linhas(1)), MAX_MENSAGEM)]
+
+
+def avisar_devolucao_galpao(id_stokki: int, embarcador: str, itens: list, config: dict, **kw) -> str:
+    """Grupo PEDIDOS CANCELADOS (grupo_cancelados_id); sem ele devolve 'desligado' (o chamador loga os
+    enderecos). Uma mensagem por parte, cada uma com assinatura propria (hash dos itens + numero da parte):
+    devolucao parcial retomada no mesmo dia avisa os itens novos e o mesmo aviso repetido nao reenvia.
+    Devolve UMA situacao: 'enviado' so se todas as partes sairam; senao a da primeira que nao saiu
+    (as seguintes nao sao tentadas)."""
+    try:
+        grupo = _cfg(config).get("grupo_cancelados_id")
+        if not grupo:
+            return "desligado"
+        chave = "|".join(sorted(f"{i.get('sku')}@{i.get('destino')}={i.get('movido')}" for i in itens))
+        hash_itens = hashlib.sha1(chave.encode("utf-8")).hexdigest()[:8]
+        situacao = "enviado"
+        for n, texto in enumerate(textos_devolucao_galpao(id_stokki, embarcador, itens), 1):
+            assinatura = f"devolucao:{id_stokki}:{hash_itens}:{n}"
+            try:  # parte que ja saiu (tentativa anterior do mesmo aviso) nao reenvia nem trava as seguintes
+                if _cfg(config).get("ativo") and not kw.get("modo_teste")                         and _ja_enviada_alguma_vez(kw.get("conn"), "devolucao_estoque", assinatura):
+                    continue
+            except Exception:  # noqa: BLE001 -- sem historico, despacha normalmente
+                pass
+            ret = despachar(config, "devolucao_estoque", "devolucao", texto, assinatura, grupo_id=grupo, **kw)
+            if ret not in ("enviado", "modo_teste"):
+                return ret
+            situacao = ret
+        return situacao
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def texto_devolucao_pendente(id_stokki: int, embarcador: str, motivo: str) -> str:
+    """Devolucao de estoque que falhou, ficou parcial ou caiu em duvida. Cabe em MAX_MENSAGEM."""
+    texto = f"Devolução de estoque do PS-{id_stokki} · {(embarcador or '')[:30]} precisa de conferência: {motivo}"
+    return texto[:MAX_MENSAGEM - 1] + "…" if len(texto) > MAX_MENSAGEM else texto
+
+
+def avisar_devolucao_pendente(id_stokki: int, embarcador: str, motivo: str, config: dict, **kw) -> str:
+    """Grupo do ATENDIMENTO (grupo_atendimento_id). Assinatura por pedido + hash do motivo: motivo
+    diferente do mesmo pedido avisa de novo, o mesmo motivo nao repete dentro da janela."""
+    try:
+        grupo = _cfg(config).get("grupo_atendimento_id")
+        if not grupo:
+            return "desligado"
+        return despachar(config, "devolucao_estoque", "devolucao_pendente",
+                         texto_devolucao_pendente(id_stokki, embarcador, motivo),
+                         f"devolucao_pendente:{id_stokki}:{hashlib.sha1(str(motivo).encode('utf-8')).hexdigest()[:8]}",
                          grupo_id=grupo, **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
@@ -1114,6 +1248,39 @@ def avisar_motorista_boas_vindas(cadastro_id: int, telefone: str, texto: str, co
                 logger.info(f"WhatsApp nao enviado (motorista {cadastro_id}): numero sem WhatsApp.")
                 return "numero_sem_whatsapp"
         return despachar(config, ORIGEM_MOTORISTA, "boas_vindas", texto, f"cadastro_link:{cadastro_id}:boas_vindas",
+                         modo_teste=modo_teste, grupo_id=f"{destino}@c.us", **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def avisar_atendimento_pedido_grupo(cadastro_id: int, texto: str, config: dict,
+                                    modo_teste: bool = False, **kw) -> str:
+    """Pedido de criacao do grupo do motorista novo, no privado do Atendimento
+    (cadastro_motorista_link.atendimento_whatsapp; ausente = "desligado").
+    Uma tentativa por cadastro (assinatura cadastro_link:<id>:pedido_grupo).
+    Mesma trava de piloto das boas-vindas: forcar_destino_whatsapp com numero
+    manda pra la com o destino real na primeira linha; "" = envio real;
+    ausente vale clientes.forcar_destino e, sem ele, nao manda."""
+    try:
+        cfg_cad = (config or {}).get("cadastro_motorista_link") or {}
+        atendimento = re.sub(r"\D", "", str(cfg_cad.get("atendimento_whatsapp") or ""))
+        if not atendimento or not gateway_clientes_ok(config):
+            return "desligado"
+        if len(atendimento) in (10, 11):
+            atendimento = "55" + atendimento
+        if "forcar_destino_whatsapp" in cfg_cad:
+            destino = re.sub(r"\D", "", str(cfg_cad["forcar_destino_whatsapp"] or ""))
+        else:
+            destino = re.sub(r"\D", "", str(_cfg_clientes(config).get("forcar_destino") or ""))
+            if not destino:
+                logger.info(f"WhatsApp nao enviado (pedido de grupo {cadastro_id}): forcar_destino_whatsapp ausente.")
+                return "desligado"
+        if destino:
+            texto = f"[teste → +{atendimento}]\n{texto}"
+        else:
+            destino = atendimento
+        return despachar(config, ORIGEM_MOTORISTA, "pedido_grupo", texto, f"cadastro_link:{cadastro_id}:pedido_grupo",
                          modo_teste=modo_teste, grupo_id=f"{destino}@c.us", **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")

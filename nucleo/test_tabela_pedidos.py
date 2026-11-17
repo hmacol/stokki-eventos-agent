@@ -140,6 +140,52 @@ class TestListar(_Base):
         self.assertEqual((filas["total"], filas["ENTREGUE"], filas["ABERTO"], filas["sem_canhoto"]), (7, 6, 1, 2))
         self.assertEqual(tp.contar_filas({"sender_id": "999"}, conn=self.conn)["sem_canhoto"], 0)
 
+    def test_fila_boleto_atrasado(self):
+        """Hugo, 16/11: entra quem teve o boleto processado depois de a rota sair
+        (nao foi no romaneio); sai quando os documentos vao por e-mail."""
+        self._pedido("PS-1")
+        self.assertEqual(self._codigos({"documentos": "boleto_atrasado"}), [])   # sem a tabela de documentos
+        self.assertEqual(tp.contar_filas({}, conn=self.conn)["boleto_atrasado"], 0)
+        self.conn.execute("CREATE TABLE documentos_processados (hash_conteudo TEXT PRIMARY KEY, tipo TEXT,"
+                          " codigo_pedido TEXT, status TEXT, processado_em TEXT)")
+        rota = self._rota(_dia(-1))
+        self.conn.execute("UPDATE nucleo_rotas SET iniciada_em = ? WHERE id = ?", (f"{_dia(-1)} 06:00:00", rota))
+        sem_saida = self._rota(_dia(0))
+        for codigo, r in (("PS-1", rota), ("PS-2", rota), ("PS-3", rota), ("PS-4", rota), ("PS-5", sem_saida),
+                          ("PS-6", rota), ("PS-60", rota)):
+            if codigo != "PS-1":
+                self._pedido(codigo)
+            self._parada(r, codigo)
+        self._pedido("PS-7-R1")   # reentrega usa o boleto do original
+        self._parada(rota, "PS-7-R1")
+        docs = [("a", "Boleto", "PS-1", "ENVIADO", f"{_dia(-1)} 16:50:00"),        # depois da saida: entra
+                ("b", "Boleto", "PS-2", "ENVIADO", f"{_dia(-2)} 20:00:00"),        # antes: foi no romaneio
+                ("c", "Boleto", "PS-3", "ENVIADO", f"{_dia(-2)} 20:00:00"),        # 1a parcela antes...
+                ("d", "Boleto", "PS-3", "ENVIADO", f"{_dia(-1)} 16:50:00"),        # ...e outra depois: fora
+                ("e", "Nota Fiscal", "PS-4", "ENVIADO", f"{_dia(-1)} 16:50:00"),   # nao e boleto
+                ("f", "Boleto", "PS-5", "ENVIADO", f"{_dia(0)} 16:50:00"),         # rota ainda nao saiu
+                ("g", "Boleto", "PS-6", "REVISAO_MANUAL", f"{_dia(-1)} 16:50:00"),  # nao esta guardado
+                ("h", "Boleto", "PS-60", "ENVIADO", f"{_dia(-1)} 16:50:00"),
+                ("i", "Boleto", "PS-7", "ENVIADO", f"{_dia(-1)} 16:50:00")]
+        self.conn.executemany("INSERT INTO documentos_processados VALUES (?, ?, ?, ?, ?)", docs)
+        self.conn.commit()
+        self.assertEqual(sorted(self._codigos({"documentos": "boleto_atrasado"})), ["PS-1", "PS-60", "PS-7"])
+        self.assertEqual(len(self._codigos({"documentos": "outra_coisa"})), 8)
+        # a fila conta sem olhar o status/canhoto/documentos escolhidos
+        filas = tp.contar_filas({"documentos": "boleto_atrasado", "status": "ABERTO"}, conn=self.conn)
+        self.assertEqual((filas["total"], filas["boleto_atrasado"]), (8, 3))
+        # enviado por e-mail (painel_agentes/documentos_email.py): sai da fila. PS-6 enviado nao tira o PS-60;
+        # envio que falhou nao conta; envio da reentrega vale pro pedido
+        self.conn.execute("CREATE TABLE pedidos_documentos_envios (id INTEGER PRIMARY KEY, codigos TEXT, ok INTEGER)")
+        self.conn.executemany("INSERT INTO pedidos_documentos_envios (codigos, ok) VALUES (?, ?)",
+                              [('["PS-6", "PS-7-R1"]', 1), ('["PS-60"]', 0)])
+        self.conn.commit()
+        self.assertEqual(sorted(self._codigos({"documentos": "boleto_atrasado"})), ["PS-1", "PS-60"])
+        self.conn.execute("INSERT INTO pedidos_documentos_envios (codigos, ok) VALUES ('[\"PS-9\", \"PS-1\"]', 1)")
+        self.conn.commit()
+        self.assertEqual(self._codigos({"documentos": "boleto_atrasado"}), ["PS-60"])
+        self.assertEqual(tp.contar_filas({}, conn=self.conn)["boleto_atrasado"], 1)
+
     def test_filtro_canhoto_cria_a_tabela_de_canhotos_manuais_se_faltar(self):
         self._pedido("PS-1")
         self.assertEqual(self._codigos({"canhoto": "sem"}), [])

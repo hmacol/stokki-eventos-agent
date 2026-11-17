@@ -429,7 +429,14 @@ def dependencias_reais(config: dict, usuario: str = "") -> Dependencias:
 
     def cancelar_stokki(id_stokki, motivo):
         from stokki.cancelar import cancelar_pedido
-        return cancelar_pedido(_sessao(), id_stokki, motivo)
+        res = cancelar_pedido(_sessao(), id_stokki, motivo)
+        if res.get("ok"):
+            try:
+                from stokki import devolucao_estoque
+                devolucao_estoque.registrar(id_stokki, "solicitacao", config, ja_estava=bool(res.get("ja_estava")))
+            except Exception as e:  # noqa: BLE001 -- a fila de devolucao nunca trava o cancelamento
+                logger.warning(f"PS-{id_stokki}: nao registrou na fila de devolucao de estoque: {e}")
+        return res
 
     def tirar_da_rota_vuupt(service_id):
         return _tirar_da_rota_real(token, service_id, agent_lalamove, usuario)

@@ -79,6 +79,11 @@ TIPOS_DESPESA = {DESPESA_PEDAGIO: "Pedágio", DESPESA_ESTACIONAMENTO: "Estaciona
                  DESPESA_DESCARGA: "Descarga", DESPESA_OUTROS: "Outros"}
 DESPESAS_COM_PEDIDO = {DESPESA_ESTACIONAMENTO, DESPESA_DESCARGA}
 
+# nucleo_ponte_vuupt.status
+PONTE_PENDENTE = "PENDENTE"
+PONTE_FEITO = "FEITO"
+PONTE_DESISTIU = "DESISTIU"
+
 # nucleo_eventos.origem
 ORIGEM_APP = "APP"
 ORIGEM_VUUPT_SYNC = "VUUPT_SYNC"
@@ -252,6 +257,26 @@ CREATE TABLE IF NOT EXISTS nucleo_pedagios (
 CREATE INDEX IF NOT EXISTS idx_nucleo_pedagios_rota ON nucleo_pedagios(rota_id);
 CREATE INDEX IF NOT EXISTS idx_nucleo_pedagios_status ON nucleo_pedagios(status, enviado_em);
 
+-- Ponte nucleo -> Vuupt (12/11): o que o motorista faz no nosso app numa rota
+-- da Vuupt e repetido la por nucleo/ponte_vuupt.py. Uma linha por acao.
+CREATE TABLE IF NOT EXISTS nucleo_ponte_vuupt (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    rota_id                 INTEGER NOT NULL,
+    parada_id               INTEGER,
+    service_id              INTEGER,
+    acao                    TEXT NOT NULL,                  -- ACEITAR | DESLOCAMENTO | CHEGADA | CONCLUIR
+    dados_json              TEXT,
+    status                  TEXT NOT NULL DEFAULT 'PENDENTE',   -- PENDENTE | FEITO | DESISTIU
+    tentativas              INTEGER NOT NULL DEFAULT 0,
+    proxima_em              TEXT,                           -- nao tenta antes disso (espera de foto / recuo apos erro)
+    ultimo_erro             TEXT,
+    resultado               TEXT,
+    criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    feito_em                TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_nucleo_ponte_status ON nucleo_ponte_vuupt(status, id);
+CREATE INDEX IF NOT EXISTS idx_nucleo_ponte_rota ON nucleo_ponte_vuupt(rota_id, status);
+
 CREATE TABLE IF NOT EXISTS tarifas_motorista (
     tipo_veiculo            TEXT PRIMARY KEY,               -- FIORINO | VAN_HR | VUC | TRES_QUARTOS | TRUCK
     nome                    TEXT,
@@ -356,6 +381,7 @@ _COLUNAS_CADASTRO_LINK = [
     ("aviso_grupo_em", "TEXT"),
     ("aviso_concluido_em", "TEXT"),
     ("boas_vindas_situacao", "TEXT"),
+    ("pedido_grupo_situacao", "TEXT"),           # pedido ao Atendimento pra criar o grupo do motorista
     ("ultimo_erro", "TEXT"),
     ("tentativas", "INTEGER NOT NULL DEFAULT 0"),
     ("processando_em", "TEXT"),
@@ -417,6 +443,9 @@ _COLUNAS_ROTAS_NOVAS = [
     ("horas_estimadas", "REAL"),        # 22/09: copiada do rascunho -- rodízio de rotas longas na alocação
     ("valor_combinado", "REAL"),        # 11/11: valor acertado com o motorista; vence a tarifa no extrato (nucleo/financeiro.py)
     ("valor_combinado_motivo", "TEXT"),
+    # 12/11: rota da Vuupt operada pelo NOSSO app (nucleo/ponte_vuupt.py). O sync
+    # da Vuupt deixa de sobrescrever resultado e horarios que o app registrou.
+    ("operada_app", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 

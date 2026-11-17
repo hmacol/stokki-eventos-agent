@@ -19,6 +19,7 @@
       padding: 12px 22px; border-radius: 12px; text-align: center; z-index: 2147483600; pointer-events: none;
       box-shadow: 0 10px 30px rgba(0,0,0,.25); opacity: 0; transition: opacity .25s; }
     #aula-legenda.on { opacity: 1; }
+    #aula-legenda.no-topo { top: 28px; bottom: auto; }
     #aula-cursor { position: fixed; left: 640px; top: 360px; width: 26px; height: 26px; z-index: 2147483646;
       pointer-events: none; transition: left .6s cubic-bezier(.4,0,.2,1), top .6s cubic-bezier(.4,0,.2,1); }
     #aula-cursor svg { width: 26px; height: 26px; filter: drop-shadow(0 2px 3px rgba(0,0,0,.35)); }
@@ -76,6 +77,7 @@
     legenda(texto) {
       montar();
       const leg = document.getElementById('aula-legenda');
+      if (leg.textContent !== (texto || '')) leg.classList.remove('no-topo');   // passo novo: volta embaixo
       leg.textContent = texto || '';
       leg.classList.toggle('on', !!texto);
       topo(leg);
@@ -88,6 +90,12 @@
     destacarCaixa(r, anel = true) {
       montar();
       const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
+      // a legenda cobriria o que esta sendo mostrado: sobe pro topo neste passo
+      const leg = document.getElementById('aula-legenda');
+      if (leg && leg.classList.contains('on')) {
+        const l = leg.getBoundingClientRect();
+        if (r.left < l.right && r.right > l.left && r.top < l.bottom && r.bottom > l.top) leg.classList.add('no-topo');
+      }
       const cur = document.getElementById('aula-cursor');
       cur.style.transition = ''; cur.style.left = x + 'px'; cur.style.top = y + 'px';
       window.__aulaCursor = [x, y];

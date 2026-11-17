@@ -398,6 +398,40 @@ class TestCancelarStokki(_BancoTemp):
         for trecho in ("hugo: ", "já estava cancelado", "cliente desistiu do pedido"):
             self.assertIn(trecho, kw["texto"])
 
+    def _com_registro(self, **kw):
+        cfg = {"stokki": {"devolucao_cancelamento": {"ativo": True}}}
+        with mock.patch.object(acoes_pedidos.torre_controle, "_carregar_config", return_value=cfg), \
+                mock.patch("stokki.devolucao_estoque.registrar", **kw) as reg:
+            r = acoes_pedidos.cancelar_stokki("PS-1, PS-2", "cliente desistiu do pedido", "hugo",
+                                              abrir_sessao=self.abrir)
+        return r, reg, cfg
+
+    def test_cancelamento_ok_registra_na_fila_de_devolucao(self):
+        r, reg, cfg = self._com_registro()
+        self.assertTrue(r["ok"], r)
+        self.assertEqual([c.args[:3] for c in reg.call_args_list],
+                         [(1, "pedidos", cfg), (2, "pedidos", cfg)])
+        self.assertTrue(all(c.kwargs["ja_estava"] is False for c in reg.call_args_list))
+
+    def test_ja_estava_cancelado_registra_com_ja_estava(self):
+        self.canc.side_effect = lambda s, i, m, prefixo=None: {"ok": True, "situacao": "Cancelado",
+                                                               "situacao_antes": "Cancelado", "ja_estava": True,
+                                                               "erro": ""}
+        r, reg, _ = self._com_registro()
+        self.assertTrue(all(c.kwargs["ja_estava"] is True for c in reg.call_args_list))
+        self.assertEqual(reg.call_count, 2)
+
+    def test_falha_nao_registra_e_registro_que_levanta_nao_muda_nada(self):
+        def lado(s, i, m, prefixo=None):
+            if i == 1:
+                return {"ok": False, "situacao": "Enviado", "ja_estava": False, "erro": "pedido ja expedido"}
+            return {"ok": True, "situacao": "Cancelado", "ja_estava": False, "erro": ""}
+        self.canc.side_effect = lado
+        r, reg, _ = self._com_registro(side_effect=RuntimeError("banco"))
+        self.assertEqual([x["ok"] for x in r["resultados"]], [False, True])
+        self.assertEqual([c.args[0] for c in reg.call_args_list], [2])
+        self.assertEqual(self.trat.call_count, 1)
+
     def test_mais_de_5_ps_recusa_sem_abrir_a_stokki(self):
         r = acoes_pedidos.cancelar_stokki("PS-1 PS-2 PS-3 PS-4 PS-5 PS-6", "cliente desistiu do pedido", "hugo",
                                           abrir_sessao=self.abrir)

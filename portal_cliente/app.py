@@ -704,19 +704,26 @@ def regioes_logo():
 
 # ── Página pública: aula em vídeo (Hugo, 06/11) ────────────────────────────────
 
+def _aula_videos() -> list[dict]:
+    """O vídeo da cotação (Hugo, 16/11) só aparece quando a calculadora for
+    liberada pra todos os clientes (portal_cliente.cotacao.visivel_cliente)."""
+    liberadas = {"cotacao"} if cotacao.regras_de(_CONFIG).get("visivel_cliente") else set()
+    return aula_info.carregar_manifesto(liberadas=liberadas)
+
+
 @app.route("/aula")
 def aula():
     """Videos curtos de treinamento do portal, sem login (o link vai por
     WhatsApp ate pra quem ainda nao entrou). So lista o que esta no
     manifesto gerado pelo aula_portal/gravar.py."""
-    return render_template("aula.html", videos=aula_info.carregar_manifesto(),
+    return render_template("aula.html", videos=_aula_videos(),
                            logo_src=url_for("regioes_logo"))
 
 
 @app.route("/aula/arquivo/<nome>")
 def aula_arquivo(nome):
     # conditional=True responde Range com 206: o Safari do iPhone so toca mp4 assim.
-    if not aula_info.arquivo_permitido(nome, aula_info.carregar_manifesto()):
+    if not aula_info.arquivo_permitido(nome, _aula_videos()):
         abort(404)
     resp = send_from_directory(aula_info.PASTA_AULA, nome, conditional=True, max_age=3600)
     resp.headers["Cache-Control"] = "public, max-age=3600"
@@ -1124,6 +1131,16 @@ def api_envios_analisar():
     itens, rejeitados, vistos = [], [], set()
     anexos = []  # PDFs do lote: documentos dos pedidos (anexos_pedido.py, 11/11)
     n_planilhas = 0
+    # Colunas da planilha indicadas na tela (16/11): {arquivo: {"linha", "colunas"}}.
+    # `indicar=1`: o cliente pediu pra indicar mesmo que os nomes sejam conhecidos.
+    try:
+        colunas_indicadas = json.loads(request.form.get("colunas") or "{}")
+    except ValueError:
+        colunas_indicadas = {}
+    if not isinstance(colunas_indicadas, dict):
+        colunas_indicadas = {}
+    pedir_indicacao = request.form.get("indicar") == "1"
+    indicar = []  # planilhas esperando o cliente dizer as colunas
     entrega_ativa = endereco_entrega.entrega_ativa(_CONFIG)
     conn = envios.conectar()
     try:
@@ -1162,13 +1179,26 @@ def api_envios_analisar():
                     # arquivo; cada pedido vira um item da prévia com token
                     # próprio (JSON temporário) apontando pra planilha original.
                     n_planilhas += 1
+                    indicado = colunas_indicadas.get(nome)
+                    mapa_usado: dict = {}
+                    avisos_plan: list = []   # coluna de item alterada: lê, avisa e não trava (17/11)
                     try:
-                        pedidos, rej = envios.ler_planilha(conteudo, nome, padrao,
-                                                           {c: e["nome"] for c, e in grupo.items()} if grupo else None)
+                        pedidos, rej = envios.ler_planilha(
+                            conteudo, nome, padrao, {c: e["nome"] for c, e in grupo.items()} if grupo else None,
+                            guardado=envios.carregar_mapa_planilha(conn, g.cliente["cnpj"]),
+                            indicado=indicado if isinstance(indicado, dict) else None,
+                            pedir_indicacao=pedir_indicacao, mapa_usado=mapa_usado, avisos=avisos_plan)
+                    except envios.ColunasPorIndicar as e:
+                        indicar.append(e.dados)
+                        continue
                     except envios.ErroEnvio as e:
                         rejeitados.append({"arquivo": nome, "erro": str(e)})
                         continue
+                    if mapa_usado:   # lida com as colunas indicadas: valem pras próximas planilhas deste login
+                        envios.guardar_mapa_planilha(conn, g.cliente["cnpj"], mapa_usado, _quem_envia())
                     rejeitados.extend(rej)
+                    if avisos_plan:
+                        logger.info(f"analisar planilha alterada cnpj={g.cliente['cnpj']} arquivo={nome!r}: {' '.join(avisos_plan)!r}")
                     token_plan = envios.guardar_temporario(conteudo, Path(nome).suffix.lstrip(".") or "xlsx")
                     for ped in pedidos:
                         rotulo = f"Pedido {ped['referencia']}"
@@ -1184,7 +1214,7 @@ def api_envios_analisar():
                             continue
                         token = envios.guardar_temporario_pedido(ped, token_plan)
                         item = {k: v_ for k, v_ in ped.items() if k not in ("emitente_cnpj",)}
-                        item.update({"token": token, "avisos": v["avisos"] + avisos_sku, "rotulo": rotulo,
+                        item.update({"token": token, "avisos": avisos_plan + v["avisos"] + avisos_sku, "rotulo": rotulo,
                                      "empresa_cnpj": emp, "empresa": ctx(emp)["nome"] if grupo else "",
                                      "destinatario_doc_formatado": envios.formatar_documento(ped["destinatario_doc"])})
                         itens.append(item)
@@ -1248,7 +1278,10 @@ def api_envios_analisar():
     _sugerir_pedidos(anexos, [{**it, "chave": it["token"]} for it in itens])
     logger.info(f"analisar cnpj={','.join(usadas)} por={_quem_envia()} validos={len(itens)} rejeitados={len(rejeitados)} "
                 f"planilhas={n_planilhas} anexos={len(anexos)}")
+    for r in rejeitados[:20]:   # o motivo fica no log: em 17/11 só deu pra saber baixando a planilha
+        logger.info(f"analisar rejeitado arquivo={r.get('arquivo')!r} {str(r.get('rotulo') or '')[:80]!r}: {str(r.get('erro'))[:300]!r}")
     return jsonify({"itens": itens, "rejeitados": rejeitados, "destinatarios": destinatarios, "anexos": anexos,
+                    "indicar": indicar,
                     "regra_xml": cfg["regra_xml"], "regra_xml_rotulo": envios.REGRAS_XML.get(cfg["regra_xml"], ""),
                     "envio_ativo": cfg["envio_ativo"], "hoje": date.today().isoformat(), "entrega_ativa": entrega_ativa,
                     "fluxos_disponiveis": fluxos_disp, "fluxo_rotulos": envios.FLUXO_ROTULOS, "xd": xd})

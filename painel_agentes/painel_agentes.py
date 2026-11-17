@@ -2266,6 +2266,82 @@ def api_acessos_senha():
     return jsonify({"ok": True})
 
 
+# --- Embarcadores (16/11): contas do portal do cliente pela tela, no lugar do
+# gerenciar_clientes.py na VPS. So nivel total (sem niveis=) e fora do catalogo
+# de acesso_telas. Mexe so em clientes_portal: `interno` nao e tocada. Criar e
+# resetar mostram o PIN provisorio na tela E mandam o link de definir PIN pros
+# e-mails do cadastro (envio real ao cliente).
+
+@app.route("/embarcadores")
+@requer_auth
+def embarcadores_portal():
+    from portal_cliente import auth_cliente as contas
+    conn = contas.conectar()
+    try:
+        linhas = contas.listar_embarcadores(conn)
+    finally:
+        conn.close()
+    for e in linhas:
+        e["cnpj_formatado"] = contas.formatar_cnpj(e["cnpj"])
+        e["estado"] = "sem_conta" if e["ativo"] is None else ("ativa" if e["ativo"] else "inativa")
+    return render_template("embarcadores_portal.html", linhas=linhas,
+                           com_conta=sum(1 for e in linhas if e["ativo"] is not None))
+
+
+@app.route("/api/embarcadores/conta", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_embarcadores_conta():
+    """acao = criar | resetar | ativar | desativar | excluir, sobre a conta do
+    portal de um CNPJ. criar e resetar devolvem o PIN provisorio (6 digitos,
+    sorteado aqui, troca obrigatoria no proximo acesso) e `email_para` (pra
+    quem o link de definir PIN foi; vazio = sem e-mail no cadastro ou falhou)."""
+    import secrets
+    from portal_cliente import auth_cliente as contas
+    body = request.get_json(force=True, silent=True) or {}
+    acao = str(body.get("acao") or "")
+    if acao not in ("criar", "resetar", "ativar", "desativar", "excluir"):
+        return jsonify({"erro": "ação inválida"}), 400
+    conn = contas.conectar()
+    try:
+        emb = contas.buscar_embarcador(conn, body.get("cnpj"))
+        if not emb:
+            return jsonify({"erro": "CNPJ não está cadastrado como embarcador."}), 400
+        conta = contas.buscar_conta(conn, emb["cnpj"])
+        tem_conta = conta is not None
+        if acao == "criar" and tem_conta:
+            return jsonify({"erro": "Esse embarcador já tem conta no portal."}), 400
+        if acao != "criar" and not tem_conta:
+            return jsonify({"erro": "Esse embarcador ainda não tem conta no portal."}), 400
+        resposta = {"ok": True, "nome": emb["nome"]}
+        if acao in ("criar", "resetar"):
+            pin = f"{secrets.randbelow(10 ** 6):06d}"
+            contas.definir_pin(conn, emb["cnpj"], pin, trocar_pin=True)
+            resposta["pin"] = pin
+            # E-mail com o link de definir PIN pros e-mails do cadastro (16/11, Hugo:
+            # "enviamos por e-mail e mostramos na tela tambem"). Falha no envio nao
+            # desfaz o PIN: a tela mostra e a equipe repassa.
+            # Conta inativa nao recebe e-mail: o link diria "acesso liberado" e o
+            # login continuaria barrado.
+            resposta["email_para"] = []
+            if emb["emails"] and (conta is None or conta["ativo"]):
+                try:
+                    from portal_cliente.gerenciar_clientes import enviar_convite
+                    ok, destinos = enviar_convite(conn, _carregar_config(), emb)
+                    resposta["email_para"] = destinos if ok else []
+                except (Exception, SystemExit):
+                    logging.getLogger(__name__).exception("embarcadores.conta: falha no e-mail do PIN (%s)", emb["cnpj"])
+        elif acao == "excluir":
+            contas.excluir_conta(conn, emb["cnpj"])
+        else:
+            contas.definir_ativo(conn, emb["cnpj"], acao == "ativar")
+    finally:
+        conn.close()
+    logging.getLogger(__name__).info("embarcadores.conta acao=%s cnpj=%s por=%s",
+                                     acao, emb["cnpj"], session.get("usuario", ""))
+    return jsonify(resposta)
+
+
 # --- Notificacoes (24/10): geral, tipo, excecao, piloto e e-mails do embarcador.
 # So nivel total (sem niveis=) e fora do catalogo de acesso_telas. Quem decide e
 # grava e controle_notificacoes; a tela e o que o Hugo usa no lugar do config.
@@ -4511,6 +4587,7 @@ def _filtros_tabela_pedidos() -> dict:
         "agent_id": request.args.get("motorista") or "",
         "zona": (request.args.get("zona") or "").strip(),
         "canhoto": (request.args.get("canhoto") or "").strip().lower(),
+        "documentos": (request.args.get("documentos") or "").strip().lower(),
         "q": (request.args.get("q") or "").strip(),
         "colunas": {c.chave: request.args.get(f"f_{c.chave}", "").strip()
                     for c in tabela_pedidos.COLUNAS if request.args.get(f"f_{c.chave}", "").strip()},

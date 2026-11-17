@@ -34,6 +34,7 @@ FORA_DO_CATALOGO = {"static", "login", "logout", "api_romaneios_pendentes", "api
                     "api_notificacoes_embarcador", "api_notificacoes_embarcador_salvar",
                     "api_notificacoes_embarcador_situacao", "api_notificacoes_disparo_dados",
                     "api_notificacoes_disparo",
+                    "embarcadores_portal", "api_embarcadores_conta",
                     "homologacao.saude", "homologacao.envios", "homologacao.envio_detalhe"}
 
 
