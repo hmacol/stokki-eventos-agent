@@ -41,6 +41,16 @@ class TestEtiquetaVolume(unittest.TestCase):
         # pedido desconhecido ou campos vazios nao impedem a etiqueta
         vol.desenhar_etiqueta_volume(sep.dados_do_volume(self.conn, "FV|PS-1|1|1"))
 
+    def test_numero_da_nf_vai_pra_etiqueta(self):
+        self.assertEqual(sep.dados_do_volume(self.conn, "FV|PS-44009|1|1")["nf"], "")
+        self.conn.execute("UPDATE wms_pedidos SET nf = '12345' WHERE codigo_ps = 'PS-44009'")
+        self.conn.commit()
+        dados = sep.dados_do_volume(self.conn, "FV|PS-44009|1|1")
+        self.assertEqual(dados["nf"], "12345")
+        com = vol.desenhar_etiqueta_volume(dados)
+        sem = vol.desenhar_etiqueta_volume({**dados, "nf": ""})
+        self.assertNotEqual(com.tobytes(), sem.tobytes())
+
     def test_pdf_tem_uma_pagina_por_volume(self):
         pdf = vol.gerar_pdf_volumes(self.conn, ["FV|PS-44009|1|3", "FV|PS-44009|2|3", "FV|PS-44009|3|3"])
         self.assertTrue(pdf.startswith(b"%PDF"))

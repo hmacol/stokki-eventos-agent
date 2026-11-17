@@ -518,8 +518,15 @@ def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste:
             data_entrega, regiao = calcular_data_entrega(
                 data_expedicao.isoformat() if data_expedicao else "", destino)
 
+            # NF so entra quando a pagina traz: pedido aberto ainda nao tem, e uma
+            # releitura sem a nota nao pode apagar o numero ja gravado.
+            extras = {}
+            numero_nf = stokki_pedidos.extrair_numero_nf(html)
+            if numero_nf:
+                extras["nf"] = numero_nf
             try:
                 pedido_id = wms_pedidos.registrar_pedido(conn, {
+                    **extras,
                     "id_stokki": id_pedido,
                     "codigo_ps": codigo_ps,
                     "embarcador": embarcador,

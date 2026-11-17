@@ -6469,13 +6469,13 @@ def api_wms_separacao_conferir_iniciar(pedido_id):
 @requer_auth(niveis=_NIVEIS_WMS)
 @exige_mesma_origem
 def api_wms_separacao_conferir_bipe(conferencia_id):
-    _wms_exige_operador()
+    op = _wms_exige_operador()
     corpo = _sep_corpo()
 
     def _f(conn):
         _wms_exige_uuid_do_aparelho(corpo.get("uuid"))
         return wms_separacao.conferir_bipe(conn, conferencia_id, corpo.get("codigo", ""),
-                                           qtd_un=corpo.get("qtd_un"), uuid=corpo.get("uuid") or "")
+                                           qtd_un=corpo.get("qtd_un"), uuid=corpo.get("uuid") or "", operador=op)
     return _sep_chamar(_f)
 
 
@@ -6483,8 +6483,8 @@ def api_wms_separacao_conferir_bipe(conferencia_id):
 @requer_auth(niveis=_NIVEIS_WMS)
 @exige_mesma_origem
 def api_wms_separacao_conferir_fechar(conferencia_id):
-    _wms_exige_operador()
-    return _sep_chamar(lambda conn: wms_separacao.fechar_conferencia(conn, conferencia_id))
+    op = _wms_exige_operador()
+    return _sep_chamar(lambda conn: wms_separacao.fechar_conferencia(conn, conferencia_id, op))
 
 
 @app.route("/api/wms/separacao/pedidos/<int:pedido_id>/volumes", methods=["POST"])

@@ -181,5 +181,34 @@ class TestRodadaComPedidoAberto(BaseRotina):
         self.assertEqual(self._pedido(50003)["fonte_itens"], "")
 
 
+CHAVE = "35261112345678000190550010000123451000012340"   # NF 12345, serie 1
+_LINK_NF = ('<tr><th>NF-e:</th><td><a href="http://www.nfe.fazenda.gov.br/portal/consultaRecaptcha.aspx'
+            '?tipoConsulta=completa&nfe=%s">%s</a></td></tr>')
+
+
+class TestNumeroDaNF(BaseRotina):
+    def test_numero_sai_da_chave_sem_os_zeros(self):
+        self.assertEqual(stokki_pedidos.extrair_numero_nf(_LINK_NF % (CHAVE, CHAVE)), "12345")
+        self.assertEqual(stokki_pedidos.extrair_numero_nf(_LINK_NF.replace("&nfe", "&amp;nfe") % (CHAVE, CHAVE)), "12345")
+
+    def test_sem_nota_chave_curta_ou_marcador_99_devolve_vazio(self):
+        marcador = "99" + CHAVE[2:]
+        for html in ("", "<p>sem nota</p>", "?nfe=" + CHAVE[:43], "?nfe=" + CHAVE + "9", _LINK_NF % (marcador, marcador)):
+            self.assertEqual(stokki_pedidos.extrair_numero_nf(html), "", html[:40])
+
+    def _rodar(self, html):
+        self.conn.execute("UPDATE wms_produtos SET embarcador_id = 22 WHERE id = 1")
+        self.conn.commit()
+        linhas = _linhas_vazias()
+        linhas["Open"] = [_linha(50010, PILOTO_ID, nome_truncado="MOMBAK", status="Open")]
+        mod.rodar(self.conn, SessaoFalsa(linhas, {"50010": html}), PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+        return self.conn.execute("SELECT nf FROM wms_pedidos WHERE id_stokki = 50010").fetchone()[0]
+
+    def test_sync_grava_a_nf_e_releitura_sem_nota_nao_apaga(self):
+        self.assertEqual(self._rodar(_HTML_ABERTO), "")                       # pedido aberto ainda sem nota
+        self.assertEqual(self._rodar(_HTML_ABERTO + _LINK_NF % (CHAVE, CHAVE)), "12345")
+        self.assertEqual(self._rodar(_HTML_ABERTO), "12345")                  # pagina sem o link: mantem
+
+
 if __name__ == "__main__":
     unittest.main()

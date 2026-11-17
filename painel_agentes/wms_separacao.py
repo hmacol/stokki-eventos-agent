@@ -838,24 +838,31 @@ def _estado_conferencia(conn, conferencia_id: int) -> dict:
             "resultado": c["resultado"]}
 
 
-def _conferencia_aberta(conn, conferencia_id: int) -> dict:
+def _conferencia_aberta(conn, conferencia_id: int, operador: dict | None = None) -> dict:
+    """Conferencia ainda aberta. Com `operador`, so quem abriu pode bipar ou fechar: sem
+    isso quem separou o pedido bipava (ou fechava) a conferencia de outra pessoa pelo id e
+    a regra de "outra pessoa confere" virava enfeite (revisao de seguranca, 17/11)."""
     c = conn.execute("SELECT * FROM wms_conferencias WHERE id = ?", (int(conferencia_id),)).fetchone()
     if not c:
         raise ErroWMS("Conferencia nao encontrada.")
     if c["resultado"]:
         raise ErroWMS("Esta conferencia ja foi fechada.")
+    if operador is not None and _op(operador)[0] != c["operador_id"]:
+        raise ErroWMS(f"Esta conferencia e de {c['operador_nome']}: so quem abriu pode bipar ou fechar.")
     return dict(c)
 
 
-def conferir_bipe(conn, conferencia_id: int, codigo: str, *, qtd_un: float | None = None, uuid: str) -> dict:
+def conferir_bipe(conn, conferencia_id: int, codigo: str, *, qtd_un: float | None = None, uuid: str,
+                  operador: dict | None = None) -> dict:
     """Bipe do conferente. Serial de caixa inteira do pedido, ou codigo do produto + quantidade
     (parte de caixa). A resposta nunca diz o que era esperado."""
     uuid = _exigir_uuid(uuid)
-    if conn.execute("SELECT 1 FROM wms_conferencia_bipes WHERE uuid = ?", (uuid,)).fetchone():
+    ja = conn.execute("SELECT conferencia_id FROM wms_conferencia_bipes WHERE uuid = ?", (uuid,)).fetchone()
+    if ja and ja["conferencia_id"] == int(conferencia_id):
         return {**_estado_conferencia(conn, conferencia_id), "repetido": True}
     codigo = str(codigo or "").strip().upper()
     with _tx(conn):
-        c = _conferencia_aberta(conn, conferencia_id)
+        c = _conferencia_aberta(conn, conferencia_id, operador)
         p = _pedido(conn, c["pedido_id"])
         if p["estado_reserva"] == "CANCELADO":
             raise ErroWMS(f"{p['codigo_ps']} foi cancelado: pare a conferencia.")
@@ -898,11 +905,11 @@ def conferir_bipe(conn, conferencia_id: int, codigo: str, *, qtd_un: float | Non
     return {**_estado_conferencia(conn, conferencia_id), "repetido": False}
 
 
-def fechar_conferencia(conn, conferencia_id: int) -> dict:
+def fechar_conferencia(conn, conferencia_id: int, operador: dict | None = None) -> dict:
     """Compara o bipado com o que o pedido pede AGORA. Bateu (ou sobrou): CONFERIDO.
     Faltou: AGUARDANDO_DECISAO, e o escritorio decide."""
     with _tx(conn):
-        c = _conferencia_aberta(conn, conferencia_id)
+        c = _conferencia_aberta(conn, conferencia_id, operador)
         p = _pedido(conn, c["pedido_id"])
         if p["estado_reserva"] == "CANCELADO":
             raise ErroWMS(f"{p['codigo_ps']} foi cancelado: nao ha o que fechar.")

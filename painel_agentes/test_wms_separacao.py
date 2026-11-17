@@ -342,6 +342,31 @@ class TestConferencia(Base):
         with self.assertRaisesRegex(wms.ErroWMS, "ja esta sendo conferido por Bia"):
             sep.iniciar_conferencia(self.conn, pid, {"id": "3", "nome": "Caio"})
 
+    def test_so_quem_abriu_a_conferencia_bipa_e_fecha(self):
+        # revisao de seguranca 17/11: quem separou (Ana) nao pode bipar nem fechar, pelo id,
+        # a conferencia que a Bia abriu
+        pid, s = self.pronto_pra_conferir()
+        c = sep.iniciar_conferencia(self.conn, pid, BIA)["conferencia_id"]
+        with self.assertRaisesRegex(wms.ErroWMS, "so quem abriu"):
+            sep.conferir_bipe(self.conn, c, s[0], uuid=self.u(), operador=ANA)
+        with self.assertRaisesRegex(wms.ErroWMS, "so quem abriu"):
+            sep.fechar_conferencia(self.conn, c, ANA)
+        self.assertEqual((sep._estado_conferencia(self.conn, c)["bipes"], self.execucao(pid)), (0, "CONFERINDO"))
+        for x in s:
+            sep.conferir_bipe(self.conn, c, x, uuid=self.u(), operador=BIA)
+        self.assertEqual(sep.fechar_conferencia(self.conn, c, BIA)["resultado"], "OK")
+
+    def test_uuid_de_bipe_de_outra_conferencia_nao_vale_como_repetido(self):
+        pid, s = self.pronto_pra_conferir()
+        outro, s_outro = self.pronto_pra_conferir()
+        c1 = sep.iniciar_conferencia(self.conn, pid, BIA)["conferencia_id"]
+        c2 = sep.iniciar_conferencia(self.conn, outro, BIA)["conferencia_id"]
+        uuid = self.u()
+        sep.conferir_bipe(self.conn, c1, s[0], uuid=uuid, operador=BIA)
+        with self.assertRaises(Exception):
+            sep.conferir_bipe(self.conn, c2, s_outro[0], uuid=uuid, operador=BIA)
+        self.assertEqual(sep._estado_conferencia(self.conn, c2)["bipes"], 0)
+
     def test_bipe_repetido_caixa_repetida_e_caixa_de_outro_pedido(self):
         pid, s = self.pronto_pra_conferir()
         outro, s_outro = self.pronto_pra_conferir()

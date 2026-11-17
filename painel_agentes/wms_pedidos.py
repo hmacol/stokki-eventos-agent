@@ -142,6 +142,7 @@ _COLUNAS_NOVAS = {
                     "endereco_destino": "TEXT NOT NULL DEFAULT ''",
                     "cidade": "TEXT NOT NULL DEFAULT ''",
                     "uf": "TEXT NOT NULL DEFAULT ''",
+                    "nf": "TEXT NOT NULL DEFAULT ''",   # numero da NF-e (etiqueta de volume, 17/11)
                     # separacao no nosso sistema (wms_separacao.py): etapa do pedido, onda e
                     # o id do embarcador (a onda e por embarcador)
                     "embarcador_id": "TEXT NOT NULL DEFAULT ''",
@@ -158,7 +159,7 @@ _COLUNAS_NOVAS = {
 
 
 _CAMPOS_OPCIONAIS_PEDIDO = ("embarcador_id", "fonte_itens", "data_expedicao", "data_entrega_calc", "regiao_dia_fixo",
-                            "destinatario", "endereco_destino", "cidade", "uf")
+                            "destinatario", "endereco_destino", "cidade", "uf", "nf")
 
 
 def _migrar(conn) -> None:

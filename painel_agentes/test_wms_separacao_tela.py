@@ -116,6 +116,21 @@ class TestRotasDoGalpao(Base):
         estacao = self.cliente("expedicao")
         self.assertEqual(estacao.get(f"/etiquetas/fila/{v['impressao_id']}.pdf").mimetype, "application/pdf")
 
+    def test_conferencia_de_outro_operador_nao_aceita_bipe_nem_fechamento(self):
+        c = self.cliente()
+        with self.operador(ANA):
+            onda = self.post(c, f"/api/wms/separacao/ondas/pedido/{self.pedido_id}").get_json()["onda_id"]
+            for s in self.seriais:
+                self.post(c, f"/api/wms/separacao/ondas/{onda}/separar", {"serial": s, "uuid": self.u()})
+            self.post(c, f"/api/wms/separacao/ondas/{onda}/fechar")
+        with self.operador(BIA):
+            conf = self.post(c, f"/api/wms/separacao/conferir/{self.pedido_id}/iniciar").get_json()["conferencia_id"]
+        with self.operador(ANA):   # quem separou tenta usar a conferencia da Bia pelo id
+            r = self.post(c, f"/api/wms/separacao/conferencias/{conf}/bipe", {"codigo": self.seriais[0], "uuid": self.u()})
+            self.assertEqual(r.status_code, 400)
+            self.assertIn("so quem abriu", r.get_json()["erro"])
+            self.assertEqual(self.post(c, f"/api/wms/separacao/conferencias/{conf}/fechar").status_code, 400)
+
     def test_sem_operador_do_pin_recusa_o_bipe(self):
         c = self.cliente()
         with self.operador(None):
