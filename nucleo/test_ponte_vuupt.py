@@ -215,6 +215,25 @@ class TestPonteVuupt(unittest.TestCase):
         self.assertEqual(self.vuupt.chamadas, [])
         self.assertEqual(self._fila()[0]["resultado"], "ja_fechado")
 
+    def test_sync_respeita_o_aceite_feito_pelo_app(self):
+        def sync(**kw):
+            conn = banco.conectar()
+            sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(self.servicos, **kw)], conn)
+            conn.commit()
+            conn.close()
+            return self._um("SELECT status FROM nucleo_rotas WHERE id = ?", self.rota_id)["status"]
+
+        self.cli.post(f"/api/rotas/{self.rota_id}/aceitar", json={}, headers=self.h)
+        # a Vuupt segue "assigned" (ou "not_started"): o aceite do app fica
+        self.assertEqual(sync(), "ACEITA")
+        self.assertEqual(sync(status="not_started"), "ACEITA")
+        # recusou pelo app: volta a planejada e o sync nao ressuscita o aceite
+        self.cli.post(f"/api/rotas/{self.rota_id}/recusar", json={"motivo": "x"}, headers=self.h)
+        self.assertEqual(sync(), "PLANEJADA")
+        # aceitou de novo e a rota foi pra outro motorista: o aceite cai
+        self.cli.post(f"/api/rotas/{self.rota_id}/aceitar", json={}, headers=self.h)
+        self.assertEqual(sync(agent_id=AGENT + 1), "PLANEJADA")
+
     def test_sync_nao_apaga_o_que_o_app_registrou(self):
         self.cli.post(f"/api/rotas/{self.rota_id}/iniciar", json={}, headers=self.h)
         self._evento(self.p1, "ENTREGUE", "u1", ocorrido_em="2026-11-16 09:15:00")
