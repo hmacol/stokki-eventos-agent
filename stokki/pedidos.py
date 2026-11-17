@@ -573,6 +573,54 @@ def extrair_itens_do_pedido(html: str) -> list[dict]:
     return itens
 
 
+def extrair_itens_tabela_pedido(html: str) -> list[dict]:
+    """
+    Itens da tabela `#example1` (aba "Itens do pedido": NR. | ID | SKU | Nome |
+    Quantidade | unidade | ...). Ao contrario da tabela Produto|EAN|Quantidade de
+    extrair_itens_do_pedido, esta existe desde o pedido ABERTO (17/11: o galpao
+    comeca a separar no nosso sistema antes de a Stokki mexer no pedido).
+
+    A quantidade aqui esta na UNIDADE DO PRODUTO (a mesma do cadastro), uma linha
+    por SKU, sem EAN: por isso cada item leva `unidade_do_produto: True`, que
+    wms_pedidos.resolver_item usa pra nao converter por embalagem. `linha` e o
+    NR. da propria tabela (chave de reconciliacao), nunca a posicao na lista.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    tabela = soup.find("table", id="example1")
+    if tabela is None:
+        return []
+    cab = [th.get_text(strip=True).upper() for th in tabela.find_all("th")]
+    try:
+        i_sku, i_nome, i_qtd = cab.index("SKU"), cab.index("NOME"), cab.index("QUANTIDADE")
+    except ValueError:
+        return []
+    i_nr = cab.index("NR.") if "NR." in cab else None
+    itens, posicao = [], 0
+    for tr in tabela.find_all("tr"):
+        celulas = tr.find_all("td")
+        if len(celulas) <= max(i_sku, i_nome, i_qtd):
+            continue
+        posicao += 1
+        bruta = celulas[i_qtd].get_text(" ", strip=True).replace(".", "").replace(",", ".")
+        try:
+            quantidade = float(bruta)
+        except ValueError:
+            continue  # nao renumera as de baixo
+        linha = posicao
+        if i_nr is not None:
+            nr = re.sub(r"[^0-9]", "", celulas[i_nr].get_text(strip=True))
+            linha = int(nr) if nr else posicao
+        itens.append({
+            "linha": linha,
+            "sku": celulas[i_sku].get_text(" ", strip=True),
+            "ean_linha": "",
+            "descricao": celulas[i_nome].get_text(" ", strip=True),
+            "qtd_embalagem": quantidade,
+            "unidade_do_produto": True,
+        })
+    return itens
+
+
 # ── Diretórios ────────────────────────────────────────────────────────────────
 
 def listar_transportadoras(sessao: StokkiSession) -> list[dict]:
