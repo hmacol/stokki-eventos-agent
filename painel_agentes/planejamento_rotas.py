@@ -62,6 +62,7 @@ from regras.tipo_carga_embarcador import (
 from regras.tipo_veiculo import tipo_por_codigo, TIPOS_VEICULO
 from regras.prioridade_ofertas import carregar_historico_justica
 from regras import feriados
+from regras import veiculos as veiculos_regras
 from retiradas.regras_retirada import (PREFIXO_TITULO, STATUSES_ABERTOS, config_retiradas,
                                        data_prevista_do_servico, eh_servico_retirada)
 # regras.ofertas_rota / regras.resumo_oferta (marketplace de rotas, Hugo
@@ -273,6 +274,53 @@ MINIMO_ROTAS_PARA_MEDIANA = 3  # com menos rotas no lote, "2x fora da mediana" n
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+
+def listar_veiculos_vuupt(config: dict) -> list[dict]:
+    """Veiculos da Vuupt com cache de 10 min (regras.veiculos). Levanta se a
+    Vuupt falhar; quem so precisa da placa usa placas_veiculos_vuupt."""
+    from nucleo.vuupt_agentes import VuuptAgentes
+    return veiculos_regras.listar_veiculos_cacheado(
+        lambda: VuuptAgentes(config.get("vuupt_api", {}).get("token", "")).listar_veiculos())
+
+
+def placas_veiculos_vuupt(config: dict) -> dict | None:
+    """{vehicle_id: placa}, ou None se a lista nao carregou (so vehicle_id vazio
+    conta como 'sem carro' nesse caso). Usado pela tela e pelo envio manual."""
+    try:
+        return veiculos_regras.placas_por_id(listar_veiculos_vuupt(config))
+    except Exception as e:
+        logger.warning(f"Lista de veiculos da Vuupt indisponivel, checando so o vehicle_id: {e}")
+        return None
+
+
+def confirmar_envio_rascunhos(rascunho_ids: list, config: dict) -> list[dict]:
+    """Envio manual (botão Confirmar envio): motorista de verdade sai com carro. Com
+    planejamento.trava_sem_carro ligada, rascunho sem carro é barrado (os outros seguem);
+    desligada (padrão), sai mesmo assim e o resultado leva "aviso". Um resultado por id."""
+    token = config.get("vuupt_api", {}).get("token", "")
+    placas = placas_veiculos_vuupt(config)
+    trava = veiculos_regras.trava_sem_carro_ligada(config)
+    resultados = []
+    for rid in rascunho_ids:
+        erro_carro = veiculos_regras.verificar_carro(rascunhos_rota.buscar_rascunho(rid) or {}, placas)
+        if erro_carro and trava:
+            resultados.append({"ok": False, "rascunho_id": rid, "erro": erro_carro})
+            continue
+        resultado = rascunhos_rota.enviar_rascunho(rid, token)
+        if erro_carro:
+            resultado = {**resultado, "aviso": erro_carro}
+        resultados.append(resultado)
+    return resultados
+
+
+def seletor_veiculos(config: dict, data_alvo: date) -> list[dict]:
+    """Carros do seletor do card: sem generico/excluido, dono primeiro, com
+    rodizio_no_dia. Levanta se a Vuupt falhar."""
+    cfg = config.get("motoristas", {})
+    catalogo = CatalogoMotoristas.carregar(cfg.get("planilha", ""), cfg.get("json_fallback", ""))
+    motoristas = [{"vehicle_id": m.vehicle_id, "nome": m.nome} for m in catalogo.motoristas]
+    return veiculos_regras.listar_para_seletor(listar_veiculos_vuupt(config), motoristas, data_alvo)
 
 
 def _ressincronizar(vuupt: VuuptClient, service_ids: list[int]) -> None:
@@ -962,6 +1010,15 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     except Exception as e:
         logger.warning(f"Falha ao marcar segurados pro pool (tela segue sem essa marcação): {e}")
 
+    # Retornando (editar rota enviada, 10/11): pedido tirado de rota iniciada,
+    # no carro do motorista. Continua no pool com selo; o front bloqueia o arraste.
+    retornando_por_id: dict[int, dict] = {}
+    try:
+        import pedidos_retornando
+        retornando_por_id = pedidos_retornando.retornando_por_servico(servicos_brutos)
+    except Exception as e:
+        logger.warning(f"Falha ao marcar retornando pro pool (tela segue sem essa marcação): {e}")
+
     # Dia fixo fora do dia (Hugo, 23/09): só rotula; o aviso é do botão
     # "Roteirizar" no front. Vale pro pool e pras paradas já em rascunho.
     fora_dia_fixo: dict[int, str] = {}
@@ -991,6 +1048,9 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         for p in pool:
             p["fora_dia_fixo"] = fora_dia_fixo.get(p["service_id"])
             p["segurado"] = segurados_por_id.get(p["service_id"])
+            r = retornando_por_id.get(p["service_id"])
+            p["retornando"] = ({"motorista_nome": r.get("motorista_nome"), "motivo": r.get("motivo"),
+                                "criado_em": r.get("criado_em")} if r else None)
         marcar_pausados_cliente(pool, servicos_brutos)
         pool.sort(key=lambda p: p["codigo"])
     # Situação na Stokki (Hugo, 19/10): bloco "Em separação na Stokki" do pool
@@ -1047,6 +1107,32 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         "dedicados_por_service_id": dedicados_por_id,
         "fora_dia_fixo_por_service_id": fora_dia_fixo,
     }
+
+
+def _anotar_rota_enviada(rascunho: dict) -> None:
+    """Card da rota ENVIADA (editar rota enviada, 10/11): `status_vuupt` por parada e
+    `rota_iniciada`, lidos do espelho do nucleo (ate 15 min atrasado, so pra exibir --
+    a acao de tirar/trocar confere ao vivo na Vuupt)."""
+    import edicao_rota
+    espelho = rascunhos_rota.espelho_rota_enviada(rascunho["vuupt_route_id"])
+    for p in rascunho["paradas"]:
+        p["status_vuupt"] = espelho["paradas"].get(p["service_id"])
+    rascunho["rota_iniciada"] = edicao_rota.rota_iniciada({
+        "status": espelho["status_rota"],
+        "servicos": [{"status": p["status_vuupt"]} for p in rascunho["paradas"]],
+    })
+
+
+def _anotar_centro_expandido(rascunhos: list[dict]) -> None:
+    """Aviso de rodizio na troca de carro pelo card (editar rota enviada, 10/11):
+    `tem_centro_expandido` = alguma parada com coordenada dentro do Centro Expandido
+    (mesmo poligono da alocacao, roteirizacao/rodizio_sp). Parada sem coordenada nao conta."""
+    from rodizio_sp import em_area_rodizio
+    for r in rascunhos:
+        r["tem_centro_expandido"] = any(
+            p.get("latitude") is not None and p.get("longitude") is not None
+            and em_area_rodizio(float(p["latitude"]), float(p["longitude"]))
+            for p in r["paradas"])
 
 
 def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
@@ -1141,6 +1227,18 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
             p["fora_janela"] = bool(sim and i in sim["fora_janela"])
         # selo "Em separação" etc. também na parada da rota (Hugo, 09/11), não só no pool
         anotar_situacao_stokki(r["paradas"], pool_e_agendados["retrato_stokki"])
+        if r["status"] == rascunhos_rota.STATUS_ENVIADO and r["vuupt_route_id"]:
+            try:
+                _anotar_rota_enviada(r)
+            except Exception as e:  # noqa: BLE001 -- enfeite do card: a tela carrega sem ele
+                logger.warning(f"Card da rota {r['vuupt_route_id']} sem status da Vuupt: {e}")
+
+    # motorista de verdade sai sempre com carro (spec 4): a tela mostra o aviso
+    veiculos_regras.anotar_falta_carro(rascunhos, placas_veiculos_vuupt(config))
+    try:
+        _anotar_centro_expandido(rascunhos)
+    except Exception as e:  # noqa: BLE001 -- so o aviso de rodizio na troca de carro
+        logger.warning(f"Aviso de Centro Expandido nao calculado: {e}")
 
     cfg_motoristas = config.get("motoristas", {})
     catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))
@@ -1252,6 +1350,12 @@ def roteirizar_selecionados(data_alvo: date, service_ids: list[int],
     # Data automática não é agendamento do cliente (marca; não anda a data aqui).
     from datas_automaticas import marcar_datas_automaticas
     marcar_datas_automaticas(selecionados)
+    # Retornando (editar rota enviada, 10/11): no carro do motorista, so entra em rota depois do /retornos.
+    import pedidos_retornando
+    selecionados, retornando = pedidos_retornando.separar_retornando(selecionados)
+    if retornando and not selecionados and not pausados:
+        raise ValueError("Os pedidos selecionados estão retornando ao galpão e só entram em rota "
+                         "depois do recebimento em /retornos.")
     if pausados and not selecionados:
         raise ValueError("Os pedidos selecionados estão em espera a pedido do cliente "
                          "e não entram em rota. Retome a espera antes de roteirizar.")
@@ -1293,6 +1397,7 @@ def roteirizar_selecionados(data_alvo: date, service_ids: list[int],
         "pedidos_roteirizados": sum(len(r["sublote"]) for r in rascunhos_novos),
         "pedidos_indisponiveis": indisponiveis,
         "pedidos_pausados": len(pausados),
+        "pedidos_retornando": len(retornando),
     }
 
 
@@ -1393,6 +1498,18 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict],
     ids_em_rascunho = {p["service_id"] for r in rascunhos for p in r["paradas"]}
     novos = [p for p in paradas if p.get("service_id") not in ids_em_rascunho]
     indisponiveis = len(paradas) - len(novos)
+    # Retornando (editar rota enviada, 10/11): volta como nao colocado, com o motivo.
+    import pedidos_retornando
+    retornando_ids = pedidos_retornando.retornando_por_servico([{"id": p.get("service_id")} for p in novos])
+    retornando_info = []
+    if retornando_ids:
+        retornando_info = [{"codigo": p.get("codigo", ""),
+                            "motivo": f"Retornando — no carro de {retornando_ids[p['service_id']].get('motorista_nome') or '?'}"}
+                           for p in novos if p.get("service_id") in retornando_ids]
+        novos = [p for p in novos if p.get("service_id") not in retornando_ids]
+    if not novos and retornando_info:
+        return {"alocados": [], "orfaos": [r["codigo"] for r in retornando_info], "retornando": retornando_info,
+                "pedidos_indisponiveis": indisponiveis, "rotas_afetadas": 0}
     if not novos:
         raise ValueError("Todos os pedidos selecionados já estão em algum rascunho. Atualize a página.")
 
@@ -1528,9 +1645,11 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict],
 
     if orfaos:
         logger.info(f"Incrementar rascunhos: {len(orfaos)} pedido(s) sem rascunho compatível: {orfaos}")
+    orfaos = orfaos + [r["codigo"] for r in retornando_info]
     return {
         "alocados": alocados,
         "orfaos": orfaos,
+        "retornando": retornando_info,
         "pedidos_indisponiveis": indisponiveis,
         "rotas_afetadas": len(rotas_afetadas),
     }
@@ -1859,7 +1978,7 @@ def limpar_disponibilidade_dia(agent_id: int, data_alvo: date) -> dict:
     return {"removido": removido}
 
 
-def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:
+def cancelar_pedido(service_id: int, rascunho_id: int | None = None, usuario: str = "") -> dict:
     """
     Cancela DE VERDADE um pedido na VUUPT (PUT /services/{id}/cancel --
     VuuptClient.cancelar_servico_oficial) direto da tela de planejamento --
@@ -1875,9 +1994,12 @@ def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:
       - Numa rota já enviada (rascunho ENVIADO, rota de verdade na
         VUUPT): rascunhos_rota.preparar_cancelamento_de_parada tira o
         serviço da rota de verdade primeiro (ou cancela a rota inteira,
-        se for a última parada) -- só quando ela ainda não iniciou
-        deslocamento (checado ao vivo); só então o serviço é cancelado
-        de fato.
+        se for a última parada e nada começou) -- só se o PEDIDO ainda
+        não começou (checado ao vivo; desde 10/11 vale com a rota já
+        rodando); só então o serviço é cancelado de fato. Não vira
+        Retornando -- exceto se o pedido já saiu de rota INICIADA e o
+        cancelamento falhar: aí ele segue vivo no carro e vira Retornando
+        (retornando_se_cancelamento_falhou), com o aviso junto do erro.
 
     NÃO mexe em nada na Stokki -- só cancela na VUUPT (roteirização).
     Cancelar o pedido na Stokki de verdade continua manual, fora dessa
@@ -1892,6 +2014,7 @@ def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:
     if rascunho_id and not rascunho:
         return {"ok": False, "erro": f"Rascunho {rascunho_id} não encontrado."}
 
+    preparo = {}
     if rascunho and rascunho["status"] == rascunhos_rota.STATUS_ENVIADO:
         preparo = rascunhos_rota.preparar_cancelamento_de_parada(rascunho_id, service_id, token)
         if not preparo["ok"]:
@@ -1901,6 +2024,10 @@ def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:
     try:
         vuupt.cancelar_servico_oficial(service_id)
     except VuuptAPIError as e:
+        # pedido ja saiu de rota iniciada mas nao cancelou: esta no carro -> Retornando
+        aviso = rascunhos_rota.retornando_se_cancelamento_falhou(preparo, service_id, str(e), usuario)
+        if aviso:
+            return {"ok": False, "erro": f"{e} — {aviso}", "aviso": aviso}
         return {"ok": False, "erro": str(e)}
     _ressincronizar(vuupt, [service_id])
 
