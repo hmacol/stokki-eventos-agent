@@ -154,6 +154,10 @@ export async function trocarPin(pinAtual: string, pinNovo: string): Promise<Moto
 }
 
 export const eu = () => chamar<Motorista>('/eu');
+/** Diagnóstico (17/11): a API loga o caminho de cada chamada; o erro de envio
+ * de foto vai junto pra aparecer no log do servidor (antes só no Perfil). */
+export const diagnostico = (texto: string) =>
+  chamar<Motorista>(`/eu?diag=${encodeURIComponent(texto.slice(0, 300))}`).then(() => undefined, () => undefined);
 /** Meus dados (Hugo, 08/10): telefone, e-mail, PIX e placa valem na hora. */
 export const atualizarMeusDados = (dados: MeusDados) =>
   chamar<{ motorista: Motorista; mudancas: MudancaCadastro[] }>('/eu', { metodo: 'PUT', corpo: dados });
@@ -191,7 +195,9 @@ export const cancelarPedagio = (rotaId: number, pedagioId: number) =>
 // nativo lê o arquivo direto do disco, sem timeout de JS, e devolve o
 // status HTTP como qualquer chamada.
 async function enviarArquivo<T>(caminho: string, uri: string, campos: Record<string, string>, repetiu = false, campoArquivo = 'arquivo'): Promise<T> {
-  const info = await FileSystem.getInfoAsync(uri).catch(() => ({ exists: false }));
+  const info = await FileSystem.getInfoAsync(uri).catch((e) => {
+    throw new ErroRede(`leitura da foto: ${(e as Error).message}`);
+  });
   if (!info.exists) {
     // Foto sumiu do cache do aparelho: não adianta insistir (vira "recusado" na fila)
     throw new ErroApi(410, 'A foto não está mais no aparelho -- registre de novo.');
