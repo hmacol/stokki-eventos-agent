@@ -111,6 +111,8 @@ import wms_pedidos
 import wms_etiqueta_produto
 import wms_caixas
 import wms_pilotos
+import wms_separacao
+import wms_etiqueta_volume
 import wms_fila_impressao
 import wms_faltas_recebimento
 import acesso_telas
@@ -6346,6 +6348,238 @@ def wms_etiqueta_produto_pdf():
 # Fila de impressão das etiquetas de caixa (computador da equipe): o celular
 # do galpão pede as etiquetas (wms_caixas.criar_caixas enfileira) e quem está
 # no computador com a térmica abre o PDF e marca como impresso.
+# ── Galpão: separação em onda, conferência cega e volumes (17/11) ─────────────
+# Regras em wms_separacao.py (sem Flask). No app do galpão (/wms) o operador é o do
+# PIN; as telas do escritório ficam em /ondas, FORA de /wms, pra o login do galpão
+# não enxergar (a regex da tela "wms" em acesso_telas pega tudo sob /api/wms/).
+
+def _sep_chamar(funcao):
+    """Abre a conexão, chama funcao(conn) e devolve JSON; erro de regra vira 400."""
+    conn = wms_separacao.conectar()
+    try:
+        return jsonify(funcao(conn))
+    except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
+def _sep_corpo() -> dict:
+    corpo = request.get_json(silent=True)
+    return corpo if isinstance(corpo, dict) else {}
+
+
+@app.route("/api/wms/separacao/painel")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_separacao_painel():
+    """O que o app do galpão mostra nas abas Separar, Conferir e Volumes."""
+    com_caixas = _wms_ids_caixas()
+
+    def _f(conn):
+        soltos = []
+        for emb in sorted(com_caixas):
+            soltos += wms_separacao.pedidos_para_onda(conn, emb)
+        return {"ondas": wms_separacao.ondas_vivas(conn, com_caixas), "pedidos_soltos": soltos,
+                "conferir": wms_separacao.pedidos_para_conferir(conn, com_caixas),
+                "volumes": wms_separacao.pedidos_para_volumes(conn, com_caixas)}
+    return _sep_chamar(_f)
+
+
+@app.route("/api/wms/separacao/ondas/pedido/<int:pedido_id>", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_onda_de_um_pedido(pedido_id):
+    op = _wms_exige_operador()
+    return _sep_chamar(lambda conn: {"onda_id": wms_separacao.onda_de_um_pedido(conn, pedido_id, op)})
+
+
+@app.route("/api/wms/separacao/ondas/<int:onda_id>")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_separacao_onda(onda_id):
+    return _sep_chamar(lambda conn: wms_separacao.detalhe_onda(conn, onda_id))
+
+
+@app.route("/api/wms/separacao/ondas/<int:onda_id>/iniciar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_onda_iniciar(onda_id):
+    op = _wms_exige_operador()
+
+    def _f(conn):
+        wms_separacao.iniciar_onda(conn, onda_id, op)
+        return wms_separacao.detalhe_onda(conn, onda_id)
+    return _sep_chamar(_f)
+
+
+@app.route("/api/wms/separacao/ondas/<int:onda_id>/separar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_separar(onda_id):
+    op = _wms_exige_operador()
+    corpo = _sep_corpo()
+
+    def _f(conn):
+        _wms_exige_uuid_do_aparelho(corpo.get("uuid"))
+        return wms_separacao.separar_caixa(conn, onda_id, corpo.get("serial", ""), qtd_un=corpo.get("qtd_un"),
+                                           uuid=corpo.get("uuid") or "", operador=op)
+    return _sep_chamar(_f)
+
+
+@app.route("/api/wms/separacao/ondas/<int:onda_id>/distribuir", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_distribuir(onda_id):
+    op = _wms_exige_operador()
+    corpo = _sep_corpo()
+
+    def _f(conn):
+        _wms_exige_uuid_do_aparelho(corpo.get("uuid"))
+        return wms_separacao.distribuir_caixa(conn, onda_id, corpo.get("codigo", ""), qtd_un=corpo.get("qtd_un"),
+                                              uuid=corpo.get("uuid") or "", operador=op)
+    return _sep_chamar(_f)
+
+
+@app.route("/api/wms/separacao/ondas/<int:onda_id>/fechar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_fechar(onda_id):
+    op = _wms_exige_operador()
+    mesmo_faltando = bool(_sep_corpo().get("mesmo_faltando"))
+    return _sep_chamar(lambda conn: wms_separacao.fechar_separacao(conn, onda_id, op, mesmo_faltando=mesmo_faltando))
+
+
+@app.route("/api/wms/separacao/itens/<int:item_id>/devolver", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_devolver(item_id):
+    op = _wms_exige_operador()
+    motivo = str(_sep_corpo().get("motivo") or "")
+    return _sep_chamar(lambda conn: wms_separacao.devolver_item(conn, item_id, operador=op, motivo=motivo))
+
+
+@app.route("/api/wms/separacao/conferir/<int:pedido_id>/iniciar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_conferir_iniciar(pedido_id):
+    op = _wms_exige_operador()
+    return _sep_chamar(lambda conn: wms_separacao.iniciar_conferencia(conn, pedido_id, op))
+
+
+@app.route("/api/wms/separacao/conferencias/<int:conferencia_id>/bipe", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_conferir_bipe(conferencia_id):
+    _wms_exige_operador()
+    corpo = _sep_corpo()
+
+    def _f(conn):
+        _wms_exige_uuid_do_aparelho(corpo.get("uuid"))
+        return wms_separacao.conferir_bipe(conn, conferencia_id, corpo.get("codigo", ""),
+                                           qtd_un=corpo.get("qtd_un"), uuid=corpo.get("uuid") or "")
+    return _sep_chamar(_f)
+
+
+@app.route("/api/wms/separacao/conferencias/<int:conferencia_id>/fechar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_conferir_fechar(conferencia_id):
+    _wms_exige_operador()
+    return _sep_chamar(lambda conn: wms_separacao.fechar_conferencia(conn, conferencia_id))
+
+
+@app.route("/api/wms/separacao/pedidos/<int:pedido_id>/volumes", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_volumes(pedido_id):
+    op = _wms_exige_operador()
+    total = _sep_corpo().get("total")
+    return _sep_chamar(lambda conn: wms_separacao.fechar_volumes(conn, pedido_id, total, op))
+
+
+@app.route("/api/wms/separacao/pedidos/<int:pedido_id>/volumes/<int:numero>/reimprimir", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_volume_reimprimir(pedido_id, numero):
+    op = _wms_exige_operador()
+    return _sep_chamar(lambda conn: wms_separacao.reimprimir_volume(conn, pedido_id, numero, op.get("nome", "")))
+
+
+# Escritório: montar onda, decidir falta e acompanhar (níveis total e operador).
+
+def _ondas_embarcadores() -> list:
+    """Embarcadores que operam por caixa (wms.pilotos): só eles têm onda."""
+    return [{"id": p["id"], "nome": p["nome"]} for p in wms_pilotos.pilotos(_carregar_config() or {}) if p["caixas"]]
+
+
+@app.route("/ondas")
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+def ondas():
+    return render_template("ondas.html", embarcadores=_ondas_embarcadores())
+
+
+@app.route("/api/ondas/pedidos")
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+def api_ondas_pedidos():
+    embarcador_id = request.args.get("embarcador_id", type=int)
+    data = (request.args.get("data_entrega") or "").strip() or None
+    if not embarcador_id or embarcador_id not in {e["id"] for e in _ondas_embarcadores()}:
+        return _wms_json_erro("Escolha um embarcador que opera por caixa.")
+
+    def _f(conn):
+        return {"datas": wms_separacao.datas_para_onda(conn, embarcador_id),
+                "pedidos": wms_separacao.pedidos_para_onda(conn, embarcador_id, data),
+                "ondas": wms_separacao.ondas_vivas(conn, {embarcador_id})}
+    return _sep_chamar(_f)
+
+
+@app.route("/api/ondas", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_ondas_montar():
+    corpo = _sep_corpo()
+    embarcador_id = corpo.get("embarcador_id")
+    if embarcador_id not in {e["id"] for e in _ondas_embarcadores()}:
+        return _wms_json_erro("Escolha um embarcador que opera por caixa.")
+    por = session.get("usuario") or ""
+    return _sep_chamar(lambda conn: {"onda_id": wms_separacao.montar_onda(
+        conn, embarcador_id, corpo.get("pedido_ids") or [], por)})
+
+
+@app.route("/api/ondas/<int:onda_id>/cancelar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_ondas_cancelar(onda_id):
+    por = session.get("usuario") or ""
+
+    def _f(conn):
+        wms_separacao.cancelar_onda(conn, onda_id, por)
+        return {"ok": True}
+    return _sep_chamar(_f)
+
+
+@app.route("/api/ondas/andamento")
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+def api_ondas_andamento():
+    embarcador_id = request.args.get("embarcador_id", type=int)
+    return _sep_chamar(lambda conn: {"pedidos": wms_separacao.andamento(conn, embarcador_id)})
+
+
+@app.route("/api/ondas/faltas")
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+def api_ondas_faltas():
+    return _sep_chamar(lambda conn: {"faltas": wms_separacao.faltas_pendentes(conn)})
+
+
+@app.route("/api/ondas/faltas/<int:pedido_id>/decidir", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_ondas_faltas_decidir(pedido_id):
+    corpo = _sep_corpo()
+    por = session.get("usuario") or ""
+    return _sep_chamar(lambda conn: wms_separacao.decidir_falta(
+        conn, pedido_id, corpo.get("decisao"), corpo.get("motivo"), por))
+
+
 _NIVEIS_FILA_ETIQUETAS = ("total", "operador", "expedicao")
 
 
@@ -6398,9 +6632,13 @@ def fila_etiquetas_pdf(impressao_id):
         if trabalho is None:
             abort(404, "Pedido de impressão não encontrado.")
         try:
-            pdf = wms_etiqueta_produto.gerar_pdf_caixas(
-                conn, trabalho["itens"], orientacao=orientacao, margem_mm=margem,
-                desloc_x_mm=dx, desloc_y_mm=dy)
+            if trabalho["tipo"] == "VOLUME":
+                # etiqueta 10x15 do pedido (17/11): outra impressora, sem a calibracao da 10x5
+                pdf = wms_etiqueta_volume.gerar_pdf_volumes(conn, trabalho["itens"])
+            else:
+                pdf = wms_etiqueta_produto.gerar_pdf_caixas(
+                    conn, trabalho["itens"], orientacao=orientacao, margem_mm=margem,
+                    desloc_x_mm=dx, desloc_y_mm=dy)
         except wms.ErroWMS as e:
             abort(400, str(e))
     finally:

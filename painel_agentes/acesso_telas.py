@@ -71,6 +71,7 @@ TELAS = [
     ("wms_estoque", "Estoque", "Galpão", [r"^/wms/estoque$", r"^/api/wms/(pedidos|pendencias|reservas-antigas)(/|$)",
                                           r"^/api/wms/produtos(/\d+/saldo)?$"]),
     ("fila_etiquetas", "Fila de etiquetas", "Galpão", [r"^/etiquetas/fila", r"^/api/etiquetas/fila"]),
+    ("ondas", "Ondas", "Galpão", [r"^/ondas$", r"^/api/ondas(/|$)"]),
     ("atendimento", "Atendimento", "Clientes", [r"^/atendimento(/|$)", r"^/api/atendimento/"]),
     ("adesao_portal", "Adesão ao portal", "Clientes", [r"^/adesao-portal$"]),
     ("motoristas", "Motoristas", "Motoristas", [r"^/motoristas$", r"^/api/motoristas(/|$)"]),
