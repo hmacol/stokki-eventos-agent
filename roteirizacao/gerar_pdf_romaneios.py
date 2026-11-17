@@ -25,9 +25,10 @@ os documentos):
      lido cai na DANFE e, sem ela, no dimension_3 do VUUPT dividido
      pelo fator_ponderado (o dimension_3 é a caixa NORMALIZADA, não a
      contagem real), marcado com * (não conferido). O cabeçalho mostra
-     o total real de caixas e a lotação = soma do dimension_3 ÷
-     capacidade do tipo de veículo do motorista (regras/tipo_veiculo),
-     em vermelho acima de 100%. Peso bruto vem da DANFE.
+     o total real de caixas. A lotação (soma do dimension_3 ÷
+     capacidade do tipo de veículo do motorista, regras/tipo_veiculo)
+     é interna: sai só no log, aviso acima de 100%. Peso bruto vem da
+     DANFE.
   2. Documentos emendados direto: NFs e depois boletos, pedido a pedido;
      por último os outros documentos que o cliente anexou ao pedido no
      portal (11/11, portal_cliente/anexos_pedido.py).
@@ -723,13 +724,10 @@ def _tabela_header_capa(draw: ImageDraw.ImageDraw, y: int) -> int:
 
 def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
                data_alvo: date, tem_canhoteira: bool,
-               transportadoras: list[str] | None = None,
-               lotacao: tuple[int, int] | None = None) -> list[Image.Image]:
+               transportadoras: list[str] | None = None) -> list[Image.Image]:
     """Capa em PAISAGEM: identidade Freshlog + resumo da rota + tabela
     com 1 linha por pedido (ordem de visita) mostrando embarcador,
-    cliente, endereço de entrega, caixas, peso e status de NF/boleto.
-    lotacao: (caixas normalizadas da rota, capacidade do veículo na mesma
-    unidade); None = sem motorista/veículo, a capa sai só com o total."""
+    cliente, endereço de entrega, caixas, peso e status de NF/boleto."""
     data_br = data_alvo.strftime("%d/%m/%Y")
     dia_semana = DIAS_SEMANA_PT[data_alvo.weekday()]
     nome_rota = rota.get("name") or f"Rota {rota.get('id')}"
@@ -743,20 +741,11 @@ def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
         draw.text((x, y + 56), valor, font=_fonte(30, True), fill=NAVY, anchor=anchor)
     _info(MARGEM, "DATA", f"{dia_semana}, {data_br}")
     _info(540, "MOTORISTA", _truncar(draw, nome_motorista, _fonte(30, True), 340))
-    # Total REAL de caixas (o que sobe no carro) e lotação pela caixa
-    # normalizada ÷ capacidade do veículo; acima de 100% sai em vermelho.
+    # Total REAL de caixas (o que sobe no carro). A lotação do carro NÃO
+    # aparece aqui: é informação interna (Hugo, 16/11), vai só pro log.
     total_caixas = _somar_volumes(itens)
-    texto_caixas = (total_caixas.replace(" (parcial)", "") + " caixas"
-                    + (" (parcial)" if "(parcial)" in total_caixas else ""))
-    rotulo_caixas, cor_rotulo, cor_caixas = "CAIXAS", CINZA_TXT, NAVY
-    if lotacao and lotacao[1]:
-        pct = round(100 * lotacao[0] / lotacao[1])
-        texto_caixas += f" · {pct}% da capacidade"
-        if lotacao[0] > lotacao[1]:
-            rotulo_caixas, cor_rotulo, cor_caixas = "CAIXAS · ACIMA DA CAPACIDADE", VERMELHO, VERMELHO
-    draw.text((910, y + 18), rotulo_caixas, font=_fonte(20, cor_rotulo == VERMELHO), fill=cor_rotulo, anchor="ls")
-    draw.text((910, y + 56), _truncar(draw, texto_caixas, _fonte(30, True), 630),
-              font=_fonte(30, True), fill=cor_caixas, anchor="ls")
+    _info(910, "CAIXAS", total_caixas.replace(" (parcial)", "") + " caixas"
+          + (" (parcial)" if "(parcial)" in total_caixas else ""))
     _info(A4_PAISAGEM[0] - MARGEM, "PEDIDOS", str(len(itens)), anchor="rs")
     avisos = []
     if tem_canhoteira:
@@ -1216,15 +1205,22 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
     # notificação de transportadoras.
     nomes_transportadoras = [nome_curto_transportadora(p) for p, _e in grupos_transportadora]
 
-    # Capa
+    # Lotação do carro (caixa normalizada ÷ capacidade do tipo de veículo):
+    # uso interno, só no log -- o motorista não vê (Hugo, 16/11).
     tipo_veiculo = _tipo_veiculo_da_rota(rota)
-    lotacao = ((sum(_caixas_normalizadas(s) for s in servicos), tipo_veiculo.volume_maximo_cx)
-               if tipo_veiculo else None)
+    if tipo_veiculo and tipo_veiculo.volume_maximo_cx:
+        normalizadas = sum(_caixas_normalizadas(s) for s in servicos)
+        pct = round(100 * normalizadas / tipo_veiculo.volume_maximo_cx)
+        (logger.warning if normalizadas > tipo_veiculo.volume_maximo_cx else logger.info)(
+            f"  lotacao {rota.get('name') or rota.get('id')}: {normalizadas} caixas normalizadas / "
+            f"{tipo_veiculo.volume_maximo_cx} ({tipo_veiculo.codigo}) = {pct}%"
+            + (" -- ACIMA DA CAPACIDADE" if normalizadas > tipo_veiculo.volume_maximo_cx else ""))
+
+    # Capa
     for pagina in _paginas_pillow(
             gerar_capa(rota, itens, nome_motorista, data_alvo,
                        tem_canhoteira=bool(entregas_canhoteira),
-                       transportadoras=nomes_transportadoras,
-                       lotacao=lotacao),
+                       transportadoras=nomes_transportadoras),
             buffers_vivos):
         writer.add_page(pagina)
 

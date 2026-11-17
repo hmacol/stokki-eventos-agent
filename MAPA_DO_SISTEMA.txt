@@ -992,7 +992,8 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            Saída: roteirizacao/dados/romaneios/<data>/.
  atualizar_volumes_conferidos.py  Volume conferido na Stokki dos pedidos das rotas do dia
                           (03h50) -> tabela volumes_conferidos; a capa do romaneio mostra
-                          essas caixas e a lotação (normalizada ÷ capacidade do veículo).
+                          essas caixas; a lotação (normalizada ÷ capacidade do veículo)
+                          fica só no log do romaneio, o motorista não vê.
 documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
  avisar_motoristas_rotas.py  Texto WhatsApp/e-mail + confirmações.
  sincronizar_respostas_confirmacao.py  Puxa respostas da página pública.

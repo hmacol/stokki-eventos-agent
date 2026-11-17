@@ -87,7 +87,8 @@ class VolumesDoPedido(unittest.TestCase):
 
 class RomaneioUsaConferido(unittest.TestCase):
     """montar_pdf_rota: caixas do pedido = conferido (nao o dimension_3
-    despoderado) e lotacao = normalizada / capacidade do veiculo."""
+    despoderado); a lotacao (normalizada / capacidade do veiculo) vai so
+    pro log, nunca pra capa."""
 
     def _montar(self, conferidos, tipo):
         servicos = [
@@ -100,38 +101,42 @@ class RomaneioUsaConferido(unittest.TestCase):
         capturado = {}
 
         def capa(rota, itens, *a, **kw):
-            capturado["itens"], capturado["lotacao"] = itens, kw.get("lotacao")
+            capturado["itens"], capturado["kw"] = itens, kw
             return [gpr._pagina_branca(gpr.A4_PAISAGEM)[0]]
 
         with tempfile.TemporaryDirectory() as pasta, \
                 patch.object(gpr.volumes_conferidos, "carregar", return_value=conferidos), \
                 patch.object(gpr, "_tipo_veiculo_da_rota", return_value=tipo), \
                 patch.object(gpr, "carregar_catalogo_transportadoras", return_value=None), \
-                patch.object(gpr, "gerar_capa", side_effect=capa):
+                patch.object(gpr, "gerar_capa", side_effect=capa),                 self.assertLogs(gpr.logger, "INFO") as logs:
+            gpr.logger.info("inicio")
             gpr.montar_pdf_rota({"name": "Rota #1", "id": 1, "agent_id": 5}, servicos, {}, {999: "EMB"},
                                 {999: 3.0}, "MOTORISTA", date(2026, 11, 16), Path(pasta) / "r.pdf")
+        capturado["log"] = [m for m in logs.output if "lotacao" in m]
         return capturado
 
     def test_conferido_e_lotacao(self):
         c = self._montar({1: (12, "conferencia"), 2: (30, "nfe")}, tipo_por_codigo("FIORINO"))
         self.assertEqual([(i["volumes"], i["volumes_conferidos"]) for i in c["itens"]], [(12, True), (30, False)])
-        self.assertEqual(c["lotacao"], (126, 100))     # 36 + 90 normalizadas / Fiorino 100
+        # 36 + 90 normalizadas / Fiorino 100: so no log, como aviso
+        self.assertEqual(len(c["log"]), 1)
+        self.assertTrue(c["log"][0].startswith("WARNING"))
+        self.assertIn("126 caixas normalizadas / 100 (FIORINO) = 126% -- ACIMA", c["log"][0])
+        self.assertNotIn("lotacao", c["kw"])
 
     def test_sem_leitura_cai_no_que_valia_antes(self):
         c = self._montar({}, None)
         self.assertEqual([(i["volumes"], i["volumes_conferidos"]) for i in c["itens"]], [(12, False), (30, False)])
-        self.assertIsNone(c["lotacao"])
+        self.assertEqual(c["log"], [])
 
 
 class CapaDesenha(unittest.TestCase):
-    def test_capa_com_e_sem_lotacao(self):
+    def test_capa_desenha(self):
         item = {"posicao": 1, "codigo": "PS-1", "embarcador": "EMB", "cliente": "C", "endereco": "Rua A",
                 "volumes": 12, "volumes_conferidos": False, "peso": None, "nfs": "", "tem_nf": False,
                 "tem_boleto": False}
-        for lotacao in (None, (126, 100), (78, 100)):
-            paginas = gpr.gerar_capa({"name": "Rota #1", "id": 1}, [item], "M", date(2026, 11, 16),
-                                     False, None, lotacao=lotacao)
-            self.assertEqual(len(paginas), 1)
+        paginas = gpr.gerar_capa({"name": "Rota #1", "id": 1}, [item], "M", date(2026, 11, 16), False, None)
+        self.assertEqual(len(paginas), 1)
 
 
 if __name__ == "__main__":
