@@ -47,6 +47,7 @@ import logging
 import re
 import sys
 import time
+from datetime import date, datetime
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent
@@ -70,7 +71,9 @@ logger = logging.getLogger("sincronizar_pedidos_wms")
 # baixa -- feita pelo expedir_pedidos.py quando o pedido passa por rota da
 # Vuupt e, pra quem sai por fora dela, pela varredura do fim desta rodada
 # (_varrer_candidatos).
-STATUS_INTERESSANTES = ("Waiting for Carrier", "Separating", "Ready to Pack")
+# "Open" entrou em 17/11: a separacao comeca no nosso sistema antes de a Stokki
+# mexer no pedido (os itens do aberto vem de extrair_itens_tabela_pedido).
+STATUS_INTERESSANTES = ("Open", "Waiting for Carrier", "Separating", "Ready to Pack")
 MAX_PAGINAS_POR_STATUS = 4  # com o --limite padrao (50), ate 200 pedidos por status
 
 # Dono da trava cooperativa da sessao Stokki (stokki/sessao_uso.py). TTL
@@ -149,6 +152,42 @@ def _piloto_nome(config: dict) -> str:
     do pedido nao tiver o nome completo -- NUNCA usado pra decidir se um
     pedido e do piloto (o nome vem truncado na listagem)."""
     return (config.get("wms", {}) or {}).get("embarcador_piloto", "MARIA DOLORES").strip().upper()
+
+
+def _parse_data(texto) -> date | None:
+    limpo = re.sub(r"<[^>]+>", "", str(texto or "")).strip()
+    for formato in ("%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(limpo[:10], formato).date()
+        except ValueError:
+            continue
+    return None
+
+
+def calcular_data_entrega(data_expedicao, destino: dict | None) -> tuple[str, str]:
+    """
+    Data de entrega do pedido que ainda nao tem agendamento (regra do Hugo, 17/11):
+    a data de expedicao lancada na Stokki, tirada de fim de semana/feriado e
+    empurrada pro proximo dia de visita quando a regiao do destino tem dia fixo.
+    Devolve (AAAA-MM-DD, nome da regiao que empurrou) ou ('', '') sem data.
+    Nunca levanta: sem a regra da regiao, vale a data de expedicao.
+    """
+    d = _parse_data(data_expedicao)
+    if d is None:
+        return "", ""
+    regiao = ""
+    try:
+        from regras import feriados
+        from roteirizacao import regioes_dia_fixo
+        d = feriados.rolar_para_dia_util(d)
+        dest = destino or {}
+        endereco = "{}, {} - {}, {}".format(dest.get("endereco") or "", dest.get("cidade") or "",
+                                             str(dest.get("uf") or "").upper(), dest.get("cep") or "")
+        d, regra = regioes_dia_fixo.ajustar_data_por_dia_fixo({"address": endereco}, d)
+        regiao = (regra or {}).get("regiao") or ""
+    except Exception as e:  # noqa: BLE001 -- data sem ajuste e melhor que pedido sem data
+        logger.warning("Data de entrega sem ajuste de regiao (%s): %s", data_expedicao, e)
+    return d.isoformat(), regiao
 
 
 def _stkkc_id_da_linha(linha) -> str | None:
@@ -456,7 +495,17 @@ def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste:
                 res["erros"] += 1
                 continue
 
-            itens = stokki_pedidos.extrair_itens_do_pedido(html)
+            # De qual tabela os itens vem: pedido novo usa a tabela do pedido
+            # (#example1, existe desde o aberto); pedido que ja foi gravado pela
+            # tabela Produto|EAN|Quantidade continua nela -- as linhas das duas
+            # nao se correspondem e trocar no meio embaralharia as reservas.
+            gravado = conn.execute("SELECT fonte_itens FROM wms_pedidos WHERE id_stokki = ?",
+                                   (int(id_pedido),)).fetchone()
+            itens, fonte_itens = [], ""
+            if gravado is None or gravado["fonte_itens"] == "PEDIDO":
+                itens, fonte_itens = stokki_pedidos.extrair_itens_tabela_pedido(html), "PEDIDO"
+            if not itens and (gravado is None or gravado["fonte_itens"] == ""):
+                itens, fonte_itens = stokki_pedidos.extrair_itens_do_pedido(html), ""
             if not itens:
                 logger.warning("Pedido %s sem itens legiveis -- pulando.", id_pedido)
                 res["erros"] += 1
@@ -464,6 +513,10 @@ def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste:
 
             detalhe = stokki_pedidos._parsear_pagina_detalhe(html, id_pedido)
             embarcador = ((detalhe.get("cliente") or {}).get("nome") or piloto_nome).strip().upper()
+            destino = detalhe.get("local_entrega") or detalhe.get("destino") or {}
+            data_expedicao = _parse_data(linha.get("expedition_date") if isinstance(linha, dict) else "")
+            data_entrega, regiao = calcular_data_entrega(
+                data_expedicao.isoformat() if data_expedicao else "", destino)
 
             try:
                 pedido_id = wms_pedidos.registrar_pedido(conn, {
@@ -471,6 +524,15 @@ def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste:
                     "codigo_ps": codigo_ps,
                     "embarcador": embarcador,
                     "situacao": status,
+                    "embarcador_id": int(piloto_id),
+                    "fonte_itens": fonte_itens,
+                    "data_expedicao": data_expedicao.isoformat() if data_expedicao else "",
+                    "data_entrega_calc": data_entrega,
+                    "regiao_dia_fixo": regiao,
+                    "destinatario": destino.get("nome") or "",
+                    "endereco_destino": destino.get("endereco") or "",
+                    "cidade": destino.get("cidade") or "",
+                    "uf": destino.get("uf") or "",
                 }, itens)
                 r = wms_pedidos.reservar_pedido(conn, pedido_id)
                 conn.commit()

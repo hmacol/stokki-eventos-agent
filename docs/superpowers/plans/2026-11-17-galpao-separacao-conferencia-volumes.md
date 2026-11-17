@@ -15,12 +15,15 @@
 - Teste de segunda 23/11 com a **MOMBAK** (`#stkkc-22`, 4 produtos, todos com EAN). Maria Dolores (`#stkkc-48`) entra terça ou quarta.
 - A MOMBAK fica etiquetada e endereçada **antes** de segunda. A etiquetagem da Maria Dolores (marca Nuu) acontece de segunda a quarta.
 - **Robô da Stokki fora.** A equipe repete o pedido na Stokki à mão.
-- Onda é montada **por embarcador** (uma onda nunca mistura embarcadores).
+- Onda é montada **por embarcador** (uma onda nunca mistura embarcadores) e filtrada também por **data de entrega** (17/11, à noite).
 
 ## Recorte proposto pelo Claude (o Hugo pode trocar)
 
 - Sem etiqueta avulsa de fracionamento (C8 da spec). Pedido que pede menos que a caixa: o separador bipa a caixa e digita quanto tirou; a caixa fica no lugar com o resto. Na conferência o conferente bipa o EAN do produto e digita a quantidade solta.
-- Sem filtro por data de entrega na onda (H11): `wms_pedidos` não guarda a data. Filtro só por embarcador; o escritório marca os pedidos.
+- **Data de entrega do pedido (regra do Hugo, 17/11 à noite).** A rota ainda não existe quando a onda é montada, então:
+  1. o **agendamento** do pedido, quando existe (`nucleo_pedidos.agendamento_inicio`, que já está em horário local);
+  2. senão, a **data de expedição** lançada no pedido (`expedition_date` da listagem da Stokki), **ajustada pelos dias de entrega da região** do destinatário: `roteirizacao.regioes_dia_fixo.ajustar_data_por_dia_fixo` empurra para o próximo dia de visita quando a data cai fora dele, e `regras.feriados.rolar_para_dia_util` tira de fim de semana e feriado.
+  A tela mostra de onde a data veio (`agendamento` ou `expedicao`) e, quando a região empurrou, o nome dela. Pedido sem data de expedição aparece em "sem data". Data anterior a hoje não é recalculada: aparece como atrasada (escolha do Claude).
 - Acompanhamento = uma lista por pedido (etapa, quem, quando) na tela `/ondas`. Sem comparação com a Stokki.
 
 ## Global Constraints
@@ -120,7 +123,8 @@ A separação precisa começar no nosso sistema antes de a Stokki mexer no pedid
 - [ ] **Step 2:** implementar o leitor.
 - [ ] **Step 3:** `STATUS_INTERESSANTES` ganha `"Open"` na frente; em `rodar`, se `extrair_itens_do_pedido` vier vazio, tenta `extrair_itens_tabela_pedido`.
 - [ ] **Step 4:** teste do sync com Stokki falsa: pedido Open é registrado e reservado; o mesmo pedido relido em `Separating` não duplica itens.
-- [ ] **Step 5:** commit. Prova na VPS: `--modo-teste` mostra os Open dos pilotos.
+- [ ] **Step 5:** `calcular_data_entrega` + colunas novas em `wms_pedidos` (`_COLUNAS_NOVAS`), preenchidas no `registrar_pedido` a partir de `linha["expedition_date"]` e do bloco `destino` de `_parsear_pagina_detalhe`. Testes: data num dia de visita fica; fora do dia de visita vai para o próximo (ex.: Santos, que é terça, com expedição numa quarta); sábado rola para segunda; sem expedição devolve vazio; destino sem cidade não quebra.
+- [ ] **Step 6:** commit. Prova na VPS: `--modo-teste` mostra os Open dos pilotos.
 
 ### Task 3: Modelo de dados da separação
 
@@ -150,7 +154,9 @@ A separação precisa começar no nosso sistema antes de a Stokki mexer no pedid
 **Interfaces:**
 - Consumes: `wms_caixas.obter_caixa`, `wms_caixas._mudar_caixa`, `wms_pedidos.trocar_lote_reserva`, `wms_pedidos.reservar_pedido`.
 - Produces:
-  - `pedidos_para_onda(conn, embarcador_id: int) -> list[dict]`: pedidos do embarcador com `execucao = ''`, não baixados nem cancelados, com `estado_reserva` e a falta de cada um.
+  - A parte 2 da regra é calculada **no sync** (script da raiz, que enxerga `roteirizacao/` e `regras/`) e gravada em `wms_pedidos`: `data_expedicao`, `data_entrega_calc` (AAAA-MM-DD), `regiao_dia_fixo`, mais `destinatario`, `endereco_destino`, `cidade`, `uf`. Função: `sincronizar_pedidos_wms.calcular_data_entrega(data_expedicao: str, destino: dict | None) -> tuple[str, str]` = `(data ou '', regiao ou '')`. Entra na Task 2.
+  - `wms_separacao.data_entrega_do_pedido(conn, pedido: dict) -> tuple[str, str]`: `(AAAA-MM-DD ou '', fonte)`, fonte `agendamento | expedicao | ''`. Procura o agendamento em `nucleo_pedidos` pelo código normalizado (comparar `PS-1` e `#PS-1` em SQL com `replace(codigo, '#', '')`; não importar `nucleo` de dentro de `painel_agentes`); sem tabela `nucleo_pedidos` (banco de teste) cai direto na expedição.
+  - `pedidos_para_onda(conn, embarcador_id: int, data_entrega: str | None = None) -> list[dict]`: pedidos do embarcador com `execucao = ''`, não baixados nem cancelados, com `estado_reserva`, a falta de cada um, `data_entrega` e `fonte_data`. Com `data_entrega`, só os daquele dia; `data_entrega='sem'` traz os sem data.
   - `montar_onda(conn, embarcador_id: int, pedido_ids: list[int], criada_por: str) -> int`: recusa pedido de outro embarcador, pedido já em onda viva, lista vazia.
   - `onda_de_um_pedido(conn, pedido_id: int, operador: dict) -> int` (C9: o separador começa sozinho).
   - `iniciar_onda(conn, onda_id: int, operador: dict) -> None`: `ABERTA -> EM_SEPARACAO`, pedidos `SEPARANDO`.
@@ -158,6 +164,7 @@ A separação precisa começar no nosso sistema antes de a Stokki mexer no pedid
   - `separar_caixa(conn, onda_id: int, serial: str, *, qtd_un: float | None, uuid: str, operador: dict) -> dict`: `qtd_un=None` leva a caixa inteira (caixa vira `SEPARADA`); menor que a caixa registra a parte e a caixa fica onde está. Devolve a linha da caminhada atualizada e, em onda de um pedido, o `codigo_ps` (já distribui).
   - `cancelar_onda(conn, onda_id: int, por: str) -> None`: só sem nada separado.
 
+- [ ] **Step 0:** testes de `data_entrega_do_pedido`: agendamento vence a expedição; sem agendamento usa `data_entrega_calc`; sem nada devolve `('', '')`; banco sem `nucleo_pedidos` não quebra.
 - [ ] **Step 1:** testes do caminho bom: onda com 2 pedidos da MOMBAK, caminhada soma os dois, separar caixa inteira e parte de caixa, onda de um pedido já distribui.
 - [ ] **Step 2:** testes do Review Focus 1, 2 e 5: mesmo `uuid` duas vezes devolve o mesmo e conta uma; caixa de outro embarcador, de produto fora da onda, `IMPRESSA`, já `SEPARADA`; quantidade acima do que a onda ainda pede daquele produto; duas conexões separando a mesma caixa (só uma vence).
 - [ ] **Step 3:** teste de lote trocado: caixa do mesmo produto com lote diferente do reservado é aceita e a reserva é trocada (D6); se não houver reserva pendente daquele produto, recusa.
@@ -247,10 +254,10 @@ Abas: **Separar** (substitui a atual quando o embarcador usa caixas; a antiga se
 
 **Interfaces:**
 - `GET /ondas` (`requer_auth(niveis=("total", "operador"))`)
-- `GET /api/ondas/pedidos?embarcador_id=`, `POST /api/ondas` (`{embarcador_id, pedido_ids}`), `POST /api/ondas/<id>/cancelar`
+- `GET /api/ondas/pedidos?embarcador_id=&data_entrega=`, `POST /api/ondas` (`{embarcador_id, pedido_ids}`), `POST /api/ondas/<id>/cancelar`
 - `GET /api/ondas/andamento?embarcador_id=`, `GET /api/ondas/faltas`, `POST /api/ondas/faltas/<pedido_id>/decidir`
 
-Três blocos: **Montar onda** (escolhe o embarcador, marca pedidos, vê quem está com falta de estoque, botão "Montar onda"), **Faltas esperando decisão** (o que faltou, quem conferiu, "Voltar para separação" / "Liberar parcial" com motivo), **Andamento** (por pedido: etapa, onda, quem separou, quem conferiu, volumes, horários).
+Três blocos: **Montar onda** (escolhe o embarcador e a data de entrega, com a contagem de pedidos por dia; marca pedidos, vê quem está com falta de estoque, botão "Montar onda"), **Faltas esperando decisão** (o que faltou, quem conferiu, "Voltar para separação" / "Liberar parcial" com motivo), **Andamento** (por pedido: etapa, onda, quem separou, quem conferiu, volumes, horários).
 
 - [ ] **Step 1:** testes de rota e de acesso (nível `galpao` leva 403 em `/ondas` e `/api/ondas/*`). **Step 2:** implementar. **Step 3:** ensaio na 8099. **Step 4:** commit.
 
@@ -264,4 +271,4 @@ Três blocos: **Montar onda** (escolhe o embarcador, marca pedidos, vê quem est
 
 ## Fora deste plano
 
-Robô R1/R2 na Stokki; etiqueta avulsa de fracionamento; filtro por data de entrega; comparação com a Stokki no acompanhamento; migração para o freshhub.
+Robô R1/R2 na Stokki; etiqueta avulsa de fracionamento; comparação com a Stokki no acompanhamento; migração para o freshhub.

@@ -719,6 +719,10 @@ Pilotos (17/11): lista wms.pilotos no config ({id, nome, caixas}); lida por pain
 Os três scripts abaixo rodam um piloto por vez; `caixas: true` liga o controle por caixa só daquele
 embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um piloto só).
  sincronizar_pedidos_wms.py      Reserva estoque (FEFO) para os pedidos.
+                                 Desde 17/11 le tambem os pedidos ABERTOS (itens pela tabela
+                                 #example1, stokki.pedidos.extrair_itens_tabela_pedido) e grava
+                                 em wms_pedidos a data de expedicao, a data de entrega ajustada
+                                 pelo dia da regiao (calcular_data_entrega) e o destino.
  sincronizar_recebimentos_wms.py Recebimentos viram entrada esperada.
  sincronizar_produtos_stokki.py  Catálogo -> wms_produtos.
  checar_caixas_wms.py            Caixas x saldo da Stokki (divergências; 06h40).

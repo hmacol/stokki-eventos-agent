@@ -129,7 +129,19 @@ CREATE TABLE IF NOT EXISTS wms_recebimento_enderecamentos (
 # precisa do ALTER TABLE -- feito uma vez por conexao, e barato.
 _COLUNAS_NOVAS = {
     "wms_pedidos": {"motivo_cancelamento": "TEXT NOT NULL DEFAULT ''",
-                    "saldo_negativo": "TEXT NOT NULL DEFAULT ''"},
+                    "saldo_negativo": "TEXT NOT NULL DEFAULT ''",
+                    # 17/11 (separacao no nosso sistema): de qual tabela da Stokki os itens
+                    # vieram ('' = Produto|EAN|Quantidade, 'PEDIDO' = #example1), a data de
+                    # expedicao lancada, a data de entrega ja ajustada pelo dia da regiao e
+                    # o destino (onda por data de entrega e etiqueta de volume).
+                    "fonte_itens": "TEXT NOT NULL DEFAULT ''",
+                    "data_expedicao": "TEXT NOT NULL DEFAULT ''",
+                    "data_entrega_calc": "TEXT NOT NULL DEFAULT ''",
+                    "regiao_dia_fixo": "TEXT NOT NULL DEFAULT ''",
+                    "destinatario": "TEXT NOT NULL DEFAULT ''",
+                    "endereco_destino": "TEXT NOT NULL DEFAULT ''",
+                    "cidade": "TEXT NOT NULL DEFAULT ''",
+                    "uf": "TEXT NOT NULL DEFAULT ''"},
     "wms_pedido_itens": {"falta_un": "REAL NOT NULL DEFAULT 0",
                          "removido_em": "TEXT NOT NULL DEFAULT ''"},
     "wms_recebimentos": {"stkkc_id": "TEXT NOT NULL DEFAULT ''",
@@ -138,6 +150,10 @@ _COLUNAS_NOVAS = {
                          "encerrado_por": "TEXT NOT NULL DEFAULT ''"},
     "wms_recebimento_itens": {"falta_un": "REAL NOT NULL DEFAULT 0"},
 }
+
+
+_CAMPOS_OPCIONAIS_PEDIDO = ("fonte_itens", "data_expedicao", "data_entrega_calc", "regiao_dia_fixo",
+                            "destinatario", "endereco_destino", "cidade", "uf")
 
 
 def _migrar(conn) -> None:
@@ -178,6 +194,23 @@ def resolver_item(conn, item: dict) -> dict:
     ean = _so_digitos(item.get("ean_linha"))
     sku = str(item.get("sku") or "").strip()
     qtd = float(item.get("qtd_embalagem") or 0)
+
+    # Linha da tabela #example1 (pedido aberto, 17/11): uma linha por SKU, ja na
+    # unidade do produto e sem EAN. So o SKU decide, dentro do embarcador do pedido
+    # (SKU repete entre embarcadores).
+    if item.get("unidade_do_produto"):
+        sql, args = "SELECT * FROM wms_produtos WHERE ativo = 1 AND sku = ? COLLATE NOCASE", [sku]
+        if item.get("embarcador_id"):
+            sql += " AND embarcador_id = ?"
+            args.append(int(item["embarcador_id"]))
+        rows = conn.execute(sql, args).fetchall() if sku else []
+        if len(rows) == 1:
+            return {"produto_id": rows[0]["id"], "qtd_un": qtd, "motivo_pendencia": ""}
+        if len(rows) > 1:
+            return {"produto_id": None, "qtd_un": None,
+                    "motivo_pendencia": f"SKU {sku} esta em {len(rows)} produtos ativos"}
+        return {"produto_id": None, "qtd_un": None,
+                "motivo_pendencia": f"Produto nao encontrado no catalogo (SKU {sku or '-'}, EAN -)"}
 
     if ean:
         for coluna, fator_caixa in (("dun", True), ("ean", False)):
@@ -314,9 +347,18 @@ def registrar_pedido(conn, pedido: dict, itens: list[dict]) -> int:
              pedido.get("situacao", ""), agora, agora))
         pedido_id = cur.lastrowid
 
+    # Campos opcionais (17/11): so grava o que quem chamou mandou, pra releitura sem
+    # o dado nao apagar o que ja estava la.
+    for campo in _CAMPOS_OPCIONAIS_PEDIDO:
+        if campo in pedido:
+            conn.execute(f"UPDATE wms_pedidos SET {campo} = ? WHERE id = ?",
+                         (str(pedido[campo] or ""), pedido_id))
+
     linhas_novas = [int(item["linha"]) for item in itens]
 
     for item in itens:
+        if item.get("unidade_do_produto") and pedido.get("embarcador_id"):
+            item = {**item, "embarcador_id": pedido["embarcador_id"]}
         r = resolver_item(conn, item)
         conn.execute("""
             INSERT INTO wms_pedido_itens (pedido_id, linha, sku, ean_linha, descricao, qtd_embalagem,
