@@ -761,6 +761,8 @@ def _com_cookie_aparelho(resp):
 def _avisos_da_pessoa(contadores: dict) -> list:
     """Avisos do perfil, sem os ignorados, com `destino` ja resolvido pelo
     url_for (prefixo do Caddy). Nunca derruba o poll do menu."""
+    if not avisos_pendencias.ATIVO:
+        return []
     try:
         pessoa = _pessoa_do_aviso()
         telas = g.get("telas_liberadas")

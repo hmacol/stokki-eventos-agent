@@ -127,6 +127,8 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  Aviso de pendências no topo (faixas) ...... painel_agentes/templates/_aviso_pendencias.html (incluído no <main> de base.html/base_mobile.html;
                                               ouve o evento do _menu_lateral_script), API /api/sidebar/contadores + /api/avisos/ignorar,
                                               tabela painel_avisos_ignorados, módulo painel_agentes/avisos_pendencias.py
+                                              ESCONDIDO desde 17/11 (avisos_pendencias.ATIVO = False: a API devolve
+                                              lista vazia; pra voltar, True + restart do painel-agentes)
  Login / níveis de acesso do painel ........ painel_agentes/painel_agentes.py (requer_auth)
  WMS do galpão ............................. painel_agentes/wms.py, wms_pedidos.py, wms_caixas.py
                                              (caixas com serial/eventos), wms_fila_impressao.py (fila de etiquetas)
