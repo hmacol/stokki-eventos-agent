@@ -1198,7 +1198,7 @@ def api_envios_analisar():
                         envios.guardar_mapa_planilha(conn, g.cliente["cnpj"], mapa_usado, _quem_envia())
                     rejeitados.extend(rej)
                     if avisos_plan:
-                        logger.info(f"analisar planilha alterada cnpj={g.cliente['cnpj']} arquivo={nome!r}: {' '.join(avisos_plan)}")
+                        logger.info(f"analisar planilha alterada cnpj={g.cliente['cnpj']} arquivo={nome!r}: {' '.join(avisos_plan)!r}")
                     token_plan = envios.guardar_temporario(conteudo, Path(nome).suffix.lstrip(".") or "xlsx")
                     for ped in pedidos:
                         rotulo = f"Pedido {ped['referencia']}"
@@ -1279,7 +1279,7 @@ def api_envios_analisar():
     logger.info(f"analisar cnpj={','.join(usadas)} por={_quem_envia()} validos={len(itens)} rejeitados={len(rejeitados)} "
                 f"planilhas={n_planilhas} anexos={len(anexos)}")
     for r in rejeitados[:20]:   # o motivo fica no log: em 17/11 só deu pra saber baixando a planilha
-        logger.info(f"analisar rejeitado arquivo={r.get('arquivo')!r} {r.get('rotulo') or ''}: {str(r.get('erro'))[:300]}")
+        logger.info(f"analisar rejeitado arquivo={r.get('arquivo')!r} {str(r.get('rotulo') or '')[:80]!r}: {str(r.get('erro'))[:300]!r}")
     return jsonify({"itens": itens, "rejeitados": rejeitados, "destinatarios": destinatarios, "anexos": anexos,
                     "indicar": indicar,
                     "regra_xml": cfg["regra_xml"], "regra_xml_rotulo": envios.REGRAS_XML.get(cfg["regra_xml"], ""),

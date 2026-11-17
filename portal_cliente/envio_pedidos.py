@@ -662,13 +662,14 @@ def _pares_de_itens(cabecalho: list, ocupadas: set[int] | None = None, avisos: l
         return []
     fora = set(ocupadas or ()) | set(skus.values()) | set(qtds.values())
     notas = []
+    nome = lambda j: _celula_texto(cabecalho[j])[:60]   # texto do cliente: curto no aviso e no log
     for k in sorted(skus):
         j = skus[k] + 1
         if k not in qtds and j < len(nomes) and nomes[j] and j not in fora:
             qtds[k] = j
             fora.add(j)
-            notas.append(f'Coluna "{_celula_texto(cabecalho[j])}" lida como a quantidade do item da coluna '
-                         f'"{_celula_texto(cabecalho[skus[k]])}" (o esperado era "Quantidade{k}").')
+            notas.append(f'Coluna "{nome(j)}" lida como a quantidade do item da coluna '
+                         f'"{nome(skus[k])}" (o esperado era "Quantidade{k}").')
     soltas = {}
     for j, n in enumerate(nomes):
         chave = _APELIDOS_NORMALIZADOS.get(n)
@@ -676,7 +677,7 @@ def _pares_de_itens(cabecalho: list, ocupadas: set[int] | None = None, avisos: l
             soltas.setdefault(chave, j)
     if len(soltas) == 2:
         skus[0], qtds[0] = soltas["sku"], soltas["quantidade"]
-        notas.append(f'Colunas "{_celula_texto(cabecalho[soltas["sku"]])}" e "{_celula_texto(cabecalho[soltas["quantidade"]])}" '
+        notas.append(f'Colunas "{nome(soltas["sku"])}" e "{nome(soltas["quantidade"])}" '
                      "lidas como um item do pedido, junto com os pares numerados.")
     if avisos is not None:
         avisos.extend(notas)
