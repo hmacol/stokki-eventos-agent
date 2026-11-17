@@ -112,6 +112,8 @@ export type Rota = {
   nome: string | null;
   provedor: 'VUUPT' | 'APP';
   editavel: boolean;
+  /** false = rota de dia futuro: o servidor so avisa que ela existe; abre as 00h do dia. */
+  liberada?: boolean;
   status: StatusRota;
   start_at: string | null;
   km_estimado: number | null;

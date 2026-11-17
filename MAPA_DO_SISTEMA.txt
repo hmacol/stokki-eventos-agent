@@ -1033,6 +1033,10 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            com nucleo_rotas.operada_app=1 e o sync não sobrescreve o que o app
                            registrou. Fila: python nucleo/ponte_vuupt.py --situacao.
                            NÃO fecha a rota na Vuupt (só os serviços).
+                           Liberação às 00h (16/11): rota de dia futuro vai pro app só como
+                           aviso ("Rota confirmada", sem paradas/nome) e recusa aceitar/recusar/
+                           iniciar/evento com 409; abre inteira às 00h do dia da rota
+                           (operacao.rota_liberada, vale pra qualquer provedor).
  comparar_pool.py          Sombra: pool Vuupt x núcleo.
  comparar_vuupt.py         Rotas Vuupt x núcleo.
  exportar_historico_vuupt.py  Exporta histórico da Vuupt para o GCS.
