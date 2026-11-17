@@ -58,6 +58,7 @@ if hasattr(sys.stdout, "reconfigure"):
 import yaml
 
 import wms_pedidos
+import wms_pilotos
 from stokki import pedidos as stokki_pedidos
 from stokki import sessao_uso
 from stokki.auth import StokkiSession
@@ -512,8 +513,11 @@ def main(argv=None) -> int:
         handlers=[logging.StreamHandler(),
                   logging.FileHandler(_RAIZ / "dados" / "wms_reservar_pedidos.log", encoding="utf-8")])
     config = _carregar_config()
-    piloto_id = (args.embarcador_id or _piloto_id(config)).strip()
-    piloto_nome = (args.embarcador or _piloto_nome(config)).strip().upper()
+    # Varios pilotos (17/11): lista wms.pilotos do config; --embarcador-id roda so aquele.
+    if args.embarcador_id:
+        alvos = [(args.embarcador_id.strip(), (args.embarcador or _piloto_nome(config)).strip().upper())]
+    else:
+        alvos = [(str(p["id"]), p["nome"]) for p in wms_pilotos.pilotos(config)]
 
     # Trava cooperativa da sessao Stokki (sessao unica -- ver stokki/sessao_uso.py
     # e o comentario "Correcao 2" no topo do arquivo). Adquire ANTES de abrir a
@@ -532,17 +536,27 @@ def main(argv=None) -> int:
         logger.warning("Stokki ocupada por '%s' -- desistindo desta rodada (proxima em 15 min).", ocupante)
         return 0
 
-    t0 = time.time()
+    erro = None
     try:
         conn = wms_pedidos.conectar()
         sess = StokkiSession(config)
         try:
-            res = rodar(conn, sess, piloto_nome, piloto_id, args.limite, args.modo_teste)
+            for piloto_id, piloto_nome in alvos:
+                t0 = time.time()
+                try:
+                    res = rodar(conn, sess, piloto_nome, piloto_id, args.limite, args.modo_teste)
+                except Exception as e:  # noqa: BLE001 -- um piloto ruim nao impede o seguinte
+                    logger.exception("Piloto %s (#stkkc-%s) falhou", piloto_nome, piloto_id)
+                    conn.rollback()
+                    erro = erro or e
+                    continue
+                logger.info("Piloto %s (#stkkc-%s): %s (%.0fs)", piloto_nome, piloto_id, res, time.time() - t0)
         finally:
             conn.close()
     finally:
         sessao_uso.liberar(DONO_TRAVA)
-    logger.info("Piloto %s (#stkkc-%s): %s (%.0fs)", piloto_nome, piloto_id, res, time.time() - t0)
+    if erro:
+        raise erro  # a rodada falha (OnFailure avisa), mas so depois de tentar todos
     return 0
 
 

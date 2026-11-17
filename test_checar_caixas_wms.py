@@ -116,6 +116,14 @@ class TestMain(Base):
             self.assertEqual(div.call_count, 1)
         env.assert_not_called()
 
+    def test_varios_pilotos_checa_so_quem_opera_por_caixa(self):
+        cfg = {"wms": {"alertas_email": ["ops@x.com"], "pilotos": [
+            {"id": 48, "nome": "A", "caixas": False}, {"id": 22, "nome": "B", "caixas": True},
+            {"id": 7, "nome": "C", "caixas": True}]}}
+        with mock.patch.object(chk.wms_caixas, "divergencias", return_value=[]) as div:
+            self.assertEqual(self.rodar(cfg), 0)
+        self.assertEqual([c.args[1] for c in div.call_args_list], [7, 22])
+
     def test_ligada_e_sem_divergencia_sai_0(self):
         with mock.patch.object(chk.email_utils, "enviar_email") as env:
             self.assertEqual(self.rodar(CONFIG), 0)

@@ -715,6 +715,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  integracao_chatwoot.py        LEGADO (Chatwoot abandonado).
 
  --- WMS (sincronizações com a Stokki, embarcador piloto) ---
+Pilotos (17/11): lista wms.pilotos no config ({id, nome, caixas}); lida por painel_agentes/wms_pilotos.py.
+Os três scripts abaixo rodam um piloto por vez; `caixas: true` liga o controle por caixa só daquele
+embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um piloto só).
  sincronizar_pedidos_wms.py      Reserva estoque (FEFO) para os pedidos.
  sincronizar_recebimentos_wms.py Recebimentos viram entrada esperada.
  sincronizar_produtos_stokki.py  Catálogo -> wms_produtos.

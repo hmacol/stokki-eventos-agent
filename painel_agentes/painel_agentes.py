@@ -110,6 +110,7 @@ import wms
 import wms_pedidos
 import wms_etiqueta_produto
 import wms_caixas
+import wms_pilotos
 import wms_fila_impressao
 import wms_faltas_recebimento
 import acesso_telas
@@ -5602,26 +5603,18 @@ def _wms_json_erro(e, status=400):
     return jsonify({"erro": str(e)}), status
 
 
-def _wms_piloto_id() -> int:
-    """Embarcador que controla estoque por caixa (config wms.embarcador_piloto_id, padrão 48)."""
-    try:
-        return int(((_carregar_config() or {}).get("wms") or {}).get("embarcador_piloto_id") or 48)
-    except (TypeError, ValueError):
-        return 48
-
-
-def _wms_caixas_ativo() -> bool:
-    """Chave wms.caixas_ativo (padrão desligada): liga a trava do movimento avulso,
-    o usa_caixas do Receber, o criar caixa e a aba Inventário. Ler, ativar, mover e
-    cancelar caixa funcionam com ela desligada (preparar o zerar e o mutirão)."""
-    valor = ((_carregar_config() or {}).get("wms") or {}).get("caixas_ativo", False)
-    return str(valor).strip().lower() in ("true", "1", "sim")
+def _wms_ids_caixas() -> set:
+    """Embarcadores que controlam estoque por caixa (config wms.pilotos com caixas: true;
+    sem a lista, wms.embarcador_piloto_id + wms.caixas_ativo). Pra eles valem a trava do
+    movimento avulso, o usa_caixas do Receber, o criar caixa e a aba Inventário. Ler,
+    ativar, mover e cancelar caixa funcionam pra qualquer um (preparar o zerar e o mutirão)."""
+    return wms_pilotos.ids_com_caixas(_carregar_config() or {})
 
 
 def _wms_bootstrap(conn) -> dict:
     return {
-        "piloto_id": _wms_piloto_id(),
-        "caixas_ativo": _wms_caixas_ativo(),
+        "caixas_embarcadores": sorted(_wms_ids_caixas()),
+        "caixas_ativo": bool(_wms_ids_caixas()),
         "operador": _wms_operador_atual(),
         "operadores": wms.listar_operadores(conn),
         "areas": wms.listar_areas(conn),
@@ -5798,9 +5791,9 @@ def _wms_exige_uuid_do_aparelho(uuid):
 
 def _wms_registrar(conn, item: dict, op: dict) -> dict:
     _wms_exige_uuid_do_aparelho(item.get("uuid"))
-    # Trava (só com wms.caixas_ativo): produto do piloto só muda de saldo por caixa (Inventário, Receber, Mover).
+    # Trava: produto de embarcador que opera por caixa só muda de saldo por caixa (Inventário, Receber, Mover).
     produto = wms.obter_produto(conn, int(item.get("produto_id") or 0))
-    if produto and _wms_caixas_ativo() and wms_caixas.produto_usa_caixas(produto, _wms_piloto_id()):
+    if produto and wms_caixas.produto_usa_caixas(produto, _wms_ids_caixas()):
         raise wms.ErroWMS("Produto controlado por caixa: use Inventario, Receber ou Mover caixa.")
     return wms.registrar_movimento(
         conn, tipo=item.get("tipo", ""), produto_id=int(item.get("produto_id") or 0),
@@ -6110,10 +6103,10 @@ def api_wms_recebimento(recebimento_id):
         # A unidade vem do produto do catálogo (wms_recebimento_itens não tem
         # essa coluna -- a tela mostrava "undefined" no rótulo da quantidade).
         itens = wms_pedidos.itens_do_recebimento(conn, recebimento_id)
-        piloto, ativo = _wms_piloto_id(), _wms_caixas_ativo()
+        com_caixas = _wms_ids_caixas()
         for it in itens:
             produto = wms.obter_produto(conn, int(it.get("produto_id") or 0))
-            it["usa_caixas"] = bool(ativo and produto and wms_caixas.produto_usa_caixas(produto, piloto))
+            it["usa_caixas"] = bool(produto and wms_caixas.produto_usa_caixas(produto, com_caixas))
         return jsonify({"recebimento": dict(rec), "itens": itens})
     finally:
         conn.close()
@@ -6123,7 +6116,8 @@ def api_wms_recebimento(recebimento_id):
 @requer_auth(niveis=_NIVEIS_WMS)
 @exige_mesma_origem
 def api_wms_caixas_criar():
-    if not _wms_caixas_ativo():
+    com_caixas = _wms_ids_caixas()
+    if not com_caixas:
         return _wms_json_erro("Caixas desligadas (wms.caixas_ativo).")
     op = _wms_exige_operador()
     body = request.get_json(force=True) or {}
@@ -6132,7 +6126,7 @@ def api_wms_caixas_criar():
         qtd_un = body.get("qtd_un")
         produto_id = int(body.get("produto_id") or 0)
         produto = wms.obter_produto(conn, produto_id)
-        if produto and not wms_caixas.produto_usa_caixas(produto, _wms_piloto_id()):
+        if produto and not wms_caixas.produto_usa_caixas(produto, com_caixas):
             return _wms_json_erro("Produto fora do piloto: use Movimentos.")
         r = wms_caixas.criar_caixas(
             conn, produto_id=produto_id, lote=body.get("lote", ""),

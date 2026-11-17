@@ -456,5 +456,33 @@ class TestTravaStokki(unittest.TestCase):
         liberar.assert_called_once_with(mod.DONO_TRAVA)
 
 
+class TestVariosPilotos(unittest.TestCase):
+    """17/11: wms.pilotos no config -- a rodada passa por todos, um por vez, na mesma trava."""
+
+    CFG = {"wms": {"pilotos": [{"id": 48, "nome": "Maria Dolores"}, {"id": 22, "nome": "Mombak", "caixas": True}]}}
+
+    def _main(self, argv, **rodar_kw):
+        with mock.patch("stokki.sessao_uso.adquirir", return_value=True),              mock.patch("stokki.sessao_uso.liberar") as liberar,              mock.patch("sincronizar_recebimentos_wms._carregar_config", return_value=self.CFG),              mock.patch("sincronizar_recebimentos_wms.wms_pedidos.conectar", return_value=mock.Mock()),              mock.patch("sincronizar_recebimentos_wms.StokkiSession"),              mock.patch("sincronizar_recebimentos_wms.rodar", **rodar_kw) as rodar_mock:
+            try:
+                codigo = mod.main(argv)
+            except RuntimeError as e:
+                codigo = e
+        liberar.assert_called_once_with(mod.DONO_TRAVA)
+        return codigo, [(c.args[3], c.args[2]) for c in rodar_mock.call_args_list]
+
+    def test_roda_um_por_piloto_na_ordem_do_config(self):
+        codigo, chamadas = self._main(["--limite", "5"], return_value={"lidos": 0})
+        self.assertEqual(codigo, 0)
+        self.assertEqual(chamadas, [("48", "MARIA DOLORES"), ("22", "MOMBAK")])
+
+    def test_embarcador_id_na_linha_de_comando_roda_so_aquele(self):
+        codigo, chamadas = self._main(["--embarcador-id", "22", "--embarcador", "mombak"], return_value={})
+        self.assertEqual((codigo, chamadas), (0, [("22", "MOMBAK")]))
+
+    def test_piloto_que_falha_nao_impede_o_seguinte_e_a_rodada_falha_no_fim(self):
+        codigo, chamadas = self._main([], side_effect=[RuntimeError("bug"), {"lidos": 0}])
+        self.assertIsInstance(codigo, RuntimeError)
+        self.assertEqual(len(chamadas), 2)
+
 if __name__ == "__main__":
     unittest.main()

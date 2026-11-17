@@ -189,8 +189,11 @@ def obter_caixa(conn, serial: str) -> dict | None:
     return d
 
 
-def produto_usa_caixas(produto: dict, piloto_id: int) -> bool:
-    return produto.get("embarcador_id") == piloto_id
+def produto_usa_caixas(produto: dict, embarcadores) -> bool:
+    """embarcadores: id ou colecao de ids dos pilotos que operam por caixa (wms_pilotos.ids_com_caixas)."""
+    if isinstance(embarcadores, int):
+        embarcadores = (embarcadores,)
+    return produto.get("embarcador_id") in embarcadores
 
 
 # ---------------------------------------------------------------------------
