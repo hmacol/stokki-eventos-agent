@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { AppState } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -8,6 +8,7 @@ import Constants from 'expo-constants';
 import { ProvedorSessao, useSessao } from '../src/sessao';
 import * as api from '../src/api';
 import * as fila from '../src/fila';
+import * as rascunho from '../src/rascunhoParada';
 import { cores } from '../src/tema';
 
 Notifications.setNotificationHandler({
@@ -43,6 +44,17 @@ function Guarda() {
     if (motorista?.trocar_pin && !emTrocaPin) router.replace('/trocar-pin');
     else if (motorista && emLogin) router.replace('/(tabs)/rotas');
   }, [pronto, motorista, segments, router]);
+
+  // O Android fechou o app com a câmera aberta na parada: ao reabrir,
+  // volta pra parada (uma vez por abertura) em vez de largar na lista.
+  const retomou = useRef(false);
+  useEffect(() => {
+    if (retomou.current || !motorista || motorista.trocar_pin || segments[0] !== '(tabs)') return;
+    retomou.current = true;
+    void rascunho.ler().then((r) => {
+      if (r?.cameraAberta) router.push(`/parada/${r.paradaId}?rota=${r.rotaId}`);
+    });
+  }, [motorista, segments, router]);
 
   useEffect(() => {
     // Com PIN provisório a API responde 403 em tudo: fila e push esperam a troca.
