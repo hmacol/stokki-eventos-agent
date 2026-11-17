@@ -4548,6 +4548,7 @@ def _filtros_tabela_pedidos() -> dict:
         "agent_id": request.args.get("motorista") or "",
         "zona": (request.args.get("zona") or "").strip(),
         "canhoto": (request.args.get("canhoto") or "").strip().lower(),
+        "documentos": (request.args.get("documentos") or "").strip().lower(),
         "q": (request.args.get("q") or "").strip(),
         "colunas": {c.chave: request.args.get(f"f_{c.chave}", "").strip()
                     for c in tabela_pedidos.COLUNAS if request.args.get(f"f_{c.chave}", "").strip()},

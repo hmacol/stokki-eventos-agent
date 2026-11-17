@@ -37,6 +37,7 @@ from nucleo.vuupt_agentes import (  # noqa: E402
     ErroVuupt, VuuptAgentes, base_operacional_mais_comum, gerar_email, mesmo_telefone,
 )
 from regras import motoristas_banco  # noqa: E402
+from regras.tipo_veiculo import tipo_por_codigo  # noqa: E402
 
 logger = logging.getLogger("nucleo.cadastro_motorista_link")
 
@@ -52,6 +53,7 @@ MAX_AGENTES_DIA = 10
 MSG_LIMITE_AGENTES = "limite diário de agentes novos atingido"
 # nao_enviado = canal em pausa ou teto do dia: o motorista ainda não recebeu o login
 BOAS_VINDAS_DE_NOVO = ("falhou", "indeterminado", "nao_enviado")
+PEDIDO_GRUPO_DE_NOVO = ("falhou", "nao_enviado")
 AVISO_GRUPO_DE_NOVO = ("falhou", "nao_enviado")
 # Quem vem pelo link entra como esporádico; o "Fixo" pedido fica em
 # motoristas_cadastros.posicao e a equipe promove pelo Editar (decisão de 02/11).
@@ -90,6 +92,11 @@ def _avisar_motorista_padrao(cadastro_id, telefone, texto, config, modo_teste=Fa
     import notificar_whatsapp
     return notificar_whatsapp.avisar_motorista_boas_vindas(cadastro_id, telefone, texto, config,
                                                            modo_teste=modo_teste)
+
+
+def _avisar_atendimento_padrao(cadastro_id, texto, config, modo_teste=False):
+    import notificar_whatsapp
+    return notificar_whatsapp.avisar_atendimento_pedido_grupo(cadastro_id, texto, config, modo_teste=modo_teste)
 
 
 def _gravar(conn, cadastro_id: int, **campos) -> None:
@@ -253,7 +260,8 @@ def _tabela(conn, config: dict, c: dict) -> None:
 # ── Processamento ─────────────────────────────────────────────────────────────
 
 def processar(conn: sqlite3.Connection, config: dict, cadastro_id: int, *, vuupt=None, avisar_grupo=None,
-              avisar_motorista=None, agora: datetime | None = None, forcar: bool = False) -> dict:
+              avisar_motorista=None, avisar_atendimento=None, agora: datetime | None = None,
+              forcar: bool = False) -> dict:
     """Leva um cadastro enviado até o fim (ou até onde der). Devolve
     {"situacao": concluido | pendente | conflito | ocupado | ignorado, "erro": str | None}.
     `ignorado` = não é do link, não foi enviado ou já concluiu (nada é feito);
@@ -273,7 +281,8 @@ def processar(conn: sqlite3.Connection, config: dict, cadastro_id: int, *, vuupt
         return {"situacao": "ocupado", "erro": None}
     try:
         return _processar(conn, config, cadastro_id, vuupt or VuuptAgentes(config["vuupt_api"]["token"]),
-                          avisar_grupo or _avisar_grupo_padrao, avisar_motorista or _avisar_motorista_padrao, agora)
+                          avisar_grupo or _avisar_grupo_padrao, avisar_motorista or _avisar_motorista_padrao,
+                          avisar_atendimento or _avisar_atendimento_padrao, agora)
     finally:
         # só solta a própria trava (outra rodada pode ter assumido a vencida)
         conn.execute("UPDATE motoristas_cadastros SET processando_em = NULL WHERE id = ? AND processando_em = ?",
@@ -303,7 +312,7 @@ def _registrar_conflito(conn, cadastro_id: int, dono: int, tipo: str) -> None:
     _gravar(conn, cadastro_id, conflito_agent_id=dono, conflito_resolvido=0, conflito_tipo=tipo)
 
 
-def _processar(conn, config, cadastro_id, vuupt, avisar_grupo, avisar_motorista, agora) -> dict:
+def _processar(conn, config, cadastro_id, vuupt, avisar_grupo, avisar_motorista, avisar_atendimento, agora) -> dict:
     import notificar_whatsapp as nw
     c = buscar_cadastro(conn, cadastro_id)
     if _ignorar(c):   # concluído por outra rodada entre a leitura e a trava
@@ -379,6 +388,16 @@ def _processar(conn, config, cadastro_id, vuupt, avisar_grupo, avisar_motorista,
         _gravar(conn, cadastro_id, boas_vindas_situacao=bv)
         if bv in BOAS_VINDAS_DE_NOVO:
             return _pendente(conn, cadastro_id, f"boas-vindas: {bv}")
+    pg = c.get("pedido_grupo_situacao")
+    if bv == "enviado" and (not pg or pg in PEDIDO_GRUPO_DE_NOVO):
+        # o sistema nao cria o grupo (risco de banimento): pede ao Atendimento, ja com o nome certo
+        tipo = tipo_por_codigo(c["tipo_veiculo"])
+        texto = nw.texto_pedido_grupo_motorista(c["nome"], c["telefone"], tipo.nome if tipo else c["tipo_veiculo"],
+                                                c.get("refrigerado"))
+        pg = avisar_atendimento(cadastro_id, texto, config)
+        _gravar(conn, cadastro_id, pedido_grupo_situacao=pg)
+        if pg in PEDIDO_GRUPO_DE_NOVO:
+            return _pendente(conn, cadastro_id, f"pedido de grupo: {pg}")
     if aviso in AVISO_GRUPO_DE_NOVO:
         # canal em pausa, teto do dia ou gateway fora: sem isso o aviso se perderia ao concluir
         return _pendente(conn, cadastro_id, f"aviso do grupo: {aviso}")

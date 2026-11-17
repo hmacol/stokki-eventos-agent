@@ -462,11 +462,13 @@
   </div>
 </div>
 
-{% if filtros.canhoto == 'sem' and filtros.status in ('', 'ENTREGUE') %}{% set fila_ativa = 'sem_canhoto' %}
+{% if filtros.documentos == 'boleto_atrasado' %}{% set fila_ativa = 'boleto_atrasado' if not filtros.status and not filtros.canhoto else '' %}
+{% elif filtros.canhoto == 'sem' and filtros.status in ('', 'ENTREGUE') %}{% set fila_ativa = 'sem_canhoto' %}
 {% elif filtros.canhoto %}{% set fila_ativa = '' %}{% else %}{% set fila_ativa = filtros.status or 'total' %}{% endif %}
 <nav class="filas" id="filas" aria-label="Filas de pedidos">
-  {% for chave, rotulo, st, ca in [('total', 'Todos', None, None), ('IMPORTADO', 'Importados', 'IMPORTADO', None), ('sem_canhoto', 'Sem canhoto', None, 'sem'), ('INSUCESSO', 'Insucesso', 'INSUCESSO', None), ('ABERTO', 'Abertos', 'ABERTO', None), ('EM_ROTA', 'Em rota', 'EM_ROTA', None)] %}
-  <a class="fila" data-fila="{{ chave }}" href="{{ url_com(status=st, canhoto=ca, pagina=None) }}"{% if fila_ativa == chave %} aria-current="true"{% endif %}>{{ rotulo }} <span class="n"></span></a>
+  {# Boleto atrasado (16/11): o boleto entrou no sistema depois de a rota sair; sai da fila quando vai por e-mail #}
+  {% for chave, rotulo, st, ca, doc, dica in [('total', 'Todos', None, None, None, ''), ('IMPORTADO', 'Importados', 'IMPORTADO', None, None, ''), ('sem_canhoto', 'Sem canhoto', None, 'sem', None, ''), ('boleto_atrasado', 'Boleto atrasado', None, None, 'boleto_atrasado', 'O boleto chegou depois de a rota sair, então não foi com o motorista. Mande pelo Documentos por e-mail: o pedido sai desta fila.'), ('INSUCESSO', 'Insucesso', 'INSUCESSO', None, None, ''), ('ABERTO', 'Abertos', 'ABERTO', None, None, ''), ('EM_ROTA', 'Em rota', 'EM_ROTA', None, None, '')] %}
+  <a class="fila" data-fila="{{ chave }}" href="{{ url_com(status=st, canhoto=ca, documentos=doc, pagina=None) }}"{% if fila_ativa == chave %} aria-current="true"{% endif %}{% if dica %} title="{{ dica }}"{% endif %}>{{ rotulo }} <span class="n"></span></a>
   {% endfor %}
   <span id="visoes"></span>
   <button type="button" class="fila fila-nova" id="visao-salvar" title="Guarda os filtros de agora como um atalho aqui em cima (fica neste navegador)">+ Salvar esta visão</button>
@@ -481,6 +483,7 @@
 <form class="filtros" id="form-pedidos" method="get" action="{{ url_for('pedidos_tabela') }}">
   <input type="hidden" name="ordem" value="{{ ordem }}">
   <input type="hidden" name="direcao" value="{{ direcao }}">
+  {% if filtros.documentos == 'boleto_atrasado' %}<input type="hidden" name="documentos" value="boleto_atrasado">{% endif %}
   <div class="linha-busca">
     <input type="search" name="q" value="{{ filtros.q }}" placeholder="Buscar código, destinatário, CNPJ, endereço, embarcador, motorista…" aria-label="Busca livre">
     <button type="submit" class="botao primario">Filtrar</button>
@@ -539,6 +542,7 @@
   {% if filtros.data_tipo != 'referencia' and filtros.data_tipo in datas %}{% set _ = et.append(('Período por: ' ~ datas[filtros.data_tipo][0], url_com(data_tipo=None, pagina=None))) %}{% endif %}
   {% if filtros.status in status %}{% set _ = et.append(('Status: ' ~ formatar('status', filtros.status), url_com(status=None, pagina=None))) %}{% endif %}
   {% for v, rotulo in opcoes_canhoto if filtros.canhoto == v %}{% set _ = et.append((rotulo, url_com(canhoto=None, pagina=None))) %}{% endfor %}
+  {% if filtros.documentos == 'boleto_atrasado' %}{% set _ = et.append(('Boleto atrasado', url_com(documentos=None, pagina=None))) %}{% endif %}
   {% if filtros.fluxo in fluxos %}{% set _ = et.append(('Fluxo: ' ~ formatar('status', filtros.fluxo), url_com(fluxo=None, pagina=None))) %}{% endif %}
   {% for e in opcoes.embarcadores if filtros.sender_id|string == e.sender_id|string %}{% set _ = et.append(('Embarcador: ' ~ e.nome, url_com(embarcador=None, pagina=None))) %}{% endfor %}
   {% for m in opcoes.motoristas if filtros.agent_id|string == m.agent_id|string %}{% set _ = et.append(('Motorista: ' ~ m.nome, url_com(motorista=None, pagina=None))) %}{% endfor %}

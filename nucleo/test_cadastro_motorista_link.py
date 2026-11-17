@@ -129,6 +129,7 @@ class TestProcessador(unittest.TestCase):
         self.vuupt = VuuptFalsa(veiculos=[{"id": 1, "license_plate": "XYZ9A99", "operational_base_id": 77}])
         self.grupo = mock.Mock(return_value="enviado")
         self.motorista = mock.Mock(return_value="enviado")
+        self.atendimento = mock.Mock(return_value="enviado")
 
     def tearDown(self):
         self.conn.close()
@@ -144,11 +145,11 @@ class TestProcessador(unittest.TestCase):
 
     def _processar(self, cid, agora=AGORA):
         return proc.processar(self.conn, CONFIG, cid, vuupt=self.vuupt, avisar_grupo=self.grupo,
-                              avisar_motorista=self.motorista, agora=agora)
+                              avisar_motorista=self.motorista, avisar_atendimento=self.atendimento, agora=agora)
 
     def _retentar(self, agora=AGORA):
         return proc.retentar(self.conn, CONFIG, vuupt=self.vuupt, avisar_grupo=self.grupo,
-                             avisar_motorista=self.motorista, agora=agora)
+                             avisar_motorista=self.motorista, avisar_atendimento=self.atendimento, agora=agora)
 
     def _linha(self, cid):
         return dict(self.conn.execute("SELECT * FROM motoristas_cadastros WHERE id = ?", (cid,)).fetchone())
@@ -594,6 +595,36 @@ class TestProcessador(unittest.TestCase):
         self.assertEqual(self._linha(cid)["agent_id"], 5001)
         self.assertEqual(len(self._tabela(5001)), 1)
         self.assertEqual(self._linha(cid)["bd_motorista_id"], existente)
+
+    def test_pedido_de_grupo_sai_depois_das_boas_vindas(self):
+        cid = self._enviado(refrigerado=True, temp_min_c=2)
+        self.assertEqual(self._processar(cid)["situacao"], "concluido")
+        self.assertEqual(self.atendimento.call_count, 1)
+        self.assertEqual(self.atendimento.call_args.args[0], cid)
+        texto = self.atendimento.call_args.args[1]
+        self.assertIn("Nome do grupo: FRESH + João Santos - Fiorino (Refrigerado)", texto)
+        self.assertIn("https://wa.me/5511998765432", texto)
+        self.assertEqual(self._linha(cid)["pedido_grupo_situacao"], "enviado")
+
+    def test_pedido_de_grupo_falhou_retenta_sem_repetir_boas_vindas(self):
+        self.atendimento.side_effect = ["falhou", "enviado"]
+        cid = self._enviado()
+        r = self._processar(cid)
+        self.assertEqual((r["situacao"], r["erro"]), ("pendente", "pedido de grupo: falhou"))
+        self.assertEqual([x["situacao"] for x in self._retentar()], ["concluido"])
+        self.assertEqual(self.atendimento.call_count, 2)
+        self.assertEqual(self.motorista.call_count, 1)
+
+    def test_pedido_de_grupo_desligado_conclui(self):
+        self.atendimento.return_value = "desligado"
+        cid = self._enviado()
+        self.assertEqual(self._processar(cid)["situacao"], "concluido")
+
+    def test_sem_boas_vindas_enviadas_nao_pede_grupo(self):
+        self.motorista.return_value = "numero_sem_whatsapp"
+        cid = self._enviado()
+        self.assertEqual(self._processar(cid)["situacao"], "concluido")
+        self.atendimento.assert_not_called()
 
     def test_boas_vindas_falhou_retenta(self):
         self.motorista.side_effect = ["falhou", "enviado"]

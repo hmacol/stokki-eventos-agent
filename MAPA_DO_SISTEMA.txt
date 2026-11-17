@@ -105,6 +105,10 @@
                                              (documentos_processados + dados/xml_stokki), nada na Stokki. Rotas
                                              POST /api/pedidos/documentos/conferir e .../enviar, GET .../arquivo.
                                              Tabelas pedidos_documentos_envios e pedidos_documentos_destinos.
+                                             Fila "Boleto atrasado" (16/11, ?documentos=boleto_atrasado): boleto processado
+                                             depois de a rota sair (documentos_processados.processado_em > nucleo_rotas.
+                                             iniciada_em); sai da fila quando vai por e-mail. Regra em
+                                             nucleo/tabela_pedidos.py (_sql_boleto_atrasado), conta em contar_filas.
 Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/acoes_pedidos.py (rotas POST /api/pedidos/acao/reenvio, .../cancelar-vuupt, .../cancelar-stokki, .../endereco, .../agendar, .../checar-dia-fixo, .../marcar-entregue (multipart, helper _marcar_entregue_pelo_form da Torre), .../validar-lote-foto; GET .../comprovantes?codigo= + /pedidos/canhoto/vuupt/<checklist_id>.pdf + /pedidos/canhoto/manual/<PS-N>.pdf (leitura, canhoto Vuupt/manual/app); cancelar-stokki concluído registra o pedido na fila stokki_devolucoes (origem 'pedidos'; devolução de estoque);
                                              confere Vuupt na hora, Stokki pela trava sessao_uso)
  Vigia de pedidos abertos (estado/prazo) ... vigia/ (regras.py = prazos; tela /vigia)
@@ -171,10 +175,11 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  Cadastro de motorista pelo link ........... app.freshhub.com.br/motorista/cadastro (nucleo/api_motorista.py +
                                              nucleo/templates/cadastro_motorista.html) -> nucleo/cadastro_motorista_link.py
                                              (agente e veículo na Vuupt via nucleo/vuupt_agentes.py, linha em
-                                             bd_motoristas, aviso no grupo, boas-vindas pelo notificar_whatsapp.py);
+                                             bd_motoristas, aviso no grupo, boas-vindas pelo notificar_whatsapp.py
+                                             e, depois delas, pedido ao Atendimento pra criar o grupo do motorista);
                                              timer cadastro-motorista-link; ficha no painel /motoristas.
                                              Config: cadastro_motorista_link.{ativo, forcar_destino_whatsapp,
-                                             link_app_vuupt, max_agentes_dia (padrão 10)} e
+                                             atendimento_whatsapp, link_app_vuupt, max_agentes_dia (padrão 10)} e
                                              whatsapp_notificacoes.motoristas.teto_diario.
                                              Freios: POST /api/cadastro-link 5/IP/hora e 40/24 h contados no
                                              banco (motoristas_cadastros.ip_origem); documentos, situação e
@@ -1770,7 +1775,7 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
                              bd_motorista_id, conflito_* com conflito_tipo
                              telefone|placa, agente_criado/vehicle_criado = criados
                              por este cadastro), avisos (aviso_grupo_em,
-                             boas_vindas_situacao), ultimo_erro/tentativas e a trava
+                             boas_vindas_situacao, pedido_grupo_situacao), ultimo_erro/tentativas e a trava
                              processando_em/concluido_em.
    rascunhos_rota, rascunhos_parada  painel_agentes/rascunhos_rota.py  (coluna turno: NULL = manha, TARDE)
    painel_execucoes          painel_agentes/executor.py
@@ -2001,7 +2006,12 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
    boas-vindas ao motorista; enquanto cadastro_motorista_link.forcar_destino_
    whatsapp tiver número, as boas-vindas vão só pra ele ("" = envio real; chave
    AUSENTE = vale whatsapp_notificacoes.clientes.forcar_destino e, sem ele, não
-   manda). Telefone ou placa que já é de agente da Vuupt NÃO cria nada (a placa
+   manda). Com as boas-vindas enviadas sai também, no privado do número em
+   cadastro_motorista_link.atendimento_whatsapp, o pedido pra equipe criar À MÃO
+   o grupo "FRESH + <Primeiro Último> - <Carro> (Refrigerado|Seco)" (16/11: o
+   sistema não cria grupo, risco de banimento); mesma trava de piloto das
+   boas-vindas; sem a chave não manda e o cadastro conclui; cadastro já
+   concluído não recebe pedido retroativo. Telefone ou placa que já é de agente da Vuupt NÃO cria nada (a placa
    é conferida antes do POST do agente): vira conflito na ficha do /motoristas
    (usar o agente existente ou criar novo). Teto de agentes NOVOS por dia:
    cadastro_motorista_link.max_agentes_dia (padrão 10, contado por
