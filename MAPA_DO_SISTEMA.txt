@@ -131,6 +131,11 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                               lista vazia; pra voltar, True + restart do painel-agentes)
  Login / níveis de acesso do painel ........ painel_agentes/painel_agentes.py (requer_auth)
  WMS do galpão ............................. painel_agentes/wms.py, wms_pedidos.py, wms_caixas.py
+ Separação/conferência/volumes do galpão .. painel_agentes/wms_separacao.py (17/11: ondas por embarcador, bipe de
+                                             caixa, distribuição, conferência cega, falta, volumes; tabelas
+                                             wms_ondas, wms_onda_pedidos, wms_separacao_itens, wms_conferencias,
+                                             wms_conferencia_bipes, wms_decisoes_falta, wms_volumes). Plano:
+                                             docs/superpowers/plans/2026-11-17-galpao-separacao-conferencia-volumes.md
                                              (caixas com serial/eventos), wms_fila_impressao.py (fila de etiquetas)
                                              Spec: docs/superpowers/specs/2026-11-01-galpao-separacao-conferencia-etiquetagem-design.md
  Portal do cliente ......................... portal_cliente/app.py

@@ -14,7 +14,7 @@ import json
 
 import wms
 
-TIPOS = ("CAIXA",)
+TIPOS = ("CAIXA", "VOLUME")  # VOLUME (17/11): etiqueta 10x15 do pedido, itens = QR FV|PS|n|total
 TAMANHOS = ("10x5", "10x15")
 SITUACOES = ("PENDENTE", "IMPRESSO", "CANCELADO")
 

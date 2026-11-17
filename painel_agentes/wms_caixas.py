@@ -21,7 +21,11 @@ import wms_fila_impressao
 import wms_pedidos
 from wms import ErroWMS
 
-SITUACOES_CAIXA = ("IMPRESSA", "EM_ESTOQUE", "ABERTA", "EXPEDIDA", "CANCELADA")
+# SEPARADA/DISTRIBUIDA/CONFERIDA/DEVOLVIDA (17/11, wms_separacao.py): a caixa saiu da prateleira
+# pra um pedido mas continua no saldo da posicao ate a baixa da expedicao.
+SITUACOES_CAIXA = ("IMPRESSA", "EM_ESTOQUE", "ABERTA", "SEPARADA", "DISTRIBUIDA", "CONFERIDA", "DEVOLVIDA",
+                   "EXPEDIDA", "CANCELADA")
+NO_SALDO = ("EM_ESTOQUE", "ABERTA", "SEPARADA", "DISTRIBUIDA", "CONFERIDA", "DEVOLVIDA")
 MAX_CAIXAS = 200
 MAX_QTD_UN = 100000
 
@@ -394,6 +398,16 @@ def mover_caixa(conn, serial: str, destino: str, *, uuid: str, operador: dict | 
     if conn.execute("SELECT 1 FROM wms_caixa_eventos WHERE uuid = ?", (evento_uuid,)).fetchone():
         # Reenvio de um mover ja concluido: nada a fazer.
         return {"caixa": caixa, "duplicado": True, "movimento_uuid": uuid}
+    if caixa["situacao"] == "DEVOLVIDA":
+        # Caixa que voltou de um pedido (17/11, C13 da spec): bipar a posicao onde foi guardada
+        # devolve ela ao estoque. Ela nunca saiu do saldo da posicao antiga, entao guardar no
+        # mesmo lugar nao gera movimento; em outro lugar, segue como transferencia normal.
+        _mudar_caixa(conn, serial, de_situacoes=("DEVOLVIDA",), para="EM_ESTOQUE", posicao=None,
+                     evento_uuid=f"cx-{serial}-guardar-{uuid}", movimento_uuid=None, operador=operador,
+                     observacao="Devolvida guardada", manter_posicao=True)
+        caixa = _caixa_ou_erro(conn, serial)
+        if caixa["posicao"] == destino:
+            return {"caixa": caixa, "duplicado": False, "movimento_uuid": None}
     if caixa["situacao"] not in ("EM_ESTOQUE", "ABERTA"):
         raise ErroWMS(f"Caixa {serial} esta {caixa['situacao']} e nao pode ser movida.")
     ja = conn.execute("SELECT * FROM wms_movimentos WHERE uuid = ?", (uuid,)).fetchone()
@@ -545,8 +559,8 @@ def divergencias(conn, embarcador_id: int) -> list[dict]:
     for r in conn.execute(
             "SELECT c.posicao, c.produto_id, p.sku, c.lote, c.validade, SUM(c.qtd_un) AS q "
             "FROM wms_caixas c JOIN wms_produtos p ON p.id = c.produto_id "
-            "WHERE p.embarcador_id = ? AND c.situacao IN ('EM_ESTOQUE', 'ABERTA') "
-            "GROUP BY c.posicao, c.produto_id, c.lote, c.validade", (embarcador_id,)):
+            f"WHERE p.embarcador_id = ? AND c.situacao IN ({','.join('?' * len(NO_SALDO))}) "
+            "GROUP BY c.posicao, c.produto_id, c.lote, c.validade", (embarcador_id, *NO_SALDO)):
         k = (r["posicao"], r["produto_id"], r["lote"] or "", r["validade"] or "")
         d = chaves.setdefault(k, {"sku": r["sku"], "saldo": 0.0, "caixas": 0.0})
         d["caixas"] += float(r["q"] or 0)
