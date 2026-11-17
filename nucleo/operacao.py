@@ -27,7 +27,7 @@ import math
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
-from nucleo import banco, pedidos as nucleo_pedidos, ponte_vuupt, tempos, validacao_fotos
+from nucleo import banco, ofertas_rota_enviada, pedidos as nucleo_pedidos, ponte_vuupt, tempos, validacao_fotos
 from nucleo.rotas import registrar_evento
 
 # Passos da parada no app (Hugo, 26/08): DESLOCAMENTO ("Iniciar deslocamento",
@@ -127,7 +127,8 @@ def listar_rotas_motorista(conn: sqlite3.Connection, agent_id: int | None, de: d
         WHERE agent_id = ? AND data_rota BETWEEN ? AND ? AND status != ?
         ORDER BY data_rota, start_at, nome
     """, (agent_id, de.isoformat(), ate.isoformat(), banco.ROTA_CANCELADA)).fetchall()
-    return [montar_rota(conn, r) for r in rows]
+    escondidas = ofertas_rota_enviada.rotas_escondidas(conn, agent_id)   # recusou e a rota foi pros outros
+    return [montar_rota(conn, r) for r in rows if r["id"] not in escondidas]
 
 
 def montar_rota(conn: sqlite3.Connection, rota: sqlite3.Row) -> dict:
@@ -397,6 +398,9 @@ def aceitar_rota(conn: sqlite3.Connection, rota_id: int, agent_id: int, ocorrido
     _exigir_liberada(rota)
     if rota["status"] in (banco.ROTA_CANCELADA, banco.ROTA_CONCLUIDA):
         raise OperacaoInvalida(f"Rota já está {rota['status'].lower()}.", 409)
+    em_oferta = ofertas_rota_enviada.ao_aceitar(conn, rota, agent_id)
+    if em_oferta:
+        raise OperacaoInvalida(em_oferta, 409)
     if rota["status"] == banco.ROTA_PLANEJADA:
         conn.execute("UPDATE nucleo_rotas SET status = ?, atualizado_em = ? WHERE id = ?",
                      (banco.ROTA_ACEITA, banco.agora(), rota_id))
@@ -826,8 +830,12 @@ def _onda_aberta(elegibilidade: dict | None, agora_utc: str) -> bool:
 
 
 def listar_ofertas(conn: sqlite3.Connection, agent_id: int | None) -> dict:
-    if agent_id is None or not _tem_tabela(conn, "ofertas_rota"):
+    if agent_id is None:
         return {"abertas": [], "minhas": []}
+    # Rota enviada que ficou sem aceite (nucleo/ofertas_rota_enviada.py) entra na mesma lista.
+    sem_aceite = ofertas_rota_enviada.listar_para_motorista(conn, agent_id)
+    if not _tem_tabela(conn, "ofertas_rota"):
+        return sem_aceite
     hoje = date.today().isoformat()
     agora_utc = _agora_utc_iso()
     abertas, minhas = [], []
@@ -839,7 +847,7 @@ def listar_ofertas(conn: sqlite3.Connection, agent_id: int | None) -> dict:
         elif o["status"] == "ESCOLHIDA" and o["escolhido_por"] == agent_id:
             item["aplicada"] = o["aplicado_em"] is not None
             minhas.append(item)
-    return {"abertas": abertas, "minhas": minhas}
+    return {"abertas": sem_aceite["abertas"] + abertas, "minhas": sem_aceite["minhas"] + minhas}
 
 
 def escolher_oferta(conn: sqlite3.Connection, agent_id: int | None, rascunho_id: int, marketplace=None) -> dict:
@@ -855,6 +863,11 @@ def escolher_oferta(conn: sqlite3.Connection, agent_id: int | None, rascunho_id:
     Sem `marketplace` (dev/testes): claim atômico só no banco local."""
     if agent_id is None:
         raise OperacaoInvalida("Motorista sem agent_id -- não pode escolher rota.", 403)
+    if rascunho_id >= ofertas_rota_enviada.ID_BASE:      # rota enviada sem aceite: disputa so aqui
+        erro = ofertas_rota_enviada.escolher(conn, agent_id, rascunho_id - ofertas_rota_enviada.ID_BASE)
+        if erro:
+            raise OperacaoInvalida(erro, 409)
+        return listar_ofertas(conn, agent_id)
     o = conn.execute("SELECT * FROM ofertas_rota WHERE rascunho_id = ?", (rascunho_id,)).fetchone()
     elegibilidade = _elegibilidade(o, agent_id) if o else None
     if not elegibilidade:
@@ -912,6 +925,11 @@ def cancelar_escolha_oferta(conn: sqlite3.Connection, agent_id: int | None, rasc
     """Desiste da escolha pelo app. Só antes de a escolha ser aplicada no
     planejamento (aplicado_em). Com `marketplace`, cancela primeiro na
     página pública (dona da escolha) e espelha aqui."""
+    if agent_id is not None and rascunho_id >= ofertas_rota_enviada.ID_BASE:
+        erro = ofertas_rota_enviada.cancelar(conn, agent_id, rascunho_id - ofertas_rota_enviada.ID_BASE)
+        if erro:
+            raise OperacaoInvalida(erro, 409)
+        return listar_ofertas(conn, agent_id)
     if marketplace is not None:
         from nucleo.marketplace_remoto import SemConexaoMarketplace
         o = conn.execute("SELECT * FROM ofertas_rota WHERE rascunho_id = ?", (rascunho_id,)).fetchone()

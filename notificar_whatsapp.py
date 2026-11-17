@@ -206,6 +206,7 @@ NOMES_DAS_TAREFAS = {
     "notificar-transportadoras": "Aviso às transportadoras",
     "nucleo-sincronizar-servicos": "Atualização dos pedidos fora de rota",
     "nucleo-sincronizar-vuupt": "Atualização das rotas no app dos motoristas",
+    "ofertar-rotas-sem-aceite": "Oferta aos motoristas da rota que ficou sem aceite",
     "pipeline-horario": "Importação de pedidos de hora em hora",
     "ponte-vuupt": "Envio pra Vuupt do que o motorista fez no app",
     "reconciliar-retirada": "Conferência dos pedidos que o cliente retira",
