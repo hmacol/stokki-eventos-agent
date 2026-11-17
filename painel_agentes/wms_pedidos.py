@@ -141,7 +141,12 @@ _COLUNAS_NOVAS = {
                     "destinatario": "TEXT NOT NULL DEFAULT ''",
                     "endereco_destino": "TEXT NOT NULL DEFAULT ''",
                     "cidade": "TEXT NOT NULL DEFAULT ''",
-                    "uf": "TEXT NOT NULL DEFAULT ''"},
+                    "uf": "TEXT NOT NULL DEFAULT ''",
+                    # separacao no nosso sistema (wms_separacao.py): etapa do pedido, onda e
+                    # o id do embarcador (a onda e por embarcador)
+                    "embarcador_id": "TEXT NOT NULL DEFAULT ''",
+                    "execucao": "TEXT NOT NULL DEFAULT ''",
+                    "onda_id": "INTEGER"},
     "wms_pedido_itens": {"falta_un": "REAL NOT NULL DEFAULT 0",
                          "removido_em": "TEXT NOT NULL DEFAULT ''"},
     "wms_recebimentos": {"stkkc_id": "TEXT NOT NULL DEFAULT ''",
@@ -152,7 +157,7 @@ _COLUNAS_NOVAS = {
 }
 
 
-_CAMPOS_OPCIONAIS_PEDIDO = ("fonte_itens", "data_expedicao", "data_entrega_calc", "regiao_dia_fixo",
+_CAMPOS_OPCIONAIS_PEDIDO = ("embarcador_id", "fonte_itens", "data_expedicao", "data_entrega_calc", "regiao_dia_fixo",
                             "destinatario", "endereco_destino", "cidade", "uf")
 
 
@@ -435,6 +440,10 @@ def reservar_pedido(conn, pedido_id: int) -> dict:
     pedido = conn.execute("SELECT * FROM wms_pedidos WHERE id = ?", (pedido_id,)).fetchone()
     if pedido and pedido["estado_reserva"] in ("BAIXADO", "CANCELADO"):
         return {"estado": pedido["estado_reserva"], "reservas": 0, "pendencias": [], "ignorado": True}
+    # Pedido ja conferido/embalado no nosso sistema (17/11): as reservas dele sao o que foi
+    # bipado. Re-reservar aqui traria de volta o que o escritorio liberou como parcial.
+    if pedido and (dict(pedido).get("execucao") or "") in ("CONFERIDO", "EMBALADO"):
+        return {"estado": pedido["estado_reserva"], "reservas": 0, "pendencias": [], "ignorado": True}
     itens = conn.execute(
         "SELECT * FROM wms_pedido_itens WHERE pedido_id = ? AND removido_em = '' ORDER BY linha",
         (pedido_id,)).fetchall()
@@ -511,6 +520,13 @@ def cancelar_reservas(conn, pedido_id: int, motivo: str = "") -> int:
     conn.execute(
         "UPDATE wms_pedidos SET estado_reserva = 'CANCELADO', motivo_cancelamento = ?, atualizado_em = ? "
         "WHERE id = ?", (str(motivo or "")[:300], agora, pedido_id))
+    # O que ja estava separado pro pedido vira DEVOLVIDA e ele sai da onda (17/11). Falha aqui
+    # nao pode impedir o cancelamento da reserva.
+    try:
+        import wms_separacao
+        wms_separacao.ao_cancelar_pedido(conn, pedido_id)
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger(__name__).warning("ao_cancelar_pedido falhou (pedido %s): %s", pedido_id, e)
     return cur.rowcount
 
 
@@ -597,6 +613,12 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
         import wms_caixas
         wms_caixas.garantir_tabelas(conn)
         conn.commit()
+        try:  # banco que nunca abriu a separacao (17/11): cria as tabelas antes do laco
+            import wms_separacao
+            wms_separacao.garantir_tabelas(conn)
+        except Exception as e_sep:  # noqa: BLE001 -- a baixa segue pela ordem antiga
+            conn.rollback()
+            logging.getLogger(__name__).warning("garantir_tabelas da separacao falhou: %s", e_sep)
     except Exception as e_tab:  # noqa: BLE001
         conn.rollback()
         wms_caixas = None
@@ -657,9 +679,26 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
                 # BEGIN IMMEDIATE: leitura e escrita das caixas na mesma
                 # transacao (sem corrida com outra baixa ou com cancelar).
                 conn.execute("BEGIN IMMEDIATE")
-                wms_caixas.consumir_caixas(
-                    conn, posicao=r["posicao"], produto_id=r["produto_id"], lote=r["lote"],
-                    validade=r["validade"], qtd_un=r["quantidade_un"], movimento_uuid=mov["uuid"])
+                # Primeiro o que foi separado PARA este pedido naquela chave (17/11); o que
+                # sobrar (pedido que nao passou pela nossa separacao) segue a ordem antiga.
+                resto = r["quantidade_un"]
+                if not mov.get("duplicado"):
+                    try:
+                        import wms_separacao
+                        resto = wms_separacao.consumir_do_pedido(
+                            conn, pedido_id=pedido["id"], posicao=r["posicao"], produto_id=r["produto_id"],
+                            lote=r["lote"], validade=r["validade"], qtd_un=r["quantidade_un"],
+                            movimento_uuid=mov["uuid"])
+                    except Exception as e_sep:  # noqa: BLE001 -- sem a separacao, vale a ordem antiga
+                        conn.rollback()
+                        conn.execute("BEGIN IMMEDIATE")
+                        resto = r["quantidade_un"]
+                        logging.getLogger(__name__).warning(
+                            "consumir_do_pedido falhou (%s, reserva %s): %s", uuid, r["id"], e_sep)
+                if resto > 0.0004:
+                    wms_caixas.consumir_caixas(
+                        conn, posicao=r["posicao"], produto_id=r["produto_id"], lote=r["lote"],
+                        validade=r["validade"], qtd_un=resto, movimento_uuid=mov["uuid"])
                 conn.commit()
             except Exception as e_cx:  # noqa: BLE001
                 conn.rollback()
