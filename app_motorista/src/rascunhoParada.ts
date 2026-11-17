@@ -4,6 +4,7 @@
 // da parada grava aqui o que já foi preenchido; ao reabrir, o app volta
 // pra parada e recupera a foto (ImagePicker.getPendingResultAsync).
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system/legacy';
 
 const CHAVE = 'motorista.rascunho_parada.v1';
 const VALIDADE_MS = 12 * 60 * 60 * 1000;
@@ -30,6 +31,26 @@ export async function ler(): Promise<RascunhoParada | null> {
     if (!bruto) return null;
     const r = JSON.parse(bruto) as RascunhoParada;
     return Date.now() - r.salvoEm < VALIDADE_MS ? r : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Foto que a câmera gravou depois de `desdeMs` (17/11, Renato): quando o
+ * Android mata o app com a câmera aberta, o getPendingResultAsync volta
+ * vazio, mas o arquivo que a câmera preencheu continua na pasta de cache
+ * do ImagePicker. Devolve o mais novo com conteúdo, ou null. */
+export async function fotoDaCamera(desdeMs: number): Promise<string | null> {
+  try {
+    const pasta = `${FileSystem.cacheDirectory}ImagePicker/`;
+    let melhor: { uri: string; em: number } | null = null;
+    for (const nome of await FileSystem.readDirectoryAsync(pasta)) {
+      const info = await FileSystem.getInfoAsync(pasta + nome);
+      if (!info.exists || info.isDirectory || info.size === 0) continue;
+      const em = info.modificationTime * 1000;
+      if (em >= desdeMs - 5000 && (!melhor || em > melhor.em)) melhor = { uri: info.uri, em };
+    }
+    return melhor?.uri ?? null;
   } catch {
     return null;
   }

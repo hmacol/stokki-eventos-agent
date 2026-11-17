@@ -123,7 +123,8 @@ export default function RegistroParada() {
       if (salvo.cameraAberta) {
         const { chave, substituir } = salvo.cameraAberta;
         const pendente = await ImagePicker.getPendingResultAsync().catch(() => null);
-        const uri = pendente && 'assets' in pendente && !pendente.canceled ? pendente.assets[0]?.uri : null;
+        const uri = (pendente && 'assets' in pendente && !pendente.canceled ? pendente.assets[0]?.uri : null)
+          ?? await rascunho.fotoDaCamera(salvo.salvoEm);
         if (uri && !(fotosSalvas[chave] ?? []).includes(uri)) {
           fotosSalvas[chave] = substituir ? [uri] : [...(fotosSalvas[chave] ?? []), uri];
           setAvisosFoto((a) => ({ ...a, [chave]: 'Foto recuperada.' }));
