@@ -384,6 +384,40 @@ class TestApiMotorista(unittest.TestCase):
                          [{"agent_id": AGENT, "nome": "Teste"}, {"agent_id": 999, "nome": "Zé Outro"}])
         conn.close()
 
+    def test_rota_de_amanha_so_avisa_e_libera_a_meia_noite(self):
+        h = self._auth()
+        amanha = (date.today() + timedelta(days=1)).isoformat()
+        rota_id = self._rota_app(data=amanha)
+
+        lista = self.cli.get(f"/api/rotas?de={amanha}&ate={amanha}", headers=h).get_json()["rotas"]
+        self.assertEqual(len(lista), 1)
+        for r in (lista[0], self.cli.get(f"/api/rotas/{rota_id}", headers=h).get_json()):
+            self.assertFalse(r["liberada"])
+            self.assertEqual(r["paradas"], [])
+            self.assertIsNone(r["nome"])
+            self.assertEqual(r["total_paradas"], 0)
+            self.assertEqual(r["start_at"], f"{amanha} 07:00:00")
+            self.assertNotIn("km_estimado", r)
+        for acao in ("aceitar", "recusar", "iniciar"):
+            self.assertEqual(self.cli.post(f"/api/rotas/{rota_id}/{acao}", json={}, headers=h).status_code, 409, acao)
+        conn = banco.conectar()
+        parada_id = conn.execute("SELECT id FROM nucleo_paradas WHERE rota_id = ?", (rota_id,)).fetchone()["id"]
+        self.assertEqual(conn.execute("SELECT status FROM nucleo_rotas WHERE id = ?", (rota_id,)).fetchone()["status"], "PLANEJADA")
+        conn.close()
+        self.assertEqual(self.cli.post(f"/api/paradas/{parada_id}/eventos", json={"uuid": "u1", "tipo": "CHEGADA"}, headers=h).status_code, 409)
+
+        # Virou o dia: a mesma rota abre inteira.
+        class _Amanha(date):
+            @classmethod
+            def today(cls):
+                return date.fromisoformat(amanha)
+        from nucleo import operacao
+        with mock.patch.object(operacao, "date", _Amanha):
+            r = self.cli.get(f"/api/rotas/{rota_id}", headers=h).get_json()
+            self.assertTrue(r["liberada"])
+            self.assertEqual(len(r["paradas"]), 2)
+            self.assertEqual(self.cli.post(f"/api/rotas/{rota_id}/aceitar", json={}, headers=h).status_code, 200)
+
     def test_rota_vuupt_e_somente_leitura_mas_aceite_alimenta_confirmacao(self):
         h = self._auth()
         conn = banco.conectar()

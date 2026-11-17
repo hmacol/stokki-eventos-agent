@@ -267,6 +267,21 @@ def finalizar_rota(token: str, route_id: int) -> dict | None:
     return resp.json() if resp.text else None
 
 
+def comando_rota(token: str, route_id: int, acao: str) -> None:
+    """PUT /routes/{id}/accept | start (comandos do app, fora da doc). So
+    funcionam quando o agente da rota e o dono do token (403 nos outros)."""
+    resp = chamar_com_retry(requests.put, f"{API_BASE}/routes/{route_id}/{acao}", headers=_headers(token), timeout=30)
+    _verificar_resposta(resp)
+
+
+def trocar_agente_rota(token: str, route_id: int, agent_id: int) -> None:
+    """PUT /routes/{id} {"agent_id"}: troca o motorista sem mexer nas paradas.
+    Aceita ate com a rota "started"; rota "finished" nao troca mais."""
+    resp = chamar_com_retry(requests.put, f"{API_BASE}/routes/{route_id}", json={"agent_id": agent_id},
+                            headers=_headers(token), timeout=30)
+    _verificar_resposta(resp)
+
+
 def cancelar_rota(token: str, route_id: int, services_action: str = "keep") -> dict | None:
     """DELETE /routes/{id}/cancel. services_action: "keep" (mantém status
     dos serviços), "unassign" (desatribui), "cancel" (cancela os

@@ -7,6 +7,7 @@ grupo na mesma tela -- Marchef tem 10 CNPJs, Grupo Trigo 2 remetentes).
     py -3.11 -m unittest portal_cliente.test_grupos
 """
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -360,7 +361,53 @@ class RotasGrupoTest(_BancoTemporario):
                           data={"arquivos": (io.BytesIO(buf.getvalue()), "antiga.xlsx")})
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.get_json()["itens"], [])
-        self.assertIn("falta a coluna", r.get_json()["rejeitados"][0]["erro"])
+        # sem a coluna da empresa a planilha não é recusada: a tela pede pra indicar (16/11)
+        self.assertEqual(r.get_json()["rejeitados"], [])
+        self.assertEqual(r.get_json()["indicar"][0]["arquivo"], "antiga.xlsx")
+        self.assertIn("CNPJ da empresa (quem envia)", r.get_json()["indicar"][0]["faltando"])
+
+    def test_planilha_do_cliente_com_colunas_indicadas_na_tela(self):
+        """Planilha antiga + uma coluna com o CNPJ da empresa (16/11): a 1a
+        leitura devolve as colunas pra indicar, a 2a (com a escolha) lê, e a
+        escolha fica guardada pro login."""
+        self._ambiente_envio()
+        cab = ["Quem envia", "Nr Doc", "CNPJ", "Razão", "CEP", "Rua", "Nr", "Bairro", "Município", "UF", "Cod. item", "Qt"]
+        campos = ["empresa_cnpj", "referencia", "destinatario_doc", "destinatario_nome", "cep", "logradouro", "numero",
+                  "bairro", "cidade", "uf", "sku", "quantidade"]
+
+        def planilha(ref, empresa):
+            wb = openpyxl.Workbook()
+            wb.active.append(cab)
+            wb.active.append([empresa, ref, "98.765.432/0001-10", "Mercado Teste", "01310-100", "Av. Paulista", "1578",
+                              "Bela Vista", "São Paulo", "SP", "SKU-A", 10])
+            buf = io.BytesIO()
+            wb.save(buf)
+            return buf.getvalue()
+
+        def analisar(conteudo, **form):
+            r = self.cli.post("/api/envios/analisar", base_url=self.HTTPS, content_type="multipart/form-data",
+                              data={"arquivos": (io.BytesIO(conteudo), "minha.xlsx"), **form})
+            self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+            return r.get_json()
+
+        j = analisar(planilha("P-1", "48.654.566/0001-63"))
+        self.assertEqual((j["itens"], j["rejeitados"]), ([], []))
+        pedido = j["indicar"][0]
+        self.assertEqual([c["nome"] for c in pedido["colunas"]], cab)
+        self.assertEqual(pedido["campos"][0], {"chave": "empresa_cnpj", "rotulo": "CNPJ da empresa (quem envia)", "obrigatoria": True})
+
+        escolha = {"minha.xlsx": {"linha": pedido["linha"], "colunas": {k: i for i, k in enumerate(campos)}}}
+        j = analisar(planilha("P-1", "48.654.566/0001-63"), colunas=json.dumps(escolha))
+        self.assertEqual(j["indicar"], [])
+        self.assertEqual([(i["referencia"], i["empresa_cnpj"]) for i in j["itens"]], [("P-1", MEMBRO_A)])
+
+        j = analisar(planilha("P-2", PRINCIPAL))          # próxima planilha: sem indicar de novo
+        self.assertEqual([(i["referencia"], i["empresa_cnpj"]) for i in j["itens"]], [("P-2", PRINCIPAL)])
+        j = analisar(planilha("P-3", PRINCIPAL), indicar="1")   # botão "indicar colunas": pergunta mesmo já sabendo
+        self.assertEqual(j["itens"], [])
+        self.assertEqual(j["indicar"][0]["sugestao"]["referencia"], 1)
+        j = analisar(planilha("P-3", PRINCIPAL), colunas="isso nao e json")   # lixo no campo não derruba
+        self.assertEqual([i["referencia"] for i in j["itens"]], ["P-3"])
 
     def test_envios_na_empresa_do_grupo_escolhida(self):
         r, listar = self._listar_envios(headers={"X-Portal-Empresa": "48.654.566/0001-63"})

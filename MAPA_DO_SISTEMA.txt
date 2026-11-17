@@ -105,12 +105,17 @@
                                              (documentos_processados + dados/xml_stokki), nada na Stokki. Rotas
                                              POST /api/pedidos/documentos/conferir e .../enviar, GET .../arquivo.
                                              Tabelas pedidos_documentos_envios e pedidos_documentos_destinos.
+                                             Fila "Boleto atrasado" (16/11, ?documentos=boleto_atrasado): boleto processado
+                                             depois de a rota sair (documentos_processados.processado_em > nucleo_rotas.
+                                             iniciada_em); sai da fila quando vai por e-mail. Regra em
+                                             nucleo/tabela_pedidos.py (_sql_boleto_atrasado), conta em contar_filas.
 Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/acoes_pedidos.py (rotas POST /api/pedidos/acao/reenvio, .../cancelar-vuupt, .../cancelar-stokki, .../endereco, .../agendar, .../checar-dia-fixo, .../marcar-entregue (multipart, helper _marcar_entregue_pelo_form da Torre), .../validar-lote-foto; GET .../comprovantes?codigo= + /pedidos/canhoto/vuupt/<checklist_id>.pdf + /pedidos/canhoto/manual/<PS-N>.pdf (leitura, canhoto Vuupt/manual/app); cancelar-stokki concluído registra o pedido na fila stokki_devolucoes (origem 'pedidos'; devolução de estoque);
                                              confere Vuupt na hora, Stokki pela trava sessao_uso)
  Vigia de pedidos abertos (estado/prazo) ... vigia/ (regras.py = prazos; tela /vigia)
  Clientes que exigem agendamento (AGENDA) .. regras/clientes_agendamento.py; fila em
                                              marcar_clientes_agenda.py + tela /clientes-agenda
  Quem usa o portal / importa por lá ........ painel_agentes/adesao_portal.py (tela /adesao-portal)
+ Conta do embarcador no portal (criar, PIN) tela /embarcadores do painel (só total) ou portal_cliente/gerenciar_clientes.py
  Telas liberadas por usuário (personalizado) painel_agentes/acesso_telas.py (tela /acessos)
  Logins nominais (cadastro, nível, nome, equipe) painel_agentes/acesso_telas.py, tabela painel_usuarios (tela /acessos;
                                             equipe = lista fixa EQUIPES, obrigatória desde 25/10, só informativa)
@@ -170,10 +175,11 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  Cadastro de motorista pelo link ........... app.freshhub.com.br/motorista/cadastro (nucleo/api_motorista.py +
                                              nucleo/templates/cadastro_motorista.html) -> nucleo/cadastro_motorista_link.py
                                              (agente e veículo na Vuupt via nucleo/vuupt_agentes.py, linha em
-                                             bd_motoristas, aviso no grupo, boas-vindas pelo notificar_whatsapp.py);
+                                             bd_motoristas, aviso no grupo, boas-vindas pelo notificar_whatsapp.py
+                                             e, depois delas, pedido ao Atendimento pra criar o grupo do motorista);
                                              timer cadastro-motorista-link; ficha no painel /motoristas.
                                              Config: cadastro_motorista_link.{ativo, forcar_destino_whatsapp,
-                                             link_app_vuupt, max_agentes_dia (padrão 10)} e
+                                             atendimento_whatsapp, link_app_vuupt, max_agentes_dia (padrão 10)} e
                                              whatsapp_notificacoes.motoristas.teto_diario.
                                              Freios: POST /api/cadastro-link 5/IP/hora e 40/24 h contados no
                                              banco (motoristas_cadastros.ip_origem); documentos, situação e
@@ -996,7 +1002,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  cancelar_rotas_sem_motorista.py  15h45; só avisa rotas passadas sem baixa (28/10), não devolve.
  finalizar_rotas_entregues.py  23h30; finaliza na Vuupt (PUT /routes/{id}/finish) a rota iniciada
                            pelo motorista com tudo entregue (11/11). Rota nunca iniciada a
-                           Vuupt não deixa fechar pela conta: só sai no log.
+                           Vuupt não deixa fechar pela conta: só sai no log. Exceção (16/11):
+                           rota da Lalamove fecha pela troca de agente (passa pro agente do
+                           token, accept + start, devolve, finish).
  cancelar_servico.py       Cancela 1 serviço na Vuupt onde estiver (pool, rascunho,
                            rota enviada) fora do painel; sempre PUT /cancel. Usado
                            pelo portal. O Planejamento NÃO usa (escopo B, 06/10).
@@ -1047,6 +1055,10 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            com nucleo_rotas.operada_app=1 e o sync não sobrescreve o que o app
                            registrou. Fila: python nucleo/ponte_vuupt.py --situacao.
                            NÃO fecha a rota na Vuupt (só os serviços).
+                           Liberação às 00h (16/11): rota de dia futuro vai pro app só como
+                           aviso ("Rota confirmada", sem paradas/nome) e recusa aceitar/recusar/
+                           iniciar/evento com 409; abre inteira às 00h do dia da rota
+                           (operacao.rota_liberada, vale pra qualquer provedor).
  comparar_pool.py          Sombra: pool Vuupt x núcleo.
  comparar_vuupt.py         Rotas Vuupt x núcleo.
  exportar_historico_vuupt.py  Exporta histórico da Vuupt para o GCS.
@@ -1331,6 +1343,12 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                               desativa/reativa,
                               telas de cada um / nível personalizado,
                               caixa "Portal do cliente" = entra no /cliente/equipe)
+   /embarcadores              embarcadores_portal.html, rotas no painel_agentes.py (só total:
+                              conta do portal por embarcador de `interno` com sender_id;
+                              cria e reseta com PIN provisório mostrado na tela + e-mail REAL
+                              com o link de definir PIN pros e-mails do cadastro
+                              (gerenciar_clientes.enviar_convite), inativa/reativa e
+                              exclui; só clientes_portal, via portal_cliente/auth_cliente.py)
    /notificacoes              notificacoes.html + notificacoes_tela.py (só total: liga,
                               pilota ou desliga os envios a embarcador/transportadora;
                               geral, tipo, exceção, piloto, histórico, e-mails do
@@ -1474,6 +1492,14 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                            só no grupo; o modelo do grupo já vem com ela), o XML vai
                            pelo emitente e a lista junta todas as empresas. Rotas em
                            app.py: _grupo_sem_seletor / _empresa_do_envio.
+                           Colunas da planilha (16/11): faltando coluna obrigatória (ou pelo
+                           botão "Usar a minha planilha") a prévia devolve `indicar` e a
+                           tela abre a janela pra dizer qual coluna é cada campo
+                           (ColunasPorIndicar); a escolha fica por login em
+                           portal_mapa_planilha e vale pras próximas planilhas.
+                           Cabeçalho com pares numerados (Sku1 | Quantidade1 | Sku2 ...,
+                           planilha da Marchef): um pedido por linha, itens saem dos
+                           pares preenchidos (_pares_de_itens), sem precisar indicar.
  anexos_pedido.py          PDFs anexados ao pedido (prévia e lista): lê, sugere o
                            pedido, grava e registra pro romaneio quando sai o PS.
  endereco_entrega.py       Endereço de entrega escolhido na prévia: CEP com IBGE, última
@@ -1817,7 +1843,7 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
                              bd_motorista_id, conflito_* com conflito_tipo
                              telefone|placa, agente_criado/vehicle_criado = criados
                              por este cadastro), avisos (aviso_grupo_em,
-                             boas_vindas_situacao), ultimo_erro/tentativas e a trava
+                             boas_vindas_situacao, pedido_grupo_situacao), ultimo_erro/tentativas e a trava
                              processando_em/concluido_em.
                              Origem 'atualizacao' (16/11): ficha do link pessoal, bd_motorista_id sempre
                              preenchido, APROVADO ao concluir (rascunho = PENDENTE); a fila de aprovação do
@@ -2063,7 +2089,12 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
    boas-vindas ao motorista; enquanto cadastro_motorista_link.forcar_destino_
    whatsapp tiver número, as boas-vindas vão só pra ele ("" = envio real; chave
    AUSENTE = vale whatsapp_notificacoes.clientes.forcar_destino e, sem ele, não
-   manda). Telefone ou placa que já é de agente da Vuupt NÃO cria nada (a placa
+   manda). Com as boas-vindas enviadas sai também, no privado do número em
+   cadastro_motorista_link.atendimento_whatsapp, o pedido pra equipe criar À MÃO
+   o grupo "FRESH + <Primeiro Último> - <Carro> (Refrigerado|Seco)" (16/11: o
+   sistema não cria grupo, risco de banimento); mesma trava de piloto das
+   boas-vindas; sem a chave não manda e o cadastro conclui; cadastro já
+   concluído não recebe pedido retroativo. Telefone ou placa que já é de agente da Vuupt NÃO cria nada (a placa
    é conferida antes do POST do agente): vira conflito na ficha do /motoristas
    (usar o agente existente ou criar novo). Teto de agentes NOVOS por dia:
    cadastro_motorista_link.max_agentes_dia (padrão 10, contado por

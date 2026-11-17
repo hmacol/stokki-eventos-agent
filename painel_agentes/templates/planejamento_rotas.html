@@ -1716,6 +1716,14 @@
      leva pra aba Pool com a seleção (Criar rota, Roteirizar...). */
   .folha-mapa { display: none; }
   html.modo-mobile[data-aba="mapa"] body.tem-selecao-mapa .folha-mapa { display: flex; }
+  /* desktop (Hugo, 16/11): a mesma folha flutua no canto de baixo do
+     mapa (ultima coluna); "Mais acoes" some, as barras das colunas ja
+     estao a vista */
+  html:not(.modo-mobile) .layout-planejamento { position: relative; }
+  /* left/top/largura vêm do JS (posicionarFolhaDesktop): canto de baixo do #map */
+  html:not(.modo-mobile) body.tem-selecao-mapa .folha-mapa { display: flex; position: absolute; right: auto; bottom: auto; transform: translateY(-100%); max-height: 60vh; z-index: 5; }
+  html:not(.modo-mobile) .folha-mapa #folha-mais { display: none; }
+  @media print { .folha-mapa { display: none !important; } }
   .folha-mapa {
     position: fixed; left: 8px; right: 8px; bottom: calc(66px + env(safe-area-inset-bottom, 0px)); z-index: 75;
     flex-direction: column; gap: 8px; padding: 8px 10px 10px; max-height: 48vh;
@@ -3672,12 +3680,12 @@
       marker.serviceId = serviceId;
       marker.numero = idx + 1;
       marker.addListener("click", () => {
-        // celular, aba Mapa, rota ainda em rascunho: toque (des)seleciona
-        // pra mover pela folha (#folha-mapa); rota enviada segue só
-        // mostrando o balão
+        // rota ainda em rascunho (celular na aba Mapa; desktop desde
+        // 16/11): clique (des)seleciona pra mover pela folha
+        // (#folha-mapa); rota enviada segue só mostrando o balão
         const r = RASCUNHOS.find(x => x.id === rascunhoId);
         const li = document.querySelector(`#lista-rotas .item-parada[data-service-id="${serviceId}"]`);
-        if (MODO_MOBILE && PODE_EDITAR && document.documentElement.dataset.aba === "mapa" && r && r.status === "RASCUNHO" && li) {
+        if (PODE_EDITAR && (!MODO_MOBILE || document.documentElement.dataset.aba === "mapa") && r && r.status === "RASCUNHO" && li) {
           alternarSelecaoRota(serviceId, li);
           return;
         }
@@ -4680,7 +4688,8 @@
   // (vira alerta), arrastar pool→rota entre abas (vira "Adicionar à
   // rota…"). O resto da tela é o mesmo código do desktop.
   function iniciarModoMobile() {
-    if (!MODO_MOBILE) return;
+    // a folha de seleção do mapa vale também no desktop (16/11)
+    if (!MODO_MOBILE) { montarFolhaMapa(); return; }
     // coluna colapsada no desktop (persistida) esconderia o painel inteiro
     document.querySelectorAll(".coluna.colapsada").forEach(c => c.classList.remove("colapsada"));
     // contadores das abas espelham os da tela (pool muda sem reload no
@@ -4813,7 +4822,9 @@
         <button type="button" id="folha-tirar" title="Devolve as paradas de rota selecionadas pro pool (não cancela na VUUPT), igual ao &quot;Remover da rota&quot; do ⋯">Tirar da rota</button>
         <button type="button" id="folha-mais" title="Abre a aba Pool (ou Rotas) com a seleção: Criar rota, Roteirizar, endereço, agendar...">Mais ações ›</button>
       </div>`;
-    document.body.appendChild(folha);
+    // desktop: mora no layout das colunas, presa ao canto do mapa
+    (MODO_MOBILE ? document.body : document.querySelector(".layout-planejamento")).appendChild(folha);
+    if (!MODO_MOBILE) window.addEventListener("resize", posicionarFolhaDesktop);
     folha.querySelector("#folha-limpar").addEventListener("click", () => {
       limparSelecao();
       limparSelecaoRotas();
@@ -4904,6 +4915,7 @@
     const mapaEl = document.getElementById("map");
     if (!map || isNaN(lat) || isNaN(lng) || !folha || !mapaEl) return;
     map.panTo({ lat, lng });
+    if (!MODO_MOBILE) return;  // no desktop a folha cobre só um canto do mapa
     const r = mapaEl.getBoundingClientRect();
     const livreCentro = (r.top + Math.min(folha.getBoundingClientRect().top, r.bottom)) / 2;
     const deslocamento = Math.round((r.top + r.bottom) / 2 - livreCentro);
@@ -4973,11 +4985,23 @@
     return { n: lis.length, caixas: lis.reduce((s, li) => s + Number(li.dataset.caixas || 1), 0) };
   }
 
+  // desktop (16/11): a folha fica no canto de baixo, à direita, do mapa
+  function posicionarFolhaDesktop() {
+    const folha = document.getElementById("folha-mapa");
+    const mapaEl = document.getElementById("map");
+    if (MODO_MOBILE || !folha || !mapaEl) return;
+    const largura = Math.min(400, mapaEl.offsetWidth - 24);
+    folha.style.width = `${largura}px`;
+    folha.style.left = `${mapaEl.offsetLeft + mapaEl.offsetWidth - 12 - largura}px`;
+    folha.style.top = `${mapaEl.offsetTop + mapaEl.offsetHeight - 24}px`;
+  }
+
   function atualizarFolhaMapa() {
     const folha = document.getElementById("folha-mapa");
     if (!folha) return;
     const total = SELECIONADOS.size + SELECIONADOS_ROTA.size;
     document.body.classList.toggle("tem-selecao-mapa", total > 0);
+    posicionarFolhaDesktop();
     if (detalhesFolhaServiceId !== null && !SELECIONADOS.has(detalhesFolhaServiceId) && !SELECIONADOS_ROTA.has(detalhesFolhaServiceId)) {
       fecharDetalhesNaFolha();
     }
@@ -4992,7 +5016,7 @@
     const caixasSel = todosLis.reduce((s, li) => s + Number(li.dataset.caixas || 1), 0);
     const n = todosLis.length;
     folha.querySelector("#folha-resumo").innerHTML =
-      `${n} pedido${n === 1 ? "" : "s"} <small>· ${caixasSel} cx · toque no mapa pra somar mais</small>`;
+      `${n} pedido${n === 1 ? "" : "s"} <small>· ${caixasSel} cx · ${MODO_MOBILE ? "toque" : "clique"} no mapa pra somar mais</small>`;
     const chip = (id, codigo, cor, origem) =>
       `<span class="chip-pedido" data-id="${id}" data-origem="${origem}" style="--cor-origem:${cor}">
         <button type="button" class="ver" aria-label="Ver detalhes de ${escaparHtml(codigo)}">${escaparHtml(codigo)}<span class="i" aria-hidden="true">ⓘ</span></button>
