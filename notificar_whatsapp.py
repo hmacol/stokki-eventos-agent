@@ -120,6 +120,13 @@ ORIGEM_FORA_DIA_FIXO_PILOTO = "cliente_fora_dia_fixo_piloto"
 # boas-vindas ao motorista novo (cadastro pelo link): mensagem individual, teto proprio
 # (motoristas.teto_diario); nao consome o teto interno nem o dos clientes
 ORIGEM_MOTORISTA = "motorista_boas_vindas"
+# link de atualizacao cadastral no grupo do motorista: teto proprio
+# (atualizacao_motoristas.teto_diario, padrao 15); a copia de piloto (so pro numero do
+# Hugo) conta num balde a parte pra nao gastar o teto do envio real
+ORIGEM_MOTORISTA_ATUALIZACAO = "motorista_atualizacao"
+ORIGEM_MOTORISTA_ATUALIZACAO_PILOTO = "motorista_atualizacao_piloto"
+ORIGENS_ATUALIZACAO = (ORIGEM_MOTORISTA_ATUALIZACAO, ORIGEM_MOTORISTA_ATUALIZACAO_PILOTO)
+TETO_ATUALIZACAO_PADRAO = 15
 ORIGENS_PILOTO = (ORIGEM_CLIENTE_PILOTO, ORIGEM_CADASTRO_PILOTO, ORIGEM_TRANSPORTADORA_PILOTO,
                   ORIGEM_FORA_DIA_FIXO_PILOTO)
 TETO_PILOTO_PADRAO = 20
@@ -616,27 +623,38 @@ def _enviados_hoje(conn, agora: datetime, origem: str) -> int:
         filtro, args = "origem = ?", (ORIGEM_CLIENTE,)
     elif origem == ORIGEM_MOTORISTA:
         filtro, args = "origem = ?", (ORIGEM_MOTORISTA,)
+    elif origem in ORIGENS_ATUALIZACAO:
+        filtro, args = "origem = ?", (origem,)
     elif origem in ORIGENS_PILOTO:
         filtro, args = f"origem IN ({marcas})", ORIGENS_PILOTO
     else:
-        filtro, args = (f"origem NOT IN (?, ?) AND origem NOT IN ({marcas})",
-                        (ORIGEM_CLIENTE, ORIGEM_MOTORISTA, *ORIGENS_PILOTO))
+        filtro, args = (f"origem NOT IN (?, ?, ?, ?) AND origem NOT IN ({marcas})",
+                        (ORIGEM_CLIENTE, ORIGEM_MOTORISTA, *ORIGENS_ATUALIZACAO, *ORIGENS_PILOTO))
     return conn.execute(
         f"SELECT COUNT(*) FROM notificacoes_whatsapp WHERE situacao = 'enviado' AND criado_em >= ? "
         f"AND {filtro}", (inicio_do_dia, *args)).fetchone()[0]
 
 
-def _teto(cfg: dict, origem: str) -> int:
+def _teto(cfg: dict, origem: str, config: dict | None = None) -> int:
+    """cfg = whatsapp_notificacoes. `config` (o config inteiro) so e preciso pra origem
+    da atualizacao, cujo teto mora em atualizacao_motoristas (chave de topo)."""
     if origem == ORIGEM_CLIENTE:
         return _inteiro(cfg.get("clientes") or {}, "teto_diario", TETO_CLIENTES_PADRAO)
     if origem == ORIGEM_MOTORISTA:
         return _inteiro(cfg.get("motoristas") or {}, "teto_diario", TETO_MOTORISTAS_PADRAO)
+    if origem in ORIGENS_ATUALIZACAO:
+        return _inteiro((config or {}).get("atualizacao_motoristas") or {}, "teto_diario", TETO_ATUALIZACAO_PADRAO)
     if origem in ORIGENS_PILOTO:
         return _inteiro(cfg.get("clientes") or {}, "teto_piloto", TETO_PILOTO_PADRAO)
     return _inteiro(cfg, "teto_diario", 20)
 
 
-def _motivo_para_nao_enviar(conn, cfg: dict, origem: str, assinatura: str | None, agora: datetime) -> str | None:
+MOTIVO_TETO = "teto diario atingido"
+MOTIVO_CANAL_EM_PAUSA = "canal em pausa"
+
+
+def _motivo_para_nao_enviar(conn, cfg: dict, origem: str, assinatura: str | None, agora: datetime,
+                            config: dict | None = None) -> str | None:
     # A origem dos clientes nao usa a janela: a rotina so chama uma vez por
     # mensagem da equipe, e a janela deixaria repetir depois de 2 h.
     if assinatura and origem != ORIGEM_CLIENTE:
@@ -655,9 +673,9 @@ def _motivo_para_nao_enviar(conn, cfg: dict, origem: str, assinatura: str | None
     if len(ultimas) == limite and all(s == "falhou" for s, _ in ultimas):
         pausa = timedelta(minutes=_inteiro(cfg, "pausa_canal_min", 60))
         if agora - datetime.fromisoformat(ultimas[0][1]) < pausa:
-            return "canal em pausa"
-    if _enviados_hoje(conn, agora, origem) >= _teto(cfg, origem):
-        return "teto diario atingido"
+            return MOTIVO_CANAL_EM_PAUSA
+    if _enviados_hoje(conn, agora, origem) >= _teto(cfg, origem, config):
+        return MOTIVO_TETO
     return None
 
 
@@ -732,7 +750,7 @@ def _despachar(config, origem, tipo, texto, assinatura, modo_teste, conn, agora,
         conn = sqlite3.connect(DB_PATH, timeout=10)
     try:
         conn.execute(_SCHEMA)
-        motivo = _motivo_para_nao_enviar(conn, cfg, origem, assinatura, agora)
+        motivo = _motivo_para_nao_enviar(conn, cfg, origem, assinatura, agora, config)
         if motivo:
             _registrar(conn, agora, origem, tipo, assinatura, "nao_enviado", motivo)
             logger.info(f"WhatsApp nao enviado ({origem}): {motivo}.")
@@ -1225,6 +1243,70 @@ def avisar_motorista_boas_vindas(cadastro_id: int, telefone: str, texto: str, co
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"
+
+
+def texto_link_atualizacao(primeiro_nome: str, link: str, expira) -> str:
+    """Mensagem do link de atualizacao cadastral (texto fixo do desenho, secao 4).
+    `expira`: date ou datetime."""
+    return (f"Olá, {primeiro_nome}! Estamos atualizando o cadastro dos motoristas da Fresh Log. "
+            f"Preencha pelo link (leva 5 minutos, tenha CNH e documento do veículo em mãos): {link}. "
+            f"Vale até {expira:%d/%m}.")
+
+
+def destino_link_atualizacao(config: dict) -> str | None:
+    """Trava do envio do link de atualizacao (atualizacao_motoristas.forcar_destino_whatsapp):
+    None = desligado (chave ausente, nula ou sem digitos), numero = piloto (so pra la),
+    "" = envio real no grupo do motorista. Esquecer ou errar a chave nunca libera o envio."""
+    cfg_atu = (config or {}).get("atualizacao_motoristas") or {}
+    if "forcar_destino_whatsapp" not in cfg_atu or cfg_atu["forcar_destino_whatsapp"] is None:
+        return None
+    bruto = str(cfg_atu["forcar_destino_whatsapp"]).strip()
+    digitos = re.sub(r"\D", "", bruto)
+    if bruto and not digitos:
+        return None
+    return digitos
+
+
+def _motivo_da_ultima_recusa(conn, origem: str, assinatura: str) -> str | None:
+    fechar = conn is None
+    if fechar:
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        row = conn.execute("SELECT motivo FROM notificacoes_whatsapp WHERE origem = ? AND assinatura = ? "
+                           "AND situacao = 'nao_enviado' ORDER BY id DESC LIMIT 1", (origem, assinatura)).fetchone()
+        return row[0] if row else None
+    finally:
+        if fechar:
+            conn.close()
+
+
+def avisar_motorista_link_atualizacao(link_id: int, grupo_id: str, grupo_nome: str, texto: str, config: dict,
+                                      modo_teste: bool = False, **kw) -> tuple[str, bool]:
+    """Manda o link de atualizacao no grupo do motorista. Devolve (situacao, piloto).
+    Situacoes: desligado | modo_teste | enviado | falhou | teto | canal_em_pausa |
+    nao_enviado (despachar so devolve 'nao_enviado' pra teto, pausa e repeticao; aqui
+    teto e pausa saem com nome proprio pro lote saber que deve parar). Uma mensagem por
+    link (assinatura link_atualizacao:<id>). Piloto = forcar_destino_whatsapp com numero:
+    vai pra la com '[teste -> grupo X]' na frente; presente e vazio = grupo real; ausente
+    = 'desligado'. Nao depende de whatsapp_notificacoes.clientes.ativo."""
+    try:
+        destino = destino_link_atualizacao(config)
+        if destino is None or not grupo_id or not gateway_clientes_ok(config):
+            return "desligado", False
+        piloto = bool(destino)
+        if piloto:
+            texto = f"[teste → grupo {grupo_nome}]\n{texto}"
+        origem = ORIGEM_MOTORISTA_ATUALIZACAO_PILOTO if piloto else ORIGEM_MOTORISTA_ATUALIZACAO
+        assinatura = f"link_atualizacao:{link_id}"
+        situacao = despachar(config, origem, "link_atualizacao", texto, assinatura, modo_teste=modo_teste,
+                             grupo_id=f"{destino}@c.us" if piloto else grupo_id, **kw)
+        if situacao == "nao_enviado":
+            motivo = _motivo_da_ultima_recusa(kw.get("conn"), origem, assinatura)
+            situacao = {MOTIVO_TETO: "teto", MOTIVO_CANAL_EM_PAUSA: "canal_em_pausa"}.get(motivo, situacao)
+        return situacao, piloto
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou", False
 
 
 def avisar_cliente_transportadora(cnpj: str, telefone: str, texto: str, assinatura: str, config: dict,

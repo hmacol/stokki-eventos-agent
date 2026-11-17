@@ -88,9 +88,15 @@ def dados_pagina_motoristas() -> dict:
         catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))
         lista = [linha_da_tela(m) for m in catalogo.motoristas]
     motoristas = sorted(lista, key=lambda m: m["nome"])
+    padrao, total_pendentes = _padrao_por_linha()
+    for m in motoristas:
+        m.update(padrao.get(m["id"]) or {
+            "principal_id": None, "pendencias": {}, "tem_pendencia": False, "estado_link": None, "link_data": None,
+            "rotas_30d": None, "grupo_nome": None, "tem_login": bool(m["cpf_login"]), "tem_ficha": False})
 
     return {
         "motoristas": motoristas,
+        "total_pendentes": total_pendentes,
         "zonas_disponiveis": ZONAS_DISPONIVEIS,
         "dias_semana": DIAS_SEMANA,
         "tipos_veiculo": [{"codigo": t.codigo, "nome": t.nome} for t in TIPOS_VEICULO],
@@ -112,6 +118,66 @@ def _registros_do_banco() -> list[dict]:
         import logging
         logging.getLogger(__name__).warning(f"bd_motoristas indisponível: {e}")
         return []
+
+
+def url_app_motorista(config: dict) -> str:
+    """Endereço público do app dos motoristas (onde fica /atualizar/<token>). Não há
+    chave própria: sai do portal_cliente.chamados.url_painel trocando o /painel do fim
+    por /motorista; fora desse formato, o endereço de produção."""
+    url = str((((config or {}).get("portal_cliente") or {}).get("chamados") or {}).get("url_painel")
+              or "https://app.freshhub.com.br/painel").rstrip("/")
+    if url.endswith("/painel"):
+        return url[:-len("/painel")] + "/motorista"
+    return "https://app.freshhub.com.br/motorista"
+
+
+def _padrao_por_linha() -> tuple[dict, int]:
+    """id da linha -> pendências da pessoa, estado do link, rotas 30 d, grupo, login e
+    ficha; mais o total de PESSOAS com pendência. Liga antes as fichas antigas sem
+    vínculo (idempotente). Falha: ({}, 0) e a tela segue sem os selos."""
+    try:
+        from nucleo import (atualizacao_motorista as atu, auth_motorista as auth, banco as nucleo_banco,
+                            cadastro_motorista as cad, grupos_motoristas as grupos)
+        from regras.preferencias_motoristas import _parse_bool
+        conn = nucleo_banco.conectar()
+        try:
+            atu.vincular_fichas(conn)
+            rotas = grupos.rotas_30d(conn)
+            vinculos = grupos._vinculos(conn)   # privado do backend (fora desta tarefa); só leitura
+            com_ficha = {r[0] for r in conn.execute(
+                "SELECT DISTINCT bd_motorista_id FROM motoristas_cadastros WHERE status = ? "
+                "AND bd_motorista_id IS NOT NULL", (cad.STATUS_APROVADO,))}
+            por_linha, total = {}, 0
+            for p in atu.pessoas(conn):
+                pid = p["principal_id"]
+                pend = atu.pendencias(conn, p) if p["ativo"] else {}
+                tem = bool(pend.get("documentos") or pend.get("campos") or pend.get("veiculo_diferente"))
+                total += tem
+                estado = atu.estado_link(conn, pid)
+                aberto = atu.link_em_aberto(conn, pid) if estado == "enviado" else None
+                quando = aberto and (aberto.get("enviado_em") or aberto.get("criado_em")) or ""
+                rotas_pessoa = sum(rotas.get(a, 0) for a in p["agent_ids"])   # por pessoa, igual em toda linha
+                for linha in p["linhas"]:
+                    ativa = _parse_bool(linha.get("ATIVO"))
+                    cpf = auth.normalizar_cpf(linha.get("CPF_MOTORISTA"))
+                    por_linha[linha["id"]] = {
+                        "principal_id": pid,
+                        "pendencias": pend if ativa else {},
+                        "tem_pendencia": tem and ativa,
+                        "estado_link": estado,
+                        "link_data": f"{quando[8:10]}/{quando[5:7]}" if quando else None,
+                        "rotas_30d": rotas_pessoa,
+                        "grupo_nome": (vinculos.get(pid) or {}).get("grupo_nome"),
+                        "tem_login": bool(cpf and auth.buscar_motorista(conn, cpf)),
+                        "tem_ficha": any(i in com_ficha for i in p["ids"]),
+                    }
+            return por_linha, total
+        finally:
+            conn.close()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Pendências dos motoristas indisponíveis: {e}")
+        return {}, 0
 
 
 def logins_do_app() -> dict[int, dict]:

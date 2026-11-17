@@ -70,6 +70,33 @@
   .link-acoes input { width: 150px; padding: 7px 8px; }
   .link-acoes button { padding: 8px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
   .link-acoes button.principal { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
+
+  /* Padrão único de cadastro (16/11): selos, ações da linha e bloco WhatsApp */
+  .tabela-rolagem { overflow-x: auto; max-width: 100%; }
+  .col-pendencias { min-width: 160px; }
+  .col-pendencias .badge { margin: 1px 2px 1px 0; white-space: nowrap; }
+  .barra-pendentes { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-bottom: 10px; font-size: 13px; }
+  .barra-pendentes label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  .acoes-linha { display: flex; flex-wrap: wrap; gap: 4px; min-width: 210px; }
+  .acoes-linha button { white-space: nowrap; }
+  .botao-sec { padding: 5px 9px; border-radius: 6px; font-size: 12px; cursor: pointer; background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
+  .botao-sec:hover { background: var(--fundo); }
+  .botao-sec:disabled { opacity: 0.5; cursor: not-allowed; }
+  .botao-sec.perigo { color: var(--erro); border-color: var(--erro); }
+  .bloco-whatsapp { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
+  .bloco-whatsapp h2 { font-size: 16px; margin: 0 0 4px; }
+  .bloco-whatsapp .acoes-bloco { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .modal-motorista.largo { width: 760px; }
+  .modal-motorista table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .modal-motorista th, .modal-motorista td { padding: 6px 8px; border-bottom: 1px solid var(--borda); text-align: left; vertical-align: top; }
+  .modal-motorista td select { width: 100%; max-width: 320px; }
+  .modal-motorista .rolagem-modal { overflow-x: auto; }
+  .aviso-modal { font-size: 12.5px; margin: 0 0 10px; padding: 8px 10px; border-radius: 6px; background: var(--fundo); border: 1px solid var(--borda); }
+  .aviso-modal.forte { color: var(--erro); border-color: var(--erro); background: var(--erro-bg); font-weight: 700; }
+  .pin-grande { font-size: 30px; font-weight: 700; letter-spacing: 6px; margin: 8px 0; }
+  .campo-copia { display: flex; gap: 6px; margin: 8px 0; }
+  .campo-copia input { flex: 1; padding: 7px 9px; border: 1px solid var(--borda); border-radius: 6px; font-size: 12.5px; background: var(--fundo); color: var(--texto); }
+  .dica { font-size: 12px; color: var(--texto-suave); }
 </style>
 {% endblock %}
 
@@ -219,16 +246,44 @@
   {% endfor %}
 </section>
 {% endif %}
+{% if pode_aprovar %}
+<section class="bloco-whatsapp" aria-labelledby="titulo-whatsapp">
+  <h2 id="titulo-whatsapp">WhatsApp</h2>
+  <p class="pendentes-ajuda">Grupos dos motoristas e envio do link de atualização do cadastro. Nada é gravado, renomeado ou enviado sem você confirmar na janela.</p>
+  <div class="acoes-bloco">
+    <button type="button" class="botao-sec" id="botao-identificar-grupos">Identificar grupos</button>
+    <button type="button" class="botao-sec" id="botao-renomear-grupos">Renomear grupos confirmados</button>
+    <button type="button" class="botao-sec" id="botao-enviar-links">Enviar links de atualização</button>
+  </div>
+</section>
+{% endif %}
+<div class="barra-pendentes">
+  <strong id="contador-pendentes">{{ dados.total_pendentes }} motorista{{ "s" if dados.total_pendentes != 1 }} com pendência</strong>
+  <label><input type="checkbox" id="so-pendentes"> só pendentes</label>
+</div>
+{% set ROTULO_DOC = {"cnh": "CNH", "crlv": "CRLV", "selfie": "Selfie", "antt": "ANTT", "residencia": "Residência"} %}
+<div class="tabela-rolagem">
 <table class="tabela-motoristas">
   <thead>
     <tr>
-      <th>Nome</th><th>Agent ID</th><th>Ativo</th><th>Posição</th><th>Dias</th><th>Zonas</th><th>Veículo</th><th>Telefone</th><th>Placa</th><th title="Login do app: se vê o extrato (quem dirige carro de outro não vê)">App · Financeiro</th>{% if pode_editar %}<th></th>{% endif %}
+      <th>Nome</th><th>Pendências</th><th>Rotas 30 d</th><th>Agent ID</th><th>Ativo</th><th>Posição</th><th>Dias</th><th>Zonas</th><th>Veículo</th><th>Telefone</th><th>Placa</th><th title="Login do app: se vê o extrato (quem dirige carro de outro não vê)">App · Financeiro</th>{% if pode_editar %}<th></th>{% endif %}
     </tr>
   </thead>
   <tbody>
     {% for m in dados.motoristas %}
-    <tr>
+    {% set p = m.pendencias or {} %}
+    <tr data-pendente="{{ 1 if m.tem_pendencia else 0 }}">
       <td>{{ m.nome }}</td>
+      <td class="col-pendencias">
+        {%- for t in p.documentos or [] %}<span class="badge badge-erro">{{ ROTULO_DOC.get(t, t) }}</span>{% endfor %}
+        {%- if p.campos %}<span class="badge badge-erro" title="Falta: {{ p.campos | join(', ') }}">Ficha incompleta</span>{% endif %}
+        {%- if p.veiculo_diferente %}<span class="badge badge-erro" title="O tipo de veículo da ficha não bate com o da tabela">veículo diferente</span>{% endif %}
+        {%- if p.falta_cpf %}<span class="badge badge-erro">falta CPF para enviar no grupo</span>{% endif %}
+        {%- if m.estado_link == "enviado" %}<span class="badge badge-nunca">link enviado {{ m.link_data or "" }}</span>
+        {%- elif m.estado_link == "aberto" %}<span class="badge badge-nunca">abriu, não concluiu</span>
+        {%- elif m.estado_link == "vencido" %}<span class="badge badge-nunca">link vencido</span>{% endif %}
+      </td>
+      <td>{{ m.rotas_30d if m.rotas_30d is not none else "—" }}</td>
       <td class="mono">{{ m.agent_id }}</td>
       <td>{% if m.ativo %}<span class="badge badge-sucesso">Ativo</span>{% else %}<span class="badge badge-erro">Inativo</span>{% endif %}</td>
       <td>{{ "Fixo" if m.posicao == "FIXO" else "Esporádico" }}</td>
@@ -247,15 +302,43 @@
         {% else %}{% if m.ve_financeiro %}Vê extrato{% else %}Sem extrato{% endif %}{% endif %}
       </td>
       {% if pode_editar %}
-      <td>{% if m.id %}<button type="button" class="botao botao-editar-motorista" data-id="{{ m.id }}" data-motorista='{{ m.form | tojson }}'>Editar</button>{% endif %}</td>
+      <td>{% if m.id %}<div class="acoes-linha" data-id="{{ m.id }}" data-nome="{{ m.nome }}" data-link="{{ m.estado_link or '' }}">
+        <button type="button" class="botao botao-editar-motorista" data-id="{{ m.id }}" data-motorista='{{ m.form | tojson }}'>Editar</button>
+        <button type="button" class="botao-sec botao-ver-ficha">Ver ficha</button>
+        {% if m.ativo %}<button type="button" class="botao-sec botao-copiar-link">Copiar link</button>{% endif %}
+        <button type="button" class="botao-sec botao-ativo" data-ativo="{{ 1 if m.ativo else 0 }}">{{ "Inativar" if m.ativo else "Reativar" }}</button>
+        <button type="button" class="botao-sec botao-pin" {% if not m.form.cpf %}disabled title="falta o CPF"{% endif %}>{{ "Resetar PIN" if m.tem_login else "Criar acesso ao app" }}</button>
+        {% if pode_aprovar %}<button type="button" class="botao-sec perigo botao-excluir-motorista">Excluir</button>{% endif %}
+      </div>{% endif %}</td>
       {% endif %}
     </tr>
     {% else %}
-    <tr><td colspan="10">Nenhum motorista cadastrado.</td></tr>
+    <tr><td colspan="12">Nenhum motorista cadastrado.</td></tr>
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}
+
+<script>
+// Filtro "só pendentes" (no navegador; a escolha fica neste aparelho)
+(function () {
+  const caixa = document.getElementById("so-pendentes");
+  if (!caixa) return;
+  const CHAVE = "motoristas_so_pendentes";
+  const aplicar = () => {
+    for (const tr of document.querySelectorAll(".tabela-motoristas tbody tr[data-pendente]")) {
+      tr.hidden = caixa.checked && tr.dataset.pendente !== "1";
+    }
+  };
+  try { caixa.checked = localStorage.getItem(CHAVE) === "1"; } catch (e) {}
+  aplicar();
+  caixa.addEventListener("change", () => {
+    try { localStorage.setItem(CHAVE, caixa.checked ? "1" : "0"); } catch (e) {}
+    aplicar();
+  });
+})();
+</script>
 
 {% if pode_editar and dados %}
 <div class="modal-overlay-motorista" id="modal-novo-motorista">
@@ -649,6 +732,361 @@ const putJSON = (url, body) => postJSON(url, body, "PUT");
       botao.textContent = original;
     }
   });
+})();
+</script>
+
+<div class="modal-overlay-motorista" id="modal-padrao">
+  <div class="modal-motorista" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-padrao">
+    <h2 id="titulo-modal-padrao"></h2>
+    <div id="corpo-modal-padrao"></div>
+    <div class="acoes" id="acoes-modal-padrao"></div>
+  </div>
+</div>
+
+<script>
+// ── Padrão único de cadastro (16/11): ficha, link, ativo, PIN, excluir e bloco WhatsApp ──
+(function () {
+  const overlay = document.getElementById("modal-padrao");
+  const ROTULO_DOC = { cnh: "CNH", crlv: "CRLV", selfie: "Selfie", antt: "ANTT", residencia: "Residência" };
+
+  // Monta elemento com texto seguro (nada de innerHTML com dado do servidor).
+  function el(tag, props = {}, ...filhos) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(props)) {
+      if (k === "class") e.className = v;
+      else if (k in e) e[k] = v;
+      else e.setAttribute(k, v);
+    }
+    for (const f of filhos.flat()) if (f !== null && f !== undefined && f !== false) e.append(f);
+    return e;
+  }
+
+  async function getJSON(url) {
+    const resp = await fetch(BASE_PATH + url);
+    let dados = {};
+    try { dados = await resp.json(); } catch (e) { /* resposta sem JSON */ }
+    if (!resp.ok) throw new Error(dados.erro || `HTTP ${resp.status} em ${url}`);
+    return dados;
+  }
+
+  let aoFechar = null;
+  function fecharModal() {
+    overlay.classList.remove("aberto");
+    if (aoFechar) { const f = aoFechar; aoFechar = null; f(); }
+  }
+  // botoes: [{texto, principal, acao, desabilitado, title}]; "Fechar" vem sempre.
+  function abrirModal(titulo, corpo, botoes = [], { largo = false, depois = null } = {}) {
+    document.getElementById("titulo-modal-padrao").textContent = titulo;
+    overlay.querySelector(".modal-motorista").classList.toggle("largo", largo);
+    const caixaCorpo = document.getElementById("corpo-modal-padrao");
+    caixaCorpo.replaceChildren(...[].concat(corpo));
+    const acoes = document.getElementById("acoes-modal-padrao");
+    acoes.replaceChildren(el("button", { type: "button", class: "cancelar", onclick: fecharModal }, "Fechar"));
+    for (const b of botoes) {
+      const botao = el("button", { type: "button", class: b.principal ? "confirmar" : "cancelar" }, b.texto);
+      botao.disabled = !!b.desabilitado;
+      if (b.title) botao.title = b.title;
+      botao.addEventListener("click", () => b.acao(botao));
+      acoes.append(botao);
+    }
+    aoFechar = depois;
+    overlay.classList.add("aberto");
+  }
+  const carregando = (titulo) => abrirModal(titulo, el("p", { class: "dica" }, "Carregando..."));
+  const falhou = (titulo, e) => abrirModal(titulo, el("p", { class: "aviso-modal forte" }, e.message));
+
+  async function copiar(texto, campo) {
+    try { await navigator.clipboard.writeText(texto); return true; } catch (e) {
+      if (campo) { campo.select(); try { return document.execCommand("copy"); } catch (e2) { return false; } }
+      return false;
+    }
+  }
+  function campoCopia(texto) {
+    const campo = el("input", { type: "text", readOnly: true, value: texto });
+    const botao = el("button", { type: "button", class: "botao-sec" }, "Copiar");
+    botao.addEventListener("click", async () => { botao.textContent = (await copiar(texto, campo)) ? "Copiado" : "Copie à mão"; });
+    return el("div", { class: "campo-copia" }, campo, botao);
+  }
+  const ddmm = (s) => (s && s.length >= 10) ? `${s.slice(8, 10)}/${s.slice(5, 7)}` : "";
+
+  // ── Ações da linha ──
+  for (const caixa of document.querySelectorAll(".acoes-linha")) {
+    const id = caixa.dataset.id;
+    const nome = caixa.dataset.nome;
+
+    caixa.querySelector(".botao-ver-ficha").addEventListener("click", async () => {
+      const titulo = `Ficha · ${nome}`;
+      carregando(titulo);
+      let d;
+      try { d = await getJSON(`/api/motoristas/${id}/ficha`); } catch (e) { falhou(titulo, e); return; }
+      const p = d.pendencias || {};
+      const faltas = [...(p.documentos || []).map(t => ROTULO_DOC[t] || t), ...(p.campos || [])];
+      if (p.veiculo_diferente) faltas.push("veículo diferente da tabela");
+      const corpo = [el("p", { class: faltas.length ? "aviso-modal forte" : "aviso-modal" },
+                        faltas.length ? `Falta: ${faltas.join(", ")}.` : "Sem pendências.")];
+      const f = d.ficha;
+      if (!f) {
+        corpo.push(el("p", { class: "dica" }, "Sem ficha aprovada: os dados acima vêm só da tabela."));
+      } else {
+        const campos = [["Nome", f.nome], ["CPF", f.cpf], ["Telefone", f.telefone], ["E-mail", f.email],
+          ["PIX", f.chave_pix], ["Nascimento", f.data_nascimento], ["Placa", f.placa], ["Tipo de veículo", f.tipo_veiculo],
+          ["Modelo", f.veiculo_modelo], ["Ano", f.veiculo_ano], ["Refrigerado", f.refrigerado ? "sim" : "não"],
+          ["Emite NF", f.emite_nf ? "sim" : "não"], ["Veículo é dele", f.dono_veiculo ? "sim" : "não"],
+          ["Ficha", `#${f.id} · ${f.origem || ""} · ${f.concluido_em || f.revisado_em || f.criado_em || ""}`]];
+        corpo.push(el("div", { class: "link-ficha" },
+          campos.filter(([rot]) => d.documentos_visiveis || !["PIX", "Nascimento"].includes(rot))
+                .map(([rot, v]) => el("div", {}, el("span", {}, rot), " ", (v === null || v === undefined || v === "") ? "—" : String(v)))));
+        corpo.push(el("div", { class: "cadastro-docs" }, Object.keys(ROTULO_DOC).map(t => {
+          if (!f[`tem_${t}`]) return el("span", { class: "falta" }, `sem ${ROTULO_DOC[t]}`);
+          if (!d.documentos_visiveis) return el("span", {}, `${ROTULO_DOC[t]} enviado`);
+          return el("a", { href: `${BASE_PATH}/api/motoristas/cadastros/${f.id}/documento/${t}`, target: "_blank", rel: "noopener" }, ROTULO_DOC[t]);
+        })));
+      }
+      abrirModal(titulo, corpo, [], { largo: true });
+    });
+
+    const botaoLink = caixa.querySelector(".botao-copiar-link");
+    if (botaoLink) botaoLink.addEventListener("click", async () => {
+      if (["enviado", "aberto"].includes(caixa.dataset.link) &&
+          !confirm(`${nome} já tem um link em aberto. Gerar um novo cancela o anterior. Continuar?`)) return;
+      const titulo = `Link de atualização · ${nome}`;
+      carregando(titulo);
+      let r;
+      try { r = await postJSON(`/api/motoristas/${id}/link-atualizacao`, {}); } catch (e) { falhou(titulo, e); return; }
+      const copiado = await copiar(r.url);
+      const corpo = [el("p", { class: "dica" }, `${copiado ? "Link copiado. " : ""}Vale até ${ddmm(r.expira_em)}. Mande ao motorista por onde quiser; ele pede o CPF para abrir.`),
+                     campoCopia(r.url)];
+      if (!r.pagina_ligada) corpo.unshift(el("p", { class: "aviso-modal forte" },
+        "A página de atualização está desligada (atualizacao_motoristas.ativo): o link só abre depois de ligada."));
+      abrirModal(titulo, corpo, [], { depois: () => location.reload() });
+    });
+
+    caixa.querySelector(".botao-ativo").addEventListener("click", async (ev) => {
+      const ativar = caixa.querySelector(".botao-ativo").dataset.ativo !== "1";
+      const pergunta = ativar ? `Reativar ${nome}?`
+        : `Inativar ${nome}? Ele ainda entra no app por 30 dias; a Vuupt não muda. Link de atualização em aberto é cancelado.`;
+      if (!confirm(pergunta)) return;
+      const botao = ev.currentTarget; botao.disabled = true;
+      try {
+        await postJSON(`/api/motoristas/${id}/ativo`, { ativo: ativar });
+        location.reload();
+      } catch (e) {
+        alert(`Falha: ${e.message}`);
+        botao.disabled = false;
+      }
+    });
+
+    caixa.querySelector(".botao-pin").addEventListener("click", async (ev) => {
+      const botao = ev.currentTarget;
+      const criar = botao.textContent.trim() === "Criar acesso ao app";
+      if (!confirm(criar ? `Criar o acesso de ${nome} ao app com um PIN provisório?`
+                         : `Resetar o PIN de ${nome}? O PIN atual para de valer e as sessões do app caem.`)) return;
+      botao.disabled = true;
+      let r;
+      try { r = await postJSON(`/api/motoristas/${id}/resetar-pin`, {}); } catch (e) {
+        alert(`Falha: ${e.message}`); botao.disabled = false; return;
+      }
+      abrirModal(criar ? "Acesso ao app criado" : "PIN resetado", [
+        el("p", {}, `${nome} · CPF ${r.cpf}`),
+        el("div", { class: "pin-grande mono" }, r.pin),
+        campoCopia(r.pin),
+        el("p", { class: "dica" }, "PIN provisório. O app pede a troca no primeiro acesso."),
+        el("p", { class: "dica" }, "Ele aparece só agora: ao fechar, não dá para ver de novo."),
+      ], [], { depois: () => location.reload() });
+    });
+
+    const botaoExcluir = caixa.querySelector(".botao-excluir-motorista");
+    if (botaoExcluir) botaoExcluir.addEventListener("click", async () => {
+      const digitado = prompt(`Excluir ${nome} da tabela? Apaga a linha, o login do app (se o CPF não estiver em outra linha), os links e os documentos. A Vuupt não muda.\n\nPara confirmar, digite o nome: ${nome}`);
+      if (digitado === null) return;
+      if (digitado.trim().toLowerCase() !== nome.trim().toLowerCase()) { alert("O nome não confere. Nada foi excluído."); return; }
+      botaoExcluir.disabled = true;
+      try {
+        const r = await postJSON(`/api/motoristas/${id}`, {}, "DELETE");
+        alert(`Excluído.${r.login_apagado ? " Login do app apagado." : ""}${r.fichas ? ` ${r.fichas} ficha(s) marcadas como recusadas.` : ""}`);
+        location.reload();
+      } catch (e) {
+        alert(`Não excluído: ${e.message}`);
+        botaoExcluir.disabled = false;
+      }
+    });
+  }
+
+  {% if pode_aprovar %}
+  // ── Bloco WhatsApp (nível total) ──
+  const tabela = (cabecalho, linhas) => el("div", { class: "rolagem-modal" },
+    el("table", {}, el("thead", {}, el("tr", {}, cabecalho.map(c => el("th", {}, c)))), el("tbody", {}, linhas)));
+
+  document.getElementById("botao-identificar-grupos").addEventListener("click", async () => {
+    const titulo = "Identificar grupos";
+    carregando(titulo);
+    let d;
+    try { d = await getJSON("/api/motoristas/grupos/sugestoes"); } catch (e) { falhou(titulo, e); return; }
+    if (d.erro) { abrirModal(titulo, el("p", { class: "aviso-modal forte" }, d.erro)); return; }
+    const corpo = [el("p", { class: "dica" }, "Sugestão por telefone (o número do motorista está no grupo) já vem marcada; por nome fica só como sugestão. Só o que você mudar é gravado ao salvar.")];
+    if (d.grupos_sem_leitura > 0) corpo.push(el("p", { class: "aviso-modal forte" },
+      `${d.grupos_sem_leitura} grupos não puderam ser lidos; as sugestões por telefone podem estar incompletas.`));
+    const seletores = [];
+    const linhas = d.pessoas.map(pessoa => {
+      const sel = el("select", {});
+      sel.append(el("option", { value: "" }, "— sem grupo —"));
+      const sugeridos = new Set();
+      for (const s of pessoa.sugestoes) {
+        sugeridos.add(s.grupo_id);
+        const opt = el("option", { value: s.grupo_id }, `${s.grupo_nome} (por ${s.como})`);
+        opt.dataset.como = s.como; opt.dataset.nome = s.grupo_nome;
+        sel.append(opt);
+      }
+      for (const g of d.grupos) {
+        if (sugeridos.has(g.grupo_id)) continue;
+        const opt = el("option", { value: g.grupo_id }, g.grupo_nome);
+        opt.dataset.nome = g.grupo_nome;
+        sel.append(opt);
+      }
+      const atual = pessoa.confirmado ? pessoa.confirmado.grupo_id : "";
+      const porTelefone = pessoa.sugestoes.filter(s => s.como === "telefone");
+      if (pessoa.confirmado && ![...sel.options].some(o => o.value === atual)) {
+        const opt = el("option", { value: atual }, `${pessoa.confirmado.grupo_nome || atual} (confirmado)`);
+        opt.dataset.nome = pessoa.confirmado.grupo_nome || ""; opt.dataset.como = pessoa.confirmado.como;
+        sel.append(opt);
+      }
+      // um grupo só com o telefone dele = pré-marcado; mais de um = a equipe escolhe
+      sel.value = atual || (porTelefone.length === 1 ? porTelefone[0].grupo_id : "");
+      seletores.push({ pessoa, sel, atual });
+      const porNome = pessoa.sugestoes.filter(s => s.como === "nome").map(s => s.grupo_nome);
+      let dica = null;
+      if (!atual && porTelefone.length > 1) dica = `${porTelefone.length} grupos têm o telefone deste motorista: escolha.`;
+      else if (!atual && !porTelefone.length && porNome.length) dica = `por nome: ${porNome.join(", ")}`;
+      return el("tr", {}, el("td", {}, pessoa.nome || `#${pessoa.principal_id}`),
+        el("td", {}, sel, dica ? el("div", { class: "dica" }, dica) : null),
+        el("td", {}, pessoa.confirmado ? `confirmado (${pessoa.confirmado.como})` : "—"));
+    });
+    corpo.push(tabela(["Motorista", "Grupo", "Hoje"], linhas));
+    abrirModal(titulo, corpo, [{
+      texto: "Salvar", principal: true, acao: async (botao) => {
+        const itens = seletores.filter(s => s.sel.value !== s.atual).map(s => {
+          const opt = s.sel.selectedOptions[0];
+          return { principal_id: s.pessoa.principal_id, grupo_id: s.sel.value,
+                   grupo_nome: s.sel.value ? opt.dataset.nome : "", como: s.sel.value ? (opt.dataset.como || "manual") : "" };
+        });
+        if (!itens.length) { fecharModal(); return; }
+        botao.disabled = true;
+        try {
+          const r = await postJSON("/api/motoristas/grupos/confirmar", { itens });
+          alert(`${r.gravados} vínculo(s) gravado(s).`);
+          fecharModal(); location.reload();
+        } catch (e) { alert(`Falha ao salvar: ${e.message}`); botao.disabled = false; }
+      }
+    }], { largo: true });
+  });
+
+  const SITUACAO_RENOMEAR = {
+    renomear: "vai renomear", renomeado: "renomeado", ja_no_padrao: "já está no padrão",
+    dupla: "grupo de dupla: não muda", sem_permissao: "sem permissão (só administrador muda o nome)",
+    erro: "não deu para ler o grupo (ou falta o nome do motorista)", incerto: "o WhatsApp não confirmou: confira o nome do grupo",
+    sem_grupo: "sem grupo confirmado", desligado: "renomeação desligada", falhou: "falhou (veja o log)",
+    piloto: "piloto: nada renomeado (só a prévia)",
+  };
+  const TEXTO_MODO_RENOMEAR = {
+    desligado: ["aviso-modal forte", "Renomeação desligada (falta ligar atualizacao_motoristas.renomear_grupos, o WhatsApp ou a chave atualizacao_motoristas.forcar_destino_whatsapp)."],
+    piloto: ["aviso-modal", "Piloto: a renomeação só mostra a prévia."],
+    real: ["aviso-modal forte", "RENOMEAÇÃO REAL: os grupos mudam de nome para todos os participantes."],
+  };
+  document.getElementById("botao-renomear-grupos").addEventListener("click", async () => {
+    const titulo = "Renomear grupos confirmados";
+    carregando(titulo);
+    let d;
+    try { d = await getJSON("/api/motoristas/grupos/previa-renomear"); } catch (e) { falhou(titulo, e); return; }
+    if (!d.previa.length) { abrirModal(titulo, el("p", { class: "dica" }, "Nenhum grupo confirmado ainda. Use \"Identificar grupos\" antes.")); return; }
+    const marcas = [];
+    const linhas = d.previa.map(item => {
+      const caixa = el("input", { type: "checkbox" });
+      caixa.disabled = item.situacao !== "renomear";
+      caixa.checked = !caixa.disabled;
+      marcas.push({ item, caixa });
+      return el("tr", {}, el("td", {}, caixa), el("td", {}, item.atual || "—"), el("td", {}, "→ ", item.novo || "—"),
+                el("td", {}, SITUACAO_RENOMEAR[item.situacao] || item.situacao,
+                   item.observacao ? el("div", { class: "dica" }, item.observacao) : null));
+    });
+    const [classeModo, textoModo] = TEXTO_MODO_RENOMEAR[d.modo] || TEXTO_MODO_RENOMEAR.desligado;
+    const corpo = [el("p", { class: classeModo }, textoModo),
+                   el("p", { class: "dica" }, "O nome novo aparece para todos no grupo. Só os marcados são renomeados, um por vez.")];
+    corpo.push(tabela(["", "Nome atual", "Nome novo", "Situação"], linhas));
+    abrirModal(titulo, corpo, [{
+      texto: "Renomear marcados", principal: true, desabilitado: d.modo !== "real",
+      title: d.modo === "real" ? "" : textoModo,
+      acao: async (botao) => {
+        const ids = marcas.filter(m => m.caixa.checked).map(m => m.item.principal_id);
+        if (!ids.length) { alert("Nenhum grupo marcado."); return; }
+        if (!confirm(`Renomear ${ids.length} grupo(s) no WhatsApp?`)) return;
+        botao.disabled = true; botao.textContent = "Renomeando...";
+        let r;
+        try { r = await postJSON("/api/motoristas/grupos/renomear", { principal_ids: ids }); } catch (e) { falhou(titulo, e); return; }
+        abrirModal(titulo, tabela(["Nome atual", "Nome novo", "Resultado"], r.resultado.map(x => {
+          const s = x.resultado || x.situacao;
+          return el("tr", {}, el("td", {}, x.atual || "—"), el("td", {}, x.novo || "—"),
+                    el("td", {}, (SITUACAO_RENOMEAR[s] || s) + (x.erro ? ` (${x.erro})` : "")));
+        })), [], { largo: true, depois: () => location.reload() });
+      }
+    }], { largo: true });
+  });
+
+  const SITUACAO_ENVIO = {
+    enviado: "enviado", modo_teste: "modo teste: nada enviado (link cancelado)", desligado: "envio desligado: nada enviado",
+    teto: "teto diário atingido: o lote parou aqui", canal_em_pausa: "WhatsApp em pausa: o lote parou aqui",
+    nao_enviado: "não enviado (o controle de envio recusou)", nao_tentado: "não tentado (o lote parou antes)",
+    nao_elegivel: "não está mais apto (já tem link em aberto, sem grupo ou sem pendência)",
+    falhou: "falhou (link cancelado; veja o log)",
+  };
+  const TEXTO_MODO = {
+    desligado: ["aviso-modal", "Envio desligado: nada será enviado (falta ligar atualizacao_motoristas.ativo, o WhatsApp ou a chave atualizacao_motoristas.forcar_destino_whatsapp)."],
+    piloto: ["aviso-modal", "Piloto: as mensagens vão para o número de teste, não para os grupos."],
+    real: ["aviso-modal forte", "ENVIO REAL: as mensagens vão para os grupos dos motoristas."],
+  };
+  document.getElementById("botao-enviar-links").addEventListener("click", async () => {
+    const titulo = "Enviar links de atualização";
+    carregando(titulo);
+    let d;
+    try { d = await getJSON("/api/motoristas/envio-links/candidatos"); } catch (e) { falhou(titulo, e); return; }
+    const [classe, texto] = TEXTO_MODO[d.modo] || TEXTO_MODO.desligado;
+    const corpo = [el("p", { class: classe }, texto)];
+    if (!d.candidatos.length) {
+      corpo.push(el("p", { class: "dica" }, "Ninguém para enviar: precisa estar ativo, com pendência, com CPF, com grupo confirmado e sem link em aberto."));
+      abrirModal(titulo, corpo); return;
+    }
+    const nomes = {};
+    const marcas = d.candidatos.map((c, i) => {
+      nomes[c.principal_id] = c.nome;
+      const caixa = el("input", { type: "checkbox" });
+      caixa.checked = i < 10;
+      return { c, caixa };
+    });
+    corpo.push(el("p", { class: "dica" }, "Mais rotas nos últimos 30 dias primeiro; os 10 primeiros já vêm marcados. Teto diário de mensagens vale."));
+    corpo.push(el("p", { class: "aviso-modal" }, "Leva cerca de 20 segundos por mensagem. Não feche a página."));
+    corpo.push(tabela(["", "Motorista", "Rotas 30 d", "Grupo", "Falta"], marcas.map(({ c, caixa }) => {
+      const p = c.pendencias || {};
+      return el("tr", {}, el("td", {}, caixa), el("td", {}, c.nome), el("td", {}, String(c.rotas_30d)), el("td", {}, c.grupo_nome || "—"),
+                el("td", {}, [...(p.documentos || []).map(t => ROTULO_DOC[t] || t), ...(p.campos || [])].join(", ")));
+    })));
+    abrirModal(titulo, corpo, [{
+      texto: "Enviar aos marcados", principal: true, desabilitado: d.modo === "desligado",
+      title: d.modo === "desligado" ? "Envio desligado" : "",
+      acao: async (botao) => {
+        const ids = marcas.filter(m => m.caixa.checked).map(m => m.c.principal_id);
+        if (!ids.length) { alert("Ninguém marcado."); return; }
+        if (!confirm(`${texto}\n\nGerar e mandar o link para ${ids.length} motorista(s)?`)) return;
+        botao.disabled = true; botao.textContent = "Enviando...";
+        let r;
+        try { r = await postJSON("/api/motoristas/envio-links", { principal_ids: ids }); } catch (e) { falhou(titulo, e); return; }
+        abrirModal(titulo, [el("p", { class: classe }, texto), tabela(["Motorista", "Resultado"], r.resultado.map(x =>
+          el("tr", {}, el("td", {}, nomes[x.principal_id] || `#${x.principal_id}`),
+                       el("td", {}, (x.situacao === "enviado" && d.modo === "piloto") ? "enviado (para o número de teste)"
+                                    : (SITUACAO_ENVIO[x.situacao] || x.situacao)))))],
+          [], { largo: true, depois: () => location.reload() });
+      }
+    }], { largo: true });
+  });
+  {% endif %}
 })();
 </script>
 {% endif %}
