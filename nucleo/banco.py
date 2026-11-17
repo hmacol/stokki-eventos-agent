@@ -277,6 +277,28 @@ CREATE TABLE IF NOT EXISTS nucleo_ponte_vuupt (
 CREATE INDEX IF NOT EXISTS idx_nucleo_ponte_status ON nucleo_ponte_vuupt(status, id);
 CREATE INDEX IF NOT EXISTS idx_nucleo_ponte_rota ON nucleo_ponte_vuupt(rota_id, status);
 
+-- Rota enviada que o motorista recusou ou nao aceitou ate o prazo (17/11):
+-- fica aberta pros outros escolherem no app (nucleo/ofertas_rota_enviada.py).
+-- Uma linha por rota, pra sempre: rota que ja foi ofertada nao e ofertada de novo.
+CREATE TABLE IF NOT EXISTS nucleo_ofertas_rota (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    rota_id                 INTEGER NOT NULL UNIQUE,
+    data_rota               TEXT NOT NULL,
+    agent_original          INTEGER,
+    motivo                  TEXT NOT NULL,                  -- RECUSA | PRAZO
+    status                  TEXT NOT NULL DEFAULT 'ABERTA', -- ABERTA | ESCOLHIDA | APLICADA | RETIRADA
+    elegiveis_json          TEXT,                           -- [agent_id, ...] que podem ver/escolher
+    resumo_json             TEXT,
+    escolhido_por           INTEGER,
+    escolhido_em            TEXT,
+    aviso_grupo_em          TEXT,                           -- aviso de rota disponivel ja tentado
+    aviso_escolha_em        TEXT,                           -- aviso a equipe de que alguem escolheu
+    motivo_retirada         TEXT,
+    criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    atualizado_em           TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_nucleo_ofertas_rota_status ON nucleo_ofertas_rota(status, data_rota);
+
 CREATE TABLE IF NOT EXISTS tarifas_motorista (
     tipo_veiculo            TEXT PRIMARY KEY,               -- FIORINO | VAN_HR | VUC | TRES_QUARTOS | TRUCK
     nome                    TEXT,

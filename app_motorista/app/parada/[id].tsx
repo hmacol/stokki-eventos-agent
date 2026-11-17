@@ -6,7 +6,7 @@
 // entrega (a parada volta pra pendente). Tudo entra na fila offline.
 // Assinatura na tela foi desconsiderada pelo Hugo em 11/09 (o canhoto
 // fotografado já é a prova de entrega); src/assinatura.tsx fica sem uso.
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
@@ -15,6 +15,7 @@ import * as api from '../../src/api';
 import * as fila from '../../src/fila';
 import * as gps from '../../src/gps';
 import * as local from '../../src/local';
+import * as rascunho from '../../src/rascunhoParada';
 import { carregarRotas } from '../../src/rotasStore';
 import { Deslizar } from '../../src/deslizar';
 import { conferirPermissao } from '../../src/permissoes';
@@ -105,14 +106,50 @@ export default function RegistroParada() {
   const [horaRetorno, setHoraRetorno] = useState<string | 'FIM' | null>(null);
   const [horaManual, setHoraManual] = useState('');
   const [obsRetorno, setObsRetorno] = useState('');
+  const [restaurado, setRestaurado] = useState(false);
+  const cameraAberta = useRef<{ chave: string; substituir: boolean } | null>(null);
+  const finalizado = useRef(false);
 
   const carregar = useCallback(async () => {
     const r = await carregarRotas();
     const rota = r.rotas.find((x) => x.id === rotaId);
     setParada(rota?.paradas.find((p) => p.id === paradaId) ?? null);
     setChecklist(await carregarChecklist());
+    // Retoma o que já estava preenchido se o Android fechou o app com a
+    // câmera aberta, e recupera a foto que a câmera entregou nesse meio.
+    const salvo = await rascunho.ler();
+    if (salvo && salvo.paradaId === paradaId) {
+      const fotosSalvas = { ...salvo.fotos };
+      if (salvo.cameraAberta) {
+        const { chave, substituir } = salvo.cameraAberta;
+        const pendente = await ImagePicker.getPendingResultAsync().catch(() => null);
+        const uri = (pendente && 'assets' in pendente && !pendente.canceled ? pendente.assets[0]?.uri : null)
+          ?? await rascunho.fotoDaCamera(salvo.salvoEm);
+        if (uri && !(fotosSalvas[chave] ?? []).includes(uri)) {
+          fotosSalvas[chave] = substituir ? [uri] : [...(fotosSalvas[chave] ?? []), uri];
+          setAvisosFoto((a) => ({ ...a, [chave]: 'Foto recuperada.' }));
+        } else if (!uri) {
+          Alert.alert('Foto não recuperada', 'O celular fechou o aplicativo enquanto a câmera estava aberta. O que você já tinha preenchido foi mantido — tire a foto de novo.');
+        }
+      }
+      setFluxo(salvo.fluxo as Fluxo | null);
+      setRespostas(salvo.respostas);
+      setFotos(fotosSalvas);
+      setMotivoId(salvo.motivoId);
+    }
+    setRestaurado(true);
   }, [rotaId, paradaId]);
   useEffect(() => { void carregar(); }, [carregar]);
+
+  // Guarda o rascunho a cada mudança (só depois de restaurar, pra não
+  // gravar a tela vazia por cima do que estava salvo).
+  const gravarRascunho = useCallback(
+    () => rascunho.salvar({ paradaId, rotaId, fluxo, respostas, fotos, motivoId, cameraAberta: cameraAberta.current }),
+    [paradaId, rotaId, fluxo, respostas, fotos, motivoId],
+  );
+  useEffect(() => {
+    if (restaurado && !finalizado.current) void gravarRascunho();
+  }, [restaurado, gravarRascunho]);
 
   if (!parada || !checklist) return <Carregando />;
 
@@ -179,7 +216,17 @@ export default function RegistroParada() {
   // senão ela é acrescentada à lista do campo.
   const tirarFoto = async (chave: string, substituir = false) => {
     if (!conferirPermissao(await ImagePicker.requestCameraPermissionsAsync(), 'Câmera', 'Permita o uso da câmera pra fotografar o comprovante.')) return;
-    const r = await ImagePicker.launchCameraAsync({ quality: 0.7, allowsEditing: false, exif: false });
+    // Marca no rascunho que a câmera está aberta: se o Android fechar o
+    // app agora, a reabertura volta pra cá e busca a foto pendente.
+    cameraAberta.current = { chave, substituir };
+    await gravarRascunho();
+    let r: ImagePicker.ImagePickerResult;
+    try {
+      r = await ImagePicker.launchCameraAsync({ quality: 0.7, allowsEditing: false, exif: false });
+    } finally {
+      cameraAberta.current = null;
+      await gravarRascunho();
+    }
     const uri = !r.canceled ? r.assets[0]?.uri : null;
     if (!uri) return;
     if (validacaoAtiva && chaveBase(chave) === 'foto_canhoto') return conferirFoto(chave, uri, substituir);
@@ -265,6 +312,8 @@ export default function RegistroParada() {
           await fila.enfileirar({ uuid: fila.novoUuid(), tipo: 'COMPROVANTE', paradaId: parada.id, uri, tipoComprovante: TIPO_COMPROVANTE[chaveBase(chave)] ?? 'CANHOTO', nf: nfDaChave(chave), capturadoEm: agora, criadoEm: agora, tentativas: 0 });
         }
       }
+      finalizado.current = true;
+      await rascunho.limpar();
       router.back();
     } finally {
       setEnviando(false);
@@ -288,6 +337,8 @@ export default function RegistroParada() {
         uuid: fila.novoUuid(), tipo: 'EVENTO_PARADA', paradaId: parada.id, criadoEm: agora, tentativas: 0,
         corpo: { tipo: 'REAGENDAR', ocorrido_em: agora, ...pos, novo_horario: novo, observacoes: obsRetorno.trim() || null },
       });
+      finalizado.current = true;
+      await rascunho.limpar();
       router.back();
     } finally {
       setEnviando(false);

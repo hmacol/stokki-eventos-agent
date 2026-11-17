@@ -714,6 +714,20 @@ def criar_app(config: dict | None = None) -> Flask:
             raise OperacaoInvalida("Envie {'pontos': [...]}.")
         return jsonify({"novos": operacao.registrar_gps(conn(), agent_id(), pontos[:2000])})
 
+    @app.get("/abrir/ofertas")
+    def abrir_ofertas():
+        """Link do aviso de rota disponivel (WhatsApp so torna clicavel https):
+        abre o app na aba Ofertas. Pagina fixa, sem dado nenhum."""
+        destino = "freshlogmotorista://ofertas"
+        return ("<!doctype html><html lang=pt-BR><meta charset=utf-8>"
+                "<meta name=viewport content='width=device-width,initial-scale=1'><title>Fresh Log</title>"
+                f"<meta http-equiv=refresh content='0;url={destino}'>"
+                "<body style='font-family:sans-serif;padding:32px 16px;text-align:center'>"
+                "<h1 style='font-size:20px'>Rota disponível</h1>"
+                f"<p><a href='{destino}' style='display:inline-block;padding:14px 22px;background:#1b7f4c;color:#fff;"
+                "border-radius:10px;text-decoration:none;font-weight:700'>Abrir o app Fresh Log</a></p>"
+                "<p style='color:#666'>Se não abrir, entre no app e toque em Ofertas.</p></body></html>")
+
     @app.get("/api/ofertas")
     @requer_motorista
     def ofertas():
