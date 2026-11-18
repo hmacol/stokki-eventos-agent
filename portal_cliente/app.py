@@ -1754,6 +1754,10 @@ consulta_transportadora_web.registrar(app, config=_CONFIG, secret=_SECRET)
 import link_canhoto
 link_canhoto.registrar(app, config=_CONFIG, secret=_SECRET)
 
+# ── Link público da ciência do dedicado fora do dia fixo, 17/11 -- link_ciencia.py ──
+import link_ciencia
+link_ciencia.registrar(app, config=_CONFIG, secret=_SECRET)
+
 
 @app.errorhandler(404)
 def _404(_e):

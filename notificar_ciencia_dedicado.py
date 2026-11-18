@@ -255,6 +255,13 @@ def _conversa_anterior(conn, ids: list[int]) -> int | None:
     return int(destino) if destino.isdigit() else None
 
 
+def decisao_email(cnpj, config: dict, db_path=None) -> cn.Decisao:
+    """Decisao da tela pro e-mail do embarcador; vale tambem pro chat e pra pagina
+    de resposta (portal_cliente/link_ciencia.py). Sem linha na tela = PILOTO."""
+    return cn.decidir(TIPO, cnpj, fallback_acao="PILOTO",
+                      fallback_piloto=cd.cfg(config)["forcar_destino"] or EMAIL_PILOTO, canal="email", db_path=db_path)
+
+
 def _bloqueado(d: cn.Decisao) -> bool:
     return d.acao == "NAO" or (d.acao == "PILOTO" and not d.destino_piloto)
 
@@ -284,8 +291,7 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
     lembrete_piloto = min(rodadas[i] + cd.rodadas_piloto(conn, i) for i in rodadas) > 0
     link = link_ciencia.url(sender_id, config["portal_cliente"]["secret_key"], ch.url_base(config))
 
-    d_email = cn.decidir(TIPO, cnpj, fallback_acao="PILOTO", fallback_piloto=c["forcar_destino"] or EMAIL_PILOTO,
-                         canal="email", db_path=db_path)
+    d_email = decisao_email(cnpj, config, db_path=db_path)
     d_wpp = cn.decidir(TIPO, cnpj, fallback_acao="PILOTO", fallback_piloto=_piloto_whatsapp(db_path),
                        canal="whatsapp", db_path=db_path)
 
