@@ -257,6 +257,16 @@ CREATE TABLE IF NOT EXISTS nucleo_pedagios (
 CREATE INDEX IF NOT EXISTS idx_nucleo_pedagios_rota ON nucleo_pedagios(rota_id);
 CREATE INDEX IF NOT EXISTS idx_nucleo_pedagios_status ON nucleo_pedagios(status, enviado_em);
 
+-- Trajeto da rota pro mapa do app (18/11): desenho do Google Routes guardado
+-- por rota; a assinatura e dos pontos (CD + paradas validas em ordem + CD).
+CREATE TABLE IF NOT EXISTS nucleo_rotas_trajeto (
+    rota_id                 INTEGER PRIMARY KEY,
+    assinatura              TEXT NOT NULL,
+    pontos_json             TEXT NOT NULL,
+    fonte                   TEXT NOT NULL,
+    criado_em               TEXT NOT NULL
+);
+
 -- Ponte nucleo -> Vuupt (12/11): o que o motorista faz no nosso app numa rota
 -- da Vuupt e repetido la por nucleo/ponte_vuupt.py. Uma linha por acao.
 CREATE TABLE IF NOT EXISTS nucleo_ponte_vuupt (

@@ -45,7 +45,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
 from nucleo import (atualizacao_motorista as atualizacao, auth_motorista as auth, banco,
-                    cadastro_motorista as cadastro, financeiro, operacao, ponte_vuupt, validacao_fotos)
+                    cadastro_motorista as cadastro, financeiro, operacao, ponte_vuupt, trajeto_rota, validacao_fotos)
 from nucleo.marketplace_remoto import ClienteMarketplace
 from nucleo.auth_motorista import AutenticacaoInvalida
 from nucleo.operacao import OperacaoInvalida
@@ -55,6 +55,10 @@ logger = logging.getLogger("nucleo.api_motorista")
 
 EXTENSOES_FOTO = {"jpg", "jpeg", "png", "webp", "heic"}
 TAMANHO_MAX_FOTO = 15 * 1024 * 1024
+
+# Aviso de APK novo no app (/api/app-versao). None = sem aviso; liga-se trocando por commit.
+APK_VERSAO_ATUAL: str | None = None
+APK_LINK = "https://app.freshhub.com.br/motorista/app.apk"
 
 
 def _carregar_config() -> dict:
@@ -482,6 +486,17 @@ def criar_app(config: dict | None = None) -> Flask:
     def rota(rota_id):
         r = operacao.rota_do_motorista(conn(), rota_id, agent_id())
         return jsonify(operacao.montar_rota(conn(), r))
+
+    @app.get("/api/rotas/<int:rota_id>/trajeto")
+    @requer_motorista
+    def rota_trajeto(rota_id):
+        operacao.rota_do_motorista(conn(), rota_id, agent_id())
+        chave = (app.config["CONFIG_PROJETO"].get("google_maps") or {}).get("api_key")
+        return jsonify(trajeto_rota.trajeto(conn(), rota_id, chave))
+
+    @app.get("/api/app-versao")
+    def app_versao():
+        return jsonify({"versao_atual": APK_VERSAO_ATUAL, "link": APK_LINK})
 
     @app.post("/api/rotas/<int:rota_id>/aceitar")
     @requer_motorista

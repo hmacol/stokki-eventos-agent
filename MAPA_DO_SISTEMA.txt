@@ -1177,6 +1177,10 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
                            atualizar; token ruim = 404 sem dizer o motivo) e POST /api/atualizacao/<token>/
                            {abrir (CPF), dados, concluir}; documentos sobem pelo POST /api/cadastro/<id>/
                            documentos de sempre (recusado com o link morto). Mesmo freio por IP do cadastro.
+ trajeto_rota.py          Desenho do trajeto da rota pro mapa do app (Google Routes, guardado em
+                           nucleo_rotas_trajeto por assinatura dos pontos; falha = linha reta sem gravar).
+                           Rotas em api_motorista.py: GET /api/rotas/<id>/trajeto (login) e
+                           GET /api/app-versao (sem login; APK_VERSAO_ATUAL None = sem aviso).
  operacao.py               Regras: aceitar/iniciar, eventos, checklist,
                            comprovantes, GPS, ofertas, disponibilidade, pedágios.
  auth_motorista.py         Login CPF+PIN, tokens, troca de PIN (POST /api/trocar-pin).
