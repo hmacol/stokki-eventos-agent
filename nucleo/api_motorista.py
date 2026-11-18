@@ -490,8 +490,12 @@ def criar_app(config: dict | None = None) -> Flask:
     @app.get("/api/rotas/<int:rota_id>/trajeto")
     @requer_motorista
     def rota_trajeto(rota_id):
-        operacao.rota_do_motorista(conn(), rota_id, agent_id())
-        chave = (app.config["CONFIG_PROJETO"].get("google_maps") or {}).get("api_key")
+        r = operacao.rota_do_motorista(conn(), rota_id, agent_id())
+        if not operacao.rota_liberada(r):
+            # rota de dia futuro abre as 00h: nem pontos nem chamada ao Google
+            return jsonify({"pontos": [], "fonte": trajeto_rota.FONTE_LINHA_RETA, "assinatura": "",
+                            "base": [trajeto_rota.COORD_CD[0], trajeto_rota.COORD_CD[1]]})
+        chave =(app.config["CONFIG_PROJETO"].get("google_maps") or {}).get("api_key")
         return jsonify(trajeto_rota.trajeto(conn(), rota_id, chave))
 
     @app.get("/api/app-versao")

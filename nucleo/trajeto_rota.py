@@ -34,7 +34,8 @@ def pontos_da_rota(conn, rota_id: int, base=COORD_CD) -> list[tuple[float, float
         "SELECT latitude, longitude FROM nucleo_paradas WHERE rota_id = ? AND situacao != ? ORDER BY ordem",
         (rota_id, banco.PARADA_CANCELADA),
     ).fetchall()
-    coords = [(p["latitude"], p["longitude"]) for p in paradas if p["latitude"] is not None and p["longitude"] is not None]
+    coords = [(p["latitude"], p["longitude"]) for p in paradas if p["latitude"] is not None and p["longitude"] is not None
+              and (p["latitude"], p["longitude"]) != (0, 0)]
     if not coords:
         return []
     return [tuple(base)] + coords + [tuple(base)]

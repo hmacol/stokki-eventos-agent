@@ -10,7 +10,7 @@ import json
 import sys
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -148,6 +148,28 @@ class TestTrajetoRota(unittest.TestCase):
         h = self._auth()
         outra = self._rota_app(rascunho_id=3, agent_id=999)
         self.assertEqual(self.cli.get(f"/api/rotas/{outra}/trajeto", headers=h).status_code, 404)
+
+    def test_api_trajeto_rota_de_dia_futuro_nao_entrega_pontos_nem_chama_google(self):
+        h = self._auth()
+        futuro = (date.today() + timedelta(days=2)).isoformat()
+        rota_id = self._rota_app(data=futuro)
+        self.app.config["CONFIG_PROJETO"]["google_maps"] = {"api_key": "chave"}
+        with mock.patch.object(km_rodoviario, "tracar_google", side_effect=self._desenho) as m:
+            r = self.cli.get(f"/api/rotas/{rota_id}/trajeto", headers=h)
+        self.assertEqual(r.status_code, 200)
+        j = r.get_json()
+        self.assertEqual(j["pontos"], [])
+        self.assertEqual(j["fonte"], "LINHA_RETA")
+        self.assertEqual(j["base"], [-23.497039, -46.6605211])
+        m.assert_not_called()
+
+    def test_parada_em_zero_zero_fica_fora(self):
+        rota_id = self._rota_app()
+        conn = banco.conectar()
+        conn.execute("UPDATE nucleo_paradas SET latitude = 0, longitude = 0 WHERE rota_id = ? AND ordem = 1", (rota_id,))
+        conn.commit()
+        self.assertEqual(trajeto_rota.pontos_da_rota(conn, rota_id), [COORD_CD, (-23.55, -46.65), COORD_CD])
+        conn.close()
 
     def test_api_trajeto_200(self):
         h = self._auth()
