@@ -91,12 +91,54 @@ class TestLigacaoCiencia(Base):
         self.executar.assert_not_called()
 
     def test_ligado_falha_na_ciencia_nao_derruba_a_rodada(self):
+        with mock.patch.object(cd, "abrir", side_effect=[RuntimeError("banco travado"), 5]):
+            r = self._tratar([_servico(1), _servico(2)])
+        self.assertEqual((r["marcados"], r["ciencias"], r["ciencias_falhas"]), (2, 1, 1))
+        self.assertNotIn("erro", r)
+        self.avisar.assert_not_called()
+        self.executar.assert_called_once()
+        self.assertEqual(len(self._ativos()), 2)
+
+    def test_proxima_rodada_reabre_ciencia_do_orfao_recente(self):
         with mock.patch.object(cd, "abrir", side_effect=RuntimeError("banco travado")):
             r = self._tratar([_servico()])
-        self.assertEqual(r["marcados"], 1)
-        self.assertIn("banco travado", r["erro"])
-        self.avisar.assert_not_called()
-        self.assertEqual(len(self._ativos()), 1)
+        self.assertEqual((r["ciencias"], r["ciencias_falhas"]), (0, 1))
+        self.executar.assert_not_called()
+        self.assertEqual(self._ciencias(), [])
+        r = self._tratar([_servico()])   # marcar pula (ja marcado), mas o orfao entra
+        self.assertEqual((r["marcados"], r["ciencias"]), (0, 1))
+        self.assertEqual(len(self._ciencias()), 1)
+        self.executar.assert_called_once()
+
+    def _envelhecer_marcacao(self, horas):
+        conn = pedidos_dedicados.conectar(self.db)
+        conn.execute("UPDATE pedidos_dedicados SET marcado_em = datetime('now','localtime', ?)", (f"-{horas} hours",))
+        conn.commit()
+        conn.close()
+
+    def test_orfao_marcado_ha_mais_de_48h_nao_entra(self):
+        with mock.patch.object(cd, "abrir", side_effect=RuntimeError("x")):
+            self._tratar([_servico()])
+        self._envelhecer_marcacao(49)
+        r = self._tratar([_servico()])
+        self.assertEqual(r["ciencias"], 0)
+        self.assertEqual(self._ciencias(), [])
+        self.executar.assert_not_called()
+
+    def test_pedido_com_ciencia_respondida_nao_reabre(self):
+        self._tratar([_servico()])
+        conn = cd.conectar(self.db)
+        cd.responder(conn, self._ciencias()[0]["id"], cd.CIENTE, "Ana", "1.1.1.1", datetime(2026, 10, 6, 10, 0))
+        conn.close()
+        r = self._tratar([_servico()])
+        self.assertEqual(r["ciencias"], 0)
+        self.assertEqual(len(self._ciencias()), 1)
+
+    def test_falha_ao_conectar_nao_derruba_a_rodada(self):
+        with mock.patch.object(cd, "conectar", side_effect=RuntimeError("sem banco")):
+            r = self._tratar([_servico()])
+        self.assertEqual((r["marcados"], r["ciencias"], r["ciencias_falhas"]), (1, 0, 1))
+        self.assertNotIn("erro", r)
 
     def test_modo_teste_nao_abre_ciencia(self):
         r = self._tratar([_servico()], modo_teste=True)

@@ -25,7 +25,7 @@ o valor sai menor que o rodoviário e o financeiro corrige.
 """
 import logging
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 _AQUI = Path(__file__).parent
@@ -199,9 +199,38 @@ def pendentes_de_aviso(servicos: list[dict], hoje: date | None = None, db_path=N
         conn_ded.close()
 
 
-def _abrir_ciencias(marcados: list[dict], config: dict, db_path=None) -> dict:
-    """Abre a ciencia de cada pedido marcado nesta rodada e, se abriu alguma,
-    dispara a rotina de envio (o primeiro aviso sai agora, respeitando a janela)."""
+ORFAO_HORAS = 48   # marcado ha mais que isso sem ciencia nao e reaberto (pedido anterior a chave)
+
+
+def _orfaos_sem_ciencia(servicos: list[dict], conn_cd, hoje: date, db_path=None) -> list[dict]:
+    """Pedidos marcados por ESTA regra nas ultimas 48h, ainda ativos e sem nenhuma
+    ciencia (a abertura falhou numa rodada anterior). Mesmo item do pendentes_de_aviso."""
+    import ciencia_dedicado
+    limite = (datetime.now() - timedelta(hours=ORFAO_HORAS)).strftime("%Y-%m-%d %H:%M:%S")
+    conn_ded = pedidos_dedicados.conectar(db_path or pedidos_dedicados.DB_PATH)
+    try:
+        ativos = pedidos_dedicados.ativos_por_codigo(conn_ded)
+        itens = []
+        for s in servicos:
+            linha = next((ativos[c] for c in pedidos_dedicados.codigos_do_servico(s) if c in ativos), None)
+            por = str((linha or {}).get("marcado_por") or "")
+            if not por.startswith(POR) or str(linha["marcado_em"] or "") < limite:
+                continue
+            regra, data = regra_dia_fixo_do_servico(s), data_agendada(s)
+            if not regra or not data or data < hoje or ciencia_dedicado.existe_para_servico(conn_cd, s):
+                continue
+            itens.append({"servico": s, "regra": regra, "data": data, "valor": float(linha["valor"] or 0.0),
+                          "valor_pendente": por == POR_VALOR_PENDENTE})
+        return itens
+    finally:
+        conn_ded.close()
+
+
+def _abrir_ciencias(marcados: list[dict], config: dict, db_path=None, servicos: list[dict] | None = None,
+                    hoje: date | None = None) -> dict:
+    """Abre a ciencia de cada pedido marcado nesta rodada (mais os orfaos recentes de
+    rodadas anteriores) e, se abriu alguma, dispara a rotina de envio (o primeiro aviso
+    sai agora, respeitando a janela). Falha num item e logada e nao para os outros."""
     import preferencias_notificacao
     import notificar_ciencia_dedicado
     import ciencia_dedicado
@@ -210,19 +239,35 @@ def _abrir_ciencias(marcados: list[dict], config: dict, db_path=None) -> dict:
     except Exception as e:
         embarcadores = {}
         logger.warning(f"Ciencia do dedicado: CNPJ dos embarcadores indisponivel ({e}); abrindo sem CNPJ.")
-    abertas = 0
-    conn = ciencia_dedicado.conectar(db_path or ciencia_dedicado.DB_PATH)
+    abertas = falhas = 0
     try:
-        for item in marcados:
-            cnpj = (embarcadores.get(item["servico"].get("sender_id")) or {}).get("cnpj")
-            if ciencia_dedicado.abrir(conn, item, cnpj, datetime.now()):
-                abertas += 1
+        conn = ciencia_dedicado.conectar(db_path or ciencia_dedicado.DB_PATH)
+    except Exception as e:
+        logger.error(f"Ciencia do dedicado: banco indisponivel, {len(marcados)} pedido(s) marcado(s) sem ciencia: {e}")
+        return {"ciencias": 0, "ciencias_falhas": max(len(marcados), 1)}
+    try:
+        itens = list(marcados)
+        try:
+            ids = {i["servico"].get("id") for i in marcados}
+            itens += [o for o in _orfaos_sem_ciencia(servicos or [], conn, hoje or date.today(), db_path=db_path)
+                      if o["servico"].get("id") not in ids]
+        except Exception as e:
+            logger.error(f"Ciencia do dedicado: falha ao procurar pedidos marcados sem ciencia: {e}")
+        for item in itens:
+            try:
+                cnpj = (embarcadores.get(item["servico"].get("sender_id")) or {}).get("cnpj")
+                if ciencia_dedicado.abrir(conn, item, cnpj, datetime.now()):
+                    abertas += 1
+            except Exception as e:
+                falhas += 1
+                logger.error(f"Ciencia do dedicado: falha ao abrir a ciencia de {item['servico'].get('code')}: {e}")
     finally:
         conn.close()
     if abertas:
         notificar_ciencia_dedicado.executar(config, db_path=db_path)
-    logger.info(f"Fora do dia fixo: {len(marcados)} marcado(s) como dedicado; {abertas} ciencia(s) aberta(s).")
-    return {"ciencias": abertas}
+    logger.info(f"Fora do dia fixo: {len(marcados)} marcado(s) como dedicado; {abertas} ciencia(s) aberta(s), "
+                f"{falhas} falha(s).")
+    return {"ciencias": abertas, **({"ciencias_falhas": falhas} if falhas else {})}
 
 
 def tratar_fora_dia_fixo(servicos: list[dict], config: dict, modo_teste: bool = False,
@@ -249,7 +294,7 @@ def tratar_fora_dia_fixo(servicos: list[dict], config: dict, modo_teste: bool = 
         import ciencia_dedicado
         if ciencia_dedicado.cfg(config)["ativo"]:
             # fluxo novo: o pedido marcado agora abre ciencia e o aviso unico antigo nao sai
-            return {"marcados": len(marcados), **_abrir_ciencias(marcados, config, db_path)}
+            return {"marcados": len(marcados), **_abrir_ciencias(marcados, config, db_path, servicos, hoje)}
         import notificar_fora_dia_fixo
         avisos = notificar_fora_dia_fixo.avisar(pendentes_de_aviso(servicos, hoje=hoje, db_path=db_path), config,
                                                 db_path=db_path)

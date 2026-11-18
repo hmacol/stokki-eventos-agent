@@ -147,6 +147,14 @@ def abrir(conn, item: dict, cnpj: str | None, agora: datetime) -> int | None:
     return cur.lastrowid
 
 
+def existe_para_servico(conn, servico: dict) -> bool:
+    """True se ha qualquer ciencia (de qualquer situacao) do servico, pelo codigo
+    (mesma normalizacao do abrir) ou pelo service_id."""
+    codigo = normalizar_codigo(str(servico.get("code") or "").split(",")[0])
+    return conn.execute("SELECT 1 FROM ciencias_dedicado WHERE codigo = ? OR (service_id IS NOT NULL AND service_id = ?)",
+                        (codigo, servico.get("id"))).fetchone() is not None
+
+
 def _dicts(cur) -> list[dict]:
     return [dict(r) for r in cur.fetchall()]
 

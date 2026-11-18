@@ -46,6 +46,15 @@ class TestCienciaDedicado(unittest.TestCase):
         self.assertEqual(c["destinatario"], "Padaria do Ze")
         self.assertEqual(c["cidade"], "Campinas")
 
+    def test_existe_para_servico_por_codigo_ou_service_id_em_qualquer_situacao(self):
+        self.assertFalse(cd.existe_para_servico(self.conn, _item()["servico"]))
+        cid = cd.abrir(self.conn, _item(), None, AGORA)
+        cd.responder(self.conn, cid, cd.REAGENDADO, "Ana", "1.1.1.1", AGORA, date(2026, 11, 25))
+        self.assertTrue(cd.existe_para_servico(self.conn, _item()["servico"]))
+        self.assertTrue(cd.existe_para_servico(self.conn, {"id": 10, "code": "#PS-99"}))
+        self.assertTrue(cd.existe_para_servico(self.conn, {"id": 77, "code": "PS-1, PS-2"}))
+        self.assertFalse(cd.existe_para_servico(self.conn, {"id": 77, "code": "#PS-2"}))
+
     def test_abrir_nao_duplica_pendente_do_mesmo_codigo(self):
         self.assertIsNotNone(cd.abrir(self.conn, _item(), None, AGORA))
         self.assertIsNone(cd.abrir(self.conn, _item(), None, AGORA))
