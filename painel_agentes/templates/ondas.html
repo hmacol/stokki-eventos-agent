@@ -159,12 +159,17 @@
       atualizarSelecao();
     } catch (e) { corpoPedidos.innerHTML = '<tr><td colspan="10" class="vazio">' + esc(e.message) + "</td></tr>"; }
   }
-  // Lote indicado pelo cliente: sem indicação vale o FEFO (sai primeiro o que vence primeiro)
+  // Lote indicado pelo cliente: sem indicação sai primeiro o que vence primeiro
   function desenharLotes(linha, r) {
     linha.querySelector("td").innerHTML = '<div class="falta-item" style="margin:0">' + (r.produtos.map(function(p) {
-      const opcoes = '<option value="">FEFO (o que vence primeiro)</option>' + p.lotes.map(function(l) {
-        return '<option value="' + esc(l.lote) + '"' + (l.lote === p.indicado ? " selected" : "") + ">Lote " + esc(l.lote || "(sem lote)") +
-          (l.validade ? " · val. " + dataBr(l.validade) + "/" + l.validade.slice(0, 4) : " · sem validade") + " · " + num(l.livre_un) + " UN livres · " + esc(l.posicoes.join(", ")) + "</option>";
+      // sem indicação do cliente sai o primeiro da lista (o que vence primeiro): mostra o LOTE, não a sigla
+      function rotulo(l) {
+        return "Lote " + esc(l.lote || "(sem lote)") + (l.validade ? " · val. " + dataBr(l.validade) + "/" + l.validade.slice(0, 4) : " · sem validade") +
+          " · " + num(l.livre_un) + " UN livres · " + esc(l.posicoes.join(", "));
+      }
+      const padrao = p.lotes.length ? rotulo(p.lotes[0]) + " (vai este: vence primeiro)" : "Sem caixa disponível deste produto";
+      const opcoes = '<option value="">' + padrao + "</option>" + p.lotes.map(function(l) {
+        return '<option value="' + esc(l.lote) + '"' + (l.lote === p.indicado ? " selected" : "") + ">" + rotulo(l) + " (pedido do cliente)</option>";
       }).join("");
       return '<div class="rodape-bloco" style="margin:4px 0"><span style="min-width:260px"><b>' + esc(p.sku) + "</b> " + esc(p.descricao) + " · " + num(p.pedido_un) + ' UN</span>' +
         '<select data-produto="' + p.produto_id + '" data-pedido="' + r.pedido_id + '" aria-label="Lote de ' + esc(p.sku) + '">' + opcoes + "</select>" +
@@ -184,7 +189,7 @@
     try {
       const r = await chamar(URL_LOTES.replace("/0/", "/" + s.dataset.pedido + "/"), { produto_id: Number(s.dataset.produto), lote: s.value });
       desenharLotes(linha, r);
-      dizer(r.codigo_ps + (s.value ? ": lote " + s.value + " indicado. A separação só vai aceitar esse lote." : ": voltou para o FEFO."), "ok");
+      dizer(r.codigo_ps + (s.value ? ": lote " + s.value + " indicado. A separação só vai aceitar esse lote." : ": sem lote indicado, sai o lote que vence primeiro."), "ok");
     } catch (e) { dizer(e.message, "erro"); }
   });
   function marcados() { return Array.from(document.querySelectorAll(".marca:checked")).map(function(c) { return Number(c.value); }); }

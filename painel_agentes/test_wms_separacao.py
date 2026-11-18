@@ -839,8 +839,12 @@ class TestLoteEValidade(Base):
         nova = self.caixa("L-NOVO", "2027-06-30", P1)
         velha = self.caixa("L-VELHO", "2027-01-15", P2)
         pid, onda = self.onda_de()
-        with self.assertRaisesRegex(wms.ErroWMS, r"FEFO: pegue primeiro o lote L-VELHO, que vence em 15/01/2027 e esta em C9-E1-N2"):
+        with self.assertRaises(wms.ErroWMS) as erro:
             sep.separar_caixa(self.conn, onda, nova, uuid=self.u(), operador=ANA)
+        msg = str(erro.exception)
+        self.assertIn("Pegue o lote L-VELHO (val. 15/01/2027) na posicao C9-E1-N2", msg)
+        self.assertIn("Esta caixa e do lote L-NOVO, val. 30/06/2027", msg)
+        self.assertNotIn("FEFO", msg)   # a tela mostra o lote, nao a sigla
         self.assertEqual((self.situacao(nova), self.conn.execute("SELECT COUNT(*) FROM wms_separacao_itens").fetchone()[0]),
                          ("EM_ESTOQUE", 0))
         r = sep.separar_caixa(self.conn, onda, velha, uuid=self.u(), operador=ANA)
@@ -875,7 +879,7 @@ class TestLoteEValidade(Base):
         sem = self.caixas(1, 1, lote="L-SEM")[0]
         com = self.caixa("L-COM", "2027-06-30")
         pid, onda = self.onda_de()
-        with self.assertRaisesRegex(wms.ErroWMS, "FEFO"):
+        with self.assertRaisesRegex(wms.ErroWMS, "Pegue o lote L-COM .* Esta caixa e do lote L-SEM, sem validade"):
             sep.separar_caixa(self.conn, onda, sem, uuid=self.u(), operador=ANA)
         sep.separar_caixa(self.conn, onda, com, uuid=self.u(), operador=ANA)
 

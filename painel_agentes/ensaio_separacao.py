@@ -140,7 +140,7 @@ with sync_playwright() as p:
     conferir(esc.locator("#tab-pedidos tbody tr:not(.linha-lotes)").count() == 3, "lista os 3 pedidos da MOMBAK")
     esc.click("#tab-pedidos [data-lotes] >> nth=0")
     esc.wait_for_timeout(500)
-    conferir("FEFO (o que vence primeiro)" in esc.inner_text("#tab-pedidos .linha-lotes >> nth=0"), "painel Lote do cliente abre com FEFO como padrao")
+    conferir("vai este: vence primeiro" in esc.inner_text("#tab-pedidos .linha-lotes >> nth=0") and "FEFO" not in esc.inner_text("#tab-pedidos"), "painel Lote do cliente mostra o lote que vai sair, sem a sigla")
     esc.screenshot(path=str(PRINTS / "e0_lote_do_cliente.png"), full_page=True)
     esc.click("#tab-pedidos [data-lotes] >> nth=0")
     esc.click("#datas [data-data='2026-11-24']")
