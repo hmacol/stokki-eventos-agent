@@ -135,5 +135,64 @@ class UmaLinhaPorPedidoTest(unittest.TestCase):
                          "04/11 Insucesso (Fora do horário de recebimento); 05/11 Entregue")
 
 
+class CanceladoNaStokkiTest(unittest.TestCase):
+    """PS-44507 (18/11): cancelado na Stokki, subiu pra rota mesmo assim e o
+    motorista deu "não coletado" -- o portal mostrava "Aguardando saída"
+    carimbado com hoje. Hugo: aparecer como "Cancelado"."""
+
+    def _unir(self, rotas, cancelados, sem_rota=()):
+        linhas = dc._carimbar_dia(dc.linhas_das_rotas(rotas, REMETENTE, {}, {}) + list(sem_rota), HOJE)
+        return dc.unir_tentativas(linhas, HOJE, cancelados=cancelados)
+
+    def test_nao_coletado_de_pedido_cancelado_vira_cancelado_no_dia_da_rota(self):
+        linhas = self._unir([_rota(20, _dia(1), _servico("#PS-44507", falha=NAO_COLETADO))], {"PS-44507"})
+        self.assertEqual(len(linhas), 1)
+        p = linhas[0]
+        self.assertEqual((p["situacao"], p["situacao_rotulo"], p["data"]),
+                         ("cancelado", "Cancelado", _dia(1).isoformat()))
+        self.assertEqual((p["motivo"], p["failed_reason_id"], p["comprovante"]), ("", None, False))
+        self.assertEqual([t["situacao"] for t in p["tentativas"]], ["cancelado"])
+
+    def test_aguardando_saida_de_pedido_cancelado_vira_cancelado(self):
+        linhas = self._unir([], {"PS-10"}, sem_rota=[_sem_rota("#PS-10")])
+        self.assertEqual(linhas[0]["situacao"], "cancelado")
+
+    def test_entregue_continua_entregue_mesmo_cancelado(self):
+        linhas = self._unir([_rota(1, HOJE, _servico("#PS-11"))], {"PS-11"})
+        self.assertEqual(linhas[0]["situacao"], "entregue")
+
+    def test_pedido_agrupado_so_e_cancelado_com_todos_cancelados(self):
+        linhas = self._unir([_rota(1, HOJE, _servico("#PS-12, #PS-13", status="assigned"))], {"PS-12"})
+        self.assertEqual(linhas[0]["situacao"], "programado")
+
+    def test_sem_cancelados_nada_muda(self):
+        linhas = self._unir([_rota(1, HOJE, _servico("#PS-14", falha=NAO_COLETADO))], set())
+        self.assertEqual(linhas[0]["situacao"], "aguardando_saida")
+
+
+class CanceladosNoBancoTest(unittest.TestCase):
+    def test_le_galpao_pedidos_situacao_cancelado(self):
+        import sqlite3
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "dados.db"
+            conn = sqlite3.connect(db)
+            conn.execute("CREATE TABLE galpao_pedidos (id_stokki INTEGER, codigo TEXT, situacao TEXT)")
+            conn.executemany("INSERT INTO galpao_pedidos VALUES (?, ?, ?)",
+                             [(1, "PS-1", "Cancelado"), (2, "PS-2", "Aguardando Transportador")])
+            conn.commit()
+            conn.close()
+            with mock.patch.object(dc, "DB_PATH", db):
+                self.assertEqual(dc.cancelados_na_stokki({"PS-1", "PS-2", "PS-3"}), {"PS-1"})
+
+    def test_banco_sem_tabela_devolve_vazio(self):
+        import tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(dc, "DB_PATH", Path(tmp) / "vazio.db"):
+                self.assertEqual(dc.cancelados_na_stokki({"PS-1"}), set())
+
+
 if __name__ == "__main__":
     unittest.main()

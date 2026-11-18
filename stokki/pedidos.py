@@ -346,8 +346,15 @@ def _parsear_pagina_detalhe(html: str, id_pedido: int) -> dict:
             except ValueError:
                 continue
 
+    # Situacao ("Cancelado", "Aguardando Transportador"...) -- mesmo campo que
+    # stokki/cancelar.situacao_e_token le. O pipeline confere antes de subir
+    # pra Vuupt: a listagem da rodada pode estar 20 min velha (PS-44507, 17/11).
+    m_sit = re.search(r"Situa[çc][ãa]o:\s*</th>\s*<td>(.*?)</td>", html, re.S)
+    situacao = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m_sit.group(1))).strip() if m_sit else ""
+
     return {
         "id":         id_pedido,
+        "situacao":   situacao,
         "referencia": referencia,
         "stkkc_id":   stkkc_id,
         "quantidade_volumes": quantidade_volumes,

@@ -88,6 +88,7 @@ ROTULOS = {
     "aguardando_saida": "Aguardando saída",
     "agendado": "Agendado",
     "insucesso": "Insucesso",
+    "cancelado": "Cancelado",
 }
 
 
@@ -239,6 +240,30 @@ def nf_por_codigo(codigos_base: set[str]) -> dict[str, str]:
     except Exception as e:
         logger.warning(f"[portal] NF por código falhou: {e}")
         return {}
+
+
+def cancelados_na_stokki(codigos_base: set[str]) -> set[str]:
+    """Códigos base cancelados na Stokki, pelo coletor do galpão (galpao_pedidos,
+    1 min) -- a mesma fonte do status CANCELADO da tela /pedidos. Falha = vazio
+    (o portal segue como antes)."""
+    if not codigos_base:
+        return set()
+    try:
+        conn = _conectar()
+        try:
+            achados: set[str] = set()
+            lista = sorted(codigos_base)
+            for i in range(0, len(lista), 900):
+                lote = lista[i:i + 900]
+                achados.update(r["codigo"] for r in conn.execute(
+                    f"SELECT codigo FROM galpao_pedidos WHERE situacao = 'Cancelado' "
+                    f"AND codigo IN ({','.join('?' * len(lote))})", lote))
+            return achados
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"[portal] cancelados na Stokki indisponível: {e}")
+        return set()
 
 
 def _catalogo_motoristas(config: dict) -> dict:
@@ -566,7 +591,7 @@ def invalidar_cache(sender_id: int) -> None:
             _cache_dia.pop(k, None)
 
 
-ORDEM_SITUACAO = {"insucesso": 0, "em_rota": 1, "programado": 2, "aguardando_saida": 3, "entregue": 4}
+ORDEM_SITUACAO = {"insucesso": 0, "em_rota": 1, "programado": 2, "aguardando_saida": 3, "entregue": 4, "cancelado": 5}
 
 
 def _carimbar_dia(linhas: list[dict], dia: date) -> list[dict]:
@@ -602,12 +627,23 @@ def _so_nao_coletado(p: dict, dia: date) -> dict:
             "data": dia.isoformat(), "data_rotulo": f"{_dia_semana(dia)} {_ddmm(dia)}"}
 
 
-def unir_tentativas(linhas: list[dict], dia: date) -> list[dict]:
+def _como_cancelado(p: dict) -> dict:
+    """Pedido cancelado na Stokki (Hugo, 18/11, PS-44507): fica no dia da última
+    tentativa, sem motorista nem motivo."""
+    return {**p, "situacao": "cancelado", "situacao_rotulo": ROTULOS["cancelado"],
+            "detalhe": "Pedido cancelado", "motorista": "", "rota": "", "placa": "", "ordem": None,
+            "total_paradas": None, "concluido_em": "", "motivo": "", "failed_reason_id": None,
+            "comprovante": False, "rota_iniciada_em": ""}
+
+
+def unir_tentativas(linhas: list[dict], dia: date, cancelados: set[str] | frozenset[str] = frozenset()) -> list[dict]:
     """Uma linha por pedido (empresa + códigos base). `codigo` passa a ser o
     código base; o do serviço da última tentativa fica em `codigo_servico`
     (é o que casa com os insucessos aguardando resposta). Só entram no
     histórico as tentativas que terminaram e a atual: programado de rota
-    antiga e rota duplicada não são tentativa."""
+    antiga e rota duplicada não são tentativa. `cancelados` = códigos base
+    cancelados na Stokki: o pedido (todos os códigos dele) que não foi
+    entregue vira "Cancelado"."""
     grupos: dict[tuple, list[dict]] = {}
     for p in linhas:
         grupos.setdefault((p.get("sender_id"), tuple(codigos_base_lista(p["codigo"]))), []).append(p)
@@ -618,11 +654,16 @@ def unir_tentativas(linhas: list[dict], dia: date) -> list[dict]:
     saida = []
     for (_, bases), grupo in grupos.items():
         validas = [p for p in grupo if not (p["situacao"] == "insucesso" and p.get("failed_reason_id") == NAO_COLETADO)]
+        cancelado = bool(bases) and all(b in cancelados for b in bases)
         if validas:
             entregues = [p for p in validas if p["situacao"] == "entregue"]
             final = dict(max(entregues or validas, key=recencia))
+        elif cancelado:
+            final = dict(max(grupo, key=recencia))
         else:
             final = _so_nao_coletado(max(grupo, key=recencia), dia)
+        if cancelado and final["situacao"] != "entregue":
+            final = _como_cancelado(final)
         tentativas = {}
         for p in sorted(validas, key=recencia):
             if p["situacao"] in ("entregue", "insucesso"):
@@ -643,7 +684,9 @@ def unir_tentativas(linhas: list[dict], dia: date) -> list[dict]:
 def _unir_com_futuros(pedidos: list[dict], futuros: list[dict], dia: date) -> tuple[list[dict], list[dict]]:
     """Os agendados pra frente entram na união (a reentrega agendada é a
     última tentativa do pedido) e voltam pra lista deles."""
-    unidos = unir_tentativas(pedidos + futuros, dia)
+    todos = pedidos + futuros
+    cancelados = cancelados_na_stokki({b for p in todos for b in codigos_base_lista(p["codigo"])})
+    unidos = unir_tentativas(todos, dia, cancelados)
     return ([p for p in unidos if p["situacao"] != "agendado"],
             [p for p in unidos if p["situacao"] == "agendado"])
 

@@ -2103,6 +2103,13 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
    segue aberto na Stokki: sai como pulado_cancelado_vuupt no relatório
    da importação (conferir à mão). Exceção: se virou RETIRADA, sai como
    ignorado_retirada (retirada nunca sobe pra Vuupt, 06/11).
+ - Pedido CANCELADO na Stokki depois da listagem da rodada (18/11, PS-44507):
+   o pipeline lê a "Situação" no detalhe (stokki/pedidos.obter_detalhe) e
+   não sobe (ignorado_cancelado_stokki); serviço not_assigned é cancelado na
+   Vuupt. Cancelamento direto na Stokki DEPOIS de o serviço existir continua
+   sem propagar (só o batimento acusa CANCELADO_STOKKI_SERVICO_VIVO).
+   O portal mostra "Cancelado" pra pedido não entregue que galpao_pedidos
+   marca Cancelado (portal_cliente/dados_cliente.cancelados_na_stokki).
  - documentos_pedido/selecionar_pedidos.py repete regra do pipeline.py.
  - O `niveis` do menu lateral precisa bater com o @requer_auth da rota.
  - Envio real para clientes/motoristas é desligado por padrão; ligar pela tela
