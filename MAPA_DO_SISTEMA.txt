@@ -144,6 +144,11 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              exige FEFO (recusa a caixa se outra disponível vence antes) e nunca
                                              aceita caixa vencida; lote indicado é marcado em /ondas (tabela
                                              wms_pedido_lotes) e aí só aquele lote entra no pedido.
+                                             Planilha de lotes do cliente (modelo Maria Dolores: aba Lotes, tabela
+                                             dinâmica NF x SKU x lote): painel_agentes/wms_lotes_planilha.py lê,
+                                             wms_separacao.importar_lotes_cliente grava em wms_lotes_cliente e a
+                                             indicação casa com o pedido pelo número da NF (wms_pedidos.nf).
+                                             Envio pelo escritório em /ondas; .xls precisa do xlrd no venv.
                                              pela fila de etiquetas (tipo VOLUME). Ensaio no navegador com banco
                                              temporário: py -3.11 ensaio_separacao.py <pasta> (de painel_agentes/).
                                              (caixas com serial/eventos), wms_fila_impressao.py (fila de etiquetas)

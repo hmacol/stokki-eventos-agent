@@ -2,6 +2,7 @@
 Testes da separacao em onda, distribuicao, conferencia cega e volumes (dados).
 Rodar (de dentro de painel_agentes): py -3.11 -m unittest test_wms_separacao -v
 """
+import io
 import sqlite3
 import sys
 import tempfile
@@ -17,6 +18,7 @@ import wms_caixas as cx  # noqa: E402
 import wms_fila_impressao as fila  # noqa: E402
 import wms_pedidos  # noqa: E402
 import wms_separacao as sep  # noqa: E402
+import wms_lotes_planilha as lp  # noqa: E402
 
 EMB = 22
 ANA = {"id": "1", "nome": "Ana"}
@@ -905,7 +907,7 @@ class TestLoteEValidade(Base):
         self.assertEqual(sep.indicar_lote(self.conn, pid, 1, " l-novo ", "hugo")["produtos"][0]["indicado"], "L-NOVO")
         onda = sep.onda_de_um_pedido(self.conn, pid, ANA)
         self.assertEqual(sep.detalhe_onda(self.conn, onda)["lotes_indicados"][0]["lote"], "L-NOVO")
-        with self.assertRaisesRegex(wms.ErroWMS, "cliente indicou o lote L-NOVO"):
+        with self.assertRaisesRegex(wms.ErroWMS, "cliente pediu o lote L-NOVO"):
             sep.separar_caixa(self.conn, onda, velha, uuid=self.u(), operador=ANA)
         sep.separar_caixa(self.conn, onda, nova, uuid=self.u(), operador=ANA)
         self.assertEqual(self.reservas(pid), [("MANUAL", P1, "L-NOVO", 12)])
@@ -940,6 +942,158 @@ class TestLoteEValidade(Base):
         sep.separar_caixa(self.conn, onda, velha, uuid=self.u(), operador=ANA)
         lotes = sep.andamento(self.conn, EMB)[0]["lotes"]
         self.assertEqual(lotes, [{"sku": "CAFE", "lote": "L-VELHO", "validade": "2027-01-15", "un": 12}])
+
+
+def planilha_lotes(linhas, lotes=("247", "254", "FIFO"), com_lixo=True):
+    """xlsx no modelo da Maria Dolores: aba Lotes com tabela dinamica (NF e cliente so na 1a linha do grupo)."""
+    import openpyxl
+    wb = openpyxl.Workbook()
+    wb.active.title = "BASE"
+    wb.active.append(["ID", "Numero do pedido", "Data"])
+    ws = wb.create_sheet("Lotes")
+    if com_lixo:
+        ws.append(["CD", "(Varios itens)"])
+        ws.append([])
+        ws.append(["Soma de Quantidade", None, None, None, "Lotes"])
+    ws.append(["Nome do contato", "Nota Fiscal", "Descrição", "Código (SKU)"]
+              + [int(l) if l.isdigit() else l for l in lotes] + ["Total Geral"])
+    for cliente, nf, sku, qtds in linhas:
+        ws.append([cliente, nf, "DESCRICAO " + sku, sku] + list(qtds) + [sum(q or 0 for q in qtds)])
+    ws.append(["Total Geral"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+class TestPlanilhaDeLotes(Base):
+    """Cliente indica o lote por nota e por produto (modelo da Maria Dolores, 17/11)."""
+
+    LINHAS = [("DUFRY", 42430, "CAFE", (6, None, None)),
+              ("AMMFA", 1345, "CAFE", (None, 30, None)),
+              (None, None, "LEITE", (None, None, 12)),            # mesma NF 1345, sem lote
+              ("VERO", "042424", "CAFE", (None, None, 6))]
+
+    def caixa(self, lote, validade, produto_id=1, qtd=None, posicao=P1):
+        r = cx.criar_caixas(self.conn, produto_id=produto_id, lote=lote, validade=validade, qtd_un=qtd, quantidade=1)
+        cx.ativar_caixa(self.conn, r["seriais"][0], posicao)
+        return r["seriais"][0]
+
+    def pedido_nf(self, itens, nf):
+        pid = self.pedido(itens)
+        self.conn.execute("UPDATE wms_pedidos SET nf = ? WHERE id = ?", (nf, pid))
+        self.conn.commit()
+        return pid
+
+    def test_le_a_tabela_dinamica_com_nf_repetida_em_branco_e_coluna_sem_lote(self):
+        r = lp.ler_lotes(planilha_lotes(self.LINHAS), "LOTES.xlsx")
+        self.assertEqual((r["aba"], r["lotes"]), ("Lotes", ["247", "254"]))
+        self.assertEqual([(l["nf"], l["sku"], l["lote"], l["qtd_un"], l["cliente"]) for l in r["linhas"]],
+                         [("42430", "CAFE", "247", 6, "DUFRY"), ("1345", "CAFE", "254", 30, "AMMFA")])
+        self.assertEqual([(l["nf"], l["sku"], l["qtd_un"]) for l in r["sem_lote"]], [("1345", "LEITE", 12), ("42424", "CAFE", 6)])
+
+    def test_planilha_que_nao_e_de_lotes_e_recusada_com_motivo(self):
+        import openpyxl
+        wb = openpyxl.Workbook()
+        wb.active.append(["Pedido", "SKU", "Quantidade"])
+        buf = io.BytesIO()
+        wb.save(buf)
+        casos = ((buf.getvalue(), "x.xlsx", "Nota Fiscal"), (b"nao e planilha", "x.xlsx", "Nao consegui abrir"),
+                 (b"", "x.xlsx", "vazio"), (planilha_lotes(self.LINHAS, lotes=("FIFO",)), "x.xlsx", "nenhuma coluna de lote"))
+        for conteudo, nome, motivo in casos:
+            with self.assertRaisesRegex(wms.ErroWMS, motivo):
+                lp.ler_lotes(conteudo, nome)
+
+    def test_xls_antigo_sem_o_leitor_instalado_pede_pra_salvar_como_xlsx(self):
+        import builtins
+        real = builtins.__import__
+
+        def sem_xlrd(nome, *a, **kw):
+            if nome == "xlrd":
+                raise ImportError("sem xlrd")
+            return real(nome, *a, **kw)
+        ole = bytes.fromhex("d0cf11e0a1b11ae1") + b"resto"
+        builtins.__import__ = sem_xlrd
+        try:
+            with self.assertRaisesRegex(wms.ErroWMS, "salve a planilha como .xlsx"):
+                lp.ler_lotes(ole, "LOTES.xls")
+        finally:
+            builtins.__import__ = real
+
+    def test_importar_casa_pela_nf_e_a_separacao_so_aceita_o_lote_pedido(self):
+        velha = self.caixa("240", "2027-01-15", qtd=6)
+        pedida = self.caixa("247", "2027-06-30", qtd=6)
+        pid = self.pedido_nf([("CAFE", 6)], "42430")
+        r = sep.importar_lotes_cliente(self.conn, EMB, lp.ler_lotes(planilha_lotes(self.LINHAS), "LOTES.xlsx"), "LOTES.xlsx", "hugo")
+        self.assertEqual((r["gravadas"], r["sem_lote"]), (2, 2))
+        self.assertEqual([(l["nf"], l["codigo_ps"], l["situacao"]) for l in r["linhas"]],
+                         [("42430", f"PS-{self._stokki}", "ok"), ("1345", "", "nf_sem_pedido")])
+        self.assertTrue(any("1345" in a for a in r["avisos"]))
+        self.assertEqual(sep.lotes_indicados(self.conn, [pid]), {pid: {1: {"247": 6}}})
+        self.assertEqual(sep.pedidos_para_onda(self.conn, EMB)[0]["lotes_cliente"], ["247"])
+        self.assertEqual(sep.opcoes_de_lote(self.conn, pid)["produtos"][0]["planilha"], [{"lote": "247", "qtd_un": 6}])
+        onda = sep.onda_de_um_pedido(self.conn, pid, ANA)
+        self.assertEqual(sep.detalhe_onda(self.conn, onda)["lotes_indicados"][0]["qtd_un"], 6)
+        with self.assertRaisesRegex(wms.ErroWMS, "cliente pediu o lote 247"):
+            sep.separar_caixa(self.conn, onda, velha, uuid=self.u(), operador=ANA)   # vence antes, mas nao e o pedido
+        sep.separar_caixa(self.conn, onda, pedida, uuid=self.u(), operador=ANA)
+        self.assertEqual(self.reservas(pid), [("MANUAL", P1, "247", 6)])
+
+    def test_lote_pedido_so_pra_parte_do_produto_e_o_resto_sai_o_que_vence_primeiro(self):
+        velha = self.caixa("240", "2027-01-15", qtd=6)
+        pedida = self.caixa("247", "2027-06-30", qtd=6)
+        nova = self.caixa("260", "2027-09-30", qtd=6)
+        pid = self.pedido_nf([("CAFE", 12)], "42430")      # a planilha pede 6 do lote 247; os outros 6 sao livres
+        sep.importar_lotes_cliente(self.conn, EMB, lp.ler_lotes(planilha_lotes(self.LINHAS), "x.xlsx"), "x.xlsx", "hugo")
+        onda = sep.onda_de_um_pedido(self.conn, pid, ANA)
+        with self.assertRaisesRegex(wms.ErroWMS, "Pegue o lote 240"):
+            sep.separar_caixa(self.conn, onda, nova, uuid=self.u(), operador=ANA)   # parte livre segue a validade
+        sep.separar_caixa(self.conn, onda, pedida, uuid=self.u(), operador=ANA)      # o lote pedido entra fora da ordem
+        sep.separar_caixa(self.conn, onda, velha, uuid=self.u(), operador=ANA)
+        self.assertEqual(self.reservas(pid), [("MANUAL", P1, "240", 6), ("MANUAL", P1, "247", 6)])
+
+    def test_reenviar_a_planilha_substitui_e_linha_sem_lote_apaga_a_indicacao_antiga(self):
+        pid = self.pedido_nf([("CAFE", 6)], "42430")
+        sep.importar_lotes_cliente(self.conn, EMB, lp.ler_lotes(planilha_lotes(self.LINHAS), "a.xlsx"), "a.xlsx", "hugo")
+        troca = [("DUFRY", 42430, "CAFE", (None, 6, None))]
+        sep.importar_lotes_cliente(self.conn, EMB, lp.ler_lotes(planilha_lotes(troca), "b.xlsx"), "b.xlsx", "hugo")
+        self.assertEqual(sep.lotes_indicados(self.conn, [pid]), {pid: {1: {"254": 6}}})
+        sem = [("DUFRY", 42430, "CAFE", (None, None, 6)), ("X", 9, "LEITE", (1, None, None))]
+        sep.importar_lotes_cliente(self.conn, EMB, lp.ler_lotes(planilha_lotes(sem), "c.xlsx"), "c.xlsx", "hugo")
+        self.assertEqual(sep.lotes_indicados(self.conn, [pid]), {})
+
+    def test_marcacao_do_escritorio_vale_por_cima_da_planilha(self):
+        self.caixa("247", "2027-06-30", qtd=6)
+        self.caixa("260", "2027-09-30", qtd=6)
+        pid = self.pedido_nf([("CAFE", 6)], "42430")
+        sep.importar_lotes_cliente(self.conn, EMB, lp.ler_lotes(planilha_lotes(self.LINHAS), "a.xlsx"), "a.xlsx", "hugo")
+        sep.indicar_lote(self.conn, pid, 1, "260", "hugo")
+        self.assertEqual(sep.lotes_indicados(self.conn, [pid]), {pid: {1: {"260": None}}})
+        op = sep.opcoes_de_lote(self.conn, pid)["produtos"][0]
+        self.assertEqual((op["indicado"], op["planilha"]), ("260", []))
+
+    def test_avisos_de_sku_desconhecido_lote_sem_caixa_e_pedido_que_ja_passou(self):
+        pid, s = self.pronto_pra_conferir()     # ja separado
+        self.conn.execute("UPDATE wms_pedidos SET nf = '42430' WHERE id = ?", (pid,))
+        outro = self.pedido_nf([("CAFE", 6)], "1345")
+        self.conn.commit()
+        linhas = self.LINHAS + [("Z", 777, "NAOEXISTE", (1, None, None))]
+        r = sep.importar_lotes_cliente(self.conn, EMB, lp.ler_lotes(planilha_lotes(linhas), "a.xlsx"), "a.xlsx", "hugo")
+        self.assertEqual({l["nf"]: l["situacao"] for l in r["linhas"]},
+                         {"42430": "pedido_ja_separado", "1345": "lote_sem_estoque", "777": "sku_desconhecido"})
+        self.assertEqual(len(r["avisos"]), 3)
+        self.assertIsNotNone(outro)
+
+    def test_na_onda_de_varios_pedidos_a_caixa_do_lote_pedido_vai_pra_quem_pediu(self):
+        comum = self.caixa("240", "2027-01-15", qtd=6)
+        pedida = self.caixa("247", "2027-06-30", qtd=6)
+        a = self.pedido_nf([("CAFE", 6)], "111")
+        b = self.pedido_nf([("CAFE", 6)], "42430")
+        sep.importar_lotes_cliente(self.conn, EMB, lp.ler_lotes(planilha_lotes(self.LINHAS), "a.xlsx"), "a.xlsx", "hugo")
+        onda = self.onda(a, b)
+        for x in (pedida, comum):
+            sep.separar_caixa(self.conn, onda, x, uuid=self.u(), operador=ANA)
+        destinos = {x: sep.distribuir_caixa(self.conn, onda, x, uuid=self.u(), operador=ANA)["pedido_id"] for x in (comum, pedida)}
+        self.assertEqual(destinos, {comum: a, pedida: b})
 
 
 if __name__ == "__main__":

@@ -50,6 +50,53 @@
 </div>
 <p id="aviso" role="alert"></p>
 
+<section class="bloco">
+  <h2>Planilha de lotes do cliente</h2>
+  <p class="vazio" style="padding:0 0 8px">Quando o cliente pede lote específico, envie aqui a planilha dele (por nota fiscal e produto). O que não tiver lote indicado sai pelo que vence primeiro.</p>
+  <div class="filtros" style="margin-bottom:0">
+    <label for="sel-emb-lotes">Embarcador</label>
+    <select id="sel-emb-lotes">
+      {% for e in pilotos %}<option value="{{ e.id }}">{{ e.nome }}</option>{% endfor %}
+    </select>
+    <input type="file" id="arq-lotes" accept=".xls,.xlsx,.xlsm" aria-label="Arquivo da planilha de lotes">
+    <button type="button" class="btn" id="btn-lotes-planilha">Enviar planilha</button>
+  </div>
+  <div id="resultado-lotes"></div>
+</section>
+<script>
+(function() {
+  const aviso = document.getElementById("aviso");
+  function esc(t) { const d = document.createElement("div"); d.textContent = t == null ? "" : String(t); return d.innerHTML; }
+  function num(v) { const n = Number(v); return Number.isInteger(n) ? String(n) : n.toLocaleString("pt-BR", { maximumFractionDigits: 3 }); }
+  function dizer(msg, tipo) { aviso.textContent = msg || ""; aviso.className = tipo || ""; }
+  document.getElementById("btn-lotes-planilha").addEventListener("click", async function(ev) {
+    const campo = document.getElementById("arq-lotes");
+    const alvo = document.getElementById("resultado-lotes");
+    if (!campo.files.length) { dizer("Escolha o arquivo da planilha de lotes.", "erro"); return; }
+    const corpo = new FormData();
+    corpo.append("arquivo", campo.files[0]);
+    corpo.append("embarcador_id", document.getElementById("sel-emb-lotes").value);
+    ev.target.disabled = true;
+    try {
+      const resp = await fetch("{{ url_for('api_ondas_lotes_planilha') }}", { method: "POST", body: corpo, credentials: "same-origin", headers: { "Accept": "application/json" } });
+      const r = await resp.json().catch(function() { return {}; });
+      if (!resp.ok) throw new Error(r.erro || ("Erro " + resp.status));
+      dizer("Planilha lida: " + r.gravadas + " indicação(ões) de lote gravada(s); " + r.sem_lote + " linha(s) sem lote saem pelo que vence primeiro.", "ok");
+      alvo.innerHTML = '<div class="falta-item" style="margin-top:10px">' +
+        (r.avisos.length ? "<ul>" + r.avisos.map(function(a) { return "<li>" + esc(a) + "</li>"; }).join("") + "</ul>" : "") +
+        '<div class="rolagem"><table class="tab"><thead><tr><th>NF</th><th>Pedido</th><th>SKU</th><th>Lote</th><th>Quantidade</th><th>Cliente</th></tr></thead><tbody>' +
+        r.linhas.map(function(l) {
+          return '<tr><td class="mono">' + esc(l.nf) + '</td><td class="mono">' + (esc(l.codigo_ps) || '<span class="selo">ainda não chegou</span>') + "</td><td>" + esc(l.sku) +
+            "</td><td><b>" + esc(l.lote) + '</b></td><td class="num">' + num(l.qtd_un) + '</td><td class="quebra">' + esc(l.cliente) + "</td></tr>";
+        }).join("") + "</tbody></table></div></div>";
+      campo.value = "";
+      document.dispatchEvent(new CustomEvent("lotes-importados"));
+    } catch (e) { dizer(e.message, "erro"); }
+    ev.target.disabled = false;
+  });
+})();
+</script>
+
 {% if not embarcadores %}
 <div class="bloco"><div class="vazio">Nenhum embarcador opera por caixa ainda (config <span class="mono">wms.pilotos</span>). Sem isso não há onda.</div></div>
 {% else %}
@@ -147,7 +194,8 @@
         return '<tr><td><input type="checkbox" class="marca" value="' + p.id + '" aria-label="' + esc(p.codigo_ps) + '"></td><td class="mono">' + esc(p.codigo_ps) +
           "</td><td>" + entrega(p) + '</td><td class="quebra">' + esc(p.destinatario) + "</td><td>" + esc(p.cidade) + (p.uf ? " - " + esc(p.uf) : "") +
           '</td><td class="num">' + p.linhas + '</td><td class="num">' + num(p.un) + "</td><td>" + estoque + "</td><td>" + esc(p.situacao) +
-          '</td><td><button type="button" class="btn" data-lotes="' + p.id + '" title="Sem indicação a separação segue o que vence primeiro. Use quando o cliente pedir um lote específico.">Lote do cliente</button></td></tr>' +
+          '</td><td><button type="button" class="btn" data-lotes="' + p.id + '" title="Sem indicação a separação segue o que vence primeiro. Use quando o cliente pedir um lote específico.">Lote do cliente</button>' +
+          ((p.lotes_cliente || []).length ? ' <span class="selo atencao" title="Lote pedido pelo cliente">lote ' + esc(p.lotes_cliente.join(", ")) + "</span>" : "") + "</td></tr>" +
           '<tr class="linha-lotes" id="lotes-' + p.id + '" hidden><td colspan="10"></td></tr>';
       }).join("") || '<tr><td colspan="10" class="vazio">Nenhum pedido deste embarcador esperando onda' + (dataEscolhida ? " nesta data" : "") + ".</td></tr>";
       document.getElementById("marcar-todos").checked = false;
@@ -173,6 +221,7 @@
       }).join("");
       return '<div class="rodape-bloco" style="margin:4px 0"><span style="min-width:260px"><b>' + esc(p.sku) + "</b> " + esc(p.descricao) + " · " + num(p.pedido_un) + ' UN</span>' +
         '<select data-produto="' + p.produto_id + '" data-pedido="' + r.pedido_id + '" aria-label="Lote de ' + esc(p.sku) + '">' + opcoes + "</select>" +
+        ((p.planilha || []).length ? ' <span class="selo atencao">planilha do cliente: ' + p.planilha.map(function(x) { return num(x.qtd_un) + " UN do lote " + esc(x.lote); }).join(", ") + "</span>" : "") +
         (p.indicado && !p.lotes.some(function(l) { return l.lote === p.indicado; }) ? ' <span class="selo erro">lote ' + esc(p.indicado) + " indicado, sem caixa disponível</span>" : "") + "</div>";
     }).join("") || '<span class="vazio">Pedido sem produto cadastrado.</span>') + "</div>";
   }
@@ -276,6 +325,7 @@
     try { const r = await chamar(URL_LIBERAR.replace("/0/", "/" + b.dataset.liberar + "/"), {}); dizer(r.codigo_ps + ": conferência liberada, o pedido voltou para a fila de conferência.", "ok"); carregarAndamento(); }
     catch (e) { dizer(e.message, "erro"); b.disabled = false; }
   });
+  document.addEventListener("lotes-importados", function() { carregarPedidos(); });
   document.getElementById("btn-atualizar").addEventListener("click", function() { carregarPedidos(); carregarAndamento(); carregarFaltas(); });
   carregarPedidos(); carregarAndamento(); carregarFaltas();
   setInterval(function() { if (!document.hidden) { carregarAndamento(); carregarFaltas(); } }, 30000);
