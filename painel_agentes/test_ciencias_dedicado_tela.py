@@ -8,7 +8,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from unittest import mock
 
@@ -130,6 +130,38 @@ class TestCienciasDedicadoTela(unittest.TestCase):
         self._logar("leitura")
         self.assertIn(self.cliente.get("/ciencias-dedicado").status_code, (302, 401, 403))
         self.assertIn(self.cliente.get(f"/api/ciencias-dedicado/{self.ids['PS-1']}").status_code, (302, 401, 403))
+
+    def test_api_mostra_quem_respondeu_quando_e_ip_como_prova(self):
+        self._logar("operador")
+        d = self.cliente.get(f"/api/ciencias-dedicado/{self.ids['PS-2']}").get_json()
+        self.assertEqual(d["ciencia"]["situacao"], "CIENTE")
+        self.assertEqual(d["resposta"], {"por": "Maria", "em": "2026-11-17 10:00:00",
+                                         "ip": "1.2.3.4", "data_nova": None})
+        self.assertIsNone(d["encerramento"])
+
+    def test_api_reagendado_traz_data_nova(self):
+        conn = cd.conectar(self.db)
+        cd.responder(conn, self.ids["PS-1"], cd.REAGENDADO, "Joao", "9.9.9.9", AGORA, date(2026, 11, 24))
+        conn.close()
+        self._logar("operador")
+        d = self.cliente.get(f"/api/ciencias-dedicado/{self.ids['PS-1']}").get_json()
+        self.assertEqual(d["resposta"]["por"], "Joao")
+        self.assertEqual(d["resposta"]["ip"], "9.9.9.9")
+        self.assertEqual(d["resposta"]["data_nova"], "2026-11-24")
+
+    def test_api_encerrado_nao_tem_resposta_do_embarcador(self):
+        self._logar("operador")
+        d = self.cliente.get(f"/api/ciencias-dedicado/{self.ids['PS-3']}").get_json()
+        self.assertIsNone(d["resposta"])
+        self.assertEqual(d["encerramento"], {"motivo": "pedido entregue", "em": "2026-11-17 10:00:00"})
+        self.assertNotIn("respondido_por", d["ciencia"])
+        self.assertNotIn("respondido_ip", d["ciencia"])
+
+    def test_api_pendente_nao_tem_resposta_nem_encerramento(self):
+        self._logar("operador")
+        d = self.cliente.get(f"/api/ciencias-dedicado/{self.ids['PS-1']}").get_json()
+        self.assertIsNone(d["resposta"])
+        self.assertIsNone(d["encerramento"])
 
     def test_tela_esta_em_acesso_telas(self):
         telas = {t[0]: t for t in acesso_telas.TELAS}

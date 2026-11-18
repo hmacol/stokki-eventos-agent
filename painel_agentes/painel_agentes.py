@@ -1963,7 +1963,15 @@ def api_ciencia_dedicado(ciencia_id):
                   for e in cd.envios(conn, ciencia_id)]
     finally:
         conn.close()
-    return jsonify({"ciencia": linha, "envios": envios})
+    # Prova da resposta (quem, quando, IP) so existe pra CIENTE/REAGENDADO; ENCERRADO e o sistema fechando.
+    resposta = encerramento = None
+    if linha["situacao"] in (cd.CIENTE, cd.REAGENDADO):
+        resposta = {"por": linha["respondido_por"], "em": linha["respondido_em"],
+                    "ip": linha["respondido_ip"], "data_nova": linha["data_nova"]}
+    elif linha["situacao"] == cd.ENCERRADO:
+        encerramento = {"motivo": linha["motivo_encerramento"], "em": linha["respondido_em"]}
+    return jsonify({"ciencia": {"codigo": linha["codigo"], "situacao": linha["situacao"]},
+                    "resposta": resposta, "encerramento": encerramento, "envios": envios})
 
 
 @app.route("/api/canhotos-pendentes", methods=["POST"])

@@ -248,7 +248,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  Ciências de dedicado ....................... /ciencias-dedicado (ciencias_dedicado.html, total/operador/logistica):
                                              dedicado fora do dia fixo; situação, avisos enviados por canal (só
                                              'enviado'), resposta do embarcador, botão Copiar link e histórico
-                                             lateral via GET /api/ciencias-dedicado/<id>. Dados em
+                                             lateral via GET /api/ciencias-dedicado/<id> (mostra quem respondeu,
+                                             quando e o IP, e a data nova se reagendou; ENCERRADO mostra só o
+                                             motivo e a data, sem "respondido por"). Dados em
                                              painel_agentes/ciencias_dedicado.py (lê ciencia_dedicado.py da raiz).
                                              Testes: painel_agentes/test_ciencias_dedicado_tela.py
  Pedidos do portal (solicitações do cliente)  /solicitacoes-portal (solicitacoes_portal.html, total/operador/logistica,
@@ -493,6 +495,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  a cada 5 min                atendimento-monitorar-saude-ev. atendimento/monitorar_saude_evolution.py
  a cada 2 min                avisar-cliente-sem-resposta     avisar_cliente_sem_resposta.py (só age no
                                                              horário de atendimento dos chamados)
+ a cada 15 min               stokki-ciencia-dedicado         notificar_ciencia_dedicado.py (primeiro aviso e
+                                                             lembretes da ciência do dedicado; só envia
+                                                             08h-20h; --modo-teste)
  07..19:10 (1h)              stokki-embarcadores-novos       embarcadores_stokki.py (pré-cadastro + convite;
                                                              --modo-teste)
 
@@ -633,8 +638,8 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                (a tela só trava por cima, nunca força); tipo sem
                                linha na tela = vale o config. Erro de banco = vale o
                                config + warning. Tabelas notificacoes_controle,
-                               _excecao, _param (piloto), _historico. TIPOS = os 15
-                               tipos da tela. Evento barrado (NAO) é consumido: não
+                               _excecao, _param (piloto), _historico. TIPOS = os 17
+                               tipos da tela (inclui ciencia_dedicado). Evento barrado (NAO) é consumido: não
                                sai depois ao ligar. Exceções: insucesso,
                                agendamento, redespacho, convite e faltas ficam
                                pendentes (pendência de estado), e "piloto sem
@@ -652,6 +657,29 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                tentativa por mensagem da equipe (assinatura msg:<id>),
                                mensagem com até 3 dias, teto próprio. Desligado
                                (whatsapp_notificacoes.clientes.ativo); --modo-teste.
+ ciencia_dedicado.py           Ciência obrigatória do dedicado fora do dia fixo: tabelas
+                               ciencias_dedicado (uma linha por pedido marcado) e
+                               ciencias_dedicado_envios (uma linha por tentativa e canal),
+                               leitura da seção `ciencia_dedicado` do config (cfg) e
+                               situação PENDENTE/CIENTE/REAGENDADO/ENCERRADO. Nada é
+                               apagado: é a prova pra contestação do embarcador.
+ notificar_ciencia_dedicado.py Timer 15 min (stokki-ciencia-dedicado): primeiro aviso e
+                               lembrete a cada 4 h pelos 3 canais (chat do portal, e-mail,
+                               WhatsApp), um por embarcador com todos os pedidos
+                               pendentes e o link /ciencia/<token>. Só entre 08h e 20h
+                               (fora disso fica pras 08h). Antes de cada envio encerra
+                               quem não precisa mais (entregue, cancelado, rota iniciada,
+                               dedicado removido, data passada ou em dia de visita) e
+                               alerta o grupo Alertas 1x por pedido (16h da véspera).
+                               roteirizacao/fora_dia_fixo.py chama a rotina no primeiro
+                               aviso quando ciencia_dedicado.ativo. Chaves em
+                               `ciencia_dedicado` do config: ativo, intervalo_horas (4),
+                               janela.inicio/janela.fim (08:00/20:00), forcar_destino
+                               (ausente = hugo@). Tela /notificacoes, tipo
+                               ciencia_dedicado (ENVIAR/PILOTO/NÃO). --modo-teste só loga.
+                               Tela da equipe: /ciencias-dedicado (painel_agentes/
+                               ciencias_dedicado.py). Testes: test_ciencia_dedicado.py,
+                               test_notificar_ciencia_dedicado*.py.
  embarcadores_stokki.py        De hora em hora (07h-19h): cliente da Stokki fora de
                                `interno` vira pré-cadastro (sem habilidade), ganha o
                                sender da Vuupt (pedido mais antigo do núcleo ou
@@ -1005,6 +1033,13 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
                            fora_dia_fixo.forcar_destino ausente = hugo@
                            (piloto, sai mesmo com notificacoes_automaticas
                            desligada); "" = envio real, exige a chave geral.
+                           Com ciencia_dedicado.ativo o aviso único sai de cena:
+                           fora_dia_fixo abre a ciência (ciencia_dedicado.py) e chama
+                           notificar_ciencia_dedicado; falha ao abrir uma não para as
+                           outras e órfão marcado nas últimas 48h é reaberto na
+                           rodada seguinte. Dedicado removido pela página de
+                           ciência ("ciência: reagendado pelo embarcador") não bloqueia
+                           marcar de novo.
  registro_dia_fixo.py      Tabelas agendamentos_origem (origem da data
                            gravada pelo sistema: DIA_FIXO, EQUIPE ou AUTOMATICO) e
                            avisos_fora_dia_fixo.
@@ -1640,6 +1675,13 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
  entrada_equipe.py         Passe assinado painel -> portal (botão Cotação da Torre);
                            quem entra é decidido em app.py (_equipe_do_passe).
  link_canhoto.py           /c/<token>: canhoto sem login.
+ link_ciencia.py           /ciencia/<token>: página pública (sem login, token por embarcador,
+                           30 dias) onde o embarcador confirma ciência do dedicado (nome
+                           obrigatório, grava IP) ou reagenda pra um dos próximos 4 dias de
+                           visita (usa alterar_entrega, só data; remove o dedicado).
+                           Templates ciencia.html e ciencia_erro.html. Só age de verdade com
+                           ENVIAR na tela Notificações ou no cliente teste; senão simula
+                           (faixa "modo piloto"). Funciona com alteracao_entrega desligada.
  consulta_transportadora_web.py  /transportadora/<token>: embarcador responde (retirada, redespacho,
                            entrega) sobre transportadora nova, sem login; template consulta_transportadora.html.
  bloqueio_area.py          Bloqueio de área não atendida. Classificar a transportadora do XML
@@ -1962,6 +2004,8 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
                              controle_notificacoes.py (tela /notificacoes: estado
                              geral/tipo, exceção por cnpj ou transportadora, piloto,
                              histórico com desfazer)
+   ciencias_dedicado, ciencias_dedicado_envios
+                             ciencia_dedicado.py (criadas em conectar(); tela /ciencias-dedicado)
    notificacoes_disparos     painel_agentes/notificacoes_tela.py ("Disparar agora":
                              quem, quando, saída; disparo órfão é fechado)
    notificacoes_enviadas     (tipo piloto_<tipo>) cópias de piloto de limite_piloto.py;
@@ -2088,6 +2132,19 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
    -> exceção -> preferência do portal; sem linha na tela = vale o config
    (notificacoes_automaticas.ativo, forcar_destino). --modo-teste SEMPRE ignora a
    tela (ensaio só pro Hugo; em whatsapp_sem_resposta só simula).
+ - Ciência do dedicado: ciencia_dedicado.ativo AUSENTE ou falso = nada roda e o aviso
+   único antigo (notificar_fora_dia_fixo) continua; verdadeiro = fluxo novo e o aviso
+   antigo para. Sem linha do tipo ciencia_dedicado na tela /notificacoes = PILOTO
+   (e-mail e WhatsApp vão pro Hugo, chat não abre conversa); ligar pro cliente é
+   ENVIAR na tela. A página pública /ciencia/<token> só age de verdade com ENVIAR ou no
+   cliente teste do portal; no resto simula, pra clique de teste não mexer em pedido real.
+ - Embarcador que usa o portal só por login de grupo não tem conta própria: o chat
+   registra nao_enviado: sem_conta_portal (e-mail e WhatsApp seguem). Pedido reagendado
+   pela página pode ser marcado dedicado de novo se a data voltar pra fora do dia de
+   visita (ciclo recomeça, histórico antigo fica). Os lembretes param quando o pedido
+   é entregue ou cancelado, a rota dele começa, a marca de dedicado sai, a data passa
+   ou muda pra dia de visita. Fora desses casos, sem resposta o pedido segue como
+   dedicado e sai na data pedida.
  - consulta_transportadora: LIGADO na tela só vale com
    consulta_transportadora.ativo ligado (é feature flag que segura pedidos no
    pipeline, não só aviso).

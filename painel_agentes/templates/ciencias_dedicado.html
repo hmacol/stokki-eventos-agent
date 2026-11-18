@@ -87,6 +87,7 @@
   <button type="button" class="fechar">Fechar</button>
   <h2 id="hist-titulo"></h2>
   <div class="suave" id="hist-sub"></div>
+  <div id="hist-resposta" style="margin-top:8px;font-size:13px;font-weight:700"></div>
   <ol id="hist-lista"></ol>
 </aside>
 
@@ -94,13 +95,14 @@
 (function () {
   var painel = document.getElementById("historico");
   var urlApi = "{{ url_for('api_ciencia_dedicado', ciencia_id=0) }}".replace(/0$/, "");
+  var ROTULO_RESULTADO = { nao_enviado: "não enviado", piloto: "cópia de piloto" };
   function fmt(s) { return s ? s.slice(8, 10) + "/" + s.slice(5, 7) + " " + s.slice(11, 16) : ""; }
   function item(e) {
     var li = document.createElement("li");
     var topo = document.createElement("div");
     var res = document.createElement("span");
     res.className = "res-" + e.resultado;
-    res.textContent = e.resultado.replace("_", " ");
+    res.textContent = ROTULO_RESULTADO[e.resultado] || e.resultado.replace("_", " ");
     topo.appendChild(document.createTextNode(fmt(e.enviado_em) + " · " + e.canal + " · "));
     topo.appendChild(res);
     li.appendChild(topo);
@@ -118,6 +120,15 @@
           if (!d.ciencia) { return; }
           document.getElementById("hist-titulo").textContent = "Avisos do pedido " + d.ciencia.codigo;
           document.getElementById("hist-sub").textContent = d.envios.length + " tentativa(s) de envio";
+          var prova = document.getElementById("hist-resposta");
+          if (d.resposta) {
+            prova.textContent = "Respondido por " + d.resposta.por + " em " + fmt(d.resposta.em) + ", IP " + d.resposta.ip +
+              (d.resposta.data_nova ? ". Nova data: " + d.resposta.data_nova.slice(8, 10) + "/" + d.resposta.data_nova.slice(5, 7) : "") + ".";
+          } else if (d.encerramento) {
+            prova.textContent = "Encerrado pelo sistema em " + fmt(d.encerramento.em) + ": " + d.encerramento.motivo + ".";
+          } else {
+            prova.textContent = "";
+          }
           var lista = document.getElementById("hist-lista");
           lista.textContent = "";
           d.envios.forEach(function (e) { lista.appendChild(item(e)); });

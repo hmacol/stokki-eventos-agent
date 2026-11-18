@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-ciencia-dedicado.service a cada 15 min (so envia entre 08h e 20h)
+
+[Timer]
+OnCalendar=*:0/15
+Persistent=false
+AccuracySec=10sec
+
+[Install]
+WantedBy=timers.target
