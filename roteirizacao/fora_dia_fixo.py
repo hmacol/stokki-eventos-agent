@@ -25,7 +25,7 @@ o valor sai menor que o rodoviário e o financeiro corrige.
 """
 import logging
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 _AQUI = Path(__file__).parent
@@ -199,6 +199,32 @@ def pendentes_de_aviso(servicos: list[dict], hoje: date | None = None, db_path=N
         conn_ded.close()
 
 
+def _abrir_ciencias(marcados: list[dict], config: dict, db_path=None) -> dict:
+    """Abre a ciencia de cada pedido marcado nesta rodada e, se abriu alguma,
+    dispara a rotina de envio (o primeiro aviso sai agora, respeitando a janela)."""
+    import preferencias_notificacao
+    import notificar_ciencia_dedicado
+    import ciencia_dedicado
+    try:
+        embarcadores = preferencias_notificacao.carregar_embarcadores("agendamento", db_path=db_path)
+    except Exception as e:
+        embarcadores = {}
+        logger.warning(f"Ciencia do dedicado: CNPJ dos embarcadores indisponivel ({e}); abrindo sem CNPJ.")
+    abertas = 0
+    conn = ciencia_dedicado.conectar(db_path or ciencia_dedicado.DB_PATH)
+    try:
+        for item in marcados:
+            cnpj = (embarcadores.get(item["servico"].get("sender_id")) or {}).get("cnpj")
+            if ciencia_dedicado.abrir(conn, item, cnpj, datetime.now()):
+                abertas += 1
+    finally:
+        conn.close()
+    if abertas:
+        notificar_ciencia_dedicado.executar(config, db_path=db_path)
+    logger.info(f"Fora do dia fixo: {len(marcados)} marcado(s) como dedicado; {abertas} ciencia(s) aberta(s).")
+    return {"ciencias": abertas}
+
+
 def tratar_fora_dia_fixo(servicos: list[dict], config: dict, modo_teste: bool = False,
                          hoje: date | None = None, db_path=None) -> dict:
     """Ponto de chamada do criar_rotas_diarias / incrementar_rotas: marca os
@@ -220,6 +246,10 @@ def tratar_fora_dia_fixo(servicos: list[dict], config: dict, modo_teste: bool = 
             return {"marcados": 0, "candidatos": len(achados)}
         marcados = marcar_fora_dia_fixo(servicos, config, hoje=hoje, db_path=db_path)
         resumo["marcados"] = len(marcados)
+        import ciencia_dedicado
+        if ciencia_dedicado.cfg(config)["ativo"]:
+            # fluxo novo: o pedido marcado agora abre ciencia e o aviso unico antigo nao sai
+            return {"marcados": len(marcados), **_abrir_ciencias(marcados, config, db_path)}
         import notificar_fora_dia_fixo
         avisos = notificar_fora_dia_fixo.avisar(pendentes_de_aviso(servicos, hoje=hoje, db_path=db_path), config,
                                                 db_path=db_path)
