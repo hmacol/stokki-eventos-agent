@@ -83,7 +83,7 @@ function horaMaisMinutos(min: number): string {
 }
 
 export default function RegistroParada() {
-  const { id, rota: rotaParam } = useLocalSearchParams<{ id: string; rota: string }>();
+  const { id, rota: rotaParam, fluxo: fluxoParam } = useLocalSearchParams<{ id: string; rota: string; fluxo?: string | string[] }>();
   const paradaId = Number(id);
   const rotaId = Number(rotaParam);
   const router = useRouter();
@@ -109,15 +109,35 @@ export default function RegistroParada() {
   const [restaurado, setRestaurado] = useState(false);
   const cameraAberta = useRef<{ chave: string; substituir: boolean } | null>(null);
   const finalizado = useRef(false);
+  const fluxoAplicado = useRef(false);
+
+  const escolherComConfirmacao = (f: Fluxo) =>
+    new Promise<void>((resolve) => {
+      Alert.alert(
+        `Finalizar como "${TITULO_FLUXO[f]}"?`,
+        'Tem certeza que quer finalizar este pedido? Depois disso o checklist é aberto.',
+        [
+          { text: 'Voltar', style: 'cancel', onPress: () => resolve() },
+          { text: 'Sim, finalizar', onPress: () => { setFluxo(f); resolve(); } },
+        ],
+        { cancelable: true, onDismiss: () => resolve() },
+      );
+    });
 
   const carregar = useCallback(async () => {
     const r = await carregarRotas();
     const rota = r.rotas.find((x) => x.id === rotaId);
-    setParada(rota?.paradas.find((p) => p.id === paradaId) ?? null);
+    const achada = rota?.paradas.find((p) => p.id === paradaId) ?? null;
+    setParada(achada);
     setChecklist(await carregarChecklist());
     // Retoma o que já estava preenchido se o Android fechou o app com a
     // câmera aberta, e recupera a foto que a câmera entregou nesse meio.
     const salvo = await rascunho.ler();
+    // Rascunho vazio (gravado so por abrir a tela) nao conta: so o que tem estado.
+    const temRascunho = !!salvo && salvo.paradaId === paradaId && (
+      salvo.fluxo != null || salvo.motivoId != null || salvo.cameraAberta != null
+      || Object.keys(salvo.respostas).length > 0 || Object.keys(salvo.fotos).length > 0
+    );
     if (salvo && salvo.paradaId === paradaId) {
       const fotosSalvas = { ...salvo.fotos };
       if (salvo.cameraAberta) {
@@ -138,7 +158,15 @@ export default function RegistroParada() {
       setMotivoId(salvo.motivoId);
     }
     setRestaurado(true);
-  }, [rotaId, paradaId]);
+    // Vindo do mapa com o resultado ja escolhido: aplica UMA vez, so sem
+    // rascunho da mesma parada (rascunho vence) e so pra valores validos.
+    if (!fluxoAplicado.current) {
+      fluxoAplicado.current = true;
+      if (achada && !temRascunho && (fluxoParam === 'ENTREGUE' || fluxoParam === 'NAO_ENTREGUE')) {
+        void escolherComConfirmacao(fluxoParam);
+      }
+    }
+  }, [rotaId, paradaId, fluxoParam]);
   useEffect(() => { void carregar(); }, [carregar]);
 
   // Guarda o rascunho a cada mudança (só depois de restaurar, pra não
@@ -157,19 +185,6 @@ export default function RegistroParada() {
   // está ligada (config api_motorista.validacao_fotos.ativo). Desligada,
   // a tela se comporta exatamente como antes.
   const validacaoAtiva = checklist.validacao_fotos?.ativo === true;
-
-  const escolherComConfirmacao = (f: Fluxo) =>
-    new Promise<void>((resolve) => {
-      Alert.alert(
-        `Finalizar como "${TITULO_FLUXO[f]}"?`,
-        'Tem certeza que quer finalizar este pedido? Depois disso o checklist é aberto.',
-        [
-          { text: 'Voltar', style: 'cancel', onPress: () => resolve() },
-          { text: 'Sim, finalizar', onPress: () => { setFluxo(f); resolve(); } },
-        ],
-        { cancelable: true, onDismiss: () => resolve() },
-      );
-    });
 
   const guardarFoto = (chave: string, uri: string, substituir: boolean) =>
     setFotos((f) => ({ ...f, [chave]: substituir ? [uri] : [...(f[chave] ?? []), uri] }));
