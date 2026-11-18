@@ -245,6 +245,12 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  Canhotos pendentes ......................... /canhotos-pendentes (canhotos_pendentes.html, total/operador):
                                              entregues sem nenhum comprovante (padrão 60 dias); o canhoto
                                              fica guardado conosco (canhotos_manuais), NÃO vai pra Stokki
+ Ciências de dedicado ....................... /ciencias-dedicado (ciencias_dedicado.html, total/operador/logistica):
+                                             dedicado fora do dia fixo; situação, avisos enviados por canal (só
+                                             'enviado'), resposta do embarcador, botão Copiar link e histórico
+                                             lateral via GET /api/ciencias-dedicado/<id>. Dados em
+                                             painel_agentes/ciencias_dedicado.py (lê ciencia_dedicado.py da raiz).
+                                             Testes: painel_agentes/test_ciencias_dedicado_tela.py
  Pedidos do portal (solicitações do cliente)  /solicitacoes-portal (solicitacoes_portal.html, total/operador/logistica,
                                              grupo Acompanhar; destino do aviso "solicitacoes_portal"). API:
                                              GET /api/solicitacoes-portal, POST /api/solicitacoes-portal/<id>/executar
