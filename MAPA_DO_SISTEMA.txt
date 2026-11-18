@@ -210,6 +210,11 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              Freios: POST /api/cadastro-link 5/IP/hora e 40/24 h contados no
                                              banco (motoristas_cadastros.ip_origem); documentos, situação e
                                              concluir 60/IP/hora cada (memória) -> 429.
+ Página "Como funciona" (pré-cadastro) ..... app.freshhub.com.br/motorista/como-funciona (nucleo/api_motorista.py rota
+                                             /como-funciona + nucleo/templates/como_funciona_motorista.html): operação,
+                                             pagamento (tarifas lidas de regras/tarifa_motorista.TARIFAS_PADRAO; datas de
+                                             pagamento ficam no texto do template), app e obrigatoriedades. Pública, vale
+                                             mesmo com o link de cadastro desligado; linkada no passo 1 do cadastro.
  Atualização cadastral de motorista ........ tela /motoristas (selos de pendência, "Copiar link", bloco WhatsApp) ->
                                              link pessoal app.freshhub.com.br/motorista/atualizar/<token>
                                              (nucleo/atualizacao_motorista.py + nucleo/api_motorista.py +

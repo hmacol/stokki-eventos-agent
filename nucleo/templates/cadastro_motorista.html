@@ -74,6 +74,7 @@
 <div id="tela-1" hidden>
   <h1>Seus dados</h1>
   <p class="passo">Passo 1 de 3</p>
+  {% if not atualizar %}<p class="passo"><a href="{{ url_for('como_funciona') }}" target="_blank" rel="noopener">Como funciona a operação, o pagamento e o app</a></p>{% endif %}
   <div class="barra"><i style="transform:scaleX(.33)"></i></div>
   <div class="erro" id="erro-1" role="alert"></div>
   <form id="f1" novalidate autocomplete="on">
