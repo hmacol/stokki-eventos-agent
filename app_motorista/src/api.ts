@@ -153,6 +153,9 @@ export async function trocarPin(pinAtual: string, pinNovo: string): Promise<Moto
   return r.motorista;
 }
 
+/** Versao atual do APK (sem login; semAuth evita header e fluxo de sessao caindo). */
+export const appVersao = () =>
+  chamar<{ versao_atual: string | null; link: string }>('/app-versao', { semAuth: true });
 export const eu = () => chamar<Motorista>('/eu');
 /** Diagnóstico (17/11): a API loga o caminho de cada chamada; o erro de envio
  * de foto vai junto pra aparecer no log do servidor (antes só no Perfil). */
