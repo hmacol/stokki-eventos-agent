@@ -9,7 +9,8 @@ com salt proprio. O token e por embarcador (carrega so o sender_id) e vale
 30 dias; a pagina lista os pedidos PENDENTE daquele sender_id.
 
 Pagina (registrar, chamado em app.py): GET /ciencia/<token> lista os PENDENTE
-e os respondidos dos ultimos 30 dias; POST .../ciente e .../reagendar (so a
+e os respondidos (CIENTE/REAGENDADO; encerrado pelo sistema nao aparece) dos
+ultimos 30 dias; POST .../ciente e .../reagendar (so a
 data, pelo alterar_entrega, pra um dos proximos 4 dias de visita da regiao).
 Nao depende de portal_cliente.alteracao_entrega. No piloto (decisao do e-mail
 na tela de Notificacoes = PILOTO) valida tudo e simula: nao grava, nao chama a
@@ -143,15 +144,12 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
     def _vista_respondido(r: dict) -> dict:
         if r["situacao"] == cd.CIENTE:
             rotulo = "Ciente do carro dedicado"
-        elif r["situacao"] == cd.REAGENDADO:
-            rotulo = f"Reagendado para {_br(r['data_nova'])}"
         else:
-            rotulo = f"Encerrado pelo sistema ({r.get('motivo_encerramento') or 'sem motivo'})"
+            rotulo = f"Reagendado para {_br(r['data_nova'])}"
         quando = ""
         if r.get("respondido_em"):
             quando = datetime.strptime(r["respondido_em"], "%Y-%m-%d %H:%M:%S").strftime("%d/%m/%Y %H:%M")
-        return dict(r, rotulo=rotulo, quando=quando,
-                    quem=r.get("respondido_por") if r["situacao"] != cd.ENCERRADO else "")
+        return dict(r, rotulo=rotulo, quando=quando, quem=r.get("respondido_por"))
 
     def _erro():
         return render_template("ciencia_erro.html"), 404
@@ -159,7 +157,8 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
     def _pagina(token, sender_id, *, aviso=None, erro=None, abrir=None, nome="", status=200):
         with closing(cd.conectar(db)) as conn:
             pendentes = cd.pendentes_do_sender(conn, sender_id)
-            respondidos = [r for r in cd.do_sender(conn, sender_id) if r["situacao"] != cd.PENDENTE]
+            # encerrado pelo sistema nao aparece: o motivo e interno
+            respondidos = [r for r in cd.do_sender(conn, sender_id) if r["situacao"] in (cd.CIENTE, cd.REAGENDADO)]
         linhas = pendentes + respondidos
         cnpj = next((r["cnpj"] for r in linhas if r.get("cnpj")), None)
         return render_template("ciencia.html", token=token, pendentes=[_vista_pendente(p) for p in pendentes],
@@ -338,8 +337,11 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
                          f"embarcador para {data:%d/%m/%Y}: data alterada, mas {' e '.join(falhas)}. "
                          f"Conferir à mão.")
                 try:
-                    alerta_equipe(texto)
+                    saiu, motivo = alerta_equipe(texto), "nao saiu"
                 except Exception as e:  # noqa: BLE001
-                    logger.error(f"ciencia {ciencia['codigo']}: alerta da equipe falhou ({e}): {texto}")
+                    saiu, motivo = False, f"falhou ({e})"
+                if not saiu:   # ultimo rastro de um cliente que ficou cobrado: vai pro log de erro
+                    logger.error(f"ciencia {ciencia['codigo']}: alerta da equipe {motivo}; reagendado para "
+                                 f"{data:%d/%m/%Y}, mas {' e '.join(falhas)}. Conferir a mao: {texto}")
                 return _ir(token, "ajuste_pendente", ciencia["id"])
         return _ir(token, "reagendado", ciencia["id"])

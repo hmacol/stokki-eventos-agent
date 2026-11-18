@@ -179,6 +179,15 @@ def codigos_e_servicos_ja_marcados(conn: sqlite3.Connection) -> tuple[set[str], 
             {r["service_id"] for r in rows if r["service_id"] is not None})
 
 
+def removidos_pela_ciencia_desde(conn: sqlite3.Connection, desde: str) -> tuple[set[str], set[int]]:
+    """(codigos, service_ids) removidos pela pagina de ciencia (embarcador reagendou)
+    a partir de `desde` ('YYYY-MM-DD HH:MM:SS')."""
+    rows = conn.execute("SELECT codigo_pedido, service_id FROM pedidos_dedicados "
+                        "WHERE removido_por = ? AND removido_em >= ?", (POR_CIENCIA_REAGENDADO, desde)).fetchall()
+    return ({r["codigo_pedido"] for r in rows if r["codigo_pedido"]},
+            {r["service_id"] for r in rows if r["service_id"] is not None})
+
+
 def ativo_por_envio(conn: sqlite3.Connection, envio_id: int) -> dict | None:
     r = _ativo(conn, envio_id=envio_id)
     return dict(r) if r else None

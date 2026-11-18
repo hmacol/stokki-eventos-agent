@@ -89,6 +89,7 @@ class PaginaCiencia(unittest.TestCase):
         self.buscas = []
         self.chat = []
         self.alertas = []
+        self.alerta_ok = True
         self.regra = rdf.regra_dia_fixo_do_servico(_servico())
 
     # ── montagem ──────────────────────────────────────────────────────────────
@@ -108,7 +109,7 @@ class PaginaCiencia(unittest.TestCase):
         link_ciencia.registrar(app, config=CONFIG, secret=SEGREDO, db_path=self.db, deps_fabrica=self.deps.fabrica,
                                buscar_servico=buscar,
                                chat_mensagem=lambda chamado, texto: self.chat.append((chamado, texto)) or True,
-                               alerta_equipe=self.alertas.append)
+                               alerta_equipe=lambda texto: self.alertas.append(texto) or self.alerta_ok)
         return app.test_client()
 
     def _ciencia(self, sid=1001, code="#PS-1", sender_id=101, cnpj=CNPJ_REAL, data=date(2026, 11, 21)):
@@ -444,6 +445,33 @@ class PaginaCiencia(unittest.TestCase):
         self.assertIn("data alterada, mas a resposta não foi gravada", alerta)
         self.assertEqual(cd.buscar(self.conn, cid)["situacao"], cd.PENDENTE)
         self.assertFalse(self._dedicado_ativo())
+
+    def test_alerta_da_equipe_que_nao_saiu_fica_no_log_de_erro(self):
+        self._tela_ligada()
+        cid = self._ciencia()
+        self.alerta_ok = False
+        tc = self._cliente()
+        data = self._datas()[0]
+        with mock.patch.object(pedidos_dedicados, "remover", side_effect=RuntimeError("banco travado")),                 self.assertLogs("portal_cliente.link_ciencia", level="ERROR") as logs:
+            r = self._post(tc, "reagendar", {"ciencia_id": str(cid), "nome": "Maria", "data": data.isoformat()})
+        self.assertEqual(r.status_code, 303)
+        self.assertEqual(len(self.alertas), 1)
+        linhas = [l for l in logs.output if "ERROR" in l and "alerta" in l]
+        self.assertTrue(linhas, logs.output)
+        for trecho in ("PS-1", data.strftime("%d/%m/%Y"), "o dedicado não foi removido"):
+            self.assertIn(trecho, linhas[-1])
+
+    def test_encerrado_pelo_sistema_nao_aparece_pro_cliente(self):
+        encerrada = self._ciencia()
+        cd.encerrar(self.conn, encerrada, "data em dia de visita", datetime.now())
+        respondida = self._ciencia(sid=1002, code="#PS-2")
+        cd.responder(self.conn, respondida, cd.CIENTE, "Joana Lima", IP, datetime.now())
+        corpo = self._cliente().get(self._url(101)).get_data(as_text=True)
+        self.assertIn("PS-2", corpo)
+        self.assertIn("Joana Lima", corpo)
+        self.assertNotIn("PS-1", corpo)
+        self.assertNotIn("data em dia de visita", corpo)
+        self.assertNotIn("Encerrado", corpo)
 
     def test_reagendar_com_resposta_concorrente_avisa_no_log_e_tira_o_dedicado(self):
         self._tela_ligada()

@@ -20,7 +20,10 @@ Sem linha na tela = PILOTO: e-mail pra ciencia_dedicado.forcar_destino (ausente 
 hugo@), WhatsApp pro numero do piloto da tela; o chat so registra 'piloto'.
 
 Falha de um canal nao impede os outros. Embarcador sem canal nenhum: os tres
-'nao_enviado: sem_canal' e um alerta pra equipe na rodada 0.
+'nao_enviado: sem_canal' e um alerta pra equipe na rodada 0 (so no envio real).
+Cada pedido e reivindicado (ciencia_dedicado.reivindicar_lembrete) antes de
+qualquer canal: timer e roteirizacao rodando juntos nao mandam o mesmo lembrete
+duas vezes.
 
 Os canais chegam prontos (Canais): os testes passam falsos; canais_reais() e o
 unico lugar que toca e-mail, WhatsApp e chat de verdade.
@@ -31,7 +34,11 @@ Rotina do timer (stokki-ciencia-dedicado, a cada 15 min; secoes 3, 5 e 6):
 
 Encerra pelo espelho do nucleo (cancelado, entregue/insucesso, rota iniciada,
 data em dia de visita), por dedicado removido ou data passada; alerta a equipe
-as 16h da vespera; manda o lembrete vencido (a cada 4h) so entre 08h e 20h.
+as 16h da vespera (uma mensagem com todos, so no envio real); manda o lembrete
+vencido (a cada 4h) so entre 08h e 20h. Nos primeiros 30 min da ciencia o
+espelho (sincronizado a cada 15 min) nao vale: so dedicado removido e data
+passada encerram. A roteirizacao chama executar(somente_ids=...) so com as
+ciencias que acabou de abrir: sem encerrar, sem alertar, sem lembrete dos outros.
 --modo-teste so loga: nao grava envio, nao encerra, nao mexe no lembrete.
 """
 import argparse
@@ -74,6 +81,9 @@ ASSUNTO_CHAT = "Entrega dedicada: confirme a ciência"
 CANAIS = ("email", "whatsapp", "chat")
 # motivos de falta de cadastro: os tres juntos viram sem_canal
 _SEM_CADASTRO = ("sem_email", "sem_whatsapp", "sem_conta_portal")
+# ciencia aberta ha menos que isso: o espelho do nucleo (sincronismo de 15 min) ainda
+# pode ser de antes da marcacao (data velha, servico recriado que ele nao tem)
+CARENCIA_ESPELHO_MIN = 30
 
 
 @dataclass
@@ -83,7 +93,7 @@ class Canais:
     chat_abrir: Callable[[str, str, str, str], "int | None"]  # (cnpj, assunto, texto, pedido_ref) -> id do chamado
     chat_mensagem: Callable[[int, str], bool]               # False = conversa resolvida/sumiu (abre outra)
     tem_conta_portal: Callable[[str], bool]
-    alerta_equipe: Callable[[str], None]
+    alerta_equipe: Callable[[str], bool]                    # True = saiu pro grupo da equipe
 
 
 def abrir_conversa(conn, cnpj: str, assunto: str, texto: str, pedido_ref: str) -> int | None:
@@ -134,7 +144,7 @@ def canais_reais(config: dict, db_path=None) -> Canais:
             lambda conn: abrir_conversa(conn, cnpj, assunto, texto, ref)),
         chat_mensagem=chat_mensagem,
         tem_conta_portal=tem_conta_portal,
-        alerta_equipe=lambda texto: notificar_whatsapp.despachar(config, TIPO, "alerta_equipe", texto),
+        alerta_equipe=lambda texto: notificar_whatsapp.despachar(config, TIPO, "alerta_equipe", texto) == "enviado",
     )
 
 
@@ -226,9 +236,12 @@ def _texto_alerta(nome: str, pendentes: list[dict], link: str) -> str:
             f"Avisar à mão ({codigos}): {link}")
 
 
-def _texto_alerta_vespera(nome: str, ciencia: dict, avisos: int) -> str:
-    return (f"Ciência do dedicado sem resposta: pedido {ciencia['codigo']} ({nome or 'embarcador'}), "
-            f"entrega {_data(ciencia)}. {avisos} aviso(s) enviado(s) ao embarcador. Falar com ele antes da saída.")
+def _texto_alerta_vespera(itens: list[tuple[dict, str, int]]) -> str:
+    """Uma mensagem com todos os pedidos da rodada: (ciencia, nome do embarcador, avisos)."""
+    linhas = [f"- {c['codigo']} ({nome or 'embarcador'}), entrega {_data(c)}, {avisos} aviso(s) enviado(s)"
+              for c, nome, avisos in itens]
+    return ("Ciência do dedicado sem resposta na véspera da entrega:\n" + "\n".join(linhas) +
+            "\nFalar com o embarcador antes da saída.")
 
 
 # ── rodada ─────────────────────────────────────────────────────────────────────
@@ -269,21 +282,32 @@ def _bloqueado(d: cn.Decisao) -> bool:
 def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config: dict, canais: Canais,
                       agora: datetime, db_path=None) -> dict:
     """Uma rodada para o embarcador: uma mensagem por canal com todos os `pendentes`
-    (linhas de ciencias_dedicado), um envio gravado por pedido e por canal, e o
-    proximo lembrete agendado. Devolve quantas mensagens sairam por canal (enviado
-    ou piloto) e quantos canais ficaram em nao_enviado.
+    (linhas de ciencias_dedicado) que esta rodada conseguiu reivindicar, um envio
+    gravado por pedido e por canal. Devolve quantas mensagens sairam por canal
+    (enviado ou piloto) e quantos canais ficaram em nao_enviado.
 
-    O proximo lembrete e agendado ANTES de enviar: se o banco falhar (ex.: dados.db
-    travado), nada sai, em vez de sair e o pedido continuar vencido (o cliente
-    receberia de novo a cada rodada do timer). Falha ao gravar o envio de um pedido
-    e logada e nao impede os outros."""
+    Cada pedido e reivindicado ANTES de enviar (cd.reivindicar_lembrete: adia o
+    proximo lembrete so se ainda esta vencido e PENDENTE). Pedido que outra rodada
+    ja tomou (timer e roteirizacao juntos) fica fora da mensagem; nenhum tomado =
+    nada sai. Se o banco falhar (ex.: dados.db travado), nada sai, em vez de sair e
+    o pedido continuar vencido (o cliente receberia de novo a cada rodada do timer).
+    Falha ao gravar o envio de um pedido e logada e nao impede os outros."""
     contadores = {"email": 0, "whatsapp": 0, "chat": 0, "nao_enviado": 0}
     if not pendentes:
+        return contadores
+    c = cd.cfg(config)
+    try:
+        pendentes = [p for p in pendentes if cd.reivindicar_lembrete(conn, p["id"], agora, c["intervalo_horas"])]
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"ciencia do dedicado: nao reivindicou os lembretes do embarcador {sender_id} ({e}); "
+                     f"nada enviado nesta rodada")
+        return contadores
+    if not pendentes:
+        logger.info(f"ciencia do dedicado: lembretes do embarcador {sender_id} ja tomados por outra rodada")
         return contadores
     emb = emb or {}
     cnpj = emb.get("cnpj") or pendentes[0].get("cnpj") or None
     nome = emb.get("nome") or ""
-    c = cd.cfg(config)
     rodadas = {p["id"]: cd.rodadas_enviadas(conn, p["id"]) for p in pendentes}
     rodada_msg = min(rodadas.values())
     lembrete = rodada_msg > 0
@@ -339,14 +363,6 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
         novo = canais.chat_abrir(cnpj, ASSUNTO_CHAT, texto, pendentes[0]["codigo"])
         return ("enviado", "", str(novo)) if novo else ("nao_enviado", "falha", "")
 
-    try:
-        for p in pendentes:
-            cd.agendar_proximo(conn, p["id"], agora, c["intervalo_horas"])
-    except Exception as e:  # noqa: BLE001
-        logger.error(f"ciencia do dedicado: nao agendou o proximo lembrete do embarcador {sender_id} ({e}); "
-                     f"nada enviado nesta rodada")
-        return contadores
-
     resultados = {}
     for canal, fn in (("email", email), ("whatsapp", whatsapp), ("chat", chat)):
         try:
@@ -357,9 +373,12 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
 
     if all(resultados[canal][1] in _SEM_CADASTRO for canal in CANAIS):
         resultados = {canal: ("nao_enviado", "sem_canal", "") for canal in CANAIS}
-        if rodada_msg == 0:
+        # so no envio real: no piloto (ou CNPJ desconhecido) ninguem do cliente pode responder
+        if rodada_msg == 0 and d_email.acao == "ENVIAR" and cnpj:
             try:
-                canais.alerta_equipe(_texto_alerta(nome, pendentes, link))
+                if not canais.alerta_equipe(_texto_alerta(nome, pendentes, link)):
+                    logger.warning(f"ciencia do dedicado: alerta da equipe do embarcador {sender_id} "
+                                   f"(sem canal) nao saiu")
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"ciencia do dedicado: alerta da equipe do embarcador {sender_id} falhou ({e})")
 
@@ -397,14 +416,18 @@ def estado_do_pedido(conn_nucleo, codigo, service_id=None) -> dict | None:
     Com service_id procura primeiro pelo servico (nucleo_pedidos.vuupt_service_id e
     nucleo_paradas.service_id): reentrega com o mesmo codigo nao herda a parada da
     rota antiga, e servico com codigos combinados ('PS-1, PS-2') e achado. Sem
-    service_id, ou se o nucleo nao tem o servico, vale o codigo."""
-    sql = "SELECT status, agendamento_inicio FROM nucleo_pedidos WHERE {} = ? LIMIT 1"
+    service_id, ou se o nucleo nao tem o servico, vale o codigo; mas se a linha do
+    codigo e de OUTRO servico (servico recriado que o espelho ainda nao tem), None:
+    o estado daquela linha e do servico velho."""
+    sql = "SELECT status, agendamento_inicio, vuupt_service_id FROM nucleo_pedidos WHERE {} = ? LIMIT 1"
     row = None
     if service_id is not None:
         row = conn_nucleo.execute(sql.format("vuupt_service_id"), (service_id,)).fetchone()
     campo, chave = ("pa.service_id", service_id) if row is not None else ("pa.codigo", codigo)
     if row is None:
         row = conn_nucleo.execute(sql.format("codigo"), (codigo,)).fetchone()
+        if row is not None and service_id is not None and row[2] is not None and row[2] != service_id:
+            return None
     if row is None:
         return None
     iniciada = conn_nucleo.execute(f"""
@@ -455,32 +478,65 @@ def _avisos_enviados(conn, ciencia_id) -> int:
                         "WHERE ciencia_id = ? AND resultado = 'enviado'", (ciencia_id,)).fetchone()[0]
 
 
-def _alertar_equipe(conn, ciencia: dict, nome: str, canais: Canais, agora: datetime, modo_teste: bool) -> bool:
-    """Alerta da vespera no grupo da equipe; marca o pedido pra nao repetir. False
-    se o envio falhou (tenta de novo na proxima rodada)."""
-    texto = _texto_alerta_vespera(nome, ciencia, _avisos_enviados(conn, ciencia["id"]))
+def _alertar_vespera(conn, alertar: list[dict], embarcador: Callable[[object], dict], config: dict,
+                     canais: Canais, agora: datetime, modo_teste: bool, db_path=None) -> int:
+    """Alerta da vespera no grupo da equipe: UMA mensagem com todos os pedidos que
+    seguem PENDENTE (relidos agora) e marca cada um so se ela saiu; senao tentam de
+    novo na proxima rodada. Pedido fora do envio real (piloto, bloqueado ou CNPJ
+    desconhecido) nao entra: ninguem do cliente pode responder. Devolve quantos
+    pedidos foram alertados."""
+    itens, acoes = [], {}
+    for ciencia in alertar:
+        try:
+            fresco = cd.buscar(conn, ciencia["id"])   # quem respondeu durante os envios nao gera alerta
+            if not fresco or fresco["situacao"] != cd.PENDENTE or fresco["alerta_equipe_em"]:
+                continue
+            emb = embarcador(ciencia["sender_id"])
+            cnpj = emb.get("cnpj") or fresco["cnpj"]
+            if not cnpj:
+                continue
+            if cnpj not in acoes:
+                acoes[cnpj] = decisao_email(cnpj, config, db_path=db_path).acao
+            if acoes[cnpj] != "ENVIAR":
+                continue
+            itens.append(({**fresco, "data_entrega": ciencia["data_entrega"]}, emb.get("nome") or "",
+                          _avisos_enviados(conn, ciencia["id"])))
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"ciencia do dedicado: alerta da equipe de {ciencia['codigo']} falhou ({e})")
+    if not itens:
+        return 0
+    itens.sort(key=lambda i: i[0]["id"])
+    texto = _texto_alerta_vespera(itens)
+    codigos = ", ".join(c["codigo"] for c, _, _ in itens)
     if modo_teste:
         logger.info(f"[modo-teste] ciencia do dedicado: alertaria a equipe: {texto}")
-        return True
+        return len(itens)
     try:
-        canais.alerta_equipe(texto)
+        saiu = canais.alerta_equipe(texto)
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"ciencia do dedicado: alerta da equipe de {ciencia['codigo']} falhou ({e})")
-        return False
-    try:
-        cd.marcar_alerta_equipe(conn, ciencia["id"], agora)
-    except Exception as e:  # noqa: BLE001
-        logger.error(f"ciencia do dedicado: alerta de {ciencia['codigo']} saiu sem marcar ({e}); pode repetir")
-    return True
+        logger.warning(f"ciencia do dedicado: alerta da equipe falhou ({e})")
+        saiu = False
+    if not saiu:
+        logger.warning(f"ciencia do dedicado: alerta da vespera nao saiu ({codigos}); tenta na proxima rodada")
+        return 0
+    for c, _, _ in itens:
+        try:
+            cd.marcar_alerta_equipe(conn, c["id"], agora)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"ciencia do dedicado: alerta de {c['codigo']} saiu sem marcar ({e}); pode repetir")
+    return len(itens)
 
 
 def executar(config: dict, agora: datetime | None = None, modo_teste: bool = False, canais: Canais | None = None,
-             db_path=None, embarcadores: dict | None = None) -> dict:
+             db_path=None, embarcadores: dict | None = None, somente_ids: set[int] | None = None) -> dict:
     """Uma rodada do timer: confere todos os PENDENTE (encerra ou atualiza a data) e,
     dentro da janela, manda os lembretes vencidos por embarcador, relendo cada pedido
     logo antes do envio (quem respondeu no meio da rodada nao recebe); depois alerta
     a equipe dos que passaram das 16h da vespera e seguem PENDENTE. Erro num pedido
-    ou num embarcador e logado e nao para os outros."""
+    ou num embarcador e logado e nao para os outros.
+
+    Com `somente_ids` (a roteirizacao, logo depois de abrir) so manda o aviso dessas
+    ciencias: nao confere nem encerra ninguem e nao alerta a equipe (fica pro timer)."""
     resumo = {"encerrados": 0, "embarcadores": 0, "enviados": 0, "adiados": 0, "alertas": 0}
     c = cd.cfg(config)
     if not c["ativo"]:
@@ -503,9 +559,13 @@ def executar(config: dict, agora: datetime | None = None, modo_teste: bool = Fal
         servicos_ativos = {d["service_id"] for d in ativos.values() if d["service_id"] is not None}
         fora = set()   # nao entram no envio desta rodada: encerrados, ou sem como conferir
         alertar = []   # vespera vencida: alerta da equipe depois dos envios (conta o aviso que acabou de sair)
-        for ciencia in cd.listar(conn, cd.PENDENTE, limite=-1):   # -1 = sem limite no SQLite
+        conferir = cd.listar(conn, cd.PENDENTE, limite=-1) if somente_ids is None else []   # -1 = sem limite
+        for ciencia in conferir:
             try:
-                estado = estado_do_pedido(conn, ciencia["codigo"], ciencia["service_id"])
+                # recem-aberta: o espelho pode ser de antes da marcacao; so as tabelas locais encerram
+                idade = agora - datetime.strptime(ciencia["criado_em"], "%Y-%m-%d %H:%M:%S")
+                recente = idade < timedelta(minutes=CARENCIA_ESPELHO_MIN)
+                estado = None if recente else estado_do_pedido(conn, ciencia["codigo"], ciencia["service_id"])
                 # servico OU codigo: o dedicado guarda o primeiro service_id; reentrega ou servico
                 # recriado chega com outro (remocao poe removido_em, entao o codigo tambem a enxerga)
                 ativo = (ciencia["service_id"] in servicos_ativos
@@ -536,7 +596,8 @@ def executar(config: dict, agora: datetime | None = None, modo_teste: bool = Fal
                     and agora >= datetime.combine(data - timedelta(days=1), time(16, 0)):
                 alertar.append(ciencia)
 
-        vencidos = [p for p in cd.pendentes_vencidos(conn, agora) if p["id"] not in fora]
+        vencidos = [p for p in cd.pendentes_vencidos(conn, agora)
+                    if p["id"] not in fora and (somente_ids is None or p["id"] in somente_ids)]
         if not dentro:
             resumo["adiados"] = len(vencidos)
             if vencidos:
@@ -566,17 +627,8 @@ def executar(config: dict, agora: datetime | None = None, modo_teste: bool = Fal
             except Exception as e:  # noqa: BLE001  (um embarcador nunca derruba os outros)
                 logger.error(f"ciencia do dedicado: embarcador {sender_id} falhou nesta rodada ({e})")
 
-        for ciencia in alertar:
-            try:
-                fresco = cd.buscar(conn, ciencia["id"])   # quem respondeu durante os envios nao gera alerta
-                if not fresco or fresco["situacao"] != cd.PENDENTE or fresco["alerta_equipe_em"]:
-                    continue
-                nome = embarcador(ciencia["sender_id"]).get("nome") or ""
-                if _alertar_equipe(conn, {**fresco, "data_entrega": ciencia["data_entrega"]}, nome, canais, agora,
-                                   modo_teste):
-                    resumo["alertas"] += 1
-            except Exception as e:  # noqa: BLE001
-                logger.error(f"ciencia do dedicado: alerta da equipe de {ciencia['codigo']} falhou ({e})")
+        resumo["alertas"] = _alertar_vespera(conn, alertar, embarcador, config, canais, agora, modo_teste,
+                                             db_path=db_path)
     finally:
         conn.close()
     return resumo

@@ -77,6 +77,8 @@ class TestLigacaoCiencia(Base):
         self.assertEqual(self.executar.call_args.kwargs["db_path"], self.db)
         linhas = self._ciencias()
         self.assertEqual(len(linhas), 1)
+        # a roteirizacao so manda o aviso do que acabou de abrir (os lembretes vencidos sao do timer)
+        self.assertEqual(self.executar.call_args.kwargs["somente_ids"], {linhas[0]["id"]})
         self.assertEqual((linhas[0]["codigo"], linhas[0]["cnpj"], linhas[0]["data_entrega"]),
                          ("PS-1001", "12345678000190", QUINTA))
 
@@ -146,14 +148,32 @@ class TestLigacaoCiencia(Base):
         self.executar.assert_not_called()
         self.assertEqual(self._ciencias(), [])
 
-    def test_remarcado_apos_reagendar_abre_ciencia_nova(self):
-        self._tratar([_servico()])
+    def _reagendar_pela_pagina(self, minutos_atras):
         conn = cd.conectar(self.db)
         cd.encerrar(conn, self._ciencias()[0]["id"], "reagendado", datetime(2026, 10, 6, 10, 0))
         conn.close()
         conn = pedidos_dedicados.conectar(self.db)
         pedidos_dedicados.remover(conn, codigo_pedido="PS-1001", por=pedidos_dedicados.POR_CIENCIA_REAGENDADO)
+        conn.execute("UPDATE pedidos_dedicados SET removido_em = datetime('now','localtime', ?)",
+                     (f"-{minutos_atras} minutes",))
+        conn.commit()
         conn.close()
+
+    def test_reagendado_pela_pagina_ha_menos_de_60_min_nao_e_remarcado(self):
+        # a roteirizacao que buscou os servicos antes do reagendamento ainda ve a data velha
+        self._tratar([_servico()])
+        self._reagendar_pela_pagina(10)
+        r = self._tratar([_servico()])
+        self.assertEqual((r["marcados"], r["ciencias"]), (0, 0))
+        self.assertEqual(self._ativos(), {})
+        self.assertEqual(len(self._ciencias()), 1)
+        # mesmo servico com outro codigo tambem espera
+        outro = dict(_servico(), code="#PS-7777")
+        self.assertEqual(self._tratar([outro])["marcados"], 0)
+
+    def test_remarcado_apos_reagendar_abre_ciencia_nova(self):
+        self._tratar([_servico()])
+        self._reagendar_pela_pagina(61)
         r = self._tratar([_servico()])
         self.assertEqual((r["marcados"], r["ciencias"]), (1, 1))
         self.assertEqual(len(self._ciencias()), 2)

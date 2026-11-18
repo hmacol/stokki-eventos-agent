@@ -68,6 +68,9 @@ def conectar(db_path=DB_PATH) -> sqlite3.Connection:
         );
         CREATE INDEX IF NOT EXISTS idx_ciencias_dedicado_codigo ON ciencias_dedicado (codigo, situacao);
         CREATE INDEX IF NOT EXISTS idx_ciencias_dedicado_sender ON ciencias_dedicado (sender_id, situacao);
+        -- um codigo nunca tem duas PENDENTE (duas rodadas abrindo ao mesmo tempo)
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_ciencias_dedicado_pendente ON ciencias_dedicado (codigo)
+            WHERE situacao = 'PENDENTE';
         CREATE TABLE IF NOT EXISTS ciencias_dedicado_envios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ciencia_id INTEGER NOT NULL,
@@ -99,13 +102,32 @@ def _hhmm(valor, padrao: time) -> time:
         return padrao
 
 
+def _ligado(valor) -> bool:
+    """So True (booleano) ou "true"/"sim"/"1": a string "false" do config nao liga."""
+    if isinstance(valor, str):
+        return valor.strip().lower() in ("true", "sim", "1")
+    return valor is True
+
+
+def _intervalo(valor, padrao: int = 4) -> int:
+    try:
+        horas = int(valor)
+    except (TypeError, ValueError, OverflowError):
+        return padrao
+    return horas if horas >= 1 else padrao
+
+
 def cfg(config: dict | None) -> dict:
-    """Secao ciencia_dedicado do config ja carregado; tolera secao ausente."""
+    """Secao ciencia_dedicado do config ja carregado. Nunca levanta (roda dentro da
+    roteirizacao do dia mesmo com a chave desligada): secao ausente ou valor ruim
+    vale o padrao."""
     c = (config or {}).get("ciencia_dedicado") or {}
+    c = c if isinstance(c, dict) else {}
     janela = c.get("janela") or {}
+    janela = janela if isinstance(janela, dict) else {}
     return {
-        "ativo": bool(c.get("ativo", False)),
-        "intervalo_horas": int(c.get("intervalo_horas") or 4),
+        "ativo": _ligado(c.get("ativo", False)),
+        "intervalo_horas": _intervalo(c.get("intervalo_horas")),
         "janela": (_hhmm(janela.get("inicio"), time(8, 0)), _hhmm(janela.get("fim"), time(20, 0))),
         "forcar_destino": str(c.get("forcar_destino") or ""),
     }
@@ -121,7 +143,8 @@ def _destinatario(servico: dict) -> str:
 
 
 def abrir(conn, item: dict, cnpj: str | None, agora: datetime) -> int | None:
-    """Abre ciencia PENDENTE (lembrete imediato). None se ja ha PENDENTE do codigo."""
+    """Abre ciencia PENDENTE (lembrete imediato). None se ja ha PENDENTE do codigo
+    (pela checagem ou, se duas rodadas abrirem juntas, pelo indice unico)."""
     servico = item["servico"]
     regra = item["regra"]
     # service.code pode trazer varios pedidos ('#PS-1, PS-2'): vale o primeiro
@@ -132,17 +155,21 @@ def abrir(conn, item: dict, cnpj: str | None, agora: datetime) -> int | None:
                     (codigo, PENDENTE)).fetchone():
         return None
     quando = _quando(agora)
-    cur = conn.execute("""
-        INSERT INTO ciencias_dedicado (codigo, service_id, sender_id, cnpj, regiao, regra_nome,
-            dias_visita, destinatario, cidade, data_entrega, valor, valor_pendente, criado_em,
-            situacao, proximo_lembrete_em)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (codigo, servico.get("id"), servico.get("sender_id"), cnpj,
-          regra.get("regiao") or regra["nome"], regra["nome"],
-          regioes_dia_fixo.descricao_dias(regra), _destinatario(servico),
-          regioes_dia_fixo.extrair_cidade(servico) or "",
-          item["data"].isoformat(), item.get("valor"), 1 if item.get("valor_pendente") else 0,
-          quando, PENDENTE, quando))
+    try:
+        cur = conn.execute("""
+            INSERT INTO ciencias_dedicado (codigo, service_id, sender_id, cnpj, regiao, regra_nome,
+                dias_visita, destinatario, cidade, data_entrega, valor, valor_pendente, criado_em,
+                situacao, proximo_lembrete_em)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (codigo, servico.get("id"), servico.get("sender_id"), cnpj,
+              regra.get("regiao") or regra["nome"], regra["nome"],
+              regioes_dia_fixo.descricao_dias(regra), _destinatario(servico),
+              regioes_dia_fixo.extrair_cidade(servico) or "",
+              item["data"].isoformat(), item.get("valor"), 1 if item.get("valor_pendente") else 0,
+              quando, PENDENTE, quando))
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return None
     conn.commit()
     return cur.lastrowid
 
@@ -253,6 +280,18 @@ def agendar_proximo(conn, ciencia_id, agora: datetime, intervalo_horas: int):
     conn.execute("UPDATE ciencias_dedicado SET proximo_lembrete_em = ? WHERE id = ?",
                  (_quando(agora + timedelta(hours=intervalo_horas)), ciencia_id))
     conn.commit()
+
+
+def reivindicar_lembrete(conn, ciencia_id, agora: datetime, intervalo_horas: int) -> bool:
+    """Toma o lembrete vencido pra esta rodada, num UPDATE so: adia o proximo se o
+    pedido ainda esta PENDENTE e vencido. False = outra rodada (timer e roteirizacao
+    rodando juntos) ja tomou, ou o embarcador respondeu: nao envia."""
+    cur = conn.execute("""
+        UPDATE ciencias_dedicado SET proximo_lembrete_em = ?
+        WHERE id = ? AND situacao = ? AND proximo_lembrete_em <= ?
+    """, (_quando(agora + timedelta(hours=intervalo_horas)), ciencia_id, PENDENTE, _quando(agora)))
+    conn.commit()
+    return cur.rowcount == 1
 
 
 def responder(conn, ciencia_id, situacao, nome, ip, agora: datetime, data_nova: date | None = None) -> bool:

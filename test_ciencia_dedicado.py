@@ -111,6 +111,56 @@ class TestCienciaDedicado(unittest.TestCase):
         cd.agendar_proximo(self.conn, cid, AGORA, 4)
         self.assertEqual(cd.buscar(self.conn, cid)["proximo_lembrete_em"], "2026-11-17 14:00:00")
 
+    def test_reivindicar_lembrete_so_toma_o_vencido_e_pendente_uma_vez(self):
+        cid = cd.abrir(self.conn, _item(), None, AGORA)
+        self.assertTrue(cd.reivindicar_lembrete(self.conn, cid, AGORA, 4))
+        self.assertEqual(cd.buscar(self.conn, cid)["proximo_lembrete_em"], "2026-11-17 14:00:00")
+        # outra rodada no mesmo instante (timer x roteirizacao) perde
+        self.assertFalse(cd.reivindicar_lembrete(self.conn, cid, AGORA, 4))
+        self.assertFalse(cd.reivindicar_lembrete(self.conn, cid, datetime(2026, 11, 17, 13, 59), 4))
+        self.assertEqual(cd.buscar(self.conn, cid)["proximo_lembrete_em"], "2026-11-17 14:00:00")
+        self.assertTrue(cd.reivindicar_lembrete(self.conn, cid, datetime(2026, 11, 17, 14, 0), 4))
+        cd.responder(self.conn, cid, cd.CIENTE, "Ana", "1.1.1.1", AGORA)
+        self.assertFalse(cd.reivindicar_lembrete(self.conn, cid, datetime(2026, 11, 18, 10, 0), 4))
+
+    def test_abrir_duas_vezes_sem_a_checagem_previa_fica_uma_pendente(self):
+        """Duas rodadas abrindo ao mesmo tempo passam as duas pela checagem: o indice unico segura."""
+        real = self.conn
+
+        class SemChecagem:
+            def execute(self, sql, *args):
+                if sql.startswith("SELECT 1 FROM ciencias_dedicado WHERE codigo = ?"):
+                    return real.execute("SELECT 1 WHERE 0")
+                return real.execute(sql, *args)
+
+            def __getattr__(self, nome):
+                return getattr(real, nome)
+
+        self.assertIsNotNone(cd.abrir(SemChecagem(), _item(), None, AGORA))
+        self.assertIsNone(cd.abrir(SemChecagem(), _item(), None, AGORA))
+        self.assertEqual([c["situacao"] for c in cd.listar(self.conn)], [cd.PENDENTE])
+        # o indice so vale pra PENDENTE: respondida libera abrir outra
+        cd.responder(self.conn, cd.listar(self.conn)[0]["id"], cd.CIENTE, "Ana", "1.1.1.1", AGORA)
+        self.assertIsNotNone(cd.abrir(SemChecagem(), _item(), None, AGORA))
+
+    def test_cfg_tolera_valores_ruins(self):
+        for ruim in ("abc", 0, -2, "0", None, "", [1], 0.5, float("inf")):
+            with self.subTest(intervalo=ruim):
+                self.assertEqual(cd.cfg({"ciencia_dedicado": {"intervalo_horas": ruim}})["intervalo_horas"], 4)
+        self.assertEqual(cd.cfg({"ciencia_dedicado": {"intervalo_horas": "6"}})["intervalo_horas"], 6)
+        self.assertEqual(cd.cfg({"ciencia_dedicado": {"intervalo_horas": 2}})["intervalo_horas"], 2)
+        for valor, esperado in ((True, True), ("true", True), ("Sim", True), ("1", True), (" TRUE ", True),
+                                (False, False), ("false", False), ("nao", False), ("0", False), (None, False),
+                                (1, False), ("", False)):
+            with self.subTest(ativo=valor):
+                self.assertIs(cd.cfg({"ciencia_dedicado": {"ativo": valor}})["ativo"], esperado)
+        # secao ou janela com tipo errado nao derrubam quem chama (roteirizacao do dia)
+        for secao in ("sim", [1, 2], 5, {"janela": "08:00"}, {"janela": [1]}, {"forcar_destino": 3}):
+            with self.subTest(secao=secao):
+                c = cd.cfg({"ciencia_dedicado": secao})
+                self.assertEqual(c["janela"], (time(8, 0), time(20, 0)))
+                self.assertFalse(c["ativo"])
+
     def test_proximo_envio_permitido(self):
         j = (time(8, 0), time(20, 0))
         self.assertEqual(cd.proximo_envio_permitido(datetime(2026, 11, 17, 7, 59), j),

@@ -669,10 +669,19 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                pendentes e o link /ciencia/<token>. Só entre 08h e 20h
                                (fora disso fica pras 08h). Antes de cada envio encerra
                                quem não precisa mais (entregue, cancelado, rota iniciada,
-                               dedicado removido, data passada ou em dia de visita) e
-                               alerta o grupo Alertas 1x por pedido (16h da véspera).
+                               dedicado removido, data passada ou em dia de visita); nos
+                               primeiros 30 min da ciência o espelho do núcleo não vale
+                               (só dedicado removido e data passada encerram). Cada pedido
+                               é reivindicado num UPDATE antes de enviar
+                               (reivindicar_lembrete): timer e roteirização juntos não
+                               mandam o mesmo lembrete 2x. Alerta o grupo Alertas 1x por
+                               pedido (16h da véspera), numa mensagem só com todos da
+                               rodada; não marcado se não saiu (tenta de novo); piloto
+                               ou CNPJ desconhecido não alerta.
                                roteirizacao/fora_dia_fixo.py chama a rotina no primeiro
-                               aviso quando ciencia_dedicado.ativo. Chaves em
+                               aviso quando ciencia_dedicado.ativo, com somente_ids (só as
+                               que acabou de abrir: não encerra, não alerta, não manda
+                               lembrete dos outros). Chaves em
                                `ciencia_dedicado` do config: ativo, intervalo_horas (4),
                                janela.inicio/janela.fim (08:00/20:00), forcar_destino
                                (ausente = hugo@). Tela /notificacoes, tipo
@@ -1035,11 +1044,13 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
                            desligada); "" = envio real, exige a chave geral.
                            Com ciencia_dedicado.ativo o aviso único sai de cena:
                            fora_dia_fixo abre a ciência (ciencia_dedicado.py) e chama
-                           notificar_ciencia_dedicado; falha ao abrir uma não para as
+                           notificar_ciencia_dedicado só com as que abriu
+                           (somente_ids); falha ao abrir uma não para as
                            outras e órfão marcado nas últimas 48h é reaberto na
                            rodada seguinte. Dedicado removido pela página de
                            ciência ("ciência: reagendado pelo embarcador") não bloqueia
-                           marcar de novo.
+                           marcar de novo, mas só depois de 60 min (a rodada pode ter
+                           lido a data velha antes do reagendamento).
  registro_dia_fixo.py      Tabelas agendamentos_origem (origem da data
                            gravada pelo sistema: DIA_FIXO, EQUIPE ou AUTOMATICO) e
                            avisos_fora_dia_fixo.
@@ -1679,6 +1690,7 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
                            30 dias) onde o embarcador confirma ciência do dedicado (nome
                            obrigatório, grava IP) ou reagenda pra um dos próximos 4 dias de
                            visita (usa alterar_entrega, só data; remove o dedicado).
+                           Encerrado pelo sistema não aparece pro cliente (motivo interno).
                            Templates ciencia.html e ciencia_erro.html. Só age de verdade com
                            ENVIAR na tela Notificações ou no cliente teste; senão simula
                            (faixa "modo piloto"). Funciona com alteracao_entrega desligada.
@@ -2141,7 +2153,8 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
  - Embarcador que usa o portal só por login de grupo não tem conta própria: o chat
    registra nao_enviado: sem_conta_portal (e-mail e WhatsApp seguem). Pedido reagendado
    pela página pode ser marcado dedicado de novo se a data voltar pra fora do dia de
-   visita (ciclo recomeça, histórico antigo fica). Os lembretes param quando o pedido
+   visita (ciclo recomeça, histórico antigo fica), passados 60 min do reagendamento.
+   Os lembretes param quando o pedido
    é entregue ou cancelado, a rota dele começa, a marca de dedicado sai, a data passa
    ou muda pra dia de visita. Fora desses casos, sem resposta o pedido segue como
    dedicado e sai na data pedida.

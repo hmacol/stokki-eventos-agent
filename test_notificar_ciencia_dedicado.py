@@ -43,8 +43,8 @@ def _item(codigo="#PS-1", sid=10, valor=250.0, valor_pendente=False):
 class CanaisFalsos:
     """Grava as chamadas; o resultado de cada canal e configuravel."""
 
-    def __init__(self, email_ok=True, wpp="enviado", conta=True):
-        self.email_ok, self.wpp, self.conta = email_ok, wpp, conta
+    def __init__(self, email_ok=True, wpp="enviado", conta=True, alerta_ok=True):
+        self.email_ok, self.wpp, self.conta, self.alerta_ok = email_ok, wpp, conta, alerta_ok
         self.emails, self.whats, self.abertos, self.mensagens, self.alertas = [], [], [], [], []
         self.resolvidos = set()
         self._proximo_id = 100
@@ -52,7 +52,11 @@ class CanaisFalsos:
     def canais(self) -> ncd.Canais:
         return ncd.Canais(email=self._email, whatsapp=self._whatsapp, chat_abrir=self._abrir,
                           chat_mensagem=self._mensagem, tem_conta_portal=lambda cnpj: self.conta,
-                          alerta_equipe=self.alertas.append)
+                          alerta_equipe=self._alerta)
+
+    def _alerta(self, texto):
+        self.alertas.append(texto)
+        return self.alerta_ok
 
     def _email(self, destinos, assunto, html):
         if isinstance(self.email_ok, Exception):
@@ -325,17 +329,64 @@ class TestRodada(_Base):
         self.assertEqual(cd.pendentes_vencidos(self.conn, datetime(2026, 11, 17, 14, 14)), [])
 
 
-    def test_agendar_proximo_falhando_nada_sai(self):
+    def test_reivindicar_lembrete_falhando_nada_sai(self):
         self._tela("LIGADO")
         self._numero()
         cid = self._abrir()
         f = CanaisFalsos()
-        travado = mock.patch.object(cd, "agendar_proximo", side_effect=sqlite3.OperationalError("database is locked"))
+        travado = mock.patch.object(cd, "reivindicar_lembrete",
+                                    side_effect=sqlite3.OperationalError("database is locked"))
         with travado, self.assertLogs("notificar_ciencia_dedicado", "ERROR"):
             res = self._rodada(f)
         self.assertEqual(res, {"email": 0, "whatsapp": 0, "chat": 0, "nao_enviado": 0})
         self.assertEqual((f.emails, f.whats, f.abertos, f.mensagens), ([], [], [], []))
         self.assertEqual(cd.envios(self.conn, cid), [])
+
+    def test_lembrete_tomado_por_outra_rodada_nao_sai_de_novo(self):
+        self._tela("LIGADO")
+        self._numero()
+        tomado, livre = self._abrir("#PS-1", 10), self._abrir("#PS-2", 11)
+        # a outra rodada (timer x roteirizacao) tomou o PS-1 depois da selecao
+        self.assertTrue(cd.reivindicar_lembrete(self.conn, tomado, AGORA, 4))
+        f = CanaisFalsos()
+        res = self._rodada(f)
+        self.assertEqual(res, {"email": 1, "whatsapp": 1, "chat": 1, "nao_enviado": 0})
+        for texto in (f.emails[0][2], f.whats[0][2], f.abertos[0][3]):
+            self.assertIn("PS-2", texto)
+            self.assertNotIn("PS-1", texto)
+        self.assertEqual(cd.envios(self.conn, tomado), [])
+        self.assertEqual(len(cd.envios(self.conn, livre)), 3)
+
+    def test_todos_tomados_por_outra_rodada_nada_sai(self):
+        self._tela("LIGADO")
+        self._numero()
+        cid = self._abrir()
+        f = CanaisFalsos()
+        self.assertTrue(cd.reivindicar_lembrete(self.conn, cid, AGORA, 4))
+        res = self._rodada(f)
+        self.assertEqual(res, {"email": 0, "whatsapp": 0, "chat": 0, "nao_enviado": 0})
+        self.assertEqual((f.emails, f.whats, f.abertos, f.mensagens, f.alertas), ([], [], [], [], []))
+        self.assertEqual(cd.envios(self.conn, cid), [])
+
+    def test_sem_canal_com_cnpj_desconhecido_nao_alerta_a_equipe(self):
+        # CNPJ desconhecido conta como piloto: ninguem do lado do cliente pode responder
+        self._tela("LIGADO")
+        cid = cd.abrir(self.conn, _item(), None, AGORA)
+        f = CanaisFalsos(conta=False)
+        ncd.enviar_embarcador(self.conn, SENDER, cd.pendentes_do_sender(self.conn, SENDER),
+                              {"nome": "Sem Cadastro", "emails": []}, CONFIG, f.canais(), AGORA, db_path=self.db)
+        self.assertEqual(f.alertas, [])
+        self.assertIn(("email", "nao_enviado", "sem_canal", 0), self._envios(cid))
+
+    def test_alerta_sem_canal_que_nao_saiu_fica_no_log(self):
+        self._tela("LIGADO")
+        self.emb["emails"] = []
+        self._abrir()
+        f = CanaisFalsos(conta=False, alerta_ok=False)
+        with self.assertLogs("notificar_ciencia_dedicado", "WARNING") as logs:
+            self._rodada(f)
+        self.assertEqual(len(f.alertas), 1)
+        self.assertTrue(any("WARNING" in l and "nao saiu" in l for l in logs.output), logs.output)
 
     def test_falha_ao_gravar_um_pedido_grava_os_outros_sem_levantar(self):
         self._tela("LIGADO")
