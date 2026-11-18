@@ -66,9 +66,10 @@ class _Base(unittest.TestCase):
         self.pd = pd.conectar(self.db)
         self.addCleanup(self.pd.close)
         self.conn.executescript("""
-            CREATE TABLE nucleo_pedidos (codigo TEXT PRIMARY KEY, status TEXT, agendamento_inicio TEXT);
+            CREATE TABLE nucleo_pedidos (codigo TEXT PRIMARY KEY, vuupt_service_id INTEGER, status TEXT,
+                                         agendamento_inicio TEXT);
             CREATE TABLE nucleo_rotas (id INTEGER PRIMARY KEY, status TEXT);
-            CREATE TABLE nucleo_paradas (rota_id INTEGER, codigo TEXT, situacao TEXT);
+            CREATE TABLE nucleo_paradas (rota_id INTEGER, service_id INTEGER, codigo TEXT, situacao TEXT);
         """)
         c = cn.conectar(self.db)
         try:
@@ -78,24 +79,30 @@ class _Base(unittest.TestCase):
         self.embs = {s: {"nome": f"Emb {s}", "emails": [f"a{s}@emb.com"], "cnpj": CNPJS[s], "desligado": False}
                      for s in CNPJS}
 
-    def _abrir(self, codigo="#PS-1", sid=10, sender=SENDER, data=ENTREGA, agora=AGORA, nucleo=True):
+    def _abrir(self, codigo="#PS-1", sid=10, sender=SENDER, data=ENTREGA, agora=AGORA, nucleo=True, marcar=True):
         item = {"servico": {"id": sid, "code": codigo, "sender_id": sender, "title": f"{codigo} - 1 / EMB / Padaria",
                             "address": "Rua A, 10, Campinas - SP, 13000-000, Brasil"},
                 "regra": CAMPINAS, "data": data, "valor": 250.0}
         cid = cd.abrir(self.conn, item, CNPJS[sender], agora)
-        pd.marcar(self.pd, [{"codigo_pedido": codigo, "service_id": sid, "sender_id": sender}], 250.0,
-                  pd.POR_FORA_DIA_FIXO)
+        if marcar:
+            pd.marcar(self.pd, [{"codigo_pedido": codigo, "service_id": sid, "sender_id": sender}], 250.0,
+                      pd.POR_FORA_DIA_FIXO)
         if nucleo:
-            self._nucleo(codigo.lstrip("#"), agendamento=f"{data.isoformat()} 08:00:00")
+            self._nucleo(codigo.lstrip("#"), agendamento=f"{data.isoformat()} 08:00:00", service_id=sid)
         return cid
 
-    def _nucleo(self, codigo, status="ABERTO", agendamento="2026-11-19 08:00:00"):
-        self.conn.execute("INSERT OR REPLACE INTO nucleo_pedidos VALUES (?, ?, ?)", (codigo, status, agendamento))
+    def _nucleo(self, codigo, status="ABERTO", agendamento="2026-11-19 08:00:00", service_id=None):
+        """Upsert: chamada sem service_id mantem o que ja estava gravado."""
+        self.conn.execute("""
+            INSERT INTO nucleo_pedidos (codigo, vuupt_service_id, status, agendamento_inicio) VALUES (?, ?, ?, ?)
+            ON CONFLICT(codigo) DO UPDATE SET status = excluded.status, agendamento_inicio = excluded.agendamento_inicio,
+                vuupt_service_id = COALESCE(excluded.vuupt_service_id, vuupt_service_id)
+        """, (codigo, service_id, status, agendamento))
         self.conn.commit()
 
-    def _rota(self, codigo, status_rota, situacao="PENDENTE"):
+    def _rota(self, codigo, status_rota, situacao="PENDENTE", service_id=None):
         rota_id = self.conn.execute("INSERT INTO nucleo_rotas (status) VALUES (?)", (status_rota,)).lastrowid
-        self.conn.execute("INSERT INTO nucleo_paradas VALUES (?, ?, ?)", (rota_id, codigo, situacao))
+        self.conn.execute("INSERT INTO nucleo_paradas VALUES (?, ?, ?, ?)", (rota_id, service_id, codigo, situacao))
         self.conn.commit()
 
     def _executar(self, agora, falsos, config=CONFIG, **kw):
@@ -130,6 +137,29 @@ class TestEstadoDoPedido(_Base):
         self._rota("PS-1", "EM_ROTA")
         self.assertTrue(ncd.estado_do_pedido(self.conn, "PS-1")["rota_iniciada"])
 
+    def test_reentrega_do_mesmo_codigo_nao_herda_a_rota_antiga(self):
+        # rota antiga (servico 10) concluida com insucesso; a reentrega e o servico 20, mesmo codigo
+        self._rota("PS-1", "CONCLUIDA", situacao="INSUCESSO", service_id=10)
+        self._nucleo("PS-1", "ABERTO", "2026-11-23 08:00:00", service_id=20)
+        estado = ncd.estado_do_pedido(self.conn, "PS-1", service_id=20)
+        self.assertEqual(estado, {"cancelado": False, "finalizado": False, "rota_iniciada": False,
+                                  "data": date(2026, 11, 23)})
+        self.assertTrue(ncd.estado_do_pedido(self.conn, "PS-1")["rota_iniciada"])   # so pelo codigo, erraria
+        self._rota("PS-1", "EM_ROTA", service_id=20)
+        self.assertTrue(ncd.estado_do_pedido(self.conn, "PS-1", service_id=20)["rota_iniciada"])
+
+    def test_servico_com_codigos_combinados_achado_pelo_service_id(self):
+        self._nucleo("PS-1, PS-2", "ENTREGUE", service_id=10)
+        self.assertIsNone(ncd.estado_do_pedido(self.conn, "PS-1"))
+        self.assertTrue(ncd.estado_do_pedido(self.conn, "PS-1", service_id=10)["finalizado"])
+        self._nucleo("PS-1, PS-2", "EM_ROTA")
+        self._rota("PS-1, PS-2", "EM_ROTA", service_id=10)
+        self.assertTrue(ncd.estado_do_pedido(self.conn, "PS-1", service_id=10)["rota_iniciada"])
+
+    def test_service_id_que_o_nucleo_nao_tem_cai_no_codigo(self):
+        self._nucleo("PS-1", "CANCELADO")
+        self.assertTrue(ncd.estado_do_pedido(self.conn, "PS-1", service_id=99)["cancelado"])
+
 
 class TestRotina(_Base):
     def test_encerra_pelo_nucleo_e_pelo_dedicado_removido_sem_enviar(self):
@@ -138,7 +168,7 @@ class TestRotina(_Base):
         em_rota = self._abrir("#PS-3", 12)
         self._nucleo("PS-1", "CANCELADO")
         pd.remover(self.pd, service_id=11, por="equipe")
-        self._rota("PS-3", "EM_ROTA")
+        self._rota("PS-3", "EM_ROTA", service_id=12)
         f = CanaisFalsos()
         res = self._executar(AGORA, f)
         self.assertEqual(res["encerrados"], 3)
@@ -156,6 +186,32 @@ class TestRotina(_Base):
         f = CanaisFalsos()
         self.assertEqual(self._executar(AGORA, f)["encerrados"], 0)
         self.assertEqual(len(f.emails), 1)
+
+    def test_dedicado_ativo_com_outro_service_id_vale_pelo_codigo(self):
+        # o dedicado foi marcado no servico 10; a reentrega (servico 20) casa pelo codigo
+        pd.marcar(self.pd, [{"codigo_pedido": "PS-1", "service_id": 10, "sender_id": SENDER}], 250.0,
+                  pd.POR_FORA_DIA_FIXO)
+        cid = self._abrir("#PS-1-R2", 20, marcar=False)
+        f = CanaisFalsos()
+        self.assertEqual(self._executar(AGORA, f)["encerrados"], 0)
+        self.assertEqual(self._ciencia(cid)["situacao"], cd.PENDENTE)
+        self.assertEqual(len(f.emails), 1)
+        pd.remover(self.pd, codigo_pedido="PS-1", por="equipe")
+        self.assertEqual(self._executar(datetime(2026, 11, 17, 14, 0), f)["encerrados"], 1)
+        self.assertEqual(self._ciencia(cid)["motivo_encerramento"], "dedicado removido")
+
+    def test_reentrega_nao_herda_a_rota_antiga_e_combinado_entregue_encerra(self):
+        reentrega = self._abrir("#PS-1", 20)   # nucleo: PS-1 agora no servico 20
+        self._rota("PS-1", "CONCLUIDA", situacao="INSUCESSO", service_id=10)
+        combinado = self._abrir("#PS-5, PS-6", 30, nucleo=False)
+        self._nucleo("PS-5, PS-6", "ENTREGUE", service_id=30)
+        f = CanaisFalsos()
+        res = self._executar(AGORA, f)
+        self.assertEqual(self._ciencia(reentrega)["situacao"], cd.PENDENTE)
+        self.assertEqual((self._ciencia(combinado)["situacao"], self._ciencia(combinado)["motivo_encerramento"]),
+                         (cd.ENCERRADO, "entregue ou insucesso"))
+        self.assertEqual((res["encerrados"], res["enviados"]), (1, 1))
+        self.assertNotIn("PS-5", f.emails[0][2])
 
     def test_data_mudou_e_segue_fora_do_dia_atualiza_e_continua_pendente(self):
         fora = self._abrir("#PS-1", 10)
@@ -241,8 +297,10 @@ class TestRotina(_Base):
         res = self._executar(datetime(2026, 11, 18, 18, 0), f)
         self.assertEqual((res["alertas"], res["enviados"]), (1, 1))
         self.assertIn("PS-1", f.alertas[0])
-        self.assertIn("0 aviso(s)", f.alertas[0])   # o alerta sai antes do primeiro aviso
+        self.assertIn("1 aviso(s)", f.alertas[0])   # o alerta sai depois do primeiro aviso e o conta
         self.assertTrue(self._ciencia(tarde)["alerta_equipe_em"])
+        self.assertEqual(self._executar(datetime(2026, 11, 18, 18, 15), f)["alertas"], 0)
+        self.assertEqual(len(f.alertas), 1)
         # marcado as 22h pra amanha: fora da janela espera as 08h
         noite = self._abrir("#PS-2", 11, sender=OUTRO, agora=datetime(2026, 11, 18, 22, 0))
         g = CanaisFalsos()
@@ -250,7 +308,23 @@ class TestRotina(_Base):
         self.assertEqual(g.alertas, [])
         self.assertEqual(self._executar(datetime(2026, 11, 19, 8, 0), g)["alertas"], 1)
         self.assertIn("PS-2", g.alertas[0])
+        self.assertIn("1 aviso(s)", g.alertas[0])
         self.assertTrue(self._ciencia(noite)["alerta_equipe_em"])
+
+    def test_alerta_nao_sai_se_respondeu_durante_o_envio(self):
+        cid = self._abrir("#PS-1", 10, agora=datetime(2026, 11, 18, 18, 0))
+        f = CanaisFalsos()
+        email_original = f._email
+
+        def email(destinos, assunto, html):
+            cd.responder(self.conn, cid, cd.CIENTE, "Fulano", "1.2.3.4", datetime(2026, 11, 18, 18, 0))
+            return email_original(destinos, assunto, html)
+
+        f._email = email
+        res = self._executar(datetime(2026, 11, 18, 18, 0), f)
+        self.assertEqual((res["enviados"], res["alertas"]), (1, 0))
+        self.assertEqual(f.alertas, [])
+        self.assertIsNone(self._ciencia(cid)["alerta_equipe_em"])
 
     def test_modo_teste_nao_grava_nada(self):
         self._abrir("#PS-1", 10)

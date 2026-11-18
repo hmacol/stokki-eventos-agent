@@ -46,6 +46,8 @@ from typing import Callable
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):   # o logging escreve no stderr
+    sys.stderr.reconfigure(encoding="utf-8")
 
 import yaml
 
@@ -379,20 +381,30 @@ def _dia(valor) -> date | None:
         return None
 
 
-def estado_do_pedido(conn_nucleo, codigo) -> dict | None:
+def estado_do_pedido(conn_nucleo, codigo, service_id=None) -> dict | None:
     """Situacao do pedido no espelho do nucleo (tabelas nucleo_*, no mesmo dados.db).
-    None = o nucleo nao conhece o codigo. agendamento_inicio ja esta em hora local
+    None = o nucleo nao conhece o pedido. agendamento_inicio ja esta em hora local
     (o sincronismo converte o UTC da Vuupt com vuupt_para_local): a data sao os 10
     primeiros caracteres. Rota iniciada = parada nao cancelada numa rota EM_ROTA ou
-    CONCLUIDA (o status EM_ROTA do pedido so diz que ele esta numa rota)."""
-    row = conn_nucleo.execute("SELECT status, agendamento_inicio FROM nucleo_pedidos WHERE codigo = ?",
-                              (codigo,)).fetchone()
+    CONCLUIDA (o status EM_ROTA do pedido so diz que ele esta numa rota).
+
+    Com service_id procura primeiro pelo servico (nucleo_pedidos.vuupt_service_id e
+    nucleo_paradas.service_id): reentrega com o mesmo codigo nao herda a parada da
+    rota antiga, e servico com codigos combinados ('PS-1, PS-2') e achado. Sem
+    service_id, ou se o nucleo nao tem o servico, vale o codigo."""
+    sql = "SELECT status, agendamento_inicio FROM nucleo_pedidos WHERE {} = ? LIMIT 1"
+    row = None
+    if service_id is not None:
+        row = conn_nucleo.execute(sql.format("vuupt_service_id"), (service_id,)).fetchone()
+    campo, chave = ("pa.service_id", service_id) if row is not None else ("pa.codigo", codigo)
+    if row is None:
+        row = conn_nucleo.execute(sql.format("codigo"), (codigo,)).fetchone()
     if row is None:
         return None
-    iniciada = conn_nucleo.execute("""
+    iniciada = conn_nucleo.execute(f"""
         SELECT 1 FROM nucleo_paradas pa JOIN nucleo_rotas r ON r.id = pa.rota_id
-        WHERE pa.codigo = ? AND pa.situacao <> ? AND r.status IN (?, ?) LIMIT 1
-    """, (codigo, nb.PARADA_CANCELADA, nb.ROTA_EM_ROTA, nb.ROTA_CONCLUIDA)).fetchone() is not None
+        WHERE {campo} = ? AND pa.situacao <> ? AND r.status IN (?, ?) LIMIT 1
+    """, (chave, nb.PARADA_CANCELADA, nb.ROTA_EM_ROTA, nb.ROTA_CONCLUIDA)).fetchone() is not None
     return {"cancelado": row[0] == nb.PEDIDO_CANCELADO,
             "finalizado": row[0] in (nb.PEDIDO_ENTREGUE, nb.PEDIDO_INSUCESSO),
             "rota_iniciada": iniciada, "data": _dia(row[1])}
@@ -458,10 +470,11 @@ def _alertar_equipe(conn, ciencia: dict, nome: str, canais: Canais, agora: datet
 
 def executar(config: dict, agora: datetime | None = None, modo_teste: bool = False, canais: Canais | None = None,
              db_path=None, embarcadores: dict | None = None) -> dict:
-    """Uma rodada do timer: confere todos os PENDENTE (encerra ou atualiza a data),
-    alerta a equipe na vespera e, dentro da janela, manda os lembretes vencidos por
-    embarcador, relendo cada pedido logo antes do envio (quem respondeu no meio da
-    rodada nao recebe). Erro num pedido ou num embarcador e logado e nao para os outros."""
+    """Uma rodada do timer: confere todos os PENDENTE (encerra ou atualiza a data) e,
+    dentro da janela, manda os lembretes vencidos por embarcador, relendo cada pedido
+    logo antes do envio (quem respondeu no meio da rodada nao recebe); depois alerta
+    a equipe dos que passaram das 16h da vespera e seguem PENDENTE. Erro num pedido
+    ou num embarcador e logado e nao para os outros."""
     resumo = {"encerrados": 0, "embarcadores": 0, "enviados": 0, "adiados": 0, "alertas": 0}
     c = cd.cfg(config)
     if not c["ativo"]:
@@ -483,13 +496,14 @@ def executar(config: dict, agora: datetime | None = None, modo_teste: bool = Fal
         ativos = pedidos_dedicados.ativos_por_codigo(conn)
         servicos_ativos = {d["service_id"] for d in ativos.values() if d["service_id"] is not None}
         fora = set()   # nao entram no envio desta rodada: encerrados, ou sem como conferir
+        alertar = []   # vespera vencida: alerta da equipe depois dos envios (conta o aviso que acabou de sair)
         for ciencia in cd.listar(conn, cd.PENDENTE, limite=-1):   # -1 = sem limite no SQLite
             try:
-                estado = estado_do_pedido(conn, ciencia["codigo"])
-                if ciencia["service_id"] is not None:
-                    ativo = ciencia["service_id"] in servicos_ativos
-                else:
-                    ativo = pedidos_dedicados.normalizar_codigo(ciencia["codigo"]) in ativos
+                estado = estado_do_pedido(conn, ciencia["codigo"], ciencia["service_id"])
+                # servico OU codigo: o dedicado guarda o primeiro service_id; reentrega ou servico
+                # recriado chega com outro (remocao poe removido_em, entao o codigo tambem a enxerga)
+                ativo = (ciencia["service_id"] in servicos_ativos
+                         or pedidos_dedicados.normalizar_codigo(ciencia["codigo"]) in ativos)
                 motivo = motivo_de_encerramento(ciencia, estado, ativo, _regra_por_nome(ciencia["regra_nome"]),
                                                 agora.date())
                 if motivo:
@@ -512,14 +526,9 @@ def executar(config: dict, agora: datetime | None = None, modo_teste: bool = Fal
                              f"fica sem lembrete nesta rodada")
                 continue
             data = _dia(ciencia["data_entrega"])
-            if dentro and data and not ciencia["alerta_equipe_em"] \
+            if data and not ciencia["alerta_equipe_em"] \
                     and agora >= datetime.combine(data - timedelta(days=1), time(16, 0)):
-                try:
-                    nome = embarcador(ciencia["sender_id"]).get("nome") or ""
-                    if _alertar_equipe(conn, ciencia, nome, canais, agora, modo_teste):
-                        resumo["alertas"] += 1
-                except Exception as e:  # noqa: BLE001
-                    logger.error(f"ciencia do dedicado: alerta da equipe de {ciencia['codigo']} falhou ({e})")
+                alertar.append(ciencia)
 
         vencidos = [p for p in cd.pendentes_vencidos(conn, agora) if p["id"] not in fora]
         if not dentro:
@@ -550,6 +559,18 @@ def executar(config: dict, agora: datetime | None = None, modo_teste: bool = Fal
                     resumo["enviados"] += len(frescos)
             except Exception as e:  # noqa: BLE001  (um embarcador nunca derruba os outros)
                 logger.error(f"ciencia do dedicado: embarcador {sender_id} falhou nesta rodada ({e})")
+
+        for ciencia in alertar:
+            try:
+                fresco = cd.buscar(conn, ciencia["id"])   # quem respondeu durante os envios nao gera alerta
+                if not fresco or fresco["situacao"] != cd.PENDENTE or fresco["alerta_equipe_em"]:
+                    continue
+                nome = embarcador(ciencia["sender_id"]).get("nome") or ""
+                if _alertar_equipe(conn, {**fresco, "data_entrega": ciencia["data_entrega"]}, nome, canais, agora,
+                                   modo_teste):
+                    resumo["alertas"] += 1
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"ciencia do dedicado: alerta da equipe de {ciencia['codigo']} falhou ({e})")
     finally:
         conn.close()
     return resumo
