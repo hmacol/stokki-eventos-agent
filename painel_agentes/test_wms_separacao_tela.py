@@ -176,6 +176,32 @@ class TestRotasDoGalpao(Base):
         galpao = self.cliente("galpao")
         self.assertEqual(galpao.get(f"/api/ondas/pedidos/{self.pedido_id}/lotes").status_code, 403)
 
+    def test_escritorio_envia_a_planilha_de_lotes_do_cliente(self):
+        import io as _io
+        from test_wms_separacao import planilha_lotes
+        conn = sep.conectar()
+        conn.execute("UPDATE wms_pedidos SET nf = '42430' WHERE id = ?", (self.pedido_id,))
+        conn.commit()
+        conn.close()
+        arq = planilha_lotes([("DUFRY", 42430, "CAFE", (None, 24, None))], lotes=("247", "L1", "FIFO"))
+        adm = self.cliente("operador")
+
+        def enviar(c, conteudo, nome="LOTES.xlsx", emb="22"):
+            return c.post("/api/ondas/lotes/planilha", headers=ORIGEM, content_type="multipart/form-data",
+                          data={"embarcador_id": emb, "arquivo": (_io.BytesIO(conteudo), nome)})
+        r = enviar(adm, arq)
+        j = r.get_json()
+        self.assertEqual((r.status_code, j["gravadas"], j["linhas"][0]["codigo_ps"], j["linhas"][0]["situacao"]),
+                         (200, 1, "PS-70001", "ok"))
+        pedidos = adm.get("/api/ondas/pedidos?embarcador_id=22").get_json()["pedidos"]
+        self.assertEqual(pedidos[0]["lotes_cliente"], ["L1"])
+        self.assertEqual(enviar(adm, b"lixo").status_code, 400)
+        self.assertEqual(enviar(adm, arq, emb="48").status_code, 200)      # piloto sem caixa ainda: guarda a indicacao
+        self.assertEqual(enviar(adm, arq, emb="999").status_code, 400)     # nao e piloto
+        self.assertIn(">MARIA DOLORES</option>", adm.get("/ondas").get_data(as_text=True))
+        self.assertEqual(adm.post("/api/ondas/lotes/planilha", headers=ORIGEM, data={"embarcador_id": "22"}).status_code, 400)
+        self.assertEqual(enviar(self.cliente("galpao"), arq).status_code, 403)
+
     def test_montar_onda_com_embarcador_estranho_vira_400(self):
         adm = self.cliente("operador")
         for emb in ([22], {"a": 1}, "22", None):
@@ -218,7 +244,8 @@ class TestEscritorio(Base):
         self.assertEqual(pagina.status_code, 200)
         html = pagina.get_data(as_text=True)
         self.assertIn(">MOMBAK</option>", html)
-        self.assertNotIn(">MARIA DOLORES</option>", html)   # nao opera por caixa
+        # a Maria Dolores (sem caixa) aparece so no envio da planilha de lotes, nao no montar onda
+        self.assertEqual(html.count(">MARIA DOLORES</option>"), 1)
         r = c.get("/api/ondas/pedidos?embarcador_id=22").get_json()
         self.assertEqual((r["datas"], [p["codigo_ps"] for p in r["pedidos"]]),
                          ([{"data": "2026-11-24", "pedidos": 1}], ["PS-70001"]))

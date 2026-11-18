@@ -112,6 +112,7 @@ import wms_etiqueta_produto
 import wms_caixas
 import wms_pilotos
 import wms_separacao
+import wms_lotes_planilha
 import wms_etiqueta_volume
 import wms_fila_impressao
 import wms_faltas_recebimento
@@ -6535,7 +6536,8 @@ def _ondas_embarcadores() -> list:
 @app.route("/ondas")
 @requer_auth(niveis=_NIVEIS_WMS_ADMIN)
 def ondas():
-    return render_template("ondas.html", embarcadores=_ondas_embarcadores())
+    pilotos = [{"id": p["id"], "nome": p["nome"]} for p in wms_pilotos.pilotos(_carregar_config() or {})]
+    return render_template("ondas.html", embarcadores=_ondas_embarcadores(), pilotos=pilotos)
 
 
 @app.route("/api/ondas/pedidos")
@@ -6568,6 +6570,30 @@ def api_ondas_pedido_lotes_indicar(pedido_id):
     por = session.get("usuario") or ""
     return _sep_chamar(lambda conn: wms_separacao.indicar_lote(
         conn, pedido_id, int(corpo.get("produto_id") or 0), corpo.get("lote") or "", por))
+
+
+@app.route("/api/ondas/lotes/planilha", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_ondas_lotes_planilha():
+    """Planilha de lotes do cliente (por nota fiscal e produto): o escritório envia o arquivo que
+    o cliente mandou. Sem lote indicado, vale o que vence primeiro."""
+    # qualquer piloto, mesmo o que ainda nao opera por caixa: a indicacao fica guardada e
+    # passa a valer quando ele entrar na separacao
+    embarcador_id = request.form.get("embarcador_id", type=int)
+    if embarcador_id not in {p["id"] for p in wms_pilotos.pilotos(_carregar_config() or {})}:
+        return _wms_json_erro("Escolha o embarcador da planilha.")
+    arquivo = request.files.get("arquivo")
+    if not arquivo or not arquivo.filename:
+        return _wms_json_erro("Escolha o arquivo da planilha de lotes.")
+    conteudo = arquivo.read(wms_lotes_planilha.MAX_BYTES + 1)
+    nome = Path(arquivo.filename).name[:120]
+    por = session.get("usuario") or ""
+
+    def _f(conn):
+        lido = wms_lotes_planilha.ler_lotes(conteudo, nome)
+        return wms_separacao.importar_lotes_cliente(conn, embarcador_id, lido, nome, por)
+    return _sep_chamar(_f)
 
 
 @app.route("/api/ondas", methods=["POST"])

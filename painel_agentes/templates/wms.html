@@ -1452,7 +1452,7 @@
         : 'bipe a caixa na prateleira · sai primeiro o que vence primeiro · pegou só parte da caixa? o sistema pede a quantidade';
       const faltaTotal = d.produtos.reduce((n, p) => n + Math.max(p.pedido_un - p.separado_un, 0), 0);
       document.getElementById('onda-corpo').innerHTML = `
-        ${(d.lotes_indicados || []).length ? `<div class="cartao atencao"><div class="sub"><b>Lote pedido pelo cliente:</b><br>${d.lotes_indicados.map((l) => '<span class="mono">' + esc(l.codigo_ps) + '</span> · ' + esc(l.descricao) + ' · só lote <b>' + esc(l.lote) + '</b>').join('<br>')}</div></div>` : ''}
+        ${(d.lotes_indicados || []).length ? `<div class="cartao atencao"><div class="sub"><b>Lote pedido pelo cliente:</b><br>${d.lotes_indicados.map((l) => '<span class="mono">' + esc(l.codigo_ps) + '</span> · ' + esc(l.descricao) + ' · ' + (l.qtd_un == null ? 'só lote <b>' + esc(l.lote) + '</b>' : '<b>' + num(l.qtd_un) + ' UN do lote ' + esc(l.lote) + '</b>')).join('<br>')}</div></div>` : ''}
         <h2 class="sep-titulo">Produtos${faltaTotal > 0 ? '' : ' · <span class="badge badge-ok">tudo separado</span>'}</h2>
         <div class="lista">${d.produtos.map((p) => { const falta = Math.max(p.pedido_un - p.separado_un, 0); return `
           <div class="item ${falta > 0 ? '' : 'feito'}" style="cursor:default">
