@@ -31,6 +31,7 @@ MENU_ESPERADO = {
     "Retornos", "Demandas", "Aula (vídeos)",
     # entraram depois e o teste nao tinha acompanhado (visto em 17/11): o `niveis` das tres inclui logistica
     "Pedidos", "Pedidos do portal", "Coletas",
+    "Pagamentos",   # pagamentos pontuais (18/11): total, atendimento e logistica
 }
 
 
@@ -76,7 +77,8 @@ class TestNivelLogistica(unittest.TestCase):
 
     def test_telas_da_lista_abrem(self):
         for url in ("/canhotos-pendentes", "/historico-tratativas", "/consulta", "/clientes-agenda",
-                    "/atendimento", "/motoristas", "/financeiro/pedagios", "/canhotos", "/adesao-portal"):
+                    "/atendimento", "/motoristas", "/financeiro/pedagios", "/financeiro/pagamentos", "/canhotos",
+                    "/adesao-portal"):
             self.assertEqual(self.cliente.get(url).status_code, 200, url)
 
 

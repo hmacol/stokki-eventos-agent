@@ -409,7 +409,10 @@ def _chave_ordem_rota(nome: str | None) -> tuple:
 
 def listar_rascunhos_do_dia(data_alvo: date) -> list[dict]:
     """Rascunhos (com paradas aninhadas) do lote ativo mais recente da
-    data, prontos pra tela de planejamento."""
+    data, prontos pra tela de planejamento -- mais as rotas ENVIADAS de
+    qualquer lote da data (Hugo, 18/11: em 17/11 um lote novo gerado no
+    painel as 12h41 escondeu as 18 rotas ja enviadas do lote anterior;
+    rota enviada e rota real do dia, nao depende de lote)."""
     conn = _conectar()
     try:
         lote_id = _lote_ativo_id(conn, data_alvo)
@@ -417,8 +420,8 @@ def listar_rascunhos_do_dia(data_alvo: date) -> list[dict]:
             return []
         rows = conn.execute("""
             SELECT * FROM rascunhos_rota
-            WHERE lote_id = ? AND status != ?
-        """, (lote_id, STATUS_DESCARTADO)).fetchall()
+            WHERE data_alvo = ? AND status != ? AND (lote_id = ? OR status = ?)
+        """, (data_alvo.isoformat(), STATUS_DESCARTADO, lote_id, STATUS_ENVIADO)).fetchall()
         rows = sorted(rows, key=lambda r: _chave_ordem_rota(r["nome"]))
         return [_montar_rascunho(conn, r) for r in rows]
     finally:
@@ -1044,7 +1047,13 @@ def referencia_para_rascunho_manual(data_alvo: date) -> dict:
     na ida e na volta, saída 13:00Z, partição Seco/GRANDE_SP), e o
     rascunho criado passa a ser ele mesmo o lote ativo da data.
     """
-    rascunhos_do_dia = listar_rascunhos_do_dia(data_alvo)
+    conn = _conectar()
+    try:
+        lote_ativo = _lote_ativo_id(conn, data_alvo)
+    finally:
+        conn.close()
+    # a lista traz tambem ENVIADAS de lotes anteriores (18/11): a referencia e sempre do lote ativo
+    rascunhos_do_dia = [r for r in listar_rascunhos_do_dia(data_alvo) if r["lote_id"] == lote_ativo]
     if rascunhos_do_dia:
         r = rascunhos_do_dia[0]
         return {chave: r[chave] for chave in (
@@ -1192,7 +1201,11 @@ def duplicar_rascunho(rascunho_id: int) -> int:
 
     conn = _conectar()
     try:
-        nome_copia = _nome_copia(conn, origem["nome"], origem["lote_id"])
+        # 18/11: a copia vai pro lote ATIVO da data -- a origem pode ser uma
+        # ENVIADA de lote anterior (a tela mostra todas); copia no lote antigo
+        # tornaria ele o ativo de novo e esconderia os rascunhos do lote novo.
+        lote_destino = _lote_ativo_id(conn, date.fromisoformat(origem["data_alvo"])) or origem["lote_id"]
+        nome_copia = _nome_copia(conn, origem["nome"], lote_destino)
         cursor = conn.execute("""
             INSERT INTO rascunhos_rota (
                 data_alvo, lote_id, nome, particao, tipo_rota, zona, tipo_veiculo,
@@ -1201,7 +1214,7 @@ def duplicar_rascunho(rascunho_id: int) -> int:
                 start_at, km_estimado, horas_estimadas, turno, status
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            origem["data_alvo"], origem["lote_id"], nome_copia, origem["particao"],
+            origem["data_alvo"], lote_destino, nome_copia, origem["particao"],
             origem["tipo_rota"], origem["zona"], origem.get("tipo_veiculo"), origem["agent_id"], origem["vehicle_id"],
             origem["motorista_nome"], origem["start_location_base_id"], origem["end_location_base_id"],
             origem["start_at"], origem["km_estimado"], origem.get("horas_estimadas"), origem.get("turno"),
