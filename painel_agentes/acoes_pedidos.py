@@ -236,74 +236,40 @@ def cancelar_vuupt(service_id: int, usuario: str, *, token: str, agent_lalamove:
     return {"ok": True, "ja_estava": bool(r.get("ja_estava")), "erro": "", "aviso": aviso}
 
 
-def _abrir_sessao_stokki():
-    """Gerenciador de contexto: pega a trava da Stokki (dono unico por chamada, ate 60 s de espera,
-    conta principal ou reserva) e entrega a StokkiSession. RuntimeError se ocupada."""
-    import contextlib
-    from stokki import sessao_uso
-
-    @contextlib.contextmanager
-    def _ctx():
-        dono = f"painel-pedidos-acao-{uuid.uuid4().hex[:8]}"
-        conta = sessao_uso.adquirir(dono, ttl_segundos=300, esperar_segundos=60, alternativa=True)
-        if not conta:
-            raise RuntimeError("Stokki ocupada por outra rotina")
-        try:
-            from stokki.auth import StokkiSession
-            yield StokkiSession(torre_controle._carregar_config(), conta=conta)
-        finally:
-            sessao_uso.liberar(dono)
-    return _ctx()
-
-
-def cancelar_stokki(codigo: str, motivo: str, usuario: str, *, abrir_sessao=None) -> dict:
-    """Cancela na Stokki os pedidos PS-<id> do codigo (so a Stokki; a Vuupt e outra acao)."""
+def cancelar_stokki(codigo: str, motivo: str, usuario: str) -> dict:
+    """Poe na fila os pedidos PS-<id> do codigo (so a Stokki; a Vuupt e outra acao). Nunca fala com a
+    Stokki aqui (Hugo, 18/11: "incluir solicitacao na fila sempre"): o worker do portal executa
+    quando a Stokki estiver livre (stokki/fila_cancelamento.py) e a tela acompanha pelo andamento."""
     motivo = (motivo or "").strip()
     if len(motivo) < 15:
-        return {"ok": False, "resultados": [], "erro": "Informe o motivo do cancelamento (mínimo de 15 caracteres)."}
+        return {"ok": False, "fila": [], "erro": "Informe o motivo do cancelamento (mínimo de 15 caracteres)."}
     ids = list(dict.fromkeys(int(i) for i in re.findall(r"PS-(\d+)", (codigo or "").upper())))
     if not ids:
-        return {"ok": False, "resultados": [], "erro": "código sem PS-<número>: não dá pra achar o pedido na Stokki."}
+        return {"ok": False, "fila": [], "erro": "código sem PS-<número>: não dá pra achar o pedido na Stokki."}
     if len(ids) > _MAX_PS_STOKKI:
-        return {"ok": False, "resultados": [], "erro": f"no máximo {_MAX_PS_STOKKI} pedidos por vez."}
-    from stokki import cancelar
-    abrir_sessao = abrir_sessao or _abrir_sessao_stokki
-    resultados = []
+        return {"ok": False, "fila": [], "erro": f"no máximo {_MAX_PS_STOKKI} pedidos por vez."}
+    from stokki import fila_cancelamento
+    conn = banco.conectar()
     try:
-        with abrir_sessao() as sessao:
-            for id_stokki in ids:
-                try:
-                    r = cancelar.cancelar_pedido(sessao, id_stokki, motivo,
-                                                 prefixo=f"Fresh Hub Pedidos ({usuario})")
-                except Exception as e:
-                    logger.warning(f"[acoes_pedidos] cancelar PS-{id_stokki} na Stokki falhou: {e}")
-                    r = {"ok": False, "situacao": "", "erro": f"falha ao falar com a Stokki: {e}"}
-                resultados.append({"id_stokki": id_stokki, "ok": bool(r.get("ok")),
-                                   "situacao": r.get("situacao") or "", "erro": r.get("erro") or ""})
-                if r.get("ok"):
-                    try:
-                        from stokki import devolucao_estoque
-                        devolucao_estoque.registrar(id_stokki, "pedidos", torre_controle._carregar_config(),
-                                                    ja_estava=bool(r.get("ja_estava")))
-                    except Exception as e:  # noqa: BLE001 -- a fila de devolucao nunca trava o cancelamento
-                        logger.warning(f"[acoes_pedidos] PS-{id_stokki}: nao registrou na fila de devolucao: {e}")
-                if r.get("ok") and r.get("ja_estava"):
-                    # repetir depois de um poll perdido: a tratativa ainda guarda quem pediu
-                    tratativas.registrar_evento(
-                        codigo.strip(), "PEDIDOS", "CANCELADO_STOKKI",
-                        texto=f"{usuario}: cancelado na Stokki (PS-{id_stokki}, já estava cancelado): {motivo}")
-                elif r.get("ok"):
-                    tratativas.registrar_evento(
-                        codigo.strip(), "PEDIDOS", "CANCELADO_STOKKI",
-                        texto=f"{usuario}: cancelado na Stokki (PS-{id_stokki}, situação: "
-                              f"{r.get('situacao_antes') or '?'} → {r.get('situacao') or '?'}): {motivo}")
-    except RuntimeError as e:
-        if not resultados:
-            return {"ok": False, "resultados": [], "erro": f"{e}, tente em alguns minutos."}
-        raise
-    falhas = [x for x in resultados if not x["ok"]]
-    return {"ok": not falhas, "resultados": resultados,
-            "erro": "; ".join(f"PS-{x['id_stokki']}: {x['erro']}" for x in falhas)}
+        fila = fila_cancelamento.enfileirar(conn, codigo, ids, motivo, usuario)
+    finally:
+        conn.close()
+    if any(f["novo"] for f in fila):
+        tratativas.registrar_evento(
+            codigo.strip(), "PEDIDOS", "CANCELAMENTO_STOKKI_NA_FILA",
+            texto=f"{usuario}: pediu o cancelamento na Stokki "
+                  f"({', '.join('PS-' + str(f['id_stokki']) for f in fila)}): {motivo}")
+    return {"ok": True, "fila": fila, "erro": ""}
+
+
+def andamento_cancelamento(fila_ids) -> list[dict]:
+    """Estado das linhas da fila de cancelamento (ids devolvidos por cancelar_stokki)."""
+    from stokki import fila_cancelamento
+    conn = banco.conectar()
+    try:
+        return fila_cancelamento.andamento(conn, fila_ids)
+    finally:
+        conn.close()
 
 
 def expedir_stokki(codigos, usuario: str, *, iniciar, pasta, coleta: int | None = None) -> dict:

@@ -394,6 +394,43 @@ class Worker(unittest.TestCase):
             es.processar_cancelamentos_do_ciclo(conn, {})
         self.assertEqual(envio(conn, 50)["status"], ep.STATUS_CANCELANDO)
 
+    def test_fila_do_painel_vazia_nao_pega_a_trava(self):
+        from unittest import mock
+        import enviar_stokki as es
+        conn = conn_completo([])
+        with mock.patch.object(es, "StokkiSession") as sess, mock.patch.object(es.sessao_uso, "adquirir") as adq:
+            self.assertEqual(es.processar_cancelamentos_painel_do_ciclo(conn, {}), {"ok": 0, "erro": 0, "de_novo": 0})
+        sess.assert_not_called()
+        adq.assert_not_called()
+
+    def test_fila_do_painel_cancela_sob_a_trava_com_a_conta_que_pegou(self):
+        from unittest import mock
+        import enviar_stokki as es
+        from stokki import fila_cancelamento as fc
+        conn = conn_completo([])
+        f = fc.enfileirar(conn, "PS-39959", [39959], "cliente desistiu do pedido", "valeria")[0]
+        ok = {"ok": True, "situacao": "Cancelado", "situacao_antes": "Aberto", "ja_estava": False, "erro": ""}
+        with mock.patch.object(es.sessao_uso, "adquirir", return_value="reserva"),              mock.patch.object(es.sessao_uso, "liberar") as lib,              mock.patch.object(es, "StokkiSession") as sess,              mock.patch("stokki.cancelar.cancelar_pedido", return_value=ok) as cp,              mock.patch("tratativas.registrar_evento") as ev,              mock.patch("stokki.devolucao_estoque.registrar") as dev:
+            r = es.processar_cancelamentos_painel_do_ciclo(conn, {"stokki": {}})
+        self.assertEqual(r["ok"], 1)
+        self.assertEqual(sess.call_args.kwargs["conta"], "reserva")
+        self.assertEqual(cp.call_args.args[1:3], (39959, "cliente desistiu do pedido"))
+        self.assertEqual(ev.call_args.args[2], "CANCELADO_STOKKI")
+        self.assertEqual(dev.call_args.args[:2], (39959, "pedidos"))
+        lib.assert_called_once_with(es.DONO_TRAVA)
+        self.assertEqual(fc.andamento(conn, [f["fila_id"]])[0]["status"], "OK")
+
+    def test_fila_do_painel_com_stokki_ocupada_espera_o_proximo_ciclo(self):
+        from unittest import mock
+        import enviar_stokki as es
+        from stokki import fila_cancelamento as fc
+        conn = conn_completo([])
+        f = fc.enfileirar(conn, "PS-39959", [39959], "cliente desistiu do pedido", "valeria")[0]
+        with mock.patch.object(es.sessao_uso, "adquirir", return_value=False),              mock.patch.object(es.sessao_uso, "em_uso", return_value="pipeline"),              mock.patch("stokki.cancelar.cancelar_pedido") as cp:
+            es.processar_cancelamentos_painel_do_ciclo(conn, {})
+        cp.assert_not_called()
+        self.assertEqual(fc.andamento(conn, [f["fila_id"]])[0]["status"], "NA_FILA")
+
     def test_cancelando_orfao_volta_pra_criado(self):
         import enviar_stokki as es
         conn = conn_completo([(50, ep.STATUS_CANCELANDO, "9959", "PS-39959")])

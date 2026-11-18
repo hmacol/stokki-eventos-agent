@@ -862,6 +862,7 @@
   "reenvio": url_for('api_pedidos_acao_reenvio'),
   "cancelar_vuupt": url_for('api_pedidos_acao_cancelar_vuupt'),
   "cancelar_stokki": url_for('api_pedidos_acao_cancelar_stokki'),
+  "cancelar_stokki_andamento": url_for('api_pedidos_acao_cancelar_stokki_andamento'),
   "endereco": url_for('api_pedidos_acao_endereco'),
   "agendar": url_for('api_pedidos_acao_agendar'),
   "checar_dia_fixo": url_for('api_pedidos_acao_checar_dia_fixo'),
@@ -1429,11 +1430,6 @@
       const d = await enviar(URLS.cancelar_vuupt, { service_id: sid });
       return { selo: d.ja_estava ? "Já estava cancelado" : "Cancelado agora", aviso: d.aviso, jaEstava: !!d.ja_estava };
     }
-    if (acao === "cancelar_stokki") {
-      const d = await enviar(URLS.cancelar_stokki, { codigo: it.codigo, motivo: p.motivo });
-      const sits = (d.resultados || []).map((r) => r.situacao).filter(Boolean);
-      return { selo: "Cancelado na Stokki", aviso: sits.length ? `situação na Stokki: ${sits.join(", ")}` : "" };
-    }
     if (acao === "endereco") {
       await enviar(URLS.endereco, { service_id: sid, endereco: p.endereco });
       return { selo: "Endereço alterado" };
@@ -1527,6 +1523,7 @@
 
   botaoConfirmar.addEventListener("click", async () => {
     if (!atual || atual.rodando || atual.terminou || atual.bloqueado) return;
+    const esse = atual;   // o Cancelar Stokki acompanha a fila depois de liberar o Fechar
     const acao = atual.acao;
     const p = lerFormulario(acao);
     if (p.erro) { mostrarErro(p.erro); return; }
@@ -1553,9 +1550,10 @@
       }
       if (acao === "documentos") await enviarDocumentos(p);
       else if (acao === "expedir_stokki") await rodarExpedicao();
+      else if (acao === "cancelar_stokki") await rodarCancelamentoStokki(p);
       else await rodarLote(acao, p);
     } finally {
-      if (atual) {
+      if (atual && atual === esse) {
         atual.rodando = false;
         botaoFechar.disabled = false;
         botaoConfirmar.disabled = false;
@@ -1655,6 +1653,84 @@
     }
     $("modal-form").hidden = true;
     mostrarResumo(feitos, [], falhas, atual.pulados, avisos);
+  }
+
+  // Cancelar Stokki (Hugo, 18/11): o clique só põe na fila; o worker do portal cancela quando a Stokki
+  // estiver livre. A tela acompanha enquanto o modal está aberto; fechar não tira nada da fila.
+  async function rodarCancelamentoStokki(p) {
+    const meu = atual, itens = atual.itens;
+    const naFila = [], falhas = [];
+    const texto = (t) => { $("modal-progresso-texto").textContent = t; };
+    const TEXTO_FILA = "Na fila: cancela assim que a Stokki estiver livre (cerca de 30 s por pedido). Pode fechar: a fila segue e o resultado fica no histórico do pedido.";
+    $("modal-progresso").hidden = false;
+    $("modal-barra").removeAttribute("value");   // sem valor = barra indeterminada
+    for (let i = 0; i < itens.length; i++) {
+      const it = itens[i];
+      botaoConfirmar.textContent = `Pondo na fila ${i + 1} de ${itens.length}...`;
+      try {
+        const d = await enviar(URLS.cancelar_stokki, { codigo: it.codigo, motivo: p.motivo });
+        naFila.push({ it, ids: (d.fila || []).map((f) => f.fila_id) });
+        selo(it.tr, "Na fila da Stokki");
+        const caixa = it.tr.querySelector("input[name=sel], input[name=sel-m]");
+        if (caixa) caixa.checked = false;   // falhas ficam marcadas, pra tentar de novo
+      } catch (e) {
+        falhas.push({ codigo: it.codigo, erro: e.message });
+      }
+    }
+    atualizarBarra();
+    if (!naFila.length) {
+      $("modal-progresso").hidden = true;
+      if (!meu.lote && falhas.length === 1) { mostrarErro(falhas[0].erro); return; }
+      $("modal-form").hidden = true;
+      mostrarResumo([], [], falhas, meu.pulados, []);
+      return;
+    }
+    // Já está na fila: libera o Fechar e só acompanha.
+    $("modal-form").hidden = true;
+    botaoConfirmar.hidden = true;
+    meu.rodando = false;
+    botaoFechar.disabled = false;
+    botaoFechar.textContent = "Fechar (a fila segue)";
+    texto(TEXTO_FILA);
+    const ids = [].concat(...naFila.map((x) => x.ids));
+    const url = `${URLS.cancelar_stokki_andamento}?ids=${encodeURIComponent(ids.join(","))}`;
+    const estado = {};
+    const limite = Date.now() + 10 * 60 * 1000;
+    while (atual === meu && Date.now() < limite) {
+      await new Promise((r) => setTimeout(r, 5000));
+      if (atual !== meu) return;
+      try {
+        const a = await lerResposta(await fetch(url, { credentials: "same-origin" }));
+        (a.itens || []).forEach((x) => { estado[x.fila_id] = x; });
+      } catch (e) {
+        continue;
+      }
+      const abertos = ids.filter((id) => !estado[id] || estado[id].status === "NA_FILA" || estado[id].status === "RODANDO");
+      if (!abertos.length) break;
+      texto(ids.some((id) => estado[id] && estado[id].status === "RODANDO")
+        ? `Cancelando na Stokki... (${ids.length - abertos.length} de ${ids.length} prontos)` : TEXTO_FILA);
+    }
+    if (atual !== meu) return;
+    const feitos = [], jaEstavam = [], avisos = [], aindaNaFila = [];
+    naFila.forEach(({ it, ids: seus }) => {
+      const rs = seus.map((id) => estado[id]).filter(Boolean);
+      const ruins = rs.filter((r) => r.status === "ERRO");
+      if (ruins.length) {
+        falhas.push({ codigo: it.codigo, erro: ruins.map((r) => `PS-${r.id_stokki}: ${r.erro}`).join("; ") });
+        selo(it.tr, "Stokki não cancelou");
+        return;
+      }
+      if (rs.length < seus.length || rs.some((r) => r.status !== "OK")) { aindaNaFila.push(it.codigo); return; }
+      selo(it.tr, "Cancelado na Stokki");
+      (rs.every((r) => r.ja_estava) ? jaEstavam : feitos).push(it.codigo);
+      const sits = rs.map((r) => r.situacao).filter(Boolean);
+      if (sits.length) avisos.push(`${it.codigo}: situação na Stokki: ${sits.join(", ")}`);
+    });
+    if (aindaNaFila.length) avisos.push(`Ainda na fila, seguem sozinhos (resultado no histórico do pedido): ${aindaNaFila.join(", ")}`);
+    $("modal-barra").max = 1;
+    $("modal-barra").value = 1;
+    texto("");
+    mostrarResumo(feitos, jaEstavam, falhas, meu.pulados, avisos);
   }
 
   // Tela do pedido no celular usa o mesmo menu (como folha de baixo) e os mesmos modais.
