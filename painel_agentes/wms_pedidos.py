@@ -218,10 +218,23 @@ def resolver_item(conn, item: dict) -> dict:
         return {"produto_id": None, "qtd_un": None,
                 "motivo_pendencia": f"Produto nao encontrado no catalogo (SKU {sku or '-'}, EAN -)"}
 
+    # Com o embarcador do pedido (18/11), o codigo e procurado so entre os produtos DELE: o
+    # mesmo EAN curto ("004") aparece em produtos de embarcadores diferentes e travava a linha.
+    emb = int(item["embarcador_id"]) if item.get("embarcador_id") else None
+
+    def _buscar(coluna: str, valor: str, colate: str = "") -> list:
+        """Primeiro so no embarcador do pedido; nada ali (produto sem embarcador no cadastro),
+        busca como antes. O filtro so desempata, nunca perde produto."""
+        sql = f"SELECT * FROM wms_produtos WHERE ativo = 1 AND {coluna} = ?{colate}"
+        if emb is not None:
+            rows = conn.execute(sql + " AND embarcador_id = ?", (valor, emb)).fetchall()
+            if rows:
+                return rows
+        return conn.execute(sql, (valor,)).fetchall()
+
     if ean:
         for coluna, fator_caixa in (("dun", True), ("ean", False)):
-            rows = conn.execute(
-                f"SELECT * FROM wms_produtos WHERE ativo = 1 AND {coluna} = ?", (ean,)).fetchall()
+            rows = _buscar(coluna, ean)
             if len(rows) == 1:
                 p = rows[0]
                 por_caixa = float(p["qtd_por_caixa"] or 1)
@@ -233,8 +246,7 @@ def resolver_item(conn, item: dict) -> dict:
                         "motivo_pendencia": f"EAN {ean} esta em {len(rows)} produtos ativos"}
 
     if sku:
-        rows = conn.execute(
-            "SELECT * FROM wms_produtos WHERE ativo = 1 AND sku = ? COLLATE NOCASE", (sku,)).fetchall()
+        rows = _buscar("sku", sku, " COLLATE NOCASE")
         if len(rows) == 1:
             p = rows[0]
             por_caixa = float(p["qtd_por_caixa"] or 1)
@@ -363,7 +375,7 @@ def registrar_pedido(conn, pedido: dict, itens: list[dict]) -> int:
     linhas_novas = [int(item["linha"]) for item in itens]
 
     for item in itens:
-        if item.get("unidade_do_produto") and pedido.get("embarcador_id"):
+        if pedido.get("embarcador_id"):
             item = {**item, "embarcador_id": pedido["embarcador_id"]}
         r = resolver_item(conn, item)
         conn.execute("""

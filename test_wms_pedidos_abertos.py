@@ -91,6 +91,37 @@ class TestResolverNaUnidadeDoProduto(BaseRotina):
             self.assertIn("nao encontrado", r["motivo_pendencia"])
 
 
+class TestCodigoDeBarrasPorEmbarcador(BaseRotina):
+    """18/11: EAN curto ("004") em produtos de embarcadores diferentes travava a linha do pedido."""
+
+    def setUp(self):
+        super().setUp()
+        for pid, sku, emb in ((10, "NUU004FD", 48), (11, "PEDTCZ004", 63), (12, "PEDTCZ004", 62)):
+            self.conn.execute(
+                "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, embarcador_id, ean, qtd_por_caixa, "
+                "unidade, atualizado_em) VALUES (?, ?, ?, 'P', 'E', ?, '004', 1, 'CX', '2026-09-21 10:00:00')",
+                (pid, 2000 + pid, sku, emb))
+        self.conn.commit()
+
+    def item(self, **extra):
+        return {"linha": 1, "sku": "NUU004FD", "ean_linha": "004", "qtd_embalagem": 3, **extra}
+
+    def test_sem_embarcador_continua_pendente(self):
+        r = wms_pedidos.resolver_item(self.conn, self.item())
+        self.assertIsNone(r["produto_id"])
+        self.assertIn("3 produtos ativos", r["motivo_pendencia"])
+
+    def test_com_o_embarcador_do_pedido_resolve(self):
+        r = wms_pedidos.resolver_item(self.conn, self.item(embarcador_id=48))
+        self.assertEqual((r["produto_id"], r["qtd_un"], r["motivo_pendencia"]), (10, 3, ""))
+
+    def test_registrar_pedido_passa_o_embarcador_pra_toda_linha(self):
+        pid = wms_pedidos.registrar_pedido(self.conn, {"id_stokki": 60001, "codigo_ps": "PS-60001", "embarcador": "MD",
+                                                       "situacao": "Waiting for Carrier", "embarcador_id": 48}, [self.item()])
+        linha = self.conn.execute("SELECT produto_id, qtd_un FROM wms_pedido_itens WHERE pedido_id = ?", (pid,)).fetchone()
+        self.assertEqual((linha["produto_id"], linha["qtd_un"]), (10, 3))
+
+
 class TestDataDeEntrega(unittest.TestCase):
     SANTOS = {"endereco": "Rua das Flores, 10", "cidade": "Santos", "uf": "SP", "cep": "11000-000"}
     CAPITAL = {"endereco": "Av Paulista, 1000", "cidade": "São Paulo", "uf": "SP", "cep": "01310-100"}
