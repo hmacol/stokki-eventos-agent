@@ -36,7 +36,7 @@
 
 ---
 
-### Tarefa 1: Routes API devolve o desenho do trajeto
+### Task 1: Routes API devolve o desenho do trajeto
 
 **Files:**
 - Modify: `roteirizacao/km_rodoviario.py` (constantes no topo; funções novas depois de `calcular_trajeto`)
@@ -58,7 +58,7 @@
 - [ ] **Step 4:** Mesmo comando → PASSA. E `py -3.11 -m unittest roteirizacao.test_pedido_cabe_no_trajeto nucleo.test_nucleo_fase_a` continua passando.
 - [ ] **Step 5:** Commit no ramo: `Roteirizacao: Routes API devolve o desenho do trajeto (polyline) pro mapa do app`.
 
-### Tarefa 2: Trajeto guardado por rota + rotas na API do motorista
+### Task 2: Trajeto guardado por rota + rotas na API do motorista
 
 **Files:**
 - Create: `nucleo/trajeto_rota.py`
@@ -89,7 +89,7 @@
 - [ ] **Step 5:** Atualizar `MAPA_DO_SISTEMA.txt` (tabela nova, rotas novas). Commit: `App motorista: API entrega o trajeto da rota (Google, guardado por rota) e a versao atual do APK`.
 - [ ] **Step 6: PARA: OK do Hugo** → push, PR, deploy pela skill `deploy-vps` (restart só do `motorista-api`). Prova: `curl -s http://127.0.0.1:8073/api/app-versao` → `{"versao_atual": null, ...}`; e na VPS, `sudo -u www-data venv/bin/python -c` chamando `trajeto_rota.trajeto` numa rota de hoje com chave do config → `fonte GOOGLE_ROUTES` e algumas centenas de pontos; segunda chamada sem rede ao Google (mesma assinatura).
 
-### Tarefa 3: Aviso "tem versão nova do app" (vai por OTA pro 1.1.1)
+### Task 3: Aviso "tem versão nova do app" (vai por OTA pro 1.1.1)
 
 Ramo próprio `aviso-versao-app` a partir do master (não do ramo do mapa): é o código que sai por OTA pro 1.1.1.
 
@@ -109,7 +109,7 @@ Ramo próprio `aviso-versao-app` a partir do master (não do ramo do mapa): é o
 - [ ] **Step 3:** Commit: `App motorista: aviso de versao nova do APK (sai por OTA pro 1.1.1)`.
 - [ ] **Step 4: PARA: OK do Hugo** → push + PR + merge. **A OTA em si só na Tarefa 9.**
 
-### Tarefa 4: Lógica de passos da parada num módulo compartilhado (sem mudar comportamento)
+### Task 4: Lógica de passos da parada num módulo compartilhado (sem mudar comportamento)
 
 **Files:**
 - Create: `app_motorista/src/paradaPasso.ts`
@@ -128,7 +128,7 @@ Ramo próprio `aviso-versao-app` a partir do master (não do ramo do mapa): é o
 - [ ] **Step 2:** Expo Go numa rota de teste do app (provedor APP, `motoristas_cli.py replicar-rota` ou rota de teste existente): aceitar → iniciar → iniciar deslocamento → cheguei → finalizar entrega; tudo igual a antes, inclusive "Finalize a parada X pra liberar esta".
 - [ ] **Step 3:** Commit: `App motorista: passos da parada num modulo compartilhado (preparo do mapa)`.
 
-### Tarefa 5: Tela da parada abre com o resultado já escolhido
+### Task 5: Tela da parada abre com o resultado já escolhido
 
 **Files:**
 - Modify: `app_motorista/app/parada/[id].tsx`
@@ -140,7 +140,7 @@ Ramo próprio `aviso-versao-app` a partir do master (não do ramo do mapa): é o
 - [ ] **Step 2:** Expo Go: abrir `/parada/<id>?rota=<r>&fluxo=NAO_ENTREGUE` → pergunta de confirmação e já mostra o motivo; "trocar resultado" volta às 4 opções; sem `fluxo` → igual a hoje.
 - [ ] **Step 3:** Commit: `App motorista: tela da parada aceita o resultado ja escolhido (vindo do mapa)`.
 
-### Tarefa 6: react-native-maps, chave fora do git e APK 1.2.0
+### Task 6: react-native-maps, chave fora do git e APK 1.2.0
 
 **Files:**
 - Modify: `app_motorista/package.json` / `package-lock.json` (`npx expo install react-native-maps -- --legacy-peer-deps`), `app_motorista/app.json` (`"version": "1.2.0"`), `app_motorista/eas.json` (perfil `preview` e `production` com `"environment": "preview"` / `"production"`)
@@ -151,7 +151,7 @@ Ramo próprio `aviso-versao-app` a partir do master (não do ramo do mapa): é o
 - [ ] **Step 3:** Commit: `App motorista: react-native-maps e versao 1.2.0 (chave do Maps por variavel do EAS)`.
 - [ ] **Step 4: PARA: Hugo** cria a chave (passo a passo no fim deste plano) e roda `npx eas-cli env:create --environment preview --name GOOGLE_MAPS_ANDROID_KEY --visibility sensitive` (o valor ele cola no terminal dele, nunca no chat).
 
-### Tarefa 7: Tela do mapa
+### Task 7: Tela do mapa
 
 **Files:**
 - Create: `app_motorista/src/trajeto.ts`, `app_motorista/src/mapa/CartaoParada.tsx`, `app_motorista/app/mapa/[id].tsx`
@@ -184,14 +184,14 @@ Ramo próprio `aviso-versao-app` a partir do master (não do ramo do mapa): é o
   8. Rota concluída / por aceitar: cartões só de leitura.
 - [ ] **Step 3:** Atualizar `MAPA_DO_SISTEMA.txt` (seção 13: `app/mapa/[id].tsx`, `src/trajeto.ts`, `src/paradaPasso.ts`, `src/avisoVersao.tsx`, react-native-maps, chave no EAS). Commit: `App motorista: tela Mapa da rota (pinos, trajeto e baixa pelo cartao)`.
 
-### Tarefa 8: APK de teste com a chave e teste do Hugo
+### Task 8: APK de teste com a chave e teste do Hugo
 
 - [ ] **Step 1: PARA: OK do Hugo** → push do ramo `mapa-rota-app`.
 - [ ] **Step 2:** `npx eas-cli build --profile preview --platform android` (token Expo como na skill `publicar-ota`, sem vazar). Copiar o SHA-1 do keystore em expo.dev → Credentials e passar ao Hugo pra restrição da chave, se ainda não estiver.
 - [ ] **Step 3:** Instalar o APK num Android real (o Hugo) e repetir o roteiro da Tarefa 7, Step 2, itens 1–3 e 7. Mapa com fundo cinza/sem ruas = chave errada ou SHA-1 faltando.
 - [ ] **Step 4:** Correções voltam pras tarefas 4–7. Com o OK do Hugo: PR do ramo (não publicar o APK no link fixo ainda).
 
-### Tarefa 9: Soltar depois de sexta 20/11
+### Task 9: Soltar depois de sexta 20/11
 
 - [ ] **Step 1: PARA: Hugo confirma o fim do piloto.**
 - [ ] **Step 2:** Do **master com o PR da Tarefa 3 e sem o do mapa**, `version` 1.1.1: publicar OTA pela skill `publicar-ota` (canal `preview`). Conferir num aparelho 1.1.1 que nada muda (API ainda com `APK_VERSAO_ATUAL = None`).
