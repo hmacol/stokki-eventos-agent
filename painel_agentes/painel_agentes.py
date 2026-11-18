@@ -120,6 +120,7 @@ import acesso_telas
 import avisos_pendencias
 from galpao3d import banco as galpao3d_banco, estado as galpao3d_estado
 import retornos
+import pagamentos_pontuais
 
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
@@ -4435,6 +4436,131 @@ def revisar_pedagio(pedagio_id):
     finally:
         conn.close()
     return jsonify({"ok": True, "pedagio": resultado})
+
+
+# ── Pagamentos pontuais: Adiantamento e Descarga (Hugo, 18/11) ───────────────
+# A logística lança, o pedido vai pro grupo FINANCEIRO + LOGÍSTICA, o
+# financeiro paga e manda o comprovante, a logística confirma anexando o
+# comprovante; Descarga ainda pede o documento. Lógica e trava do envio em
+# pagamentos_pontuais.py; aqui só HTTP.
+
+NIVEIS_PAGAMENTOS = ("total", "atendimento", "logistica")
+
+
+def _usuario_pagamento() -> str:
+    return getattr(g, "nome_usuario", "") or session.get("usuario") or g.nivel_acesso
+
+
+@app.route("/financeiro/pagamentos")
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+def pagamentos():
+    pp = pagamentos_pontuais
+    situacao = (request.args.get("situacao") or pp.AGUARDANDO_PAGAMENTO).upper()
+    if situacao != "TODOS" and situacao not in pp.SITUACOES:
+        situacao = pp.AGUARDANDO_PAGAMENTO
+    config = _carregar_config()
+    conn = pp.conectar()
+    try:
+        itens = pp.listar(conn, None if situacao == "TODOS" else situacao)
+        contagem = pp.contagem(conn)
+        motoristas = pp.listar_motoristas(conn)
+    finally:
+        conn.close()
+    for p in itens:
+        p["pode_reenviar"] = pp.pode_reenviar(p)
+    return render_template("pagamentos_pontuais.html", itens=itens, situacao=situacao, contagem=contagem,
+                           motoristas=motoristas, pp=pp, envio_ligado=pp.config_pagamentos(config)["ativo"])
+
+
+def _resposta_pagamento(conn, pagamento_id: int, evento: str | None):
+    aviso = pagamentos_pontuais.disparar_aviso(conn, pagamento_id, evento, _carregar_config()) if evento else None
+    return jsonify({"ok": True, "id": pagamento_id, "pagamento": pagamentos_pontuais.obter(conn, pagamento_id),
+                    "aviso": aviso})
+
+
+@app.route("/api/financeiro/pagamentos", methods=["POST"])
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+@exige_mesma_origem
+def api_lancar_pagamento():
+    conn = pagamentos_pontuais.conectar()
+    try:
+        novo_id = pagamentos_pontuais.lancar(conn, request.get_json(silent=True) or {}, _usuario_pagamento())
+        return _resposta_pagamento(conn, novo_id, "lancamento")
+    except pagamentos_pontuais.ErroPagamento as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/financeiro/pagamentos/<int:pagamento_id>/confirmar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+@exige_mesma_origem
+def api_confirmar_pagamento(pagamento_id):
+    arquivo = request.files.get("comprovante")
+    conn = pagamentos_pontuais.conectar()
+    try:
+        pagamentos_pontuais.confirmar(conn, pagamento_id, arquivo.read() if arquivo else b"", _usuario_pagamento())
+        return _resposta_pagamento(conn, pagamento_id, None)
+    except pagamentos_pontuais.ErroPagamento as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/financeiro/pagamentos/<int:pagamento_id>/documento", methods=["POST"])
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+@exige_mesma_origem
+def api_documento_pagamento(pagamento_id):
+    arquivo = request.files.get("documento")
+    conn = pagamentos_pontuais.conectar()
+    try:
+        pagamentos_pontuais.incluir_documento(conn, pagamento_id, arquivo.read() if arquivo else b"",
+                                              _usuario_pagamento())
+        return _resposta_pagamento(conn, pagamento_id, "documento")
+    except pagamentos_pontuais.ErroPagamento as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/financeiro/pagamentos/<int:pagamento_id>/cancelar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+@exige_mesma_origem
+def api_cancelar_pagamento(pagamento_id):
+    conn = pagamentos_pontuais.conectar()
+    try:
+        pagamentos_pontuais.cancelar(conn, pagamento_id, (request.get_json(silent=True) or {}).get("motivo"),
+                                     _usuario_pagamento())
+        return _resposta_pagamento(conn, pagamento_id, "cancelamento")
+    except pagamentos_pontuais.ErroPagamento as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/financeiro/pagamentos/<int:pagamento_id>/reenviar-aviso", methods=["POST"])
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+@exige_mesma_origem
+def api_reenviar_aviso_pagamento(pagamento_id):
+    conn = pagamentos_pontuais.conectar()
+    try:
+        p = pagamentos_pontuais.obter(conn, pagamento_id)
+        if not p:
+            return jsonify({"erro": "Lançamento não encontrado."}), 404
+        if not pagamentos_pontuais.pode_reenviar(p):
+            return jsonify({"erro": "Esse aviso não está pendente de reenvio."}), 400
+        return _resposta_pagamento(conn, pagamento_id, p["aviso_evento"])
+    finally:
+        conn.close()
+
+
+@app.route("/financeiro/pagamentos/<int:pagamento_id>/arquivo/<nome>")
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+def pagamento_arquivo(pagamento_id, nome):
+    caminho = pagamentos_pontuais.caminho_arquivo(pagamento_id, nome)
+    if caminho is None:
+        abort(404)
+    return send_file(caminho)
 
 
 # ── Canhotos: conferência das fotos do app (Hugo, 12/09) ─────────────────────

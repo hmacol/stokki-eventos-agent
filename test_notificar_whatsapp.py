@@ -1055,3 +1055,20 @@ class TestAvisarRotasSemBaixa(_ComBanco):
     def test_nunca_levanta(self):
         with patch.object(nw, "despachar", side_effect=RuntimeError("bug")):
             self.assertEqual(nw.avisar_rotas_sem_baixa([_rota_sem_baixa()], _config()), "falhou")
+
+
+class TestTetoPagamentoPontual(_ComBanco):
+    """Pedido de pagamento pontual (painel_agentes/pagamentos_pontuais.py, 18/11): balde
+    proprio (pagamentos_pontuais.teto_diario), separado do teto interno dos alertas."""
+
+    def test_nao_gasta_nem_e_barrado_pelo_teto_interno(self):
+        config = {**_config(teto_diario=1), "pagamentos_pontuais": {"teto_diario": 2}}
+        self.assertEqual(self.despachar(config, origem="rotina"), "enviado")
+        self.assertEqual(self.despachar(config, origem="rotina"), "nao_enviado")       # interno cheio
+        for i in range(2):
+            self.assertEqual(self.despachar(config, origem=nw.ORIGEM_PAGAMENTO, assinatura=f"p{i}"), "enviado")
+        self.assertEqual(self.despachar(config, origem=nw.ORIGEM_PAGAMENTO, assinatura="p9"), "nao_enviado")
+        self.assertEqual(self.linhas()[-1][2], nw.MOTIVO_TETO)
+
+    def test_teto_padrao(self):
+        self.assertEqual(nw._teto({}, nw.ORIGEM_PAGAMENTO, {}), nw.TETO_PAGAMENTO_PADRAO)
