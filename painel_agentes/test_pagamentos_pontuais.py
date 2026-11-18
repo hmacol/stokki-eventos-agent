@@ -167,6 +167,11 @@ class TestFluxo(Base):
         p = pp.obter(self.conn, pid)
         self.assertEqual((p["situacao"], p["documento"]), (pp.PAGO, "documento_1.pdf"))
 
+    def test_arquivo_grande_demais(self):
+        pid = self.lancar()
+        with self.assertRaisesRegex(pp.ErroPagamento, "10 MB"):
+            pp.confirmar(self.conn, pid, JPEG + b"0" * pp.MAX_ARQUIVO_BYTES, "Carlos")
+
     def test_arquivo_que_nao_e_foto_nem_pdf(self):
         pid = self.lancar()
         with self.assertRaisesRegex(pp.ErroPagamento, "foto"):
@@ -240,6 +245,16 @@ class TestAviso(Base):
         args, kw = despachar.call_args
         self.assertEqual((args[1], args[2], kw["grupo_id"]), ("pagamento_pontual", "lancamento", "2@g.us"))
         self.assertEqual(pp.obter(self.conn, pid)["aviso_situacao"], "enviado")
+
+    def test_grupo_repetido_nao_escolhe_no_escuro(self):
+        dois = lambda c: [{"id": "1@g.us", "name": "FINANCEIRO + LOGÍSTICA"}, {"id": "2@g.us", "name": "Financeiro + Logistica"}]
+        self.assertIsNone(pp.grupo_destino(CFG_LIGADO, pp.config_pagamentos(CFG_LIGADO), listar=dois))
+
+    def test_simulacao_nao_poe_cpf_no_log(self):
+        pid = self.lancar()
+        with self.assertLogs("painel.pagamentos_pontuais", "INFO") as logs:
+            pp.disparar_aviso(self.conn, pid, "lancamento", CFG_DESLIGADO)
+        self.assertNotIn("123.456.789", " ".join(logs.output))
 
     def test_grupo_do_config_vence_o_nome(self):
         cfg = {**CFG_LIGADO, "pagamentos_pontuais": {"ativo": True, "grupo_id": "9@g.us"}}

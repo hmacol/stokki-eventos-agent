@@ -461,16 +461,19 @@ def _so_letras(nome) -> str:
 
 def grupo_destino(config: dict, cfg: dict, listar=None) -> str | None:
     """grupo_id do config, senao o grupo FINANCEIRO + LOGÍSTICA achado pelo
-    nome no gateway. None = gateway fora ou o numero nao esta no grupo."""
+    nome no gateway. None = gateway fora, o numero nao esta no grupo ou ha
+    mais de um grupo com esse nome (nao escolhe no escuro: grupo_id resolve)."""
     if cfg["grupo_id"]:
         return cfg["grupo_id"]
     if listar is None:
         from integracao_openwa import listar_grupos as listar
     alvo = _so_letras(NOME_GRUPO)
-    for g in listar((config or {}).get("whatsapp_notificacoes") or {}) or []:
-        if isinstance(g, dict) and g.get("id") and _so_letras(g.get("name")) == alvo:
-            return g["id"]
-    return None
+    achados = {g["id"] for g in listar((config or {}).get("whatsapp_notificacoes") or {}) or []
+               if isinstance(g, dict) and g.get("id") and _so_letras(g.get("name")) == alvo}
+    if len(achados) > 1:
+        logger.warning("Mais de um grupo %r no WhatsApp: aviso nao sai; definir pagamentos_pontuais.grupo_id",
+                       NOME_GRUPO)
+    return achados.pop() if len(achados) == 1 else None
 
 
 def preparar_aviso(conn, pagamento_id: int, evento: str, config: dict) -> dict:
@@ -485,8 +488,8 @@ def preparar_aviso(conn, pagamento_id: int, evento: str, config: dict) -> dict:
                  (evento, texto, situacao, motivo, _agora(), pagamento_id))
     conn.commit()
     if situacao == AVISO_SIMULADO:
-        logger.info("[SIMULACAO] Pagamento #%s (%s) nao enviado ao grupo %s. Texto:\n%s",
-                    pagamento_id, evento, NOME_GRUPO, texto)
+        # so id e evento: o texto (CPF, PIX) fica no banco e na tela, nao no log
+        logger.info("[SIMULACAO] Pagamento #%s (%s) nao enviado ao grupo %s.", pagamento_id, evento, NOME_GRUPO)
     return {"situacao": situacao, "texto": texto}
 
 
@@ -503,7 +506,7 @@ def enviar_aviso(config: dict, pagamento_id: int, caminho_db=None, despachar=Non
                 return "ignorado"
             grupo = grupo_destino(config, config_pagamentos(config), listar)
             if grupo is None:
-                situacao, motivo = "nao_enviado", f"grupo {NOME_GRUPO} não encontrado no WhatsApp"
+                situacao, motivo = "nao_enviado", f"grupo {NOME_GRUPO} não encontrado (ou repetido) no WhatsApp"
             else:
                 situacao = despachar(config, ORIGEM_WHATSAPP, p["aviso_evento"], p["aviso_texto"],
                                      assinatura=f"pagamento-{pagamento_id}-{p['aviso_evento']}", grupo_id=grupo)

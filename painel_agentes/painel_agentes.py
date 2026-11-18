@@ -4499,7 +4499,7 @@ def api_confirmar_pagamento(pagamento_id):
     arquivo = request.files.get("comprovante")
     conn = pagamentos_pontuais.conectar()
     try:
-        pagamentos_pontuais.confirmar(conn, pagamento_id, arquivo.read() if arquivo else b"", _usuario_pagamento())
+        pagamentos_pontuais.confirmar(conn, pagamento_id, arquivo.read(pagamentos_pontuais.MAX_ARQUIVO_BYTES + 1) if arquivo else b"", _usuario_pagamento())
         return _resposta_pagamento(conn, pagamento_id, None)
     except pagamentos_pontuais.ErroPagamento as e:
         return jsonify({"erro": str(e)}), 400
@@ -4514,7 +4514,7 @@ def api_documento_pagamento(pagamento_id):
     arquivo = request.files.get("documento")
     conn = pagamentos_pontuais.conectar()
     try:
-        pagamentos_pontuais.incluir_documento(conn, pagamento_id, arquivo.read() if arquivo else b"",
+        pagamentos_pontuais.incluir_documento(conn, pagamento_id, arquivo.read(pagamentos_pontuais.MAX_ARQUIVO_BYTES + 1) if arquivo else b"",
                                               _usuario_pagamento())
         return _resposta_pagamento(conn, pagamento_id, "documento")
     except pagamentos_pontuais.ErroPagamento as e:
