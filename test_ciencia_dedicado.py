@@ -86,6 +86,19 @@ class TestCienciaDedicado(unittest.TestCase):
                          (cd.CIENTE, "Ana", "1.1.1.1", "2026-11-17 10:00:00"))
         self.assertIsNone(c["data_nova"])
 
+    def test_do_sender_filtra_respondidos_pela_data_da_resposta_e_sempre_traz_pendente(self):
+        antigo = datetime(2026, 9, 1, 10, 0, 0)   # 77 dias antes de AGORA
+        pendente_antigo = cd.abrir(self.conn, _item("#PS-1", 1), None, antigo)
+        respondido_agora = cd.abrir(self.conn, _item("#PS-2", 2), None, antigo)
+        cd.responder(self.conn, respondido_agora, cd.CIENTE, "Ana", "1.1.1.1", datetime(2026, 11, 10, 9, 0, 0))
+        respondido_antes = cd.abrir(self.conn, _item("#PS-3", 3), None, AGORA)
+        cd.responder(self.conn, respondido_antes, cd.CIENTE, "Bia", "1.1.1.1", datetime(2026, 10, 1, 9, 0, 0))
+        encerrado_agora = cd.abrir(self.conn, _item("#PS-4", 4), None, antigo)
+        cd.encerrar(self.conn, encerrado_agora, "data passou", datetime(2026, 11, 16, 9, 0, 0))
+        cd.abrir(self.conn, _item("#PS-5", 5, sender=6), None, AGORA)   # outro embarcador
+        ids = [c["id"] for c in cd.do_sender(self.conn, 5, agora=AGORA)]
+        self.assertEqual(ids, [encerrado_agora, respondido_agora, pendente_antigo])
+
     def test_pendentes_vencidos_respeita_proximo_lembrete(self):
         cid = cd.abrir(self.conn, _item(), None, AGORA)
         self.assertEqual([c["id"] for c in cd.pendentes_vencidos(self.conn, AGORA)], [cid])

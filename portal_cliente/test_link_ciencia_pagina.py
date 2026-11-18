@@ -88,6 +88,7 @@ class PaginaCiencia(unittest.TestCase):
         self.servicos = {}
         self.buscas = []
         self.chat = []
+        self.alertas = []
         self.regra = rdf.regra_dia_fixo_do_servico(_servico())
 
     # ── montagem ──────────────────────────────────────────────────────────────
@@ -106,7 +107,8 @@ class PaginaCiencia(unittest.TestCase):
 
         link_ciencia.registrar(app, config=CONFIG, secret=SEGREDO, db_path=self.db, deps_fabrica=self.deps.fabrica,
                                buscar_servico=buscar,
-                               chat_mensagem=lambda chamado, texto: self.chat.append((chamado, texto)) or True)
+                               chat_mensagem=lambda chamado, texto: self.chat.append((chamado, texto)) or True,
+                               alerta_equipe=self.alertas.append)
         return app.test_client()
 
     def _ciencia(self, sid=1001, code="#PS-1", sender_id=101, cnpj=CNPJ_REAL, data=date(2026, 11, 21)):
@@ -281,6 +283,7 @@ class PaginaCiencia(unittest.TestCase):
         self.assertEqual(agendada[0], data.strftime("%d/%m/%Y"))
         self.assertEqual(len(self.chat), 1)
         self.assertIn(data.strftime("%d/%m/%Y"), self.chat[0][1])
+        self.assertEqual(self.alertas, [])
         corpo = tc.get(r.headers["Location"]).get_data(as_text=True)
         self.assertIn(f"reagendada para {data.strftime('%d/%m/%Y')}", corpo)
 
@@ -360,6 +363,112 @@ class PaginaCiencia(unittest.TestCase):
         self.assertEqual(cd.buscar(self.conn, outro)["situacao"], cd.REAGENDADO)
         self.assertIn(("reagendar", 1002, data.isoformat(), "08:00", "18:00"), self.deps.chamadas)
         self.assertFalse(self._dedicado_ativo(1002))
+
+    def _tela(self, *comandos):
+        """Zera a tela de Notificacoes e aplica os comandos (funcoes que recebem a conexao)."""
+        conn = cn.conectar(self.db)
+        for tabela in ("notificacoes_controle", "notificacoes_controle_excecao", "notificacoes_controle_param"):
+            conn.execute(f"DELETE FROM {tabela}")
+        conn.commit()
+        for comando in comandos:
+            comando(conn)
+        conn.commit()
+        conn.close()
+
+    def _assert_simulou(self, tc, cid, caso):
+        self.assertIn("Modo piloto: nada é gravado", tc.get(self._url()).get_data(as_text=True), caso)
+        r = self._post(tc, "ciente", {"ciencia_id": str(cid), "nome": "Hugo"})
+        self.assertIn("ciência simulada", tc.get(r.headers["Location"]).get_data(as_text=True), caso)
+        r = self._post(tc, "reagendar", {"ciencia_id": str(cid), "nome": "Hugo", "data": self._datas()[0].isoformat()})
+        self.assertIn("reagendamento simulado", tc.get(r.headers["Location"]).get_data(as_text=True), caso)
+        self.assertEqual(cd.buscar(self.conn, cid)["situacao"], cd.PENDENTE, caso)
+        self.assertTrue(self._dedicado_ativo(), caso)
+        self.assertEqual((self.deps.chamadas, self.buscas, self.chat), ([], [], []), caso)
+
+    def test_tela_que_nao_manda_enviar_simula(self):
+        # so ENVIAR age de verdade: NAO (geral desligado, tipo desligado, embarcador bloqueado,
+        # piloto sem e-mail de destino) simula como o piloto
+        cid = self._ciencia()
+        tc = self._cliente()
+        casos = {
+            "geral desligado": [lambda c: cn.definir_estado(c, "ciencia_dedicado", "LIGADO", "t"),
+                                lambda c: cn.definir_geral(c, False, "t")],
+            "tipo desligado": [lambda c: cn.definir_estado(c, "ciencia_dedicado", "DESLIGADO", "t")],
+            "embarcador bloqueado": [lambda c: cn.definir_estado(c, "ciencia_dedicado", "LIGADO", "t"),
+                                     lambda c: cn.definir_excecao(c, "ciencia_dedicado", CNPJ_REAL, "BLOQUEADO", "t")],
+            "piloto sem e-mail": [lambda c: cn.definir_estado(c, "ciencia_dedicado", "PILOTO", "t"),
+                                  lambda c: c.execute("INSERT INTO notificacoes_controle_param VALUES ('piloto_email', '')")],
+        }
+        for caso, comandos in casos.items():
+            self._tela(*comandos)
+            self.assertEqual(cn.decidir("ciencia_dedicado", CNPJ_REAL, fallback_acao="PILOTO", db_path=self.db).acao,
+                             "NAO", caso)
+            self._assert_simulou(tc, cid, caso)
+
+    def test_erro_ao_decidir_simula(self):
+        self._tela_ligada()
+        cid = self._ciencia()
+        tc = self._cliente()
+        import notificar_ciencia_dedicado as ncd
+        with mock.patch.object(ncd, "decisao_email", side_effect=RuntimeError("tela quebrada")), \
+                self.assertLogs("portal_cliente.link_ciencia", level="WARNING"):
+            self._assert_simulou(tc, cid, "erro")
+
+    def _reagendar_com_falha(self, alvo, metodo):
+        self._tela_ligada()
+        cid = self._ciencia()
+        alertas = self.alertas
+        tc = self._cliente()
+        data = self._datas()[0]
+        with mock.patch.object(alvo, metodo, side_effect=RuntimeError("banco travado")), \
+                self.assertLogs("portal_cliente.link_ciencia", level="ERROR"):
+            r = self._post(tc, "reagendar", {"ciencia_id": str(cid), "nome": "Maria", "data": data.isoformat()})
+        self.assertEqual(r.status_code, 303)
+        self.assertIn("A data foi alterada. Nossa equipe vai concluir o ajuste do pedido.",
+                      tc.get(r.headers["Location"]).get_data(as_text=True))
+        self.assertIn(("reagendar", 1001, data.isoformat(), "08:00", "18:00"), self.deps.chamadas)
+        self.assertEqual(len(alertas), 1)
+        self.assertIn("PS-1", alertas[0])
+        self.assertIn(CNPJ_REAL, alertas[0])
+        self.assertIn(data.strftime("%d/%m/%Y"), alertas[0])
+        return cid, alertas[0]
+
+    def test_reagendar_aplicado_com_falha_ao_tirar_o_dedicado_alerta_a_equipe(self):
+        cid, alerta = self._reagendar_com_falha(pedidos_dedicados, "remover")
+        self.assertIn("data alterada, mas o dedicado não foi removido", alerta)
+        self.assertEqual(cd.buscar(self.conn, cid)["situacao"], cd.REAGENDADO)   # a resposta e gravada antes
+        self.assertTrue(self._dedicado_ativo())
+
+    def test_reagendar_aplicado_com_falha_ao_gravar_a_resposta_alerta_e_ainda_tira_o_dedicado(self):
+        cid, alerta = self._reagendar_com_falha(cd, "responder")
+        self.assertIn("data alterada, mas a resposta não foi gravada", alerta)
+        self.assertEqual(cd.buscar(self.conn, cid)["situacao"], cd.PENDENTE)
+        self.assertFalse(self._dedicado_ativo())
+
+    def test_reagendar_com_resposta_concorrente_avisa_no_log_e_tira_o_dedicado(self):
+        self._tela_ligada()
+        cid = self._ciencia()
+        tc = self._cliente()
+        data = self._datas()[0]
+        with mock.patch.object(cd, "responder", return_value=False), \
+                self.assertLogs("portal_cliente.link_ciencia", level="WARNING") as logs:
+            r = self._post(tc, "reagendar", {"ciencia_id": str(cid), "nome": "Maria", "data": data.isoformat()})
+        self.assertTrue(any("WARNING" in linha and "PS-1" in linha for linha in logs.output), logs.output)
+        self.assertEqual(r.status_code, 303)
+        self.assertNotIn("simulado", tc.get(r.headers["Location"]).get_data(as_text=True))
+        self.assertFalse(self._dedicado_ativo())
+
+    def test_ids_que_nao_sao_inteiro_positivo_pequeno_nao_tocam_o_banco(self):
+        self._tela_ligada()
+        cid = self._ciencia()
+        tc = self._cliente()
+        for valor in ("99999999999999999999999", str(2 ** 31), "-1", "0", "1.0", " 1", "1e3", "abc", ""):
+            r = self._post(tc, "ciente", {"ciencia_id": valor, "nome": "Maria"})
+            self.assertEqual(r.status_code, 303, valor)
+            self.assertIn("r=ja_respondido", r.headers["Location"], valor)
+            r = tc.get(self._url() + f"?r=ciente&c={valor}")
+            self.assertEqual(r.status_code, 200, valor)
+        self.assertEqual(cd.buscar(self.conn, cid)["situacao"], cd.PENDENTE)
 
     def test_pagina_funciona_com_alteracao_entrega_desligada(self):
         self.assertFalse(ae.ativa_para(CONFIG, CNPJ_REAL))

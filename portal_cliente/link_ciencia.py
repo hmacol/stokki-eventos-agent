@@ -15,6 +15,7 @@ Nao depende de portal_cliente.alteracao_entrega. No piloto (decisao do e-mail
 na tela de Notificacoes = PILOTO) valida tudo e simula: nao grava, nao chama a
 Vuupt, nao tira o dedicado. O cliente teste do portal sempre age de verdade.
 """
+import re
 from datetime import date, datetime
 
 from itsdangerous import BadData, URLSafeTimedSerializer
@@ -62,18 +63,20 @@ def datas_de_visita(regra: dict, hoje: date, n: int = 4) -> list[date]:
 
 
 def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None, buscar_servico=None,
-              avaliar_servico=None, chat_mensagem=None):
+              avaliar_servico=None, chat_mensagem=None, alerta_equipe=None):
     """Rotas /ciencia/<token>. Em producao os falsos ficam None e valem os reais:
     deps_fabrica(config, por) = alterar_entrega.dependencias_reais; buscar_servico(id)
     = GET da Vuupt; avaliar_servico(conn, servico) = mesma avaliacao da rota logada
-    de alteracao (app._avaliar_alteracao); chat_mensagem(chamado_id, texto) = chat
-    do portal. Sem sessao: o token da URL e a credencial (como /c/<token>)."""
+    de alteracao (alterar_entrega.avaliar_no_nucleo); chat_mensagem(chamado_id, texto)
+    = chat do portal; alerta_equipe(texto) = grupo da equipe (o mesmo da rotina do
+    timer). Sem sessao: o token da URL e a credencial (como /c/<token>)."""
     import logging
     from contextlib import closing
 
     from flask import redirect, render_template, request, url_for
 
     import alterar_entrega as ae
+    import auth_cliente
     import ciencia_dedicado as cd
     import dados_cliente as dados
     import notificar_ciencia_dedicado as ncd
@@ -86,34 +89,34 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
     deps_fabrica = deps_fabrica or ae.dependencias_reais
     buscar_servico = buscar_servico or (
         lambda sid: dados.buscar_servico(token_vuupt, sid, incluir="checklistAnswers,customer"))
-    if chat_mensagem is None:
-        chat_mensagem = ncd.canais_reais(config, db_path=db_path).chat_mensagem
-
-    def _avaliar_real(conn, servico):
-        # mesmo que app._avaliar_alteracao (mora no app.py, que nao pode ser importado daqui)
-        import cancelamento
-        codigos = pedidos_dedicados.codigos_do_servico(servico)
-        servicos, rotas = cancelamento.servicos_do_pedido(conn, dados.codigo_base(codigos[0])) if codigos else ([], {})
-        status_nucleo = next((s.get("status") for s in servicos if s.get("vuupt_service_id") == servico.get("id")), None)
-        lalamove = int((config.get("lalamove") or {}).get("agent_id_vuupt") or 0)
-        return ae.avaliar(servico, rotas, status_nucleo, lalamove)
-
-    avaliar_servico = avaliar_servico or _avaliar_real
-
-    def _mapa_horarios() -> dict:
-        # mesmo que app._mapa_horarios: horario de recebimento da planilha BD_CLIENTES
-        try:
-            from regras.complexidade_entrega import carregar_horarios
-            caminho = (config.get("complexidade_entrega") or {}).get("planilha", "")
-            return carregar_horarios(caminho) if caminho else {}
-        except Exception as e:  # noqa: BLE001 -- sem a planilha vale o ajuste manual / padrao
-            logger.warning(f"ciencia: horarios da planilha indisponiveis: {e}")
-            return {}
+    reais = ncd.canais_reais(config, db_path=db_path)
+    chat_mensagem = chat_mensagem or reais.chat_mensagem
+    alerta_equipe = alerta_equipe or reais.alerta_equipe
+    avaliar_servico = avaliar_servico or (lambda conn, servico: ae.avaliar_no_nucleo(conn, servico, config))
 
     def _piloto(cnpj) -> bool:
+        """Simula salvo decisao ENVIAR da tela (cn.ACOES) ou cliente teste. NAO (geral ou
+        tipo desligado, embarcador bloqueado, piloto sem e-mail), PILOTO e erro: simula."""
         if ae._digitos(cnpj) == CNPJ_CLIENTE_TESTE:
             return False
-        return ncd.decisao_email(cnpj, config, db_path=db_path).acao == "PILOTO"
+        try:
+            return ncd.decisao_email(cnpj, config, db_path=db_path).acao != "ENVIAR"
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"ciencia: nao leu a decisao da tela para {cnpj} ({e}); simulando")
+            return True
+
+    def _id(valor) -> int | None:
+        """Inteiro positivo simples abaixo de 2**31; qualquer outra coisa e None (nao vai ao banco)."""
+        texto = str(valor or "")
+        if not re.fullmatch(r"[1-9][0-9]{0,9}", texto) or int(texto) >= 2 ** 31:
+            return None
+        return int(texto)
+
+    def _nome_embarcador(conn, cnpj) -> str:
+        try:
+            return (auth_cliente.buscar_embarcador(conn, cnpj) or {}).get("nome") or ""
+        except Exception:  # noqa: BLE001 -- so enfeita o aviso da equipe
+            return ""
 
     def _br(valor) -> str:
         try:
@@ -171,6 +174,8 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
         """Aviso depois do POST, so de chaves fixas: nada da query string vira texto."""
         if resultado == "ja_respondido":
             return "Este pedido já foi respondido."
+        if resultado == "ajuste_pendente":
+            return "A data foi alterada. Nossa equipe vai concluir o ajuste do pedido."
         if resultado not in ("ciente", "reagendado"):
             return None
         with closing(cd.conectar(db)) as conn:
@@ -178,12 +183,14 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
         if not ciencia or ciencia["sender_id"] != sender_id:
             return "Resposta recebida."
         codigo = ciencia["codigo"]
-        if resultado == "ciente":
-            if ciencia["situacao"] == cd.CIENTE:
-                return f"Pedido {codigo}: ciência registrada em nome de {ciencia['respondido_por']}. Obrigado!"
-            return f"Pedido {codigo}: ciência simulada."
-        if ciencia["situacao"] == cd.REAGENDADO:
+        if resultado == "ciente" and ciencia["situacao"] == cd.CIENTE:
+            return f"Pedido {codigo}: ciência registrada em nome de {ciencia['respondido_por']}. Obrigado!"
+        if resultado == "reagendado" and ciencia["situacao"] == cd.REAGENDADO:
             return f"Pedido {codigo}: entrega reagendada para {_br(ciencia['data_nova'])}. Obrigado!"
+        if not _piloto(ciencia["cnpj"]):
+            return f"Pedido {codigo}: resposta recebida."
+        if resultado == "ciente":
+            return f"Pedido {codigo}: ciência simulada."
         try:
             dia = date.fromisoformat(data_txt or "").strftime("%d/%m/%Y")
         except ValueError:
@@ -191,10 +198,8 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
         return f"Pedido {codigo}: reagendamento simulado para {dia}."
 
     def _pendente_do_form(conn, sender_id):
-        try:
-            ciencia = cd.buscar(conn, int(request.form.get("ciencia_id") or ""))
-        except ValueError:
-            return None
+        ciencia_id = _id(request.form.get("ciencia_id"))
+        ciencia = cd.buscar(conn, ciencia_id) if ciencia_id else None
         if not ciencia or ciencia["sender_id"] != sender_id or ciencia["situacao"] != cd.PENDENTE:
             return None
         return ciencia
@@ -234,7 +239,8 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
             cli = dados._desembrulhar(servico, "customer")
             contexto = {"cnpj_embarcador": ciencia["cnpj"] or "", "sender_id": ciencia["sender_id"], "por": por,
                         "destinatario_doc": ae._digitos(cli.get("code")), "destinatario_nome": cli.get("name") or "",
-                        "config": config, "mapa_horarios": _mapa_horarios(), "empresa_nome": ""}
+                        "config": config, "mapa_horarios": ae.mapa_horarios(config),
+                        "empresa_nome": _nome_embarcador(conn, ciencia["cnpj"])}
             resultado = ae.aplicar(conn, servico, validado, plano, contexto, deps_fabrica(config, por))
         except ae.ErroAlteracao as e:
             return str(e)
@@ -252,7 +258,7 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
         sender_id = ler(token, secret)
         if sender_id is None:
             return _erro()
-        aviso = _aviso(sender_id, request.args.get("r"), request.args.get("c", type=int), request.args.get("d"))
+        aviso = _aviso(sender_id, request.args.get("r"), _id(request.args.get("c")), request.args.get("d"))
         return _pagina(token, sender_id, aviso=aviso)
 
     @app.route("/ciencia/<token>/ciente", methods=["POST"])
@@ -306,13 +312,34 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
                 logger.info(f"ciencia {ciencia['codigo']}: reagendamento recusado ({recusa})")
                 return _pagina(token, sender_id, erro=recusa, abrir=ciencia["id"], nome=nome, status=409)
             agora = datetime.now()
+            # a data ja mudou na Vuupt: cada registro tenta por si; o que falhar vira alerta da equipe
+            falhas = []
+            try:
+                if not cd.responder(conn, ciencia["id"], cd.REAGENDADO, nome, request.remote_addr, agora,
+                                    data_nova=data):
+                    logger.warning(f"ciencia {ciencia['codigo']}: reagendado na Vuupt, mas a ciencia ja nao "
+                                   f"estava PENDENTE (outra resposta ou encerramento no meio)")
+            except Exception:  # noqa: BLE001
+                logger.exception(f"ciencia {ciencia['codigo']}: reagendado na Vuupt, mas a resposta nao foi gravada")
+                falhas.append("a resposta não foi gravada")
             try:
                 pedidos_dedicados.remover(conn, codigo_pedido=ciencia["codigo"], service_id=ciencia["service_id"],
                                           por=pedidos_dedicados.POR_CIENCIA_REAGENDADO)
-                cd.responder(conn, ciencia["id"], cd.REAGENDADO, nome, request.remote_addr, agora, data_nova=data)
-            except Exception:  # noqa: BLE001 -- a data ja mudou na Vuupt; a rotina do timer encerra a ciencia
-                logger.exception(f"ciencia {ciencia['codigo']}: reagendado na Vuupt, mas o registro falhou")
+            except Exception:  # noqa: BLE001
+                logger.exception(f"ciencia {ciencia['codigo']}: reagendado na Vuupt, mas o dedicado nao foi removido")
+                falhas.append("o dedicado não foi removido")
             logger.info(f"ciencia {ciencia['codigo']}: REAGENDADO para {data.isoformat()} por {nome}")
             _postar_no_chat(conn, ciencia, f"{nome} reagendou o pedido {ciencia['codigo']} para "
                                            f"{data:%d/%m/%Y} (dia de visita da região) em {agora:%d/%m %H:%M}.")
+            if falhas:
+                embarcador = " ".join(p for p in (_nome_embarcador(conn, ciencia["cnpj"]),
+                                                  f"(CNPJ {ciencia['cnpj'] or '?'})") if p)
+                texto = (f"Ciência do dedicado: pedido {ciencia['codigo']} de {embarcador} reagendado pelo "
+                         f"embarcador para {data:%d/%m/%Y}: data alterada, mas {' e '.join(falhas)}. "
+                         f"Conferir à mão.")
+                try:
+                    alerta_equipe(texto)
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"ciencia {ciencia['codigo']}: alerta da equipe falhou ({e}): {texto}")
+                return _ir(token, "ajuste_pendente", ciencia["id"])
         return _ir(token, "reagendado", ciencia["id"])

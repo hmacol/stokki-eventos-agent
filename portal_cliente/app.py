@@ -177,7 +177,8 @@ def _carregar_cliente():
             return redirect(url_for("completar_cadastro"))
 
 
-_LIVRES_ANTES_DA_TROCA = {"trocar_pin", "sair", "static", "saude", "regioes", "regioes_logo", "aula", "aula_arquivo"}
+_LIVRES_ANTES_DA_TROCA = {"trocar_pin", "sair", "static", "saude", "regioes", "regioes_logo", "aula", "aula_arquivo",
+                          "ciencia_pagina", "ciencia_ciente", "ciencia_reagendar"}  # link publico da ciencia do dedicado
 _LIVRES_ANTES_DO_CADASTRO = _LIVRES_ANTES_DA_TROCA | {"completar_cadastro"}
 
 
@@ -780,13 +781,7 @@ _FORA_DA_AREA = f"Esse endereço fica fora da área atendida. {alterar_entrega.C
 
 def _mapa_horarios() -> dict:
     """Horário padrão de recebimento da planilha BD_CLIENTES (como o envio de pedidos)."""
-    try:
-        from regras.complexidade_entrega import carregar_horarios
-        caminho = (_CONFIG.get("complexidade_entrega") or {}).get("planilha", "")
-        return carregar_horarios(caminho) if caminho else {}
-    except Exception as e:  # noqa: BLE001 -- sem a planilha vale o ajuste manual / padrão
-        logger.warning(f"alteracao: horarios da planilha indisponiveis: {e}")
-        return {}
+    return alterar_entrega.mapa_horarios(_CONFIG)
 
 
 def _servico_alteravel(service_id: int) -> tuple[dict, dict]:
@@ -803,12 +798,7 @@ def _servico_alteravel(service_id: int) -> tuple[dict, dict]:
 
 
 def _avaliar_alteracao(conn, servico: dict) -> alterar_entrega.Avaliacao:
-    from pedidos_dedicados import codigos_do_servico
-    codigos = codigos_do_servico(servico)
-    servicos, rotas = cancelamento.servicos_do_pedido(conn, dados.codigo_base(codigos[0])) if codigos else ([], {})
-    status_nucleo = next((s.get("status") for s in servicos if s.get("vuupt_service_id") == servico.get("id")), None)
-    lalamove = int((_CONFIG.get("lalamove") or {}).get("agent_id_vuupt") or 0)
-    return alterar_entrega.avaliar(servico, rotas, status_nucleo, lalamove)
+    return alterar_entrega.avaliar_no_nucleo(conn, servico, _CONFIG)
 
 
 def _destinatario(servico: dict) -> tuple[str, str]:

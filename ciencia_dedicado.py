@@ -176,12 +176,13 @@ def pendentes_do_sender(conn, sender_id) -> list[dict]:
         (PENDENTE, sender_id)))
 
 
-def do_sender(conn, sender_id, dias: int = 30) -> list[dict]:
-    """Ciencias do embarcador criadas nos ultimos `dias` dias, mais recentes primeiro."""
-    corte = _quando(datetime.now() - timedelta(days=dias))
+def do_sender(conn, sender_id, dias: int = 30, agora: datetime | None = None) -> list[dict]:
+    """Ciencias do embarcador: todas as PENDENTE e as respondidas/encerradas nos
+    ultimos `dias` dias (pela data da resposta), mais recentes primeiro."""
+    corte = _quando((agora or datetime.now()) - timedelta(days=dias))
     return _dicts(conn.execute(
-        "SELECT * FROM ciencias_dedicado WHERE sender_id = ? AND criado_em >= ? ORDER BY id DESC",
-        (sender_id, corte)))
+        "SELECT * FROM ciencias_dedicado WHERE sender_id = ? AND (situacao = ? OR respondido_em >= ?) "
+        "ORDER BY id DESC", (sender_id, PENDENTE, corte)))
 
 
 def listar(conn, situacao=None, sender_id=None, limite=300) -> list[dict]:
