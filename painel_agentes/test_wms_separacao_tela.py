@@ -165,6 +165,17 @@ class TestRotasDoGalpao(Base):
         self.assertEqual(r.status_code, 503)
         self.assertIn("ocupado", r.get_json()["erro"])
 
+    def test_lote_do_cliente_pela_rota_do_escritorio(self):
+        adm = self.cliente("operador")
+        r = adm.get(f"/api/ondas/pedidos/{self.pedido_id}/lotes").get_json()
+        self.assertEqual((r["codigo_ps"], r["produtos"][0]["indicado"], r["produtos"][0]["lotes"][0]["lote"]), ("PS-70001", "", "L1"))
+        r = self.post(adm, f"/api/ondas/pedidos/{self.pedido_id}/lotes", {"produto_id": 1, "lote": "L1"})
+        self.assertEqual((r.status_code, r.get_json()["produtos"][0]["indicado"]), (200, "L1"))
+        self.assertEqual(self.post(adm, f"/api/ondas/pedidos/{self.pedido_id}/lotes", {"produto_id": 1, "lote": "L9"}).status_code, 400)
+        self.assertEqual(self.post(adm, f"/api/ondas/pedidos/{self.pedido_id}/lotes", {"produto_id": "x", "lote": "L1"}).status_code, 400)
+        galpao = self.cliente("galpao")
+        self.assertEqual(galpao.get(f"/api/ondas/pedidos/{self.pedido_id}/lotes").status_code, 403)
+
     def test_montar_onda_com_embarcador_estranho_vira_400(self):
         adm = self.cliente("operador")
         for emb in ([22], {"a": 1}, "22", None):

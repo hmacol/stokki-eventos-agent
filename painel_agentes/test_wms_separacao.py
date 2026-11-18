@@ -689,24 +689,28 @@ class TestRevisaoIndependente(Base):
         self.separar_tudo(onda, s[:1])
         sep.fechar_separacao(self.conn, onda, ANA, mesmo_faltando=True)
         c = sep.iniciar_conferencia(self.conn, pid, BIA)["conferencia_id"]
-        casos = (("789000000001", 12, "nao tem unidade solta"),      # EAN + quantidade no lugar da caixa que falta
-                 (s[1], 12, "nao e deste pedido"),                    # serial de caixa que nunca foi separada
-                 (s[1], None, "nao e deste pedido"))
-        for codigo, qtd, motivo in casos:
-            with self.assertRaisesRegex(wms.ErroWMS, motivo):
-                sep.conferir_bipe(self.conn, c, codigo, qtd_un=qtd, uuid=self.u(), operador=BIA)
+        for qtd in (12, None):   # serial de caixa que nunca foi separada pra este pedido
+            with self.assertRaisesRegex(wms.ErroWMS, "nao e deste pedido"):
+                sep.conferir_bipe(self.conn, c, s[1], qtd_un=qtd, uuid=self.u(), operador=BIA)
         sep.conferir_bipe(self.conn, c, s[0], uuid=self.u(), operador=BIA)
-        self.assertEqual(sep.fechar_conferencia(self.conn, c, BIA)["resultado"], "FALTA")
+        # EAN + quantidade no lugar da caixa que falta: o bipe entra (sem dica), mas o fechamento nao aceita
+        sep.conferir_bipe(self.conn, c, "789000000001", qtd_un=12, uuid=self.u(), operador=BIA)
+        f = sep.fechar_conferencia(self.conn, c, BIA)
+        self.assertEqual((f["resultado"], f["faltas"], f["nao_separado"][0]["contado_solto_un"]), ("FALTA", [], 12))
+        self.assertEqual(self.execucao(pid), "AGUARDANDO_DECISAO")
 
-    def test_unidades_soltas_na_conferencia_nao_passam_do_que_foi_separado(self):
+    def test_bipe_de_quantidade_nao_da_dica_e_a_diferenca_aparece_so_no_fechamento(self):
         pid, s, onda = self.separado([("CAFE", 8)], 1)
         sep.separar_caixa(self.conn, onda, s[0], qtd_un=4, uuid=self.u(), operador=ANA)
         sep.fechar_separacao(self.conn, onda, ANA, mesmo_faltando=True)
         c = sep.iniciar_conferencia(self.conn, pid, BIA)["conferencia_id"]
-        sep.conferir_bipe(self.conn, c, "CAFE", qtd_un=4, uuid=self.u(), operador=BIA)
-        with self.assertRaisesRegex(wms.ErroWMS, "nao bate"):   # o reenvio com uuid novo nao mascara a falta
-            sep.conferir_bipe(self.conn, c, "CAFE", qtd_un=4, uuid=self.u(), operador=BIA)
-        self.assertEqual(sep.fechar_conferencia(self.conn, c, BIA)["resultado"], "FALTA")
+        # qualquer quantidade e aceita igual: a resposta nao depende do esperado nem do separado
+        respostas = [sep.conferir_bipe(self.conn, c, "CAFE", qtd_un=q, uuid=self.u(), operador=BIA) for q in (4, 4, 500)]
+        for r in respostas:
+            self.assertFalse({"faltas", "esperado", "esperado_un", "separado", "restam"} & set(r))
+        self.assertEqual([r["bipes"] for r in respostas], [1, 2, 3])
+        f = sep.fechar_conferencia(self.conn, c, BIA)
+        self.assertEqual((f["resultado"], [x["sku"] for x in f["sobras"]]), ("FALTA", ["CAFE"]))
 
     def test_linha_sem_cadastro_impede_o_conferido(self):
         s = self.caixas(1, 1)
@@ -817,6 +821,121 @@ class TestRevisaoIndependente(Base):
         item = self.conn.execute("SELECT id FROM wms_separacao_itens WHERE pedido_id = ? LIMIT 1", (pid,)).fetchone()[0]
         with self.assertRaisesRegex(wms.ErroWMS, "ja saiu da separacao"):
             sep.devolver_item(self.conn, item, operador=ANA)
+
+
+class TestLoteEValidade(Base):
+    """Regra do Hugo (17/11): sem lote indicado pelo cliente, FEFO sempre."""
+
+    def caixa(self, lote, validade, posicao=P1, produto_id=1):
+        r = cx.criar_caixas(self.conn, produto_id=produto_id, lote=lote, validade=validade, qtd_un=None, quantidade=1)
+        cx.ativar_caixa(self.conn, r["seriais"][0], posicao)
+        return r["seriais"][0]
+
+    def onda_de(self, qtd=12):
+        pid = self.pedido([("CAFE", qtd)])
+        return pid, sep.onda_de_um_pedido(self.conn, pid, ANA)
+
+    def test_recusa_a_caixa_que_nao_vence_primeiro_e_diz_onde_esta_a_certa(self):
+        nova = self.caixa("L-NOVO", "2027-06-30", P1)
+        velha = self.caixa("L-VELHO", "2027-01-15", P2)
+        pid, onda = self.onda_de()
+        with self.assertRaisesRegex(wms.ErroWMS, r"FEFO: pegue primeiro o lote L-VELHO, que vence em 15/01/2027 e esta em C9-E1-N2"):
+            sep.separar_caixa(self.conn, onda, nova, uuid=self.u(), operador=ANA)
+        self.assertEqual((self.situacao(nova), self.conn.execute("SELECT COUNT(*) FROM wms_separacao_itens").fetchone()[0]),
+                         ("EM_ESTOQUE", 0))
+        r = sep.separar_caixa(self.conn, onda, velha, uuid=self.u(), operador=ANA)
+        self.assertEqual((r["lote"], r["validade"]), ("L-VELHO", "2027-01-15"))
+
+    def test_depois_que_o_lote_velho_sai_o_novo_e_aceito(self):
+        velha = self.caixa("L-VELHO", "2027-01-15")
+        nova = self.caixa("L-NOVO", "2027-06-30")
+        pid, onda = self.onda_de(24)
+        sep.separar_caixa(self.conn, onda, velha, uuid=self.u(), operador=ANA)
+        sep.separar_caixa(self.conn, onda, nova, uuid=self.u(), operador=ANA)
+        self.assertEqual(self.situacao(nova), "DISTRIBUIDA")
+
+    def test_mesma_validade_em_lotes_diferentes_tanto_faz(self):
+        a = self.caixa("L-A", "2027-01-15")
+        b = self.caixa("L-B", "2027-01-15")
+        pid, onda = self.onda_de()
+        sep.separar_caixa(self.conn, onda, b, uuid=self.u(), operador=ANA)
+        self.assertEqual((self.situacao(a), self.situacao(b)), ("EM_ESTOQUE", "DISTRIBUIDA"))
+
+    def test_caixa_vencida_e_recusada_e_nao_conta_no_fefo(self):
+        vencida = self.caixa("L-VENC", "2026-01-10")
+        boa = self.caixa("L-BOA", "2027-06-30")
+        pid, onda = self.onda_de()
+        with self.assertRaisesRegex(wms.ErroWMS, "VENCIDA em 10/01/2026"):
+            sep.separar_caixa(self.conn, onda, vencida, uuid=self.u(), operador=ANA)
+        sep.separar_caixa(self.conn, onda, boa, uuid=self.u(), operador=ANA)   # a vencida nao trava a boa
+        self.assertEqual(self.situacao(boa), "DISTRIBUIDA")
+        self.assertEqual([x["lote"] for x in sep.lotes_do_produto(self.conn, 1)], [])   # vencida fora, boa ja saiu
+
+    def test_caixa_sem_validade_so_sai_depois_das_que_tem(self):
+        sem = self.caixas(1, 1, lote="L-SEM")[0]
+        com = self.caixa("L-COM", "2027-06-30")
+        pid, onda = self.onda_de()
+        with self.assertRaisesRegex(wms.ErroWMS, "FEFO"):
+            sep.separar_caixa(self.conn, onda, sem, uuid=self.u(), operador=ANA)
+        sep.separar_caixa(self.conn, onda, com, uuid=self.u(), operador=ANA)
+
+    def test_caixa_velha_toda_prometida_a_outro_pedido_nao_trava(self):
+        velha = self.caixa("L-VELHO", "2027-01-15")
+        nova = self.caixa("L-NOVO", "2027-06-30")
+        _, onda1 = self.onda_de(12)
+        sep.separar_caixa(self.conn, onda1, velha, uuid=self.u(), operador=ANA)
+        _, onda2 = self.onda_de(12)
+        sep.separar_caixa(self.conn, onda2, nova, uuid=self.u(), operador=ANA)
+        self.assertEqual(self.situacao(nova), "DISTRIBUIDA")
+
+    def test_lote_indicado_pelo_cliente_vence_o_fefo_e_so_ele_e_aceito(self):
+        velha = self.caixa("L-VELHO", "2027-01-15")
+        nova = self.caixa("L-NOVO", "2027-06-30")
+        pid = self.pedido([("CAFE", 12)])
+        op = sep.opcoes_de_lote(self.conn, pid)
+        self.assertEqual([(l["lote"], l["validade"], l["livre_un"], l["posicoes"]) for l in op["produtos"][0]["lotes"]],
+                         [("L-VELHO", "2027-01-15", 12, [P1]), ("L-NOVO", "2027-06-30", 12, [P1])])
+        for produto, lote in ((1, "L-NAOEXISTE"), (2, "L-NOVO")):
+            with self.assertRaises(wms.ErroWMS):
+                sep.indicar_lote(self.conn, pid, produto, lote, "hugo")
+        self.assertEqual(sep.indicar_lote(self.conn, pid, 1, " l-novo ", "hugo")["produtos"][0]["indicado"], "L-NOVO")
+        onda = sep.onda_de_um_pedido(self.conn, pid, ANA)
+        self.assertEqual(sep.detalhe_onda(self.conn, onda)["lotes_indicados"][0]["lote"], "L-NOVO")
+        with self.assertRaisesRegex(wms.ErroWMS, "cliente indicou o lote L-NOVO"):
+            sep.separar_caixa(self.conn, onda, velha, uuid=self.u(), operador=ANA)
+        sep.separar_caixa(self.conn, onda, nova, uuid=self.u(), operador=ANA)
+        self.assertEqual(self.reservas(pid), [("MANUAL", P1, "L-NOVO", 12)])
+        # tirar a indicacao volta pro FEFO
+        outro = self.pedido([("CAFE", 12)])
+        sep.indicar_lote(self.conn, outro, 1, "L-VELHO", "hugo")
+        self.assertEqual(sep.indicar_lote(self.conn, outro, 1, "", "hugo")["produtos"][0]["indicado"], "")
+
+    def test_na_onda_de_varios_pedidos_o_lote_indicado_vai_pro_pedido_que_pediu(self):
+        velha = self.caixa("L-VELHO", "2027-01-15")
+        nova = self.caixa("L-NOVO", "2027-06-30")
+        a, b = self.pedido([("CAFE", 12)]), self.pedido([("CAFE", 12)])
+        sep.indicar_lote(self.conn, b, 1, "L-NOVO", "hugo")
+        onda = self.onda(a, b)
+        sep.separar_caixa(self.conn, onda, nova, uuid=self.u(), operador=ANA)    # fora do FEFO, mas o B pediu
+        sep.separar_caixa(self.conn, onda, velha, uuid=self.u(), operador=ANA)
+        destinos = {x: sep.distribuir_caixa(self.conn, onda, x, uuid=self.u(), operador=ANA)["pedido_id"] for x in (velha, nova)}
+        self.assertEqual(destinos, {velha: a, nova: b})
+
+    def test_nao_indica_lote_depois_que_o_pedido_saiu_da_separacao(self):
+        self.caixa("L-A", "2027-01-15")
+        pid, onda = self.onda_de()
+        s = self.conn.execute("SELECT serial FROM wms_caixas").fetchone()[0]
+        sep.separar_caixa(self.conn, onda, s, uuid=self.u(), operador=ANA)
+        sep.fechar_separacao(self.conn, onda, ANA)
+        with self.assertRaisesRegex(wms.ErroWMS, "ja saiu da separacao"):
+            sep.indicar_lote(self.conn, pid, 1, "L-A", "hugo")
+
+    def test_andamento_mostra_os_lotes_que_foram_pro_pedido(self):
+        velha = self.caixa("L-VELHO", "2027-01-15")
+        pid, onda = self.onda_de()
+        sep.separar_caixa(self.conn, onda, velha, uuid=self.u(), operador=ANA)
+        lotes = sep.andamento(self.conn, EMB)[0]["lotes"]
+        self.assertEqual(lotes, [{"sku": "CAFE", "lote": "L-VELHO", "validade": "2027-01-15", "un": 12}])
 
 
 if __name__ == "__main__":

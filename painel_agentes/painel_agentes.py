@@ -6553,6 +6553,23 @@ def api_ondas_pedidos():
     return _sep_chamar(_f)
 
 
+@app.route("/api/ondas/pedidos/<int:pedido_id>/lotes")
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+def api_ondas_pedido_lotes(pedido_id):
+    """Lote indicado pelo cliente e os lotes disponíveis (sem indicação a separação segue FEFO)."""
+    return _sep_chamar(lambda conn: wms_separacao.opcoes_de_lote(conn, pedido_id))
+
+
+@app.route("/api/ondas/pedidos/<int:pedido_id>/lotes", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_ondas_pedido_lotes_indicar(pedido_id):
+    corpo = _sep_corpo()
+    por = session.get("usuario") or ""
+    return _sep_chamar(lambda conn: wms_separacao.indicar_lote(
+        conn, pedido_id, int(corpo.get("produto_id") or 0), corpo.get("lote") or "", por))
+
+
 @app.route("/api/ondas", methods=["POST"])
 @requer_auth(niveis=_NIVEIS_WMS_ADMIN)
 @exige_mesma_origem

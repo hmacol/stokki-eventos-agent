@@ -115,6 +115,16 @@ CREATE TABLE IF NOT EXISTS wms_decisoes_falta (
 )
 """,
     """
+CREATE TABLE IF NOT EXISTS wms_pedido_lotes (
+    pedido_id  INTEGER NOT NULL,
+    produto_id INTEGER NOT NULL,
+    lote       TEXT NOT NULL,              -- lote que o cliente indicou pra este produto do pedido
+    por        TEXT NOT NULL DEFAULT '',
+    em         TEXT NOT NULL,
+    PRIMARY KEY (pedido_id, produto_id)
+)
+""",
+    """
 CREATE TABLE IF NOT EXISTS wms_volumes (
     pedido_id    INTEGER NOT NULL,
     numero       INTEGER NOT NULL,
@@ -455,8 +465,15 @@ def detalhe_onda(conn, onda_id: int) -> dict:
                           "descricao": info.get("descricao") or "", "qtd_un": _r(it["qtd_un"]),
                           "caixa_inteira": bool(it["caixa_inteira"]), "lote": it["lote"], "validade": it["validade"],
                           "codigo_ps": codigos.get(it["pedido_id"], ""), "separado_por": it["separado_por_nome"]})
+    indicados = []
+    codigos_ps = {p["id"]: p["codigo_ps"] for p in pedidos}
+    for pid, lotes in lotes_indicados(conn, list(codigos_ps)).items():
+        for prod, lote in lotes.items():
+            info = _produto(conn, prod)
+            indicados.append({"codigo_ps": codigos_ps[pid], "sku": info.get("sku") or "",
+                              "descricao": info.get("descricao") or "", "lote": lote})
     return {"onda": onda, "pedidos": por_pedido, "produtos": produtos, "caminhada": caminhada, "itens": itens,
-            "a_distribuir": sum(1 for i in itens if not i["codigo_ps"])}
+            "lotes_indicados": indicados, "a_distribuir": sum(1 for i in itens if not i["codigo_ps"])}
 
 
 # ---------------------------------------------------------------------------
@@ -588,6 +605,131 @@ def _atribuir(conn, item: dict, pedido: dict, operador, dist_uuid: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Lote e validade (regra do Hugo, 17/11): se o cliente nao indicou lote, FEFO
+# sempre -- sai primeiro o que vence primeiro. Lote indicado pelo cliente e
+# marcado pelo escritorio no pedido e ai a separacao so aceita aquele lote.
+# Caixa vencida nunca e separada e nao conta na comparacao do FEFO.
+# ---------------------------------------------------------------------------
+
+def _hoje() -> str:
+    return wms.agora()[:10]
+
+
+def _data_br(iso: str) -> str:
+    iso = str(iso or "")
+    return f"{iso[8:10]}/{iso[5:7]}/{iso[:4]}" if len(iso) >= 10 else ""
+
+
+def lotes_do_produto(conn, produto_id: int) -> list[dict]:
+    """Lotes com caixa disponivel (no saldo, nao vencida, com unidade livre), na ordem do FEFO."""
+    hoje = _hoje()
+    rows = conn.execute(
+        "SELECT serial, lote, COALESCE(validade, '') AS validade, posicao, qtd_un FROM wms_caixas "
+        "WHERE produto_id = ? AND situacao IN ('EM_ESTOQUE', 'ABERTA', 'DEVOLVIDA') "
+        "ORDER BY COALESCE(validade, '') = '', validade, lote, posicao", (int(produto_id),)).fetchall()
+    lotes: dict[tuple, dict] = {}
+    for r in rows:
+        if r["validade"] and r["validade"] < hoje:
+            continue
+        livre = _r(r["qtd_un"] - wms_caixas._prometido(conn, r["serial"]))
+        if livre <= EPS:
+            continue
+        d = lotes.setdefault((r["lote"], r["validade"]), {"lote": r["lote"], "validade": r["validade"],
+                                                           "livre_un": 0.0, "posicoes": []})
+        d["livre_un"] = _r(d["livre_un"] + livre)
+        if r["posicao"] and r["posicao"] not in d["posicoes"]:
+            d["posicoes"].append(r["posicao"])
+    return list(lotes.values())
+
+
+def lotes_indicados(conn, pedido_ids) -> dict[int, dict[int, str]]:
+    """{pedido_id: {produto_id: lote}} dos lotes que o cliente indicou."""
+    ids = [int(i) for i in pedido_ids]
+    if not ids:
+        return {}
+    marcas = ",".join("?" * len(ids))
+    saida: dict[int, dict[int, str]] = {}
+    for r in conn.execute(f"SELECT pedido_id, produto_id, lote FROM wms_pedido_lotes WHERE pedido_id IN ({marcas})", ids):
+        saida.setdefault(r["pedido_id"], {})[r["produto_id"]] = r["lote"]
+    return saida
+
+
+def opcoes_de_lote(conn, pedido_id: int) -> dict:
+    """Pra tela do escritorio: cada produto do pedido, o lote indicado e os lotes disponiveis."""
+    p = _pedido(conn, pedido_id)
+    indicado = lotes_indicados(conn, [p["id"]]).get(p["id"], {})
+    produtos = []
+    for prod, q in sorted(necessidade_do_pedido(conn, p["id"]).items()):
+        info = _produto(conn, prod)
+        produtos.append({"produto_id": prod, "sku": info.get("sku") or "", "descricao": info.get("descricao") or "",
+                         "pedido_un": q, "indicado": indicado.get(prod, ""), "lotes": lotes_do_produto(conn, prod)})
+    return {"pedido_id": p["id"], "codigo_ps": p["codigo_ps"], "produtos": produtos}
+
+
+def indicar_lote(conn, pedido_id: int, produto_id: int, lote: str, por: str) -> dict:
+    """O cliente pediu um lote especifico (lote='' volta pro FEFO). So enquanto o pedido nao
+    saiu da separacao, e so lote que existe em estoque pra esse produto."""
+    lote = " ".join(str(lote or "").split()).upper()
+    with _tx(conn):
+        p = _pedido(conn, pedido_id)
+        if (p.get("execucao") or "") not in ("", "NA_ONDA", "SEPARANDO"):
+            raise ErroWMS(f"{p['codigo_ps']} ja saiu da separacao: nao da mais pra indicar lote.")
+        if int(produto_id) not in necessidade_do_pedido(conn, p["id"]):
+            raise ErroWMS(f"{p['codigo_ps']} nao pede este produto.")
+        if not lote:
+            conn.execute("DELETE FROM wms_pedido_lotes WHERE pedido_id = ? AND produto_id = ?", (p["id"], int(produto_id)))
+        else:
+            if lote not in {x["lote"] for x in lotes_do_produto(conn, produto_id)}:
+                raise ErroWMS(f"Nao ha caixa disponivel do lote {lote} deste produto.")
+            conn.execute(
+                "INSERT INTO wms_pedido_lotes (pedido_id, produto_id, lote, por, em) VALUES (?,?,?,?,?) "
+                "ON CONFLICT(pedido_id, produto_id) DO UPDATE SET lote = excluded.lote, por = excluded.por, em = excluded.em",
+                (p["id"], int(produto_id), lote, str(por or "")[:80], wms.agora()))
+    return opcoes_de_lote(conn, pedido_id)
+
+
+def _caixa_que_vence_antes(conn, caixa: dict) -> dict | None:
+    """Outra caixa do mesmo produto, disponivel e nao vencida, que vence ANTES da bipada."""
+    hoje = _hoje()
+    validade = caixa.get("validade") or ""
+    rows = conn.execute(
+        "SELECT serial, lote, validade, posicao, qtd_un FROM wms_caixas WHERE produto_id = ? AND serial <> ? "
+        "AND situacao IN ('EM_ESTOQUE', 'ABERTA', 'DEVOLVIDA') AND COALESCE(validade, '') <> '' AND validade >= ? "
+        "ORDER BY validade, posicao, serial", (caixa["produto_id"], caixa["serial"], hoje)).fetchall()
+    for r in rows:
+        if validade and r["validade"] >= validade:
+            break
+        if _r(r["qtd_un"] - wms_caixas._prometido(conn, r["serial"])) > EPS:
+            return dict(r)
+    return None
+
+
+def _conferir_lote_da_caixa(conn, onda_id: int, caixa: dict) -> None:
+    """Levanta ErroWMS se a caixa nao pode entrar na onda pela regra de lote/validade."""
+    validade = caixa.get("validade") or ""
+    if validade and validade < _hoje():
+        raise ErroWMS(f"Caixa {caixa['serial']} VENCIDA em {_data_br(validade)}: nao pode ser separada. "
+                      f"Avise o escritorio.")
+    faltas = _faltas_da_onda(conn, onda_id)[1]
+    precisam = [pid for pid, f in faltas.items() if f.get(caixa["produto_id"], 0.0) > EPS]
+    indicados = lotes_indicados(conn, precisam)
+    lote = caixa.get("lote") or ""
+    do_lote = [pid for pid in precisam if indicados.get(pid, {}).get(caixa["produto_id"]) == lote]
+    livres = [pid for pid in precisam if caixa["produto_id"] not in indicados.get(pid, {})]
+    if do_lote:
+        return  # o cliente pediu exatamente este lote
+    if not livres and precisam:
+        pedidos = {indicados[pid][caixa["produto_id"]] for pid in precisam}
+        raise ErroWMS(f"O cliente indicou o lote {', '.join(sorted(pedidos))} deste produto: "
+                      f"esta caixa e do lote {lote or '(sem lote)'}.")
+    antes = _caixa_que_vence_antes(conn, caixa)
+    if antes:
+        raise ErroWMS(
+            f"FEFO: pegue primeiro o lote {antes['lote'] or '(sem lote)'}, que vence em {_data_br(antes['validade'])} "
+            f"e esta em {antes['posicao']}. Esta caixa vence em {_data_br(validade) or '(sem validade)'}.")
+
+
+# ---------------------------------------------------------------------------
 # Separar
 # ---------------------------------------------------------------------------
 
@@ -642,6 +784,7 @@ def separar_caixa(conn, onda_id: int, serial: str, *, qtd_un: float | None = Non
             raise ErroWMS(f"A onda nao pede este produto ({_rotulo(produto)}).")
         if falta <= EPS:
             raise ErroWMS(f"A onda ja tem tudo deste produto ({_rotulo(produto)}).")
+        _conferir_lote_da_caixa(conn, onda_id, caixa)
         # o que ja foi prometido desta caixa em partes e ainda nao saiu na baixa
         marcas = ",".join("?" * len(ETAPAS_VIVAS))
         prometido = conn.execute(
@@ -769,6 +912,11 @@ def distribuir_caixa(conn, onda_id: int, codigo: str, *, qtd_un: float | None = 
         faltas = _faltas_da_onda(conn, onda_id)[1]
         candidatos = [(p, faltas[p["id"]][item["produto_id"]]) for p in _pedidos_da_onda(conn, onda_id)
                       if faltas.get(p["id"], {}).get(item["produto_id"], 0.0) > EPS]
+        # lote indicado pelo cliente: esse pedido so recebe aquele lote, e recebe antes dos outros
+        indicados = lotes_indicados(conn, [p["id"] for p, _ in candidatos])
+        candidatos = [(p, f) for p, f in candidatos
+                      if indicados.get(p["id"], {}).get(item["produto_id"], item["lote"]) == item["lote"]]
+        candidatos.sort(key=lambda c: item["produto_id"] not in indicados.get(c[0]["id"], {}))
         if not candidatos:
             raise ErroWMS("Nenhum pedido da onda precisa mais deste produto: devolva a caixa (botao Devolver).")
         pedido, falta = next(((p, f) for p, f in candidatos if f + EPS >= q), candidatos[0])
@@ -924,9 +1072,10 @@ def _conferencia_aberta(conn, conferencia_id: int, operador: dict | None = None)
 def conferir_bipe(conn, conferencia_id: int, codigo: str, *, qtd_un: float | None = None, uuid: str,
                   operador: dict | None = None) -> dict:
     """
-    Bipe do conferente. So entra o que foi separado PARA este pedido: a etiqueta de uma caixa
-    inteira dele, ou o codigo do produto + quantidade para as unidades soltas (ate o total de
-    unidades soltas que a separacao registrou). A resposta nunca diz o que era esperado.
+    Bipe do conferente: a etiqueta de uma caixa inteira deste pedido, ou o codigo do produto +
+    quantidade para as unidades soltas. A quantidade e gravada COMO DIGITADA: nenhuma resposta
+    aqui depende do que foi pedido ou separado (senao o conferente descobriria o numero por
+    tentativa -- revisao de seguranca, 17/11). A comparacao acontece so no fechamento.
     """
     uuid = _exigir_uuid(uuid)
     ja = conn.execute("SELECT conferencia_id FROM wms_conferencia_bipes WHERE uuid = ?", (uuid,)).fetchone()
@@ -961,13 +1110,10 @@ def conferir_bipe(conn, conferencia_id: int, codigo: str, *, qtd_un: float | Non
                 raise ErroWMS(f"Codigo {codigo or '(vazio)'} nao reconhecido.")
             if len(produtos) > 1:
                 raise ErroWMS(f"Codigo {codigo} esta em mais de um produto.")
-            soltas = conn.execute(
-                "SELECT COALESCE(SUM(qtd_un), 0) FROM wms_separacao_itens WHERE pedido_id = ? AND produto_id = ? "
-                "AND caixa_inteira = 0 AND etapa = 'DISTRIBUIDA'", (p["id"], produtos[0])).fetchone()[0]
-            if _r(soltas) <= EPS:
-                if caixa:
-                    raise ErroWMS(f"Caixa {codigo} nao e deste pedido.")
-                raise ErroWMS("Este pedido nao tem unidade solta deste produto: bipe a etiqueta da caixa.")
+            if caixa and not conn.execute(
+                    "SELECT 1 FROM wms_separacao_itens WHERE pedido_id = ? AND serial = ? AND etapa = 'DISTRIBUIDA'",
+                    (p["id"], codigo)).fetchone():
+                raise ErroWMS(f"Caixa {codigo} nao e deste pedido.")
             if qtd_un in (None, ""):
                 raise ErroWMS("Informe a quantidade de unidades soltas deste produto.")
             try:
@@ -976,12 +1122,6 @@ def conferir_bipe(conn, conferencia_id: int, codigo: str, *, qtd_un: float | Non
                 raise ErroWMS("Quantidade invalida.")
             if q <= EPS or q > wms_caixas.MAX_QTD_UN:
                 raise ErroWMS("Quantidade invalida.")
-            contado = conn.execute(
-                "SELECT COALESCE(SUM(qtd_un), 0) FROM wms_conferencia_bipes WHERE conferencia_id = ? "
-                "AND produto_id = ? AND serial = ''", (c["id"], produtos[0])).fetchone()[0]
-            if _r(contado) + q > _r(soltas) + EPS:
-                raise ErroWMS("Quantidade nao bate com as unidades soltas separadas pra este pedido: "
-                              "reconte; se sobrou produto, chame o escritorio.")
             conn.execute(
                 "INSERT INTO wms_conferencia_bipes (uuid, conferencia_id, serial, produto_id, qtd_un, criado_em) "
                 "VALUES (?,?,'',?,?,?)", (uuid, c["id"], produtos[0], q, ts))
@@ -1020,9 +1160,25 @@ def fechar_conferencia(conn, conferencia_id: int, operador: dict | None = None) 
                 "SELECT linha, sku, descricao, qtd_embalagem, motivo_pendencia FROM wms_pedido_itens "
                 "WHERE pedido_id = ? AND removido_em = '' AND (produto_id IS NULL OR qtd_un IS NULL) ORDER BY linha",
                 (p["id"],)).fetchall()]
+        # O contado em unidades soltas tem que ser o que a separacao registrou solto pro pedido:
+        # quantidade digitada no lugar de uma caixa que nao foi bipada nao fecha a conta.
+        separado_solto = {int(r["produto_id"]): _r(r["q"]) for r in conn.execute(
+            "SELECT produto_id, SUM(qtd_un) AS q FROM wms_separacao_itens WHERE pedido_id = ? AND caixa_inteira = 0 "
+            "AND etapa = 'DISTRIBUIDA' GROUP BY produto_id", (p["id"],)).fetchall()}
+        contado_solto = {int(r["produto_id"]): _r(r["q"]) for r in conn.execute(
+            "SELECT produto_id, SUM(qtd_un) AS q FROM wms_conferencia_bipes WHERE conferencia_id = ? AND serial = '' "
+            "GROUP BY produto_id", (c["id"],)).fetchall()}
+        nao_separado = []
+        for prod in sorted(set(separado_solto) | set(contado_solto)):
+            if abs(separado_solto.get(prod, 0.0) - contado_solto.get(prod, 0.0)) > EPS:
+                info = _produto(conn, prod)
+                nao_separado.append({"produto_id": prod, "sku": info.get("sku") or "",
+                                     "descricao": info.get("descricao") or "",
+                                     "separado_solto_un": separado_solto.get(prod, 0.0),
+                                     "contado_solto_un": contado_solto.get(prod, 0.0)})
         ts = wms.agora()
-        resultado = "OK" if not (faltas or sobras or sem_cadastro) else "FALTA"
-        detalhe = {"faltas": faltas, "sobras": sobras, "sem_cadastro": sem_cadastro}
+        resultado = "OK" if not (faltas or sobras or sem_cadastro or nao_separado) else "FALTA"
+        detalhe = {"faltas": faltas, "sobras": sobras, "sem_cadastro": sem_cadastro, "nao_separado": nao_separado}
         conn.execute("UPDATE wms_conferencias SET fechada_em = ?, resultado = ?, detalhe = ? WHERE id = ?",
                      (ts, resultado, json.dumps(detalhe, ensure_ascii=False), c["id"]))
         if resultado == "OK":
@@ -1138,7 +1294,8 @@ def faltas_pendentes(conn) -> list[dict]:
                       "destinatario": p.get("destinatario") or "",
                       "conferente": c["operador_nome"] if c else "", "fechada_em": c["fechada_em"] if c else "",
                       "faltas": detalhe.get("faltas") or [], "sobras": detalhe.get("sobras") or [],
-                      "sem_cadastro": detalhe.get("sem_cadastro") or []})
+                      "sem_cadastro": detalhe.get("sem_cadastro") or [],
+                      "nao_separado": detalhe.get("nao_separado") or []})
     return saida
 
 
@@ -1293,6 +1450,12 @@ def andamento(conn, embarcador_id: int | None = None, limite: int = 200) -> list
         conf = conn.execute("SELECT operador_nome, resultado, fechada_em FROM wms_conferencias WHERE pedido_id = ? "
                             "ORDER BY id DESC LIMIT 1", (p["id"],)).fetchone()
         volumes = conn.execute("SELECT MAX(total) FROM wms_volumes WHERE pedido_id = ?", (p["id"],)).fetchone()[0]
+        lotes = [{"sku": (_produto(conn, r["produto_id"]).get("sku") or ""), "lote": r["lote"], "validade": r["validade"],
+                  "un": _r(r["q"])}
+                 for r in conn.execute(
+                     "SELECT produto_id, lote, validade, SUM(qtd_un) AS q FROM wms_separacao_itens WHERE pedido_id = ? "
+                     "AND etapa IN ('DISTRIBUIDA', 'CONFERIDA', 'EXPEDIDA') GROUP BY produto_id, lote, validade "
+                     "ORDER BY produto_id, validade", (p["id"],)).fetchall()]
         data, fonte = data_entrega_do_pedido(conn, p)
         saida.append({
             "pedido_id": p["id"], "codigo_ps": p["codigo_ps"], "embarcador": p["embarcador"],
@@ -1302,7 +1465,7 @@ def andamento(conn, embarcador_id: int | None = None, limite: int = 200) -> list
             "separado_por": nomes["sep"] or "", "itens_separados": int(nomes["itens"] or 0),
             "inicio_separacao": nomes["inicio"] or "",
             "conferente": conf["operador_nome"] if conf else "", "conferencia": conf["resultado"] if conf else "",
-            "conferido_em": conf["fechada_em"] if conf else "", "volumes": int(volumes or 0),
+            "conferido_em": conf["fechada_em"] if conf else "", "volumes": int(volumes or 0), "lotes": lotes,
             "atualizado_em": p["atualizado_em"],
         })
     return saida

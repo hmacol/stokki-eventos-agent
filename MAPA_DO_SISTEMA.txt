@@ -140,6 +140,10 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              /api/wms/separacao/*) e /ondas do escritório (ondas.html, /api/ondas/*,
                                              só total e operador: fica FORA de /wms pra o login do galpão não ver).
                                              Etiqueta de volume 10x15: painel_agentes/wms_etiqueta_volume.py, sai
+                                             Lote e validade (17/11): sem lote indicado pelo cliente a separação
+                                             exige FEFO (recusa a caixa se outra disponível vence antes) e nunca
+                                             aceita caixa vencida; lote indicado é marcado em /ondas (tabela
+                                             wms_pedido_lotes) e aí só aquele lote entra no pedido.
                                              pela fila de etiquetas (tipo VOLUME). Ensaio no navegador com banco
                                              temporário: py -3.11 ensaio_separacao.py <pasta> (de painel_agentes/).
                                              (caixas com serial/eventos), wms_fila_impressao.py (fila de etiquetas)
