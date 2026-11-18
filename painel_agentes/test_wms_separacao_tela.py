@@ -131,6 +131,46 @@ class TestRotasDoGalpao(Base):
             self.assertIn("so quem abriu", r.get_json()["erro"])
             self.assertEqual(self.post(c, f"/api/wms/separacao/conferencias/{conf}/fechar").status_code, 400)
 
+    def test_devolver_e_abandonar_pelas_rotas(self):
+        c = self.cliente()
+        with self.operador(ANA):
+            onda = self.post(c, f"/api/wms/separacao/ondas/pedido/{self.pedido_id}").get_json()["onda_id"]
+            r = self.post(c, f"/api/wms/separacao/ondas/{onda}/separar", {"serial": self.seriais[0], "uuid": self.u()})
+            item = c.get(f"/api/wms/separacao/ondas/{onda}").get_json()["itens"][0]
+            self.assertEqual((item["serial"], item["codigo_ps"], r.get_json()["lote"]), (self.seriais[0], "PS-70001", "L1"))
+            self.assertEqual(self.post(c, f"/api/wms/separacao/itens/{item['id']}/devolver").status_code, 200)
+            self.assertEqual(c.get(f"/api/wms/separacao/ondas/{onda}").get_json()["itens"], [])
+            for s in self.seriais:
+                self.post(c, f"/api/wms/separacao/ondas/{onda}/separar", {"serial": s, "uuid": self.u()})
+            self.post(c, f"/api/wms/separacao/ondas/{onda}/fechar")
+        with self.operador(BIA):
+            conf = self.post(c, f"/api/wms/separacao/conferir/{self.pedido_id}/iniciar").get_json()["conferencia_id"]
+        with self.operador(ANA):
+            self.assertEqual(self.post(c, f"/api/wms/separacao/conferencias/{conf}/abandonar").status_code, 400)
+        with self.operador(BIA):
+            self.assertEqual(self.post(c, f"/api/wms/separacao/conferencias/{conf}/abandonar").status_code, 200)
+            self.assertEqual(len(c.get("/api/wms/separacao/painel").get_json()["conferir"]), 1)
+            self.post(c, f"/api/wms/separacao/conferir/{self.pedido_id}/iniciar")
+        # o escritorio tambem libera uma conferencia esquecida aberta
+        adm = self.cliente("operador")
+        self.assertEqual(self.post(adm, f"/api/ondas/conferencias/{self.pedido_id}/liberar").status_code, 200)
+        self.assertEqual(self.post(adm, f"/api/ondas/conferencias/{self.pedido_id}/liberar").status_code, 400)
+        self.assertEqual(self.post(c, f"/api/ondas/conferencias/{self.pedido_id}/liberar").status_code, 403)
+
+    def test_banco_ocupado_vira_aviso_e_nao_erro_500(self):
+        import sqlite3
+        c = self.cliente()
+        with self.operador(ANA), mock.patch.object(sep, "ondas_vivas", side_effect=sqlite3.OperationalError("database is locked")):
+            r = c.get("/api/wms/separacao/painel")
+        self.assertEqual(r.status_code, 503)
+        self.assertIn("ocupado", r.get_json()["erro"])
+
+    def test_montar_onda_com_embarcador_estranho_vira_400(self):
+        adm = self.cliente("operador")
+        for emb in ([22], {"a": 1}, "22", None):
+            r = self.post(adm, "/api/ondas", {"embarcador_id": emb, "pedido_ids": [self.pedido_id]})
+            self.assertEqual(r.status_code, 400, emb)
+
     def test_sem_operador_do_pin_recusa_o_bipe(self):
         c = self.cliente()
         with self.operador(None):

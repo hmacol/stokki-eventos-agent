@@ -253,18 +253,22 @@ class TestSeparar(Base):
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM wms_separacao_itens").fetchone()[0], 1)
 
     def test_devolver_item_solta_a_reserva_e_a_caixa_espera_ser_guardada(self):
-        s = self.caixas(1, 1)
+        s = self.caixas(1, 2)
         pid = self.pedido([("CAFE", 12)])
         onda_id = sep.onda_de_um_pedido(self.conn, pid, ANA)
         r = sep.separar_caixa(self.conn, onda_id, s[0], uuid=self.u(), operador=ANA)
         sep.devolver_item(self.conn, r["item_id"], operador=ANA, motivo="caixa amassada")
         self.assertEqual((self.situacao(s[0]), self.reservas(pid)), ("DEVOLVIDA", []))
-        with self.assertRaisesRegex(wms.ErroWMS, "devolvida"):
-            sep.separar_caixa(self.conn, onda_id, s[0], uuid=self.u(), operador=ANA)
+        self.assertEqual(cx.divergencias(self.conn, EMB), [])   # devolvida continua no saldo da posicao
         cx.mover_caixa(self.conn, s[0], P1, uuid=self.u(), operador=ANA)   # guardou no mesmo lugar
         self.assertEqual(self.situacao(s[0]), "EM_ESTOQUE")
+        # devolvida tambem pode voltar direto pra onda, sem passar pelo Mover
+        r = sep.separar_caixa(self.conn, onda_id, s[1], uuid=self.u(), operador=ANA)
+        sep.devolver_item(self.conn, r["item_id"], operador=ANA)
+        self.assertEqual(self.situacao(s[1]), "DEVOLVIDA")
+        sep.separar_caixa(self.conn, onda_id, s[1], uuid=self.u(), operador=ANA)
+        self.assertEqual((self.situacao(s[1]), self.reservas(pid)), ("DISTRIBUIDA", [("MANUAL", P1, "L1", 12)]))
         self.assertEqual(cx.divergencias(self.conn, EMB), [])
-
 
 class TestDistribuir(Base):
     def test_onda_de_dois_pedidos_a_tela_diz_de_quem_e_a_caixa(self):
@@ -412,12 +416,23 @@ class TestConferencia(Base):
         self.assertEqual((self.execucao(pid), sep._onda(self.conn, r["onda_id"])["situacao"]), ("SEPARANDO", "EM_SEPARACAO"))
         with self.assertRaises(wms.ErroWMS):
             sep.decidir_falta(self.conn, pid, "VOLTAR", "de novo", "hugo")
-        # a nova conferencia pode ser da mesma pessoa de antes, e agora fecha
+        # a caixa que a conferencia nao achou foi devolvida: a onda nova so pede o que falta (12, nao 24)
+        self.assertEqual((self.situacao(s[0]), self.situacao(s[1])), ("DISTRIBUIDA", "DEVOLVIDA"))
+        d = sep.detalhe_onda(self.conn, r["onda_id"])
+        self.assertEqual((d["produtos"][0]["pedido_un"], d["produtos"][0]["separado_un"]), (24, 12))
+        self.assertEqual(sep.fechar_separacao(self.conn, r["onda_id"], ANA)["prontos"], [])
+        sep.separar_caixa(self.conn, r["onda_id"], s[1], uuid=self.u(), operador=ANA)   # achou a caixa
+        with self.assertRaisesRegex(wms.ErroWMS, "ja tem tudo"):
+            sep.separar_caixa(self.conn, r["onda_id"], self.caixas(1, 1)[0], uuid=self.u(), operador=ANA)
         sep.fechar_separacao(self.conn, r["onda_id"], ANA)
         c2 = sep.iniciar_conferencia(self.conn, pid, BIA)["conferencia_id"]
         for x in s:
             sep.conferir_bipe(self.conn, c2, x, uuid=self.u())
         self.assertEqual(sep.fechar_conferencia(self.conn, c2)["resultado"], "OK")
+        # a baixa tira exatamente as 24 do pedido
+        wms_pedidos.baixar_por_expedicao(self.conn, f"PS-{self._stokki}")
+        self.assertEqual(wms._saldo_atual(self.conn, P1, 1, "L1", ""), 12)
+        self.assertEqual(cx.divergencias(self.conn, EMB), [])
 
     def test_liberar_parcial_segue_so_com_o_conferido_e_nao_volta_a_reservar(self):
         s = self.caixas(1, 2)
@@ -435,19 +450,32 @@ class TestConferencia(Base):
         decisao = self.conn.execute("SELECT decisao, motivo, por FROM wms_decisoes_falta").fetchone()
         self.assertEqual(tuple(decisao), ("PARCIAL", "cliente aceitou receber menos", "hugo"))
 
-    def test_item_removido_do_pedido_depois_da_separacao_vira_sobra_e_nao_trava(self):
+    def test_item_removido_do_pedido_depois_da_separacao_trava_e_o_voltar_devolve_a_caixa(self):
         s = self.caixas(1, 1) + self.caixas(2, 1)
         pid = self.pedido([("CAFE", 12), ("LEITE", 6)])
         onda_id = sep.onda_de_um_pedido(self.conn, pid, ANA)
         self.separar_tudo(onda_id, s)
         sep.fechar_separacao(self.conn, onda_id, ANA)
-        self.conn.execute("UPDATE wms_pedido_itens SET removido_em = '2026-11-23 10:00:00' WHERE pedido_id = ? AND sku = 'LEITE'", (pid,))
+        # o sync tira o LEITE do pedido (registrar_pedido cancela a reserva da linha que sumiu)
+        wms_pedidos.registrar_pedido(self.conn, {"id_stokki": self._stokki, "codigo_ps": f"PS-{self._stokki}",
+                                                  "embarcador": "EMB", "situacao": "Open"},
+                                     [{"linha": 1, "sku": "CAFE", "ean_linha": "", "descricao": "CAFE",
+                                       "qtd_embalagem": 12, "unidade_do_produto": True, "embarcador_id": EMB}])
         self.conn.commit()
         c = sep.iniciar_conferencia(self.conn, pid, BIA)["conferencia_id"]
         for x in s:
             sep.conferir_bipe(self.conn, c, x, uuid=self.u())
         f = sep.fechar_conferencia(self.conn, c)
-        self.assertEqual((f["resultado"], [x["sku"] for x in f["sobras"]]), ("OK", ["LEITE"]))
+        self.assertEqual((f["resultado"], [x["sku"] for x in f["sobras"]]), ("FALTA", ["LEITE"]))   # sobra tambem trava
+        r = sep.decidir_falta(self.conn, pid, "VOLTAR", "leite saiu do pedido", "hugo")
+        self.assertEqual((self.situacao(s[0]), self.situacao(s[1])), ("DISTRIBUIDA", "DEVOLVIDA"))
+        sep.fechar_separacao(self.conn, r["onda_id"], ANA)
+        c2 = sep.iniciar_conferencia(self.conn, pid, BIA)["conferencia_id"]
+        sep.conferir_bipe(self.conn, c2, s[0], uuid=self.u())
+        self.assertEqual(sep.fechar_conferencia(self.conn, c2)["resultado"], "OK")
+        wms_pedidos.baixar_por_expedicao(self.conn, f"PS-{self._stokki}")
+        self.assertEqual((self.situacao(s[0]), self.situacao(s[1])), ("EXPEDIDA", "DEVOLVIDA"))
+        self.assertEqual(cx.divergencias(self.conn, EMB), [])
 
     def test_pedido_cancelado_no_meio_para_a_conferencia_e_devolve_as_caixas(self):
         pid, s = self.pronto_pra_conferir()
@@ -592,6 +620,203 @@ class TestAndamento(Base):
         a = linhas[0]
         self.assertEqual((a["execucao"], a["separado_por"], a["conferente"], a["conferencia"], a["volumes"],
                           a["data_entrega"]), ("EMBALADO", "Ana", "Bia", "OK", 2, "2026-11-24"))
+
+
+class TestRevisaoIndependente(Base):
+    """Cenarios da revisao de 17/11: a baixa segue o CONFERIDO, e nada fica preso."""
+
+    def separado(self, itens, n_caixas, **kw):
+        seriais = self.caixas(1, n_caixas, **kw)
+        pid = self.pedido(list(itens))
+        return pid, seriais, sep.onda_de_um_pedido(self.conn, pid, ANA)
+
+    def conferir(self, pid, seriais, operador=BIA):
+        c = sep.iniciar_conferencia(self.conn, pid, operador)["conferencia_id"]
+        for x in seriais:
+            sep.conferir_bipe(self.conn, c, x, uuid=self.u(), operador=operador)
+        return sep.fechar_conferencia(self.conn, c, operador)
+
+    def test_parcial_nao_baixa_a_caixa_que_o_conferente_nao_achou(self):
+        pid, s, onda = self.separado([("CAFE", 24)], 2)
+        self.separar_tudo(onda, s)
+        sep.fechar_separacao(self.conn, onda, ANA)
+        self.assertEqual(self.conferir(pid, s[:1])["resultado"], "FALTA")
+        sep.decidir_falta(self.conn, pid, "PARCIAL", "cliente aceitou 12", "hugo")
+        self.assertEqual((self.situacao(s[0]), self.situacao(s[1]), self.reservas(pid)),
+                         ("CONFERIDA", "DEVOLVIDA", [("MANUAL", P1, "L1", 12)]))
+        wms_pedidos.baixar_por_expedicao(self.conn, f"PS-{self._stokki}")
+        self.assertEqual((self.situacao(s[0]), self.situacao(s[1])), ("EXPEDIDA", "DEVOLVIDA"))
+        self.assertEqual(wms._saldo_atual(self.conn, P1, 1, "L1", ""), 12)   # a caixa que ficou continua no saldo
+        self.assertEqual(cx.divergencias(self.conn, EMB), [])
+
+    def test_conferencia_ok_devolve_o_que_estava_separado_e_nao_foi_bipado(self):
+        # nao deveria acontecer (a conta nao fecharia), mas se o pedido diminui na Stokki a sobra separada volta
+        pid, s, onda = self.separado([("CAFE", 24)], 2)
+        self.separar_tudo(onda, s)
+        sep.fechar_separacao(self.conn, onda, ANA)
+        self.conn.execute("UPDATE wms_pedido_itens SET qtd_un = 12, qtd_embalagem = 12 WHERE pedido_id = ?", (pid,))
+        self.conn.commit()
+        self.assertEqual(self.conferir(pid, s[:1])["resultado"], "OK")
+        self.assertEqual((self.situacao(s[0]), self.situacao(s[1])), ("CONFERIDA", "DEVOLVIDA"))
+        wms_pedidos.baixar_por_expedicao(self.conn, f"PS-{self._stokki}")
+        self.assertEqual((wms._saldo_atual(self.conn, P1, 1, "L1", ""), cx.divergencias(self.conn, EMB)), (12, []))
+
+    def test_caixa_maior_que_a_sugestao_partida_em_dois_lotes_expede_a_caixa_certa(self):
+        self.caixas(1, 1, posicao=P1, lote="L1", qtd=5)
+        c2, c3 = self.caixas(1, 2, posicao=P2, lote="L2")
+        pid = self.pedido([("CAFE", 12)])
+        self.assertEqual(self.reservas(pid), [("FEFO", P1, "L1", 5), ("FEFO", P2, "L2", 7)])
+        onda = sep.onda_de_um_pedido(self.conn, pid, ANA)
+        sep.separar_caixa(self.conn, onda, c2, uuid=self.u(), operador=ANA)
+        self.assertEqual(self.reservas(pid), [("MANUAL", P2, "L2", 12)])
+        sep.fechar_separacao(self.conn, onda, ANA)
+        self.assertEqual(self.conferir(pid, [c2])["resultado"], "OK")
+        wms_pedidos.baixar_por_expedicao(self.conn, f"PS-{self._stokki}")
+        self.assertEqual((self.situacao(c2), self.situacao(c3)), ("EXPEDIDA", "EM_ESTOQUE"))
+        self.assertEqual(cx.divergencias(self.conn, EMB), [])
+
+    def test_fechar_sem_nada_separado_tira_o_pedido_da_onda_e_ninguem_confere_vazio(self):
+        pid, s, onda = self.separado([("CAFE", 24)], 2)
+        r = sep.fechar_separacao(self.conn, onda, ANA, mesmo_faltando=True)
+        self.assertEqual((r["prontos"], r["sem_nada"], r["onda_concluida"], self.execucao(pid)),
+                         ([], [f"PS-{self._stokki}"], True, ""))
+        with self.assertRaisesRegex(wms.ErroWMS, "nao esta pronto"):
+            sep.iniciar_conferencia(self.conn, pid, ANA)
+        self.assertEqual([p["id"] for p in sep.pedidos_para_onda(self.conn, EMB)], [pid])
+
+    def test_conferente_nao_inventa_quantidade_nem_usa_caixa_que_nao_foi_separada(self):
+        pid, s, onda = self.separado([("CAFE", 24)], 3)
+        self.separar_tudo(onda, s[:1])
+        sep.fechar_separacao(self.conn, onda, ANA, mesmo_faltando=True)
+        c = sep.iniciar_conferencia(self.conn, pid, BIA)["conferencia_id"]
+        casos = (("789000000001", 12, "nao tem unidade solta"),      # EAN + quantidade no lugar da caixa que falta
+                 (s[1], 12, "nao e deste pedido"),                    # serial de caixa que nunca foi separada
+                 (s[1], None, "nao e deste pedido"))
+        for codigo, qtd, motivo in casos:
+            with self.assertRaisesRegex(wms.ErroWMS, motivo):
+                sep.conferir_bipe(self.conn, c, codigo, qtd_un=qtd, uuid=self.u(), operador=BIA)
+        sep.conferir_bipe(self.conn, c, s[0], uuid=self.u(), operador=BIA)
+        self.assertEqual(sep.fechar_conferencia(self.conn, c, BIA)["resultado"], "FALTA")
+
+    def test_unidades_soltas_na_conferencia_nao_passam_do_que_foi_separado(self):
+        pid, s, onda = self.separado([("CAFE", 8)], 1)
+        sep.separar_caixa(self.conn, onda, s[0], qtd_un=4, uuid=self.u(), operador=ANA)
+        sep.fechar_separacao(self.conn, onda, ANA, mesmo_faltando=True)
+        c = sep.iniciar_conferencia(self.conn, pid, BIA)["conferencia_id"]
+        sep.conferir_bipe(self.conn, c, "CAFE", qtd_un=4, uuid=self.u(), operador=BIA)
+        with self.assertRaisesRegex(wms.ErroWMS, "nao bate"):   # o reenvio com uuid novo nao mascara a falta
+            sep.conferir_bipe(self.conn, c, "CAFE", qtd_un=4, uuid=self.u(), operador=BIA)
+        self.assertEqual(sep.fechar_conferencia(self.conn, c, BIA)["resultado"], "FALTA")
+
+    def test_linha_sem_cadastro_impede_o_conferido(self):
+        s = self.caixas(1, 1)
+        pid = self.pedido([("CAFE", 12), ("NAOEXISTE", 3)])
+        onda = sep.onda_de_um_pedido(self.conn, pid, ANA)
+        self.separar_tudo(onda, s)
+        sep.fechar_separacao(self.conn, onda, ANA)
+        f = self.conferir(pid, s)
+        self.assertEqual((f["resultado"], f["faltas"], [x["sku"] for x in f["sem_cadastro"]]), ("FALTA", [], ["NAOEXISTE"]))
+        self.assertEqual(sep.faltas_pendentes(self.conn)[0]["sem_cadastro"][0]["sku"], "NAOEXISTE")
+
+    def test_pedido_cancelado_sai_da_onda_e_nao_recebe_mais_caixa(self):
+        s = self.caixas(1, 3)
+        a, b = self.pedido([("CAFE", 12)]), self.pedido([("CAFE", 12)])
+        onda = self.onda(a, b)
+        self.separar_tudo(onda, s[:2])
+        wms_pedidos.cancelar_reservas(self.conn, b, "cancelado na Stokki")
+        self.conn.commit()
+        self.assertEqual([p["id"] for p in sep._pedidos_da_onda(self.conn, onda)], [a])
+        destino = sep.distribuir_caixa(self.conn, onda, s[0], uuid=self.u(), operador=ANA)
+        self.assertEqual(destino["pedido_id"], a)
+        with self.assertRaisesRegex(wms.ErroWMS, "Devolver"):
+            sep.distribuir_caixa(self.conn, onda, s[1], uuid=self.u(), operador=ANA)
+        with self.assertRaisesRegex(wms.ErroWMS, "ja tem tudo"):
+            sep.separar_caixa(self.conn, onda, s[2], uuid=self.u(), operador=ANA)
+        # a caixa que sobrou tem saida pela tela: devolver, e a onda fecha
+        solto = [i for i in sep.detalhe_onda(self.conn, onda)["itens"] if not i["codigo_ps"]]
+        sep.devolver_item(self.conn, solto[0]["id"], operador=ANA)
+        self.assertTrue(sep.fechar_separacao(self.conn, onda, ANA)["onda_concluida"])
+        self.assertEqual((self.execucao(a), self.execucao(b), self.situacao(s[1])), ("SEPARADO", "", "DEVOLVIDA"))
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM wms_reservas WHERE pedido_id = ? AND estado = 'ATIVA'",
+                                           (b,)).fetchone()[0], 0)
+
+    def test_onda_que_perde_todos_os_pedidos_encerra_e_devolve_o_que_estava_solto(self):
+        s = self.caixas(1, 2)
+        a, b = self.pedido([("CAFE", 12)]), self.pedido([("CAFE", 12)])
+        onda = self.onda(a, b)
+        self.separar_tudo(onda, s)
+        for pid in (a, b):
+            wms_pedidos.cancelar_reservas(self.conn, pid, "cancelado")
+        self.conn.commit()
+        self.assertEqual(sep._onda(self.conn, onda)["situacao"], "CANCELADA")
+        self.assertEqual([self.situacao(x) for x in s], ["DEVOLVIDA", "DEVOLVIDA"])
+        self.assertEqual(cx.divergencias(self.conn, EMB), [])
+
+    def test_pedido_baixado_no_meio_da_separacao_nao_pede_mais_nada(self):
+        pid, s, onda = self.separado([("CAFE", 24)], 2)
+        sep.separar_caixa(self.conn, onda, s[0], uuid=self.u(), operador=ANA)
+        wms_pedidos.baixar_por_expedicao(self.conn, f"PS-{self._stokki}")   # a expedicao chegou antes
+        with self.assertRaises(wms.ErroWMS):
+            sep.separar_caixa(self.conn, onda, s[1], uuid=self.u(), operador=ANA)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM wms_reservas WHERE pedido_id = ? AND estado = 'ATIVA'",
+                                           (pid,)).fetchone()[0], 0)
+
+    def test_conferencia_esquecida_aberta_pode_ser_abandonada(self):
+        pid, s = self.pronto_pra_conferir()
+        c = sep.iniciar_conferencia(self.conn, pid, BIA)["conferencia_id"]
+        sep.conferir_bipe(self.conn, c, s[0], uuid=self.u(), operador=BIA)
+        caio = {"id": "3", "nome": "Caio"}
+        with self.assertRaises(wms.ErroWMS):
+            sep.abandonar_conferencia(self.conn, c, caio)
+        self.assertEqual(sep.conferencia_aberta_do_pedido(self.conn, pid), c)
+        sep.abandonar_conferencia(self.conn, c, None, por="hugo")     # o escritorio libera
+        self.assertEqual((self.execucao(pid), sep.conferencia_aberta_do_pedido(self.conn, pid)), ("SEPARADO", None))
+        self.assertEqual(self.conferir(pid, s, operador=caio)["resultado"], "OK")   # os bipes antigos nao valem
+
+    def test_caixa_dividida_entre_pedidos_nao_fica_presa(self):
+        s = self.caixas(1, 1)
+        a, b = self.pedido([("CAFE", 6)]), self.pedido([("CAFE", 6)])
+        onda = self.onda(a, b)
+        sep.separar_caixa(self.conn, onda, s[0], uuid=self.u(), operador=ANA)
+        for _ in range(2):
+            sep.distribuir_caixa(self.conn, onda, s[0], uuid=self.u(), operador=ANA)
+        wms_pedidos.cancelar_reservas(self.conn, b, "cancelado")
+        self.conn.commit()
+        sep.fechar_separacao(self.conn, onda, ANA)
+        c = sep.iniciar_conferencia(self.conn, a, BIA)["conferencia_id"]
+        sep.conferir_bipe(self.conn, c, "CAFE", qtd_un=6, uuid=self.u(), operador=BIA)
+        self.assertEqual(sep.fechar_conferencia(self.conn, c, BIA)["resultado"], "OK")
+        wms_pedidos.baixar_por_expedicao(self.conn, sep._pedido(self.conn, a)["codigo_ps"])
+        caixa = cx.obter_caixa(self.conn, s[0])
+        self.assertEqual((caixa["situacao"], caixa["qtd_un"]), ("DEVOLVIDA", 6))   # sobrou metade: guardar
+        self.assertEqual(cx.divergencias(self.conn, EMB), [])
+        cx.mover_caixa(self.conn, s[0], P1, uuid=self.u(), operador=ANA)
+        self.assertEqual(self.situacao(s[0]), "EM_ESTOQUE")
+
+    def test_caixa_com_parte_separada_nao_move_e_a_baixa_antiga_respeita_a_parte(self):
+        s = self.caixas(1, 2)
+        com = self.pedido([("CAFE", 4)])
+        ps_com = f"PS-{self._stokki}"
+        onda = sep.onda_de_um_pedido(self.conn, com, ANA)
+        sep.separar_caixa(self.conn, onda, s[0], qtd_un=4, uuid=self.u(), operador=ANA)
+        with self.assertRaisesRegex(wms.ErroWMS, "unidades separadas"):
+            cx.mover_caixa(self.conn, s[0], P2, uuid=self.u(), operador=ANA)
+        sem = self.pedido([("CAFE", 12)])      # pedido que nao passa pela separacao
+        wms_pedidos.baixar_por_expedicao(self.conn, f"PS-{self._stokki}")
+        # a baixa antiga tirou 8 da primeira caixa (as 4 do outro pedido ficam) e 4 da segunda
+        self.assertEqual([(cx.obter_caixa(self.conn, x)["situacao"], cx.obter_caixa(self.conn, x)["qtd_un"]) for x in s],
+                         [("ABERTA", 4), ("ABERTA", 8)])
+        self.assertEqual(cx.divergencias(self.conn, EMB), [])
+        wms_pedidos.baixar_por_expedicao(self.conn, ps_com)
+        self.assertEqual(self.situacao(s[0]), "EXPEDIDA")
+        self.assertEqual((wms._saldo_atual(self.conn, P1, 1, "L1", ""), cx.divergencias(self.conn, EMB)), (8, []))
+        self.assertIsNotNone(sem)
+
+    def test_devolver_so_enquanto_o_pedido_esta_separando(self):
+        pid, s = self.pronto_pra_conferir()
+        item = self.conn.execute("SELECT id FROM wms_separacao_itens WHERE pedido_id = ? LIMIT 1", (pid,)).fetchone()[0]
+        with self.assertRaisesRegex(wms.ErroWMS, "ja saiu da separacao"):
+            sep.devolver_item(self.conn, item, operador=ANA)
 
 
 if __name__ == "__main__":

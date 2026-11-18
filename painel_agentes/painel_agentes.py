@@ -6355,11 +6355,24 @@ def wms_etiqueta_produto_pdf():
 
 def _sep_chamar(funcao):
     """Abre a conexão, chama funcao(conn) e devolve JSON; erro de regra vira 400."""
-    conn = wms_separacao.conectar()
+    import sqlite3
+    try:
+        conn = wms_separacao.conectar()
+    except sqlite3.Error:
+        return _wms_json_erro("Sistema ocupado agora. Tente de novo em alguns segundos.", 503)
     try:
         return jsonify(funcao(conn))
     except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
         return _wms_json_erro(e)
+    except sqlite3.Error as e:
+        # banco compartilhado ocupado ("database is locked") ou dois bipes iguais ao mesmo tempo:
+        # o operador ve um aviso e repete, em vez de um "Erro 500"
+        app.logger.warning("separacao: banco recusou a operacao: %s", e)
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
+        return _wms_json_erro("Sistema ocupado agora. Tente de novo em alguns segundos.", 503)
     finally:
         conn.close()
 
@@ -6487,6 +6500,14 @@ def api_wms_separacao_conferir_fechar(conferencia_id):
     return _sep_chamar(lambda conn: wms_separacao.fechar_conferencia(conn, conferencia_id, op))
 
 
+@app.route("/api/wms/separacao/conferencias/<int:conferencia_id>/abandonar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_conferir_abandonar(conferencia_id):
+    op = _wms_exige_operador()
+    return _sep_chamar(lambda conn: wms_separacao.abandonar_conferencia(conn, conferencia_id, op))
+
+
 @app.route("/api/wms/separacao/pedidos/<int:pedido_id>/volumes", methods=["POST"])
 @requer_auth(niveis=_NIVEIS_WMS)
 @exige_mesma_origem
@@ -6538,7 +6559,7 @@ def api_ondas_pedidos():
 def api_ondas_montar():
     corpo = _sep_corpo()
     embarcador_id = corpo.get("embarcador_id")
-    if embarcador_id not in {e["id"] for e in _ondas_embarcadores()}:
+    if type(embarcador_id) is not int or embarcador_id not in {e["id"] for e in _ondas_embarcadores()}:
         return _wms_json_erro("Escolha um embarcador que opera por caixa.")
     por = session.get("usuario") or ""
     return _sep_chamar(lambda conn: {"onda_id": wms_separacao.montar_onda(
@@ -6562,6 +6583,21 @@ def api_ondas_cancelar(onda_id):
 def api_ondas_andamento():
     embarcador_id = request.args.get("embarcador_id", type=int)
     return _sep_chamar(lambda conn: {"pedidos": wms_separacao.andamento(conn, embarcador_id)})
+
+
+@app.route("/api/ondas/conferencias/<int:pedido_id>/liberar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_ondas_conferencia_liberar(pedido_id):
+    """Conferência esquecida aberta (o conferente foi embora): o escritório libera o pedido."""
+    por = session.get("usuario") or ""
+
+    def _f(conn):
+        conferencia_id = wms_separacao.conferencia_aberta_do_pedido(conn, pedido_id)
+        if not conferencia_id:
+            raise wms.ErroWMS("Este pedido não tem conferência aberta.")
+        return wms_separacao.abandonar_conferencia(conn, conferencia_id, None, por=por)
+    return _sep_chamar(_f)
 
 
 @app.route("/api/ondas/faltas")

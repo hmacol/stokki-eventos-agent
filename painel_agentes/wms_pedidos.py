@@ -687,8 +687,7 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
                     try:
                         import wms_separacao
                         resto = wms_separacao.consumir_do_pedido(
-                            conn, pedido_id=pedido["id"], posicao=r["posicao"], produto_id=r["produto_id"],
-                            lote=r["lote"], validade=r["validade"], qtd_un=r["quantidade_un"],
+                            conn, pedido_id=pedido["id"], reserva_id=r["id"], qtd_un=r["quantidade_un"],
                             movimento_uuid=mov["uuid"])
                     except Exception as e_sep:  # noqa: BLE001 -- sem a separacao, vale a ordem antiga
                         conn.rollback()

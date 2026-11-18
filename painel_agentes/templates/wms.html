@@ -1329,13 +1329,26 @@
     if (navigator.vibrate) navigator.vibrate(ok ? 60 : [120, 80, 120]);
   }
   // POST de bipe: sem operador manda pra tela do PIN; rede fora avisa que NAO registrou.
+  // Bipe que ficou sem resposta (rede caiu no meio) guarda o uuid: repetir o MESMO bipe manda o
+  // mesmo uuid e o servidor nao conta duas vezes, mesmo que a primeira tentativa tenha gravado.
+  const sepPendentes = {};
   async function sepPost(caminho, corpo) {
     if (!S.operador) { toast('Identifique o operador primeiro', true); ir('operador'); throw new Error('sem operador'); }
-    if (!navigator.onLine) throw new Error('Sem conexão: este bipe NÃO foi registrado. Tente de novo quando a rede voltar.');
-    try { return await api('/separacao' + caminho, { method: 'POST', body: corpo || {} }); }
-    catch (e) {
+    corpo = corpo || {};
+    let chave = null;
+    if (corpo.uuid) {
+      chave = caminho + '|' + (corpo.serial || corpo.codigo || '') + '|' + (corpo.qtd_un == null ? '' : corpo.qtd_un);
+      if (sepPendentes[chave]) corpo.uuid = sepPendentes[chave]; else sepPendentes[chave] = corpo.uuid;
+    }
+    if (!navigator.onLine) throw new Error('Sem conexão. Repita o bipe quando a rede voltar.');
+    try {
+      const r = await api('/separacao' + caminho, { method: 'POST', body: corpo });
+      if (chave) delete sepPendentes[chave];
+      return r;
+    } catch (e) {
       if (e.status === 409 && e.dados && e.dados.sem_operador) { S.operador = null; ir('operador'); }
-      if (!e.status) e.message = 'Sem conexão: este bipe NÃO foi registrado. Tente de novo.';
+      if (!e.status || e.status === 503) e.message = (e.status === 503 ? e.message : 'Sem conexão.') + ' Repita o mesmo bipe: não conta em dobro.';
+      else if (chave) delete sepPendentes[chave];   // o servidor respondeu e recusou: bipe encerrado
       throw e;
     }
   }
@@ -1459,13 +1472,25 @@
             <div class="cod mono">${esc(p.codigo_ps)}</div>
             <div class="qtd">${num(p.atribuido_un)}<small>de ${num(p.pedido_un)}</small></div>
             <div class="meta">${esc(p.destinatario || '')} · ${esc(ETAPA_PEDIDO[p.execucao] || p.execucao || '')}</div>
-          </div>`).join('')}</div>`;
+          </div>`).join('')}</div>
+        ${d.itens.length ? `<h2 class="sep-titulo">Já bipado (toque em Devolver pra desfazer)</h2>
+        <div class="lista">${d.itens.map((i) => `
+          <div class="item" style="cursor:default">
+            <div class="cod"><span class="mono">${esc(i.serial)}</span> · ${num(i.qtd_un)} UN${i.caixa_inteira ? '' : ' (parte da caixa)'}</div>
+            <div class="qtd"><button type="button" class="voltar" data-devolver="${i.id}">Devolver</button></div>
+            <div class="meta">${esc(i.descricao)} · lote ${esc(i.lote || '-')}${i.validade ? ' · val. ' + dataBr(i.validade) : ''} · ${i.codigo_ps ? '<span class="mono">' + esc(i.codigo_ps) + '</span>' : '<span class="badge badge-atencao">sem pedido</span>'}</div>
+          </div>`).join('')}</div>` : ''}`;
+      document.getElementById('onda-corpo').querySelectorAll('[data-devolver]').forEach((b) => b.addEventListener('click', async () => {
+        if (!confirm('Devolver este bipe? A caixa deixa de contar pra onda e precisa voltar pra prateleira.')) return;
+        try { await sepPost('/itens/' + b.dataset.devolver + '/devolver', {}); toast('Devolvido. Guarde a caixa na posição ou bipe de novo.'); carregar(); }
+        catch (e) { if (e.message !== 'sem operador') toast(e.message, true); }
+      }));
     }
     async function separar(codigo, qtd) {
       const serial = serialDe(codigo) || String(codigo).trim().toUpperCase();
       try {
         const r = await sepPost('/ondas/' + ctx.ondaId + '/separar', { serial: serial, qtd_un: qtd === undefined ? null : qtd, uuid: uuid() });
-        sepResultado(true, r.codigo_ps ? r.codigo_ps : 'Separada', num(r.qtd_un) + ' UN · ' + r.produto + (r.falta_un > 0 ? ' · faltam ' + num(r.falta_un) : ' · produto completo'));
+        sepResultado(true, r.codigo_ps ? r.codigo_ps : 'Separada', num(r.qtd_un) + ' UN · ' + r.produto + ' · lote ' + (r.lote || '-') + (r.validade ? ' · val. ' + dataBr(r.validade) : '') + (r.falta_un > 0 ? ' · faltam ' + num(r.falta_un) : ' · produto completo'));
         carregar();
       } catch (e) {
         if (e.message === 'sem operador') return;
@@ -1493,7 +1518,7 @@
         if (r.faltando.length && confirm('Ainda falta separar:\n' + r.faltando.map((f) => f.codigo_ps + ': ' + num(f.falta_un) + ' UN').join('\n') + '\n\nFechar assim mesmo? A falta vai aparecer na conferência.')) {
           r = await sepPost('/ondas/' + ctx.ondaId + '/fechar', { mesmo_faltando: true });
         }
-        if (r.onda_concluida) { toast('Separação fechada: ' + r.prontos.length + ' pedido(s) pra conferir'); ir('separar', {}, false); }
+        if (r.onda_concluida) { toast('Separação fechada: ' + r.prontos.length + ' pedido(s) pra conferir' + ((r.sem_nada || []).length ? ' · ' + r.sem_nada.length + ' sem nada separado voltou pra lista' : '')); ir('separar', {}, false); }
         else { toast(r.prontos.length ? r.prontos.length + ' pedido(s) seguiram pra conferência' : 'Nada fechado: ainda falta separar', !r.prontos.length); carregar(); }
       } catch (e) { if (e.message !== 'sem operador') toast(e.message, true); }
     });
@@ -1531,9 +1556,15 @@
     </div>
     <div class="sep-resultado" id="sep-resultado"></div>
     <div class="sep-contador"><b id="conf-n">${ctx.conf.bipes}</b><span>bipe(s) nesta conferência</span></div>
-    <div class="botoes"><button class="botao" id="btn-fechar-conf">Fechar conferência</button></div>`;
+    <div class="botoes"><button class="botao" id="btn-fechar-conf">Fechar conferência</button>
+      <button class="botao neutro" id="btn-abandonar-conf">Bipei errado: recomeçar</button></div>`;
   TELAS_POS.conferencia = (ctx) => {
     document.getElementById('btn-voltar').addEventListener('click', () => ir('conferir', {}, false));
+    document.getElementById('btn-abandonar-conf').addEventListener('click', async () => {
+      if (!confirm('Largar esta conferência? Os bipes dela deixam de valer e o pedido volta pra fila.')) return;
+      try { await sepPost('/conferencias/' + ctx.conf.conferencia_id + '/abandonar', {}); toast('Conferência largada'); ir('conferir', {}, false); }
+      catch (e) { if (e.message !== 'sem operador') toast(e.message, true); }
+    });
     async function bipar(codigo, qtd) {
       const cod = serialDe(codigo) || String(codigo).trim().toUpperCase();
       try {
@@ -1565,7 +1596,6 @@
     return `
     <h1 class="mono">${esc(ctx.fim.codigo_ps)}</h1>
     <div class="sep-resultado ${ok ? 'ok' : 'erro'}"><b>${ok ? 'CONFERIDO' : 'NÃO BATEU'}</b><span>${ok ? 'Pode embalar e fechar os volumes.' : 'O pedido ficou travado. Avise o escritório: é ele quem decide se volta pra separação ou segue parcial.'}</span></div>
-    ${ok && ctx.fim.sobras.length ? '<div class="cartao atencao"><div class="sub">Veio produto a mais do que o pedido pede. Avise o escritório.</div></div>' : ''}
     <div class="botoes">
       ${ok ? '<button class="botao" id="btn-ir-volumes">Fechar volumes deste pedido</button>' : ''}
       <button class="botao neutro" id="btn-outro">Conferir outro pedido</button>
