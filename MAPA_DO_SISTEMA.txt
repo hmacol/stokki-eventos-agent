@@ -495,7 +495,7 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  30 s após cada rodada       ponte-vuupt                     nucleo/ponte_vuupt.py (repete na Vuupt o que o
                                                              motorista fez no app próprio; sem fila = sai na hora)
  2 min após cada rodada      ofertar-rotas-sem-aceite        nucleo/ofertas_rota_enviada.py (rota recusada ou sem aceite
-                                                             até 05h30 vira oferta no app + aviso no WhatsApp; desligada = sai na hora)
+                                                             até 05h30 vira oferta no app + aviso no grupo Rotas FRESHLOG; desligada = sai na hora)
  a cada 15 min               sincronizar-confirmacoes        roteirizacao/sincronizar_respostas_confirmacao.py
  a cada 15 min               sincronizar-lalamove            nucleo/sincronizar_lalamove.py
  a cada minuto               lancar-lalamove                 nucleo/lancar_lalamove_programados.py
@@ -1122,11 +1122,15 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
                            (operacao.rota_liberada, vale pra qualquer provedor).
  ofertas_rota_enviada.py   Rota enviada sem aceite vira oferta no app (17/11). Gatilhos: motorista
                            recusou no app, ou passou das 05h30 sem aceite (nem aqui nem na Vuupt).
-                           Publica em nucleo_ofertas_rota pros elegíveis (filtro do marketplace,
-                           sem ondas, só quem tem login no app), que veem na aba Ofertas (id =
-                           1.000.000.000 + rota_id, mesmos endpoints do marketplace) e avisa no
-                           WhatsApp (entregas, região, saída, valor aprox. pela tabela de tarifas,
-                           link /motorista/abrir/ofertas). Escolha NÃO troca o motorista: avisa
+                           Publica em nucleo_ofertas_rota pra todo motorista com login no app
+                           (menos o original; sem filtro de elegíveis, a equipe seleciona ao
+                           confirmar -- 18/11), que vê na aba Ofertas (id = 1.000.000.000 +
+                           rota_id, mesmos endpoints do marketplace). Única trava: veículo menor
+                           que o tipo_veiculo da rota (Fiorino em rota VAN_HR) não escolhe e o
+                           app mostra o motivo. Aviso SEMPRE no grupo "Rotas FRESHLOG" (achado
+                           pelo nome no OpenWA; grupo_id no config troca) com entregas, região,
+                           saída, valor aprox. pela tabela de tarifas e link
+                           /motorista/abrir/ofertas. Escolha NÃO troca o motorista: avisa
                            a equipe, que troca na Vuupt; o sync vira APLICADA. Quem recusou deixa
                            de ver a rota; no prazo o original ainda aceita se ninguém pegou.
                            Liga em api_motorista.rota_sem_aceite (ativo, horario_limite, todos,
