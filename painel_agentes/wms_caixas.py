@@ -384,6 +384,18 @@ def _recusar_se_reservada(conn, caixa: dict) -> None:
         raise ErroWMS(f"Caixa reservada para {pedidos}: separe ou troque a reserva antes de mover.")
 
 
+def _prometido(conn, serial: str) -> float:
+    """Unidades desta caixa ja separadas pra algum pedido e ainda nao baixadas (wms_separacao.py).
+    Banco sem a tabela da separacao: zero."""
+    try:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(qtd_un), 0) FROM wms_separacao_itens WHERE serial = ? "
+            "AND etapa IN ('SEPARADA', 'DISTRIBUIDA', 'CONFERIDA')", (serial,)).fetchone()
+    except sqlite3.OperationalError:
+        return 0.0
+    return round(float(row[0] or 0), 3)
+
+
 def mover_caixa(conn, serial: str, destino: str, *, uuid: str, operador: dict | None = None) -> dict:
     """TRANSFERENCIA da caixa (leva o saldo junto). uuid do aparelho obrigatorio."""
     uuid = str(uuid or "").strip()
@@ -410,6 +422,10 @@ def mover_caixa(conn, serial: str, destino: str, *, uuid: str, operador: dict | 
             return {"caixa": caixa, "duplicado": False, "movimento_uuid": None}
     if caixa["situacao"] not in ("EM_ESTOQUE", "ABERTA"):
         raise ErroWMS(f"Caixa {serial} esta {caixa['situacao']} e nao pode ser movida.")
+    # Parte da caixa ja foi separada pra um pedido (17/11): a baixa dele vai tirar o saldo
+    # DESTA posicao; mover agora deixaria saldo e caixa em lugares diferentes.
+    if _prometido(conn, serial) > 0.0004:
+        raise ErroWMS(f"Caixa {serial} tem unidades separadas para pedido: so pode ser movida depois da baixa.")
     ja = conn.execute("SELECT * FROM wms_movimentos WHERE uuid = ?", (uuid,)).fetchone()
     if ja:
         # Movimento ja gravado (queda antes de atualizar a caixa). So vale se for desta caixa.
@@ -515,8 +531,22 @@ def consumir_caixas(conn, *, posicao: str, produto_id: int, lote: str, validade:
     for c in caixas:
         if falta <= 0.0004:
             break
-        q = round(float(c["qtd_un"]), 3)
-        if q <= falta + 0.0004:
+        # o que ja foi separado desta caixa pra OUTRO pedido nao e desta baixa (17/11)
+        prometido = _prometido(conn, c["serial"])
+        q = round(float(c["qtd_un"]) - prometido, 3)
+        if q <= 0.0004:
+            continue
+        if q <= falta + 0.0004 and prometido > 0.0004:
+            cur = conn.execute("UPDATE wms_caixas SET situacao = 'ABERTA', qtd_un = ?, atualizado_em = ? "
+                               "WHERE serial = ? AND situacao = ? AND qtd_un = ?",
+                               (prometido, ts, c["serial"], c["situacao"], c["qtd_un"]))
+            if cur.rowcount != 1:
+                _log_corrida(c["serial"], movimento_uuid)
+                continue
+            para, obs = "ABERTA", f"Baixa da expedicao: {q:g} UN (ficam {prometido:g} UN separadas pra pedido)"
+            aberta = c["serial"]
+            falta = round(falta - q, 3)
+        elif q <= falta + 0.0004:
             cur = conn.execute("UPDATE wms_caixas SET situacao = 'EXPEDIDA', atualizado_em = ? "
                                "WHERE serial = ? AND situacao = ? AND qtd_un = ?",
                                (ts, c["serial"], c["situacao"], c["qtd_un"]))
@@ -529,7 +559,7 @@ def consumir_caixas(conn, *, posicao: str, produto_id: int, lote: str, validade:
         else:
             cur = conn.execute("UPDATE wms_caixas SET situacao = 'ABERTA', qtd_un = ?, atualizado_em = ? "
                                "WHERE serial = ? AND situacao = ? AND qtd_un = ?",
-                               (round(q - falta, 3), ts, c["serial"], c["situacao"], c["qtd_un"]))
+                               (round(q + prometido - falta, 3), ts, c["serial"], c["situacao"], c["qtd_un"]))
             if cur.rowcount != 1:
                 _log_corrida(c["serial"], movimento_uuid)
                 continue

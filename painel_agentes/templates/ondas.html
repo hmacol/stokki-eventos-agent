@@ -99,6 +99,7 @@
   const URL_ANDAMENTO = "{{ url_for('api_ondas_andamento') }}";
   const URL_FALTAS = "{{ url_for('api_ondas_faltas') }}";
   const URL_DECIDIR = "{{ url_for('api_ondas_faltas_decidir', pedido_id=0) }}";
+  const URL_LIBERAR = "{{ url_for('api_ondas_conferencia_liberar', pedido_id=0) }}";
   const sel = document.getElementById("sel-embarcador");
   const aviso = document.getElementById("aviso");
   const corpoPedidos = document.querySelector("#tab-pedidos tbody");
@@ -170,7 +171,9 @@
         const e = ETAPAS[p.execucao] || [p.execucao, ""];
         return '<tr><td class="mono">' + esc(p.codigo_ps) + '</td><td><span class="selo ' + e[1] + '">' + esc(e[0]) + "</span></td><td>" + (p.onda_id || "") +
           "</td><td>" + (p.data_entrega ? dataBr(p.data_entrega) : "") + '</td><td class="quebra">' + esc(p.destinatario) + "</td><td>" + esc(p.separado_por) +
-          "</td><td>" + esc(p.conferente) + (p.conferencia === "FALTA" ? ' <span class="selo erro">falta</span>' : "") + '</td><td class="num">' + (p.volumes || "") +
+          "</td><td>" + esc(p.conferente) + (p.conferencia === "FALTA" ? ' <span class="selo erro">não bateu</span>' : "") +
+          (p.execucao === "CONFERINDO" ? ' <button type="button" class="btn" data-liberar="' + p.pedido_id + '" title="O conferente largou a conferência aberta? Libera o pedido para outra pessoa conferir.">Liberar</button>' : "") +
+          '</td><td class="num">' + (p.volumes || "") +
           "</td><td>" + esc(p.situacao_stokki) + "</td><td>" + esc((p.atualizado_em || "").slice(5, 16)) + "</td></tr>";
       }).join("") || '<tr><td colspan="10" class="vazio">Nenhum pedido em separação ou conferência.</td></tr>';
     } catch (e) { corpo.innerHTML = '<tr><td colspan="10" class="vazio">' + esc(e.message) + "</td></tr>"; }
@@ -186,6 +189,7 @@
           '</span><span class="vazio" style="padding:0">conferido por ' + esc(f.conferente) + " · " + esc((f.fechada_em || "").slice(5, 16)) + "</span></div><ul>" +
           f.faltas.map(function(x) { return "<li>" + esc(x.sku) + " " + esc(x.descricao) + ": pedido " + num(x.esperado_un) + ", conferido <b>" + num(x.conferido_un) + "</b></li>"; }).join("") +
           f.sobras.map(function(x) { return "<li>" + esc(x.sku) + " " + esc(x.descricao) + ": veio a mais (pedido " + num(x.esperado_un) + ", conferido " + num(x.conferido_un) + ")</li>"; }).join("") +
+          (f.sem_cadastro || []).map(function(x) { return "<li>Linha " + esc(x.linha) + " (" + esc(x.sku) + " " + esc(x.descricao) + ", " + num(x.qtd) + "): o sistema não reconhece o produto, confira à mão</li>"; }).join("") +
           '</ul><div class="rodape-bloco" style="margin-top:0"><input type="text" class="motivo" placeholder="Motivo da decisão (obrigatório)" aria-label="Motivo da decisão do ' + esc(f.codigo_ps) + '">' +
           '<button type="button" class="btn" data-decisao="VOLTAR">Voltar para separação</button><button type="button" class="btn" data-decisao="PARCIAL">Liberar parcial</button></div></div>';
       }).join("");
@@ -227,6 +231,12 @@
       dizer(r.codigo_ps + (r.decisao === "VOLTAR" ? ": voltou para separação (onda " + r.onda_id + ")." : ": liberado parcial, segue para volumes."), "ok");
       carregarFaltas(); carregarAndamento();
     } catch (e) { dizer(e.message, "erro"); b.disabled = false; }
+  });
+  document.querySelector("#tab-andamento tbody").addEventListener("click", async function(ev) {
+    const b = ev.target.closest("[data-liberar]"); if (!b) return;
+    b.disabled = true;
+    try { const r = await chamar(URL_LIBERAR.replace("/0/", "/" + b.dataset.liberar + "/"), {}); dizer(r.codigo_ps + ": conferência liberada, o pedido voltou para a fila de conferência.", "ok"); carregarAndamento(); }
+    catch (e) { dizer(e.message, "erro"); b.disabled = false; }
   });
   document.getElementById("btn-atualizar").addEventListener("click", function() { carregarPedidos(); carregarAndamento(); carregarFaltas(); });
   carregarPedidos(); carregarAndamento(); carregarFaltas();
