@@ -122,6 +122,19 @@ class TestCienciaDedicado(unittest.TestCase):
         cd.registrar_envio(self.conn, cid, "email", "enviado", rodada=1, agora=hora(18))
         cd.registrar_envio(self.conn, cid, "whatsapp", "piloto", rodada=1, agora=hora(18))
         self.assertEqual(cd.rodadas_enviadas(self.conn, cid), 2)
+        self.assertEqual(cd.rodadas_piloto(self.conn, cid), 1)
+
+    def test_rodada_so_de_desligado_ou_falha_nao_conta_e_teto_conta(self):
+        cid = cd.abrir(self.conn, _item(), None, AGORA)
+        hora = lambda h: datetime(2026, 11, 17, h, 0, 0)
+        for canal in ("email", "whatsapp", "chat"):
+            cd.registrar_envio(self.conn, cid, canal, "nao_enviado", motivo="desligado", agora=hora(8))
+        cd.registrar_envio(self.conn, cid, "email", "nao_enviado", motivo="falha", agora=hora(12))
+        cd.registrar_envio(self.conn, cid, "chat", "nao_enviado", motivo="desligado", agora=hora(12))
+        self.assertEqual((cd.rodadas_enviadas(self.conn, cid), cd.rodadas_piloto(self.conn, cid)), (0, 0))
+        cd.registrar_envio(self.conn, cid, "email", "nao_enviado", motivo="falha", agora=hora(16))
+        cd.registrar_envio(self.conn, cid, "whatsapp", "nao_enviado", motivo="teto", agora=hora(16))
+        self.assertEqual(cd.rodadas_enviadas(self.conn, cid), 1)
 
     def test_cfg_padrao_desligado_4h_janela_08_20(self):
         for vazio in (None, {}, {"ciencia_dedicado": None}):

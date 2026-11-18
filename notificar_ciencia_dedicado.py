@@ -236,7 +236,12 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
     """Uma rodada para o embarcador: uma mensagem por canal com todos os `pendentes`
     (linhas de ciencias_dedicado), um envio gravado por pedido e por canal, e o
     proximo lembrete agendado. Devolve quantas mensagens sairam por canal (enviado
-    ou piloto) e quantos canais ficaram em nao_enviado."""
+    ou piloto) e quantos canais ficaram em nao_enviado.
+
+    O proximo lembrete e agendado ANTES de enviar: se o banco falhar (ex.: dados.db
+    travado), nada sai, em vez de sair e o pedido continuar vencido (o cliente
+    receberia de novo a cada rodada do timer). Falha ao gravar o envio de um pedido
+    e logada e nao impede os outros."""
     contadores = {"email": 0, "whatsapp": 0, "chat": 0, "nao_enviado": 0}
     if not pendentes:
         return contadores
@@ -247,6 +252,8 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
     rodadas = {p["id"]: cd.rodadas_enviadas(conn, p["id"]) for p in pendentes}
     rodada_msg = min(rodadas.values())
     lembrete = rodada_msg > 0
+    # copia de piloto vira lembrete a partir da 2a rodada (de piloto ou real), sem mexer na contagem real
+    lembrete_piloto = min(rodadas[i] + cd.rodadas_piloto(conn, i) for i in rodadas) > 0
     link = link_ciencia.url(sender_id, config["portal_cliente"]["secret_key"], ch.url_base(config))
 
     d_email = cn.decidir(TIPO, cnpj, fallback_acao="PILOTO", fallback_piloto=c["forcar_destino"] or EMAIL_PILOTO,
@@ -261,9 +268,10 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
             return "nao_enviado", "sem_email", ""
         piloto = d_email.acao == "PILOTO"
         destinos = [d_email.destino_piloto] if piloto else list(emb["emails"])
-        corpo = envelope_html(_conteudo_email(nome, pendentes, link, lembrete, emb["emails"] if piloto else None),
+        lem = lembrete_piloto if piloto else lembrete
+        corpo = envelope_html(_conteudo_email(nome, pendentes, link, lem, emb["emails"] if piloto else None),
                               rodape="Mensagem automática — Agente Stokki Eventos.")
-        if not canais.email(destinos, _assunto(len(pendentes), lembrete), corpo):
+        if not canais.email(destinos, _assunto(len(pendentes), lem), corpo):
             return "nao_enviado", "falha", ", ".join(destinos)
         return ("piloto" if piloto else "enviado"), "", ", ".join(destinos)
 
@@ -274,7 +282,8 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
         if not telefone:
             return "nao_enviado", "sem_whatsapp", ""
         piloto = d_wpp.acao == "PILOTO"
-        texto = notificar_whatsapp.texto_ciencia_dedicado(nome, pendentes, link, lembrete)
+        texto = notificar_whatsapp.texto_ciencia_dedicado(nome, pendentes, link,
+                                                          lembrete_piloto if piloto else lembrete)
         assinatura = f"{TIPO}:{sender_id}:{rodada_msg}:{agora:%Y%m%d%H%M}"
         situacao = canais.whatsapp(assinatura, telefone, texto, d_wpp.destino_piloto if piloto else "")
         if situacao == "enviado":
@@ -296,6 +305,14 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
         novo = canais.chat_abrir(cnpj, ASSUNTO_CHAT, texto, pendentes[0]["codigo"])
         return ("enviado", "", str(novo)) if novo else ("nao_enviado", "falha", "")
 
+    try:
+        for p in pendentes:
+            cd.agendar_proximo(conn, p["id"], agora, c["intervalo_horas"])
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"ciencia do dedicado: nao agendou o proximo lembrete do embarcador {sender_id} ({e}); "
+                     f"nada enviado nesta rodada")
+        return contadores
+
     resultados = {}
     for canal, fn in (("email", email), ("whatsapp", whatsapp), ("chat", chat)):
         try:
@@ -315,10 +332,13 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
     for canal, (resultado, _, _) in resultados.items():
         contadores[canal if resultado != "nao_enviado" else "nao_enviado"] += 1
     for p in pendentes:
-        for canal, (resultado, motivo, destino) in resultados.items():
-            cd.registrar_envio(conn, p["id"], canal, resultado, destino=destino, motivo=motivo,
-                               rodada=rodadas[p["id"]], agora=agora)
-        cd.agendar_proximo(conn, p["id"], agora, c["intervalo_horas"])
+        try:
+            for canal, (resultado, motivo, destino) in resultados.items():
+                cd.registrar_envio(conn, p["id"], canal, resultado, destino=destino, motivo=motivo,
+                                   rodada=rodadas[p["id"]], agora=agora)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"ciencia do dedicado: rodada de {p['codigo']} sem registro de envio ({e}); "
+                         f"o que saiu: {resultados}")
     logger.info(f"ciencia do dedicado: embarcador {sender_id}, {len(pendentes)} pedido(s), rodada {rodada_msg}: "
                 + ", ".join(f"{canal}={r[0]}{':' + r[1] if r[1] else ''}" for canal, r in resultados.items()))
     return contadores

@@ -204,22 +204,39 @@ def envios(conn, ciencia_id) -> list[dict]:
         "SELECT * FROM ciencias_dedicado_envios WHERE ciencia_id = ? ORDER BY id", (ciencia_id,)))
 
 
+# uma linha por rodada (enviado_em) do pedido; `cadastro` = nao_enviado que nao e desligado nem falha
+_RODADAS_SQL = """
+    SELECT SUM(resultado = 'enviado') AS reais, SUM(resultado = 'piloto') AS pilotos,
+           SUM(resultado = 'nao_enviado' AND COALESCE(motivo, '') NOT IN ('desligado', 'falha')) AS cadastro
+    FROM ciencias_dedicado_envios WHERE ciencia_id = ? GROUP BY enviado_em
+"""
+
+
 def rodadas_enviadas(conn, ciencia_id) -> int:
     """Numero da proxima rodada: quantas rodadas ja aconteceram fora do piloto.
 
     Uma rodada e uma chamada de envio do embarcador; todos os envios dela gravam
     o mesmo enviado_em, que e o que identifica a rodada (o numero gravado em
     `rodada` se repete enquanto o piloto nao conta). Conta a rodada com algum
-    envio real ('enviado') e tambem a que so teve 'nao_enviado' (embarcador sem
-    canal: senao ficaria na rodada 0 pra sempre e alertaria a equipe a cada
-    rodada). Rodada de piloto (alguma copia 'piloto' e nenhum 'enviado', mesmo
-    com um canal 'nao_enviado') nao conta: a virada de piloto pra envio real
-    recomeca na rodada 0."""
-    return conn.execute("""
-        SELECT COUNT(*) FROM (
-            SELECT SUM(resultado = 'enviado') AS reais, SUM(resultado = 'piloto') AS pilotos
-            FROM ciencias_dedicado_envios WHERE ciencia_id = ? GROUP BY enviado_em)
-        WHERE reais > 0 OR pilotos = 0
+    envio real ('enviado') e tambem a que so teve 'nao_enviado' por falta de
+    cadastro ou teto (embarcador sem canal: senao ficaria na rodada 0 pra sempre
+    e alertaria a equipe a cada rodada). Nao contam: rodada de piloto (alguma
+    copia 'piloto' e nenhum 'enviado', mesmo com um canal 'nao_enviado'), pra a
+    virada de piloto pra envio real recomecar na rodada 0; e rodada so de
+    'nao_enviado' por 'desligado' ou 'falha', pra a primeira mensagem que o
+    cliente de fato recebe nao sair como lembrete."""
+    return conn.execute(f"""
+        SELECT COUNT(*) FROM ({_RODADAS_SQL})
+        WHERE reais > 0 OR (pilotos = 0 AND cadastro > 0)
+    """, (ciencia_id,)).fetchone()[0]
+
+
+def rodadas_piloto(conn, ciencia_id) -> int:
+    """Quantas rodadas de piloto ja aconteceram (alguma copia 'piloto', nenhum
+    'enviado'). So escolhe o texto das copias de piloto (lembrete ou nao): o
+    numero da rodada continua sendo rodadas_enviadas."""
+    return conn.execute(f"""
+        SELECT COUNT(*) FROM ({_RODADAS_SQL}) WHERE reais = 0 AND pilotos > 0
     """, (ciencia_id,)).fetchone()[0]
 
 

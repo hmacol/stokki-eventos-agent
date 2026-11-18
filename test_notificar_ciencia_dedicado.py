@@ -16,6 +16,7 @@ import controle_notificacoes as cn
 import notificar_ciencia_dedicado as ncd
 import notificar_whatsapp as nw
 import preferencias_notificacao as pn
+from portal_cliente import auth_cliente
 from portal_cliente import chamados as ch
 from portal_cliente import link_ciencia
 
@@ -324,6 +325,69 @@ class TestRodada(_Base):
         self.assertEqual(cd.pendentes_vencidos(self.conn, datetime(2026, 11, 17, 14, 14)), [])
 
 
+    def test_agendar_proximo_falhando_nada_sai(self):
+        self._tela("LIGADO")
+        self._numero()
+        cid = self._abrir()
+        f = CanaisFalsos()
+        travado = mock.patch.object(cd, "agendar_proximo", side_effect=sqlite3.OperationalError("database is locked"))
+        with travado, self.assertLogs("notificar_ciencia_dedicado", "ERROR"):
+            res = self._rodada(f)
+        self.assertEqual(res, {"email": 0, "whatsapp": 0, "chat": 0, "nao_enviado": 0})
+        self.assertEqual((f.emails, f.whats, f.abertos, f.mensagens), ([], [], [], []))
+        self.assertEqual(cd.envios(self.conn, cid), [])
+
+    def test_falha_ao_gravar_um_pedido_grava_os_outros_sem_levantar(self):
+        self._tela("LIGADO")
+        a, b = self._abrir("#PS-1", 10), self._abrir("#PS-2", 11)
+        original = cd.registrar_envio
+
+        def registrar(conn, ciencia_id, *args, **kw):
+            if ciencia_id == a:
+                raise sqlite3.OperationalError("database is locked")
+            return original(conn, ciencia_id, *args, **kw)
+
+        f = CanaisFalsos()
+        with mock.patch.object(cd, "registrar_envio", registrar), \
+                self.assertLogs("notificar_ciencia_dedicado", "ERROR") as logs:
+            self._rodada(f)
+        self.assertIn("PS-1", " ".join(logs.output))
+        self.assertEqual(cd.envios(self.conn, a), [])
+        self.assertEqual(sorted(e["canal"] for e in cd.envios(self.conn, b)), ["chat", "email", "whatsapp"])
+        for cid in (a, b):
+            self.assertEqual(cd.buscar(self.conn, cid)["proximo_lembrete_em"], "2026-11-17 14:00:00")
+
+    def test_rodada_desligada_nao_conta_e_o_primeiro_envio_real_e_a_rodada_0(self):
+        self._tela("DESLIGADO")
+        self.emb["emails"] = []
+        cid = self._abrir()
+        f = CanaisFalsos(conta=False)
+        self._rodada(f, AGORA)
+        self.assertEqual(cd.rodadas_enviadas(self.conn, cid), 0)
+        self._tela("LIGADO")
+        self._rodada(f, AGORA + timedelta(hours=4))
+        self.assertEqual(len(f.alertas), 1)   # o alerta da rodada 0 ainda sai
+        self.assertIn(("email", "nao_enviado", "sem_canal", 0), self._envios(cid))
+        self.emb["emails"] = ["a@emb.com"]
+        self._rodada(f, AGORA + timedelta(hours=8))
+        self.assertTrue(f.emails[0][1].startswith("Lembrete: "))   # rodada 1: a sem canal contou
+
+    def test_copia_de_piloto_vira_lembrete_a_partir_da_2a_rodada(self):
+        self._tela("PILOTO")
+        self._numero()
+        cid = self._abrir()
+        f = CanaisFalsos()
+        self._rodada(f, AGORA)
+        self.assertFalse(f.emails[0][1].startswith("Lembrete"))
+        self.assertTrue(f.whats[0][2].startswith("Fresh Log: "))
+        self._rodada(f, AGORA + timedelta(hours=4))
+        self.assertTrue(f.emails[1][1].startswith("Lembrete: "))
+        self.assertTrue(f.whats[1][2].startswith("Lembrete Fresh Log: "))
+        self.assertIn("LEMBRETE", f.emails[1][2])
+        self.assertEqual((cd.rodadas_enviadas(self.conn, cid), cd.rodadas_piloto(self.conn, cid)), (0, 2))
+        self.assertTrue(all(rod == 0 for _, _, _, rod in self._envios(cid)))
+
+
 class TestConversaReal(_Base):
     def test_conversa_nasce_aguardando_o_cliente(self):
         with mock.patch.object(ch, "DB_PATH", self.db):
@@ -348,6 +412,31 @@ class TestConversaReal(_Base):
             self.assertTrue(canais.chat_mensagem(chamado_id, "lembrete"))
             ch.atualizar_chamado(conn, chamado_id, status=ch.STATUS_RESOLVIDO)
             self.assertFalse(canais.chat_mensagem(chamado_id, "outro lembrete"))
+        finally:
+            conn.close()
+
+
+    def test_membro_de_grupo_sem_conta_propria_nao_tem_conta_no_chat(self):
+        """O chat do portal filtra pelo CNPJ do login (g.cliente["cnpj"], chamados_web.py): a
+        conversa aberta no CNPJ do membro nao aparece pra quem entra pelo login do grupo."""
+        login, membro = "11111111000111", CNPJ
+        self.conn.execute("CREATE TABLE interno (cnpj_embarcador TEXT, sender_id INTEGER, nome_remetente TEXT, "
+                          "apelido TEXT, email TEXT)")
+        self.conn.executemany("INSERT INTO interno VALUES (?, ?, ?, ?, '')",
+                              [(login, 7, "Grupo Ltda", "Grupo"), (membro, SENDER, "Emb Teste Ltda", "Emb Teste")])
+        self.conn.commit()
+        with mock.patch.object(ch, "DB_PATH", self.db), mock.patch.object(auth_cliente, "DB_PATH", self.db):
+            ch.conectar().close()
+            conn = auth_cliente.conectar()
+        try:
+            auth_cliente.definir_pin(conn, login, "482915")
+            auth_cliente.definir_grupo(conn, login, [membro])
+            canais = ncd.canais_reais(CONFIG, db_path=self.db)
+            self.assertTrue(canais.tem_conta_portal(login))
+            self.assertFalse(canais.tem_conta_portal(membro))
+            chamado_id = canais.chat_abrir(membro, "assunto", "texto", "PS-1")
+            self.assertNotIn(chamado_id, [c["id"] for c in ch.listar_chamados_cliente(conn, login)])
+            self.assertIsNone(ch.chamado_ativo_cliente(conn, login))
         finally:
             conn.close()
 
