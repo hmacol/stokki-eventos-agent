@@ -68,7 +68,7 @@ class _Base(unittest.TestCase):
         self.addCleanup(self.pd.close)
         self.conn.executescript("""
             CREATE TABLE nucleo_pedidos (codigo TEXT PRIMARY KEY, vuupt_service_id INTEGER, status TEXT,
-                                         agendamento_inicio TEXT);
+                                         agendamento_inicio TEXT, criado_em_provedor TEXT);
             CREATE TABLE nucleo_rotas (id INTEGER PRIMARY KEY, status TEXT);
             CREATE TABLE nucleo_paradas (rota_id INTEGER, service_id INTEGER, codigo TEXT, situacao TEXT);
         """)
@@ -93,13 +93,16 @@ class _Base(unittest.TestCase):
             self._nucleo(codigo.lstrip("#"), agendamento=f"{data.isoformat()} 08:00:00", service_id=sid)
         return cid
 
-    def _nucleo(self, codigo, status="ABERTO", agendamento="2026-11-19 08:00:00", service_id=None):
-        """Upsert: chamada sem service_id mantem o que ja estava gravado."""
+    def _nucleo(self, codigo, status="ABERTO", agendamento="2026-11-19 08:00:00", service_id=None,
+                criado_provedor=None):
+        """Upsert: chamada sem service_id/criado_provedor mantem o que ja estava gravado."""
         self.conn.execute("""
-            INSERT INTO nucleo_pedidos (codigo, vuupt_service_id, status, agendamento_inicio) VALUES (?, ?, ?, ?)
+            INSERT INTO nucleo_pedidos (codigo, vuupt_service_id, status, agendamento_inicio, criado_em_provedor)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(codigo) DO UPDATE SET status = excluded.status, agendamento_inicio = excluded.agendamento_inicio,
-                vuupt_service_id = COALESCE(excluded.vuupt_service_id, vuupt_service_id)
-        """, (codigo, service_id, status, agendamento))
+                vuupt_service_id = COALESCE(excluded.vuupt_service_id, vuupt_service_id),
+                criado_em_provedor = COALESCE(excluded.criado_em_provedor, criado_em_provedor)
+        """, (codigo, service_id, status, agendamento, criado_provedor))
         self.conn.commit()
 
     def _rota(self, codigo, status_rota, situacao="PENDENTE", service_id=None):
@@ -169,9 +172,34 @@ class TestEstadoDoPedido(_Base):
         self.assertIsNone(ncd.estado_do_pedido(self.conn, "PS-1", service_id=21))
         self.assertTrue(ncd.estado_do_pedido(self.conn, "PS-1", service_id=10)["finalizado"])
         self.assertTrue(ncd.estado_do_pedido(self.conn, "PS-1")["finalizado"])
+        # servico 10 criado antes da ciencia aberta (pelo 21) as 09:00: segue sem valer
+        self._nucleo("PS-1", "ENTREGUE", service_id=10, criado_provedor="2026-11-17 08:00:00")
+        self.assertIsNone(ncd.estado_do_pedido(self.conn, "PS-1", service_id=21, aberta_em="2026-11-17 09:00:00"))
+
+    def test_servico_recriado_depois_da_ciencia_vale_pelo_codigo(self):
+        # ciencia aberta pelo servico 10; a Vuupt recriou o pedido como 21 e o espelho trocou a linha do codigo
+        self._nucleo("PS-1", "ABERTO", service_id=21, criado_provedor="2026-11-17 09:30:00")
+        aberta = "2026-11-17 09:00:00"
+        self.assertEqual(ncd.estado_do_pedido(self.conn, "PS-1", service_id=10, aberta_em=aberta),
+                         {"cancelado": False, "finalizado": False, "rota_iniciada": False, "data": ENTREGA})
+        self._rota("PS-1", "EM_ROTA", service_id=10, situacao="CANCELADA")   # parada do servico velho
+        self.assertFalse(ncd.estado_do_pedido(self.conn, "PS-1", service_id=10, aberta_em=aberta)["rota_iniciada"])
+        self._rota("PS-1", "EM_ROTA", service_id=21)
+        self.assertTrue(ncd.estado_do_pedido(self.conn, "PS-1", service_id=10, aberta_em=aberta)["rota_iniciada"])
+        self._nucleo("PS-1", "ENTREGUE")
+        self.assertTrue(ncd.estado_do_pedido(self.conn, "PS-1", service_id=10, aberta_em=aberta)["finalizado"])
 
 
 class TestRotina(_Base):
+    def test_servico_recriado_e_entregue_encerra_a_ciencia(self):
+        cid = self._abrir("#PS-1", 10, agora=ANTES)
+        self._nucleo("PS-1", "ENTREGUE", service_id=21, criado_provedor="2026-11-17 09:20:00")
+        f = CanaisFalsos()
+        res = self._executar(AGORA, f)
+        self.assertEqual(res["encerrados"], 1)
+        self.assertEqual(self._ciencia(cid)["situacao"], cd.ENCERRADO)
+        self.assertEqual(f.emails, [])
+
     def test_encerra_pelo_nucleo_e_pelo_dedicado_removido_sem_enviar(self):
         cancelado = self._abrir("#PS-1", 10, agora=ANTES)
         removido = self._abrir("#PS-2", 11, nucleo=False, agora=ANTES)

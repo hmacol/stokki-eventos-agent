@@ -342,6 +342,19 @@ class TestRodada(_Base):
         self.assertEqual((f.emails, f.whats, f.abertos, f.mensagens), ([], [], [], []))
         self.assertEqual(cd.envios(self.conn, cid), [])
 
+    def test_falha_antes_de_enviar_nao_adia_o_lembrete(self):
+        # tela/banco falhando ao montar a mensagem: o pedido nao pode ficar 4h adiado sem envio nem registro
+        self._tela("LIGADO")
+        cid = self._abrir()
+        for alvo, nome in ((ncd, "decisao_email"), (cd, "rodadas_enviadas")):
+            with self.subTest(nome), mock.patch.object(alvo, nome, side_effect=sqlite3.OperationalError("locked")):
+                f = CanaisFalsos()
+                with self.assertRaises(sqlite3.OperationalError):
+                    self._rodada(f)
+                self.assertEqual((f.emails, f.whats, f.abertos), ([], [], []))
+                self.assertEqual([p["id"] for p in cd.pendentes_vencidos(self.conn, AGORA)], [cid])
+                self.assertEqual(cd.envios(self.conn, cid), [])
+
     def test_lembrete_tomado_por_outra_rodada_nao_sai_de_novo(self):
         self._tela("LIGADO")
         self._numero()

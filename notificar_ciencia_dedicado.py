@@ -296,6 +296,17 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
     if not pendentes:
         return contadores
     c = cd.cfg(config)
+    # tudo que pode levantar vem antes de reivindicar: falha aqui sobe sem adiar ninguem
+    # (o timer tenta de novo em 15 min), em vez de adiar 4h sem envio nem registro
+    emb = emb or {}
+    cnpj = emb.get("cnpj") or pendentes[0].get("cnpj") or None
+    nome = emb.get("nome") or ""
+    rodadas = {p["id"]: cd.rodadas_enviadas(conn, p["id"]) for p in pendentes}
+    pilotos = {p["id"]: cd.rodadas_piloto(conn, p["id"]) for p in pendentes}
+    link = link_ciencia.url(sender_id, config["portal_cliente"]["secret_key"], ch.url_base(config))
+    d_email = decisao_email(cnpj, config, db_path=db_path)
+    d_wpp = cn.decidir(TIPO, cnpj, fallback_acao="PILOTO", fallback_piloto=_piloto_whatsapp(db_path),
+                       canal="whatsapp", db_path=db_path)
     try:
         pendentes = [p for p in pendentes if cd.reivindicar_lembrete(conn, p["id"], agora, c["intervalo_horas"])]
     except Exception as e:  # noqa: BLE001
@@ -305,19 +316,11 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
     if not pendentes:
         logger.info(f"ciencia do dedicado: lembretes do embarcador {sender_id} ja tomados por outra rodada")
         return contadores
-    emb = emb or {}
-    cnpj = emb.get("cnpj") or pendentes[0].get("cnpj") or None
-    nome = emb.get("nome") or ""
-    rodadas = {p["id"]: cd.rodadas_enviadas(conn, p["id"]) for p in pendentes}
+    rodadas = {p["id"]: rodadas[p["id"]] for p in pendentes}
     rodada_msg = min(rodadas.values())
     lembrete = rodada_msg > 0
     # copia de piloto vira lembrete a partir da 2a rodada (de piloto ou real), sem mexer na contagem real
-    lembrete_piloto = min(rodadas[i] + cd.rodadas_piloto(conn, i) for i in rodadas) > 0
-    link = link_ciencia.url(sender_id, config["portal_cliente"]["secret_key"], ch.url_base(config))
-
-    d_email = decisao_email(cnpj, config, db_path=db_path)
-    d_wpp = cn.decidir(TIPO, cnpj, fallback_acao="PILOTO", fallback_piloto=_piloto_whatsapp(db_path),
-                       canal="whatsapp", db_path=db_path)
+    lembrete_piloto = min(rodadas[i] + pilotos[i] for i in rodadas) > 0
 
     def email():
         if _bloqueado(d_email):
@@ -406,7 +409,7 @@ def _dia(valor) -> date | None:
         return None
 
 
-def estado_do_pedido(conn_nucleo, codigo, service_id=None) -> dict | None:
+def estado_do_pedido(conn_nucleo, codigo, service_id=None, aberta_em: str | None = None) -> dict | None:
     """Situacao do pedido no espelho do nucleo (tabelas nucleo_*, no mesmo dados.db).
     None = o nucleo nao conhece o pedido. agendamento_inicio ja esta em hora local
     (o sincronismo converte o UTC da Vuupt com vuupt_para_local): a data sao os 10
@@ -416,10 +419,13 @@ def estado_do_pedido(conn_nucleo, codigo, service_id=None) -> dict | None:
     Com service_id procura primeiro pelo servico (nucleo_pedidos.vuupt_service_id e
     nucleo_paradas.service_id): reentrega com o mesmo codigo nao herda a parada da
     rota antiga, e servico com codigos combinados ('PS-1, PS-2') e achado. Sem
-    service_id, ou se o nucleo nao tem o servico, vale o codigo; mas se a linha do
-    codigo e de OUTRO servico (servico recriado que o espelho ainda nao tem), None:
-    o estado daquela linha e do servico velho."""
-    sql = "SELECT status, agendamento_inicio, vuupt_service_id FROM nucleo_pedidos WHERE {} = ? LIMIT 1"
+    service_id, ou se o nucleo nao tem o servico, vale o codigo. Se a linha do codigo
+    e de OUTRO servico: criado na Vuupt depois de `aberta_em` (hora local da ciencia)
+    = a Vuupt recriou o pedido e o espelho trocou a linha, vale ela (com as paradas
+    do servico novo); senao None, a linha e de um servico velho. Os ids da Vuupt
+    nao seguem a ordem de criacao, por isso a comparacao e pela data."""
+    sql = ("SELECT status, agendamento_inicio, vuupt_service_id, criado_em_provedor FROM nucleo_pedidos "
+           "WHERE {} = ? LIMIT 1")
     row = None
     if service_id is not None:
         row = conn_nucleo.execute(sql.format("vuupt_service_id"), (service_id,)).fetchone()
@@ -427,7 +433,9 @@ def estado_do_pedido(conn_nucleo, codigo, service_id=None) -> dict | None:
     if row is None:
         row = conn_nucleo.execute(sql.format("codigo"), (codigo,)).fetchone()
         if row is not None and service_id is not None and row[2] is not None and row[2] != service_id:
-            return None
+            if not (aberta_em and row[3] and row[3] >= aberta_em):
+                return None
+            campo, chave = "pa.service_id", row[2]
     if row is None:
         return None
     iniciada = conn_nucleo.execute(f"""
@@ -565,7 +573,8 @@ def executar(config: dict, agora: datetime | None = None, modo_teste: bool = Fal
                 # recem-aberta: o espelho pode ser de antes da marcacao; so as tabelas locais encerram
                 idade = agora - datetime.strptime(ciencia["criado_em"], "%Y-%m-%d %H:%M:%S")
                 recente = idade < timedelta(minutes=CARENCIA_ESPELHO_MIN)
-                estado = None if recente else estado_do_pedido(conn, ciencia["codigo"], ciencia["service_id"])
+                estado = None if recente else estado_do_pedido(conn, ciencia["codigo"], ciencia["service_id"],
+                                                               aberta_em=ciencia["criado_em"])
                 # servico OU codigo: o dedicado guarda o primeiro service_id; reentrega ou servico
                 # recriado chega com outro (remocao poe removido_em, entao o codigo tambem a enxerga)
                 ativo = (ciencia["service_id"] in servicos_ativos
