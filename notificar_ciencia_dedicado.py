@@ -24,18 +24,38 @@ Falha de um canal nao impede os outros. Embarcador sem canal nenhum: os tres
 
 Os canais chegam prontos (Canais): os testes passam falsos; canais_reais() e o
 unico lugar que toca e-mail, WhatsApp e chat de verdade.
+
+Rotina do timer (stokki-ciencia-dedicado, a cada 15 min; secoes 3, 5 e 6):
+
+    venv/bin/python notificar_ciencia_dedicado.py [--modo-teste]
+
+Encerra pelo espelho do nucleo (cancelado, entregue/insucesso, rota iniciada,
+data em dia de visita), por dedicado removido ou data passada; alerta a equipe
+as 16h da vespera; manda o lembrete vencido (a cada 4h) so entre 08h e 20h.
+--modo-teste so loga: nao grava envio, nao encerra, nao mexe no lembrete.
 """
+import argparse
 import html
 import logging
 import sqlite3
+import sys
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
+from pathlib import Path
 from typing import Callable
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
+import yaml
 
 import ciencia_dedicado as cd
 import controle_notificacoes as cn
 import notificar_whatsapp
+import pedidos_dedicados
 import preferencias_notificacao as pn
+import regioes_dia_fixo  # roteirizacao/ (ciencia_dedicado poe no sys.path)
+from nucleo import banco as nb
 from email_utils import (
     envelope_html, enviar_email,
     COR_ACENTO, COR_BORDA, COR_FUNDO, COR_PRIMARIA, COR_TEXTO,
@@ -45,6 +65,7 @@ from portal_cliente import chamados as ch
 
 logger = logging.getLogger(__name__)
 
+_RAIZ = Path(__file__).resolve().parent
 TIPO = "ciencia_dedicado"
 EMAIL_PILOTO = "hugo@freshlogbr.com"
 ASSUNTO_CHAT = "Entrega dedicada: confirme a ciência"
@@ -203,6 +224,11 @@ def _texto_alerta(nome: str, pendentes: list[dict], link: str) -> str:
             f"Avisar à mão ({codigos}): {link}")
 
 
+def _texto_alerta_vespera(nome: str, ciencia: dict, avisos: int) -> str:
+    return (f"Ciência do dedicado sem resposta: pedido {ciencia['codigo']} ({nome or 'embarcador'}), "
+            f"entrega {_data(ciencia)}. {avisos} aviso(s) enviado(s) ao embarcador. Falar com ele antes da saída.")
+
+
 # ── rodada ─────────────────────────────────────────────────────────────────────
 
 def _piloto_whatsapp(db_path) -> str:
@@ -342,3 +368,205 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
     logger.info(f"ciencia do dedicado: embarcador {sender_id}, {len(pendentes)} pedido(s), rodada {rodada_msg}: "
                 + ", ".join(f"{canal}={r[0]}{':' + r[1] if r[1] else ''}" for canal, r in resultados.items()))
     return contadores
+
+
+# ── rotina do timer ────────────────────────────────────────────────────────────
+
+def _dia(valor) -> date | None:
+    try:
+        return date.fromisoformat(str(valor)[:10]) if valor else None
+    except ValueError:
+        return None
+
+
+def estado_do_pedido(conn_nucleo, codigo) -> dict | None:
+    """Situacao do pedido no espelho do nucleo (tabelas nucleo_*, no mesmo dados.db).
+    None = o nucleo nao conhece o codigo. agendamento_inicio ja esta em hora local
+    (o sincronismo converte o UTC da Vuupt com vuupt_para_local): a data sao os 10
+    primeiros caracteres. Rota iniciada = parada nao cancelada numa rota EM_ROTA ou
+    CONCLUIDA (o status EM_ROTA do pedido so diz que ele esta numa rota)."""
+    row = conn_nucleo.execute("SELECT status, agendamento_inicio FROM nucleo_pedidos WHERE codigo = ?",
+                              (codigo,)).fetchone()
+    if row is None:
+        return None
+    iniciada = conn_nucleo.execute("""
+        SELECT 1 FROM nucleo_paradas pa JOIN nucleo_rotas r ON r.id = pa.rota_id
+        WHERE pa.codigo = ? AND pa.situacao <> ? AND r.status IN (?, ?) LIMIT 1
+    """, (codigo, nb.PARADA_CANCELADA, nb.ROTA_EM_ROTA, nb.ROTA_CONCLUIDA)).fetchone() is not None
+    return {"cancelado": row[0] == nb.PEDIDO_CANCELADO,
+            "finalizado": row[0] in (nb.PEDIDO_ENTREGUE, nb.PEDIDO_INSUCESSO),
+            "rota_iniciada": iniciada, "data": _dia(row[1])}
+
+
+def motivo_de_encerramento(ciencia: dict, estado: dict | None, dedicado_ativo: bool, regra: dict | None,
+                           hoje: date) -> str | None:
+    """Por que parar os lembretes (spec, secao 5), ou None. Pedido que o nucleo nao
+    conhece (estado None) so encerra por dedicado removido ou data passada. Sumir do
+    pool nao e motivo: o dedicado sai dele quando ganha rota."""
+    if estado:
+        if estado["cancelado"]:
+            return "cancelado"
+        if estado["finalizado"]:
+            return "entregue ou insucesso"
+        if estado["rota_iniciada"]:
+            return "rota iniciada"
+    if not dedicado_ativo:
+        return "dedicado removido"
+    data = (estado or {}).get("data") or _dia(ciencia.get("data_entrega"))
+    if data and data < hoje:
+        return "data passou"
+    if estado and estado["data"] and regra and regioes_dia_fixo.data_valida_na_regiao(regra, estado["data"]):
+        return "data em dia de visita"
+    return None
+
+
+def _regra_por_nome(nome) -> dict | None:
+    """Remonta a regra gravada em regra_nome (galpao de ENDERECOS_DIA_FIXO ou cidade)
+    pela mesma funcao que a detectou, com um endereco minimo. None se nao achar."""
+    if not nome:
+        return None
+    for r in regioes_dia_fixo.ENDERECOS_DIA_FIXO:
+        if r["nome"] == nome:
+            return regioes_dia_fixo.regra_dia_fixo_do_servico({"address": r["padroes"][0]})
+    return regioes_dia_fixo.regra_dia_fixo_do_servico({"address": f", {nome} - SP,"})
+
+
+def _avisos_enviados(conn, ciencia_id) -> int:
+    """Rodadas em que algum canal chegou de fato ao embarcador."""
+    return conn.execute("SELECT COUNT(DISTINCT enviado_em) FROM ciencias_dedicado_envios "
+                        "WHERE ciencia_id = ? AND resultado = 'enviado'", (ciencia_id,)).fetchone()[0]
+
+
+def _alertar_equipe(conn, ciencia: dict, nome: str, canais: Canais, agora: datetime, modo_teste: bool) -> bool:
+    """Alerta da vespera no grupo da equipe; marca o pedido pra nao repetir. False
+    se o envio falhou (tenta de novo na proxima rodada)."""
+    texto = _texto_alerta_vespera(nome, ciencia, _avisos_enviados(conn, ciencia["id"]))
+    if modo_teste:
+        logger.info(f"[modo-teste] ciencia do dedicado: alertaria a equipe: {texto}")
+        return True
+    try:
+        canais.alerta_equipe(texto)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"ciencia do dedicado: alerta da equipe de {ciencia['codigo']} falhou ({e})")
+        return False
+    try:
+        cd.marcar_alerta_equipe(conn, ciencia["id"], agora)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"ciencia do dedicado: alerta de {ciencia['codigo']} saiu sem marcar ({e}); pode repetir")
+    return True
+
+
+def executar(config: dict, agora: datetime | None = None, modo_teste: bool = False, canais: Canais | None = None,
+             db_path=None, embarcadores: dict | None = None) -> dict:
+    """Uma rodada do timer: confere todos os PENDENTE (encerra ou atualiza a data),
+    alerta a equipe na vespera e, dentro da janela, manda os lembretes vencidos por
+    embarcador, relendo cada pedido logo antes do envio (quem respondeu no meio da
+    rodada nao recebe). Erro num pedido ou num embarcador e logado e nao para os outros."""
+    resumo = {"encerrados": 0, "embarcadores": 0, "enviados": 0, "adiados": 0, "alertas": 0}
+    c = cd.cfg(config)
+    if not c["ativo"]:
+        logger.info("ciencia do dedicado: ciencia_dedicado.ativo desligado, nada a fazer")
+        return resumo
+    agora = agora or datetime.now()
+    teste = "[modo-teste] " if modo_teste else ""
+    dentro = cd.proximo_envio_permitido(agora, c["janela"]) == agora
+    canais = canais or canais_reais(config, db_path=db_path)
+
+    def embarcador(sender_id) -> dict:
+        nonlocal embarcadores
+        if embarcadores is None:
+            embarcadores = pn.carregar_embarcadores("agendamento", db_path=db_path)
+        return embarcadores.get(sender_id) or {}
+
+    conn = cd.conectar(db_path or cd.DB_PATH)
+    try:
+        ativos = pedidos_dedicados.ativos_por_codigo(conn)
+        servicos_ativos = {d["service_id"] for d in ativos.values() if d["service_id"] is not None}
+        fora = set()   # nao entram no envio desta rodada: encerrados, ou sem como conferir
+        for ciencia in cd.listar(conn, cd.PENDENTE, limite=-1):   # -1 = sem limite no SQLite
+            try:
+                estado = estado_do_pedido(conn, ciencia["codigo"])
+                if ciencia["service_id"] is not None:
+                    ativo = ciencia["service_id"] in servicos_ativos
+                else:
+                    ativo = pedidos_dedicados.normalizar_codigo(ciencia["codigo"]) in ativos
+                motivo = motivo_de_encerramento(ciencia, estado, ativo, _regra_por_nome(ciencia["regra_nome"]),
+                                                agora.date())
+                if motivo:
+                    fora.add(ciencia["id"])
+                    resumo["encerrados"] += 1
+                    logger.info(f"{teste}ciencia do dedicado: {ciencia['codigo']} encerrado ({motivo})")
+                    if not modo_teste:
+                        cd.encerrar(conn, ciencia["id"], motivo, agora)
+                    continue
+                nova = estado["data"] if estado else None
+                if nova and nova.isoformat() != ciencia["data_entrega"]:
+                    logger.info(f"{teste}ciencia do dedicado: {ciencia['codigo']} mudou de data "
+                                f"({ciencia['data_entrega']} -> {nova.isoformat()}) e segue fora do dia de visita")
+                    if not modo_teste:
+                        cd.atualizar_data(conn, ciencia["id"], nova)
+                    ciencia["data_entrega"] = nova.isoformat()
+            except Exception as e:  # noqa: BLE001
+                fora.add(ciencia["id"])
+                logger.error(f"ciencia do dedicado: nao conferiu {ciencia['codigo']} ({e}); "
+                             f"fica sem lembrete nesta rodada")
+                continue
+            data = _dia(ciencia["data_entrega"])
+            if dentro and data and not ciencia["alerta_equipe_em"] \
+                    and agora >= datetime.combine(data - timedelta(days=1), time(16, 0)):
+                try:
+                    nome = embarcador(ciencia["sender_id"]).get("nome") or ""
+                    if _alertar_equipe(conn, ciencia, nome, canais, agora, modo_teste):
+                        resumo["alertas"] += 1
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"ciencia do dedicado: alerta da equipe de {ciencia['codigo']} falhou ({e})")
+
+        vencidos = [p for p in cd.pendentes_vencidos(conn, agora) if p["id"] not in fora]
+        if not dentro:
+            resumo["adiados"] = len(vencidos)
+            if vencidos:
+                logger.info(f"ciencia do dedicado: {len(vencidos)} lembrete(s) fora da janela, "
+                            f"ficam para as {c['janela'][0]:%H:%M}")
+            return resumo
+        por_sender: dict = {}
+        for p in vencidos:
+            por_sender.setdefault(p["sender_id"], []).append(p["id"])
+        for sender_id, ids in por_sender.items():
+            try:
+                # rele logo antes: o embarcador pode ter respondido enquanto a rodada montava os outros
+                frescos = [p for p in (cd.buscar(conn, i) for i in ids) if p and p["situacao"] == cd.PENDENTE]
+                if not frescos:
+                    continue
+                emb = embarcador(sender_id)
+                if modo_teste:
+                    logger.info(f"[modo-teste] ciencia do dedicado: enviaria ao embarcador {sender_id} "
+                                f"({emb.get('nome') or ''}): " + ", ".join(p["codigo"] for p in frescos))
+                    saiu = True
+                else:
+                    saiu = any(enviar_embarcador(conn, sender_id, frescos, emb, config, canais, agora,
+                                                 db_path=db_path).values())
+                if saiu:
+                    resumo["embarcadores"] += 1
+                    resumo["enviados"] += len(frescos)
+            except Exception as e:  # noqa: BLE001  (um embarcador nunca derruba os outros)
+                logger.error(f"ciencia do dedicado: embarcador {sender_id} falhou nesta rodada ({e})")
+    finally:
+        conn.close()
+    return resumo
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="Lembretes da ciencia do dedicado fora do dia fixo.")
+    parser.add_argument("--modo-teste", action="store_true",
+                        help="so loga o que faria: nao envia, nao grava envio, nao encerra")
+    args = parser.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
+        config = yaml.safe_load(f) or {}
+    resumo = executar(config, modo_teste=args.modo_teste)
+    logger.info(f"Resumo: {resumo}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
