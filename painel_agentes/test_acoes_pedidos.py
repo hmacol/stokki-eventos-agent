@@ -330,128 +330,77 @@ class TestCancelarVuupt(_BancoTemp):
 
 
 class TestCancelarStokki(_BancoTemp):
+    """Hugo, 18/11: o clique so poe na fila (stokki/fila_cancelamento.py), nunca fala com a Stokki."""
+
     def setUp(self):
         super().setUp()
-        self.sessao = object()
-        self.aberturas = 0
-
-        @contextlib.contextmanager
-        def abrir():
-            self.aberturas += 1
-            yield self.sessao
-        self.abrir = abrir
-        c = mock.patch("stokki.cancelar.cancelar_pedido",
-                       side_effect=lambda s, i, m, prefixo=None: {"ok": True, "situacao": "Cancelado",
-                                                                  "situacao_antes": "Aguardando Transportador",
-                                                                  "ja_estava": False, "erro": ""})
-        self.canc = c.start()
+        c = mock.patch("stokki.cancelar.cancelar_pedido", side_effect=AssertionError("o clique nao fala com a Stokki"))
+        c.start()
         self.addCleanup(c.stop)
+        s = mock.patch("stokki.sessao_uso.adquirir", side_effect=AssertionError("o clique nao pega a trava"))
+        s.start()
+        self.addCleanup(s.stop)
 
-    def test_cancela_todos_os_ps_do_codigo(self):
-        r = acoes_pedidos.cancelar_stokki("PS-1, PS-2", "cliente desistiu do pedido", "hugo", abrir_sessao=self.abrir)
+    def _fila(self):
+        conn = banco.conectar()
+        try:
+            return [dict(l) for l in conn.execute(
+                "SELECT id_stokki, codigo, motivo, usuario, status FROM stokki_cancelamentos_fila ORDER BY id")]
+        finally:
+            conn.close()
+
+    def test_poe_todos_os_ps_do_codigo_na_fila(self):
+        r = acoes_pedidos.cancelar_stokki("PS-1, PS-2", "cliente desistiu do pedido", "hugo")
         self.assertTrue(r["ok"], r)
-        self.assertEqual([c.args[1] for c in self.canc.call_args_list], [1, 2])
-        for c in self.canc.call_args_list:
-            self.assertEqual(c.kwargs["prefixo"], "Fresh Hub Pedidos (hugo)")
-        self.assertEqual([x["id_stokki"] for x in r["resultados"]], [1, 2])
+        self.assertEqual([f["id_stokki"] for f in r["fila"]], [1, 2])
+        self.assertEqual([(f["id_stokki"], f["motivo"], f["usuario"], f["status"]) for f in self._fila()],
+                         [(1, "cliente desistiu do pedido", "hugo", "NA_FILA"),
+                          (2, "cliente desistiu do pedido", "hugo", "NA_FILA")])
+        args, kw = self.trat.call_args
+        self.assertEqual(args[1:3], ("PEDIDOS", "CANCELAMENTO_STOKKI_NA_FILA"))
+        self.assertIn("PS-1, PS-2", kw["texto"])
 
-    def test_reentrega_cancela_o_base(self):
-        acoes_pedidos.cancelar_stokki("PS-7-R1", "cliente desistiu do pedido", "hugo", abrir_sessao=self.abrir)
-        self.assertEqual([c.args[1] for c in self.canc.call_args_list], [7])
+    def test_reentrega_poe_o_base(self):
+        acoes_pedidos.cancelar_stokki("PS-7-R1", "cliente desistiu do pedido", "hugo")
+        self.assertEqual([f["id_stokki"] for f in self._fila()], [7])
+
+    def test_clique_repetido_nao_duplica_nem_registra_de_novo(self):
+        a = acoes_pedidos.cancelar_stokki("PS-1", "cliente desistiu do pedido", "hugo")
+        b = acoes_pedidos.cancelar_stokki("PS-1", "cliente desistiu do pedido", "hugo")
+        self.assertEqual(a["fila"][0]["fila_id"], b["fila"][0]["fila_id"])
+        self.assertEqual(len(self._fila()), 1)
+        self.assertEqual(self.trat.call_count, 1)
 
     def test_motivo_menor_que_15(self):
-        r = acoes_pedidos.cancelar_stokki("PS-1", "curto demais", "hugo", abrir_sessao=self.abrir)
+        r = acoes_pedidos.cancelar_stokki("PS-1", "curto demais", "hugo")
         self.assertFalse(r["ok"])
         self.assertIn("15", r["erro"])
-        self.assertEqual(self.aberturas, 0)
 
     def test_codigo_sem_ps(self):
-        r = acoes_pedidos.cancelar_stokki("ABC", "cliente desistiu do pedido", "hugo", abrir_sessao=self.abrir)
+        r = acoes_pedidos.cancelar_stokki("ABC", "cliente desistiu do pedido", "hugo")
         self.assertFalse(r["ok"])
-        self.assertEqual(self.aberturas, 0)
+        self.trat.assert_not_called()
 
-    def test_stokki_ocupada(self):
-        def ocupada():
-            raise RuntimeError("Stokki ocupada por outra-rotina")
-        r = acoes_pedidos.cancelar_stokki("PS-1", "cliente desistiu do pedido", "hugo", abrir_sessao=ocupada)
-        self.assertFalse(r["ok"])
-        self.assertIn("Stokki ocupada", r["erro"])
-        self.assertIn("tente em alguns minutos", r["erro"])
-        self.canc.assert_not_called()
-
-    def test_registra_tratativa_com_situacao(self):
-        acoes_pedidos.cancelar_stokki("PS-1", "cliente desistiu do pedido", "hugo", abrir_sessao=self.abrir)
-        args, kw = self.trat.call_args
-        self.assertEqual(args[1:3], ("PEDIDOS", "CANCELADO_STOKKI"))
-        for trecho in ("hugo: ", "cliente desistiu do pedido", "Aguardando Transportador → Cancelado"):
-            self.assertIn(trecho, kw["texto"])
-
-    def test_ja_estava_cancelado_registra_com_nota(self):
-        # repetir depois de um poll perdido: a tratativa guarda o autor mesmo assim
-        self.canc.side_effect = lambda s, i, m, prefixo=None: {"ok": True, "situacao": "Cancelado",
-                                                               "situacao_antes": "Cancelado", "ja_estava": True,
-                                                               "erro": ""}
-        r = acoes_pedidos.cancelar_stokki("PS-1", "cliente desistiu do pedido", "hugo", abrir_sessao=self.abrir)
-        self.assertTrue(r["ok"], r)
-        args, kw = self.trat.call_args
-        self.assertEqual(args[1:3], ("PEDIDOS", "CANCELADO_STOKKI"))
-        for trecho in ("hugo: ", "já estava cancelado", "cliente desistiu do pedido"):
-            self.assertIn(trecho, kw["texto"])
-
-    def _com_registro(self, **kw):
-        cfg = {"stokki": {"devolucao_cancelamento": {"ativo": True}}}
-        with mock.patch.object(acoes_pedidos.torre_controle, "_carregar_config", return_value=cfg), \
-                mock.patch("stokki.devolucao_estoque.registrar", **kw) as reg:
-            r = acoes_pedidos.cancelar_stokki("PS-1, PS-2", "cliente desistiu do pedido", "hugo",
-                                              abrir_sessao=self.abrir)
-        return r, reg, cfg
-
-    def test_cancelamento_ok_registra_na_fila_de_devolucao(self):
-        r, reg, cfg = self._com_registro()
-        self.assertTrue(r["ok"], r)
-        self.assertEqual([c.args[:3] for c in reg.call_args_list],
-                         [(1, "pedidos", cfg), (2, "pedidos", cfg)])
-        self.assertTrue(all(c.kwargs["ja_estava"] is False for c in reg.call_args_list))
-
-    def test_ja_estava_cancelado_registra_com_ja_estava(self):
-        self.canc.side_effect = lambda s, i, m, prefixo=None: {"ok": True, "situacao": "Cancelado",
-                                                               "situacao_antes": "Cancelado", "ja_estava": True,
-                                                               "erro": ""}
-        r, reg, _ = self._com_registro()
-        self.assertTrue(all(c.kwargs["ja_estava"] is True for c in reg.call_args_list))
-        self.assertEqual(reg.call_count, 2)
-
-    def test_falha_nao_registra_e_registro_que_levanta_nao_muda_nada(self):
-        def lado(s, i, m, prefixo=None):
-            if i == 1:
-                return {"ok": False, "situacao": "Enviado", "ja_estava": False, "erro": "pedido ja expedido"}
-            return {"ok": True, "situacao": "Cancelado", "ja_estava": False, "erro": ""}
-        self.canc.side_effect = lado
-        r, reg, _ = self._com_registro(side_effect=RuntimeError("banco"))
-        self.assertEqual([x["ok"] for x in r["resultados"]], [False, True])
-        self.assertEqual([c.args[0] for c in reg.call_args_list], [2])
-        self.assertEqual(self.trat.call_count, 1)
-
-    def test_mais_de_5_ps_recusa_sem_abrir_a_stokki(self):
-        r = acoes_pedidos.cancelar_stokki("PS-1 PS-2 PS-3 PS-4 PS-5 PS-6", "cliente desistiu do pedido", "hugo",
-                                          abrir_sessao=self.abrir)
+    def test_mais_de_5_ps_recusa(self):
+        r = acoes_pedidos.cancelar_stokki("PS-1 PS-2 PS-3 PS-4 PS-5 PS-6", "cliente desistiu do pedido", "hugo")
         self.assertFalse(r["ok"])
         self.assertIn("no máximo 5 pedidos por vez", r["erro"])
-        self.assertEqual(self.aberturas, 0)
-        r = acoes_pedidos.cancelar_stokki("PS-1 PS-2 PS-3 PS-4 PS-5", "cliente desistiu do pedido", "hugo",
-                                          abrir_sessao=self.abrir)
+        r = acoes_pedidos.cancelar_stokki("PS-1 PS-2 PS-3 PS-4 PS-5", "cliente desistiu do pedido", "hugo")
         self.assertTrue(r["ok"], r)
 
-    def test_falha_de_um_nao_para_os_outros_e_nao_registra_o_que_falhou(self):
-        def lado(s, i, m, prefixo=None):
-            if i == 1:
-                return {"ok": False, "situacao": "Enviado", "ja_estava": False, "erro": "pedido ja expedido"}
-            return {"ok": True, "situacao": "Cancelado", "ja_estava": False, "erro": ""}
-        self.canc.side_effect = lado
-        r = acoes_pedidos.cancelar_stokki("PS-1, PS-2", "cliente desistiu do pedido", "hugo", abrir_sessao=self.abrir)
-        self.assertFalse(r["ok"])
-        self.assertEqual([x["ok"] for x in r["resultados"]], [False, True])
-        self.assertEqual(self.trat.call_count, 1)
+    def test_andamento_pela_rota(self):
+        r = acoes_pedidos.cancelar_stokki("PS-1", "cliente desistiu do pedido", "hugo")
+        fid = r["fila"][0]["fila_id"]
+        painel_agentes.app.config["TESTING"] = True
+        cliente = painel_agentes.app.test_client()
+        with cliente.session_transaction() as sess:
+            sess["nivel_acesso"] = "operador"
+        with mock.patch.object(painel_agentes, "_carregar_config",
+                               return_value={"painel_agentes": {"usuario": "u", "senha": "s"}}):
+            a = cliente.get(f"/api/pedidos/acao/cancelar-stokki/andamento?ids={fid},999")
+            self.assertEqual(a.status_code, 200)
+            self.assertEqual([(x["fila_id"], x["status"]) for x in a.get_json()["itens"]], [(fid, "NA_FILA")])
+            self.assertEqual(cliente.get("/api/pedidos/acao/cancelar-stokki/andamento?ids=x").status_code, 400)
 
 
 DEPOIS = (date.today() + timedelta(days=2)).isoformat()   # agendar recusa data no passado

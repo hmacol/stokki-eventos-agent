@@ -3225,7 +3225,8 @@ def api_pedidos_acao_cancelar_vuupt():
 @requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
 @exige_mesma_origem
 def api_pedidos_acao_cancelar_stokki():
-    """Ação Cancelar Stokki da tela /pedidos (só a Stokki; a Vuupt é outra ação). Pode levar ~30 s por pedido."""
+    """Ação Cancelar Stokki da tela /pedidos (só a Stokki; a Vuupt é outra ação). Só põe na fila
+    (stokki/fila_cancelamento.py); o worker do portal executa e a tela acompanha pelo andamento."""
     body, erro = _corpo_json()
     if erro:
         return erro
@@ -3240,8 +3241,19 @@ def api_pedidos_acao_cancelar_stokki():
         logging.getLogger(__name__).exception("cancelar Stokki pela tela Pedidos falhou")
         return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
     if not r.get("ok"):
-        return jsonify({"erro": r.get("erro") or "Falha ao cancelar na Stokki.", "resultados": r.get("resultados", [])}), 400
+        return jsonify({"erro": r.get("erro") or "Falha ao pôr o cancelamento na fila."}), 400
     return jsonify(r)
+
+
+@app.route("/api/pedidos/acao/cancelar-stokki/andamento", methods=["GET"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+def api_pedidos_acao_cancelar_stokki_andamento():
+    """Andamento do Cancelar Stokki: ?ids=1,2 (fila_id devolvidos pelo POST)."""
+    try:
+        ids = [int(x) for x in request.args.get("ids", "").split(",") if x.strip()][:50]
+    except ValueError:
+        return jsonify({"erro": "ids inválidos."}), 400
+    return jsonify({"ok": True, "itens": acoes_pedidos.andamento_cancelamento(ids)})
 
 
 @app.route("/api/pedidos/acao/endereco", methods=["POST"])

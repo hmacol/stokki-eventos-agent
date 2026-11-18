@@ -109,7 +109,7 @@
                                              depois de a rota sair (documentos_processados.processado_em > nucleo_rotas.
                                              iniciada_em); sai da fila quando vai por e-mail. Regra em
                                              nucleo/tabela_pedidos.py (_sql_boleto_atrasado), conta em contar_filas.
-Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/acoes_pedidos.py (rotas POST /api/pedidos/acao/reenvio, .../cancelar-vuupt, .../cancelar-stokki, .../endereco, .../agendar, .../checar-dia-fixo, .../marcar-entregue (multipart, helper _marcar_entregue_pelo_form da Torre), .../validar-lote-foto; GET .../comprovantes?codigo= + /pedidos/canhoto/vuupt/<checklist_id>.pdf + /pedidos/canhoto/manual/<PS-N>.pdf (leitura, canhoto Vuupt/manual/app); cancelar-stokki concluído registra o pedido na fila stokki_devolucoes (origem 'pedidos'; devolução de estoque);
+Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/acoes_pedidos.py (rotas POST /api/pedidos/acao/reenvio, .../cancelar-vuupt, .../cancelar-stokki, .../endereco, .../agendar, .../checar-dia-fixo, .../marcar-entregue (multipart, helper _marcar_entregue_pelo_form da Torre), .../validar-lote-foto; GET .../comprovantes?codigo= + /pedidos/canhoto/vuupt/<checklist_id>.pdf + /pedidos/canhoto/manual/<PS-N>.pdf (leitura, canhoto Vuupt/manual/app); cancelar-stokki SÓ PÕE NA FILA stokki_cancelamentos_fila (stokki/fila_cancelamento.py, 18/11) e a tela acompanha por GET .../cancelar-stokki/andamento?ids=; quem cancela é o worker portal-cliente-envios, e o concluído registra o pedido na fila stokki_devolucoes (origem 'pedidos'; devolução de estoque);
                                              confere Vuupt na hora, Stokki pela trava sessao_uso)
  Vigia de pedidos abertos (estado/prazo) ... vigia/ (regras.py = prazos; tela /vigia)
  Clientes que exigem agendamento (AGENDA) .. regras/clientes_agendamento.py; fila em
@@ -837,6 +837,13 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
                       só sob a trava de sessao_uso. Descoberto 06/10 (PS-39959).
                       Parametro prefixo (montar_motivo/cancelar_pedido): quem chama troca o
                       "Portal Fresh Hub" (tela /pedidos usa "Fresh Hub Pedidos (usuario)").
+ fila_cancelamento.py Fila do "Cancelar Stokki" da tela /pedidos (18/11, "incluir na fila
+                      sempre"): o clique grava NA_FILA em stokki_cancelamentos_fila e volta;
+                      o worker do portal (enviar_stokki.processar_cancelamentos_painel_do_ciclo)
+                      executa sob a trava, sem prazo (Stokki ocupada = próximo ciclo).
+                      NA_FILA -> RODANDO -> OK | ERRO; rede: 3 tentativas; RODANDO >15 min
+                      volta pra fila; até 10 por ciclo. Tratativas: CANCELAMENTO_STOKKI_NA_FILA,
+                      CANCELADO_STOKKI, CANCELAMENTO_STOKKI_FALHOU. Testes: stokki/test_fila_cancelamento.py.
  trocar_nf.py         Troca o XML da NF de um pedido ("Informar Nota Fiscal":
                       POST outbound/nfe/store com order_id_nfe, action=invoice,
                       nfe=chave, file_nfe). Idempotente: confere chave + cProd do
@@ -1615,7 +1622,8 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
                           destinatarios com ajuste manual de horario de recebimento sao
                           reenviados uma vez.
  enviar_stokki.py          Worker que cria o pedido na Stokki (Playwright) e, a cada
-                           ciclo, executa os cancelamentos CANCELANDO sob a trava e,
+                           ciclo, executa os cancelamentos CANCELANDO sob a trava, depois
+                           a fila do "Cancelar Stokki" da tela /pedidos (stokki/fila_cancelamento.py) e,
                            logo depois dos cancelamentos e das retomadas, ANTES dos
                            lotes dos clientes (processar_devolucoes_do_ciclo), devolve
                            o saldo dos cancelados (fila stokki_devolucoes; no máximo 5
@@ -1638,7 +1646,7 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
                            e na Stokki, três fins; aviso e-mail + WhatsApp atendimento.
                            Cancelado na Stokki registra o pedido na fila da devolução
                            de estoque (assim como solicitacoes_execucao e o botão
-                           "Cancelar na Stokki" da /pedidos: acoes_pedidos.cancelar_stokki).
+                           "Cancelar na Stokki" da /pedidos: stokki/fila_cancelamento.py).
  retomada.py               Retomada de pedido em espera (RETOMANDO, ciclo do enviar_stokki):
                            agendamento = data do cliente na Vuupt + agendamentos_pedido;
                            proxima_rota = dia fixo da região (None = não mexe); fecha a
@@ -1997,6 +2005,8 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
    vigia_*                   vigia/banco.py (stokki_abertos, pedidos, historico, listagens)
    geocache                  geocodificacao.py
    stokki_sessao_uso         stokki/sessao_uso.py
+   stokki_cancelamentos_fila stokki/fila_cancelamento.py (Cancelar Stokki da tela /pedidos:
+                             NA_FILA/RODANDO/OK/ERRO, motivo, usuario, situacao, erro, tentativas)
    stokki_devolucoes         stokki/devolucao_estoque.py (fila da devolução de estoque do
                              cancelado: PENDENTE/..., origem portal/solicitacao/pedidos, ja_estava, status, itens, tentativas, erro)
    galpao_*                  galpao3d/banco.py (Galpão 3D): galpao_pedidos (último
