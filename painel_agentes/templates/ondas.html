@@ -10,7 +10,7 @@
   .bloco { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
   .bloco h2 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .filtros { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
-  .filtros select { padding: 7px 10px; border: 1px solid var(--borda); border-radius: 6px; background: var(--fundo); color: var(--texto); font: inherit; font-size: 13px; }
+  .filtros select, .falta-item select { padding: 7px 10px; border: 1px solid var(--borda); border-radius: 6px; background: var(--fundo); color: var(--texto); font: inherit; font-size: 13px; }
   .datas { display: flex; flex-wrap: wrap; gap: 6px; }
   .datas button { padding: 6px 11px; border: 1px solid var(--borda); border-radius: 999px; background: var(--fundo); color: var(--texto); font: inherit; font-size: 12.5px; cursor: pointer; }
   .datas button.on { background: var(--primaria); border-color: var(--primaria); color: #fff; }
@@ -70,8 +70,8 @@
   </div>
   <div class="rolagem">
     <table class="tab" id="tab-pedidos">
-      <thead><tr><th><input type="checkbox" id="marcar-todos" aria-label="Marcar todos"></th><th>Pedido</th><th>Entrega</th><th>Destinatário</th><th>Cidade</th><th>Linhas</th><th>Unidades</th><th>Estoque</th><th>Na Stokki</th></tr></thead>
-      <tbody><tr><td colspan="9" class="vazio">Carregando…</td></tr></tbody>
+      <thead><tr><th><input type="checkbox" id="marcar-todos" aria-label="Marcar todos"></th><th>Pedido</th><th>Entrega</th><th>Destinatário</th><th>Cidade</th><th>Linhas</th><th>Unidades</th><th>Estoque</th><th>Na Stokki</th><th>Lote</th></tr></thead>
+      <tbody><tr><td colspan="10" class="vazio">Carregando…</td></tr></tbody>
     </table>
   </div>
   <div class="rodape-bloco">
@@ -85,8 +85,8 @@
   <h2>Andamento <button type="button" class="btn" id="btn-atualizar" style="margin-left:auto">Atualizar</button></h2>
   <div class="rolagem">
     <table class="tab" id="tab-andamento">
-      <thead><tr><th>Pedido</th><th>Etapa</th><th>Onda</th><th>Entrega</th><th>Destinatário</th><th>Separou</th><th>Conferiu</th><th>Volumes</th><th>Na Stokki</th><th>Atualizado</th></tr></thead>
-      <tbody><tr><td colspan="10" class="vazio">Carregando…</td></tr></tbody>
+      <thead><tr><th>Pedido</th><th>Etapa</th><th>Onda</th><th>Entrega</th><th>Destinatário</th><th>Separou</th><th>Conferiu</th><th>Volumes</th><th>Lotes</th><th>Na Stokki</th><th>Atualizado</th></tr></thead>
+      <tbody><tr><td colspan="11" class="vazio">Carregando…</td></tr></tbody>
     </table>
   </div>
 </section>
@@ -100,6 +100,7 @@
   const URL_FALTAS = "{{ url_for('api_ondas_faltas') }}";
   const URL_DECIDIR = "{{ url_for('api_ondas_faltas_decidir', pedido_id=0) }}";
   const URL_LIBERAR = "{{ url_for('api_ondas_conferencia_liberar', pedido_id=0) }}";
+  const URL_LOTES = "{{ url_for('api_ondas_pedido_lotes', pedido_id=0) }}";
   const sel = document.getElementById("sel-embarcador");
   const aviso = document.getElementById("aviso");
   const corpoPedidos = document.querySelector("#tab-pedidos tbody");
@@ -145,8 +146,10 @@
           : (p.falta_un > 0 ? '<span class="selo atencao">faltam ' + num(p.falta_un) + " UN</span>" : '<span class="selo ok">reservado</span>');
         return '<tr><td><input type="checkbox" class="marca" value="' + p.id + '" aria-label="' + esc(p.codigo_ps) + '"></td><td class="mono">' + esc(p.codigo_ps) +
           "</td><td>" + entrega(p) + '</td><td class="quebra">' + esc(p.destinatario) + "</td><td>" + esc(p.cidade) + (p.uf ? " - " + esc(p.uf) : "") +
-          '</td><td class="num">' + p.linhas + '</td><td class="num">' + num(p.un) + "</td><td>" + estoque + "</td><td>" + esc(p.situacao) + "</td></tr>";
-      }).join("") || '<tr><td colspan="9" class="vazio">Nenhum pedido deste embarcador esperando onda' + (dataEscolhida ? " nesta data" : "") + ".</td></tr>";
+          '</td><td class="num">' + p.linhas + '</td><td class="num">' + num(p.un) + "</td><td>" + estoque + "</td><td>" + esc(p.situacao) +
+          '</td><td><button type="button" class="btn" data-lotes="' + p.id + '" title="Sem indicação a separação segue o que vence primeiro. Use quando o cliente pedir um lote específico.">Lote do cliente</button></td></tr>' +
+          '<tr class="linha-lotes" id="lotes-' + p.id + '" hidden><td colspan="10"></td></tr>';
+      }).join("") || '<tr><td colspan="10" class="vazio">Nenhum pedido deste embarcador esperando onda' + (dataEscolhida ? " nesta data" : "") + ".</td></tr>";
       document.getElementById("marcar-todos").checked = false;
       document.getElementById("ondas-vivas").innerHTML = r.ondas.length ? '<div class="vazio" style="padding:0 0 6px">Ondas abertas deste embarcador</div>' + r.ondas.map(function(o) {
         return '<div class="falta-item"><div class="topo"><b>Onda ' + o.id + '</b><span class="selo ' + (o.situacao === "ABERTA" ? "atencao" : "ok") + '">' + (o.situacao === "ABERTA" ? "liberada, ninguém começou" : "em separação") +
@@ -154,8 +157,36 @@
           (o.situacao === "ABERTA" ? '<button type="button" class="btn perigo" data-cancelar="' + o.id + '" style="margin-left:auto">Desfazer onda</button>' : "") + "</div></div>";
       }).join("") : "";
       atualizarSelecao();
-    } catch (e) { corpoPedidos.innerHTML = '<tr><td colspan="9" class="vazio">' + esc(e.message) + "</td></tr>"; }
+    } catch (e) { corpoPedidos.innerHTML = '<tr><td colspan="10" class="vazio">' + esc(e.message) + "</td></tr>"; }
   }
+  // Lote indicado pelo cliente: sem indicação vale o FEFO (sai primeiro o que vence primeiro)
+  function desenharLotes(linha, r) {
+    linha.querySelector("td").innerHTML = '<div class="falta-item" style="margin:0">' + (r.produtos.map(function(p) {
+      const opcoes = '<option value="">FEFO (o que vence primeiro)</option>' + p.lotes.map(function(l) {
+        return '<option value="' + esc(l.lote) + '"' + (l.lote === p.indicado ? " selected" : "") + ">Lote " + esc(l.lote || "(sem lote)") +
+          (l.validade ? " · val. " + dataBr(l.validade) + "/" + l.validade.slice(0, 4) : " · sem validade") + " · " + num(l.livre_un) + " UN livres · " + esc(l.posicoes.join(", ")) + "</option>";
+      }).join("");
+      return '<div class="rodape-bloco" style="margin:4px 0"><span style="min-width:260px"><b>' + esc(p.sku) + "</b> " + esc(p.descricao) + " · " + num(p.pedido_un) + ' UN</span>' +
+        '<select data-produto="' + p.produto_id + '" data-pedido="' + r.pedido_id + '" aria-label="Lote de ' + esc(p.sku) + '">' + opcoes + "</select>" +
+        (p.indicado && !p.lotes.some(function(l) { return l.lote === p.indicado; }) ? ' <span class="selo erro">lote ' + esc(p.indicado) + " indicado, sem caixa disponível</span>" : "") + "</div>";
+    }).join("") || '<span class="vazio">Pedido sem produto cadastrado.</span>') + "</div>";
+  }
+  corpoPedidos.addEventListener("click", async function(ev) {
+    const b = ev.target.closest("[data-lotes]"); if (!b) return;
+    const linha = document.getElementById("lotes-" + b.dataset.lotes);
+    if (!linha.hidden) { linha.hidden = true; return; }
+    try { desenharLotes(linha, await chamar(URL_LOTES.replace("/0/", "/" + b.dataset.lotes + "/"))); linha.hidden = false; }
+    catch (e) { dizer(e.message, "erro"); }
+  });
+  corpoPedidos.addEventListener("change", async function(ev) {
+    const s = ev.target.closest("select[data-produto]"); if (!s) return;
+    const linha = s.closest("tr");
+    try {
+      const r = await chamar(URL_LOTES.replace("/0/", "/" + s.dataset.pedido + "/"), { produto_id: Number(s.dataset.produto), lote: s.value });
+      desenharLotes(linha, r);
+      dizer(r.codigo_ps + (s.value ? ": lote " + s.value + " indicado. A separação só vai aceitar esse lote." : ": voltou para o FEFO."), "ok");
+    } catch (e) { dizer(e.message, "erro"); }
+  });
   function marcados() { return Array.from(document.querySelectorAll(".marca:checked")).map(function(c) { return Number(c.value); }); }
   function atualizarSelecao() {
     const n = marcados().length;
@@ -173,10 +204,11 @@
           "</td><td>" + (p.data_entrega ? dataBr(p.data_entrega) : "") + '</td><td class="quebra">' + esc(p.destinatario) + "</td><td>" + esc(p.separado_por) +
           "</td><td>" + esc(p.conferente) + (p.conferencia === "FALTA" ? ' <span class="selo erro">não bateu</span>' : "") +
           (p.execucao === "CONFERINDO" ? ' <button type="button" class="btn" data-liberar="' + p.pedido_id + '" title="O conferente largou a conferência aberta? Libera o pedido para outra pessoa conferir.">Liberar</button>' : "") +
-          '</td><td class="num">' + (p.volumes || "") +
+          '</td><td class="num">' + (p.volumes || "") + '</td><td class="quebra">' +
+          (p.lotes || []).map(function(l) { return esc(l.sku) + " " + esc(l.lote || "(sem lote)") + (l.validade ? " val. " + dataBr(l.validade) : "") + " · " + num(l.un); }).join("<br>") +
           "</td><td>" + esc(p.situacao_stokki) + "</td><td>" + esc((p.atualizado_em || "").slice(5, 16)) + "</td></tr>";
-      }).join("") || '<tr><td colspan="10" class="vazio">Nenhum pedido em separação ou conferência.</td></tr>';
-    } catch (e) { corpo.innerHTML = '<tr><td colspan="10" class="vazio">' + esc(e.message) + "</td></tr>"; }
+      }).join("") || '<tr><td colspan="11" class="vazio">Nenhum pedido em separação ou conferência.</td></tr>';
+    } catch (e) { corpo.innerHTML = '<tr><td colspan="11" class="vazio">' + esc(e.message) + "</td></tr>"; }
   }
 
   async function carregarFaltas() {
@@ -189,6 +221,7 @@
           '</span><span class="vazio" style="padding:0">conferido por ' + esc(f.conferente) + " · " + esc((f.fechada_em || "").slice(5, 16)) + "</span></div><ul>" +
           f.faltas.map(function(x) { return "<li>" + esc(x.sku) + " " + esc(x.descricao) + ": pedido " + num(x.esperado_un) + ", conferido <b>" + num(x.conferido_un) + "</b></li>"; }).join("") +
           f.sobras.map(function(x) { return "<li>" + esc(x.sku) + " " + esc(x.descricao) + ": veio a mais (pedido " + num(x.esperado_un) + ", conferido " + num(x.conferido_un) + ")</li>"; }).join("") +
+          (f.nao_separado || []).map(function(x) { return "<li>" + esc(x.sku) + " " + esc(x.descricao) + ": unidades soltas contadas " + num(x.contado_solto_un) + ", separadas soltas " + num(x.separado_solto_un) + " (o conferente digitou quantidade onde a separação registrou outra coisa)</li>"; }).join("") +
           (f.sem_cadastro || []).map(function(x) { return "<li>Linha " + esc(x.linha) + " (" + esc(x.sku) + " " + esc(x.descricao) + ", " + num(x.qtd) + "): o sistema não reconhece o produto, confira à mão</li>"; }).join("") +
           '</ul><div class="rodape-bloco" style="margin-top:0"><input type="text" class="motivo" placeholder="Motivo da decisão (obrigatório)" aria-label="Motivo da decisão do ' + esc(f.codigo_ps) + '">' +
           '<button type="button" class="btn" data-decisao="VOLTAR">Voltar para separação</button><button type="button" class="btn" data-decisao="PARCIAL">Liberar parcial</button></div></div>';
