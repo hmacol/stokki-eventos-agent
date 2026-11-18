@@ -84,6 +84,7 @@ function Guarda() {
       <Stack.Screen name="cadastro" options={{ headerShown: false }} />
       <Stack.Screen name="rota/[id]" options={{ title: 'Rota' }} />
       <Stack.Screen name="parada/[id]" options={{ title: 'Parada' }} />
+      <Stack.Screen name="mapa/[id]" options={{ title: 'Mapa da rota' }} />
     </Stack>
     </View>
   );

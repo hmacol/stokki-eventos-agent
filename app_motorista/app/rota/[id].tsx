@@ -345,7 +345,16 @@ export default function DetalheRota() {
         <Text style={s.nome}>{rota.nome ?? `Rota #${rota.id}`}</Text>
         <Text style={s.sub}>{formatarData(rota.data_rota)}{rota.start_at ? ` · saída ${rota.start_at.slice(11, 16)}` : ''} · {statusRotaRotulo[rota.status]}</Text>
         <View style={s.barraFundo}><View style={[s.barra, { width: `${ativas.length ? (feitas / ativas.length) * 100 : 0}%` }]} /></View>
-        <Text style={s.sub}>{feitas} de {ativas.length} paradas com resultado{rota.km_estimado ? ` · ~${rota.km_estimado.toFixed(0)} km` : ''}</Text>
+        <View style={s.resumoLinha}>
+          <Text style={[s.sub, { flex: 1 }]}>{feitas} de {ativas.length} paradas com resultado{rota.km_estimado ? ` · ~${rota.km_estimado.toFixed(0)} km` : ''}</Text>
+          {rota.liberada !== false && rota.paradas.length > 0 ? (
+            <Pressable style={({ pressed }) => [s.botaoMapa, pressed && { backgroundColor: cores.fundo }]}
+              onPress={() => router.push(`/mapa/${rota.id}`)} accessibilityRole="button" accessibilityLabel="Ver a rota no mapa">
+              <Ionicons name="map" size={17} color={cores.primaria} />
+              <Text style={s.botaoMapaTexto}>Mapa</Text>
+            </Pressable>
+          ) : null}
+        </View>
 
         {rota.status === 'PLANEJADA' && !recusando ? (
           <View style={{ marginTop: 14 }}>
@@ -418,6 +427,9 @@ const s = StyleSheet.create({
   barraFundo: { height: 8, backgroundColor: cores.borda, borderRadius: 4, marginTop: 10, overflow: 'hidden' },
   barra: { height: 8, backgroundColor: cores.acento },
   vuupt: { color: cores.info, marginTop: 10 },
+  resumoLinha: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  botaoMapa: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 40, paddingHorizontal: 14, marginTop: 4, borderRadius: 10, borderWidth: 1, borderColor: cores.borda },
+  botaoMapaTexto: { fontSize: 14, fontWeight: '700', color: cores.primaria },
   campo: { backgroundColor: '#fff', borderWidth: 1, borderColor: cores.borda, borderRadius: 10, padding: 12, minHeight: 60, color: cores.texto },
   atalhoPedagio: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: cores.cartao, borderWidth: 1, borderColor: cores.borda, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 12 },
   atalhoPedagioTexto: { flex: 1, color: cores.texto, fontWeight: '600', fontSize: 14 },

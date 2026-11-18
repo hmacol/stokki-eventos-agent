@@ -131,7 +131,7 @@ export async function chamar<T>(caminho: string, op: Opcoes = {}, repetiu = fals
 
 // ── chamadas de alto nível ────────────────────────────────────────────────
 
-import type { Ajuste, CadastroCriado, CadastroSituacao, Checklist, EstadoAtendimento, Extrato, MeusDados, Motorista, MudancaCadastro, NovoCadastro, Oferta, Pedagio, RespostaChamado, ResultadoValidacao, Rota, TipoDespesa } from './tipos';
+import type { Ajuste, CadastroCriado, CadastroSituacao, Checklist, EstadoAtendimento, Extrato, MeusDados, Motorista, MudancaCadastro, NovoCadastro, Oferta, Pedagio, RespostaChamado, ResultadoValidacao, Rota, TipoDespesa, Trajeto } from './tipos';
 
 export async function login(cpf: string, pin: string): Promise<Motorista> {
   const r = await chamar<{ acesso: string; refresh: string; motorista: Motorista }>('/login', {
@@ -172,6 +172,8 @@ export const enviarDocumentoCadastro = (id: number, chave: string, tipo: 'cnh' |
 export const rotas = (de?: string, ate?: string) =>
   chamar<{ rotas: Rota[] }>(`/rotas${de ? `?de=${de}&ate=${ate ?? de}` : ''}`).then((r) => r.rotas);
 export const rota = (id: number) => chamar<Rota>(`/rotas/${id}`);
+/** Linha do trajeto pro Mapa da rota (Google calculado e guardado no servidor). */
+export const trajeto = (rotaId: number) => chamar<Trajeto>(`/rotas/${rotaId}/trajeto`);
 export const aceitarRota = (id: number, corpo: object) => chamar<Rota>(`/rotas/${id}/aceitar`, { metodo: 'POST', corpo });
 export const recusarRota = (id: number, motivo: string) => chamar<Rota>(`/rotas/${id}/recusar`, { metodo: 'POST', corpo: { motivo } });
 export const iniciarRota = (id: number, corpo: object) => chamar<Rota>(`/rotas/${id}/iniciar`, { metodo: 'POST', corpo });
