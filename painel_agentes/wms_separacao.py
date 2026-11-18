@@ -724,9 +724,11 @@ def _conferir_lote_da_caixa(conn, onda_id: int, caixa: dict) -> None:
                       f"esta caixa e do lote {lote or '(sem lote)'}.")
     antes = _caixa_que_vence_antes(conn, caixa)
     if antes:
+        # a tela mostra o LOTE a pegar, sem a palavra FEFO (pedido do Hugo, 17/11)
         raise ErroWMS(
-            f"FEFO: pegue primeiro o lote {antes['lote'] or '(sem lote)'}, que vence em {_data_br(antes['validade'])} "
-            f"e esta em {antes['posicao']}. Esta caixa vence em {_data_br(validade) or '(sem validade)'}.")
+            f"Pegue o lote {antes['lote'] or '(sem lote)'} (val. {_data_br(antes['validade'])}) na posicao "
+            f"{antes['posicao']}: ele vence antes. Esta caixa e do lote {caixa.get('lote') or '(sem lote)'}"
+            f"{', val. ' + _data_br(validade) if validade else ', sem validade'}.")
 
 
 # ---------------------------------------------------------------------------
