@@ -38,7 +38,7 @@ import sys
 import threading
 import time
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -111,17 +111,18 @@ def codigos_base_lista(codigo: str) -> list[str]:
 
 def _parse_dt(valor) -> datetime | None:
     """Datas da VUUPT vêm como ISO com offset ('2026-09-08T10:42:00-03:00')
-    ou 'YYYY-MM-DD HH:MM:SS'. Devolve datetime no fuso de São Paulo
-    (naive) ou None."""
+    ou 'YYYY-MM-DD HH:MM:SS' -- esta em UTC sem fuso (scheduled_start,
+    completed_at, created_at; mesma regra de nucleo.normalizacao.
+    vuupt_para_local). Devolve datetime no fuso de São Paulo (naive) ou None."""
     if not valor:
         return None
     try:
         dt = datetime.fromisoformat(str(valor).replace(" ", "T").replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(FUSO).replace(tzinfo=None)
-    return dt
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(FUSO).replace(tzinfo=None)
 
 
 def _hora(valor) -> str:
