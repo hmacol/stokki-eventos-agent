@@ -107,6 +107,12 @@
   .anx-nome { font-weight: 600; color: var(--texto); word-break: break-all; }
   .anx-info { font-size: 11px; color: var(--texto-suave); }
   .anx-alerta { font-size: 11px; color: var(--st-falha); font-weight: 600; }
+  .lotes-res { font-size: 11.5px; color: var(--st-rota); margin-top: 3px; white-space: normal; }
+  .lotes-tab { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .lotes-tab th, .lotes-tab td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--borda); vertical-align: middle; }
+  .lotes-tab input { width: 100%; min-width: 90px; box-sizing: border-box; }
+  .lotes-box { border: 1px solid var(--rodando-borda); background: var(--rodando-bg); border-radius: 8px; padding: 10px 14px; font-size: 12.5px; display: flex; flex-direction: column; gap: 8px; }
+  .lotes-box ul { margin: 0; padding-left: 18px; color: var(--rodando-texto); }
   .anx-link { background: none; border: none; padding: 0; color: var(--st-rota); font-size: 11.5px; font-weight: 600; text-decoration: underline; cursor: pointer; font-family: inherit; align-self: flex-start; }
   .anx-mais { border: 1px dashed var(--borda); color: var(--texto-suave); background: none; border-radius: 6px; padding: 3px 9px; font-size: 11.5px; font-weight: 600; cursor: pointer; font-family: inherit; }
   .anx-mais:hover { border-color: var(--acento); color: var(--acento); }
@@ -133,6 +139,7 @@
           <div><b>Arraste os XMLs das notas ou a planilha de pedidos aqui</b> ou clique pra escolher</div>
           <div style="font-size:11.5px; margin-top:4px;">XML: vários .xml de uma vez ou um .zip (só NF-e de saída da sua empresa). Planilha: .xlsx no modelo Fresh Log ou a sua, uma linha por item (se os nomes das colunas forem outros, você indica qual é qual).</div>
           <div style="font-size:11.5px; margin-top:4px;">Documentos dos pedidos (boleto e outros, em PDF) podem vir juntos: o sistema coloca cada um no pedido certo e você confere antes de enviar. Eles saem impressos com a nota na entrega.</div>
+          {% if lotes_ativo %}<div style="font-size:11.5px; margin-top:4px;">Lote específico: envie junto a sua planilha de lotes (por nota fiscal e produto) ou use "Indicar lote" em cada nota da prévia. Sem indicação, sai primeiro o que vence primeiro.</div>{% endif %}
         </label>
         <input type="file" id="anx-arquivo" multiple accept=".pdf,.xml,application/pdf,text/xml,application/xml" hidden>
         <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:12px; color:var(--texto-suave);">
@@ -145,6 +152,7 @@
           {% endif %}
         </div>
         <div class="msg" id="env-msg"></div>
+        <div class="lotes-box oculto" id="env-lotes"></div>
         <div class="previa" id="previa">
           <div class="rej oculto" id="previa-rej"></div>
           <div class="anx-soltos oculto" id="previa-anexos"></div>
@@ -412,6 +420,7 @@
       previa = j;
       previa.anexos = j.anexos || [];
       mensagem(previa.anexos.length && !j.itens.length ? 'Nenhum pedido válido neste lote: os documentos em PDF não foram anexados.' : '', 'info');
+      renderLotesPlanilha(j.lotes_planilhas || []);
       renderPrevia();
     } catch (e) {
       pedirIndicacao = false;
@@ -452,6 +461,55 @@
     });
   }
 
+  // ── Lote indicado pelo cliente (18/11, lotes_cliente.py) ──────────────────────
+  // Planilha de lotes: já gravada na leitura; aqui só mostra o resultado.
+  function renderLotesPlanilha(lista) {
+    const box = $('env-lotes');
+    box.classList.toggle('oculto', !lista.length);
+    const SIT = { aguardando_pedido: 'pedido ainda não chegou: vale quando chegar', produto_desconhecido: 'produto fora do cadastro', chegou_tarde: 'pedido já separado' };
+    box.innerHTML = lista.map(r => `<div><b>Planilha de lotes ${esc(r.arquivo)}:</b> ${r.gravadas} indicaç${r.gravadas === 1 ? 'ão' : 'ões'} de lote gravada${r.gravadas === 1 ? '' : 's'}${r.sem_lote ? `; ${r.sem_lote} linha${r.sem_lote > 1 ? 's' : ''} sem lote sai${r.sem_lote > 1 ? 'em' : ''} pelo que vence primeiro` : ''}.</div>
+      ${r.avisos.length ? `<ul>${r.avisos.map(a => `<li>${esc(a)}</li>`).join('')}</ul>` : ''}
+      ${r.linhas.length ? `<div class="rolagem"><table class="lotes-tab"><thead><tr><th>NF</th><th>Pedido</th><th>SKU</th><th>Lote</th><th style="text-align:right">Quantidade</th><th></th></tr></thead><tbody>${r.linhas.map(l => `<tr><td class="mono">${esc(l.nf)}</td><td class="mono">${esc(l.codigo_ps || '—')}</td><td>${esc(l.sku)}</td><td><b>${esc(l.lote)}</b></td><td class="num" style="text-align:right">${Number(l.qtd_un).toLocaleString('pt-BR')}</td><td>${SIT[l.situacao] ? `<span class="chip">${esc(SIT[l.situacao])}</span>` : ''}</td></tr>`).join('')}</tbody></table></div>` : ''}`).join('');
+  }
+
+  const resumoLotes = it => {
+    const m = Object.entries(it._lotes || {});
+    return m.length ? `<div class="lotes-res">Lote: ${m.map(([s, l]) => `<b>${esc(l)}</b> (${esc(s)})`).join(', ')}</div>` : '';
+  };
+
+  function abrirLotes(i) {
+    const it = previa.itens[i], est = it.lotes_estoque || {}, marc = it._lotes || {};
+    modal(`<h3>Lote dos produtos · ${esc(rotIt(it))}</h3>
+      <p>Diga de qual lote deve sair cada produto (o produto inteiro sai desse lote). Deixe em branco para sair o que vence primeiro. Para dividir um produto entre dois lotes, envie a sua planilha de lotes junto com os XMLs.</p>
+      <div class="rolagem"><table class="lotes-tab"><thead><tr><th>SKU</th><th>Produto</th><th style="text-align:right">Qtd.</th><th>Lote</th></tr></thead><tbody>
+      ${it.produtos.map((pr, k) => {
+        const sku = pr.sku.toUpperCase(), ops = est[sku] || [];
+        return `<tr><td class="mono">${esc(pr.sku)}</td><td>${esc(pr.descricao)}</td><td class="num nw" style="text-align:right">${Number(pr.quantidade).toLocaleString('pt-BR')} ${esc(pr.unidade)}</td>
+          <td><input type="text" maxlength="40" data-sku="${esc(sku)}" value="${esc(marc[sku] || '')}" ${ops.length ? `list="dl-lote-${k}"` : ''} aria-label="Lote de ${esc(pr.sku)}" autocomplete="off">
+          ${ops.length ? `<datalist id="dl-lote-${k}">${ops.map(o => `<option value="${esc(o.lote)}">${o.validade ? 'val. ' + esc(dataBr(o.validade)) : 'sem validade'}</option>`).join('')}</datalist>` : ''}</td></tr>`;
+      }).join('')}</tbody></table></div>
+      <div class="msg" id="m-msg"></div>
+      <div class="pe"><button type="button" class="botao-linha" data-fechar>Voltar</button><button type="button" class="botao" id="m-ok">Guardar lotes</button></div>`, true);
+    $('m-ok').addEventListener('click', () => {
+      const novo = {};
+      for (const el of $('modal-caixa').querySelectorAll('input[data-sku]')) {
+        const v = el.value.trim().replace(/\s+/g, ' ').toUpperCase();
+        if (!v) continue;
+        if (!/^[A-Z0-9][A-Z0-9 ./_-]{0,39}$/.test(v)) {
+          const m = $('m-msg'); m.className = 'msg erro';
+          m.textContent = `Lote "${v}" de ${el.dataset.sku}: use letras, números, espaço, ponto, barra, hífen ou sublinhado.`;
+          el.focus();
+          return;
+        }
+        novo[el.dataset.sku] = v;
+      }
+      it._lotes = novo;
+      fecharModal();
+      const td = $('previa-tabela').querySelector(`tr[data-i="${i}"] .lotes-cel`);
+      if (td) td.innerHTML = resumoLotes(it);
+    });
+  }
+
   function renderPrevia() {
     const p = previa, box = $('previa');
     if (!p.itens.length && !p.rejeitados.length) { box.classList.remove('aberta'); return; }
@@ -477,7 +535,8 @@
       const doc = plan
         ? `<span class="mono num" style="font-weight:600">${esc(it.referencia)}</span> <span class="chip" title="Pedido lido da planilha${it.linhas && it.linhas.length ? ' (linhas ' + it.linhas.join(', ') + ')' : ''}">planilha</span>` +
           `<div class="end">${it.numero_nf ? 'NF ' + esc(it.numero_nf) + ' · ' : ''}${it.itens} ${it.itens > 1 ? 'itens' : 'item'}${it.data_expedicao ? ' · expede ' + dataBr(it.data_expedicao) : ''}</div>`
-        : `<span class="mono num" style="font-weight:600">${esc(it.numero_nf)}</span>`;
+        : `<span class="mono num" style="font-weight:600">${esc(it.numero_nf)}</span>` +
+          (it.lotes_ativo ? `<div><button type="button" class="anx-link" data-lote="${i}" title="Escolher de qual lote sai cada produto desta nota">Indicar lote</button><span class="lotes-cel">${resumoLotes(it)}</span></div>` : '');
       const ops = opcoesFluxo(it);
       const celFluxo = !multi ? '' : (ops.length === 1
         ? `<td class="nw" data-fluxo="${esc(ops[0])}">${esc(rotFl[ops[0]] || ops[0])}</td>`
@@ -725,6 +784,8 @@
   }
 
   $('previa-tabela').addEventListener('click', e => {
+    const bl = e.target.closest('[data-lote]');
+    if (bl) { abrirLotes(Number(bl.dataset.lote)); return; }
     const b = e.target.closest('[data-ent]');
     if (!b) return;
     const i = Number(b.closest('td.c-end').dataset.i), it = previa.itens[i], st = it._ent, acao = b.dataset.ent;
@@ -822,6 +883,7 @@
       }
       const meus = anx.filter(a => a.pedido === it.token);
       if (meus.length) item.anexos = meus.map(a => ({ token: a.token, casado_por: a.manual ? 'manual' : 'automatico' }));
+      if (it._lotes && Object.keys(it._lotes).length) item.lotes = it._lotes;
       itens.push(item);
     }
     $('btn-confirmar').disabled = true;

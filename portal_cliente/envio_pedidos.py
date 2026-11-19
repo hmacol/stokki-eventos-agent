@@ -70,6 +70,7 @@ PASTA_XMLS = _RAIZ / "dados" / "portal_envios"
 PASTA_TEMP = PASTA_XMLS / "_temporarios"
 TEMP_VALIDADE_SEGUNDOS = 2 * 3600
 DIAS_LISTAGEM = 30
+MAX_PRODUTOS_NFE = 300   # produtos da nota na prévia (indicação de lote)
 
 NS_NFE = "http://www.portalfiscal.inf.br/nfe"
 NS = {"nfe": NS_NFE}
@@ -383,6 +384,18 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
 
     emitida = _texto(ide, "nfe:dhEmi") or _texto(ide, "nfe:dEmi")
     transporta = inf.find("nfe:transp/nfe:transporta", NS)
+    # Produtos da nota (18/11): a prévia mostra pra o cliente indicar o lote (lotes_cliente.py)
+    produtos = []
+    for det in dets[:MAX_PRODUTOS_NFE]:
+        sku = _texto(det, "nfe:prod/nfe:cProd")
+        if not sku:
+            continue
+        try:
+            qtd = round(float(_texto(det, "nfe:prod/nfe:qCom") or 0), 4)
+        except ValueError:
+            qtd = 0.0
+        produtos.append({"sku": sku[:60], "descricao": _texto(det, "nfe:prod/nfe:xProd")[:120], "quantidade": qtd,
+                         "unidade": _texto(det, "nfe:prod/nfe:uCom")[:12]})
     return {
         "chave_nfe": chave,
         "numero_nf": _texto(ide, "nfe:nNF"),
@@ -403,6 +416,7 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
         "peso_kg": round(peso, 3),
         "valor_nf": round(valor, 2),
         "itens": len(dets),
+        "produtos": produtos,
         "nome_arquivo": nome_arquivo or f"{chave}.xml",
         "transportadora_nome": _texto(transporta, "nfe:xNome"),
         "transportadora_cnpj": _so_digitos(_texto(transporta, "nfe:CNPJ") or _texto(transporta, "nfe:CPF")),

@@ -10,13 +10,21 @@ quantidade. O modelo da Maria Dolores e uma tabela dinamica na aba "Lotes":
 
 Cada coluna depois do SKU e um lote; a coluna "FIFO" (ou sem nome) e "sem lote indicado": vale a
 regra padrao (sai primeiro o que vence primeiro). Nome do contato e Nota Fiscal em branco repetem
-a linha de cima. Este modulo so LE a planilha; quem grava e wms_separacao.importar_lotes_cliente.
+a linha de cima.
+
+A tabela wms_lotes_cliente mora aqui (18/11) porque o portal do cliente tambem grava nela (a
+planilha solta no envio e o lote marcado na previa) e o portal nao importa o resto do WMS. Linha
+com `inteiro = 1` e "este lote pro produto inteiro" (marcacao do cliente na previa, sem
+quantidade). Os resumos e avisos ficam com quem chama (wms_separacao, portal_cliente/lotes_cliente).
 """
 import io
 import re
 import unicodedata
 
-from wms import ErroWMS
+try:
+    from wms import ErroWMS
+except ImportError:      # importado pelo portal do cliente (painel_agentes fora do sys.path)
+    from painel_agentes.wms import ErroWMS
 
 MAX_BYTES = 8 * 1024 * 1024
 MAX_LINHAS = 5000
@@ -157,3 +165,82 @@ def ler_lotes(conteudo: bytes, nome: str) -> dict:
         raise ErroWMS("A tabela de lotes esta vazia.")
     return {"aba": titulo, "linhas": saida, "sem_lote": sem_lote,
             "lotes": [lote for _, lote in colunas_lote if lote]}
+
+
+# ---------------------------------------------------------------------------
+# Gravacao (tabela wms_lotes_cliente)
+# ---------------------------------------------------------------------------
+
+DDL_LOTES_CLIENTE = """
+CREATE TABLE IF NOT EXISTS wms_lotes_cliente (
+    embarcador_id INTEGER NOT NULL,
+    nf            TEXT NOT NULL,              -- numero da NF, como em wms_pedidos.nf
+    sku           TEXT NOT NULL,
+    lote          TEXT NOT NULL,
+    qtd_un        REAL NOT NULL,              -- quanto desse lote o cliente quer nesse produto
+    cliente       TEXT NOT NULL DEFAULT '',
+    arquivo       TEXT NOT NULL DEFAULT '',
+    por           TEXT NOT NULL DEFAULT '',
+    em            TEXT NOT NULL,
+    inteiro       INTEGER NOT NULL DEFAULT 0, -- 1 = este lote pro produto inteiro (qtd_un nao vale)
+    PRIMARY KEY (embarcador_id, nf, sku, lote)
+)
+"""
+_RE_LOTE = re.compile(r"^[A-Z0-9][A-Z0-9 ./_-]{0,39}$")
+
+
+def garantir_tabela(conn) -> None:
+    """Cria a tabela (ou a coluna `inteiro`, que entrou em 18/11). Nao faz commit."""
+    conn.execute(DDL_LOTES_CLIENTE)
+    if "inteiro" not in {r[1] for r in conn.execute("PRAGMA table_info(wms_lotes_cliente)")}:
+        conn.execute("ALTER TABLE wms_lotes_cliente ADD COLUMN inteiro INTEGER NOT NULL DEFAULT 0")
+
+
+def normalizar_nf(valor) -> str:
+    return re.sub(r"\D", "", str(valor or "")).lstrip("0")
+
+
+def normalizar_lote(valor) -> str:
+    """Lote digitado pelo cliente: maiusculo, espacos simples. '' = sem lote. ErroWMS se estranho."""
+    lote = " ".join(str(valor or "").split()).upper()
+    if lote and not _RE_LOTE.match(lote):
+        raise ErroWMS(f"Lote invalido: {lote[:40]!r}. Use letras, numeros, espaco, ponto, barra, hifen ou "
+                      f"sublinhado (ate 40).")
+    return lote
+
+
+def gravar_planilha(conn, embarcador_id: int, lido: dict, arquivo: str, por: str, em: str) -> None:
+    """
+    Grava o que ler_lotes leu. Cada (NF, SKU) da planilha SUBSTITUI o que havia dele (reenviar
+    corrige); linha "sem lote" apaga a indicacao antiga daquele produto. Sem commit: quem chama
+    abre e fecha a transacao.
+    """
+    embarcador_id = int(embarcador_id)
+    vistos = set()
+    for l in list(lido.get("linhas") or []) + list(lido.get("sem_lote") or []):
+        chave = (l["nf"], l["sku"])
+        if chave not in vistos:
+            vistos.add(chave)
+            conn.execute("DELETE FROM wms_lotes_cliente WHERE embarcador_id = ? AND nf = ? AND sku = ?",
+                         (embarcador_id, l["nf"], l["sku"]))
+    for l in lido.get("linhas") or []:
+        conn.execute(
+            "INSERT INTO wms_lotes_cliente (embarcador_id, nf, sku, lote, qtd_un, cliente, arquivo, por, em) "
+            "VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(embarcador_id, nf, sku, lote) DO UPDATE SET "
+            "qtd_un = wms_lotes_cliente.qtd_un + excluded.qtd_un",
+            (embarcador_id, l["nf"], l["sku"], l["lote"], round(float(l["qtd_un"] or 0), 3),
+             str(l.get("cliente") or "")[:120], str(arquivo or "")[:120], str(por or "")[:80], em))
+
+
+def gravar_lote_inteiro(conn, embarcador_id: int, nf: str, sku: str, lote: str, arquivo: str, por: str,
+                        em: str) -> None:
+    """O produto inteiro desta NF sai do `lote` (marcacao do cliente na previa do envio). Substitui
+    o que havia do (NF, SKU), inclusive o que veio da planilha. Sem commit."""
+    nf, sku, lote = normalizar_nf(nf), str(sku or "").strip().upper(), normalizar_lote(lote)
+    if not (nf and sku and lote):
+        raise ErroWMS("Indicacao de lote sem NF, produto ou lote.")
+    conn.execute("DELETE FROM wms_lotes_cliente WHERE embarcador_id = ? AND nf = ? AND sku = ?",
+                 (int(embarcador_id), nf, sku))
+    conn.execute(
+        "INSERT INTO wms_lotes_cliente (embarcador_id, nf, sku, lote, qtd_un, arquivo, por, em, inteiro) "
+        "VALUES (?,?,?,?,0,?,?,?,1)", (int(embarcador_id), nf, sku, lote, str(arquivo or "")[:120], str(por or "")[:80], em))

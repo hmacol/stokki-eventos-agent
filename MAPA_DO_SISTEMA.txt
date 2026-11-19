@@ -149,6 +149,12 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              wms_separacao.importar_lotes_cliente grava em wms_lotes_cliente e a
                                              indicação casa com o pedido pelo número da NF (wms_pedidos.nf).
                                              Envio pelo escritório em /ondas; .xls precisa do xlrd no venv.
+                                             Pelo portal (18/11, portal_cliente/lotes_cliente.py): o cliente piloto
+                                             solta a planilha de lotes no envio de pedidos (gravada na leitura) ou
+                                             marca "Indicar lote" na prévia da nota XML (gravado na confirmação,
+                                             wms_lotes_cliente.inteiro=1 = lote pro produto inteiro). A tabela
+                                             mora em wms_lotes_planilha.py (o portal não importa o resto do WMS).
+                                             Ordem: escritório (wms_pedido_lotes) > o que o cliente gravou por último.
                                              pela fila de etiquetas (tipo VOLUME). Ensaio no navegador com banco
                                              temporário: py -3.11 ensaio_separacao.py <pasta> (de painel_agentes/).
                                              (caixas com serial/eventos), wms_fila_impressao.py (fila de etiquetas)
@@ -1636,6 +1642,9 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
                            Cabeçalho com pares numerados (Sku1 | Quantidade1 | Sku2 ...,
                            planilha da Marchef): um pedido por linha, itens saem dos
                            pares preenchidos (_pares_de_itens), sem precisar indicar.
+ lotes_cliente.py          Lote indicado pelo cliente piloto do WMS (18/11): planilha de lotes
+                           solta no envio e "Indicar lote" na prévia (XML). Grava em
+                           wms_lotes_cliente; a separação usa (wms_separacao.lotes_indicados).
  anexos_pedido.py          PDFs anexados ao pedido (prévia e lista): lê, sugere o
                            pedido, grava e registra pro romaneio quando sai o PS.
  endereco_entrega.py       Endereço de entrega escolhido na prévia: CEP com IBGE, última
