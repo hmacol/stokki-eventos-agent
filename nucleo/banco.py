@@ -119,6 +119,28 @@ CREATE TABLE IF NOT EXISTS nucleo_pedidos (
 CREATE INDEX IF NOT EXISTS idx_nucleo_pedidos_service ON nucleo_pedidos(vuupt_service_id);
 CREATE INDEX IF NOT EXISTS idx_nucleo_pedidos_status ON nucleo_pedidos(status);
 
+-- Um serviço da VUUPT por linha (18/11). nucleo_pedidos é o estado ATUAL por
+-- código; quando a VUUPT recria o serviço com o MESMO código (reentrega sem
+-- -R), a linha de lá passa pro serviço novo e a tentativa que falhou sumia.
+-- Aqui ela fica: é a base pra contar serviços por dia de rota como a VUUPT.
+CREATE TABLE IF NOT EXISTS nucleo_servicos (
+    vuupt_service_id        INTEGER PRIMARY KEY,
+    codigo                  TEXT NOT NULL,                  -- normalizado (sem '#'), igual nucleo_pedidos.codigo
+    status                  TEXT NOT NULL DEFAULT 'ABERTO', -- mesmo vocabulário de nucleo_pedidos.status
+    status_provedor         TEXT,
+    status_done_provedor    TEXT,
+    vuupt_route_id          INTEGER,                        -- rota em que o serviço está/terminou
+    driver_id               INTEGER,
+    reentrega_de_service_id INTEGER,                        -- recreated_order_origin_id
+    criado_em_provedor      TEXT,                           -- hora local
+    concluido_em            TEXT,                           -- completed_at, hora local
+    excluido_em             TEXT,
+    criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    atualizado_em           TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_nucleo_servicos_codigo ON nucleo_servicos(codigo);
+CREATE INDEX IF NOT EXISTS idx_nucleo_servicos_rota ON nucleo_servicos(vuupt_route_id);
+
 CREATE TABLE IF NOT EXISTS nucleo_rotas (
     id                      INTEGER PRIMARY KEY AUTOINCREMENT,
     data_rota               TEXT NOT NULL,                  -- YYYY-MM-DD

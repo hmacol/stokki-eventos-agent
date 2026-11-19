@@ -123,6 +123,39 @@ def upsert_pedido(conn: sqlite3.Connection, codigo: str, campos: dict, origem: s
           banco.agora(), tipo, status))
 
 
+_COLUNAS_SERVICO = ["status_provedor", "status_done_provedor", "vuupt_route_id", "driver_id",
+                    "reentrega_de_service_id", "criado_em_provedor", "concluido_em", "excluido_em"]
+# Só o espelho de SERVIÇOS (GET /services, serviço inteiro) sabe que a VUUPT
+# esvaziou estes campos (tirou da rota, desatribuiu, reativou).
+_ESVAZIAVEIS_SERVICO = {"vuupt_route_id", "driver_id", "status_done_provedor", "excluido_em"}
+
+
+def registrar_servico(conn: sqlite3.Connection, service_id, codigo: str, campos: dict,
+                      status: str | None = None, completo: bool = False):
+    """Upsert em nucleo_servicos (uma linha por serviço da VUUPT). Ao
+    contrário de nucleo_pedidos, serviço recriado com o mesmo código NÃO
+    sobrescreve o anterior: cada um tem a sua linha. None mantém o que está
+    gravado (fonte parcial, ex. serviço dentro da rota); `completo=True`
+    (serviço inteiro) grava também o vazio dos campos que a VUUPT esvazia."""
+    codigo = normalizacao.normalizar_codigo(codigo)
+    if not service_id or not codigo:
+        return
+    valores = [campos.get(c) for c in _COLUNAS_SERVICO]
+    sets = ", ".join(
+        f"{c} = excluded.{c}" if completo and c in _ESVAZIAVEIS_SERVICO
+        else f"{c} = COALESCE(excluded.{c}, nucleo_servicos.{c})"
+        for c in _COLUNAS_SERVICO)
+    conn.execute(f"""
+        INSERT INTO nucleo_servicos (vuupt_service_id, codigo, status, {", ".join(_COLUNAS_SERVICO)}, atualizado_em)
+        VALUES (?, ?, COALESCE(?, ?), {", ".join("?" for _ in _COLUNAS_SERVICO)}, ?)
+        ON CONFLICT(vuupt_service_id) DO UPDATE SET
+            codigo = excluded.codigo,
+            status = COALESCE(?, nucleo_servicos.status),
+            {sets},
+            atualizado_em = excluded.atualizado_em
+    """, (int(service_id), codigo, status, banco.PEDIDO_ABERTO, *valores, banco.agora(), status))
+
+
 def marcar_em_rota_por_service_ids(service_ids, vuupt_route_id: int, conn: sqlite3.Connection | None = None) -> int:
     """Gancho do envio do rascunho (rascunhos_rota.enviar_rascunho, Hugo
     24/09): a rota acabou de ser criada na Vuupt e o route_id já é conhecido,
