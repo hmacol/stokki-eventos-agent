@@ -69,5 +69,7 @@ def buscar_fotos(token: str, servico: dict, http_get=None) -> list[tuple[str, by
                 raise ValueError(f"{len(r.content)} bytes")
             fotos.append((ROTULOS_CAMPO.get(campo.get("checklist_form_field_id"), padrao), r.content))
         except Exception as e:
-            logger.warning(f"Foto do checklist do servico {service_id} nao baixou: {e}")
+            # a mensagem do requests traz a file_url assinada: loga so tipo e status
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            logger.warning(f"Foto do checklist do servico {service_id} nao baixou: {type(e).__name__} {status or ''}")
     return fotos
