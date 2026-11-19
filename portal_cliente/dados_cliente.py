@@ -837,6 +837,18 @@ def checklist_id_do_servico(servico: dict) -> int | None:
     return cl.get("id")
 
 
+def comprovante_proprio(servico: dict, config: dict) -> Path | None:
+    """Comprovante no modelo da Freshlog (comprovante_entrega/, 17/11), com a
+    foto original do canhoto. None = a foto nao baixou ou a geracao falhou:
+    quem chama cai no PDF da Vuupt (baixar_canhoto_pdf)."""
+    try:
+        from comprovante_entrega import gerar_comprovante
+        return gerar_comprovante.salvar_com_foto(servico, config, CANHOTOS_DIR, validade_s=3600)
+    except Exception:
+        logger.exception(f"[portal] comprovante proprio de {servico.get('code')} falhou")
+        return None
+
+
 def baixar_canhoto_pdf(token: str, checklist_id: int, codigo: str) -> Path | None:
     """Mesmo endpoint/nome de arquivo de expedir_pedidos.baixar_canhoto_pdf
     (dados/canhotos/canhoto_<codigo>.pdf) -- se a expedição já baixou,

@@ -1724,6 +1724,17 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
    montar_email_entrega.py, vuupt_entregas.py (fonte de dados — trocar ao
    sair da Vuupt), fingerprint_notificacao_entrega.py, test_*.py.
 
+ comprovante_entrega/      Comprovante de entrega PROPRIO em PDF (17/11, modelo
+                           "recibo"), no lugar do PDF de checklist da Vuupt.
+                           Usado no anexo do e-mail de entrega concluida e no
+                           portal (/api/canhoto e link publico /c/<token>); se
+                           a foto nao baixar ou a geracao falhar, cai no PDF da
+                           Vuupt. Painel e anexo na Stokki ainda usam a Vuupt.
+   gerar_pdf.py (desenha com Pillow: entregue, nao entregue, retirado),
+   fotos_vuupt.py (fotos originais do checklist — trocar ao sair da Vuupt),
+   gerar_comprovante.py (monta com NF/motorista/rota do banco; salvar_com_foto;
+   CLI --pedido PS-x --saida arq.pdf, so le), test_comprovante.py.
+
  notificacao_transportadoras/  04h10: pedidos do dia + XML para transportadoras
                            de redespacho. Envio real exige a chave-mestra E
                            notificacao_transportadoras.ativo: true (ausente =

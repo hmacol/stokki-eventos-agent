@@ -764,7 +764,8 @@ def api_canhoto(service_id):
                                texto="O motorista ainda não enviou a foto do canhoto deste pedido, "
                                      "ou ela ainda está sendo processada. Tente de novo mais tarde.",
                                voltar=url_for("inicio")), 404
-    pdf = dados.baixar_canhoto_pdf(token, checklist_id, servico.get("code") or str(service_id))
+    pdf = dados.comprovante_proprio(servico, _CONFIG) or \
+        dados.baixar_canhoto_pdf(token, checklist_id, servico.get("code") or str(service_id))
     if not pdf:
         return render_template("mensagem.html", titulo="Comprovante indisponível",
                                texto="Não conseguimos gerar o comprovante agora. Tente de novo em alguns minutos.",
