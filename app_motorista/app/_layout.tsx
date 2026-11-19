@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { AppState } from 'react-native';
+import { AppState, View } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
@@ -10,6 +10,7 @@ import * as api from '../src/api';
 import * as fila from '../src/fila';
 import * as rascunho from '../src/rascunhoParada';
 import { cores } from '../src/tema';
+import { AvisoVersao } from '../src/avisoVersao';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: false }),
@@ -72,6 +73,8 @@ function Guarda() {
   }, [motorista]);
 
   return (
+    <View style={{ flex: 1 }}>
+      <AvisoVersao />
     <Stack screenOptions={{ headerStyle: { backgroundColor: cores.primaria }, headerTintColor: '#fff', headerTitleStyle: { fontWeight: '700' } }}>
       <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="login" options={{ headerShown: false }} />
@@ -81,7 +84,9 @@ function Guarda() {
       <Stack.Screen name="cadastro" options={{ headerShown: false }} />
       <Stack.Screen name="rota/[id]" options={{ title: 'Rota' }} />
       <Stack.Screen name="parada/[id]" options={{ title: 'Parada' }} />
+      <Stack.Screen name="mapa/[id]" options={{ title: 'Mapa da rota' }} />
     </Stack>
+    </View>
   );
 }
 

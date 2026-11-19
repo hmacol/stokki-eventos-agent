@@ -130,6 +130,16 @@ export type Rota = {
   pedagios?: Pedagio[];
 };
 
+// Trajeto da rota pelas ruas (GET /rotas/<id>/trajeto, nucleo/trajeto_rota.py):
+// pontos [lat, lng] da base ate a base, na ordem planejada. LINHA_RETA = o
+// servidor nao conseguiu o Google e ligou as paradas em reta.
+export type Trajeto = {
+  pontos: [number, number][];
+  fonte: 'GOOGLE_ROUTES' | 'LINHA_RETA';
+  assinatura: string;
+  base: [number, number];
+};
+
 export type CampoChecklist = {
   chave: string;
   rotulo: string;
