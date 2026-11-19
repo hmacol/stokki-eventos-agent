@@ -240,6 +240,9 @@ class TestRodada(_Base):
         self.assertIn("a@emb.com", html)
         _, telefone, _, destino_forcado = f.whats[0]
         self.assertEqual((telefone, destino_forcado), (NUMERO, "5511977776666"))
+        # a copia que vai pro piloto leva link de piloto (a pagina simula por ele, mesmo apos virar ENVIAR)
+        self.assertLinkDoEmbarcador(html, "email-piloto", [cid])
+        self.assertLinkDoEmbarcador(f.whats[0][2], "whatsapp-piloto", [cid])
         self.assertEqual((f.abertos, f.mensagens), ([], []))
         self.assertEqual(sorted(self._envios(cid)), [("chat", "piloto", "", 0), ("email", "piloto", "", 0),
                                                      ("whatsapp", "piloto", "", 0)])

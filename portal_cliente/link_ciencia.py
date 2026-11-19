@@ -108,11 +108,15 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
     alerta_equipe = alerta_equipe or reais.alerta_equipe
     avaliar_servico = avaliar_servico or (lambda conn, servico: ae.avaliar_no_nucleo(conn, servico, config))
 
-    def _piloto(cnpj) -> bool:
+    def _piloto(cnpj, link) -> bool:
         """Simula salvo decisao ENVIAR da tela (cn.ACOES) ou cliente teste. NAO (geral ou
-        tipo desligado, embarcador bloqueado, piloto sem e-mail), PILOTO e erro: simula."""
+        tipo desligado, embarcador bloqueado, piloto sem e-mail), PILOTO e erro: simula.
+        Link de copia de piloto (origem '*-piloto', a que vai pro Hugo) simula sempre, mesmo
+        depois de o embarcador virar ENVIAR: so o cliente teste age por ele."""
         if ae._digitos(cnpj) == CNPJ_CLIENTE_TESTE:
             return False
+        if link.origem.endswith("-piloto"):
+            return True
         try:
             return ncd.decisao_email(cnpj, config, db_path=db_path).acao != "ENVIAR"
         except Exception as e:  # noqa: BLE001
@@ -177,7 +181,7 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
         cnpj = next((r["cnpj"] for r in linhas if r.get("cnpj")), None)
         return render_template("ciencia.html", token=token, pendentes=[_vista_pendente(p) for p in pendentes],
                                respondidos=[_vista_respondido(r) for r in respondidos],
-                               piloto=bool(linhas) and _piloto(cnpj), aviso=aviso, erro=erro, abrir=abrir,
+                               piloto=bool(linhas) and _piloto(cnpj, link), aviso=aviso, erro=erro, abrir=abrir,
                                nome=nome), status
 
     def _ir(token, resultado, ciencia_id=None, data=None):
@@ -202,7 +206,7 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
             return f"Pedido {codigo}: ciência registrada em nome de {ciencia['respondido_por']}. Obrigado!"
         if resultado == "reagendado" and ciencia["situacao"] == cd.REAGENDADO:
             return f"Pedido {codigo}: entrega reagendada para {_br(ciencia['data_nova'])}. Obrigado!"
-        if not _piloto(ciencia["cnpj"]):
+        if not _piloto(ciencia["cnpj"], link):
             return f"Pedido {codigo}: resposta recebida."
         if resultado == "ciente":
             return f"Pedido {codigo}: ciência simulada."
@@ -291,7 +295,7 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
             nome = _nome_do_form()
             if not nome:
                 return _pagina(token, link, erro=_ERRO_NOME, status=400)
-            if _piloto(ciencia["cnpj"]):
+            if _piloto(ciencia["cnpj"], link):
                 return _ir(token, "ciente", ciencia["id"])
             agora = datetime.now()
             # um reagendar em andamento (esperando a Vuupt) ganha: o ciente nao grava por cima
@@ -327,7 +331,7 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
                 data = None
             if data not in datas:
                 return _pagina(token, link, erro=_ERRO_DATA, abrir=ciencia["id"], nome=nome, status=400)
-            if _piloto(ciencia["cnpj"]):
+            if _piloto(ciencia["cnpj"], link):
                 return _ir(token, "reagendado", ciencia["id"], data.isoformat())
             # trava antes da Vuupt: ciente ou outra aba no meio nao gravam por cima do que a Vuupt fizer
             if not cd.reivindicar_resposta(conn, ciencia["id"], datetime.now()):

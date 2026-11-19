@@ -20,7 +20,9 @@ ROTULOS = {
 }
 CANAIS = ("email", "whatsapp", "chat")
 _ORIGENS = {"email": "pelo link do e-mail", "whatsapp": "pelo link do WhatsApp", "chat": "pelo link do chat",
-            "equipe": "pelo link do alerta da equipe"}
+            "equipe": "pelo link do alerta da equipe",
+            "email-piloto": "pelo link da cópia de piloto do e-mail",
+            "whatsapp-piloto": "pelo link da cópia de piloto do WhatsApp"}
 
 
 def rotulo_origem(origem) -> str:

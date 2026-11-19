@@ -335,7 +335,9 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
         piloto = d_email.acao == "PILOTO"
         destinos = [d_email.destino_piloto] if piloto else list(emb["emails"])
         lem = lembrete_piloto if piloto else lembrete
-        corpo = envelope_html(_conteudo_email(nome, pendentes, link("email"), lem, emb["emails"] if piloto else None),
+        # copia de piloto leva link de piloto: a pagina simula por ele mesmo depois de o embarcador virar ENVIAR
+        link_email = link("email-piloto" if piloto else "email")
+        corpo = envelope_html(_conteudo_email(nome, pendentes, link_email, lem, emb["emails"] if piloto else None),
                               rodape="Mensagem automática — Agente Stokki Eventos.")
         if not canais.email(destinos, _assunto(len(pendentes), lem), corpo):
             return "nao_enviado", "falha", ", ".join(destinos)
@@ -348,7 +350,8 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
         if not telefone:
             return "nao_enviado", "sem_whatsapp", ""
         piloto = d_wpp.acao == "PILOTO"
-        texto = notificar_whatsapp.texto_ciencia_dedicado(nome, pendentes, link("whatsapp"),
+        link_whats = link("whatsapp-piloto" if piloto else "whatsapp")
+        texto = notificar_whatsapp.texto_ciencia_dedicado(nome, pendentes, link_whats,
                                                           lembrete_piloto if piloto else lembrete)
         assinatura = f"{TIPO}:{sender_id}:{rodada_msg}:{agora:%Y%m%d%H%M}"
         situacao = canais.whatsapp(assinatura, telefone, texto, d_wpp.destino_piloto if piloto else "")
@@ -588,10 +591,13 @@ def executar(config: dict, agora: datetime | None = None, modo_teste: bool = Fal
                                                 agora.date())
                 if motivo:
                     fora.add(ciencia["id"])
+                    if not modo_teste and not cd.encerrar(conn, ciencia["id"], motivo, agora):
+                        # resposta do embarcador em andamento (trava da pagina): fica pra proxima rodada
+                        logger.info(f"ciencia do dedicado: {ciencia['codigo']} nao encerrado agora ({motivo}): "
+                                    f"resposta em andamento ou ja respondido")
+                        continue
                     resumo["encerrados"] += 1
                     logger.info(f"{teste}ciencia do dedicado: {ciencia['codigo']} encerrado ({motivo})")
-                    if not modo_teste:
-                        cd.encerrar(conn, ciencia["id"], motivo, agora)
                     continue
                 nova = estado["data"] if estado else None
                 if nova and nova.isoformat() != ciencia["data_entrega"]:

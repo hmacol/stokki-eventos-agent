@@ -543,6 +543,25 @@ class PaginaCiencia(unittest.TestCase):
         self.assertEqual(cd.buscar(self.conn, cid)["situacao"], cd.PENDENTE)
         self.assertEqual((self.deps.chamadas, self.buscas), ([], []))
 
+    def test_link_de_copia_de_piloto_simula_mesmo_com_o_embarcador_em_envio_real(self):
+        self._tela_ligada()   # embarcador ja em ENVIAR: o link do cliente age, a copia que foi pro piloto nao
+        cid = self._ciencia()
+        tc = self._cliente()
+        for origem in ("email-piloto", "whatsapp-piloto"):
+            self.assertIn("Modo piloto", tc.get(self._url(origem=origem)).get_data(as_text=True))
+            r = self._post(tc, "ciente", {"ciencia_id": str(cid), "nome": "Hugo"}, origem=origem)
+            self.assertIn("ciência simulada", tc.get(r.headers["Location"]).get_data(as_text=True))
+            r = self._post(tc, "reagendar", {"ciencia_id": str(cid), "nome": "Hugo",
+                                             "data": self._datas()[0].isoformat()}, origem=origem)
+            self.assertIn("simulado", tc.get(r.headers["Location"]).get_data(as_text=True))
+        self.assertEqual(cd.buscar(self.conn, cid)["situacao"], cd.PENDENTE)
+        self.assertEqual((self.deps.chamadas, self.buscas), ([], []))
+
+    def test_cliente_teste_age_de_verdade_tambem_pelo_link_de_piloto(self):
+        cid = self._ciencia(cnpj="00.000.000/0001-91")
+        self._post(self._cliente(), "ciente", {"ciencia_id": str(cid), "nome": "Hugo"}, origem="email-piloto")
+        self.assertEqual(cd.buscar(self.conn, cid)["situacao"], cd.CIENTE)
+
     def test_reagendar_recusado_solta_a_trava(self):
         self._tela_ligada()
         cid = self._ciencia()
