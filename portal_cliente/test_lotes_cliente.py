@@ -41,7 +41,7 @@ def planilha_lotes(linhas, lotes=("247", "254", "FIFO"), aba="Lotes") -> bytes:
     ws.append(["Nome do contato", "Nota Fiscal", "Descrição", "Código (SKU)"] + [int(l) if l.isdigit() else l for l in lotes]
               + ["Total Geral"])
     for cliente, nf, sku, qtds in linhas:
-        ws.append([cliente, nf, "DESC", sku] + list(qtds) + [sum(q or 0 for q in qtds)])
+        ws.append([cliente, nf, "DESC", sku] + list(qtds) + [sum(q for q in qtds if isinstance(q, (int, float)))])
     ws.append(["Total Geral"])
     buf = io.BytesIO()
     wb.save(buf)
@@ -116,7 +116,60 @@ class Gravacao(BaseLotes):
                           ("50001", "", "produto_desconhecido")])
         self.assertTrue(any("lote 247 de MNDDTP" in a for a in r["avisos"]), r["avisos"])   # há caixa do produto, não desse lote
         self.assertFalse(any("MNCXDCHF300" in a for a in r["avisos"]))                       # produto sem caixa: não avisa
-        self.assertEqual(len(self.indicacoes(conn)), 4)
+        # pedido já em separação e produto fora do cadastro: avisa e NÃO grava
+        self.assertEqual([(i[0], i[1]) for i in self.indicacoes(conn)], [("42430", "MNCXDCHF300"), ("50000", "MNDDTP")])
+
+    def test_pedido_que_entrou_na_onda_nao_muda_de_lote(self):
+        conn = self._conn()
+        conn.execute("INSERT INTO wms_pedidos VALUES (1, 'PS-1', '42430', '48', 'NA_ONDA', 'RESERVADO')")
+        conn.commit()
+        r = lc.importar_planilha(conn, 48, lc.ler_planilha_de_lotes("LOTES.xlsx", planilha_lotes(
+            [("A", 42430, "MNDDTP", (1, None, None))])), "LOTES.xlsx", "c")
+        self.assertEqual(r["linhas"][0]["situacao"], "chegou_tarde")
+        lc.planilha.garantir_tabela(conn)
+        self.assertEqual(self.indicacoes(conn), [])
+        with self.assertRaisesRegex(lc.ErroLote, "já está em separação"):
+            lc.gravar_lotes_da_nota(conn, 48, "42430", {"MNDDTP": "1"}, ep.ler_nfe(xml_com_produtos(42430))["produtos"], "c")
+
+
+class Limites(BaseLotes):
+    """Revisão de segurança (18/11): a planilha vem da internet."""
+
+    def ler(self, linhas, **kw):
+        return lc.ler_planilha_de_lotes("LOTES.xlsx", planilha_lotes(linhas, **kw))
+
+    def test_sku_nf_e_quantidade_absurdos_sao_recusados(self):
+        for linhas, motivo in (([("A", 1, "X" * 61, (1, None, None))], "SKU com mais de 60"),
+                               ([("A", 1234567890, "MNDDTP", (1, None, None))], "mais de 9 digitos"),
+                               ([("A", 1, "MNDDTP", ("inf", None, None))], "Quantidade invalida"),
+                               ([("A", 1, "MNDDTP", ("Infinity", None, None))], "Quantidade invalida"),
+                               ([("A", 1, "MNDDTP", ("1e999", None, None))], "Quantidade invalida"),
+                               ([("A", 1, "MNDDTP", (2_000_000, None, None))], "Quantidade invalida")):
+            with self.assertRaisesRegex(lc.ErroLote, motivo):
+                self.ler(linhas)
+        with self.assertRaisesRegex(lc.ErroLote, "Lote invalido"):
+            self.ler([("A", 1, "MNDDTP", (1, None, None))], lotes=("L<1>", "254", "FIFO"))
+
+    def test_indicacoes_demais(self):
+        linhas = [("A", n, "MNDDTP", (1, 1, None)) for n in range(1, 1002)]
+        with self.assertRaisesRegex(lc.ErroLote, "mais de 2000"):
+            self.ler(linhas)
+
+    def test_planilha_que_declara_colunas_e_abas_demais_le_so_o_teto(self):
+        wb = openpyxl.Workbook()
+        for i in range(8):
+            ws = wb.active if i == 0 else wb.create_sheet(f"Outra{i}")
+            ws.cell(row=1, column=5000, value="x")                       # dimensão até a coluna 5000
+        lotes = wb.create_sheet("Lotes")
+        lotes.append(["Nome do contato", "Nota Fiscal", "Descrição", "Código (SKU)", 247, "Total Geral"])
+        lotes.append(["A", 42430, "D", "MNDDTP", 6, 6])
+        buf = io.BytesIO()
+        wb.save(buf)
+        abas = lc.planilha.abrir(buf.getvalue(), "LOTES.xlsx")
+        self.assertEqual(abas[0][0], "Lotes")                            # a de lotes entra mesmo sendo a 9ª
+        self.assertEqual(len(abas), lc.planilha.MAX_ABAS)
+        self.assertTrue(all(len(l) <= lc.planilha.MAX_COLUNAS for _, ls in abas for l in ls))
+        self.assertEqual(lc.ler_planilha_de_lotes("LOTES.xlsx", buf.getvalue())["linhas"][0]["lote"], "247")
 
     def test_lote_da_previa_vale_pro_produto_inteiro_por_cima_da_planilha(self):
         conn = self._conn()
@@ -136,7 +189,7 @@ class Gravacao(BaseLotes):
             lc.gravar_lotes_da_nota(conn, 48, "42430", {"MNDDTP": "<script>"}, produtos, "c")
         conn.execute("INSERT INTO wms_pedidos VALUES (1, 'PS-1', '42430', '48', 'EMBALADO', 'RESERVADO')")
         conn.commit()
-        with self.assertRaisesRegex(lc.ErroLote, "já foi separado"):
+        with self.assertRaisesRegex(lc.ErroLote, "já está em separação"):
             lc.gravar_lotes_da_nota(conn, 48, "42430", {"MNDDTP": "1"}, produtos, "c")
         lc.planilha.garantir_tabela(conn)
         self.assertEqual(self.indicacoes(conn), [])

@@ -26,7 +26,6 @@ ARQUIVO_PREVIA = "portal: prévia do envio"
 # Colunas depois do SKU com estes nomes são de planilha de PEDIDOS, não de lotes
 _NAO_SAO_LOTE = {"quantidade", "qtd", "qtde", "quant", "valor", "valor unitario", "preco", "preco unitario",
                  "unidade", "un", "peso", "descricao", "produto", "data", "observacao", "observacoes"}
-_SAIU_DA_SEPARACAO = ("SEPARADO", "CONFERINDO", "AGUARDANDO_DECISAO", "CONFERIDO", "EMBALADO")
 _NO_ESTOQUE = ("EM_ESTOQUE", "ABERTA", "DEVOLVIDA")
 
 
@@ -74,8 +73,6 @@ def ler_planilha_de_lotes(nome: str, conteudo: bytes) -> dict | None:
             raise ErroLote("A planilha de lotes precisa ter, depois do SKU, uma coluna por lote (o nome da coluna é "
                            "o lote). Achei colunas de quantidade ou valor no lugar.")
         return None
-    for l in lido["lotes"]:
-        normalizar_lote(l)
     return lido
 
 
@@ -114,8 +111,10 @@ def _pedidos_por_nf(conn, embarcador_id: int, nfs) -> dict[str, dict]:
     return {str(r["nf"]): dict(r) for r in rows}
 
 
-def _ja_separado(pedido: dict | None) -> bool:
-    return bool(pedido) and (pedido["execucao"] in _SAIU_DA_SEPARACAO or pedido.get("estado_reserva") == "BAIXADO")
+def _na_separacao(pedido: dict | None) -> bool:
+    """O pedido já entrou numa onda (ou saiu do galpão): a indicação do cliente não muda mais nada.
+    Trocar o lote no meio da separação travaria o separador (revisão de segurança, 18/11)."""
+    return bool(pedido) and (pedido["execucao"] != "" or pedido.get("estado_reserva") == "BAIXADO")
 
 
 def _skus_do_cadastro(conn, embarcador_id: int) -> set[str] | None:
@@ -148,12 +147,21 @@ def _escrever(conn, gravar) -> None:
 
 
 def importar_planilha(conn, embarcador_id: int, lido: dict, arquivo: str, por: str) -> dict:
-    """Grava a planilha de lotes (cada NF+SKU substitui o que havia) e devolve o resumo pra tela."""
-    em = _agora()
-    _escrever(conn, lambda: planilha.gravar_planilha(conn, embarcador_id, lido, f"portal: {arquivo}", por, em))
+    """
+    Grava a planilha de lotes (cada NF+SKU substitui o que havia) e devolve o resumo pra tela.
+    Não grava produto fora do cadastro do embarcador nem nota cujo pedido já entrou na separação.
+    """
     linhas = lido.get("linhas") or []
+    todas = linhas + list(lido.get("sem_lote") or [])
     cadastro = _skus_do_cadastro(conn, embarcador_id)
-    pedidos = _pedidos_por_nf(conn, embarcador_id, [l["nf"] for l in linhas])
+    pedidos = _pedidos_por_nf(conn, embarcador_id, [l["nf"] for l in todas])
+
+    def vale(l) -> bool:
+        return (cadastro is None or l["sku"] in cadastro) and not _na_separacao(pedidos.get(l["nf"]))
+    gravar = {"linhas": [l for l in linhas if vale(l)], "sem_lote": [l for l in lido.get("sem_lote") or [] if vale(l)]}
+    em = _agora()
+    if gravar["linhas"] or gravar["sem_lote"]:
+        _escrever(conn, lambda: planilha.gravar_planilha(conn, embarcador_id, gravar, f"portal: {arquivo}"[:120], por, em))
     estoque = lotes_em_estoque(conn, embarcador_id, [l["sku"] for l in linhas])
     avisos, resumo = [], []
     for l in linhas:
@@ -161,10 +169,11 @@ def importar_planilha(conn, embarcador_id: int, lido: dict, arquivo: str, por: s
         situacao = "ok" if p else "aguardando_pedido"
         if cadastro is not None and l["sku"] not in cadastro:
             situacao = "produto_desconhecido"
-            avisos.append(f"NF {l['nf']}: o produto {l['sku']} não está no cadastro da Fresh Log. Essa indicação não vai valer.")
-        elif _ja_separado(p):
+            avisos.append(f"NF {l['nf']}: o produto {l['sku']} não está no cadastro da Fresh Log. Essa indicação não foi gravada.")
+        elif _na_separacao(p):
             situacao = "chegou_tarde"
-            avisos.append(f"NF {l['nf']} ({p['codigo_ps']}): o pedido já foi separado. O lote {l['lote']} chegou tarde para ele.")
+            avisos.append(f"NF {l['nf']} ({p['codigo_ps']}): o pedido já está em separação. O lote {l['lote']} não foi "
+                          f"aplicado; se precisar, fale com a Fresh Log.")
         else:
             aviso = _aviso_estoque(estoque, l["nf"], l["sku"], l["lote"])
             if aviso:
@@ -200,8 +209,8 @@ def gravar_lotes_da_nota(conn, embarcador_id: int, nf: str, lotes: dict, produto
     if not marcados:
         return {"gravados": 0, "avisos": []}
     p = _pedidos_por_nf(conn, embarcador_id, [nf]).get(nf)
-    if _ja_separado(p):
-        raise ErroLote(f"NF {nf} ({p['codigo_ps']}): o pedido já foi separado. Não dá mais para indicar lote.")
+    if _na_separacao(p):
+        raise ErroLote(f"NF {nf} ({p['codigo_ps']}): o pedido já está em separação. Não dá mais para indicar lote.")
     em = _agora()
 
     def gravar():

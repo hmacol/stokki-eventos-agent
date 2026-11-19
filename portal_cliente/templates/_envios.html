@@ -466,7 +466,7 @@
   function renderLotesPlanilha(lista) {
     const box = $('env-lotes');
     box.classList.toggle('oculto', !lista.length);
-    const SIT = { aguardando_pedido: 'pedido ainda não chegou: vale quando chegar', produto_desconhecido: 'produto fora do cadastro', chegou_tarde: 'pedido já separado' };
+    const SIT = { aguardando_pedido: 'pedido ainda não chegou: vale quando chegar', produto_desconhecido: 'produto fora do cadastro', chegou_tarde: 'pedido já em separação: não aplicado' };
     box.innerHTML = lista.map(r => `<div><b>Planilha de lotes ${esc(r.arquivo)}:</b> ${r.gravadas} indicaç${r.gravadas === 1 ? 'ão' : 'ões'} de lote gravada${r.gravadas === 1 ? '' : 's'}${r.sem_lote ? `; ${r.sem_lote} linha${r.sem_lote > 1 ? 's' : ''} sem lote sai${r.sem_lote > 1 ? 'em' : ''} pelo que vence primeiro` : ''}.</div>
       ${r.avisos.length ? `<ul>${r.avisos.map(a => `<li>${esc(a)}</li>`).join('')}</ul>` : ''}
       ${r.linhas.length ? `<div class="rolagem"><table class="lotes-tab"><thead><tr><th>NF</th><th>Pedido</th><th>SKU</th><th>Lote</th><th style="text-align:right">Quantidade</th><th></th></tr></thead><tbody>${r.linhas.map(l => `<tr><td class="mono">${esc(l.nf)}</td><td class="mono">${esc(l.codigo_ps || '—')}</td><td>${esc(l.sku)}</td><td><b>${esc(l.lote)}</b></td><td class="num" style="text-align:right">${Number(l.qtd_un).toLocaleString('pt-BR')}</td><td>${SIT[l.situacao] ? `<span class="chip">${esc(SIT[l.situacao])}</span>` : ''}</td></tr>`).join('')}</tbody></table></div>` : ''}`).join('');

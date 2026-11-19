@@ -18,6 +18,7 @@ com `inteiro = 1` e "este lote pro produto inteiro" (marcacao do cliente na prev
 quantidade). Os resumos e avisos ficam com quem chama (wms_separacao, portal_cliente/lotes_cliente).
 """
 import io
+import math
 import re
 import unicodedata
 
@@ -28,6 +29,14 @@ except ImportError:      # importado pelo portal do cliente (painel_agentes fora
 
 MAX_BYTES = 8 * 1024 * 1024
 MAX_LINHAS = 5000
+# Tetos (revisao de seguranca 18/11): a planilha vem do cliente pelo portal, aberto na internet.
+# Sem eles uma planilha pequena enchia o dados.db, travava a escrita ou esgotava a memoria.
+MAX_ABAS = 5
+MAX_COLUNAS = 100
+MAX_INDICACOES = 2000
+MAX_QTD = 1_000_000
+MAX_SKU = 60
+MAX_DIGITOS_NF = 9
 _SEM_LOTE = {"", "fifo", "fefo", "sem lote", "(vazio)", "vazio", "padrao", "(em branco)", "em branco"}
 _TOTAIS = {"total geral", "total", "soma", "grand total"}
 _CAB_NF = {"nota fiscal", "nf", "n nf", "numero nf", "numero da nf", "nota", "nfe", "nf e"}
@@ -52,15 +61,25 @@ def _texto(valor) -> str:
 
 
 def _numero(valor) -> float | None:
+    """Quantidade da celula; None se vazia ou nao for numero. ErroWMS se infinita ou absurda."""
     if valor is None or isinstance(valor, bool) or valor == "":
         return None
     if isinstance(valor, (int, float)):
-        return float(valor)
-    bruto = str(valor).strip().replace(".", "").replace(",", ".") if "," in str(valor) else str(valor).strip()
-    try:
-        return float(bruto)
-    except ValueError:
-        return None
+        numero = float(valor)
+    else:
+        bruto = str(valor).strip().replace(".", "").replace(",", ".") if "," in str(valor) else str(valor).strip()
+        try:
+            numero = float(bruto)
+        except ValueError:
+            return None
+    if not math.isfinite(numero) or numero > MAX_QTD:
+        raise ErroWMS(f"Quantidade invalida na planilha: {str(valor)[:20]!r} (maximo {MAX_QTD:,}).".replace(",", "."))
+    return numero
+
+
+def _ordem_das_abas(nomes: list[str]) -> list[int]:
+    """Indices das abas a ler: as "Lote..." primeiro, no maximo MAX_ABAS."""
+    return sorted(range(len(nomes)), key=lambda i: (not _norm(nomes[i]).startswith("lote"), i))[:MAX_ABAS]
 
 
 def abrir(conteudo: bytes, nome: str) -> list[tuple[str, list[list]]]:
@@ -76,11 +95,22 @@ def abrir(conteudo: bytes, nome: str) -> list[tuple[str, list[list]]]:
             raise ErroWMS("Este servidor ainda nao le o formato .xls (Excel antigo): salve a planilha como .xlsx "
                           "e envie de novo.")
         try:
-            wb = xlrd.open_workbook(file_contents=conteudo)
+            wb = xlrd.open_workbook(file_contents=conteudo, on_demand=True)   # so carrega a aba pedida
         except Exception as e:  # noqa: BLE001
             raise ErroWMS(f"Nao consegui abrir a planilha ({type(e).__name__}).")
-        return [(sh.name, [[sh.cell_value(r, c) for c in range(sh.ncols)] for r in range(min(sh.nrows, MAX_LINHAS))])
-                for sh in wb.sheets()]
+        try:
+            abas = []
+            for i in _ordem_das_abas(wb.sheet_names()):
+                sh = wb.sheet_by_index(i)
+                abas.append((sh.name, [[sh.cell_value(r, c) for c in range(min(sh.ncols, MAX_COLUNAS))]
+                                       for r in range(min(sh.nrows, MAX_LINHAS))]))
+            return abas
+        except ErroWMS:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise ErroWMS(f"Nao consegui ler a planilha ({type(e).__name__}).")
+        finally:
+            wb.release_resources()
     try:
         import openpyxl
         wb = openpyxl.load_workbook(io.BytesIO(conteudo), read_only=True, data_only=True)
@@ -88,14 +118,16 @@ def abrir(conteudo: bytes, nome: str) -> list[tuple[str, list[list]]]:
         raise ErroWMS(f"Nao consegui abrir a planilha ({type(e).__name__}). Envie um arquivo .xlsx ou .xls.")
     try:
         abas = []
-        for ws in wb.worksheets:
-            linhas = []
-            for i, row in enumerate(ws.iter_rows(values_only=True)):
-                if i >= MAX_LINHAS:
-                    break
-                linhas.append(list(row))
+        nomes = wb.sheetnames
+        for i in _ordem_das_abas(nomes):
+            ws = wb[nomes[i]]
+            # max_col: em read_only o openpyxl completa cada linha ate a coluna declarada na
+            # <dimension>, que um arquivo de 2 KB pode dizer que e a XFD (16 mil colunas)
+            linhas = [list(row) for row in ws.iter_rows(max_row=MAX_LINHAS, max_col=MAX_COLUNAS, values_only=True)]
             abas.append((ws.title or "", linhas))
         return abas
+    except Exception as e:  # noqa: BLE001
+        raise ErroWMS(f"Nao consegui ler a planilha ({type(e).__name__}).")
     finally:
         wb.close()
 
@@ -134,24 +166,28 @@ def ler_lotes(conteudo: bytes, nome: str) -> dict:
         nome_col = _norm(_texto(cabecalho[j]))
         if nome_col in _TOTAIS:
             break
-        colunas_lote.append((j, "" if nome_col in _SEM_LOTE else _texto(cabecalho[j]).upper()))
+        colunas_lote.append((j, "" if nome_col in _SEM_LOTE else normalizar_lote(_texto(cabecalho[j]))))
     if not any(lote for _, lote in colunas_lote):
         raise ErroWMS("A tabela nao tem nenhuma coluna de lote depois do SKU.")
     saida, sem_lote = [], []
     nf_atual, cliente_atual = "", ""
-    for linha in linhas[i_cab + 1:]:
+    for n_linha, linha in enumerate(linhas[i_cab + 1:], start=i_cab + 2):
         linha = list(linha) + [None] * (len(cabecalho) - len(linha))
         if _norm(linha[0]) in _TOTAIS or _norm(linha[col_nf]) in _TOTAIS:
             break
         nf = re.sub(r"\D", "", _texto(linha[col_nf])).lstrip("0")
+        if len(nf) > MAX_DIGITOS_NF:
+            raise ErroWMS(f"Linha {n_linha}: numero de nota fiscal com mais de {MAX_DIGITOS_NF} digitos.")
         if nf:
             nf_atual = nf
         if col_cli is not None and _texto(linha[col_cli]):
-            cliente_atual = _texto(linha[col_cli])
+            cliente_atual = _texto(linha[col_cli])[:120]
         sku = _texto(linha[col_sku]).upper()
         if not sku or not nf_atual:
             continue
-        descricao = _texto(linha[col_sku - 1]) if col_sku - 1 > col_nf else ""
+        if len(sku) > MAX_SKU:
+            raise ErroWMS(f"Linha {n_linha}: SKU com mais de {MAX_SKU} caracteres.")
+        descricao = _texto(linha[col_sku - 1])[:120] if col_sku - 1 > col_nf else ""
         for j, lote in colunas_lote:
             qtd = _numero(linha[j])
             if not qtd or qtd <= 0:
@@ -161,6 +197,8 @@ def ler_lotes(conteudo: bytes, nome: str) -> dict:
                               "cliente": cliente_atual, "descricao": descricao})
             else:
                 sem_lote.append({"nf": nf_atual, "sku": sku, "qtd_un": round(qtd, 3)})
+            if len(saida) + len(sem_lote) > MAX_INDICACOES:
+                raise ErroWMS(f"Planilha com mais de {MAX_INDICACOES} indicacoes: divida em arquivos menores.")
     if not saida and not sem_lote:
         raise ErroWMS("A tabela de lotes esta vazia.")
     return {"aba": titulo, "linhas": saida, "sem_lote": sem_lote,
