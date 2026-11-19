@@ -106,6 +106,32 @@ def avaliar(servico: dict, rotas_nucleo: dict, status_nucleo: str | None, agent_
     return Avaliacao(True, "", bool(rota_id), rota_id)
 
 
+def avaliar_no_nucleo(conn, servico: dict, config: dict | None) -> Avaliacao:
+    """avaliar() com as rotas/status do espelho do nucleo (conn = dados.db) e o agente
+    Lalamove do config. Usado pela rota logada (app.py) e pela pagina de ciencia."""
+    import cancelamento
+    import dados_cliente
+    from pedidos_dedicados import codigos_do_servico
+    codigos = codigos_do_servico(servico)
+    servicos, rotas = (cancelamento.servicos_do_pedido(conn, dados_cliente.codigo_base(codigos[0]))
+                       if codigos else ([], {}))
+    status_nucleo = next((s.get("status") for s in servicos if s.get("vuupt_service_id") == servico.get("id")), None)
+    lalamove = int(((config or {}).get("lalamove") or {}).get("agent_id_vuupt") or 0)
+    return avaliar(servico, rotas, status_nucleo, lalamove)
+
+
+def mapa_horarios(config: dict | None) -> dict:
+    """Horario padrao de recebimento da planilha BD_CLIENTES (como o envio de pedidos);
+    {} sem planilha ou se ela nao abrir (vale o ajuste manual / padrao)."""
+    try:
+        from regras.complexidade_entrega import carregar_horarios
+        caminho = ((config or {}).get("complexidade_entrega") or {}).get("planilha", "")
+        return carregar_horarios(caminho) if caminho else {}
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"alteracao: horarios da planilha indisponiveis: {e}")
+        return {}
+
+
 def _horario(valor, nome: str) -> str:
     texto = str(valor or "").strip()
     if not _HORA.match(texto):

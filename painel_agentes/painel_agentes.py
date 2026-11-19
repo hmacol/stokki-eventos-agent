@@ -1932,6 +1932,52 @@ def canhotos_pendentes():
     return render_template("canhotos_pendentes.html", dados=dados, filtros=filtros)
 
 
+@app.route("/ciencias-dedicado")
+@requer_auth(niveis=("total", "operador", "logistica"))
+def ciencias_dedicado():
+    """Ciencia do dedicado fora do dia fixo (spec 17/11, secao 6): quem esta
+    aguardando, quem respondeu, avisos por canal e link da pagina do embarcador."""
+    import ciencia_dedicado as cd
+    import ciencias_dedicado as tela
+    from portal_cliente import chamados, link_ciencia
+    filtros = {"situacao": request.args.get("situacao", ""), "embarcador": request.args.get("embarcador", "")}
+    config = _carregar_config()
+    segredo = (config.get("portal_cliente") or {}).get("secret_key")
+    base = chamados.url_base(config)
+    conn = cd.conectar(cd.DB_PATH)
+    try:
+        linhas = tela.montar(conn, tela.nomes_embarcadores(cd.DB_PATH), filtros["situacao"], filtros["embarcador"])
+    finally:
+        conn.close()
+    for l in linhas:
+        l["link"] = link_ciencia.url(l["sender_id"], segredo, base) if segredo and l["sender_id"] else ""
+    return render_template("ciencias_dedicado.html", linhas=linhas, filtros=filtros, rotulos=tela.ROTULOS)
+
+
+@app.route("/api/ciencias-dedicado/<int:ciencia_id>")
+@requer_auth(niveis=("total", "operador", "logistica"))
+def api_ciencia_dedicado(ciencia_id):
+    import ciencia_dedicado as cd
+    conn = cd.conectar(cd.DB_PATH)
+    try:
+        linha = cd.buscar(conn, ciencia_id)
+        if not linha:
+            return jsonify({"erro": "Ciência não encontrada."}), 404
+        envios = [{k: e[k] for k in ("canal", "enviado_em", "destino", "resultado", "motivo", "rodada")}
+                  for e in cd.envios(conn, ciencia_id)]
+    finally:
+        conn.close()
+    # Prova da resposta (quem, quando, IP) so existe pra CIENTE/REAGENDADO; ENCERRADO e o sistema fechando.
+    resposta = encerramento = None
+    if linha["situacao"] in (cd.CIENTE, cd.REAGENDADO):
+        resposta = {"por": linha["respondido_por"], "em": linha["respondido_em"],
+                    "ip": linha["respondido_ip"], "data_nova": linha["data_nova"]}
+    elif linha["situacao"] == cd.ENCERRADO:
+        encerramento = {"motivo": linha["motivo_encerramento"], "em": linha["respondido_em"]}
+    return jsonify({"ciencia": {"codigo": linha["codigo"], "situacao": linha["situacao"]},
+                    "resposta": resposta, "encerramento": encerramento, "envios": envios})
+
+
 @app.route("/api/canhotos-pendentes", methods=["POST"])
 @requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
