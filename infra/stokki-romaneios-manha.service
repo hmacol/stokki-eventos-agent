@@ -1,6 +1,8 @@
 [Unit]
 Description=Stokki Eventos - Geracao de romaneios da manha (gerar_pdf_romaneios.py --data hoje)
 OnFailure=stokki-alerta-falha@%n.service
+# se a leitura dos volumes conferidos (03h50) ainda estiver rodando, espera ela terminar
+After=stokki-volumes-conferidos.service
 
 [Service]
 Type=oneshot
