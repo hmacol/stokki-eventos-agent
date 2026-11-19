@@ -330,6 +330,7 @@ def _parsear_pagina_detalhe(html: str, id_pedido: int) -> dict:
     # sempre preenchido) sobre o mencionado na NF-e (frequentemente
     # "Não informado"). Usado pra calcular o dimension_3 do VUUPT.
     quantidade_volumes = None
+    fonte_volumes = None        # "conferencia" | "nfe" -- de onde saiu o numero acima
     m_conf = re.search(
         r"Quantidade de volumes informado na confer[êe]ncia:\s*</strong>\s*([^<]*?)\s*<br>",
         html,
@@ -338,10 +339,11 @@ def _parsear_pagina_detalhe(html: str, id_pedido: int) -> dict:
         r"Quantidade de volumes mencionado na NF-e:\s*</strong>\s*([^<]*?)\s*<br>",
         html,
     )
-    for m in (m_conf, m_nfe):
+    for fonte, m in (("conferencia", m_conf), ("nfe", m_nfe)):
         if m:
             try:
                 quantidade_volumes = int(float(m.group(1).strip().replace(",", ".")))
+                fonte_volumes = fonte
                 break
             except ValueError:
                 continue
@@ -358,6 +360,7 @@ def _parsear_pagina_detalhe(html: str, id_pedido: int) -> dict:
         "referencia": referencia,
         "stkkc_id":   stkkc_id,
         "quantidade_volumes": quantidade_volumes,
+        "fonte_volumes": fonte_volumes,
         "cliente":    blocos.get("cliente"),
         "transportadora": blocos.get("transportadora"),
         "local_entrega": blocos.get("local_entrega"),

@@ -246,6 +246,21 @@ def salvar(conn: sqlite3.Connection, cnpj, emails, flags: dict, por: str, whatsa
     return ler(conn, cnpj)
 
 
+def numero_whatsapp(conn: sqlite3.Connection, cnpj) -> str | None:
+    """Numero valido gravado pelo embarcador, sem olhar chave nenhuma (aviso de
+    cobranca, como a ciencia do dedicado, sai mesmo com o aviso desligado).
+    So leitura: sem tabela ou sem coluna (ninguem salvou ainda) e None."""
+    if not _tabela_existe(conn) or "whatsapp" not in _colunas(conn):
+        return None
+    row = conn.execute(
+        "SELECT whatsapp FROM preferencias_notificacao WHERE cnpj_embarcador = ?",
+        (_so_digitos(cnpj),)).fetchone()
+    if not row:
+        return None
+    numero = _so_digitos(row[0])
+    return numero if _RE_WHATSAPP.fullmatch(numero) else None
+
+
 def whatsapp_do_embarcador(conn: sqlite3.Connection, cnpj) -> str | None:
     """Numero pro aviso de chamado sem resposta (avisar_cliente_sem_resposta.py):
     so com a chave `chamado_sem_resposta` ligada e numero valido gravado.
@@ -253,12 +268,11 @@ def whatsapp_do_embarcador(conn: sqlite3.Connection, cnpj) -> str | None:
     if not _tabela_existe(conn) or "whatsapp" not in _colunas(conn):
         return None
     row = conn.execute(
-        "SELECT whatsapp, chamado_sem_resposta FROM preferencias_notificacao WHERE cnpj_embarcador = ?",
+        "SELECT chamado_sem_resposta FROM preferencias_notificacao WHERE cnpj_embarcador = ?",
         (_so_digitos(cnpj),)).fetchone()
-    if not row or not row[1]:
+    if not row or not row[0]:
         return None
-    numero = _so_digitos(row[0])
-    return numero if _RE_WHATSAPP.fullmatch(numero) else None
+    return numero_whatsapp(conn, cnpj)
 
 
 def carregar_embarcadores(tipo: str, chave: str = "sender_id", db_path=None) -> dict:

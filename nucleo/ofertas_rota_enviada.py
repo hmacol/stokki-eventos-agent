@@ -66,6 +66,11 @@ ABERTA, ESCOLHIDA, APLICADA, RETIRADA = "ABERTA", "ESCOLHIDA", "APLICADA", "RETI
 
 LINK_PADRAO = "https://app.freshhub.com.br/motorista/abrir/ofertas"
 GRUPO_ROTAS = "Rotas FRESHLOG"
+# Pagina do link (Hugo, 19/11): coleta sempre na base; pagamento ainda sem regra no sistema.
+LOCAL_COLETA = ("Base Freshlog - Rua Zilda, 288, Portão Lateral Ouro Grosso, Casa Verde Alta, "
+                "São Paulo-SP, 02545-000")
+TEXTO_PAGAMENTO = "Alinhar no WhatsApp."
+JANELA_TARDE = "12:00"   # entrega com janela abrindo a partir daqui ganha alerta na pagina
 MAX_MENSAGEM = 200
 # Servico que a Vuupt ainda nao viu o motorista aceitar.
 _VUUPT_SEM_ACEITE = ("", "assigned", "not_assigned")
@@ -81,6 +86,7 @@ def config_ofertas(config: dict | None = None) -> dict:
         "agentes": ponte_vuupt.config_ponte(projeto)["agentes"],
         "grupo_id": bruto.get("grupo_id") or None,
         "link": bruto.get("link") or LINK_PADRAO,
+        "segredo": (projeto.get("api_motorista") or {}).get("secret_key") or None,   # assina o link de cada oferta
     }
 
 
@@ -321,6 +327,78 @@ def cancelar(conn: sqlite3.Connection, agent_id: int, rota_id: int) -> str | Non
     return None
 
 
+# ── Pagina publica do link (Hugo, 19/11) ──────────────────────────────────────
+
+def _assinatura(segredo: str, oferta_id: int) -> str:
+    import hashlib
+    import hmac
+    return hmac.new(segredo.encode(), f"oferta-rota:{oferta_id}".encode(), hashlib.sha256).hexdigest()[:16]
+
+
+def token_oferta(segredo: str, oferta_id: int) -> str:
+    """Id + assinatura: o link nao deixa adivinhar a oferta vizinha."""
+    return f"{oferta_id}-{_assinatura(segredo, oferta_id)}"
+
+
+def oferta_por_token(conn: sqlite3.Connection, segredo: str, token: str):
+    import hmac
+    oferta_id, _, assinatura = str(token or "").partition("-")
+    if not (segredo and oferta_id.isdigit() and assinatura) or not _tem_tabela(conn):
+        return None
+    if not hmac.compare_digest(assinatura, _assinatura(segredo, int(oferta_id))):
+        return None
+    return conn.execute("SELECT * FROM nucleo_ofertas_rota WHERE id = ?", (int(oferta_id),)).fetchone()
+
+
+def link_da_oferta(cfg: dict, oferta_id: int) -> str:
+    """Link do aviso: a pagina da oferta; sem segredo no config, a pagina fixa que so abre o app."""
+    return f"{cfg['link'].rstrip('/')}/{token_oferta(cfg['segredo'], oferta_id)}" if cfg.get("segredo") else cfg["link"]
+
+
+def _sem_repetir(nomes) -> list[str]:
+    """'SAO PAULO' e 'São Paulo' viram um so (fica a grafia com acento)."""
+    vistos: dict[str, str] = {}
+    for nome in nomes or []:
+        chave = _so_letras(nome)
+        if chave and (chave not in vistos or (vistos[chave].isascii() and not str(nome).isascii())):
+            vistos[chave] = str(nome)
+    return list(vistos.values())
+
+
+def dados_pagina(conn: sqlite3.Connection, oferta) -> dict:
+    """O que a pagina publica mostra: so o resumo (nunca endereco de entrega,
+    destinatario ou pedido) + coleta, valor e pagamento."""
+    from regras.tipo_veiculo import tipo_por_codigo
+    resumo = json.loads(oferta["resumo_json"] or "{}")
+    rota = conn.execute("SELECT * FROM nucleo_rotas WHERE id = ?", (oferta["rota_id"],)).fetchone()
+    tarde = None
+    if rota:
+        tarde = conn.execute(
+            "SELECT MIN(janela_inicio) FROM nucleo_paradas WHERE rota_id = ? AND situacao != ? AND janela_inicio >= ?",
+            (rota["id"], banco.PARADA_CANCELADA, JANELA_TARDE)).fetchone()[0]
+    valor = valor_aproximado(conn, rota, _tipo_veiculo_do(conn, oferta["agent_original"])) if rota else None
+    veiculo = tipo_por_codigo(rota["tipo_veiculo"]) if rota else None
+    encerrada = oferta["status"] != ABERTA or str(oferta["data_rota"]) < date.today().isoformat()
+    return {
+        "dia": f"{oferta['data_rota'][8:10]}/{oferta['data_rota'][5:7]}",
+        "disponivel": not encerrada,
+        "situacao": "Disponível" if not encerrada else (
+            "Já foi escolhida por outro motorista" if oferta["status"] in (ESCOLHIDA, APLICADA) else "Não está mais disponível"),
+        "entregas": int(resumo.get("total_paradas") or 0),
+        "regiao": resumo.get("regiao"),
+        "cidades": _sem_repetir(resumo.get("cidades")),
+        "bairros": _sem_repetir(resumo.get("bairros")),
+        "caixas": resumo.get("total_caixas"),
+        "peso_kg": resumo.get("peso_kg"),
+        "veiculo": veiculo.nome if veiculo else None,
+        "valor": _brl(valor) if valor is not None else None,
+        "local_coleta": LOCAL_COLETA,
+        "horario_coleta": resumo.get("saida"),
+        "janela_tarde": tarde,
+        "pagamento": TEXTO_PAGAMENTO,
+    }
+
+
 # ── Avisos por WhatsApp ───────────────────────────────────────────────────────
 
 def _cortar(texto: str, limite: int) -> str:
@@ -336,7 +414,7 @@ def texto_disponivel(oferta, valor: float | None, link: str) -> str:
               + (f", saída {resumo['saida']}" if resumo.get("saida") else "")]
     if valor is not None:
         linhas.append(f"Valor aprox. {_brl(valor)}")
-    fim = f"Pegue no app: {link}"
+    fim = f"Veja e pegue: {link}"
     sobra = MAX_MENSAGEM - len("\n".join(linhas + [fim])) - 1
     regiao = str(resumo.get("regiao") or "")
     if regiao and sobra >= 8:
@@ -404,7 +482,8 @@ def enviar_avisos(conn: sqlite3.Connection, config: dict, cfg: dict, modo_teste:
                 if modo_teste:
                     print(f"[modo teste] grupo {GRUPO_ROTAS!r} nao encontrado: aviso da oferta {o['id']} nao sairia")
                 continue
-            texto = texto_disponivel(o, valor_aproximado(conn, rota, _tipo_veiculo_do(conn, o["agent_original"])), cfg["link"])
+            texto = texto_disponivel(o, valor_aproximado(conn, rota, _tipo_veiculo_do(conn, o["agent_original"])),
+                                     link_da_oferta(cfg, o["id"]))
             tipo, coluna, grupo = "rota_disponivel", "aviso_grupo_em", destino_rotas
         else:
             texto = texto_escolhida(o, rota, _nome(conn, o["escolhido_por"]), _nome(conn, o["agent_original"]))

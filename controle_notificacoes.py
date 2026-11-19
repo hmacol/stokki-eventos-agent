@@ -83,6 +83,8 @@ TIPOS = {
                                 "canais": ("email", "whatsapp"), "quando": "dentro do pipeline e lembrete"},
     "rota_cancelada": {"rotulo": "Rota cancelada", "destino": "embarcador",
                        "canais": ("email",), "quando": "botão Cancelar e notificar do Planejamento"},
+    "ciencia_dedicado": {"rotulo": "Ciência do dedicado", "destino": "embarcador",
+                         "canais": ("email", "whatsapp"), "quando": "timer de 15 min (lembrete a cada 4 h)"},
 }
 
 

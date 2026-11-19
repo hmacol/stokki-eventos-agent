@@ -579,6 +579,29 @@ COL_PARES = {"referencia": 0, "destinatario_nome": 1, "destinatario_doc": 4, "ce
              "bairro": 10, "cidade": 11, "uf": 12}
 
 
+def test_planilha_que_declara_colunas_e_abas_demais_le_so_o_teto():
+    """Revisão de segurança (19/11): 2 KB declarando 16 mil colunas em muitas abas esgotava a memória."""
+    wb = openpyxl.Workbook()
+    cab = [c[1] for c in ep.COLUNAS_PLANILHA]
+    for i in range(15):
+        ws = wb.active if i == 0 else wb.create_sheet(f"Aba{i}")
+        if i == 1:      # o pedido de verdade, numa aba que também declara 16 mil colunas
+            ws.append(cab)
+            ws.append([_linha().get(c[0], "") for c in ep.COLUNAS_PLANILHA])
+        ws.cell(row=3000 if i != 1 else 3, column=16000, value=" ")
+    buf = io.BytesIO()
+    wb.save(buf)
+    assert len(buf.getvalue()) < 50_000
+    linhas = ep._abrir_planilha(buf.getvalue(), "pedidos.xlsx")
+    assert len(linhas) <= ep.MAX_LINHAS_PLANILHA + 21
+    assert all(len(l) <= ep.MAX_COLUNAS_PLANILHA for l in linhas)
+    assert any(_planilha_cab_ok(l, cab) for l in linhas)
+
+
+def _planilha_cab_ok(linha, cab):
+    return [v for v in linha[:len(cab)]] == cab
+
+
 def _planilha_cab(cab_itens: list[str], linhas: list[list]) -> bytes:
     wb = openpyxl.Workbook()
     wb.active.append(CAB_PARES + cab_itens)

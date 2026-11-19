@@ -70,6 +70,7 @@ PASTA_XMLS = _RAIZ / "dados" / "portal_envios"
 PASTA_TEMP = PASTA_XMLS / "_temporarios"
 TEMP_VALIDADE_SEGUNDOS = 2 * 3600
 DIAS_LISTAGEM = 30
+MAX_PRODUTOS_NFE = 300   # produtos da nota na prévia (indicação de lote)
 
 NS_NFE = "http://www.portalfiscal.inf.br/nfe"
 NS = {"nfe": NS_NFE}
@@ -383,6 +384,18 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
 
     emitida = _texto(ide, "nfe:dhEmi") or _texto(ide, "nfe:dEmi")
     transporta = inf.find("nfe:transp/nfe:transporta", NS)
+    # Produtos da nota (18/11): a prévia mostra pra o cliente indicar o lote (lotes_cliente.py)
+    produtos = []
+    for det in dets[:MAX_PRODUTOS_NFE]:
+        sku = _texto(det, "nfe:prod/nfe:cProd")
+        if not sku:
+            continue
+        try:
+            qtd = round(float(_texto(det, "nfe:prod/nfe:qCom") or 0), 4)
+        except ValueError:
+            qtd = 0.0
+        produtos.append({"sku": sku[:60], "descricao": _texto(det, "nfe:prod/nfe:xProd")[:120], "quantidade": qtd,
+                         "unidade": _texto(det, "nfe:prod/nfe:uCom")[:12]})
     return {
         "chave_nfe": chave,
         "numero_nf": _texto(ide, "nfe:nNF"),
@@ -403,6 +416,7 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
         "peso_kg": round(peso, 3),
         "valor_nf": round(valor, 2),
         "itens": len(dets),
+        "produtos": produtos,
         "nome_arquivo": nome_arquivo or f"{chave}.xml",
         "transportadora_nome": _texto(transporta, "nfe:xNome"),
         "transportadora_cnpj": _so_digitos(_texto(transporta, "nfe:CNPJ") or _texto(transporta, "nfe:CPF")),
@@ -493,6 +507,12 @@ COLUNA_EMPRESA: tuple[str, str, bool, tuple[str, ...], int, str] = (
      "cnpj do remetente", "cnpj remetente", "remetente"), 26, "")
 MAX_LINHAS_PLANILHA = 2000
 MAX_ITENS_PLANILHA = 10000   # planilha de pares (um pedido por linha) multiplica itens por linha
+# Revisão de segurança (19/11): um .xlsx de 2 KB pode declarar 16 mil colunas e várias abas, e o
+# openpyxl (read_only) completa cada linha até a coluna declarada: o portal esgotava a memória.
+# As planilhas reais têm 22 colunas e 2 abas; a de pares da Marchef (16 fixas + 100 pares de
+# Sku/Quantidade = 216 colunas) cabe com folga.
+MAX_COLUNAS_PLANILHA = 300
+MAX_ABAS_PLANILHA = 10
 UFS = {"AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ",
        "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"}
 NOMES_UF = {"AC": "Acre", "AL": "Alagoas", "AP": "Amapá", "AM": "Amazonas", "BA": "Bahia", "CE": "Ceará", "DF": "Distrito Federal",
@@ -582,31 +602,40 @@ def _abrir_planilha(conteudo: bytes, nome: str):
         except ImportError:
             raise ErroEnvio(f"{nome}: o formato .xls (Excel 97-2003) não é suportado -- salve a planilha como .xlsx e envie de novo.")
         try:
-            wb = xlrd.open_workbook(file_contents=conteudo)
+            wb = xlrd.open_workbook(file_contents=conteudo, on_demand=True)   # carrega só a aba pedida
         except Exception as e:
             raise ErroEnvio(f"{nome}: não consegui abrir a planilha ({e}).")
-        for sh in wb.sheets():
-            linhas = [[sh.cell_value(r, c) for c in range(sh.ncols)] for r in range(min(sh.nrows, MAX_LINHAS_PLANILHA + 20))]
-            if any(any(_celula_texto(v) for v in l) for l in linhas):
-                return linhas
-        return []
+        try:
+            for i in range(min(wb.nsheets, MAX_ABAS_PLANILHA)):
+                sh = wb.sheet_by_index(i)
+                linhas = [[sh.cell_value(r, c) for c in range(min(sh.ncols, MAX_COLUNAS_PLANILHA))]
+                          for r in range(min(sh.nrows, MAX_LINHAS_PLANILHA + 20))]
+                if any(any(_celula_texto(v) for v in l) for l in linhas):
+                    return linhas
+                wb.unload_sheet(i)
+            return []
+        except ErroEnvio:
+            raise
+        except Exception as e:
+            raise ErroEnvio(f"{nome}: não consegui ler a planilha ({type(e).__name__}).")
+        finally:
+            wb.release_resources()
     try:
         import openpyxl
         wb = openpyxl.load_workbook(io.BytesIO(conteudo), read_only=True, data_only=True)
     except Exception as e:
         raise ErroEnvio(f"{nome}: não consegui abrir a planilha ({type(e).__name__}). Envie um .xlsx no modelo Fresh Log.")
     try:
-        for ws in wb.worksheets:
+        for ws in wb.worksheets[:MAX_ABAS_PLANILHA]:
             if (ws.title or "").strip().lower().startswith("instru"):
                 continue
-            linhas = []
-            for i, row in enumerate(ws.iter_rows(values_only=True)):
-                if i > MAX_LINHAS_PLANILHA + 20:
-                    break
-                linhas.append(list(row))
+            linhas = [list(row) for row in ws.iter_rows(max_row=MAX_LINHAS_PLANILHA + 21, max_col=MAX_COLUNAS_PLANILHA,
+                                                        values_only=True)]
             if any(any(_celula_texto(v) for v in l) for l in linhas):
                 return linhas
         return []
+    except Exception as e:
+        raise ErroEnvio(f"{nome}: não consegui ler a planilha ({type(e).__name__}).")
     finally:
         wb.close()
 

@@ -51,6 +51,7 @@ TELAS = [
     ("torre", "Torre de Controle", "Entregas", [r"^/torre(/|$)", r"^/api/torre/"]),
     ("vigia_pedidos", "Vigia", "Entregas", [r"^/vigia$", r"^/api/batimento/"]),
     ("canhotos_pendentes", "Canhotos pendentes", "Entregas", [r"^/canhotos-pendentes$", r"^/api/canhotos-pendentes$"]),
+    ("ciencias_dedicado", "Ciências de dedicado", "Entregas", [r"^/ciencias-dedicado$", r"^/api/ciencias-dedicado/.*$"]),
     ("pedidos_parados", "Pedidos Parados", "Entregas", [r"^/pedidos-parados$", r"^/pedidos-parados/foto/", r"^/api/pedidos-parados/"]),
     ("historico_tratativas", "Tratativas", "Entregas", [r"^/historico-tratativas$"]),
     ("consulta", "Consulta", "Entregas", [r"^/consulta(/|$)", r"^/canhotos/\d+/foto$",

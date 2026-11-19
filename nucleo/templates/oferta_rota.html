@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Rota disponível - Fresh Log</title>
+<style>
+  :root { --verde:#1a7f45; --verde-esc:#17693a; --texto:#1c2420; --suave:#5b6660; --linha:#cfd6d2; --fundo:#eaf6ee; --alerta:#fff4d6; --alerta-borda:#b7791f; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:#fff; color:var(--texto); font:18px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { background:var(--verde); color:#fff; padding:14px 16px; font-size:20px; font-weight:700; }
+  main { max-width:620px; margin:0 auto; padding:16px; }
+  h1 { font-size:28px; line-height:1.2; margin:8px 0 4px; }
+  .selo { display:inline-block; padding:4px 12px; border-radius:20px; font-size:15px; font-weight:700; background:var(--fundo); color:var(--verde-esc); }
+  .selo.fechada { background:#eee; color:var(--suave); }
+  dl { margin:16px 0; }
+  dt { font-size:15px; color:var(--suave); margin-top:14px; }
+  dd { margin:2px 0 0; font-weight:600; }
+  .alerta { background:var(--alerta); border:2px solid var(--alerta-borda); padding:10px 14px; border-radius:10px; margin:8px 0 0; font-weight:600; }
+  .botao { display:block; text-align:center; margin:16px 0 0; padding:16px; font-weight:700; border-radius:12px; text-decoration:none; }
+  .principal { color:#fff; background:var(--verde); }
+  .secundario { color:var(--verde-esc); border:2px solid var(--verde); }
+  small { color:var(--suave); display:block; margin-top:8px; }
+</style>
+</head>
+<body>
+<header>Fresh Log</header>
+<main>
+{% if not oferta %}
+  <h1>Link inválido</h1>
+  <p>Essa rota não foi encontrada. Confira o link no grupo ou abra o app e veja a aba Ofertas.</p>
+{% else %}
+  <h1>Rota {{ oferta.dia }}</h1>
+  <span class="selo{% if not oferta.disponivel %} fechada{% endif %}">{{ oferta.situacao }}</span>
+
+  <dl>
+    <dt>Entregas</dt>
+    <dd>{{ oferta.entregas }}{% if oferta.caixas %} · {{ oferta.caixas }} caixas{% endif %}{% if oferta.peso_kg %} · {{ '%.0f' % oferta.peso_kg }} kg{% endif %}</dd>
+    {% if oferta.regiao %}<dt>Região</dt><dd>{{ oferta.regiao }}</dd>{% endif %}
+    {% if oferta.cidades %}<dt>Cidades</dt><dd>{{ oferta.cidades | join(', ') }}</dd>{% endif %}
+    {% if oferta.bairros %}<dt>Bairros</dt><dd>{{ oferta.bairros | join(', ') }}</dd>{% endif %}
+    {% if oferta.veiculo %}<dt>Veículo</dt><dd>{{ oferta.veiculo }}</dd>{% endif %}
+    {% if oferta.valor %}<dt>Valor aproximado</dt><dd>{{ oferta.valor }}</dd>{% endif %}
+
+    <dt>Local de coleta</dt>
+    <dd>{{ oferta.local_coleta }}</dd>
+    <dt>Horário de coleta</dt>
+    <dd>{{ oferta.horario_coleta or 'A combinar' }}</dd>
+    {% if oferta.janela_tarde %}<dd class="alerta">Atenção: tem entrega com janela a partir das {{ oferta.janela_tarde }}.</dd>{% endif %}
+
+    <dt>Data de pagamento</dt>
+    <dd>{{ oferta.pagamento }}</dd>
+  </dl>
+
+  {% if oferta.disponivel %}
+    <a class="botao principal" href="{{ abrir_app }}">Pegar a rota no app</a>
+    <small>Se o app não abrir, entre no app Fresh Log e toque em Ofertas.</small>
+  {% endif %}
+  <a class="botao secundario" href="{{ url_for('cadastro_pagina') }}">Ainda não tem cadastro? Cadastre-se para executar a rota</a>
+{% endif %}
+</main>
+</body>
+</html>
