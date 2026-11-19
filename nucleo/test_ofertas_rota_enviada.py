@@ -150,7 +150,8 @@ class TestOfertasRotaEnviada(unittest.TestCase):
         self.assertLessEqual(len(aviso["texto"]), 200)
         self.assertIn("2 entregas", aviso["texto"])
         self.assertIn("Valor aprox. R$ ", aviso["texto"])
-        self.assertTrue(aviso["texto"].endswith(ofertas.LINK_PADRAO))
+        id_oferta = self._oferta()["id"]
+        self.assertTrue(aviso["texto"].endswith(f"{ofertas.LINK_PADRAO}/{ofertas.token_oferta('segredo-de-teste', id_oferta)}"))
         oferta = {"data_rota": "2026-11-17", "resumo_json": '{"regiao": "%s", "total_paradas": 11, "saida": "06:00"}' % ("Campinas, " * 40)}
         longo = ofertas.texto_disponivel(oferta, 1234.5, ofertas.LINK_PADRAO)
         self.assertLessEqual(len(longo), 200)
@@ -239,6 +240,33 @@ class TestOfertasRotaEnviada(unittest.TestCase):
         self.assertIn("Fiorino", r.get_json()["erro"])
         self.assertEqual(self._oferta()["status"], "ABERTA")
         self.assertEqual(self.cli.post(url, headers=self._h(TERCEIRO)).status_code, 200)   # VAN/HR pega
+
+    def _pagina(self):
+        link = self.enviados[0]["texto"].rsplit(" ", 1)[-1]
+        return self.cli.get("/abrir/ofertas/" + link.rsplit("/", 1)[-1])
+
+    def test_pagina_da_oferta_mostra_coleta_pagamento_e_cadastro_sem_endereco(self):
+        self._sql("UPDATE nucleo_paradas SET janela_inicio = '14:00' WHERE rota_id = ? AND ordem = (SELECT MAX(ordem) "
+                  "FROM nucleo_paradas WHERE rota_id = ?)", (self.rota_id, self.rota_id))
+        self._rodar("05:40")
+        r = self._pagina()
+        self.assertEqual(r.status_code, 200)
+        html = r.get_data(as_text=True)
+        for trecho in ("Rua Zilda, 288", "Casa Verde Alta", "06:00", "janela a partir das 14:00", "Alinhar no WhatsApp.",
+                       "Valor aproximado", "Disponível", "freshlogmotorista://ofertas", "/cadastro"):
+            self.assertIn(trecho, html)
+        self.assertNotIn("Rua A, 1", html)                  # endereco de entrega nunca
+        self.assertNotIn("PS-9001", html)
+
+    def test_pagina_com_token_errado_da_404_e_escolhida_mostra_que_saiu(self):
+        self._rodar("05:40")
+        id_oferta = self._oferta()["id"]
+        self.assertEqual(self.cli.get(f"/abrir/ofertas/{id_oferta}-0000000000000000").status_code, 404)
+        self.assertEqual(self.cli.get(f"/abrir/ofertas/{id_oferta + 1}-{ofertas.token_oferta('segredo-de-teste', id_oferta).split('-')[1]}").status_code, 404)
+        self.cli.post(f"/api/ofertas/{ID_OFERTA + self.rota_id}/escolher", headers=self._h(OUTRO))
+        html = self._pagina().get_data(as_text=True)
+        self.assertIn("Já foi escolhida", html)
+        self.assertNotIn("Pegar a rota no app", html)
 
     def test_pagina_do_link_abre_o_app(self):
         r = self.cli.get("/abrir/ofertas")
