@@ -303,7 +303,7 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
     nome = emb.get("nome") or ""
     rodadas = {p["id"]: cd.rodadas_enviadas(conn, p["id"]) for p in pendentes}
     pilotos = {p["id"]: cd.rodadas_piloto(conn, p["id"]) for p in pendentes}
-    link = link_ciencia.url(sender_id, config["portal_cliente"]["secret_key"], ch.url_base(config))
+    segredo, base = config["portal_cliente"]["secret_key"], ch.url_base(config)
     d_email = decisao_email(cnpj, config, db_path=db_path)
     d_wpp = cn.decidir(TIPO, cnpj, fallback_acao="PILOTO", fallback_piloto=_piloto_whatsapp(db_path),
                        canal="whatsapp", db_path=db_path)
@@ -317,6 +317,11 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
         logger.info(f"ciencia do dedicado: lembretes do embarcador {sender_id} ja tomados por outra rodada")
         return contadores
     rodadas = {p["id"]: rodadas[p["id"]] for p in pendentes}
+
+    def link(origem: str) -> str:
+        """Um link por canal, so com os pedidos desta mensagem: a resposta grava de qual veio."""
+        return link_ciencia.url(sender_id, segredo, base, list(rodadas), origem)
+
     rodada_msg = min(rodadas.values())
     lembrete = rodada_msg > 0
     # copia de piloto vira lembrete a partir da 2a rodada (de piloto ou real), sem mexer na contagem real
@@ -330,7 +335,7 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
         piloto = d_email.acao == "PILOTO"
         destinos = [d_email.destino_piloto] if piloto else list(emb["emails"])
         lem = lembrete_piloto if piloto else lembrete
-        corpo = envelope_html(_conteudo_email(nome, pendentes, link, lem, emb["emails"] if piloto else None),
+        corpo = envelope_html(_conteudo_email(nome, pendentes, link("email"), lem, emb["emails"] if piloto else None),
                               rodape="Mensagem automática — Agente Stokki Eventos.")
         if not canais.email(destinos, _assunto(len(pendentes), lem), corpo):
             return "nao_enviado", "falha", ", ".join(destinos)
@@ -343,7 +348,7 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
         if not telefone:
             return "nao_enviado", "sem_whatsapp", ""
         piloto = d_wpp.acao == "PILOTO"
-        texto = notificar_whatsapp.texto_ciencia_dedicado(nome, pendentes, link,
+        texto = notificar_whatsapp.texto_ciencia_dedicado(nome, pendentes, link("whatsapp"),
                                                           lembrete_piloto if piloto else lembrete)
         assinatura = f"{TIPO}:{sender_id}:{rodada_msg}:{agora:%Y%m%d%H%M}"
         situacao = canais.whatsapp(assinatura, telefone, texto, d_wpp.destino_piloto if piloto else "")
@@ -359,7 +364,7 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
             return "piloto", "", ""
         if not cnpj or not canais.tem_conta_portal(cnpj):
             return "nao_enviado", "sem_conta_portal", ""
-        texto = _texto_chat(pendentes, link, lembrete)
+        texto = _texto_chat(pendentes, link("chat"), lembrete)
         anterior = _conversa_anterior(conn, [p["id"] for p in pendentes])
         if anterior and canais.chat_mensagem(anterior, texto):
             return "enviado", "", str(anterior)
@@ -379,7 +384,7 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
         # so no envio real: no piloto (ou CNPJ desconhecido) ninguem do cliente pode responder
         if rodada_msg == 0 and d_email.acao == "ENVIAR" and cnpj:
             try:
-                if not canais.alerta_equipe(_texto_alerta(nome, pendentes, link)):
+                if not canais.alerta_equipe(_texto_alerta(nome, pendentes, link("equipe"))):
                     logger.warning(f"ciencia do dedicado: alerta da equipe do embarcador {sender_id} "
                                    f"(sem canal) nao saiu")
             except Exception as e:  # noqa: BLE001

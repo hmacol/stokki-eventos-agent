@@ -1949,8 +1949,11 @@ def ciencias_dedicado():
         linhas = tela.montar(conn, tela.nomes_embarcadores(cd.DB_PATH), filtros["situacao"], filtros["embarcador"])
     finally:
         conn.close()
+    # link so daquele pedido e marcado com quem copiou: a resposta por ele nao se passa por do cliente
+    origem = f"painel:{session.get('usuario') or 'equipe'}"
     for l in linhas:
-        l["link"] = link_ciencia.url(l["sender_id"], segredo, base) if segredo and l["sender_id"] else ""
+        l["link"] = (link_ciencia.url(l["sender_id"], segredo, base, [l["id"]], origem)
+                     if segredo and l["sender_id"] else "")
     return render_template("ciencias_dedicado.html", linhas=linhas, filtros=filtros, rotulos=tela.ROTULOS)
 
 
@@ -1958,6 +1961,7 @@ def ciencias_dedicado():
 @requer_auth(niveis=("total", "operador", "logistica"))
 def api_ciencia_dedicado(ciencia_id):
     import ciencia_dedicado as cd
+    import ciencias_dedicado as tela
     conn = cd.conectar(cd.DB_PATH)
     try:
         linha = cd.buscar(conn, ciencia_id)
@@ -1971,7 +1975,9 @@ def api_ciencia_dedicado(ciencia_id):
     resposta = encerramento = None
     if linha["situacao"] in (cd.CIENTE, cd.REAGENDADO):
         resposta = {"por": linha["respondido_por"], "em": linha["respondido_em"],
-                    "ip": linha["respondido_ip"], "data_nova": linha["data_nova"]}
+                    "ip": linha["respondido_ip"], "data_nova": linha["data_nova"],
+                    "origem": tela.rotulo_origem(linha["respondido_origem"]),
+                    "navegador": linha["respondido_navegador"] or ""}
     elif linha["situacao"] == cd.ENCERRADO:
         encerramento = {"motivo": linha["motivo_encerramento"], "em": linha["respondido_em"]}
     return jsonify({"ciencia": {"codigo": linha["codigo"], "situacao": linha["situacao"]},

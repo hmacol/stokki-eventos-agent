@@ -85,6 +85,8 @@ Falha de um canal não impede os outros. Embarcador sem canal nenhum gera envio 
 
 Rota pública `/ciencia/<token>` no `portal_cliente` (sem login, token assinado com salt próprio, carrega sender_id; validade 30 dias). O token é por embarcador: a página lista todos os pedidos dele em `PENDENTE`, e mostra como respondidos os já resolvidos.
 
+Revisão de segurança (19/11): o token passou a carregar também as ciências que cobre (as da mensagem em que saiu) e a origem (`email`, `whatsapp`, `chat`, `equipe` ou `painel:<usuário>`). A página só mostra e só aceita resposta dessas ciências; pedido aberto depois ganha link novo. A resposta grava a origem e o navegador; o "Copiar link" do painel gera link só daquele pedido, marcado com quem copiou. Ciente e reagendar travam a ciência (`processando_desde`, 10 min) antes de responder, então duas respostas ao mesmo tempo não divergem da Vuupt.
+
 Para cada pedido: código, destinatário, cidade, data pedida, dias de visita da região, valor do dedicado (ou "valor a confirmar pela Fresh Log" quando pendente). Duas ações:
 
 - **Estou ciente do carro dedicado:** exige o nome de quem responde. Grava `CIENTE`, nome, data/hora, IP. Encerra os lembretes do pedido.

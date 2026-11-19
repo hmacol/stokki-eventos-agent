@@ -19,6 +19,17 @@ ROTULOS = {
     cd.ENCERRADO: "Encerrado",
 }
 CANAIS = ("email", "whatsapp", "chat")
+_ORIGENS = {"email": "pelo link do e-mail", "whatsapp": "pelo link do WhatsApp", "chat": "pelo link do chat",
+            "equipe": "pelo link do alerta da equipe"}
+
+
+def rotulo_origem(origem) -> str:
+    """De qual link veio a resposta (portal_cliente/link_ciencia: claim "o" do token)."""
+    if not origem:
+        return ""
+    if origem.startswith("painel:"):
+        return f"pelo link copiado do painel por {origem[len('painel:'):]}"
+    return _ORIGENS.get(origem, f"pelo link ({origem})")
 
 
 def nomes_embarcadores(db_path) -> dict:
