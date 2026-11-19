@@ -6,6 +6,7 @@ Rota ja enviada que o motorista NAO aceitou vira oferta pros outros
 (Hugo, 17/11). Dois gatilhos:
   RECUSA  ele recusou no app                       -> publica na rodada seguinte
   PRAZO   passou do horario limite (05h30) sem aceite, nem aqui nem na Vuupt
+          (so rota atribuida ANTES do limite; depois disso, so RECUSA)
 
 Publicada, a rota aparece na aba Ofertas do app pra TODO motorista com login
 (menos o original) e sai um aviso no grupo "Rotas FRESHLOG" com entregas,
@@ -54,7 +55,7 @@ _RAIZ = Path(__file__).parent.parent
 if str(_RAIZ) not in sys.path:
     sys.path.insert(0, str(_RAIZ))
 
-from nucleo import banco, ponte_vuupt
+from nucleo import banco, normalizacao, ponte_vuupt
 
 logger = logging.getLogger(__name__)
 
@@ -116,10 +117,24 @@ def _aceita_na_vuupt(conn: sqlite3.Connection, rota_id: int) -> bool:
         (rota_id, banco.PARADA_CANCELADA, *_VUUPT_SEM_ACEITE)).fetchone() is not None
 
 
+def _atribuida_em(rota) -> str | None:
+    """Quando a rota chegou ao motorista atual (hora local): assigned_at da
+    Vuupt (muda na troca de motorista); sem ele (rota gravada pelo envio, antes
+    do sync), a hora em que entrou no nucleo."""
+    try:
+        dados = json.loads(rota["dados_json"] or "{}")
+    except ValueError:
+        dados = {}
+    return normalizacao.vuupt_para_local(dados.get("assigned_at")) or rota["criado_em"]
+
+
 def candidatas(conn: sqlite3.Connection, cfg: dict, agora: datetime) -> list[tuple[sqlite3.Row, str]]:
     """Rotas de HOJE, da Vuupt, com motorista, ainda planejadas e nunca
-    ofertadas, que ele recusou ou deixou passar do horario limite."""
+    ofertadas, que ele recusou ou deixou passar do horario limite.
+    Rota atribuida no horario limite ou depois (coleta, rota da tarde, troca de
+    motorista) so vira oferta se ele recusar (Hugo, 19/11)."""
     passou_do_prazo = agora.strftime("%H:%M") >= cfg["horario_limite"]
+    limite = f"{agora.date().isoformat()} {cfg['horario_limite']}"
     saida = []
     for rota in conn.execute("""
             SELECT r.* FROM nucleo_rotas r
@@ -130,7 +145,7 @@ def candidatas(conn: sqlite3.Connection, cfg: dict, agora: datetime) -> list[tup
             continue
         if _recusou(conn, rota):
             saida.append((rota, MOTIVO_RECUSA))
-        elif passou_do_prazo and not _aceita_na_vuupt(conn, rota["id"]):
+        elif passou_do_prazo and (_atribuida_em(rota) or "") < limite and not _aceita_na_vuupt(conn, rota["id"]):
             saida.append((rota, MOTIVO_PRAZO))
     return saida
 
