@@ -29,6 +29,9 @@ MENU_ESPERADO = {
     "Início", "Torre de Controle", "Canhotos pendentes", "Pedidos Parados", "Tratativas", "Consulta",
     "Planejamento", "Atendimento", "Motoristas", "Pedágios", "Canhotos", "Clientes AGENDA", "Transportadoras", "Adesão ao portal",
     "Retornos", "Demandas", "Aula (vídeos)",
+    # entraram depois e o teste nao tinha acompanhado (visto em 17/11): o `niveis` das tres inclui logistica
+    "Pedidos", "Pedidos do portal", "Coletas",
+    "Pagamentos",   # pagamentos pontuais (18/11): total, atendimento e logistica
 }
 
 
@@ -59,7 +62,9 @@ class TestNivelLogistica(unittest.TestCase):
         html = r.get_data(as_text=True)
         nav = html[html.index('aria-label="Telas do painel"'):]
         nav = nav[:nav.index("</nav>")]
-        self.assertEqual(set(re.findall(r'<span class="rotulo">([^<]+)</span>', nav)), MENU_ESPERADO)
+        # so os links de tela: desde o menu por area (17/11) o cabecalho da area tambem tem "rotulo"
+        telas = re.findall(r'<a [^>]*>(?:(?!</a>).)*?<span class="rotulo">([^<]+)</span>', nav, flags=re.S)
+        self.assertEqual(set(telas), MENU_ESPERADO)
 
     def test_telas_fora_da_lista_dao_403(self):
         for url in ("/", "/historico", "/vigia", "/mapa-rotas", "/laboratorio-rotas", "/expedicao",
@@ -72,7 +77,8 @@ class TestNivelLogistica(unittest.TestCase):
 
     def test_telas_da_lista_abrem(self):
         for url in ("/canhotos-pendentes", "/historico-tratativas", "/consulta", "/clientes-agenda",
-                    "/atendimento", "/motoristas", "/financeiro/pedagios", "/canhotos", "/adesao-portal"):
+                    "/atendimento", "/motoristas", "/financeiro/pedagios", "/financeiro/pagamentos", "/canhotos",
+                    "/adesao-portal"):
             self.assertEqual(self.cliente.get(url).status_code, 200, url)
 
 

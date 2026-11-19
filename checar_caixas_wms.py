@@ -34,6 +34,7 @@ import yaml
 
 import email_utils
 import wms_caixas
+import wms_pilotos
 
 logger = logging.getLogger("checar_caixas_wms")
 
@@ -44,12 +45,12 @@ def _carregar_config() -> dict:
 
 
 def _caixas_ativo(config: dict) -> bool:
-    valor = (config.get("wms", {}) or {}).get("caixas_ativo", False)
-    return str(valor).strip().lower() in ("true", "1", "sim")
+    return bool(wms_pilotos.ids_com_caixas(config))
 
 
-def _piloto_id(config: dict) -> int:
-    return int(str((config.get("wms", {}) or {}).get("embarcador_piloto_id", "48")).strip())
+def _embarcadores(config: dict) -> list[int]:
+    """Pilotos que operam por caixa (wms.pilotos). Nenhum (so com --forcar): todos os pilotos."""
+    return sorted(wms_pilotos.ids_com_caixas(config)) or [p["id"] for p in wms_pilotos.pilotos(config)]
 
 
 def _destinatarios(config: dict) -> list[str]:
@@ -84,8 +85,8 @@ def _corpo_html(linhas: list[dict]) -> str:
 
 def checar(conn, config: dict, modo_teste: bool = False) -> dict:
     """Devolve {"divergencias": n, "email": "enviado"|"teste"|"nada"|"falhou"|"sem_destinatario"}."""
-    embarcador_id = _piloto_id(config)
-    linhas = wms_caixas.divergencias(conn, embarcador_id)
+    embarcadores = _embarcadores(config)
+    linhas = [d for embarcador_id in embarcadores for d in wms_caixas.divergencias(conn, embarcador_id)]
     resultado = {"divergencias": len(linhas), "email": "nada"}
     if not linhas:
         return resultado
@@ -99,7 +100,7 @@ def checar(conn, config: dict, modo_teste: bool = False) -> dict:
         logger.error("Sem destinatario (wms.alertas_email / email.remetente): e-mail nao enviado.")
         resultado["email"] = "sem_destinatario"
         return resultado
-    assunto = f"WMS: {len(linhas)} divergencia(s) caixas x saldo ({embarcador_id})"
+    assunto = f"WMS: {len(linhas)} divergencia(s) caixas x saldo ({', '.join(str(e) for e in embarcadores)})"
     ok = email_utils.enviar_email(destinatarios, assunto, _corpo_html(linhas), config.get("email", {}) or {})
     if ok:
         resultado["email"] = "enviado"

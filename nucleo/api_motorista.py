@@ -351,6 +351,13 @@ def criar_app(config: dict | None = None) -> Flask:
         from regras.tipo_veiculo import TIPOS_VEICULO
         return render_template("cadastro_motorista.html", zonas=cadastro.ZONAS, dias=cadastro.DIAS, tipos=TIPOS_VEICULO)
 
+    @app.get("/como-funciona")
+    def como_funciona():
+        """Página informativa pública (operação, pagamento, app, obrigatoriedades)
+        pra quem vai se cadastrar. Não depende do link de cadastro estar ligado."""
+        from regras.tarifa_motorista import TARIFAS_PADRAO
+        return render_template("como_funciona_motorista.html", tarifas=list(TARIFAS_PADRAO.values()))
+
     @app.post("/api/cadastro-link")
     def cadastro_link_novo():
         """Freio contado no banco (5/IP/hora, 40/24 h; restart não zera), à
@@ -727,6 +734,18 @@ def criar_app(config: dict | None = None) -> Flask:
                 f"<p><a href='{destino}' style='display:inline-block;padding:14px 22px;background:#1b7f4c;color:#fff;"
                 "border-radius:10px;text-decoration:none;font-weight:700'>Abrir o app Fresh Log</a></p>"
                 "<p style='color:#666'>Se não abrir, entre no app e toque em Ofertas.</p></body></html>")
+
+    @app.get("/abrir/ofertas/<token>")
+    def abrir_oferta(token):
+        """Pagina publica da oferta de rota sem aceite (Hugo, 19/11): resumo,
+        coleta, valor, pagamento, botao pro app e pro cadastro. Token assinado
+        (ofertas_rota_enviada.token_oferta); invalido = 404 sem dizer por que."""
+        from nucleo import ofertas_rota_enviada
+        oferta = ofertas_rota_enviada.oferta_por_token(conn(), app.config["SECRET_TOKENS"], token)
+        if oferta is None:
+            return render_template("oferta_rota.html", oferta=None), 404
+        return render_template("oferta_rota.html", oferta=ofertas_rota_enviada.dados_pagina(conn(), oferta),
+                               abrir_app="freshlogmotorista://ofertas")
 
     @app.get("/api/ofertas")
     @requer_motorista

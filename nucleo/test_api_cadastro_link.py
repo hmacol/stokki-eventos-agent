@@ -86,6 +86,15 @@ class TestApiCadastroLink(unittest.TestCase):
             self.assertEqual(r.status_code, 503)
             self.assertEqual(r.get_json(), {"erro": MSG_OFF})
 
+    def test_como_funciona_publica_mesmo_desligado(self):
+        r = self._app(ativo=False).get("/como-funciona")
+        self.assertEqual(r.status_code, 200)
+        html = r.get_data(as_text=True)
+        for trecho in ("R$ 340,00 até 65 km", "R$ 700,00 até 120 km", "R$ 1,25 por km", "Dia 11 do mês seguinte", "Dia 26"):
+            self.assertIn(trecho, html)
+        self.assertIn('href="/cadastro"', html)
+        self.assertIn('href="/como-funciona"', self.cli.get("/cadastro").get_data(as_text=True))
+
     def test_desligado_nao_derruba_rotas_antigas(self):
         cli = self._app(ativo=False)
         r = cli.post("/api/cadastro", json={})

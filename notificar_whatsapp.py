@@ -53,6 +53,10 @@ cadastro_motorista_link.forcar_destino_whatsapp (vazio = envio real; ausente =
 vale clientes.forcar_destino, e sem ele nao manda).
     avisar_motorista_boas_vindas
 
+Pedido de pagamento pontual (Hugo, 18/11/2026), grupo FINANCEIRO + LOGÍSTICA:
+origem "pagamento_pontual" com teto proprio (pagamentos_pontuais.teto_diario).
+Trava e destino ficam em painel_agentes/pagamentos_pontuais.py.
+
 O numero que envia e o do proprio Hugo, por um gateway nao-oficial
 (integracao_openwa.py). Por isso: desligado por padrao, teto diario,
 intervalo minimo, sem repeticao e SEM reenvio automatico (licao do erro
@@ -134,6 +138,10 @@ ORIGENS_PILOTO = (ORIGEM_CLIENTE_PILOTO, ORIGEM_CADASTRO_PILOTO, ORIGEM_TRANSPOR
 TETO_PILOTO_PADRAO = 20
 TETO_CLIENTES_PADRAO = 30
 TETO_MOTORISTAS_PADRAO = 20
+# pedido de pagamento pontual ao grupo FINANCEIRO + LOGÍSTICA (painel_agentes/pagamentos_pontuais.py):
+# teto proprio (pagamentos_pontuais.teto_diario, chave de topo), nao gasta o dos alertas
+ORIGEM_PAGAMENTO = "pagamento_pontual"
+TETO_PAGAMENTO_PADRAO = 30
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS notificacoes_whatsapp (
@@ -511,6 +519,31 @@ def texto_fora_dia_fixo(codigo: str, data, regiao: str, dias: str, valor: float 
     return next((t for t in opcoes if len(t) <= MAX_MENSAGEM), opcoes[-1][:MAX_MENSAGEM])
 
 
+def texto_ciencia_dedicado(nome: str, pedidos: list[dict], link: str, lembrete: bool) -> str:
+    """Pro embarcador (notificar_ciencia_dedicado.py): pedidos fora do dia de
+    visita que vao como entrega dedicada, com o link da pagina de ciencia. Cabe
+    em MAX_MENSAGEM sem cortar o link: sai primeiro o nome, depois os codigos."""
+    codigos = [str(p.get("codigo") or "").lstrip("#") for p in pedidos]
+    n = len(codigos)
+    inicio = "Lembrete Fresh Log: " if lembrete else "Fresh Log: "
+    fim = f"Confirme a ciência ou reagende: {link}"
+    if n == 1:
+        lista = f"o pedido {codigos[0]} vai como entrega dedicada"
+        resumo = "1 pedido seu vai como entrega dedicada."
+    else:
+        lista = f"os pedidos {', '.join(codigos)} vão como entrega dedicada"
+        resumo = f"{n} pedidos seus vão como entrega dedicada."
+    frase = lista[0].upper() + lista[1:]
+    opcoes = [
+        f"{inicio}{_nome_simples(nome, 30)}, {lista} (fora do dia de visita da região). {fim}",
+        f"{inicio}{frase} (fora do dia de visita da região). {fim}",
+        f"{inicio}{frase}. {fim}",
+        f"{inicio}{resumo} {fim}",
+        f"{inicio}{resumo} {link}",
+    ]
+    return next((t for t in opcoes if len(t) <= MAX_MENSAGEM), opcoes[-1])
+
+
 def texto_cadastro_motorista(cadastro: dict, link: str, agora: datetime | None = None) -> str:
     """Motorista novo pediu cadastro pelo app e ja mandou CNH e CRLV
     (nucleo/cadastro_motorista.py). O Hugo aprova no painel."""
@@ -651,13 +684,13 @@ def _enviados_hoje(conn, agora: datetime, origem: str) -> int:
         filtro, args = "origem = ?", (ORIGEM_CLIENTE,)
     elif origem == ORIGEM_MOTORISTA:
         filtro, args = "origem = ?", (ORIGEM_MOTORISTA,)
-    elif origem in ORIGENS_ATUALIZACAO:
+    elif origem in ORIGENS_ATUALIZACAO or origem == ORIGEM_PAGAMENTO:
         filtro, args = "origem = ?", (origem,)
     elif origem in ORIGENS_PILOTO:
         filtro, args = f"origem IN ({marcas})", ORIGENS_PILOTO
     else:
-        filtro, args = (f"origem NOT IN (?, ?, ?, ?) AND origem NOT IN ({marcas})",
-                        (ORIGEM_CLIENTE, ORIGEM_MOTORISTA, *ORIGENS_ATUALIZACAO, *ORIGENS_PILOTO))
+        filtro, args = (f"origem NOT IN (?, ?, ?, ?, ?) AND origem NOT IN ({marcas})",
+                        (ORIGEM_CLIENTE, ORIGEM_MOTORISTA, *ORIGENS_ATUALIZACAO, ORIGEM_PAGAMENTO, *ORIGENS_PILOTO))
     return conn.execute(
         f"SELECT COUNT(*) FROM notificacoes_whatsapp WHERE situacao = 'enviado' AND criado_em >= ? "
         f"AND {filtro}", (inicio_do_dia, *args)).fetchone()[0]
@@ -672,6 +705,8 @@ def _teto(cfg: dict, origem: str, config: dict | None = None) -> int:
         return _inteiro(cfg.get("motoristas") or {}, "teto_diario", TETO_MOTORISTAS_PADRAO)
     if origem in ORIGENS_ATUALIZACAO:
         return _inteiro((config or {}).get("atualizacao_motoristas") or {}, "teto_diario", TETO_ATUALIZACAO_PADRAO)
+    if origem == ORIGEM_PAGAMENTO:
+        return _inteiro((config or {}).get("pagamentos_pontuais") or {}, "teto_diario", TETO_PAGAMENTO_PADRAO)
     if origem in ORIGENS_PILOTO:
         return _inteiro(cfg.get("clientes") or {}, "teto_piloto", TETO_PILOTO_PADRAO)
     return _inteiro(cfg, "teto_diario", 20)
@@ -1183,6 +1218,47 @@ def avisar_cliente_fora_dia_fixo(codigo: str, telefone: str, texto: str, config:
                 return "numero_sem_whatsapp"
         return despachar(config, origem, "fora_dia_fixo", texto, f"fora_dia_fixo:{codigo}",
                          modo_teste=modo_teste, grupo_id=f"{destino}@c.us", **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def avisar_cliente_ciencia_dedicado(assinatura: str, telefone: str, texto: str, config: dict,
+                                    modo_teste: bool = False, destino_forcado: str | None = None, **kw) -> str:
+    """Aviso e lembretes da ciencia do dedicado (notificar_ciencia_dedicado.py).
+    Mesmo comportamento de avisar_cliente_fora_dia_fixo (teto dos clientes, copia
+    de piloto na origem do fora do dia fixo), com a `assinatura` de quem chama:
+    os lembretes se repetem por desenho, entao ela distingue cada rodada.
+    Situacoes: desligado | modo_teste | numero_sem_whatsapp | indeterminado |
+    teto | canal_em_pausa | nao_enviado | enviado | falhou (teto e pausa com nome
+    proprio, como em avisar_motorista_link_atualizacao)."""
+    try:
+        telefone = re.sub(r"\D", "", str(telefone or ""))
+        if not _canal_clientes_ok(config, destino_forcado) or not telefone:
+            return "desligado"
+        forcar = _cfg_clientes(config).get("forcar_destino") if destino_forcado is None else destino_forcado
+        destino = re.sub(r"\D", "", str(forcar or ""))
+        origem = ORIGEM_CLIENTE
+        if destino:
+            texto = f"[teste → +{telefone}]\n{texto}"
+            if destino_forcado:
+                origem = ORIGEM_FORA_DIA_FIXO_PILOTO
+        else:
+            destino = telefone
+        if not modo_teste:
+            existe = integracao_openwa.numero_existe(_cfg(config), destino)
+            if existe is None:
+                logger.warning(f"WhatsApp nao enviado ({assinatura}): gateway nao confirmou o numero.")
+                return "indeterminado"
+            if not existe:
+                logger.info(f"WhatsApp nao enviado ({assinatura}): numero sem WhatsApp.")
+                return "numero_sem_whatsapp"
+        situacao = despachar(config, origem, "ciencia_dedicado", texto, assinatura,
+                             modo_teste=modo_teste, grupo_id=f"{destino}@c.us", **kw)
+        if situacao == "nao_enviado":
+            motivo = _motivo_da_ultima_recusa(kw.get("conn"), origem, assinatura)
+            situacao = {MOTIVO_TETO: "teto", MOTIVO_CANAL_EM_PAUSA: "canal_em_pausa"}.get(motivo, situacao)
+        return situacao
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
         return "falhou"

@@ -1,0 +1,410 @@
+{% extends "base.html" %}
+{% block titulo %}Pagamentos pontuais{% endblock %}
+{% block estilo_extra %}
+<style>
+  .cabecalho-pagina { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; flex-wrap: wrap; gap: 12px; }
+  .cabecalho-pagina h1 { font-size: 21px; margin: 0; letter-spacing: -0.2px; }
+  .cabecalho-pagina p { margin: 5px 0 0; color: var(--texto-suave); font-size: 12.5px; max-width: 640px; line-height: 1.45; }
+
+  .aviso-simulacao { display: flex; gap: 10px; align-items: flex-start; background: var(--teste-bg); color: var(--teste-texto); border-radius: 10px; padding: 10px 14px; font-size: 12.5px; line-height: 1.45; margin-bottom: 14px; }
+  .aviso-simulacao strong { display: block; }
+
+  /* ── Formulário de lançamento ──────────────────────────────────────── */
+  .lancar { background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px; padding: 16px; margin-bottom: 18px; }
+  .lancar h2 { font-size: 14px; margin: 0 0 12px; }
+  .grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 14px; }
+  .campo { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .campo.largo { grid-column: 1 / -1; }
+  .campo[hidden] { display: none; }
+  .campo label, .campo .rotulo { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--texto-suave); }
+  .campo input[type="text"], .campo select, .campo textarea { height: 36px; padding: 0 10px; border: 1px solid var(--borda); border-radius: 7px; background: var(--fundo); color: var(--texto); font-size: 13.5px; font-family: inherit; width: 100%; box-sizing: border-box; }
+  .campo textarea { height: 58px; padding: 8px 10px; resize: vertical; }
+  .campo input:focus, .campo select:focus, .campo textarea:focus { outline: none; border-color: var(--acento); box-shadow: 0 0 0 3px color-mix(in srgb, var(--acento) 22%, transparent); }
+  .campo .dica { font-size: 11.5px; color: var(--texto-suave); line-height: 1.4; }
+  .campo.invalido input, .campo.invalido select, .campo.invalido .segmentos { border-color: var(--erro); }
+
+  .segmentos { display: inline-flex; border: 1px solid var(--borda); border-radius: 8px; overflow: hidden; background: var(--fundo); width: fit-content; }
+  .campo .segmentos label { cursor: pointer; text-transform: none; letter-spacing: 0; font-size: inherit; font-weight: inherit; color: inherit; }
+  .segmentos input { position: absolute; opacity: 0; pointer-events: none; }
+  .segmentos span { display: inline-flex; align-items: center; height: 34px; padding: 0 16px; white-space: nowrap; font-size: 13px; font-weight: 600; color: var(--texto-suave); border-right: 1px solid var(--borda); }
+  .segmentos label:last-child span { border-right: none; }
+  .segmentos input:checked + span { background: var(--primaria); color: #fff; }
+  html.tema-escuro .segmentos input:checked + span { background: var(--acento); color: #06170F; }
+  .segmentos input:focus-visible + span { box-shadow: inset 0 0 0 2px var(--acento); }
+
+  .grupo-valor { display: flex; align-items: center; height: 36px; border: 1px solid var(--borda); border-radius: 7px; background: var(--fundo); overflow: hidden; }
+  .grupo-valor span { padding: 0 10px; font-size: 12.5px; color: var(--texto-suave); border-right: 1px solid var(--borda); height: 100%; display: flex; align-items: center; }
+  .grupo-valor input { border: none !important; box-shadow: none !important; background: transparent !important; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .campo.invalido .grupo-valor { border-color: var(--erro); }
+
+  .ficha-motorista { font-size: 12px; color: var(--texto-suave); line-height: 1.5; min-height: 18px; }
+  .bloco-local { display: none; border: 1px dashed var(--borda); border-radius: 10px; padding: 12px; }
+  .bloco-local.aberto { display: grid; }
+
+  .rodape-form { display: flex; align-items: center; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+  .botao-principal { height: 38px; padding: 0 18px; border-radius: 8px; border: none; background: var(--acento); color: #06170F; font-weight: 700; font-size: 13.5px; cursor: pointer; font-family: inherit; }
+  .botao-principal:disabled { opacity: 0.55; cursor: default; }
+  .erro-form { color: var(--erro); font-size: 12.5px; font-weight: 600; }
+
+  /* ── Abas e lista ──────────────────────────────────────────────────── */
+  .abas { display: flex; gap: 4px; flex-wrap: wrap; padding: 4px; background: var(--superficie); border: 1px solid var(--borda); border-radius: 100px; width: fit-content; margin-bottom: 12px; }
+  .abas a { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 100px; color: var(--texto-suave); font-size: 12.5px; font-weight: 600; text-decoration: none; }
+  .abas a:hover { background: var(--fundo); color: var(--texto); }
+  .abas a.ativa { background: var(--primaria); color: #fff; }
+  html.tema-escuro .abas a.ativa { background: var(--acento); color: #06170F; }
+  .abas a .n { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 100px; background: var(--fundo); color: var(--texto-suave); font-variant-numeric: tabular-nums; }
+  .abas a.ativa .n { background: rgba(255,255,255,0.22); color: inherit; }
+
+  .lista { display: flex; flex-direction: column; gap: 10px; }
+  .item { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 12px 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 16px; }
+  .item.destaque { border-color: var(--acento); box-shadow: 0 0 0 3px color-mix(in srgb, var(--acento) 18%, transparent); }
+  .item .topo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .item .numero { font-weight: 800; font-variant-numeric: tabular-nums; }
+  .chip { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; padding: 2px 8px; border-radius: 100px; background: var(--nunca-bg); color: var(--texto-suave); }
+  .chip.descarga { background: var(--interrompido-bg); color: var(--interrompido-texto); }
+  .chip.adiantamento { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .chip.frete_avulso { background: var(--sucesso-bg); color: var(--sucesso); }
+  .margem { font-size: 12px; color: var(--texto-suave); min-height: 16px; }
+  .margem.negativa { color: var(--erro); font-weight: 600; }
+  .valor { font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
+  .detalhes { font-size: 12.5px; color: var(--texto-suave); line-height: 1.55; margin-top: 4px; }
+  .detalhes strong { color: var(--texto); }
+  .linha-acoes { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; border-top: 1px solid var(--borda); padding-top: 10px; }
+  .linha-acoes button, .linha-acoes a.botao, .linha-acoes label.botao { height: 32px; padding: 0 12px; border-radius: 7px; font-size: 12.5px; font-weight: 600; cursor: pointer; border: 1px solid var(--borda); background: transparent; color: var(--texto); font-family: inherit; display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+  .linha-acoes button:hover, .linha-acoes a.botao:hover, .linha-acoes label.botao:hover { background: var(--fundo); }
+  .linha-acoes button.confirmar { background: var(--acento); color: #06170F; border-color: transparent; font-weight: 700; }
+  .linha-acoes button.cancelar { color: var(--erro); border-color: color-mix(in srgb, var(--erro) 45%, transparent); }
+  .linha-acoes button:disabled { opacity: 0.5; cursor: default; }
+  .linha-acoes input[type="file"] { font-size: 12px; max-width: 240px; }
+  .linha-acoes .espaco { flex: 1; }
+  .linha-acoes .erro-linha { color: var(--erro); font-size: 12px; font-weight: 600; }
+
+  .aviso-whats { grid-column: 1 / -1; font-size: 12px; }
+  .aviso-whats summary { cursor: pointer; color: var(--texto-suave); width: fit-content; }
+  .aviso-whats pre { white-space: pre-wrap; font-family: inherit; font-size: 12.5px; background: var(--fundo); border: 1px solid var(--borda); border-radius: 8px; padding: 10px 12px; margin: 8px 0 0; max-width: 560px; color: var(--texto); }
+
+  .vazio { padding: 40px 20px; text-align: center; color: var(--texto-suave); font-size: 13px; background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; }
+
+  @media (max-width: 640px) {
+    .item { grid-template-columns: 1fr; }
+    .valor { text-align: left; }
+  }
+</style>
+{% endblock %}
+
+{% macro moeda(v) %}R$ {{ "%.2f"|format(v) | replace('.', ',') }}{% endmacro %}
+{% macro quando(iso) %}{% if iso %}{{ iso[8:10] }}/{{ iso[5:7] }} {{ iso[11:16] }}{% endif %}{% endmacro %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <div>
+    <h1>Pagamentos pontuais</h1>
+    <p>Peça ao financeiro um <strong>Adiantamento</strong>, uma <strong>Descarga</strong> ou o pagamento de um <strong>Frete avulso</strong> (frete avulso ou dedicado, combinado à parte). O pedido vai pro grupo <strong>{{ pp.NOME_GRUPO }}</strong> no WhatsApp. Quando o financeiro mandar o comprovante, confirme aqui anexando o comprovante. A Descarga ainda pede o documento depois do pagamento.</p>
+  </div>
+</div>
+
+{% if not envio_ligado %}
+<div class="aviso-simulacao" role="status">
+  <div><strong>Modo simulação: nada é enviado ao WhatsApp.</strong>
+  Cada lançamento mostra a mensagem que iria pro grupo. O Hugo liga o envio real no config (<code>pagamentos_pontuais.ativo</code>).</div>
+</div>
+{% endif %}
+
+<form class="lancar" id="form-lancar" novalidate>
+  <h2>Novo lançamento</h2>
+  <div class="grade">
+    <div class="campo largo" id="c-tipo">
+      <span class="rotulo" id="r-tipo">Tipo</span>
+      <div class="segmentos" role="radiogroup" aria-labelledby="r-tipo">
+        <label><input type="radio" name="tipo" value="ADIANTAMENTO"><span>Adiantamento</span></label>
+        <label><input type="radio" name="tipo" value="DESCARGA"><span>Descarga</span></label>
+        <label><input type="radio" name="tipo" value="FRETE_AVULSO"><span>Frete avulso</span></label>
+      </div>
+    </div>
+    <div class="campo" id="c-motorista">
+      <label for="f-motorista">Motorista</label>
+      <select id="f-motorista" name="motorista_id">
+        <option value="">Escolha o motorista…</option>
+        {% for m in motoristas %}
+        <option value="{{ m.id }}" data-cpf="{{ m.cpf }}" data-tel="{{ m.telefone }}" data-placa="{{ m.placa }}" data-veiculo="{{ m.veiculo }}" data-pix="{{ m.pix }}">{{ m.nome }}</option>
+        {% endfor %}
+      </select>
+      <div class="ficha-motorista" id="ficha-motorista">{% if not motoristas %}Nenhum motorista ativo cadastrado.{% endif %}</div>
+    </div>
+    <div class="campo largo" id="c-descricao" hidden>
+      <label for="f-descricao">Descrição do frete</label>
+      <input type="text" id="f-descricao" name="descricao" maxlength="300" placeholder="Ex.: Cliente X, Guarulhos → Campinas, 19/11, dedicado Fiorino">
+    </div>
+    <div class="campo" id="c-valor">
+      <label for="f-valor" id="l-valor">Valor</label>
+      <div class="grupo-valor"><span>R$</span><input type="text" id="f-valor" name="valor" inputmode="decimal" placeholder="0,00" autocomplete="off"></div>
+    </div>
+    <div class="campo" id="c-valor_cobrado" hidden>
+      <label for="f-valor-cobrado">Valor cobrado do cliente</label>
+      <div class="grupo-valor"><span>R$</span><input type="text" id="f-valor-cobrado" name="valor_cobrado" inputmode="decimal" placeholder="0,00" autocomplete="off"></div>
+      <div class="margem" id="margem" aria-live="polite"></div>
+    </div>
+    <div class="campo" id="c-favorecido" hidden>
+      <span class="rotulo" id="r-favorecido">Pagar a</span>
+      <div class="segmentos" role="radiogroup" aria-labelledby="r-favorecido">
+        <label><input type="radio" name="favorecido" value="MOTORISTA" checked><span>Motorista</span></label>
+        <label><input type="radio" name="favorecido" value="LOCAL"><span>Local da descarga</span></label>
+      </div>
+    </div>
+    <div class="campo" id="c-pix">
+      <label for="f-pix">Chave PIX do motorista</label>
+      <input type="text" id="f-pix" name="pix" maxlength="200" autocomplete="off">
+      <div class="dica" id="dica-pix">Vem preenchida com a chave do app quando houver.</div>
+    </div>
+    <div class="campo largo grade bloco-local" id="bloco-local">
+      <div class="campo" id="c-local_nome">
+        <label for="f-local-nome">Nome do local</label>
+        <input type="text" id="f-local-nome" name="local_nome" maxlength="200" placeholder="Ex.: Atacadão Guarulhos">
+      </div>
+      <div class="campo" id="c-local_pagamento">
+        <label for="f-local-pagamento">Chave PIX ou dados bancários</label>
+        <input type="text" id="f-local-pagamento" name="local_pagamento" maxlength="200">
+      </div>
+      <div class="campo">
+        <label for="f-local-endereco">Endereço <span style="text-transform:none;font-weight:500">(opcional)</span></label>
+        <input type="text" id="f-local-endereco" name="local_endereco" maxlength="200">
+      </div>
+      <div class="campo">
+        <label for="f-local-documento">CNPJ/CPF <span style="text-transform:none;font-weight:500">(opcional)</span></label>
+        <input type="text" id="f-local-documento" name="local_documento" maxlength="200">
+      </div>
+    </div>
+    <div class="campo largo">
+      <label for="f-obs">Observação <span style="text-transform:none;font-weight:500">(opcional)</span></label>
+      <textarea id="f-obs" name="observacao" maxlength="500" placeholder="Ex.: rota 1336, descarga no cliente X"></textarea>
+    </div>
+    <div class="campo largo" id="c-anexo" hidden>
+      <label for="f-anexo">Anexo <span style="text-transform:none;font-weight:500">(opcional: foto ou PDF do combinado, NF, romaneio)</span></label>
+      <input type="file" id="f-anexo" name="anexo" accept="image/*,application/pdf">
+    </div>
+  </div>
+  <div class="rodape-form">
+    <button type="submit" class="botao-principal" id="b-lancar">Lançar e avisar o grupo</button>
+    <span class="erro-form" id="erro-form" role="alert"></span>
+  </div>
+</form>
+
+<nav class="abas" aria-label="Situação">
+  {% for chave, rotulo in (("AGUARDANDO_PAGAMENTO", "Aguardando pagamento"), ("AGUARDANDO_DOCUMENTO", "Aguardando documento"), ("PAGO", "Pagos"), ("CANCELADO", "Cancelados"), ("TODOS", "Todos")) %}
+  <a href="{{ url_for('pagamentos', situacao=chave) }}" class="{{ 'ativa' if situacao == chave else '' }}">{{ rotulo }}<span class="n">{{ contagem.get(chave, 0) }}</span></a>
+  {% endfor %}
+</nav>
+
+<div class="lista">
+{% for p in itens %}
+  <article class="item" id="p{{ p.id }}" data-id="{{ p.id }}">
+    <div>
+      <div class="topo">
+        <span class="numero">#{{ p.id }}</span>
+        <span class="chip {{ p.tipo|lower }}">{{ pp.TIPOS[p.tipo] }}</span>
+        <span class="badge {{ {'AGUARDANDO_PAGAMENTO': 'badge-rodando', 'AGUARDANDO_DOCUMENTO': 'badge-timeout', 'PAGO': 'badge-sucesso', 'CANCELADO': 'badge-nunca'}[p.situacao] }}">{{ pp.SITUACOES[p.situacao] }}</span>
+      </div>
+      <div class="detalhes">
+        <strong>{{ p.motorista_nome }}</strong>{% if p.motorista_placa %} · {{ p.motorista_placa }}{% endif %}
+        {% if p.descricao %}<br>Frete: {{ p.descricao }}{% endif %}
+        {% if p.valor_cobrado is not none %}{% set mg = pp.margem(p) %}<br>Cobrado do cliente: {{ moeda(p.valor_cobrado) }} · margem <span class="{{ 'margem negativa' if mg < 0 else '' }}">{{ '-' if mg < 0 else '' }}{{ moeda(mg|abs) }}</span>{% endif %}
+        {% if p.favorecido == 'LOCAL' %}<br>Pagar ao local: <strong>{{ p.local_nome }}</strong> · {{ p.local_pagamento }}{% elif p.motorista_pix %}<br>PIX: {{ p.motorista_pix }}{% endif %}
+        {% if p.observacao %}<br>Obs: {{ p.observacao }}{% endif %}
+        <br>Lançado por {{ p.lancado_por or 'equipe' }} em {{ quando(p.lancado_em) }}
+        {% if p.confirmado_em %} · pago, confirmado por {{ p.confirmado_por or 'equipe' }} em {{ quando(p.confirmado_em) }}{% endif %}
+        {% if p.documento_em %} · documento por {{ p.documento_por or 'equipe' }} em {{ quando(p.documento_em) }}{% endif %}
+        {% if p.cancelado_em %}<br>Cancelado por {{ p.cancelado_por or 'equipe' }} em {{ quando(p.cancelado_em) }}: {{ p.motivo_cancelamento }}{% endif %}
+      </div>
+    </div>
+    <div class="valor">{{ moeda(p.valor) }}</div>
+
+    {% if p.aviso_texto %}
+    <details class="aviso-whats" {% if request.args.get('aberto')|string == p.id|string %}open{% endif %}>
+      <summary>WhatsApp:
+        {% if p.aviso_situacao == 'simulado' %}simulado (não enviado)
+        {% elif p.aviso_situacao == 'enviando' %}enviando…
+        {% elif p.aviso_situacao == 'enviado' %}enviado
+        {% else %}não enviado{% if p.aviso_motivo %} ({{ p.aviso_motivo }}){% endif %}{% endif %}
+        {% if p.aviso_em %}· {{ quando(p.aviso_em) }}{% endif %} · ver mensagem</summary>
+      <pre>{{ p.aviso_texto }}</pre>
+    </details>
+    {% endif %}
+
+    <div class="linha-acoes">
+      {% if p.situacao == 'AGUARDANDO_PAGAMENTO' %}
+        <label for="arq-{{ p.id }}" style="font-size:12px;color:var(--texto-suave)">Comprovante (foto ou PDF):</label>
+        <input type="file" id="arq-{{ p.id }}" accept="image/*,application/pdf">
+        <button type="button" class="confirmar" data-acao="confirmar">Confirmar pagamento</button>
+        <span class="espaco"></span>
+        <button type="button" class="cancelar" data-acao="cancelar">Cancelar</button>
+      {% elif p.situacao == 'AGUARDANDO_DOCUMENTO' %}
+        <label for="arq-{{ p.id }}" style="font-size:12px;color:var(--texto-suave)">Documento da descarga (foto ou PDF):</label>
+        <input type="file" id="arq-{{ p.id }}" accept="image/*,application/pdf">
+        <button type="button" class="confirmar" data-acao="documento">Incluir documento</button>
+        <span class="espaco"></span>
+      {% else %}
+        <span class="espaco"></span>
+      {% endif %}
+      {% if p.anexo %}<a class="botao" href="{{ url_for('pagamento_arquivo', pagamento_id=p.id, nome=p.anexo) }}" target="_blank" rel="noopener">Anexo</a>{% endif %}
+      {% if p.comprovante %}<a class="botao" href="{{ url_for('pagamento_arquivo', pagamento_id=p.id, nome=p.comprovante) }}" target="_blank" rel="noopener">Comprovante</a>{% endif %}
+      {% if p.documento %}<a class="botao" href="{{ url_for('pagamento_arquivo', pagamento_id=p.id, nome=p.documento) }}" target="_blank" rel="noopener">Documento</a>{% endif %}
+      {% if p.pode_reenviar %}<button type="button" data-acao="reenviar">Reenviar aviso</button>{% endif %}
+      <span class="erro-linha" role="alert"></span>
+    </div>
+  </article>
+{% else %}
+  <div class="vazio">Nenhum lançamento {{ {'AGUARDANDO_PAGAMENTO': 'aguardando pagamento', 'AGUARDANDO_DOCUMENTO': 'aguardando documento', 'PAGO': 'pago', 'CANCELADO': 'cancelado', 'TODOS': ''}[situacao] }} por enquanto.</div>
+{% endfor %}
+</div>
+
+<script>
+(function () {
+  const URL_LANCAR = "{{ url_for('api_lancar_pagamento') }}";
+  const URL_ACAO = "{{ url_for('api_cancelar_pagamento', pagamento_id=0) }}".replace(/\/0\/cancelar$/, "");
+  const URL_TELA = "{{ url_for('pagamentos') }}";
+  const form = document.getElementById("form-lancar");
+  const erroForm = document.getElementById("erro-form");
+  const sel = document.getElementById("f-motorista");
+  const ficha = document.getElementById("ficha-motorista");
+  const cFav = document.getElementById("c-favorecido");
+  const blocoLocal = document.getElementById("bloco-local");
+  const fPix = document.getElementById("f-pix");
+  const fCobrado = document.getElementById("f-valor-cobrado");
+  const elMargem = document.getElementById("margem");
+  let pixAuto = "";   // chave que a tela preencheu sozinha (troca quando muda o motorista)
+
+  function valorDe(nome) {
+    const el = form.querySelector(`[name="${nome}"]`);
+    if (el && el.type === "radio") { const marcado = form.querySelector(`[name="${nome}"]:checked`); return marcado ? marcado.value : ""; }
+    return el ? el.value.trim() : "";
+  }
+  function marcar(id, ruim) { const c = document.getElementById("c-" + id); if (c) c.classList.toggle("invalido", ruim); }
+
+  function atualizarFicha() {
+    const o = sel.selectedOptions[0];
+    if (!o || !o.value) { ficha.textContent = ""; return; }
+    const partes = [];
+    const cpf = o.dataset.cpf || "", tel = (o.dataset.tel || "").replace(/^55(?=\d{10,11}$)/, "");
+    if (cpf) partes.push("CPF " + (cpf.length === 11 ? cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4") : cpf));
+    if (tel) partes.push("Tel " + tel.replace(/^(\d{2})(\d{4,5})(\d{4})$/, "($1) $2-$3"));
+    if (o.dataset.veiculo || o.dataset.placa) partes.push([o.dataset.veiculo, o.dataset.placa].filter(Boolean).join(" · "));
+    ficha.textContent = partes.join(" · ");
+    if (!fPix.value.trim() || fPix.value.trim() === pixAuto) { fPix.value = o.dataset.pix || ""; pixAuto = fPix.value; }
+    document.getElementById("dica-pix").textContent = o.dataset.pix ? "Preenchida com a chave do app. Pode trocar." : "Motorista sem chave PIX no app: digite a chave.";
+    marcar("pix", false);
+  }
+  function atualizarTipo() {
+    const tipo = valorDe("tipo"), descarga = tipo === "DESCARGA", frete = tipo === "FRETE_AVULSO";
+    const aoLocal = descarga && valorDe("favorecido") === "LOCAL";
+    cFav.hidden = !descarga;
+    blocoLocal.classList.toggle("aberto", aoLocal);
+    document.getElementById("c-pix").hidden = aoLocal;
+    for (const id of ["c-descricao", "c-valor_cobrado", "c-anexo"]) document.getElementById(id).hidden = !frete;
+    document.getElementById("l-valor").textContent = frete ? "Valor a pagar ao motorista" : "Valor";
+    atualizarMargem();
+  }
+  function moeda(n) { return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
+  function atualizarMargem() {
+    const pago = lerValor(valorDe("valor")), cobrado = lerValor(fCobrado.value.trim());
+    elMargem.classList.remove("negativa");
+    if (!(pago > 0) || !(cobrado > 0)) { elMargem.textContent = ""; return; }
+    const m = Math.round((cobrado - pago) * 100) / 100;
+    elMargem.textContent = "Margem: " + moeda(m);
+    elMargem.classList.toggle("negativa", m < 0);
+  }
+  sel.addEventListener("change", () => { atualizarFicha(); marcar("motorista", false); });
+  form.addEventListener("change", (e) => { if (e.target.name === "tipo" || e.target.name === "favorecido") atualizarTipo(); if (e.target.name === "tipo") marcar("tipo", false); });
+  document.getElementById("f-valor").addEventListener("input", () => { marcar("valor", false); atualizarMargem(); });
+  fCobrado.addEventListener("input", () => { marcar("valor_cobrado", false); atualizarMargem(); });
+  fPix.addEventListener("input", () => marcar("pix", false));
+  document.getElementById("f-descricao").addEventListener("input", () => marcar("descricao", false));
+
+  function lerValor(txt) {
+    let t = txt.replace(/R\$|\s/g, "");
+    if (t.includes(",")) t = t.replace(/\./g, "").replace(",", ".");
+    return /^\d+(\.\d{1,2})?$/.test(t) ? Number(t) : NaN;
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    erroForm.textContent = "";
+    const corpo = {
+      tipo: valorDe("tipo"), motorista_id: sel.value, valor: valorDe("valor"), favorecido: valorDe("favorecido"),
+      observacao: valorDe("observacao"), local_nome: valorDe("local_nome"), local_pagamento: valorDe("local_pagamento"),
+      local_endereco: valorDe("local_endereco"), local_documento: valorDe("local_documento"),
+      pix: valorDe("pix"), descricao: valorDe("descricao"), valor_cobrado: valorDe("valor_cobrado"),
+    };
+    const frete = corpo.tipo === "FRETE_AVULSO";
+    const aoLocal = corpo.tipo === "DESCARGA" && corpo.favorecido === "LOCAL";
+    const erros = [];
+    if (!corpo.tipo) { marcar("tipo", true); erros.push("escolha o tipo"); }
+    if (!corpo.motorista_id) { marcar("motorista", true); erros.push("escolha o motorista"); }
+    const v = lerValor(corpo.valor);
+    if (!(v > 0)) { marcar("valor", true); erros.push(corpo.valor ? "o valor precisa ser maior que zero" : "informe o valor"); }
+    if (frete) {
+      if (!corpo.descricao) { marcar("descricao", true); erros.push("descreva o frete"); }
+      const c = lerValor(corpo.valor_cobrado);
+      if (!(c > 0)) { marcar("valor_cobrado", true); erros.push(corpo.valor_cobrado ? "o valor cobrado precisa ser maior que zero" : "informe o valor cobrado do cliente"); }
+    }
+    if (!aoLocal && !corpo.pix) { marcar("pix", true); erros.push("informe a chave PIX do motorista"); }
+    if (aoLocal) {
+      if (!corpo.local_nome) { marcar("local_nome", true); erros.push("informe o nome do local"); }
+      if (!corpo.local_pagamento) { marcar("local_pagamento", true); erros.push("informe o PIX ou os dados bancários do local"); }
+    }
+    if (erros.length) { erroForm.textContent = "Falta: " + erros.join(", ") + "."; return; }
+    const b = document.getElementById("b-lancar");
+    b.disabled = true;
+    try {
+      const fd = new FormData();
+      for (const [k, val] of Object.entries(corpo)) fd.append(k, val);
+      const anexo = document.getElementById("f-anexo");
+      if (frete && anexo.files.length) fd.append("anexo", anexo.files[0]);
+      const r = await fetch(URL_LANCAR, { method: "POST", body: fd });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { erroForm.textContent = j.erro || "Não deu pra lançar. Tente de novo."; b.disabled = false; return; }
+      location.href = `${URL_TELA}?situacao=AGUARDANDO_PAGAMENTO&aberto=${j.id}#p${j.id}`;
+    } catch (err) {
+      erroForm.textContent = "Sem conexão com o painel. Tente de novo."; b.disabled = false;
+    }
+  });
+
+  document.querySelectorAll(".item").forEach((item) => {
+    const id = item.dataset.id;
+    const erro = item.querySelector(".erro-linha");
+    item.querySelectorAll("button[data-acao]").forEach((botao) => botao.addEventListener("click", async () => {
+      const acao = botao.dataset.acao;
+      erro.textContent = "";
+      let opcoes;
+      if (acao === "confirmar" || acao === "documento") {
+        const arq = item.querySelector('input[type="file"]');
+        if (!arq.files.length) { erro.textContent = acao === "confirmar" ? "Anexe o comprovante do pagamento." : "Anexe o documento da descarga."; return; }
+        const fd = new FormData();
+        fd.append(acao === "confirmar" ? "comprovante" : "documento", arq.files[0]);
+        opcoes = { method: "POST", body: fd };
+      } else if (acao === "cancelar") {
+        const motivo = prompt("Motivo do cancelamento:");
+        if (!motivo || !motivo.trim()) return;
+        opcoes = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ motivo }) };
+      } else {
+        opcoes = { method: "POST" };
+      }
+      const caminho = { confirmar: "confirmar", documento: "documento", cancelar: "cancelar", reenviar: "reenviar-aviso" }[acao];
+      botao.disabled = true;
+      try {
+        const r = await fetch(`${URL_ACAO}/${id}/${caminho}`, opcoes);
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { erro.textContent = j.erro || "Não deu certo. Tente de novo."; botao.disabled = false; return; }
+        const destino = { confirmar: (j.pagamento && j.pagamento.situacao) || "PAGO", documento: "PAGO", cancelar: "CANCELADO" }[acao];
+        if (destino) location.href = `${URL_TELA}?situacao=${destino}&aberto=${id}#p${id}`;
+        else location.reload();
+      } catch (err) {
+        erro.textContent = "Sem conexão com o painel. Tente de novo."; botao.disabled = false;
+      }
+    }));
+  });
+
+  const alvo = new URLSearchParams(location.search).get("aberto");
+  if (alvo) { const el = document.getElementById("p" + alvo); if (el) el.classList.add("destaque"); }
+})();
+</script>
+{% endblock %}

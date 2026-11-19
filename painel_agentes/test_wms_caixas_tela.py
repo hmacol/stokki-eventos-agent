@@ -108,9 +108,21 @@ class Trava(Base):
             self.assertEqual(self.post("/api/wms/movimentos", self.mov(2, "x00000003")).status_code, 400)
             self.assertEqual(self.post("/api/wms/movimentos", self.mov(1, "x00000004")).status_code, 200)
 
-    def test_bootstrap_traz_piloto_id(self):
+    def test_bootstrap_traz_embarcadores_com_caixas(self):
         j = self.cliente.get("/api/wms/bootstrap").get_json()
-        self.assertEqual((j["piloto_id"], j["caixas_ativo"]), (48, True))
+        self.assertEqual((j["caixas_embarcadores"], j["caixas_ativo"]), ([48], True))
+
+    def test_caixas_por_piloto_da_lista(self):
+        # 17/11: wms.pilotos diz quem opera por caixa; o 48 fica fora ate a etiquetagem dele.
+        self.operador()
+        cfg = {**CFG, "wms": {"pilotos": [{"id": 48, "nome": "A", "caixas": False},
+                                          {"id": 99, "nome": "B", "caixas": True}]}}
+        with mock.patch.object(painel_agentes, "_carregar_config", return_value=cfg):
+            self.assertEqual(self.cliente.get("/api/wms/bootstrap").get_json()["caixas_embarcadores"], [99])
+            self.assertEqual(self.post("/api/wms/movimentos", self.mov(1, "x00000005")).status_code, 200)
+            r = self.post("/api/wms/movimentos", self.mov(2, "x00000006"))
+            self.assertEqual(r.status_code, 400)
+            self.assertIn(MSG, r.get_json()["erro"])
 
 
 class ChaveDesligada(Base):
