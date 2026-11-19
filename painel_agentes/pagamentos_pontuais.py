@@ -3,19 +3,22 @@
 painel_agentes/pagamentos_pontuais.py
 
 Pagamentos pontuais aos motoristas (Hugo, 18/11/2026): a logistica pede ao
-financeiro um Adiantamento ou uma Descarga pela tela /financeiro/pagamentos
-(menu Motoristas) e o pedido vai por WhatsApp pro grupo "FINANCEIRO +
+financeiro um Adiantamento, uma Descarga ou um Frete avulso pela tela
+/financeiro/pagamentos (menu Motoristas) e o pedido vai por WhatsApp pro grupo "FINANCEIRO +
 LOGÍSTICA". Nao executa pagamento nenhum e nao entra no extrato do motorista
 (card de melhoria "Pagamentos pontuais no extrato do motorista").
 
 Fluxo combinado com o Hugo:
 1. Lancar: tipo, motorista (ativos da bd_motoristas, um por CPF), valor > 0 e
-   observacao opcional. Descarga pode ser paga ao motorista ou ao LOCAL da
-   descarga (nome + PIX/dados bancarios obrigatorios; endereco e CNPJ/CPF
-   opcionais). Situacao AGUARDANDO_PAGAMENTO + aviso no grupo.
+   observacao opcional. Pago ao motorista, o PIX e obrigatorio (vem preenchido
+   com a chave do app; o digitado vale). Descarga pode ser paga ao motorista ou
+   ao LOCAL da descarga (nome + PIX/dados bancarios obrigatorios; endereco e
+   CNPJ/CPF opcionais). Frete avulso (frete avulso/dedicado combinado a parte,
+   18/11): descricao e valor cobrado do cliente obrigatorios, anexo opcional
+   (foto/PDF do combinado). Situacao AGUARDANDO_PAGAMENTO + aviso no grupo.
 2. O financeiro paga e manda o comprovante (fora do sistema). A logistica
    confirma na tela anexando o comprovante (foto ou PDF, obrigatorio).
-   Adiantamento -> PAGO. Descarga -> AGUARDANDO_DOCUMENTO.
+   Adiantamento e Frete avulso -> PAGO. Descarga -> AGUARDANDO_DOCUMENTO.
 3. Descarga: a logistica anexa o documento (foto ou PDF) -> PAGO + aviso so de
    texto no grupo.
 4. Cancelar so enquanto AGUARDANDO_PAGAMENTO, com aviso curto no grupo.
@@ -33,7 +36,7 @@ config.yaml:
       teto_diario: 30   # avisos por dia (balde proprio em notificar_whatsapp)
 
 Tabela pagamentos_pontuais (dados.db); arquivos em
-dados/pagamentos_pontuais/<id>/ (comprovante_N.ext, documento_N.ext).
+dados/pagamentos_pontuais/<id>/ (anexo_N.ext, comprovante_N.ext, documento_N.ext).
 """
 import logging
 import re
@@ -51,11 +54,12 @@ PASTA_ARQUIVOS = _RAIZ / "dados" / "pagamentos_pontuais"
 MAX_ARQUIVO_BYTES = 10 * 1024 * 1024
 MAX_OBSERVACAO = 500
 MAX_CAMPO_LOCAL = 200
+MAX_DESCRICAO = 300
 NOME_GRUPO = "FINANCEIRO + LOGÍSTICA"
 ORIGEM_WHATSAPP = "pagamento_pontual"
 
-ADIANTAMENTO, DESCARGA = "ADIANTAMENTO", "DESCARGA"
-TIPOS = {ADIANTAMENTO: "Adiantamento", DESCARGA: "Descarga"}
+ADIANTAMENTO, DESCARGA, FRETE_AVULSO = "ADIANTAMENTO", "DESCARGA", "FRETE_AVULSO"
+TIPOS = {ADIANTAMENTO: "Adiantamento", DESCARGA: "Descarga", FRETE_AVULSO: "Frete avulso"}
 MOTORISTA, LOCAL = "MOTORISTA", "LOCAL"
 
 AGUARDANDO_PAGAMENTO = "AGUARDANDO_PAGAMENTO"
@@ -114,16 +118,24 @@ CREATE TABLE IF NOT EXISTS pagamentos_pontuais (
     aviso_texto         TEXT,
     aviso_situacao      TEXT,
     aviso_motivo        TEXT,
-    aviso_em            TEXT
+    aviso_em            TEXT,
+    descricao           TEXT,
+    valor_cobrado       REAL,
+    anexo               TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pagamentos_pontuais_situacao ON pagamentos_pontuais(situacao);
 """
+_COLUNAS_NOVAS = (("descricao", "TEXT"), ("valor_cobrado", "REAL"), ("anexo", "TEXT"))
 
 
 def conectar(caminho=None) -> sqlite3.Connection:
     conn = sqlite3.connect(caminho or DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
+    existentes = {r[1] for r in conn.execute("PRAGMA table_info(pagamentos_pontuais)")}
+    for coluna, tipo in _COLUNAS_NOVAS:          # tabela criada antes do Frete avulso
+        if coluna not in existentes:
+            conn.execute(f"ALTER TABLE pagamentos_pontuais ADD COLUMN {coluna} {tipo}")
     return conn
 
 
@@ -200,19 +212,19 @@ def _sem_acento(texto: str) -> str:
 
 # ── Validacao ─────────────────────────────────────────────────────────────────
 
-def ler_valor(bruto) -> float:
+def ler_valor(bruto, rotulo: str = "valor") -> float:
     """'150', '150.5', '150,50', '1.234,56', 'R$ 80' -> float > 0 com no
     maximo 2 casas. Qualquer outra coisa -> ErroPagamento."""
     texto = str(bruto if bruto is not None else "").replace("R$", "").replace(" ", "").strip()
     if not texto:
-        raise ErroPagamento("Informe o valor.")
+        raise ErroPagamento(f"Informe o {rotulo}.")
     if "," in texto:
         texto = texto.replace(".", "").replace(",", ".")
     if not re.fullmatch(r"-?\d+(\.\d{1,2})?", texto):
-        raise ErroPagamento("Valor inválido: use só números, com até 2 casas decimais.")
+        raise ErroPagamento(f"{rotulo[0].upper()}{rotulo[1:]} inválido: use só números, com até 2 casas decimais.")
     valor = round(float(texto), 2)
     if valor <= 0:
-        raise ErroPagamento("O valor precisa ser maior que zero.")
+        raise ErroPagamento(f"O {rotulo} precisa ser maior que zero.")
     return valor
 
 
@@ -224,7 +236,7 @@ def validar(dados: dict, motoristas: list[dict]) -> dict:
     """Corpo do formulario -> campos prontos pra gravar. Levanta ErroPagamento."""
     tipo = str(dados.get("tipo") or "").strip().upper()
     if tipo not in TIPOS:
-        raise ErroPagamento("Escolha o tipo de pagamento (Adiantamento ou Descarga).")
+        raise ErroPagamento("Escolha o tipo de pagamento (Adiantamento, Descarga ou Frete avulso).")
     try:
         motorista_id = int(dados.get("motorista_id") or 0)
     except (TypeError, ValueError):
@@ -235,9 +247,20 @@ def validar(dados: dict, motoristas: list[dict]) -> dict:
     if motorista is None:
         raise ErroPagamento("Motorista não encontrado ou inativo. Recarregue a tela.")
     valor = ler_valor(dados.get("valor"))
+    descricao, valor_cobrado = "", None
+    if tipo == FRETE_AVULSO:
+        descricao = _campo(dados, "descricao", MAX_DESCRICAO)
+        if not descricao:
+            raise ErroPagamento("Descreva o frete (cliente, origem → destino, data).")
+        valor_cobrado = ler_valor(dados.get("valor_cobrado"), "valor cobrado do cliente")
     favorecido = str(dados.get("favorecido") or MOTORISTA).strip().upper()
-    if tipo == ADIANTAMENTO or favorecido not in (MOTORISTA, LOCAL):
+    if tipo != DESCARGA or favorecido not in (MOTORISTA, LOCAL):
         favorecido = MOTORISTA
+    pix = ""
+    if favorecido == MOTORISTA:
+        pix = _campo(dados, "pix", MAX_CAMPO_LOCAL)
+        if not pix:
+            raise ErroPagamento("Informe a chave PIX do motorista.")
     local = {"local_nome": "", "local_endereco": "", "local_documento": "", "local_pagamento": ""}
     if favorecido == LOCAL:
         local = {k: _campo(dados, k, MAX_CAMPO_LOCAL) for k in local}
@@ -247,25 +270,35 @@ def validar(dados: dict, motoristas: list[dict]) -> dict:
             raise ErroPagamento("Informe a chave PIX ou os dados bancários do local da descarga.")
     observacao = str(dados.get("observacao") or "").strip()[:MAX_OBSERVACAO]
     return {"tipo": tipo, "valor": valor, "observacao": observacao, "favorecido": favorecido,
-            "motorista": motorista, **local}
+            "motorista": motorista, "pix": pix, "descricao": descricao, "valor_cobrado": valor_cobrado, **local}
 
 
 # ── Fluxo ─────────────────────────────────────────────────────────────────────
 
-def lancar(conn, dados: dict, usuario: str) -> int:
+def lancar(conn, dados: dict, usuario: str, anexo: bytes = b"") -> int:
+    """Grava o lancamento. `anexo` (foto/PDF, opcional) so vale no Frete avulso."""
     campos = validar(dados, listar_motoristas(conn))
+    anexo = anexo if campos["tipo"] == FRETE_AVULSO else b""
+    if anexo:
+        _validar_arquivo(anexo)        # antes do INSERT: arquivo ruim nao deixa lancamento orfao
     m = campos["motorista"]
     cur = conn.execute(
         "INSERT INTO pagamentos_pontuais (tipo, situacao, valor, observacao, motorista_id, motorista_nome, "
         "motorista_cpf, motorista_telefone, motorista_placa, motorista_veiculo, motorista_pix, favorecido, "
-        "local_nome, local_endereco, local_documento, local_pagamento, lancado_por, lancado_em) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "local_nome, local_endereco, local_documento, local_pagamento, lancado_por, lancado_em, "
+        "descricao, valor_cobrado) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (campos["tipo"], AGUARDANDO_PAGAMENTO, campos["valor"], campos["observacao"] or None, m["id"], m["nome"],
-         m["cpf"] or None, m["telefone"] or None, m["placa"] or None, m["veiculo"] or None, m["pix"] or None,
+         m["cpf"] or None, m["telefone"] or None, m["placa"] or None, m["veiculo"] or None, campos["pix"] or None,
          campos["favorecido"], campos["local_nome"] or None, campos["local_endereco"] or None,
-         campos["local_documento"] or None, campos["local_pagamento"] or None, usuario or None, _agora()))
+         campos["local_documento"] or None, campos["local_pagamento"] or None, usuario or None, _agora(),
+         campos["descricao"] or None, campos["valor_cobrado"]))
+    novo_id = cur.lastrowid
+    if anexo:
+        conn.execute("UPDATE pagamentos_pontuais SET anexo = ? WHERE id = ?",
+                     (salvar_arquivo(novo_id, "anexo", anexo), novo_id))
     conn.commit()
-    return cur.lastrowid
+    return novo_id
 
 
 def obter(conn, pagamento_id: int) -> dict | None:
@@ -351,12 +384,18 @@ def _extensao(conteudo: bytes) -> str | None:
     return None
 
 
-def salvar_arquivo(pagamento_id: int, prefixo: str, conteudo: bytes) -> str:
+def _validar_arquivo(conteudo: bytes) -> str:
+    """Extensao do arquivo; levanta ErroPagamento se grande demais ou nao for foto/PDF."""
     if len(conteudo) > MAX_ARQUIVO_BYTES:
         raise ErroPagamento("Arquivo muito grande (máximo 10 MB).")
     ext = _extensao(conteudo)
     if not ext:
         raise ErroPagamento("O arquivo precisa ser uma foto (JPG, PNG, WEBP) ou um PDF.")
+    return ext
+
+
+def salvar_arquivo(pagamento_id: int, prefixo: str, conteudo: bytes) -> str:
+    ext = _validar_arquivo(conteudo)
     pasta = PASTA_ARQUIVOS / str(pagamento_id)
     pasta.mkdir(parents=True, exist_ok=True)
     n = sum(1 for x in pasta.iterdir() if x.name.startswith(prefixo + "_")) + 1
@@ -379,6 +418,17 @@ def caminho_arquivo(pagamento_id: int, nome: str) -> Path | None:
 def _moeda(valor) -> str:
     inteiro, centavos = f"{float(valor):.2f}".split(".")
     return f"R$ {int(inteiro):,}".replace(",", ".") + f",{centavos}"
+
+
+def _moeda_sinal(valor) -> str:
+    return ("-" if valor < 0 else "") + _moeda(abs(valor))
+
+
+def margem(p: dict) -> float | None:
+    """Cobrado do cliente menos o pago ao motorista (so Frete avulso)."""
+    if p.get("valor_cobrado") is None:
+        return None
+    return round(float(p["valor_cobrado"]) - float(p["valor"]), 2)
 
 
 def _cpf(cpf: str | None) -> str:
@@ -418,8 +468,14 @@ def _linhas_motorista(p: dict) -> list[str]:
 
 
 def texto_lancamento(p: dict) -> str:
-    linhas = [f"💰 *Solicitação de pagamento #{p['id']} · {TIPOS[p['tipo']]}*",
-              f"Valor: *{_moeda(p['valor'])}*"]
+    linhas = [f"💰 *Solicitação de pagamento #{p['id']} · {TIPOS[p['tipo']]}*"]
+    if p["tipo"] == FRETE_AVULSO:
+        linhas.append(f"Frete: {p.get('descricao') or ''}")
+        linhas.append(f"Valor a pagar ao motorista: *{_moeda(p['valor'])}*")
+        if p.get("valor_cobrado") is not None:
+            linhas.append(f"Cobrado do cliente: {_moeda(p['valor_cobrado'])} · margem {_moeda_sinal(margem(p))}")
+    else:
+        linhas.append(f"Valor: *{_moeda(p['valor'])}*")
     if p["favorecido"] == LOCAL:
         linhas.append(f"Pagar ao LOCAL da descarga: *{p['local_nome']}*")
         if p.get("local_endereco"):
@@ -432,9 +488,11 @@ def texto_lancamento(p: dict) -> str:
     else:
         linhas.append("Pagar ao motorista")
         linhas += _linhas_motorista(p)
-        linhas.append(f"PIX: {p['motorista_pix']}" if p.get("motorista_pix") else "PIX: não cadastrado no app")
+        linhas.append(f"PIX: {p['motorista_pix']}" if p.get("motorista_pix") else "PIX: não informado")
     if p.get("observacao"):
         linhas.append(f"Obs: {p['observacao']}")
+    if p.get("anexo"):
+        linhas.append("Anexo no painel (Motoristas → Pagamentos).")
     linhas.append(f"Lançado por {p.get('lancado_por') or 'equipe'} em {_quando(p['lancado_em'])}")
     linhas.append("Depois de pagar, mandem o comprovante aqui: a logística confirma no painel.")
     return "\n".join(linhas)

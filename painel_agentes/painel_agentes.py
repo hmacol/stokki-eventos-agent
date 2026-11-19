@@ -4438,7 +4438,7 @@ def revisar_pedagio(pedagio_id):
     return jsonify({"ok": True, "pedagio": resultado})
 
 
-# ── Pagamentos pontuais: Adiantamento e Descarga (Hugo, 18/11) ───────────────
+# ── Pagamentos pontuais: Adiantamento, Descarga e Frete avulso (Hugo, 18/11) ──
 # A logística lança, o pedido vai pro grupo FINANCEIRO + LOGÍSTICA, o
 # financeiro paga e manda o comprovante, a logística confirma anexando o
 # comprovante; Descarga ainda pede o documento. Lógica e trava do envio em
@@ -4482,9 +4482,13 @@ def _resposta_pagamento(conn, pagamento_id: int, evento: str | None):
 @requer_auth(niveis=NIVEIS_PAGAMENTOS)
 @exige_mesma_origem
 def api_lancar_pagamento():
+    # JSON ou formulário (o Frete avulso pode vir com anexo)
+    dados = request.form.to_dict() if request.form or request.files else (request.get_json(silent=True) or {})
+    arquivo = request.files.get("anexo")
+    anexo = arquivo.read(pagamentos_pontuais.MAX_ARQUIVO_BYTES + 1) if arquivo else b""
     conn = pagamentos_pontuais.conectar()
     try:
-        novo_id = pagamentos_pontuais.lancar(conn, request.get_json(silent=True) or {}, _usuario_pagamento())
+        novo_id = pagamentos_pontuais.lancar(conn, dados, _usuario_pagamento(), anexo)
         return _resposta_pagamento(conn, novo_id, "lancamento")
     except pagamentos_pontuais.ErroPagamento as e:
         return jsonify({"erro": str(e)}), 400

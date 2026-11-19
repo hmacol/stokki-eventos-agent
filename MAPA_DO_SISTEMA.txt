@@ -262,10 +262,11 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              motivo, assinatura; divergência/parcial -> grupo "Alertas" do
                                              /atendimento; 07h dia útil alertar_retornos_atrasados.py.
                                              Selo "No galpão" na Torre e na Consulta. Não segura reentrega.
- Pagamentos pontuais (Adiantamento/Descarga)  painel_agentes/pagamentos_pontuais.py + tela /financeiro/pagamentos
+ Pagamentos pontuais (Adiant./Desc./Frete)   painel_agentes/pagamentos_pontuais.py + tela /financeiro/pagamentos
                                              (menu Motoristas; total, atendimento, logistica). Lança -> WhatsApp no
                                              grupo "FINANCEIRO + LOGÍSTICA" (achado pelo nome; pagamentos_pontuais.
                                              grupo_id troca) -> confirma com comprovante -> Descarga pede documento.
+                                             Frete avulso: descrição + valor cobrado do cliente (margem) + anexo opcional.
                                              Envio DESLIGADO por padrão (pagamentos_pontuais.ativo; desligado =
                                              só a prévia na tela). Não entra no extrato do motorista.
  Justificativas sem canhoto ................ nucleo/justificativas_sem_canhoto.py: lista fixa de justificativas (codigo -> rotulo) e validar()
@@ -1382,12 +1383,15 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
                            (retornando_id) e o recebimento so baixa o Retornando (sem linha
                            em retornos_recebidos; o alerta do grupo avisa).
  pagamentos_pontuais.py    Pagamentos pontuais (18/11): a logística pede ao financeiro um
-                           Adiantamento ou uma Descarga (tela /financeiro/pagamentos, menu
+                           Adiantamento, uma Descarga ou um Frete avulso (tela /financeiro/pagamentos, menu
                            Motoristas; níveis total, atendimento, logistica). Motoristas = ativos
-                           da bd_motoristas, um por CPF, PIX da tabela motoristas (app). Descarga
-                           pode ser paga ao LOCAL (nome + PIX/dados bancários obrigatórios).
+                           da bd_motoristas, um por CPF. PIX do motorista obrigatório quando paga
+                           a ele (vem da tabela motoristas/app, o digitado vale). Descarga pode ser
+                           paga ao LOCAL (nome + PIX/dados bancários obrigatórios). Frete avulso
+                           (frete avulso/dedicado combinado à parte): descrição e valor cobrado do
+                           cliente obrigatórios (margem na tela e no aviso), anexo opcional.
                            Situações: AGUARDANDO_PAGAMENTO -> (confirmar com comprovante,
-                           obrigatório) PAGO | Descarga: AGUARDANDO_DOCUMENTO -> (documento)
+                           obrigatório) PAGO (Adiantamento, Frete avulso) | Descarga: AGUARDANDO_DOCUMENTO -> (documento)
                            PAGO; CANCELADO só antes do pagamento. Sem trava de duplicado e sem
                            limite de valor (Hugo). Tabela pagamentos_pontuais; arquivos (foto
                            ou PDF, 10 MB) em dados/pagamentos_pontuais/<id>/. Aviso ao grupo
@@ -1544,7 +1548,7 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
                               o envio responde 409 com a chave desligada). acesso_telas.TELAS já cobre
                               ^/api/motoristas.
    /financeiro/pedagios       pedagios.html
-   /financeiro/pagamentos     pagamentos_pontuais.html (Adiantamento/Descarga ao financeiro)
+   /financeiro/pagamentos     pagamentos_pontuais.html (Adiantamento/Descarga/Frete avulso)
    /canhotos                  canhotos.html
    /  (agentes), /execucao/<id>, /historico   index.html, execucao.html, historico.html
    APIs em /api/<tela>/...

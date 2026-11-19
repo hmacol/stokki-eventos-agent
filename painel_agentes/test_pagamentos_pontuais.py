@@ -87,8 +87,13 @@ class Base(unittest.TestCase):
         self.ana = next(m for m in self.motoristas if m["nome"] == "Ana Souza")
 
     def lancar(self, **kw):
-        dados = {"tipo": "ADIANTAMENTO", "motorista_id": self.joao["id"], "valor": "150,00", **kw}
+        dados = {"tipo": "ADIANTAMENTO", "motorista_id": self.joao["id"], "valor": "150,00", "pix": "joao@pix.com", **kw}
         return pp.lancar(self.conn, dados, "Maria")
+
+    def lancar_frete(self, anexo=b"", **kw):
+        dados = {"tipo": "FRETE_AVULSO", "motorista_id": self.joao["id"], "valor": "400,00", "pix": "joao@pix.com",
+                 "descricao": "Cliente X, Guarulhos → Campinas, dedicado", "valor_cobrado": "650,00", **kw}
+        return pp.lancar(self.conn, dados, "Maria", anexo)
 
 
 class TestMotoristas(Base):
@@ -137,6 +142,37 @@ class TestValidacao(Base):
             self.lancar(tipo="DESCARGA", favorecido="LOCAL", local_pagamento="pix@local")
         with self.assertRaisesRegex(pp.ErroPagamento, "PIX"):
             self.lancar(tipo="DESCARGA", favorecido="LOCAL", local_nome="Atacadão")
+
+    def test_pix_obrigatorio_quando_paga_o_motorista(self):
+        for tipo in ("ADIANTAMENTO", "DESCARGA", "FRETE_AVULSO"):
+            with self.assertRaisesRegex(pp.ErroPagamento, "PIX do motorista", msg=tipo):
+                self.lancar_frete(tipo=tipo, pix="  ")
+        # descarga paga ao local nao pede o PIX do motorista
+        pid = self.lancar(tipo="DESCARGA", favorecido="LOCAL", local_nome="CD", local_pagamento="pix@cd", pix="")
+        self.assertIsNone(pp.obter(self.conn, pid)["motorista_pix"])
+
+    def test_pix_digitado_troca_o_do_app(self):
+        pid = self.lancar(pix="outra@chave")
+        self.assertEqual(pp.obter(self.conn, pid)["motorista_pix"], "outra@chave")
+
+    def test_frete_avulso_exige_descricao_e_valor_cobrado(self):
+        for extra, trecho in (({"descricao": " "}, "descreva o frete"), ({"valor_cobrado": ""}, "valor cobrado"),
+                              ({"valor_cobrado": "0"}, "maior que zero"), ({"valor_cobrado": "abc"}, "inválido")):
+            with self.assertRaises(pp.ErroPagamento, msg=str(extra)) as ctx:
+                self.lancar_frete(**extra)
+            self.assertIn(trecho, str(ctx.exception).lower())
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM pagamentos_pontuais").fetchone()[0], 0)
+
+    def test_frete_avulso_grava_campos(self):
+        p = pp.obter(self.conn, self.lancar_frete())
+        self.assertEqual((p["tipo"], p["valor"], p["valor_cobrado"], p["favorecido"], p["anexo"]),
+                         ("FRETE_AVULSO", 400.0, 650.0, "MOTORISTA", None))
+        self.assertEqual(pp.margem(p), 250.0)
+
+    def test_campos_do_frete_ignorados_nos_outros_tipos(self):
+        p = pp.obter(self.conn, self.lancar(descricao="x", valor_cobrado="99"))
+        self.assertEqual((p["descricao"], p["valor_cobrado"]), (None, None))
+        self.assertIsNone(pp.margem(p))
 
     def test_adiantamento_ignora_local(self):
         pid = self.lancar(favorecido="LOCAL", local_nome="X", local_pagamento="Y")
@@ -189,6 +225,37 @@ class TestFluxo(Base):
         with self.assertRaises(pp.ErroPagamento):
             pp.cancelar(self.conn, pago, "tarde demais", "Maria")
 
+    def test_frete_avulso_confirmado_vira_pago(self):
+        pid = self.lancar_frete()
+        self.assertEqual(pp.confirmar(self.conn, pid, JPEG, "Carlos"), pp.PAGO)
+
+    def test_anexo_do_frete(self):
+        pid = self.lancar_frete(anexo=PDF)
+        self.assertEqual(pp.obter(self.conn, pid)["anexo"], "anexo_1.pdf")
+        self.assertIsNotNone(pp.caminho_arquivo(pid, "anexo_1.pdf"))
+        # arquivo ruim recusa o lancamento inteiro (sem linha orfa)
+        with self.assertRaisesRegex(pp.ErroPagamento, "foto"):
+            self.lancar_frete(anexo=b"MZ executavel")
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM pagamentos_pontuais").fetchone()[0], 1)
+        # anexo so vale no Frete avulso
+        self.assertIsNone(pp.obter(self.conn, pp.lancar(self.conn, {
+            "tipo": "ADIANTAMENTO", "motorista_id": self.joao["id"], "valor": "10", "pix": "p"}, "Maria", PDF))["anexo"])
+
+    def test_tabela_antiga_ganha_colunas_novas(self):
+        antigo = Path(self._tmp.name) / "antigo.db"
+        c = pp.sqlite3.connect(antigo)
+        c.execute("CREATE TABLE pagamentos_pontuais (id INTEGER PRIMARY KEY, tipo TEXT, situacao TEXT, valor REAL, "
+                  "motorista_nome TEXT, lancado_em TEXT)")
+        c.execute("INSERT INTO pagamentos_pontuais VALUES (1, 'ADIANTAMENTO', 'PAGO', 10, 'X', '2026-11-18 10:00:00')")
+        c.commit()
+        c.close()
+        c = pp.conectar(antigo)
+        colunas = {r[1] for r in c.execute("PRAGMA table_info(pagamentos_pontuais)")}
+        self.assertTrue({"descricao", "valor_cobrado", "anexo"} <= colunas)
+        self.assertEqual(pp.obter(c, 1)["valor_cobrado"], None)
+        c.close()
+        pp.conectar(antigo).close()          # 2a vez nao tenta criar de novo
+
     def test_caminho_arquivo_nao_sai_da_pasta(self):
         pid = self.lancar()
         pp.confirmar(self.conn, pid, JPEG, "Carlos")
@@ -216,9 +283,23 @@ class TestMensagens(Base):
         self.assertNotIn("CNPJ/CPF:", texto)       # opcional vazio nao aparece
         self.assertNotIn("PIX: joao", texto)       # quem recebe e o local
 
-    def test_motorista_sem_pix(self):
-        pid = self.lancar(motorista_id=self.ana["id"])
-        self.assertIn("PIX: não cadastrado no app", pp.texto_lancamento(pp.obter(self.conn, pid)))
+    def test_pix_digitado_vale(self):
+        pid = self.lancar(motorista_id=self.ana["id"], pix="ana@pix.com")
+        self.assertIn("PIX: ana@pix.com", pp.texto_lancamento(pp.obter(self.conn, pid)))
+
+    def test_frete_avulso_leva_descricao_valores_e_margem(self):
+        pid = self.lancar_frete(observacao="combinado com o comercial")
+        texto = pp.texto_lancamento(pp.obter(self.conn, pid))
+        for trecho in (f"#{pid} · Frete avulso", "Frete: Cliente X, Guarulhos → Campinas, dedicado",
+                       "Valor a pagar ao motorista: *R$ 400,00*", "Cobrado do cliente: R$ 650,00 · margem R$ 250,00",
+                       "Pagar ao motorista", "PIX: joao@pix.com", "Motorista: João da Silva", "Obs: combinado"):
+            self.assertIn(trecho, texto)
+        self.assertNotIn("Anexo no painel", texto)
+        self.assertIn("Anexo no painel", pp.texto_lancamento(pp.obter(self.conn, self.lancar_frete(anexo=PDF))))
+
+    def test_margem_negativa(self):
+        pid = self.lancar_frete(valor="700", valor_cobrado="650")
+        self.assertIn("margem -R$ 50,00", pp.texto_lancamento(pp.obter(self.conn, pid)))
 
 
 class TestAviso(Base):
@@ -346,6 +427,31 @@ class TestTela(Base):
         self.assertEqual((r.status_code, r.data[:4]), (200, b"%PDF"))
         r.close()
 
+    def test_frete_avulso_pelo_formulario_com_anexo(self):
+        self.logar("logistica")
+        campos = {"tipo": "FRETE_AVULSO", "motorista_id": str(self.ana["id"]), "valor": "300", "pix": "ana@pix.com",
+                  "descricao": "Cliente Y, dedicado VUC", "valor_cobrado": "480,00"}
+        r = self.cliente.post("/api/financeiro/pagamentos", headers=ORIGEM,
+                              data={**campos, "pix": ""})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("PIX", r.get_json()["erro"])
+        r = self.cliente.post("/api/financeiro/pagamentos", headers=ORIGEM,
+                              data={**campos, "anexo": (io.BytesIO(b"MZ nao e foto"), "x.exe")})
+        self.assertEqual(r.status_code, 400)
+        r = self.cliente.post("/api/financeiro/pagamentos", headers=ORIGEM,
+                              data={**campos, "anexo": (io.BytesIO(JPEG), "combinado.jpg")})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        j = r.get_json()
+        self.assertEqual((j["pagamento"]["anexo"], j["pagamento"]["valor_cobrado"]), ("anexo_1.jpg", 480.0))
+        self.assertIn("margem R$ 180,00", j["aviso"]["texto"])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM pagamentos_pontuais").fetchone()[0], 1)
+        html = self.cliente.get("/financeiro/pagamentos").get_data(as_text=True)
+        self.assertIn("Frete: Cliente Y, dedicado VUC", html)
+        self.assertIn("anexo_1.jpg", html)
+        r = self.cliente.get(f"/financeiro/pagamentos/{j['id']}/arquivo/anexo_1.jpg")
+        self.assertEqual(r.status_code, 200)
+        r.close()
+
     def test_cancelar_avisa(self):
         self.logar("atendimento")
         pid = self.lancar()
@@ -360,7 +466,8 @@ class TestTela(Base):
         self.logar("logistica")
         with mock.patch.object(pp.threading, "Thread") as thread:
             r = self.cliente.post("/api/financeiro/pagamentos", headers=ORIGEM,
-                                  json={"tipo": "ADIANTAMENTO", "motorista_id": self.ana["id"], "valor": "50"})
+                                  json={"tipo": "ADIANTAMENTO", "motorista_id": self.ana["id"], "valor": "50",
+                                        "pix": "ana@pix.com"})
         self.assertEqual(r.get_json()["aviso"]["situacao"], "enviando")
         thread.assert_called_once()
         self.assertIs(thread.call_args.kwargs["target"], pp.enviar_aviso)
