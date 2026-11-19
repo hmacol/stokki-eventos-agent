@@ -188,6 +188,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              terceiros/sugestao/livre; <entrega> no XML do lote);
                                              chave portal_cliente.envios.endereco_entrega_ativo
                                              (padrão desligado; spec 2026-10-27-endereco-entrega-portal)
+ Transportadora trocada pelo embarcador ..... portal_cliente/transportadora_envio.py (prévia: select com as
+                                             ATIVAS de /transportadoras; grava portal_envios.transportadora_json;
+                                             worker reescreve o <transporta> na cópia do lote; sem chave)
  Fluxo Cross (item XD + troca de NF) ....... nucleo/fluxo_embarcador.py (interno.fluxos, XD achado em
                                              wms_produtos) -> regra "cross" do importador -> fila
                                              portal_cliente/trocas_nf.py -> stokki/trocar_nf.py; virada:
@@ -1735,6 +1738,8 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
  endereco_entrega.py       Endereço de entrega escolhido na prévia: CEP com IBGE, última
                            entrega do destinatário (Vuupt/portal, por embarcador), <entrega>
                            inserido no XML do lote pelo worker (original intacto).
+transportadora_envio.py   Transportadora escolhida na prévia (XML): opções do cadastro, regravação
+                           do <transporta> na cópia do lote (original intacto); test_transportadora_envio.py.
 alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (quem pode, avisos,
                           data pelo dia fixo); chave portal_cliente.alteracao_entrega.
                           Rotas em app.py: GET/POST /api/pedidos/<id>/alteracao (404 com a chave

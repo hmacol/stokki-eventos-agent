@@ -61,6 +61,7 @@ for _p in (_RAIZ, Path(__file__).parent):  # painel importa como portal_cliente.
         sys.path.insert(0, str(_p))
 
 import endereco_entrega  # noqa: E402
+import transportadora_envio  # noqa: E402
 from nucleo.fluxo_embarcador import FLUXOS, ROTULOS as FLUXO_ROTULOS  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -255,6 +256,9 @@ def conectar() -> sqlite3.Connection:
         # origem fiscal|nota|cliente|ultima_entrega; json só em cliente/ultima_entrega
         "endereco_entrega_origem": "TEXT",
         "endereco_entrega_json": "TEXT",
+        # transportadora escolhida na prévia (transportadora_envio.py): {id, nome, cnpj};
+        # vazio = a do XML. O worker reescreve o <transporta> na cópia do lote.
+        "transportadora_json": "TEXT",
     })
     _garantir_colunas(conn, "portal_clientes_envio", {"carrier_id": "TEXT", "prioridade": "TEXT"})
     conn.commit()
@@ -1628,6 +1632,16 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
             raise ErroEnvio(f"{rotulo_envio(nfe)}: " + " ".join(v["erros"]))
         nfe["_fluxo"] = escolher_fluxo(item, ctx["fluxos"] or ["armazenagem"], nfe.get("origem") or ORIGEM_XML,
                                        rotulo_envio(nfe))
+        # Transportadora escolhida na prévia: antes do endereço e da área, que
+        # dependem do tipo dela (retirada/redespacho não checam região).
+        if item.get("transportadora_id"):
+            if nfe.get("origem") != ORIGEM_XML:
+                raise ErroEnvio(f"{rotulo_envio(nfe)}: pedido de planilha não aceita troca de transportadora.")
+            try:
+                transp = transportadora_envio.resolver(conn, item["transportadora_id"])
+            except transportadora_envio.ErroTransportadora as e:
+                raise ErroEnvio(f"{rotulo_envio(nfe)}: {e}")
+            nfe = {**transportadora_envio.aplicar_no_nfe(nfe, transp), "_transp_json": transportadora_envio.gravar_json(transp)}
         # Endereço de entrega escolhido na prévia (27/10): antes da área, pra
         # área, dia fixo e gravação já usarem o endereço de entrega.
         if nfe.get("origem") == ORIGEM_XML:
@@ -1718,6 +1732,7 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
             "data_expedicao": nfe.get("data_expedicao") if planilha else None,
             "linhas_planilha": ",".join(str(n) for n in nfe.get("linhas") or []) if planilha else None,
             "endereco_entrega_origem": nfe.get("_entrega_origem"), "endereco_entrega_json": nfe.get("_entrega_json"),
+            "transportadora_json": nfe.get("_transp_json"),
         }
         if existente:
             sets = ", ".join(f"{k} = ?" for k in campos if k != "chave_nfe")
@@ -1863,6 +1878,14 @@ def buscar_envio(conn: sqlite3.Connection, envio_id: int, cnpj_embarcador: str) 
 
 def caminho_xml(envio: dict) -> Path:
     return _RAIZ / envio["xml_path"]
+
+
+def ler_nfe_do_envio(envio: dict) -> dict:
+    """ler_nfe do XML gravado, já com a transportadora que o embarcador
+    escolheu na prévia (o arquivo guardado é o original da nota)."""
+    nfe = ler_nfe(caminho_xml(envio).read_bytes())
+    transp = transportadora_envio.da_linha(envio)
+    return transportadora_envio.aplicar_no_nfe(nfe, transp) if transp else nfe
 
 
 # ── Ações do cliente (item 12) ─────────────────────────────────────────────────
@@ -2075,7 +2098,7 @@ def alterar_endereco_bloqueado(conn: sqlite3.Connection, envio: dict, campos: di
     if not endereco_entrega.entrega_ativa(config):
         raise ErroEnvio("A troca de endereço de entrega não está disponível. Fale com a equipe Fresh Log.")
     try:
-        nfe = ler_nfe(caminho_xml(envio).read_bytes())
+        nfe = ler_nfe_do_envio(envio)
     except OSError:
         raise ErroEnvio("Não foi possível ler o XML deste pedido. Fale com a equipe Fresh Log.")
     if nfe.get("endereco_fiscal"):

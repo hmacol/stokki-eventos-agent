@@ -62,6 +62,7 @@ import yaml
 import anexos_pedido
 import cancelamento as cm
 import endereco_entrega
+import transportadora_envio
 import envio_pedidos as ep
 import pedidos_dedicados
 import retomada as rt
@@ -130,6 +131,14 @@ def transformar_xml(regra: str, origem: Path, destino: Path, px, fluxo: str = "a
     if fn is None:
         raise ValueError(f"Regra de XML '{regra}' não existe no importador (TRANSFORMACOES).")
     fn(origem, destino)
+
+
+def aplicar_transportadora_no_lote(e: dict, destino: Path) -> None:
+    """Transportadora escolhida pelo embarcador na prévia: troca o <transporta>
+    do XML do lote (cópia), nunca o original do cliente. Sem escolha: nada."""
+    transp = transportadora_envio.da_linha(e)
+    if transp:
+        destino.write_bytes(transportadora_envio.trocar_transporta_xml(destino.read_bytes(), transp["nome"], transp.get("cnpj") or ""))
 
 
 def aplicar_entrega_no_lote(e: dict, destino: Path) -> None:
@@ -612,6 +621,7 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
                     else:
                         transformar_xml(cfg["regra_xml"], ep.caminho_xml(e), destino, px,
                                         fluxo=e.get("fluxo") or "armazenagem", xd=xd)
+                    aplicar_transportadora_no_lote(e, destino)
                     aplicar_entrega_no_lote(e, destino)
                     arquivos.append(destino)
                     prontos_xml.append(e)

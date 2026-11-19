@@ -57,6 +57,7 @@ import lotes_cliente
 import cotacao
 import entrada_equipe
 import endereco_entrega
+import transportadora_envio
 import alterar_entrega
 import cancelamento
 from email_utils import enviar_email, envelope_html
@@ -1285,6 +1286,8 @@ def api_envios_analisar():
             for it in com_lote:
                 it["lotes_estoque"] = {p["sku"].upper(): estoque[p["sku"].upper()] for p in it["produtos"]
                                        if p["sku"].upper() in estoque}
+        # Transportadoras do cadastro, pro embarcador corrigir a da nota (só XML)
+        transportadoras = transportadora_envio.opcoes(conn) if any(it.get("origem") == envios.ORIGEM_XML for it in itens) else []
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     finally:
@@ -1308,7 +1311,8 @@ def api_envios_analisar():
                     "indicar": indicar, "lotes_planilhas": lotes_planilhas,
                     "regra_xml": cfg["regra_xml"], "regra_xml_rotulo": envios.REGRAS_XML.get(cfg["regra_xml"], ""),
                     "envio_ativo": cfg["envio_ativo"], "hoje": date.today().isoformat(), "entrega_ativa": entrega_ativa,
-                    "fluxos_disponiveis": fluxos_disp, "fluxo_rotulos": envios.FLUXO_ROTULOS, "xd": xd})
+                    "fluxos_disponiveis": fluxos_disp, "fluxo_rotulos": envios.FLUXO_ROTULOS, "xd": xd,
+                    "transportadoras": transportadoras})
 
 
 def _casos_de_entrega(conn, itens: list[dict]) -> None:

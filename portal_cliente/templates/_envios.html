@@ -527,8 +527,15 @@
     const rotFl = p.fluxo_rotulos || {};
     $('previa-tabela').querySelector('thead').innerHTML = '<tr><th>NF / Pedido</th>' +
       (multi ? `<th>Fluxo <select id="fl-todos" title="Aplicar a todos"><option value="">todos…</option>${p.fluxos_disponiveis.map(f => `<option value="${esc(f)}">${esc(rotFl[f] || f)}</option>`).join('')}</select></th>` : '') +
-      `<th>Destinatário</th><th>${p.entrega_ativa ? 'Endereço de entrega' : 'Endereço'}</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Documentos</th><th>Agendamento</th></tr>`;
-    const opcoesFluxo = it => (it.fluxos || p.fluxos_disponiveis || []).filter(f => !(it.origem === 'planilha' && f === 'cross'));
+      `<th>Destinatário</th><th>${p.entrega_ativa ? 'Endereço de entrega' : 'Endereço'}</th><th>Transportadora</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Documentos</th><th>Agendamento</th></tr>`;
+    // Transportadora da nota; no XML o embarcador pode trocar por uma do cadastro (o servidor reescreve o <transporta>)
+    const celulaTransportadora = (it, lista) => {
+      if (it.origem === 'planilha') return '<span style="color:var(--texto-suave)">—</span>';
+      const nome = `<div>${esc(it.transportadora_nome || 'não informada na nota')}</div>`;
+      if (!lista.length) return nome;
+      return nome + `<select class="tp" aria-label="Trocar a transportadora do pedido"><option value="">manter a da nota</option>${lista.map(t => `<option value="${t.id}" data-tipo="${esc(t.tipo || '')}">${esc(t.nome)}</option>`).join('')}</select>`;
+    };
+    const opcoesFluxo = it =>(it.fluxos || p.fluxos_disponiveis || []).filter(f => !(it.origem === 'planilha' && f === 'cross'));
     $('previa-tabela').querySelector('tbody').innerHTML = p.itens.map((it, i) => {
       const d = p.destinatarios[it.destinatario_doc] || {};
       const plan = it.origem === 'planilha';
@@ -545,6 +552,7 @@
         <td class="nw">${doc}${empresaDe(it)}${it.avisos.length ? `<div class="avisos">${esc(it.avisos.join(' '))}</div>` : ''}</td>${celFluxo}
         <td><div style="font-weight:600">${esc(it.destinatario_nome)}</div><div class="end">${esc(it.destinatario_doc_formatado)}</div></td>
         <td class="c-end" data-i="${i}">${celulaEndereco(it)}</td>
+        <td class="c-transp">${celulaTransportadora(it, p.transportadoras || [])}</td>
         <td class="num nw" style="text-align:center">${it.volumes}</td>
         <td class="num nw" style="text-align:right">${it.peso_kg ? it.peso_kg.toLocaleString('pt-BR') + ' kg' : '—'}</td>
         <td class="num nw" style="text-align:right">${brl(it.valor_nf)}</td>
@@ -873,8 +881,12 @@
         item.agendamento_hora_fim = (tr.querySelector('.ag-fim') || {}).value;
         if (!item.agendamento_pendente && !item.agendamento_data) { mensagem(`${rotuloIt}: ${it.destinatario_nome} só recebe com agendamento — informe a data ou marque "pendente".`, 'erro'); return; }
       }
+      const tp = tr.querySelector('select.tp'), tpOpt = tp && tp.value ? tp.selectedOptions[0] : null;
+      if (tpOpt) item.transportadora_id = Number(tp.value);
+      // retirada/redespacho não têm endereço de entrega a escolher (o servidor também recusa)
+      const semEntrega = !!tpOpt && ['RETIRADA', 'TERCEIROS'].includes(tpOpt.dataset.tipo);
       const st = it._ent;
-      if (p.entrega_ativa && it.entrega && st) {
+      if (p.entrega_ativa && it.entrega && st && !semEntrega) {
         if (st.editando) { mensagem(`${rotuloIt}: termine o endereço de entrega (Usar este endereço ou Cancelar).`, 'erro'); return; }
         if (it.entrega.modo === 'sugestao' && !st.escolha) { mensagem(`${rotuloIt}: escolha onde entregar este pedido.`, 'erro'); return; }
         if (st.escolha) item.entrega_escolha = st.escolha;
