@@ -1061,6 +1061,36 @@ class TestPlanilhaDeLotes(Base):
         sep.importar_lotes_cliente(self.conn, EMB, lp.ler_lotes(planilha_lotes(sem), "c.xlsx"), "c.xlsx", "hugo")
         self.assertEqual(sep.lotes_indicados(self.conn, [pid]), {})
 
+    def test_lote_marcado_no_portal_vale_pro_produto_inteiro_e_substitui_a_planilha(self):
+        velha = self.caixa("240", "2027-01-15", qtd=6)
+        pedida = self.caixa("254", "2027-06-30", qtd=12)
+        pid = self.pedido_nf([("CAFE", 12)], "42430")
+        sep.importar_lotes_cliente(self.conn, EMB, lp.ler_lotes(planilha_lotes(self.LINHAS), "a.xlsx"), "a.xlsx", "hugo")
+        with sep._tx(self.conn):
+            lp.gravar_lote_inteiro(self.conn, EMB, "042430", "cafe", " 254 ", "portal", "cliente", "2026-11-18 10:00:00")
+        self.assertEqual(sep.lotes_indicados(self.conn, [pid]), {pid: {1: {"254": None}}})
+        self.assertEqual(sep.opcoes_de_lote(self.conn, pid)["produtos"][0]["planilha"], [{"lote": "254", "qtd_un": None}])
+        onda = sep.onda_de_um_pedido(self.conn, pid, ANA)
+        with self.assertRaisesRegex(wms.ErroWMS, "cliente pediu o lote 254"):
+            sep.separar_caixa(self.conn, onda, velha, uuid=self.u(), operador=ANA)
+        sep.separar_caixa(self.conn, onda, pedida, uuid=self.u(), operador=ANA)
+        self.assertEqual(self.reservas(pid), [("MANUAL", P1, "254", 12)])
+
+    def test_lote_invalido_e_tabela_antiga_ganha_a_coluna_inteiro(self):
+        for ruim in ("<b>", "A" * 41, "-247"):
+            with self.assertRaises(wms.ErroWMS):
+                lp.normalizar_lote(ruim)
+        self.assertEqual(lp.normalizar_lote("  l  247/a "), "L 247/A")
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE wms_lotes_cliente (embarcador_id INTEGER NOT NULL, nf TEXT NOT NULL, sku TEXT NOT NULL, "
+                     "lote TEXT NOT NULL, qtd_un REAL NOT NULL, cliente TEXT NOT NULL DEFAULT '', arquivo TEXT NOT NULL DEFAULT '', "
+                     "por TEXT NOT NULL DEFAULT '', em TEXT NOT NULL, PRIMARY KEY (embarcador_id, nf, sku, lote))")
+        conn.execute("INSERT INTO wms_lotes_cliente (embarcador_id, nf, sku, lote, qtd_un, em) VALUES (48, '1', 'A', '247', 6, 'x')")
+        lp.garantir_tabela(conn)
+        lp.garantir_tabela(conn)
+        self.assertEqual(conn.execute("SELECT qtd_un, inteiro FROM wms_lotes_cliente").fetchall(), [(6.0, 0)])
+
     def test_marcacao_do_escritorio_vale_por_cima_da_planilha(self):
         self.caixa("247", "2027-06-30", qtd=6)
         self.caixa("260", "2027-09-30", qtd=6)

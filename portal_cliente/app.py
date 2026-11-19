@@ -53,6 +53,7 @@ import auth_cliente as auth
 import dados_cliente as dados
 import envio_pedidos as envios
 import anexos_pedido
+import lotes_cliente
 import cotacao
 import entrada_equipe
 import endereco_entrega
@@ -665,8 +666,13 @@ def _empresas_com_envio() -> list[dict]:
 @requer_cliente
 def inicio():
     aba = request.args.get("aba") or "acompanhamento"
+    conn = envios.conectar()
+    try:   # embarcador piloto do WMS: a tela de envio explica a indicação de lote (18/11)
+        lotes_ativo = any(lotes_cliente.embarcador_wms(conn, e["cnpj"], _CONFIG) is not None for e in g.cliente["empresas"])
+    finally:
+        conn.close()
     return render_template("acompanhamento.html", data_inicial=_data_da_query().isoformat(),
-                           empresas_envio=_empresas_com_envio(),
+                           empresas_envio=_empresas_com_envio(), lotes_ativo=lotes_ativo,
                            hoje=date.today().isoformat(), aba_inicial=aba if aba in ("acompanhamento", "envios") else "acompanhamento",
                            pode_enviar=not (g.get("equipe") and g.equipe.get("nivel") not in _NIVEIS_EQUIPE_ENVIA))
 
@@ -1154,10 +1160,13 @@ def api_envios_analisar():
             if cnpj not in ctxs:
                 fl, xd_ = envios.fluxos_para_envio(conn, cnpj)
                 ctxs[cnpj] = {"cfg": envios.config_stokki_cliente(conn, cnpj, _CONFIG), "fluxos": fl, "xd": xd_,
-                              "nome": ((grupo or {}).get(cnpj) or _empresa_envio())["nome"]}
+                              "nome": ((grupo or {}).get(cnpj) or _empresa_envio())["nome"],
+                              # embarcador piloto do WMS: pode indicar lote (lotes_cliente.py, 18/11)
+                              "emb_lotes": lotes_cliente.embarcador_wms(conn, cnpj, _CONFIG)}
             return ctxs[cnpj]
 
         cfg = ctx(padrao)["cfg"]
+        lotes_planilhas = []   # planilhas de lotes do cliente lidas e gravadas neste envio
         for f in arquivos:
             try:
                 partes = envios.expandir_upload(f.filename or "", f.read())
@@ -1174,6 +1183,19 @@ def api_envios_analisar():
                     except envios.ErroEnvio as e:
                         rejeitados.append({"arquivo": nome, "erro": str(e)})
                     continue
+                if envios.e_planilha(nome, conteudo) and ctx(padrao)["emb_lotes"] is not None:
+                    # Planilha de lotes do cliente (18/11): grava na hora; casa com o pedido pela NF
+                    try:
+                        lido = lotes_cliente.ler_planilha_de_lotes(nome, conteudo)
+                        if lido is not None:
+                            lotes_planilhas.append(lotes_cliente.importar_planilha(
+                                conn, ctx(padrao)["emb_lotes"], lido, nome, _quem_envia()))
+                            logger.info(f"analisar planilha de lotes cnpj={padrao} arquivo={nome!r} "
+                                        f"indicacoes={lotes_planilhas[-1]['gravadas']}")
+                            continue
+                    except lotes_cliente.ErroLote as e:
+                        rejeitados.append({"arquivo": nome, "erro": f"Planilha de lotes: {e}"})
+                        continue
                 if envios.e_planilha(nome, conteudo):
                     # Planilha no modelo Fresh Log (09/09): vários pedidos por
                     # arquivo; cada pedido vira um item da prévia com token
@@ -1240,7 +1262,8 @@ def api_envios_analisar():
                 item = {k: v_ for k, v_ in nfe.items() if k not in ("emitente_cnpj",)}
                 item.update({"token": token, "avisos": v["avisos"], "rotulo": f"NF {nfe['numero_nf']}",
                              "empresa_cnpj": emp, "empresa": ctx(emp)["nome"] if grupo else "",
-                             "destinatario_doc_formatado": envios.formatar_documento(nfe["destinatario_doc"])})
+                             "destinatario_doc_formatado": envios.formatar_documento(nfe["destinatario_doc"]),
+                             "lotes_ativo": ctx(emp)["emb_lotes"] is not None and bool(nfe.get("produtos"))})
                 itens.append(item)
         if entrega_ativa:
             _casos_de_entrega(conn, itens)
@@ -1261,6 +1284,16 @@ def api_envios_analisar():
                      and envios.primeiro_aviso_xd_do_dia(conn, c)]
         for it in itens:
             it["fluxos"] = ctx(it["empresa_cnpj"])["fluxos"]
+        # Lotes que a Fresh Log tem em estoque, de sugestão no "Indicar lote" (só pra piloto do WMS)
+        for cnpj in usadas:
+            emb_lotes = ctx(cnpj)["emb_lotes"]
+            com_lote = [it for it in itens if it["empresa_cnpj"] == cnpj and it.get("lotes_ativo")]
+            if emb_lotes is None or not com_lote:
+                continue
+            estoque = lotes_cliente.lotes_em_estoque(conn, emb_lotes, {p["sku"] for it in com_lote for p in it["produtos"]})
+            for it in com_lote:
+                it["lotes_estoque"] = {p["sku"].upper(): estoque[p["sku"].upper()] for p in it["produtos"]
+                                       if p["sku"].upper() in estoque}
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     finally:
@@ -1281,7 +1314,7 @@ def api_envios_analisar():
     for r in rejeitados[:20]:   # o motivo fica no log: em 17/11 só deu pra saber baixando a planilha
         logger.info(f"analisar rejeitado arquivo={r.get('arquivo')!r} {str(r.get('rotulo') or '')[:80]!r}: {str(r.get('erro'))[:300]!r}")
     return jsonify({"itens": itens, "rejeitados": rejeitados, "destinatarios": destinatarios, "anexos": anexos,
-                    "indicar": indicar,
+                    "indicar": indicar, "lotes_planilhas": lotes_planilhas,
                     "regra_xml": cfg["regra_xml"], "regra_xml_rotulo": envios.REGRAS_XML.get(cfg["regra_xml"], ""),
                     "envio_ativo": cfg["envio_ativo"], "hoje": date.today().isoformat(), "entrega_ativa": entrega_ativa,
                     "fluxos_disponiveis": fluxos_disp, "fluxo_rotulos": envios.FLUXO_ROTULOS, "xd": xd})
@@ -1475,7 +1508,20 @@ def api_envios_confirmar():
                         for it in itens if isinstance(it, dict) and isinstance(it.get("anexos"), list) and it["anexos"]}
     if anexos_por_token and corpo.get("anexos_conferidos") is not True:
         return jsonify({"erro": "Confirme que cada documento está no pedido correto antes de enviar."}), 400
+    # Lote marcado na prévia (18/11): item["lotes"] = {SKU: lote}. O formato do lote é conferido
+    # ANTES de gravar o envio; o produto, depois, contra o XML gravado (lotes_cliente.py).
+    lotes_por_token = {}
+    for it in itens:
+        if not (isinstance(it, dict) and isinstance(it.get("lotes"), dict) and it["lotes"]):
+            continue
+        if len(it["lotes"]) > lotes_cliente.MAX_LOTES_POR_NOTA:
+            return jsonify({"erro": "Lotes demais para uma nota."}), 400
+        try:
+            lotes_por_token[it.get("token")] = {str(k)[:60]: lotes_cliente.normalizar_lote(v) for k, v in it["lotes"].items()}
+        except lotes_cliente.ErroLote as e:
+            return jsonify({"erro": str(e)}), 400
     anexos_falhas = []
+    lotes_gravados, lotes_avisos = 0, []
     conn = envios.conectar()
     try:
         anexos_pedido.validar_tokens([a.get("token", "") for lista in anexos_por_token.values() for a in lista],
@@ -1498,6 +1544,26 @@ def api_envios_confirmar():
             fluxos_disp, _xd = envios.fluxos_para_envio(conn, _empresa_envio()['cnpj'])
             criados = envios.confirmar_envios(conn, _empresa_envio()['cnpj'], itens, _quem_envia(), _CONFIG, cfg["regra_xml"],
                                               fluxos_disponiveis=fluxos_disp, sender_id=_empresa_envio().get("sender_id"))
+        # Lotes marcados na prévia: os pedidos já estão gravados, falha vira aviso
+        for c in criados:
+            marcados = lotes_por_token.get(c.get("token"))
+            if not marcados or c.get("origem") != envios.ORIGEM_XML:
+                continue
+            try:
+                envio = envios.buscar_envio(conn, c["id"], c.get("cnpj_embarcador") or _empresa_envio()['cnpj'])
+                emb_lotes = lotes_cliente.embarcador_wms(conn, envio["cnpj_embarcador"], _CONFIG)
+                if emb_lotes is None:
+                    continue
+                produtos = envios.ler_nfe(envios.caminho_xml(envio).read_bytes())["produtos"]
+                r_lotes = lotes_cliente.gravar_lotes_da_nota(conn, emb_lotes, envio["numero_nf"], marcados, produtos, _quem_envia())
+                lotes_gravados += r_lotes["gravados"]
+                lotes_avisos += r_lotes["avisos"]
+            except lotes_cliente.ErroLote as e:
+                lotes_avisos.append(str(e))
+            except Exception:
+                conn.rollback()
+                logger.exception(f"lotes do envio {c['id']} falharam")
+                lotes_avisos.append(f"NF {c.get('numero_nf')}: o lote indicado não foi gravado. Fale com a Fresh Log.")
         # Os pedidos ja estao gravados: documento que falhar nao derruba o envio,
         # vira aviso (o cliente anexa de novo pela lista).
         for c in criados:
@@ -1543,7 +1609,12 @@ def api_envios_confirmar():
                     f"A criação na Stokki pode levar alguns instantes -- acompanhe o status na lista abaixo.")
     if anexos_falhas:
         mensagem += " Atenção: " + " ".join(anexos_falhas) + " Anexe de novo pela lista abaixo (Documentos)."
-    return jsonify({"ok": True, "criados": criados, "bloqueados": bloqueados, "mensagem": mensagem, "anexos_falhas": anexos_falhas})
+    if lotes_gravados:
+        mensagem += f" Lote indicado em {lotes_gravados} produto{'s' if lotes_gravados > 1 else ''}."
+    if lotes_avisos:
+        mensagem += " Lotes: " + " ".join(lotes_avisos)
+    return jsonify({"ok": True, "criados": criados, "bloqueados": bloqueados, "mensagem": mensagem, "anexos_falhas": anexos_falhas,
+                    "lotes_gravados": lotes_gravados, "lotes_avisos": lotes_avisos})
 
 
 @app.route("/api/envios/reenviar-erros", methods=["POST"])

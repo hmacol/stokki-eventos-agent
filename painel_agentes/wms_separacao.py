@@ -24,6 +24,7 @@ from pathlib import Path
 import wms
 import wms_caixas
 import wms_fila_impressao
+import wms_lotes_planilha
 from wms import ErroWMS
 
 EPS = 0.0004
@@ -125,20 +126,6 @@ CREATE TABLE IF NOT EXISTS wms_pedido_lotes (
 )
 """,
     """
-CREATE TABLE IF NOT EXISTS wms_lotes_cliente (
-    embarcador_id INTEGER NOT NULL,
-    nf            TEXT NOT NULL,              -- numero da NF, como em wms_pedidos.nf
-    sku           TEXT NOT NULL,
-    lote          TEXT NOT NULL,
-    qtd_un        REAL NOT NULL,              -- quanto desse lote o cliente quer nesse produto
-    cliente       TEXT NOT NULL DEFAULT '',
-    arquivo       TEXT NOT NULL DEFAULT '',
-    por           TEXT NOT NULL DEFAULT '',
-    em            TEXT NOT NULL,
-    PRIMARY KEY (embarcador_id, nf, sku, lote)
-)
-""",
-    """
 CREATE TABLE IF NOT EXISTS wms_volumes (
     pedido_id    INTEGER NOT NULL,
     numero       INTEGER NOT NULL,
@@ -163,6 +150,7 @@ _COLUNAS_EXTRAS = {
 def garantir_tabelas(conn) -> None:
     for sql in _DDL:
         conn.execute(sql)
+    wms_lotes_planilha.garantir_tabela(conn)   # wms_lotes_cliente (o portal tambem grava nela)
     for tabela, colunas in _COLUNAS_EXTRAS.items():
         existentes = {r[1] for r in conn.execute(f"PRAGMA table_info({tabela})")}
         for nome, tipo in colunas.items():
@@ -663,10 +651,11 @@ def lotes_do_produto(conn, produto_id: int) -> list[dict]:
 def lotes_indicados(conn, pedido_ids) -> dict[int, dict[int, dict[str, float | None]]]:
     """
     {pedido_id: {produto_id: {lote: quantidade}}} dos lotes que o cliente indicou.
-    Duas fontes: a planilha de lotes do cliente (wms_lotes_cliente, casada pelo numero da NF do
-    pedido e pelo SKU, com a quantidade de cada lote) e a marcacao do escritorio na tela
+    Duas fontes: o que o cliente indicou (wms_lotes_cliente, casada pelo numero da NF do pedido e
+    pelo SKU: a planilha dele, com a quantidade de cada lote, ou o lote marcado na previa do envio
+    no portal, `inteiro` = produto inteiro, quantidade None) e a marcacao do escritorio na tela
     (wms_pedido_lotes: um lote pro produto inteiro, quantidade None). A marcacao do escritorio,
-    quando existe pra um produto, vale por cima da planilha.
+    quando existe pra um produto, vale por cima da do cliente.
     """
     ids = [int(i) for i in pedido_ids]
     if not ids:
@@ -677,11 +666,12 @@ def lotes_indicados(conn, pedido_ids) -> dict[int, dict[int, dict[str, float | N
         f"SELECT id, embarcador_id, nf FROM wms_pedidos WHERE id IN ({marcas}) AND COALESCE(nf, '') <> ''", ids).fetchall()
     for p in pedidos:
         linhas = conn.execute(
-            "SELECT l.sku, l.lote, l.qtd_un, pr.id AS produto_id FROM wms_lotes_cliente l "
+            "SELECT l.sku, l.lote, l.qtd_un, l.inteiro, pr.id AS produto_id FROM wms_lotes_cliente l "
             "JOIN wms_produtos pr ON pr.sku = l.sku COLLATE NOCASE AND pr.embarcador_id = l.embarcador_id AND pr.ativo = 1 "
             "WHERE l.embarcador_id = ? AND l.nf = ?", (int(p["embarcador_id"] or 0), str(p["nf"]).lstrip("0"))).fetchall()
         for r in linhas:
-            saida.setdefault(p["id"], {}).setdefault(r["produto_id"], {})[r["lote"]] = _r(r["qtd_un"])
+            saida.setdefault(p["id"], {}).setdefault(r["produto_id"], {})[r["lote"]] = \
+                None if r["inteiro"] else _r(r["qtd_un"])
     for r in conn.execute(f"SELECT pedido_id, produto_id, lote FROM wms_pedido_lotes WHERE pedido_id IN ({marcas})", ids):
         saida.setdefault(r["pedido_id"], {})[r["produto_id"]] = {r["lote"]: None}
     return saida
@@ -810,20 +800,7 @@ def importar_lotes_cliente(conn, embarcador_id: int, lido: dict, arquivo: str, p
         "AND COALESCE(nf, '') <> ''", (str(embarcador_id),)).fetchall()}
     avisos, resumo = [], []
     with _tx(conn):
-        vistos = set()
-        for l in list(lido.get("linhas") or []) + list(lido.get("sem_lote") or []):
-            chave = (l["nf"], l["sku"])
-            if chave not in vistos:
-                vistos.add(chave)
-                conn.execute("DELETE FROM wms_lotes_cliente WHERE embarcador_id = ? AND nf = ? AND sku = ?",
-                             (embarcador_id, l["nf"], l["sku"]))
-        for l in lido.get("linhas") or []:
-            conn.execute(
-                "INSERT INTO wms_lotes_cliente (embarcador_id, nf, sku, lote, qtd_un, cliente, arquivo, por, em) "
-                "VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(embarcador_id, nf, sku, lote) DO UPDATE SET "
-                "qtd_un = wms_lotes_cliente.qtd_un + excluded.qtd_un",
-                (embarcador_id, l["nf"], l["sku"], l["lote"], _r(l["qtd_un"]), str(l.get("cliente") or "")[:120],
-                 str(arquivo or "")[:120], str(por or "")[:80], ts))
+        wms_lotes_planilha.gravar_planilha(conn, embarcador_id, lido, arquivo, por, ts)
     for l in lido.get("linhas") or []:
         p = pedidos.get(l["nf"])
         situacao = "ok"

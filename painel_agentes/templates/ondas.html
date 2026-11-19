@@ -221,7 +221,7 @@
       }).join("");
       return '<div class="rodape-bloco" style="margin:4px 0"><span style="min-width:260px"><b>' + esc(p.sku) + "</b> " + esc(p.descricao) + " · " + num(p.pedido_un) + ' UN</span>' +
         '<select data-produto="' + p.produto_id + '" data-pedido="' + r.pedido_id + '" aria-label="Lote de ' + esc(p.sku) + '">' + opcoes + "</select>" +
-        ((p.planilha || []).length ? ' <span class="selo atencao">planilha do cliente: ' + p.planilha.map(function(x) { return num(x.qtd_un) + " UN do lote " + esc(x.lote); }).join(", ") + "</span>" : "") +
+        ((p.planilha || []).length ? ' <span class="selo atencao">indicado pelo cliente: ' + p.planilha.map(function(x) { return x.qtd_un == null ? "tudo do lote " + esc(x.lote) : num(x.qtd_un) + " UN do lote " + esc(x.lote); }).join(", ") + "</span>" : "") +
         (p.indicado && !p.lotes.some(function(l) { return l.lote === p.indicado; }) ? ' <span class="selo erro">lote ' + esc(p.indicado) + " indicado, sem caixa disponível</span>" : "") + "</div>";
     }).join("") || '<span class="vazio">Pedido sem produto cadastrado.</span>') + "</div>";
   }
