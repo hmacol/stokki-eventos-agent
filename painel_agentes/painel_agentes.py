@@ -3538,12 +3538,16 @@ def api_pedidos_documentos_enviar():
     itens, erro = _itens_documentos(body)
     if erro:
         return erro
+    refs = body.get("refs")
+    if refs is not None and (not isinstance(refs, list) or len(refs) > 500
+                             or not all(isinstance(r, str) and len(r) <= 100 for r in refs)):
+        return jsonify({"erro": "Seleção de documentos inválida."}), 400
     from nucleo import banco as nucleo_banco
     try:
         conn = nucleo_banco.conectar()
         try:
             r = documentos_email.enviar(conn, itens, body.get("emails"), _autor_acao_pedidos(),
-                                        _carregar_config().get("email") or {})
+                                        _carregar_config().get("email") or {}, refs=refs)
         finally:
             conn.close()
     except documentos_email.ErroDocumentos as e:

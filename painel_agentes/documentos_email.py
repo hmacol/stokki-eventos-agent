@@ -197,12 +197,29 @@ def validar_emails(texto) -> list[str]:
     return emails
 
 
+def completar_cnpj(conn, itens: list[dict]) -> None:
+    """Poe em cada item o CNPJ/CPF do destinatario (so digitos), lido do nucleo pelo codigo do pedido.
+    Vem do banco, nao da tela. Sem tabela ou sem documento, o item fica sem "cnpj"."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'nucleo_pedidos'").fetchone():
+        return
+    for it in itens:
+        codigo = str(it.get("codigo") or "").strip().lstrip("#").upper()
+        for cand in dict.fromkeys([codigo, *ps_do_codigo(codigo)]):
+            linha = conn.execute("SELECT destinatario_codigo FROM nucleo_pedidos WHERE codigo = ?", (cand,)).fetchone()
+            digitos = re.sub(r"\D", "", str(linha[0] or "")) if linha else ""
+            if len(digitos) in (11, 14):
+                it["cnpj"] = digitos
+                break
+
+
 def chaves(itens: list[dict]) -> list[str]:
-    """Onde o e-mail usado fica lembrado: o destinatario (nome) e cada pedido."""
+    """Onde o e-mail usado fica lembrado: o CNPJ/CPF do destinatario, o nome dele e cada pedido."""
     saida = []
     for it in itens:
         nome = re.sub(r"\s+", " ", str(it.get("destinatario") or "")).strip().upper()
-        for chave in ([f"D:{nome}"] if nome else []) + [f"P:{ps}" for ps in ps_do_codigo(it.get("codigo"))]:
+        doc = re.sub(r"\D", "", str(it.get("cnpj") or ""))
+        for chave in ([f"C:{doc}"] if doc else []) + ([f"D:{nome}"] if nome else []) \
+                + [f"P:{ps}" for ps in ps_do_codigo(it.get("codigo"))]:
             if chave not in saida:
                 saida.append(chave)
     return saida
@@ -210,8 +227,9 @@ def chaves(itens: list[dict]) -> list[str]:
 
 def lembrados(conn, itens: list[dict]) -> list[str]:
     """[e-mail do ultimo envio] quando TODOS os pedidos da selecao tem lembranca e ela e a mesma
-    (pelo destinatario ou pelo pedido); senao []. Lote com clientes diferentes nao sugere o
+    (pelo CNPJ, pelo destinatario ou pelo pedido); senao []. Lote com clientes diferentes nao sugere o
     e-mail de um deles: o documento de um cliente iria pro outro num clique."""
+    completar_cnpj(conn, itens)
     vistos = set()
     for it in itens:
         lista = chaves([it])
@@ -271,9 +289,11 @@ def _corpo(parte: list[dict], i: int, n: int) -> str:
 
 def enviar(conn, itens: list[dict], emails_texto, usuario: str, config_email: dict, *, enviar_email=None,
            pasta_xml: Path | None = None, resolver=None, agora: datetime | None = None,
-           limite_bytes: int = MAX_BYTES_EMAIL) -> dict:
+           limite_bytes: int = MAX_BYTES_EMAIL, refs=None) -> dict:
     """Manda os documentos guardados dos pedidos pro(s) e-mail(s). Um e-mail so, ou
     mais de um quando os anexos passam do limite. Registra o envio e lembra o endereco.
+    `refs` (lista de referencias vindas da conferencia) restringe aos documentos marcados na tela;
+    None manda todos. Os nomes dos anexos sao os mesmos que a tela mostrou.
     Devolve {"ok", "arquivos", "partes", "emails", "faltando": {codigo: [tipos]}}."""
     enviar_email = enviar_email or email_utils.enviar_email
     if not itens:
@@ -285,6 +305,12 @@ def enviar(conn, itens: list[dict], emails_texto, usuario: str, config_email: di
     arquivos = [a for p in pedidos for a in p["arquivos"]]
     if not arquivos:
         raise ErroDocumentos("Nenhum documento guardado para os pedidos selecionados.")
+    if refs is not None:
+        marcados = {str(r) for r in refs}
+        arquivos = [a for a in arquivos if a["ref"] in marcados]
+        if not arquivos:
+            raise ErroDocumentos("Marque pelo menos um documento para enviar.")
+    completar_cnpj(conn, itens)
     garantir_tabelas(conn)
     partes = _partes(arquivos, limite_bytes)
     quando = (agora or datetime.now()).strftime(FMT)

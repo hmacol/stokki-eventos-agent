@@ -831,7 +831,7 @@
         <p class="subtitulo">Expede o pedido na Stokki agora e anexa o canhoto que existir. Se ele estiver preso numa Expedição Programada (OE), ela é finalizada; se a OE tiver outros pedidos, só este sai dela. Leva cerca de 1 minuto por pedido e espera a vez se outra rotina da Stokki estiver rodando.</p>
       </div>
       <div data-secao="documentos" hidden>
-        <p class="subtitulo">Manda o XML, a DANFE e o boleto guardados de cada pedido num e-mail só. Clique no nome do arquivo para baixar. O e-mail sai de verdade para o endereço abaixo.</p>
+        <p class="subtitulo">Manda o XML, a DANFE e o boleto guardados de cada pedido num e-mail só. Desmarque o que não quer enviar; clique no nome do arquivo para baixar. O e-mail sai de verdade para o endereço abaixo e fica salvo para o CNPJ do destinatário.</p>
         <div class="resumo" id="docs-lista" aria-live="polite"></div>
         <div class="campo" id="docs-campo-mesmo" hidden>
           <label>Enviar para o mesmo e-mail do último envio?</label>
@@ -1149,6 +1149,16 @@
     $("docs-email").focus();
     $("docs-email").select();
   });
+  function docsMarcados() { return Array.from($("docs-lista").querySelectorAll(".docs-sel:checked")); }
+  // Total do que está marcado; sem nenhum marcado o botão de enviar fica travado.
+  function atualizarTotalDocs() {
+    const todos = $("docs-lista").querySelectorAll(".docs-sel").length, marcados = docsMarcados();
+    const bytes = marcados.reduce((s, c) => s + Number(c.dataset.bytes || 0), 0);
+    $("docs-total").textContent = marcados.length
+      ? `${marcados.length} de ${todos} arquivo(s) marcado(s), ${tamanhoLegivel(bytes)}` + (bytes > 18 * 1048576 ? ": vai em mais de um e-mail por causa do tamanho." : ".")
+      : "Marque pelo menos um documento para enviar.";
+    botaoConfirmar.disabled = !marcados.length;
+  }
   async function carregarDocumentos() {
     const meu = atual, caixa = $("docs-lista");
     caixa.textContent = "Procurando os documentos...";
@@ -1172,12 +1182,23 @@
       item.appendChild(forte);
       p.arquivos.forEach((a, i) => {
         if (i) item.appendChild(document.createTextNode(" · "));
+        const rotulo = document.createElement("label");
+        const marca = document.createElement("input");
+        marca.type = "checkbox";
+        marca.className = "docs-sel";
+        marca.checked = true;
+        marca.dataset.ref = a.ref;
+        marca.addEventListener("change", atualizarTotalDocs);
+        marca.dataset.bytes = a.tamanho;
+        rotulo.appendChild(marca);
         const link = document.createElement("a");
         link.href = a.url;
         link.className = "link-linha";
         link.textContent = a.nome;
         link.title = `Baixar (${tamanhoLegivel(a.tamanho)})`;
-        item.appendChild(link);
+        rotulo.appendChild(document.createTextNode(" "));
+        rotulo.appendChild(link);
+        item.appendChild(rotulo);
       });
       if (!p.arquivos.length || p.faltando.length) {
         const falta = document.createElement("span");
@@ -1189,9 +1210,10 @@
     });
     caixa.appendChild(ul);
     const total = document.createElement("p");
-    total.textContent = !d.total_arquivos ? "Nada para enviar: nenhum documento guardado para a seleção."
-      : `${d.total_arquivos} arquivo(s), ${tamanhoLegivel(d.total_bytes)}` + (d.partes > 1 ? `: vai em ${d.partes} e-mails por causa do tamanho.` : ".");
+    total.id = "docs-total";
     caixa.appendChild(total);
+    if (!d.total_arquivos) total.textContent = "Nada para enviar: nenhum documento guardado para a seleção.";
+    else atualizarTotalDocs();
     const lembrados = d.emails_lembrados || [];
     mostrarEmailDocs(lembrados.length === 1 ? lembrados[0] : "");
     atual.bloqueado = !d.total_arquivos;
@@ -1202,7 +1224,7 @@
     botaoConfirmar.textContent = "Enviando...";
     let d;
     try {
-      d = await enviar(URLS.documentos_enviar, { itens: itensDocumentos(), emails: p.emails });
+      d = await enviar(URLS.documentos_enviar, { itens: itensDocumentos(), emails: p.emails, refs: p.refs });
     } catch (e) {
       mostrarErro(e.message);
       return;
@@ -1401,7 +1423,9 @@
     if (acao === "documentos") {
       const emails = $("docs-email").value.trim();
       if (!emails) return { erro: "Informe o e-mail de quem vai receber." };
-      return { emails };
+      const refs = docsMarcados().map((c) => c.dataset.ref);
+      if (!refs.length) return { erro: "Marque pelo menos um documento para enviar." };
+      return { emails, refs };
     }
     if (acao === "baixa") {
       const foto = $("baixa-foto-canhoto").files[0] || null;
