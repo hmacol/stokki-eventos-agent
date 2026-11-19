@@ -389,6 +389,13 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
     # agent_id/vehicle_id vão CRUS (sem COALESCE): motorista tirado da rota
     # na VUUPT tem que sumir aqui também, senão a rota fica com dono errado.
     motorista_nome = ctx.nomes.get(agent_id) if agent_id else None
+    # Quem sincroniza sem a lista de nomes (espelho de servicos) nao apaga o
+    # nome do MESMO motorista; trocou de motorista, o nome antigo nao fica.
+    if motorista_nome is None and agent_id:
+        atual = existente or conn.execute("SELECT agent_id, motorista_nome FROM nucleo_rotas WHERE id = ?",
+                                          (rota_id,)).fetchone()
+        if atual["agent_id"] == agent_id:
+            motorista_nome = atual["motorista_nome"]
     conn.execute("""
         UPDATE nucleo_rotas SET
             nome = COALESCE(?, nome), agent_id = ?, vehicle_id = ?,

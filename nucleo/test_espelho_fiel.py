@@ -133,6 +133,20 @@ class TestSincronizarCorrigido(_BaseTemp):
         self.assertIsNone(rota["agent_id"])
         self.assertIsNone(rota["motorista_nome"])
 
+    def test_sync_sem_lista_de_nomes_nao_apaga_nome_do_mesmo_motorista(self):
+        # Caso real 18/11: o espelho de servicos ressincroniza a rota com nomes=None
+        # e o nome do motorista sumia ate a proxima rodada do sync de rotas.
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(status="started")], self.conn, {1234: "Renato Forte"})
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(status="started")], self.conn)
+        self.assertEqual(self.conn.execute("SELECT motorista_nome FROM nucleo_rotas").fetchone()[0], "Renato Forte")
+
+    def test_troca_de_motorista_sem_lista_de_nomes_nao_herda_nome_antigo(self):
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(status="started")], self.conn, {1234: "Renato Forte"})
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(status="started", agent_id=999)], self.conn)
+        rota = self.conn.execute("SELECT agent_id, motorista_nome FROM nucleo_rotas").fetchone()
+        self.assertEqual(rota["agent_id"], 999)
+        self.assertIsNone(rota["motorista_nome"])
+
     def test_rota_cancelada_nao_reabre_pedido_de_outra_rota(self):
         entregue = _servico(9001, "#PS-1")
         sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(route_id=1, servicos=[entregue])], self.conn)

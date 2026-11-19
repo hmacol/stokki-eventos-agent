@@ -330,6 +330,7 @@ def _parsear_pagina_detalhe(html: str, id_pedido: int) -> dict:
     # sempre preenchido) sobre o mencionado na NF-e (frequentemente
     # "Não informado"). Usado pra calcular o dimension_3 do VUUPT.
     quantidade_volumes = None
+    fonte_volumes = None        # "conferencia" | "nfe" -- de onde saiu o numero acima
     m_conf = re.search(
         r"Quantidade de volumes informado na confer[êe]ncia:\s*</strong>\s*([^<]*?)\s*<br>",
         html,
@@ -338,19 +339,28 @@ def _parsear_pagina_detalhe(html: str, id_pedido: int) -> dict:
         r"Quantidade de volumes mencionado na NF-e:\s*</strong>\s*([^<]*?)\s*<br>",
         html,
     )
-    for m in (m_conf, m_nfe):
+    for fonte, m in (("conferencia", m_conf), ("nfe", m_nfe)):
         if m:
             try:
                 quantidade_volumes = int(float(m.group(1).strip().replace(",", ".")))
+                fonte_volumes = fonte
                 break
             except ValueError:
                 continue
 
+    # Situacao ("Cancelado", "Aguardando Transportador"...) -- mesmo campo que
+    # stokki/cancelar.situacao_e_token le. O pipeline confere antes de subir
+    # pra Vuupt: a listagem da rodada pode estar 20 min velha (PS-44507, 17/11).
+    m_sit = re.search(r"Situa[çc][ãa]o:\s*</th>\s*<td>(.*?)</td>", html, re.S)
+    situacao = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m_sit.group(1))).strip() if m_sit else ""
+
     return {
         "id":         id_pedido,
+        "situacao":   situacao,
         "referencia": referencia,
         "stkkc_id":   stkkc_id,
         "quantidade_volumes": quantidade_volumes,
+        "fonte_volumes": fonte_volumes,
         "cliente":    blocos.get("cliente"),
         "transportadora": blocos.get("transportadora"),
         "local_entrega": blocos.get("local_entrega"),
@@ -571,6 +581,24 @@ def extrair_itens_do_pedido(html: str) -> list[dict]:
             "qtd_embalagem": quantidade,
         })
     return itens
+
+
+def extrair_numero_nf(html: str) -> str:
+    """
+    Numero da NF-e do pedido, tirado da chave de 44 digitos que a pagina de detalhe
+    mostra na linha "NF-e:" (link de consulta com ?nfe=<chave>). O numero sao os 9
+    digitos da posicao 26 a 34 da chave, sem os zeros a esquerda. Devolve '' quando
+    o pedido ainda nao tem NF ou quando a chave e o marcador da Stokki (comeca com
+    99: DANFE de mentira, nao e nota).
+    """
+    m = re.search(r"[?&;]nfe=(\d{44})(?!\d)", html or "")
+    if not m:
+        return ""
+    chave = m.group(1)
+    if chave.startswith("99"):
+        return ""
+    numero = chave[25:34].lstrip("0")
+    return numero
 
 
 def extrair_itens_tabela_pedido(html: str) -> list[dict]:

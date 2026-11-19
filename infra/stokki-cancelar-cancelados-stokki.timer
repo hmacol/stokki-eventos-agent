@@ -1,0 +1,11 @@
+[Unit]
+Description=Dispara stokki-cancelar-cancelados-stokki.service a cada 15 min, 07:00-22:00 (cancelados vem do coletor do galpao, 03:50-18:30)
+
+[Timer]
+OnCalendar=*-*-* 07..21:00/15:00
+OnCalendar=*-*-* 22:00:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

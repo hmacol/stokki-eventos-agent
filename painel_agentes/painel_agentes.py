@@ -111,12 +111,16 @@ import wms_pedidos
 import wms_etiqueta_produto
 import wms_caixas
 import wms_pilotos
+import wms_separacao
+import wms_lotes_planilha
+import wms_etiqueta_volume
 import wms_fila_impressao
 import wms_faltas_recebimento
 import acesso_telas
 import avisos_pendencias
 from galpao3d import banco as galpao3d_banco, estado as galpao3d_estado
 import retornos
+import pagamentos_pontuais
 
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
@@ -3268,7 +3272,8 @@ def api_pedidos_acao_cancelar_vuupt():
 @requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
 @exige_mesma_origem
 def api_pedidos_acao_cancelar_stokki():
-    """Ação Cancelar Stokki da tela /pedidos (só a Stokki; a Vuupt é outra ação). Pode levar ~30 s por pedido."""
+    """Ação Cancelar Stokki da tela /pedidos (só a Stokki; a Vuupt é outra ação). Só põe na fila
+    (stokki/fila_cancelamento.py); o worker do portal executa e a tela acompanha pelo andamento."""
     body, erro = _corpo_json()
     if erro:
         return erro
@@ -3283,8 +3288,19 @@ def api_pedidos_acao_cancelar_stokki():
         logging.getLogger(__name__).exception("cancelar Stokki pela tela Pedidos falhou")
         return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
     if not r.get("ok"):
-        return jsonify({"erro": r.get("erro") or "Falha ao cancelar na Stokki.", "resultados": r.get("resultados", [])}), 400
+        return jsonify({"erro": r.get("erro") or "Falha ao pôr o cancelamento na fila."}), 400
     return jsonify(r)
+
+
+@app.route("/api/pedidos/acao/cancelar-stokki/andamento", methods=["GET"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+def api_pedidos_acao_cancelar_stokki_andamento():
+    """Andamento do Cancelar Stokki: ?ids=1,2 (fila_id devolvidos pelo POST)."""
+    try:
+        ids = [int(x) for x in request.args.get("ids", "").split(",") if x.strip()][:50]
+    except ValueError:
+        return jsonify({"erro": "ids inválidos."}), 400
+    return jsonify({"ok": True, "itens": acoes_pedidos.andamento_cancelamento(ids)})
 
 
 @app.route("/api/pedidos/acao/endereco", methods=["POST"])
@@ -4466,6 +4482,135 @@ def revisar_pedagio(pedagio_id):
     finally:
         conn.close()
     return jsonify({"ok": True, "pedagio": resultado})
+
+
+# ── Pagamentos pontuais: Adiantamento, Descarga e Frete avulso (Hugo, 18/11) ──
+# A logística lança, o pedido vai pro grupo FINANCEIRO + LOGÍSTICA, o
+# financeiro paga e manda o comprovante, a logística confirma anexando o
+# comprovante; Descarga ainda pede o documento. Lógica e trava do envio em
+# pagamentos_pontuais.py; aqui só HTTP.
+
+NIVEIS_PAGAMENTOS = ("total", "atendimento", "logistica")
+
+
+def _usuario_pagamento() -> str:
+    return getattr(g, "nome_usuario", "") or session.get("usuario") or g.nivel_acesso
+
+
+@app.route("/financeiro/pagamentos")
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+def pagamentos():
+    pp = pagamentos_pontuais
+    situacao = (request.args.get("situacao") or pp.AGUARDANDO_PAGAMENTO).upper()
+    if situacao != "TODOS" and situacao not in pp.SITUACOES:
+        situacao = pp.AGUARDANDO_PAGAMENTO
+    config = _carregar_config()
+    conn = pp.conectar()
+    try:
+        itens = pp.listar(conn, None if situacao == "TODOS" else situacao)
+        contagem = pp.contagem(conn)
+        motoristas = pp.listar_motoristas(conn)
+    finally:
+        conn.close()
+    for p in itens:
+        p["pode_reenviar"] = pp.pode_reenviar(p)
+    return render_template("pagamentos_pontuais.html", itens=itens, situacao=situacao, contagem=contagem,
+                           motoristas=motoristas, pp=pp, envio_ligado=pp.config_pagamentos(config)["ativo"])
+
+
+def _resposta_pagamento(conn, pagamento_id: int, evento: str | None):
+    aviso = pagamentos_pontuais.disparar_aviso(conn, pagamento_id, evento, _carregar_config()) if evento else None
+    return jsonify({"ok": True, "id": pagamento_id, "pagamento": pagamentos_pontuais.obter(conn, pagamento_id),
+                    "aviso": aviso})
+
+
+@app.route("/api/financeiro/pagamentos", methods=["POST"])
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+@exige_mesma_origem
+def api_lancar_pagamento():
+    # JSON ou formulário (o Frete avulso pode vir com anexo)
+    dados = request.form.to_dict() if request.form or request.files else (request.get_json(silent=True) or {})
+    arquivo = request.files.get("anexo")
+    anexo = arquivo.read(pagamentos_pontuais.MAX_ARQUIVO_BYTES + 1) if arquivo else b""
+    conn = pagamentos_pontuais.conectar()
+    try:
+        novo_id = pagamentos_pontuais.lancar(conn, dados, _usuario_pagamento(), anexo)
+        return _resposta_pagamento(conn, novo_id, "lancamento")
+    except pagamentos_pontuais.ErroPagamento as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/financeiro/pagamentos/<int:pagamento_id>/confirmar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+@exige_mesma_origem
+def api_confirmar_pagamento(pagamento_id):
+    arquivo = request.files.get("comprovante")
+    conn = pagamentos_pontuais.conectar()
+    try:
+        pagamentos_pontuais.confirmar(conn, pagamento_id, arquivo.read(pagamentos_pontuais.MAX_ARQUIVO_BYTES + 1) if arquivo else b"", _usuario_pagamento())
+        return _resposta_pagamento(conn, pagamento_id, None)
+    except pagamentos_pontuais.ErroPagamento as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/financeiro/pagamentos/<int:pagamento_id>/documento", methods=["POST"])
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+@exige_mesma_origem
+def api_documento_pagamento(pagamento_id):
+    arquivo = request.files.get("documento")
+    conn = pagamentos_pontuais.conectar()
+    try:
+        pagamentos_pontuais.incluir_documento(conn, pagamento_id, arquivo.read(pagamentos_pontuais.MAX_ARQUIVO_BYTES + 1) if arquivo else b"",
+                                              _usuario_pagamento())
+        return _resposta_pagamento(conn, pagamento_id, "documento")
+    except pagamentos_pontuais.ErroPagamento as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/financeiro/pagamentos/<int:pagamento_id>/cancelar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+@exige_mesma_origem
+def api_cancelar_pagamento(pagamento_id):
+    conn = pagamentos_pontuais.conectar()
+    try:
+        pagamentos_pontuais.cancelar(conn, pagamento_id, (request.get_json(silent=True) or {}).get("motivo"),
+                                     _usuario_pagamento())
+        return _resposta_pagamento(conn, pagamento_id, "cancelamento")
+    except pagamentos_pontuais.ErroPagamento as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/financeiro/pagamentos/<int:pagamento_id>/reenviar-aviso", methods=["POST"])
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+@exige_mesma_origem
+def api_reenviar_aviso_pagamento(pagamento_id):
+    conn = pagamentos_pontuais.conectar()
+    try:
+        p = pagamentos_pontuais.obter(conn, pagamento_id)
+        if not p:
+            return jsonify({"erro": "Lançamento não encontrado."}), 404
+        if not pagamentos_pontuais.pode_reenviar(p):
+            return jsonify({"erro": "Esse aviso não está pendente de reenvio."}), 400
+        return _resposta_pagamento(conn, pagamento_id, p["aviso_evento"])
+    finally:
+        conn.close()
+
+
+@app.route("/financeiro/pagamentos/<int:pagamento_id>/arquivo/<nome>")
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+def pagamento_arquivo(pagamento_id, nome):
+    caminho = pagamentos_pontuais.caminho_arquivo(pagamento_id, nome)
+    if caminho is None:
+        abort(404)
+    return send_file(caminho)
 
 
 # ── Canhotos: conferência das fotos do app (Hugo, 12/09) ─────────────────────
@@ -6392,6 +6537,316 @@ def wms_etiqueta_produto_pdf():
 # Fila de impressão das etiquetas de caixa (computador da equipe): o celular
 # do galpão pede as etiquetas (wms_caixas.criar_caixas enfileira) e quem está
 # no computador com a térmica abre o PDF e marca como impresso.
+# ── Galpão: separação em onda, conferência cega e volumes (17/11) ─────────────
+# Regras em wms_separacao.py (sem Flask). No app do galpão (/wms) o operador é o do
+# PIN; as telas do escritório ficam em /ondas, FORA de /wms, pra o login do galpão
+# não enxergar (a regex da tela "wms" em acesso_telas pega tudo sob /api/wms/).
+
+def _sep_chamar(funcao):
+    """Abre a conexão, chama funcao(conn) e devolve JSON; erro de regra vira 400."""
+    import sqlite3
+    try:
+        conn = wms_separacao.conectar()
+    except sqlite3.Error:
+        return _wms_json_erro("Sistema ocupado agora. Tente de novo em alguns segundos.", 503)
+    try:
+        return jsonify(funcao(conn))
+    except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
+        return _wms_json_erro(e)
+    except sqlite3.Error as e:
+        # banco compartilhado ocupado ("database is locked") ou dois bipes iguais ao mesmo tempo:
+        # o operador ve um aviso e repete, em vez de um "Erro 500"
+        app.logger.warning("separacao: banco recusou a operacao: %s", e)
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
+        return _wms_json_erro("Sistema ocupado agora. Tente de novo em alguns segundos.", 503)
+    finally:
+        conn.close()
+
+
+def _sep_corpo() -> dict:
+    corpo = request.get_json(silent=True)
+    return corpo if isinstance(corpo, dict) else {}
+
+
+@app.route("/api/wms/separacao/painel")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_separacao_painel():
+    """O que o app do galpão mostra nas abas Separar, Conferir e Volumes."""
+    com_caixas = _wms_ids_caixas()
+
+    def _f(conn):
+        soltos = []
+        for emb in sorted(com_caixas):
+            soltos += wms_separacao.pedidos_para_onda(conn, emb)
+        return {"ondas": wms_separacao.ondas_vivas(conn, com_caixas), "pedidos_soltos": soltos,
+                "conferir": wms_separacao.pedidos_para_conferir(conn, com_caixas),
+                "volumes": wms_separacao.pedidos_para_volumes(conn, com_caixas)}
+    return _sep_chamar(_f)
+
+
+@app.route("/api/wms/separacao/ondas/pedido/<int:pedido_id>", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_onda_de_um_pedido(pedido_id):
+    op = _wms_exige_operador()
+    return _sep_chamar(lambda conn: {"onda_id": wms_separacao.onda_de_um_pedido(conn, pedido_id, op)})
+
+
+@app.route("/api/wms/separacao/ondas/<int:onda_id>")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_separacao_onda(onda_id):
+    return _sep_chamar(lambda conn: wms_separacao.detalhe_onda(conn, onda_id))
+
+
+@app.route("/api/wms/separacao/ondas/<int:onda_id>/iniciar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_onda_iniciar(onda_id):
+    op = _wms_exige_operador()
+
+    def _f(conn):
+        wms_separacao.iniciar_onda(conn, onda_id, op)
+        return wms_separacao.detalhe_onda(conn, onda_id)
+    return _sep_chamar(_f)
+
+
+@app.route("/api/wms/separacao/ondas/<int:onda_id>/separar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_separar(onda_id):
+    op = _wms_exige_operador()
+    corpo = _sep_corpo()
+
+    def _f(conn):
+        _wms_exige_uuid_do_aparelho(corpo.get("uuid"))
+        return wms_separacao.separar_caixa(conn, onda_id, corpo.get("serial", ""), qtd_un=corpo.get("qtd_un"),
+                                           uuid=corpo.get("uuid") or "", operador=op)
+    return _sep_chamar(_f)
+
+
+@app.route("/api/wms/separacao/ondas/<int:onda_id>/distribuir", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_distribuir(onda_id):
+    op = _wms_exige_operador()
+    corpo = _sep_corpo()
+
+    def _f(conn):
+        _wms_exige_uuid_do_aparelho(corpo.get("uuid"))
+        return wms_separacao.distribuir_caixa(conn, onda_id, corpo.get("codigo", ""), qtd_un=corpo.get("qtd_un"),
+                                              uuid=corpo.get("uuid") or "", operador=op)
+    return _sep_chamar(_f)
+
+
+@app.route("/api/wms/separacao/ondas/<int:onda_id>/fechar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_fechar(onda_id):
+    op = _wms_exige_operador()
+    mesmo_faltando = bool(_sep_corpo().get("mesmo_faltando"))
+    return _sep_chamar(lambda conn: wms_separacao.fechar_separacao(conn, onda_id, op, mesmo_faltando=mesmo_faltando))
+
+
+@app.route("/api/wms/separacao/itens/<int:item_id>/devolver", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_devolver(item_id):
+    op = _wms_exige_operador()
+    motivo = str(_sep_corpo().get("motivo") or "")
+    return _sep_chamar(lambda conn: wms_separacao.devolver_item(conn, item_id, operador=op, motivo=motivo))
+
+
+@app.route("/api/wms/separacao/conferir/<int:pedido_id>/iniciar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_conferir_iniciar(pedido_id):
+    op = _wms_exige_operador()
+    return _sep_chamar(lambda conn: wms_separacao.iniciar_conferencia(conn, pedido_id, op))
+
+
+@app.route("/api/wms/separacao/conferencias/<int:conferencia_id>/bipe", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_conferir_bipe(conferencia_id):
+    op = _wms_exige_operador()
+    corpo = _sep_corpo()
+
+    def _f(conn):
+        _wms_exige_uuid_do_aparelho(corpo.get("uuid"))
+        return wms_separacao.conferir_bipe(conn, conferencia_id, corpo.get("codigo", ""),
+                                           qtd_un=corpo.get("qtd_un"), uuid=corpo.get("uuid") or "", operador=op)
+    return _sep_chamar(_f)
+
+
+@app.route("/api/wms/separacao/conferencias/<int:conferencia_id>/fechar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_conferir_fechar(conferencia_id):
+    op = _wms_exige_operador()
+    return _sep_chamar(lambda conn: wms_separacao.fechar_conferencia(conn, conferencia_id, op))
+
+
+@app.route("/api/wms/separacao/conferencias/<int:conferencia_id>/abandonar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_conferir_abandonar(conferencia_id):
+    op = _wms_exige_operador()
+    return _sep_chamar(lambda conn: wms_separacao.abandonar_conferencia(conn, conferencia_id, op))
+
+
+@app.route("/api/wms/separacao/pedidos/<int:pedido_id>/volumes", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_volumes(pedido_id):
+    op = _wms_exige_operador()
+    total = _sep_corpo().get("total")
+    return _sep_chamar(lambda conn: wms_separacao.fechar_volumes(conn, pedido_id, total, op))
+
+
+@app.route("/api/wms/separacao/pedidos/<int:pedido_id>/volumes/<int:numero>/reimprimir", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_volume_reimprimir(pedido_id, numero):
+    op = _wms_exige_operador()
+    return _sep_chamar(lambda conn: wms_separacao.reimprimir_volume(conn, pedido_id, numero, op.get("nome", "")))
+
+
+# Escritório: montar onda, decidir falta e acompanhar (níveis total e operador).
+
+def _ondas_embarcadores() -> list:
+    """Embarcadores que operam por caixa (wms.pilotos): só eles têm onda."""
+    return [{"id": p["id"], "nome": p["nome"]} for p in wms_pilotos.pilotos(_carregar_config() or {}) if p["caixas"]]
+
+
+@app.route("/ondas")
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+def ondas():
+    pilotos = [{"id": p["id"], "nome": p["nome"]} for p in wms_pilotos.pilotos(_carregar_config() or {})]
+    return render_template("ondas.html", embarcadores=_ondas_embarcadores(), pilotos=pilotos)
+
+
+@app.route("/api/ondas/pedidos")
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+def api_ondas_pedidos():
+    embarcador_id = request.args.get("embarcador_id", type=int)
+    data = (request.args.get("data_entrega") or "").strip() or None
+    if not embarcador_id or embarcador_id not in {e["id"] for e in _ondas_embarcadores()}:
+        return _wms_json_erro("Escolha um embarcador que opera por caixa.")
+
+    def _f(conn):
+        return {"datas": wms_separacao.datas_para_onda(conn, embarcador_id),
+                "pedidos": wms_separacao.pedidos_para_onda(conn, embarcador_id, data),
+                "ondas": wms_separacao.ondas_vivas(conn, {embarcador_id})}
+    return _sep_chamar(_f)
+
+
+@app.route("/api/ondas/pedidos/<int:pedido_id>/lotes")
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+def api_ondas_pedido_lotes(pedido_id):
+    """Lote indicado pelo cliente e os lotes disponíveis (sem indicação a separação segue FEFO)."""
+    return _sep_chamar(lambda conn: wms_separacao.opcoes_de_lote(conn, pedido_id))
+
+
+@app.route("/api/ondas/pedidos/<int:pedido_id>/lotes", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_ondas_pedido_lotes_indicar(pedido_id):
+    corpo = _sep_corpo()
+    por = session.get("usuario") or ""
+    return _sep_chamar(lambda conn: wms_separacao.indicar_lote(
+        conn, pedido_id, int(corpo.get("produto_id") or 0), corpo.get("lote") or "", por))
+
+
+@app.route("/api/ondas/lotes/planilha", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_ondas_lotes_planilha():
+    """Planilha de lotes do cliente (por nota fiscal e produto): o escritório envia o arquivo que
+    o cliente mandou. Sem lote indicado, vale o que vence primeiro."""
+    # qualquer piloto, mesmo o que ainda nao opera por caixa: a indicacao fica guardada e
+    # passa a valer quando ele entrar na separacao
+    embarcador_id = request.form.get("embarcador_id", type=int)
+    if embarcador_id not in {p["id"] for p in wms_pilotos.pilotos(_carregar_config() or {})}:
+        return _wms_json_erro("Escolha o embarcador da planilha.")
+    arquivo = request.files.get("arquivo")
+    if not arquivo or not arquivo.filename:
+        return _wms_json_erro("Escolha o arquivo da planilha de lotes.")
+    conteudo = arquivo.read(wms_lotes_planilha.MAX_BYTES + 1)
+    nome = Path(arquivo.filename).name[:120]
+    por = session.get("usuario") or ""
+
+    def _f(conn):
+        lido = wms_lotes_planilha.ler_lotes(conteudo, nome)
+        return wms_separacao.importar_lotes_cliente(conn, embarcador_id, lido, nome, por)
+    return _sep_chamar(_f)
+
+
+@app.route("/api/ondas", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_ondas_montar():
+    corpo = _sep_corpo()
+    embarcador_id = corpo.get("embarcador_id")
+    if type(embarcador_id) is not int or embarcador_id not in {e["id"] for e in _ondas_embarcadores()}:
+        return _wms_json_erro("Escolha um embarcador que opera por caixa.")
+    por = session.get("usuario") or ""
+    return _sep_chamar(lambda conn: {"onda_id": wms_separacao.montar_onda(
+        conn, embarcador_id, corpo.get("pedido_ids") or [], por)})
+
+
+@app.route("/api/ondas/<int:onda_id>/cancelar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_ondas_cancelar(onda_id):
+    por = session.get("usuario") or ""
+
+    def _f(conn):
+        wms_separacao.cancelar_onda(conn, onda_id, por)
+        return {"ok": True}
+    return _sep_chamar(_f)
+
+
+@app.route("/api/ondas/andamento")
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+def api_ondas_andamento():
+    embarcador_id = request.args.get("embarcador_id", type=int)
+    return _sep_chamar(lambda conn: {"pedidos": wms_separacao.andamento(conn, embarcador_id)})
+
+
+@app.route("/api/ondas/conferencias/<int:pedido_id>/liberar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_ondas_conferencia_liberar(pedido_id):
+    """Conferência esquecida aberta (o conferente foi embora): o escritório libera o pedido."""
+    por = session.get("usuario") or ""
+
+    def _f(conn):
+        conferencia_id = wms_separacao.conferencia_aberta_do_pedido(conn, pedido_id)
+        if not conferencia_id:
+            raise wms.ErroWMS("Este pedido não tem conferência aberta.")
+        return wms_separacao.abandonar_conferencia(conn, conferencia_id, None, por=por)
+    return _sep_chamar(_f)
+
+
+@app.route("/api/ondas/faltas")
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+def api_ondas_faltas():
+    return _sep_chamar(lambda conn: {"faltas": wms_separacao.faltas_pendentes(conn)})
+
+
+@app.route("/api/ondas/faltas/<int:pedido_id>/decidir", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_ondas_faltas_decidir(pedido_id):
+    corpo = _sep_corpo()
+    por = session.get("usuario") or ""
+    return _sep_chamar(lambda conn: wms_separacao.decidir_falta(
+        conn, pedido_id, corpo.get("decisao"), corpo.get("motivo"), por))
+
+
 _NIVEIS_FILA_ETIQUETAS = ("total", "operador", "expedicao")
 
 
@@ -6444,9 +6899,13 @@ def fila_etiquetas_pdf(impressao_id):
         if trabalho is None:
             abort(404, "Pedido de impressão não encontrado.")
         try:
-            pdf = wms_etiqueta_produto.gerar_pdf_caixas(
-                conn, trabalho["itens"], orientacao=orientacao, margem_mm=margem,
-                desloc_x_mm=dx, desloc_y_mm=dy)
+            if trabalho["tipo"] == "VOLUME":
+                # etiqueta 10x15 do pedido (17/11): outra impressora, sem a calibracao da 10x5
+                pdf = wms_etiqueta_volume.gerar_pdf_volumes(conn, trabalho["itens"])
+            else:
+                pdf = wms_etiqueta_produto.gerar_pdf_caixas(
+                    conn, trabalho["itens"], orientacao=orientacao, margem_mm=margem,
+                    desloc_x_mm=dx, desloc_y_mm=dy)
         except wms.ErroWMS as e:
             abort(400, str(e))
     finally:

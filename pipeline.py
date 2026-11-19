@@ -708,6 +708,28 @@ def processar_pedido(
         # 1. Detalhe completo do pedido
         detalhe = stokki_pedidos.obter_detalhe(sess_stokki, id_stokki)
 
+        # Cancelado na Stokki depois da listagem da rodada (Hugo, 18/11: PS-44507
+        # cancelado 12:15, criado na Vuupt 12:17, foi pra rota e virou "não
+        # coletado"). Não sobe; o serviço ainda not_assigned é cancelado na Vuupt
+        # (o pedido sai da listagem de abertos, nenhuma rodada volta nele).
+        if "cancel" in (detalhe.get("situacao") or "").lower():
+            resultado["acao"] = "ignorado_cancelado_stokki"
+            resultado["observacao"] = f"Cancelado na Stokki ({detalhe['situacao']}) -- não sobe pra VUUPT."
+            if status_vuupt == vuupt.STATUS_ATUALIZAVEL:
+                if modo_teste:
+                    logger.info(f"  [TESTE] {codigo_ps}: cancelado na Stokki -- cancelaria o serviço "
+                                f"{servico_existente['id']} (not_assigned) na VUUPT.")
+                else:
+                    try:
+                        vuupt.cancelar_servico_oficial(servico_existente["id"])
+                        resultado["observacao"] += f" Serviço {servico_existente['id']} cancelado na VUUPT."
+                    except Exception as e:
+                        resultado["requer_revisao"] = True
+                        resultado["observacao"] += (f" Falha ao cancelar o serviço {servico_existente['id']} "
+                                                    f"na VUUPT ({e}) -- cancelar à mão.")
+            logger.info(f"  {codigo_ps}: {resultado['observacao']}")
+            return resultado
+
         # 2. Resolução do endereço
         res_end = resolver_endereco_entrega(
             detalhe, catalogo, anthropic_api_key, google_maps_api_key)

@@ -6,6 +6,7 @@ Rota enviada sem aceite vira oferta no app (nucleo/ofertas_rota_enviada.py).
 SQLite temporario, sem rede: elegibilidade, resumo e WhatsApp sao de mentira.
     python -m unittest nucleo.test_ofertas_rota_enviada -v
 """
+import json
 import sys
 import tempfile
 import unittest
@@ -24,6 +25,8 @@ CPFS = {ORIGINAL: "12345678901", OUTRO: "22345678902", TERCEIRO: "32345678903"}
 ROTA_VUUPT = 900
 HOJE = date.today()
 ID_OFERTA = ofertas.ID_BASE   # + rota_id
+GRUPO_ROTAS_ID = "120363-rotas@g.us"
+GRUPOS = [{"id": "120363-alertas@g.us", "name": "ALERTAS FRESH"}, {"id": GRUPO_ROTAS_ID, "name": "Rotas Freshlog"}]
 
 
 def _servico(service_id, status="assigned"):
@@ -76,15 +79,20 @@ class TestOfertasRotaEnviada(unittest.TestCase):
         self.enviados.append({"tipo": tipo, "texto": texto, "grupo_id": grupo_id})
         return "enviado"
 
-    def _rodar(self, hora, elegiveis=(OUTRO, TERCEIRO), config=None):
+    def _rodar(self, hora, config=None, grupos=GRUPOS):
         conn = banco.conectar()
         try:
             return ofertas.rodar(conn, config or self.config, agora=_as(hora),
-                                 elegiveis=lambda c, rota, cfg: list(elegiveis),
                                  resumo=lambda c, rota, chave: {"regiao": "BAIXADA SANTISTA", "total_paradas": 2, "saida": "06:00"},
-                                 despachar=self._despachar)
+                                 despachar=self._despachar, listar_grupos=lambda cfg: grupos)
         finally:
             conn.close()
+
+    def _sql(self, sql, params=()):
+        conn = banco.conectar()
+        conn.execute(sql, params)
+        conn.commit()
+        conn.close()
 
     def _oferta(self):
         conn = banco.conectar()
@@ -203,6 +211,34 @@ class TestOfertasRotaEnviada(unittest.TestCase):
         self._sync(status="not_started")
         self.assertEqual(self._rodar("05:44")["retiradas"], 1)
         self.assertEqual(self._oferta()["motivo_retirada"], "motorista original aceitou")
+
+    def test_aviso_vai_pro_grupo_rotas_freshlog_e_espera_se_nao_achar(self):
+        self._rodar("05:40", grupos=[GRUPOS[0]])                 # numero fora do grupo: nada sai, fica pendente
+        self.assertEqual(self.enviados, [])
+        self.assertIsNone(self._oferta()["aviso_grupo_em"])
+        self._rodar("05:42")
+        self.assertEqual([(e["tipo"], e["grupo_id"]) for e in self.enviados], [("rota_disponivel", GRUPO_ROTAS_ID)])
+        self.assertIsNotNone(self._oferta()["aviso_grupo_em"])
+
+    def test_todo_motorista_com_app_ve_menos_o_original(self):
+        self._rodar("05:40")
+        self.assertEqual(sorted(json.loads(self._oferta()["elegiveis_json"])), [OUTRO, TERCEIRO])
+        self.assertEqual(len(self.cli.get("/api/ofertas", headers=self._h(TERCEIRO)).get_json()["abertas"]), 1)
+        self.assertEqual(self.cli.get("/api/ofertas", headers=self._h(ORIGINAL)).get_json()["abertas"], [])
+        r = self.cli.post(f"/api/ofertas/{ID_OFERTA + self.rota_id}/escolher", headers=self._h(ORIGINAL))
+        self.assertEqual(r.status_code, 409)
+
+    def test_fiorino_nao_pega_rota_de_van_hr_e_recebe_o_motivo(self):
+        self._sql("UPDATE nucleo_rotas SET tipo_veiculo = 'VAN_HR' WHERE id = ?", (self.rota_id,))
+        self._sql("UPDATE motoristas SET tipo_veiculo = 'VAN_HR' WHERE agent_id = ?", (TERCEIRO,))
+        self._rodar("05:40")
+        url = f"/api/ofertas/{ID_OFERTA + self.rota_id}/escolher"
+        r = self.cli.post(url, headers=self._h(OUTRO))           # Fiorino
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("VAN/HR", r.get_json()["erro"])
+        self.assertIn("Fiorino", r.get_json()["erro"])
+        self.assertEqual(self._oferta()["status"], "ABERTA")
+        self.assertEqual(self.cli.post(url, headers=self._h(TERCEIRO)).status_code, 200)   # VAN/HR pega
 
     def test_pagina_do_link_abre_o_app(self):
         r = self.cli.get("/abrir/ofertas")

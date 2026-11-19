@@ -947,6 +947,34 @@ def processar_cancelamentos_do_ciclo(conn, config: dict, simular: bool = False) 
         sessao_uso.liberar(DONO_TRAVA)
 
 
+def processar_cancelamentos_painel_do_ciclo(conn, config: dict, simular: bool = False) -> dict:
+    """Fila do "Cancelar Stokki" da tela /pedidos do painel (stokki/fila_cancelamento.py). Sem nada
+    na fila não abre sessão; Stokki ocupada = espera o próximo ciclo (a fila não tem prazo)."""
+    from stokki import fila_cancelamento as fc
+    vazio = {"ok": 0, "erro": 0, "de_novo": 0}
+    n = fc.pendentes(conn)
+    if not n:
+        return vazio
+    if simular:
+        logger.info(f"SIMULAÇÃO: {n} cancelamento(s) do painel ficam na fila.")
+        return vazio
+    conta = sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=10 * 60, esperar_segundos=60, alternativa=True)
+    if not conta:
+        logger.info(f"Stokki ocupada por '{sessao_uso.em_uso()}' -- {n} cancelamento(s) do painel esperam o próximo ciclo.")
+        return vazio
+    try:
+        import tratativas
+        from stokki import devolucao_estoque
+        from stokki.cancelar import cancelar_pedido
+        return fc.processar(
+            conn, StokkiSession(config, conta=conta), cancelar=cancelar_pedido,
+            registrar_evento=tratativas.registrar_evento,
+            registrar_devolucao=lambda id_stokki, ja_estava: devolucao_estoque.registrar(
+                id_stokki, "pedidos", config, ja_estava=ja_estava))
+    finally:
+        sessao_uso.liberar(DONO_TRAVA)
+
+
 def processar_retomadas_do_ciclo(conn, config: dict, simular: bool = False) -> dict:
     """Retoma o que o cliente pediu (status RETOMANDO): data na Vuupt e fecha a
     pausa. NÃO usa a Stokki, então não pega a trava de sessão."""
@@ -1106,6 +1134,10 @@ def ciclo(config: dict, simular: bool = False, headless: bool = True) -> dict:
             total["cancelamentos"] = processar_cancelamentos_do_ciclo(conn, config, simular=simular)
         except Exception as e:  # noqa: BLE001 -- cancelamento não derruba a fila de envios
             logger.error(f"cancelamentos falharam: {e}\n{traceback.format_exc()}")
+        try:
+            total["cancelamentos_painel"] = processar_cancelamentos_painel_do_ciclo(conn, config, simular=simular)
+        except Exception as e:  # noqa: BLE001 -- a fila do painel não derruba a fila de envios
+            logger.error(f"cancelamentos do painel falharam: {e}\n{traceback.format_exc()}")
         try:
             total["retomadas"] = processar_retomadas_do_ciclo(conn, config, simular=simular)
         except Exception as e:  # noqa: BLE001 -- retomada não derruba a fila de envios

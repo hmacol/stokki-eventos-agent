@@ -449,7 +449,7 @@
     const base = (d.pedidos || []).filter(p => !filtroDia || p.data === filtroDia);
     const n = s => base.filter(p => p.situacao === s).length;
     const ag = (d.agendados_futuros || []).filter(p => !filtroDia || p.data === filtroDia).length;
-    const abas = [['todos', 'Todos', base.length], ['em_rota', 'Em rota', n('em_rota')],
+    const abas = [['todos', 'Todos', base.length + ag], ['em_rota', 'Em rota', n('em_rota')],
                   ['entregues', 'Entregues', n('entregue')],
                   ['pendentes', 'Pendentes', n('programado') + n('aguardando_saida')],
                   ['insucesso', 'Insucesso', n('insucesso')], ['agendados', 'Agendados', ag]];
@@ -460,7 +460,11 @@
   }
 
   function pedidosFiltrados() {
-    let lista = aba === 'agendados' ? (dados.agendados_futuros || []) : dados.pedidos;
+    // "Todos" é todos mesmo, agendados pra frente inclusive (Hugo, 18/11),
+    // no topo: a lista vai do dia mais novo pro mais antigo.
+    const agendados = [...(dados.agendados_futuros || [])].sort((a, b) => (b.data || '').localeCompare(a.data || ''));
+    let lista = aba === 'agendados' ? (dados.agendados_futuros || [])
+              : aba === 'todos' ? [...agendados, ...dados.pedidos] : dados.pedidos;
     if (aba === 'em_rota') lista = lista.filter(p => p.situacao === 'em_rota');
     else if (aba === 'entregues') lista = lista.filter(p => p.situacao === 'entregue');
     else if (aba === 'pendentes') lista = lista.filter(p => p.situacao === 'programado' || p.situacao === 'aguardando_saida');

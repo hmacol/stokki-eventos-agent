@@ -90,6 +90,21 @@
   .item.venc { border-left: 4px solid var(--erro); }
   .item.perto { border-left: 4px solid var(--rodando); }
   .item.escolhido { outline: 2px solid var(--acento); outline-offset: 1px; }
+  /* Separacao em onda / conferencia (17/11): resultado do bipe em tela cheia de cor */
+  .sep-titulo { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--texto-suave); margin: 16px 0 4px; }
+  .sep-resultado { border-radius: 12px; padding: 0; margin: 10px 0; display: grid; gap: 2px; text-align: center; }
+  .sep-resultado.ok, .sep-resultado.erro { padding: 16px 12px; color: #fff; }
+  .sep-resultado.ok { background: #0A6E53; }
+  .sep-resultado.erro { background: #A82F25; }
+  .sep-resultado b { font-size: 34px; line-height: 1.1; font-weight: 800; overflow-wrap: anywhere; }
+  .sep-resultado span { font-size: 14px; }
+  .sep-modos { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 8px 0; }
+  .sep-modos button { padding: 11px 8px; border-radius: 10px; border: 1px solid var(--borda); background: var(--superficie); color: var(--texto); font-weight: 700; font-size: 14px; font-family: inherit; cursor: pointer; }
+  .sep-modos button.on { background: var(--primaria); border-color: var(--primaria); color: #fff; }
+  .sep-contador { text-align: center; margin: 14px 0; display: grid; }
+  .sep-contador b { font-size: 64px; line-height: 1; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .sep-contador span { font-size: 12.5px; color: var(--texto-suave); }
+  .item.feito { opacity: .6; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 100px; font-size: 10.5px; font-weight: 700; letter-spacing: .3px; text-transform: uppercase; }
   .badge-erro { background: var(--erro-bg); color: var(--erro); }
   .badge-atencao { background: var(--rodando-bg); color: var(--rodando-texto); }
@@ -246,7 +261,8 @@
     if (empilhar !== false && S.tela !== tela) S.pilha.push({ tela: S.tela, ctx: S.ctx });
     if (S.pilha.length > 12) S.pilha.shift();
     S.tela = tela; S.ctx = ctx || {}; S.aguardando = null;
-    document.querySelectorAll('.aba').forEach((a) => a.classList.toggle('on', a.dataset.aba === tela));
+    const abaDe = { onda: 'separar', conferir: 'separar', conferencia: 'separar', conferenciaFim: 'separar', volumes: 'separar', separarReserva: 'separar', separacao: 'separar' };
+    document.querySelectorAll('.aba').forEach((a) => a.classList.toggle('on', a.dataset.aba === (abaDe[tela] || tela)));
     render();
     window.scrollTo(0, 0);
   }
@@ -1123,8 +1139,8 @@
   }
 
   // Caixa (aberta pelo Consultar): mover ou cancelar
-  const SIT_CAIXA = { IMPRESSA: 'Impressa, não ativada', EM_ESTOQUE: 'Em estoque', ABERTA: 'Aberta', EXPEDIDA: 'Expedida', CANCELADA: 'Cancelada' };
-  const BADGE_CAIXA = { IMPRESSA: 'badge-neutro', EM_ESTOQUE: 'badge-ok', ABERTA: 'badge-atencao', EXPEDIDA: 'badge-neutro', CANCELADA: 'badge-erro' };
+  const SIT_CAIXA = { IMPRESSA: 'Impressa, não ativada', EM_ESTOQUE: 'Em estoque', ABERTA: 'Aberta', EXPEDIDA: 'Expedida', CANCELADA: 'Cancelada', SEPARADA: 'Separada (na onda)', DISTRIBUIDA: 'Separada pro pedido', CONFERIDA: 'Conferida', DEVOLVIDA: 'Devolvida: guardar numa posição' };
+  const BADGE_CAIXA = { IMPRESSA: 'badge-neutro', EM_ESTOQUE: 'badge-ok', ABERTA: 'badge-atencao', EXPEDIDA: 'badge-neutro', CANCELADA: 'badge-erro', SEPARADA: 'badge-atencao', DISTRIBUIDA: 'badge-atencao', CONFERIDA: 'badge-ok', DEVOLVIDA: 'badge-erro' };
   TELAS.caixa = (ctx) => {
     const c = ctx.caixa; const p = c.produto || {};
     const podeMover = !!c.posicao && (c.situacao === 'EM_ESTOQUE' || c.situacao === 'ABERTA');
@@ -1214,10 +1230,10 @@
   }
 
   // Separar -- pedidos reservados por lote, troca do lote sugerido (WMS fase 2, Task 5+10)
-  TELAS.separar = () => `
+  TELAS.separarReserva = () => `
     <h1>Separar<small>pedidos com reserva pronta ou parcial</small></h1>
     <div class="lista" id="lista-separar"><div class="vazio">Carregando…</div></div>`;
-  TELAS_POS.separar = async () => {
+  TELAS_POS.separarReserva = async () => {
     const el = document.getElementById('lista-separar');
     try {
       const [a, b] = await Promise.all([api('/pedidos?estado=RESERVADO&limite=30'), api('/pedidos?estado=PARCIAL&limite=30')]);
@@ -1299,6 +1315,340 @@
     document.getElementById('btn-cam-sep').addEventListener('click', () => abrirCamera(bipar));
   };
 
+  // ── Separação em onda, conferência cega e volumes (17/11) ──────────────
+  // Regras no servidor (wms_separacao.py). Aqui tudo exige rede: o servidor é quem
+  // recusa bipe repetido, caixa de outro pedido e conferente que separou.
+  function bip(ok) {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return;
+      bip.ctx = bip.ctx || new Ctx();
+      const o = bip.ctx.createOscillator(), g = bip.ctx.createGain();
+      o.type = 'square'; o.frequency.value = ok ? 1100 : 220; g.gain.value = 0.12;
+      o.connect(g); g.connect(bip.ctx.destination); o.start(); o.stop(bip.ctx.currentTime + (ok ? 0.09 : 0.45));
+    } catch (e) { /* sem som: a tela ja mostra */ }
+    if (navigator.vibrate) navigator.vibrate(ok ? 60 : [120, 80, 120]);
+  }
+  // POST de bipe: sem operador manda pra tela do PIN; rede fora avisa que NAO registrou.
+  // Bipe que ficou sem resposta (rede caiu no meio) guarda o uuid: repetir o MESMO bipe manda o
+  // mesmo uuid e o servidor nao conta duas vezes, mesmo que a primeira tentativa tenha gravado.
+  const sepPendentes = {};
+  async function sepPost(caminho, corpo) {
+    if (!S.operador) { toast('Identifique o operador primeiro', true); ir('operador'); throw new Error('sem operador'); }
+    corpo = corpo || {};
+    let chave = null;
+    if (corpo.uuid) {
+      chave = caminho + '|' + (corpo.serial || corpo.codigo || '') + '|' + (corpo.qtd_un == null ? '' : corpo.qtd_un);
+      if (sepPendentes[chave]) corpo.uuid = sepPendentes[chave]; else sepPendentes[chave] = corpo.uuid;
+    }
+    if (!navigator.onLine) throw new Error('Sem conexão. Repita o bipe quando a rede voltar.');
+    try {
+      const r = await api('/separacao' + caminho, { method: 'POST', body: corpo });
+      if (chave) delete sepPendentes[chave];
+      return r;
+    } catch (e) {
+      if (e.status === 409 && e.dados && e.dados.sem_operador) { S.operador = null; ir('operador'); }
+      if (!e.status || e.status === 503) e.message = (e.status === 503 ? e.message : 'Sem conexão.') + ' Repita o mesmo bipe: não conta em dobro.';
+      else if (chave) delete sepPendentes[chave];   // o servidor respondeu e recusou: bipe encerrado
+      throw e;
+    }
+  }
+  function sepResultado(ok, titulo, detalhe) {
+    const el = document.getElementById('sep-resultado'); if (!el) return;
+    el.className = 'sep-resultado ' + (ok ? 'ok' : 'erro');
+    el.innerHTML = '<b>' + esc(titulo) + '</b>' + (detalhe ? '<span>' + esc(detalhe) + '</span>' : '');
+    bip(ok);
+  }
+  function sepCampo(idCampo, idCam, bipar) {
+    const campo = document.getElementById(idCampo);
+    campo.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); const v = campo.value.trim(); campo.value = ''; if (v) bipar(v); } });
+    document.getElementById(idCam).addEventListener('click', () => abrirCamera(bipar));
+  }
+  function pedirQuantidade(msg) {
+    const bruto = prompt(msg); if (bruto === null) return null;
+    const q = Number(String(bruto).replace(',', '.'));
+    if (!Number.isFinite(q) || q <= 0) { toast('Quantidade inválida', true); return null; }
+    return q;
+  }
+  const ETAPA_PEDIDO = { NA_ONDA: 'na onda', SEPARANDO: 'separando', SEPARADO: 'separado', CONFERINDO: 'conferindo', AGUARDANDO_DECISAO: 'esperando o escritório', CONFERIDO: 'conferido', EMBALADO: 'embalado' };
+
+  // Separar: ondas liberadas pelo escritório + pedidos soltos (onda de um pedido)
+  TELAS.separar = () => BOOT.caixas_ativo ? `
+    <h1>Separar<small>ondas liberadas e pedidos sem onda</small></h1>
+    <div class="acoes">
+      <button data-ir="conferir"><b>Conferir</b><span id="sep-n-conf">pedidos separados</span></button>
+      <button data-ir="volumes"><b>Volumes</b><span id="sep-n-vol">etiquetar pedidos conferidos</span></button>
+    </div>
+    <h2 class="sep-titulo">Ondas</h2>
+    <div class="lista" id="sep-ondas"><div class="vazio">Carregando…</div></div>
+    <h2 class="sep-titulo">Pedidos sem onda</h2>
+    <div class="lista" id="sep-soltos"></div>
+    <button class="voltar" id="sep-antigo">Pedidos por reserva (embarcador sem caixa) ›</button>` : TELAS.separarReserva();
+  TELAS_POS.separar = async () => {
+    if (!BOOT.caixas_ativo) return TELAS_POS.separarReserva();
+    app.querySelectorAll('.acoes [data-ir]').forEach((b) => b.addEventListener('click', () => ir(b.dataset.ir)));
+    document.getElementById('sep-antigo').addEventListener('click', () => ir('separarReserva'));
+    const elO = document.getElementById('sep-ondas'), elS = document.getElementById('sep-soltos');
+    try {
+      const r = await api('/separacao/painel');
+      document.getElementById('sep-n-conf').textContent = r.conferir.length + ' pedido(s) pra conferir';
+      document.getElementById('sep-n-vol').textContent = r.volumes.filter((v) => v.execucao === 'CONFERIDO').length + ' pedido(s) pra etiquetar';
+      elO.innerHTML = r.ondas.map((o) => `
+        <div class="item" data-onda="${o.id}" data-sit="${o.situacao}" style="grid-template-columns:1fr">
+          <div class="cod">Onda ${o.id} · ${esc((o.embarcador || '').split(' ').slice(0, 2).join(' '))}</div>
+          <div class="meta"><span class="badge ${o.situacao === 'ABERTA' ? 'badge-atencao' : 'badge-ok'}">${o.situacao === 'ABERTA' ? 'liberada' : 'em separação'}</span> ${o.pedidos.length} pedido(s): <span class="mono">${esc(o.pedidos.slice(0, 4).join(', '))}${o.pedidos.length > 4 ? '…' : ''}</span></div>
+        </div>`).join('') || '<div class="vazio">Nenhuma onda liberada agora.</div>';
+      elS.innerHTML = r.pedidos_soltos.map((p) => `
+        <div class="item" data-solto="${p.id}" style="grid-template-columns:1fr auto">
+          <div class="cod mono">${esc(p.codigo_ps)}</div>
+          <div class="qtd">${num(p.un)}<small>UN</small></div>
+          <div class="meta">${esc(p.destinatario || '')}${p.data_entrega ? ' · entrega ' + dataBr(p.data_entrega) : ' · sem data'}${p.falta_un > 0 ? ' · <span class="badge badge-atencao">falta estoque</span>' : ''}${p.linhas_sem_cadastro ? ' · <span class="badge badge-erro">item sem cadastro</span>' : ''}</div>
+        </div>`).join('') || '<div class="vazio">Nenhum pedido esperando.</div>';
+      elO.querySelectorAll('[data-onda]').forEach((x) => x.addEventListener('click', async () => {
+        try {
+          if (x.dataset.sit === 'ABERTA') {
+            if (!confirm('Começar a separação da onda ' + x.dataset.onda + '?')) return;
+            await sepPost('/ondas/' + x.dataset.onda + '/iniciar');
+          }
+          ir('onda', { ondaId: Number(x.dataset.onda) });
+        } catch (e) { if (e.message !== 'sem operador') toast(e.message, true); }
+      }));
+      elS.querySelectorAll('[data-solto]').forEach((x) => x.addEventListener('click', async () => {
+        if (!confirm('Separar só este pedido agora?')) return;
+        try { const o = await sepPost('/ondas/pedido/' + x.dataset.solto); ir('onda', { ondaId: o.onda_id }); }
+        catch (e) { if (e.message !== 'sem operador') toast(e.message, true); }
+      }));
+    } catch (e) { elO.innerHTML = '<div class="vazio">' + esc(e.message) + '</div>'; }
+  };
+
+  // Onda: separar (bipa a caixa na prateleira) e distribuir (a tela diz o pedido)
+  TELAS.onda = (ctx) => `
+    <button class="voltar" id="btn-voltar">‹ Voltar</button>
+    <h1>Onda ${ctx.ondaId}<small id="onda-sub">carregando…</small></h1>
+    <div class="sep-modos" id="onda-modos" hidden>
+      <button type="button" data-modo="separar">1. Separar</button>
+      <button type="button" data-modo="distribuir">2. Distribuir</button>
+    </div>
+    <div class="leitura">
+      <input type="text" id="campo-onda" data-foco inputmode="none" placeholder="Bipe a caixa" autocomplete="off">
+      <button type="button" class="btn-cam" id="btn-cam-onda">📷</button>
+      <div class="dica" id="onda-dica"></div>
+    </div>
+    <div class="sep-resultado" id="sep-resultado"></div>
+    <div id="onda-corpo"><div class="vazio">Carregando…</div></div>
+    <div class="botoes"><button class="botao" id="btn-fechar-onda">Fechar separação</button></div>`;
+  TELAS_POS.onda = (ctx) => {
+    document.getElementById('btn-voltar').addEventListener('click', () => ir('separar', {}, false));
+    ctx.modo = ctx.modo || 'separar';
+    async function carregar() {
+      let d;
+      try { d = await api('/separacao/ondas/' + ctx.ondaId); } catch (e) { document.getElementById('onda-corpo').innerHTML = '<div class="vazio">' + esc(e.message) + '</div>'; return; }
+      ctx.dados = d;
+      const varios = d.pedidos.length > 1;
+      document.getElementById('onda-sub').textContent = (d.onda.embarcador || '').split(' ').slice(0, 2).join(' ') + ' · ' + d.pedidos.length + ' pedido(s)' + (d.onda.situacao !== 'EM_SEPARACAO' ? ' · ' + d.onda.situacao.toLowerCase() : '');
+      const modos = document.getElementById('onda-modos'); modos.hidden = !varios;
+      modos.querySelectorAll('[data-modo]').forEach((b) => b.classList.toggle('on', b.dataset.modo === ctx.modo));
+      document.getElementById('onda-dica').textContent = ctx.modo === 'distribuir'
+        ? 'bipe cada caixa separada: a tela mostra de qual pedido ela é' + (d.a_distribuir ? ' · ' + d.a_distribuir + ' a distribuir' : '')
+        : 'bipe a caixa na prateleira · sai primeiro o que vence primeiro · pegou só parte da caixa? o sistema pede a quantidade';
+      const faltaTotal = d.produtos.reduce((n, p) => n + Math.max(p.pedido_un - p.separado_un, 0), 0);
+      document.getElementById('onda-corpo').innerHTML = `
+        ${(d.lotes_indicados || []).length ? `<div class="cartao atencao"><div class="sub"><b>Lote pedido pelo cliente:</b><br>${d.lotes_indicados.map((l) => '<span class="mono">' + esc(l.codigo_ps) + '</span> · ' + esc(l.descricao) + ' · ' + (l.qtd_un == null ? 'só lote <b>' + esc(l.lote) + '</b>' : '<b>' + num(l.qtd_un) + ' UN do lote ' + esc(l.lote) + '</b>')).join('<br>')}</div></div>` : ''}
+        <h2 class="sep-titulo">Produtos${faltaTotal > 0 ? '' : ' · <span class="badge badge-ok">tudo separado</span>'}</h2>
+        <div class="lista">${d.produtos.map((p) => { const falta = Math.max(p.pedido_un - p.separado_un, 0); return `
+          <div class="item ${falta > 0 ? '' : 'feito'}" style="cursor:default">
+            <div class="cod">${esc(p.descricao)}</div>
+            <div class="qtd">${num(p.separado_un)}<small>de ${num(p.pedido_un)}</small></div>
+            <div class="meta"><span class="mono">${esc(p.sku)}</span>${falta > 0 ? ' · faltam ' + num(falta) : ' · <span class="badge badge-ok">ok</span>'}${varios ? ' · distribuído ' + num(p.distribuido_un) : ''}</div>
+          </div>`; }).join('')}</div>
+        ${d.caminhada.length ? `<h2 class="sep-titulo">Onde buscar (sugestão)</h2>
+        <div class="lista">${d.caminhada.map((c) => `
+          <div class="item" style="cursor:default">
+            <div class="cod mono">${esc(c.posicao)}</div>
+            <div class="qtd">${num(c.qtd_un)}<small>UN</small></div>
+            <div class="meta">${esc(c.descricao)} · lote ${esc(c.lote || '-')}${c.validade ? ' · val. ' + dataBr(c.validade) : ''}</div>
+          </div>`).join('')}</div>` : ''}
+        <h2 class="sep-titulo">Pedidos</h2>
+        <div class="lista">${d.pedidos.map((p) => `
+          <div class="item" style="cursor:default">
+            <div class="cod mono">${esc(p.codigo_ps)}</div>
+            <div class="qtd">${num(p.atribuido_un)}<small>de ${num(p.pedido_un)}</small></div>
+            <div class="meta">${esc(p.destinatario || '')} · ${esc(ETAPA_PEDIDO[p.execucao] || p.execucao || '')}</div>
+          </div>`).join('')}</div>
+        ${d.itens.length ? `<h2 class="sep-titulo">Já bipado (toque em Devolver pra desfazer)</h2>
+        <div class="lista">${d.itens.map((i) => `
+          <div class="item" style="cursor:default">
+            <div class="cod"><span class="mono">${esc(i.serial)}</span> · ${num(i.qtd_un)} UN${i.caixa_inteira ? '' : ' (parte da caixa)'}</div>
+            <div class="qtd"><button type="button" class="voltar" data-devolver="${i.id}">Devolver</button></div>
+            <div class="meta">${esc(i.descricao)} · lote ${esc(i.lote || '-')}${i.validade ? ' · val. ' + dataBr(i.validade) : ''} · ${i.codigo_ps ? '<span class="mono">' + esc(i.codigo_ps) + '</span>' : '<span class="badge badge-atencao">sem pedido</span>'}</div>
+          </div>`).join('')}</div>` : ''}`;
+      document.getElementById('onda-corpo').querySelectorAll('[data-devolver]').forEach((b) => b.addEventListener('click', async () => {
+        if (!confirm('Devolver este bipe? A caixa deixa de contar pra onda e precisa voltar pra prateleira.')) return;
+        try { await sepPost('/itens/' + b.dataset.devolver + '/devolver', {}); toast('Devolvido. Guarde a caixa na posição ou bipe de novo.'); carregar(); }
+        catch (e) { if (e.message !== 'sem operador') toast(e.message, true); }
+      }));
+    }
+    async function separar(codigo, qtd) {
+      const serial = serialDe(codigo) || String(codigo).trim().toUpperCase();
+      try {
+        const r = await sepPost('/ondas/' + ctx.ondaId + '/separar', { serial: serial, qtd_un: qtd === undefined ? null : qtd, uuid: uuid() });
+        sepResultado(true, r.codigo_ps ? r.codigo_ps : 'Separada', num(r.qtd_un) + ' UN · ' + r.produto + ' · lote ' + (r.lote || '-') + (r.validade ? ' · val. ' + dataBr(r.validade) : '') + (r.falta_un > 0 ? ' · faltam ' + num(r.falta_un) : ' · produto completo'));
+        carregar();
+      } catch (e) {
+        if (e.message === 'sem operador') return;
+        if (qtd === undefined && /informe quanto tirou/.test(e.message)) {
+          const q = pedirQuantidade(e.message + '\n\nQuantas unidades você tirou da caixa ' + serial + '?');
+          if (q !== null) return separar(codigo, q);
+        }
+        sepResultado(false, 'NÃO VALEU', e.message);
+      }
+    }
+    async function distribuir(codigo, qtd) {
+      const cod = serialDe(codigo) || String(codigo).trim().toUpperCase();
+      try {
+        const r = await sepPost('/ondas/' + ctx.ondaId + '/distribuir', { codigo: cod, qtd_un: qtd === undefined ? null : qtd, uuid: uuid() });
+        sepResultado(true, r.codigo_ps, num(r.qtd_un) + ' UN · ' + (r.destinatario || '') + (r.sobra_un > 0 ? ' · AINDA SOBRAM ' + num(r.sobra_un) + ' UN: bipe de novo' : '') + (r.restam_do_pedido > 0 ? '' : ' · pedido completo'));
+        carregar();
+      } catch (e) { if (e.message !== 'sem operador') sepResultado(false, 'NÃO VALEU', e.message); }
+    }
+    ctx.bipar = (codigo) => (ctx.modo === 'distribuir' ? distribuir(codigo) : separar(codigo));
+    sepCampo('campo-onda', 'btn-cam-onda', ctx.bipar);
+    document.getElementById('onda-modos').querySelectorAll('[data-modo]').forEach((b) => b.addEventListener('click', () => { ctx.modo = b.dataset.modo; carregar(); document.getElementById('campo-onda').focus(); }));
+    document.getElementById('btn-fechar-onda').addEventListener('click', async () => {
+      try {
+        let r = await sepPost('/ondas/' + ctx.ondaId + '/fechar', {});
+        if (r.faltando.length && confirm('Ainda falta separar:\n' + r.faltando.map((f) => f.codigo_ps + ': ' + num(f.falta_un) + ' UN').join('\n') + '\n\nFechar assim mesmo? A falta vai aparecer na conferência.')) {
+          r = await sepPost('/ondas/' + ctx.ondaId + '/fechar', { mesmo_faltando: true });
+        }
+        if (r.onda_concluida) { toast('Separação fechada: ' + r.prontos.length + ' pedido(s) pra conferir' + ((r.sem_nada || []).length ? ' · ' + r.sem_nada.length + ' sem nada separado voltou pra lista' : '')); ir('separar', {}, false); }
+        else { toast(r.prontos.length ? r.prontos.length + ' pedido(s) seguiram pra conferência' : 'Nada fechado: ainda falta separar', !r.prontos.length); carregar(); }
+      } catch (e) { if (e.message !== 'sem operador') toast(e.message, true); }
+    });
+    carregar();
+  };
+
+  // Conferir: cega. A tela nunca mostra o que o pedido pede.
+  TELAS.conferir = () => `
+    <button class="voltar" id="btn-voltar">‹ Separar</button>
+    <h1>Conferir<small>quem separou o pedido não pode conferir</small></h1>
+    <div class="lista" id="conf-lista"><div class="vazio">Carregando…</div></div>`;
+  TELAS_POS.conferir = async () => {
+    document.getElementById('btn-voltar').addEventListener('click', () => ir('separar', {}, false));
+    const el = document.getElementById('conf-lista');
+    try {
+      const r = await api('/separacao/painel');
+      el.innerHTML = r.conferir.map((p) => `
+        <div class="item" data-conf="${p.id}" style="grid-template-columns:1fr">
+          <div class="cod mono">${esc(p.codigo_ps)}</div>
+          <div class="meta">${esc(p.destinatario || '')}${p.cidade ? ' · ' + esc(p.cidade) : ''}${p.conferindo_por ? ' · <span class="badge badge-atencao">conferindo: ' + esc(p.conferindo_por) + '</span>' : ''}</div>
+        </div>`).join('') || '<div class="vazio">Nenhum pedido esperando conferência.</div>';
+      el.querySelectorAll('[data-conf]').forEach((x) => x.addEventListener('click', async () => {
+        try { const c = await sepPost('/conferir/' + x.dataset.conf + '/iniciar'); ir('conferencia', { conf: c }); }
+        catch (e) { if (e.message !== 'sem operador') { toast(e.message, true); bip(false); } }
+      }));
+    } catch (e) { el.innerHTML = '<div class="vazio">' + esc(e.message) + '</div>'; }
+  };
+  TELAS.conferencia = (ctx) => `
+    <button class="voltar" id="btn-voltar">‹ Conferir</button>
+    <h1 class="mono">${esc(ctx.conf.codigo_ps)}<small>${esc(ctx.conf.destinatario || '')}${ctx.conf.cidade ? ' · ' + esc(ctx.conf.cidade) : ''}</small></h1>
+    <div class="leitura">
+      <input type="text" id="campo-conf" data-foco inputmode="none" placeholder="Bipe cada caixa do pedido" autocomplete="off">
+      <button type="button" class="btn-cam" id="btn-cam-conf">📷</button>
+      <div class="dica">caixa fechada: bipe a etiqueta da caixa · unidades soltas: bipe o código do produto e informe quantas</div>
+    </div>
+    <div class="sep-resultado" id="sep-resultado"></div>
+    <div class="sep-contador"><b id="conf-n">${ctx.conf.bipes}</b><span>bipe(s) nesta conferência</span></div>
+    <div class="botoes"><button class="botao" id="btn-fechar-conf">Fechar conferência</button>
+      <button class="botao neutro" id="btn-abandonar-conf">Bipei errado: recomeçar</button></div>`;
+  TELAS_POS.conferencia = (ctx) => {
+    document.getElementById('btn-voltar').addEventListener('click', () => ir('conferir', {}, false));
+    document.getElementById('btn-abandonar-conf').addEventListener('click', async () => {
+      if (!confirm('Largar esta conferência? Os bipes dela deixam de valer e o pedido volta pra fila.')) return;
+      try { await sepPost('/conferencias/' + ctx.conf.conferencia_id + '/abandonar', {}); toast('Conferência largada'); ir('conferir', {}, false); }
+      catch (e) { if (e.message !== 'sem operador') toast(e.message, true); }
+    });
+    async function bipar(codigo, qtd) {
+      const cod = serialDe(codigo) || String(codigo).trim().toUpperCase();
+      try {
+        const r = await sepPost('/conferencias/' + ctx.conf.conferencia_id + '/bipe', { codigo: cod, qtd_un: qtd === undefined ? null : qtd, uuid: uuid() });
+        ctx.conf = r; document.getElementById('conf-n').textContent = r.bipes;
+        sepResultado(true, 'OK', qtd === undefined ? 'caixa ' + cod : num(qtd) + ' UN');
+      } catch (e) {
+        if (e.message === 'sem operador') return;
+        if (qtd === undefined && /quantidade/i.test(e.message)) {
+          const q = pedirQuantidade('Quantas unidades soltas deste produto estão no pedido?');
+          if (q !== null) return bipar(codigo, q);
+          return;
+        }
+        sepResultado(false, 'NÃO VALEU', e.message);
+      }
+    }
+    ctx.bipar = (codigo) => bipar(codigo);
+    sepCampo('campo-conf', 'btn-cam-conf', ctx.bipar);
+    document.getElementById('btn-fechar-conf').addEventListener('click', async () => {
+      if (!confirm('Fechar a conferência do ' + ctx.conf.codigo_ps + '? Depois de fechar não dá pra bipar mais.')) return;
+      try {
+        const r = await sepPost('/conferencias/' + ctx.conf.conferencia_id + '/fechar');
+        ir('conferenciaFim', { fim: r }, false);
+      } catch (e) { if (e.message !== 'sem operador') toast(e.message, true); }
+    });
+  };
+  TELAS.conferenciaFim = (ctx) => {
+    const ok = ctx.fim.resultado === 'OK';
+    return `
+    <h1 class="mono">${esc(ctx.fim.codigo_ps)}</h1>
+    <div class="sep-resultado ${ok ? 'ok' : 'erro'}"><b>${ok ? 'CONFERIDO' : 'NÃO BATEU'}</b><span>${ok ? 'Pode embalar e fechar os volumes.' : 'O pedido ficou travado. Avise o escritório: é ele quem decide se volta pra separação ou segue parcial.'}</span></div>
+    <div class="botoes">
+      ${ok ? '<button class="botao" id="btn-ir-volumes">Fechar volumes deste pedido</button>' : ''}
+      <button class="botao neutro" id="btn-outro">Conferir outro pedido</button>
+    </div>`;
+  };
+  TELAS_POS.conferenciaFim = (ctx) => {
+    bip(ctx.fim.resultado === 'OK');
+    document.getElementById('btn-outro').addEventListener('click', () => ir('conferir', {}, false));
+    const b = document.getElementById('btn-ir-volumes'); if (b) b.addEventListener('click', () => ir('volumes', {}, false));
+  };
+
+  // Volumes: quantos volumes o pedido tem; as etiquetas 10x15 saem na fila de impressão
+  TELAS.volumes = () => `
+    <button class="voltar" id="btn-voltar">‹ Separar</button>
+    <h1>Volumes<small>pedido conferido: informe os volumes e etiquete</small></h1>
+    <div class="lista" id="vol-lista"><div class="vazio">Carregando…</div></div>`;
+  TELAS_POS.volumes = async () => {
+    document.getElementById('btn-voltar').addEventListener('click', () => ir('separar', {}, false));
+    const el = document.getElementById('vol-lista');
+    async function carregar() {
+      try {
+        const r = await api('/separacao/painel');
+        el.innerHTML = r.volumes.map((p) => `
+          <div class="item" data-vol="${p.id}" data-ps="${esc(p.codigo_ps)}" data-n="${p.volumes}" style="grid-template-columns:1fr auto">
+            <div class="cod mono">${esc(p.codigo_ps)}</div>
+            <div class="qtd">${p.volumes || '–'}<small>volumes</small></div>
+            <div class="meta">${esc(p.destinatario || '')} · <span class="badge ${p.execucao === 'EMBALADO' ? 'badge-ok' : 'badge-atencao'}">${p.execucao === 'EMBALADO' ? 'embalado' : 'falta etiquetar'}</span></div>
+          </div>`).join('') || '<div class="vazio">Nenhum pedido conferido esperando volumes.</div>';
+        el.querySelectorAll('[data-vol]').forEach((x) => x.addEventListener('click', async () => {
+          const atual = Number(x.dataset.n);
+          try {
+            if (atual) {
+              const resp = prompt(x.dataset.ps + ' tem ' + atual + ' volume(s).\n\nDigite o NÚMERO de um volume pra reimprimir a etiqueta dele,\nou T' + '<novo total> pra trocar a quantidade (ex.: T4).');
+              if (resp === null) return;
+              const t = String(resp).trim().toUpperCase();
+              if (/^T\d+$/.test(t)) { await sepPost('/pedidos/' + x.dataset.vol + '/volumes', { total: Number(t.slice(1)) }); toast('Quantidade trocada: etiquetas novas na fila'); }
+              else if (/^\d+$/.test(t)) { await sepPost('/pedidos/' + x.dataset.vol + '/volumes/' + t + '/reimprimir'); toast('Etiqueta do volume ' + t + ' enviada pra fila'); }
+              else return toast('Não entendi. Digite um número ou T e o novo total.', true);
+            } else {
+              const q = pedirQuantidade('Quantos volumes tem o ' + x.dataset.ps + '?');
+              if (q === null) return;
+              const r2 = await sepPost('/pedidos/' + x.dataset.vol + '/volumes', { total: q });
+              toast(r2.total + ' etiqueta(s) enviadas pra fila de impressão'); bip(true);
+            }
+            carregar();
+          } catch (e) { if (e.message !== 'sem operador') toast(e.message, true); }
+        }));
+      } catch (e) { el.innerHTML = '<div class="vazio">' + esc(e.message) + '</div>'; }
+    }
+    carregar();
+  };
+
   // Produto manual
   TELAS.novoProduto = (ctx) => `
     <button class="voltar" id="btn-voltar">‹ Voltar</button>
@@ -1333,6 +1683,7 @@
   async function lerCodigo(codigo) {
     codigo = String(codigo || '').trim(); if (!codigo) return;
     if (S.tela === 'inventario' && BOOT.caixas_ativo) return invLer(codigo);
+    if ((S.tela === 'onda' || S.tela === 'conferencia') && S.ctx.bipar) return S.ctx.bipar(codigo);
     const serialDigitado = serialDe(codigo);
     if (serialDigitado) {
       if (S.tela === 'recebimento') {

@@ -28,6 +28,7 @@
   .rodape-cartao { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
   .msg-salvar { font-size: 13px; color: var(--texto-suave); }
   .msg-salvar.erro { color: var(--erro); }
+  .barra-salvar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
   .vazio { padding: 18px; color: var(--texto-suave); font-size: 13px; }
   .cartao.inativo { opacity: 0.6; }
   .pilula.desativado { background: var(--erro); color: #fff; }
@@ -46,6 +47,11 @@
   o login do histórico. <strong>Portal do cliente</strong> marcado deixa entrar em /cliente/equipe e agir em nome
   de qualquer cliente (enviar, cancelar, preferências), seja qual for o nível.
 </p>
+
+<div class="barra-salvar">
+  <button type="button" class="botao" data-acao="salvar-tudo">Salvar todas as alterações</button>
+  <span class="msg-salvar"></span>
+</div>
 
 <div class="cartao" id="sessoes">
   <h2>Sessões abertas</h2>
@@ -141,6 +147,11 @@
 <div class="cartao vazio">Nenhum login nominal cadastrado.</div>
 {% endfor %}
 
+<div class="barra-salvar">
+  <button type="button" class="botao" data-acao="salvar-tudo">Salvar todas as alterações</button>
+  <span class="msg-salvar"></span>
+</div>
+
 <script>
 (function () {
   async function enviar(caminho, corpo, botao, aviso) {
@@ -183,6 +194,36 @@
     }
   });
 
+  // Salvar geral (topo e fim): grava so os cartoes que mudaram desde que a pagina abriu.
+  const editaveis = [];
+  const gerais = document.querySelectorAll("button[data-acao=salvar-tudo]");
+  const avisarGeral = (texto, erro) => document.querySelectorAll(".barra-salvar .msg-salvar").forEach((s) => {
+    s.className = "msg-salvar" + (erro ? " erro" : "");
+    s.textContent = texto;
+  });
+  gerais.forEach((geral) => geral.addEventListener("click", async () => {
+    const mudados = editaveis.map((e) => ({ e, corpo: e.montar() }))
+      .filter((m) => JSON.stringify(m.corpo) !== m.e.inicial);
+    if (!mudados.length) { avisarGeral("Nenhuma alteração pra salvar."); return; }
+    const semTela = mudados.filter((m) => m.corpo.telas && !m.corpo.telas.length).map((m) => m.corpo.usuario);
+    if (semTela.length && !window.confirm(`Sem nenhuma tela, não consegue entrar: ${semTela.join(", ")}. Salvar assim?`)) return;
+    gerais.forEach((b) => { b.disabled = true; });
+    avisarGeral(`Salvando ${mudados.length} login(s)...`);
+    let falhas = 0;
+    for (const { e, corpo } of mudados) {
+      if (await enviar("/api/acessos", corpo, e.botao, e.aviso)) {
+        e.inicial = JSON.stringify(corpo);
+        e.botao.disabled = false;
+        e.aviso.textContent = "Salvo.";
+      } else {
+        falhas += 1;
+      }
+    }
+    if (!falhas) { window.location.reload(); return; }
+    gerais.forEach((b) => { b.disabled = false; });
+    avisarGeral(`${mudados.length - falhas} salvo(s), ${falhas} com erro: veja a mensagem no cartão do login.`, true);
+  }));
+
   document.querySelectorAll(".cartao[data-usuario]").forEach((cartao) => {
     const grade = cartao.querySelector(".grade");
     const botao = cartao.querySelector("button[data-acao=salvar]");
@@ -193,18 +234,20 @@
     cartao.querySelectorAll(".modo input").forEach((r) => r.addEventListener("change", () => {
       grade.hidden = modo() !== "personalizado";
     }));
-    botao.addEventListener("click", async () => {
-      const telas = modo() === "personalizado"
+    const montar = () => ({
+      usuario,
+      telas: modo() === "personalizado"
         ? [...grade.querySelectorAll("input:checked")].map((c) => c.value)
-        : null;
-      if (telas && !telas.length && !window.confirm(`${usuario} fica sem nenhuma tela e não consegue entrar. Salvar assim?`)) return;
-      const corpo = {
-        usuario, telas,
-        nome: cartao.querySelector("[name=nome]").value,
-        nivel: cartao.querySelector("[name=nivel]").value,
-        equipe: cartao.querySelector("[name=equipe]").value,
-        portal_equipe: cartao.querySelector("[name=portal_equipe]").checked,
-      };
+        : null,
+      nome: cartao.querySelector("[name=nome]").value,
+      nivel: cartao.querySelector("[name=nivel]").value,
+      equipe: cartao.querySelector("[name=equipe]").value,
+      portal_equipe: cartao.querySelector("[name=portal_equipe]").checked,
+    });
+    editaveis.push({ usuario, montar, botao, aviso, inicial: JSON.stringify(montar()) });
+    botao.addEventListener("click", async () => {
+      const corpo = montar();
+      if (corpo.telas && !corpo.telas.length && !window.confirm(`${usuario} fica sem nenhuma tela e não consegue entrar. Salvar assim?`)) return;
       if (await enviar("/api/acessos", corpo, botao, aviso)) window.location.reload();
     });
     cartao.querySelector("button[data-acao=ativo]").addEventListener("click", async (ev) => {

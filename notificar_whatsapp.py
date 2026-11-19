@@ -53,6 +53,10 @@ cadastro_motorista_link.forcar_destino_whatsapp (vazio = envio real; ausente =
 vale clientes.forcar_destino, e sem ele nao manda).
     avisar_motorista_boas_vindas
 
+Pedido de pagamento pontual (Hugo, 18/11/2026), grupo FINANCEIRO + LOGÍSTICA:
+origem "pagamento_pontual" com teto proprio (pagamentos_pontuais.teto_diario).
+Trava e destino ficam em painel_agentes/pagamentos_pontuais.py.
+
 O numero que envia e o do proprio Hugo, por um gateway nao-oficial
 (integracao_openwa.py). Por isso: desligado por padrao, teto diario,
 intervalo minimo, sem repeticao e SEM reenvio automatico (licao do erro
@@ -134,6 +138,10 @@ ORIGENS_PILOTO = (ORIGEM_CLIENTE_PILOTO, ORIGEM_CADASTRO_PILOTO, ORIGEM_TRANSPOR
 TETO_PILOTO_PADRAO = 20
 TETO_CLIENTES_PADRAO = 30
 TETO_MOTORISTAS_PADRAO = 20
+# pedido de pagamento pontual ao grupo FINANCEIRO + LOGÍSTICA (painel_agentes/pagamentos_pontuais.py):
+# teto proprio (pagamentos_pontuais.teto_diario, chave de topo), nao gasta o dos alertas
+ORIGEM_PAGAMENTO = "pagamento_pontual"
+TETO_PAGAMENTO_PADRAO = 30
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS notificacoes_whatsapp (
@@ -676,13 +684,13 @@ def _enviados_hoje(conn, agora: datetime, origem: str) -> int:
         filtro, args = "origem = ?", (ORIGEM_CLIENTE,)
     elif origem == ORIGEM_MOTORISTA:
         filtro, args = "origem = ?", (ORIGEM_MOTORISTA,)
-    elif origem in ORIGENS_ATUALIZACAO:
+    elif origem in ORIGENS_ATUALIZACAO or origem == ORIGEM_PAGAMENTO:
         filtro, args = "origem = ?", (origem,)
     elif origem in ORIGENS_PILOTO:
         filtro, args = f"origem IN ({marcas})", ORIGENS_PILOTO
     else:
-        filtro, args = (f"origem NOT IN (?, ?, ?, ?) AND origem NOT IN ({marcas})",
-                        (ORIGEM_CLIENTE, ORIGEM_MOTORISTA, *ORIGENS_ATUALIZACAO, *ORIGENS_PILOTO))
+        filtro, args = (f"origem NOT IN (?, ?, ?, ?, ?) AND origem NOT IN ({marcas})",
+                        (ORIGEM_CLIENTE, ORIGEM_MOTORISTA, *ORIGENS_ATUALIZACAO, ORIGEM_PAGAMENTO, *ORIGENS_PILOTO))
     return conn.execute(
         f"SELECT COUNT(*) FROM notificacoes_whatsapp WHERE situacao = 'enviado' AND criado_em >= ? "
         f"AND {filtro}", (inicio_do_dia, *args)).fetchone()[0]
@@ -697,6 +705,8 @@ def _teto(cfg: dict, origem: str, config: dict | None = None) -> int:
         return _inteiro(cfg.get("motoristas") or {}, "teto_diario", TETO_MOTORISTAS_PADRAO)
     if origem in ORIGENS_ATUALIZACAO:
         return _inteiro((config or {}).get("atualizacao_motoristas") or {}, "teto_diario", TETO_ATUALIZACAO_PADRAO)
+    if origem == ORIGEM_PAGAMENTO:
+        return _inteiro((config or {}).get("pagamentos_pontuais") or {}, "teto_diario", TETO_PAGAMENTO_PADRAO)
     if origem in ORIGENS_PILOTO:
         return _inteiro(cfg.get("clientes") or {}, "teto_piloto", TETO_PILOTO_PADRAO)
     return _inteiro(cfg, "teto_diario", 20)
