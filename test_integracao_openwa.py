@@ -17,7 +17,7 @@ def _resposta(status=200, corpo=None, json_invalido=False):
     resp = MagicMock()
     resp.status_code = status
     if status >= 400:
-        resp.raise_for_status.side_effect = requests.HTTPError(f"{status}")
+        resp.raise_for_status.side_effect = requests.HTTPError(f"{status}", response=resp)
     if json_invalido:
         resp.json.side_effect = ValueError("nao e json")
     else:
@@ -78,6 +78,53 @@ class TestEnviarTexto(unittest.TestCase):
                 self.assertLogs(openwa.logger, level="WARNING") as logs:
             openwa.enviar_texto(CFG, "1@g.us", "oi")
         self.assertNotIn("chave", "\n".join(logs.output))
+
+
+class TestGrupos(unittest.TestCase):
+    def test_listar_grupos_aceita_lista_e_envelope_data(self):
+        itens = [{"id": "1@g.us", "name": "A"}]
+        for corpo in (itens, {"data": itens}):
+            with patch.object(openwa.requests, "get", return_value=_resposta(corpo=corpo)) as get:
+                self.assertEqual(openwa.listar_grupos(CFG), itens)
+        args, kwargs = get.call_args
+        self.assertEqual(args[0], "http://127.0.0.1:2785/api/sessions/abc-123/groups")
+        self.assertEqual(kwargs["headers"], {"X-API-Key": "chave"})
+
+    def test_listar_grupos_falha_devolve_none(self):
+        with patch.object(openwa.requests, "get", return_value=_resposta(status=500)):
+            self.assertIsNone(openwa.listar_grupos(CFG))
+        with patch.object(openwa.requests, "get", side_effect=requests.ConnectionError("x")):
+            self.assertIsNone(openwa.listar_grupos(CFG))
+        with patch.object(openwa.requests, "get", return_value=_resposta(corpo={"erro": 1})):
+            self.assertIsNone(openwa.listar_grupos(CFG))
+        with patch.object(openwa.requests, "get") as get:
+            self.assertIsNone(openwa.listar_grupos({}))
+        get.assert_not_called()
+
+    def test_grupo_devolve_objeto_ou_none(self):
+        obj = {"id": "1@g.us", "name": "A", "participants": []}
+        with patch.object(openwa.requests, "get", return_value=_resposta(corpo=obj)) as get:
+            self.assertEqual(openwa.grupo(CFG, "1@g.us"), obj)
+        self.assertEqual(get.call_args[0][0], "http://127.0.0.1:2785/api/sessions/abc-123/groups/1@g.us")
+        with patch.object(openwa.requests, "get", return_value=_resposta(status=404)):
+            self.assertIsNone(openwa.grupo(CFG, "1@g.us"))
+
+    def test_renomear_grupo_put_subject(self):
+        with patch.object(openwa.requests, "put", return_value=_resposta(corpo={})) as put:
+            self.assertEqual(openwa.renomear_grupo(CFG, "1@g.us", "Novo"), (True, None))
+        args, kwargs = put.call_args
+        self.assertEqual(args[0], "http://127.0.0.1:2785/api/sessions/abc-123/groups/1@g.us/subject")
+        self.assertEqual(kwargs["json"], {"subject": "Novo"})
+        self.assertEqual(kwargs["headers"], {"X-API-Key": "chave"})
+        for status, motivo in ((403, "sem_permissao"), (503, "incerto"), (500, "500")):
+            with patch.object(openwa.requests, "put", return_value=_resposta(status=status)):
+                self.assertEqual(openwa.renomear_grupo(CFG, "1@g.us", "Novo"), (False, motivo))
+        with patch.object(openwa.requests, "put", side_effect=requests.ConnectionError("fora")):
+            self.assertEqual(openwa.renomear_grupo(CFG, "1@g.us", "Novo"), (False, "fora"))
+        with patch.object(openwa.requests, "put") as put:
+            self.assertFalse(openwa.renomear_grupo(CFG, "", "Novo")[0])
+            self.assertFalse(openwa.renomear_grupo(CFG, "1@g.us", "")[0])
+        put.assert_not_called()
 
 
 if __name__ == "__main__":

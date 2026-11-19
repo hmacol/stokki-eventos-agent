@@ -44,8 +44,8 @@ from flask import Flask, g, jsonify, render_template, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
-from nucleo import (auth_motorista as auth, banco, cadastro_motorista as cadastro, financeiro, operacao,
-                    ponte_vuupt, validacao_fotos)
+from nucleo import (atualizacao_motorista as atualizacao, auth_motorista as auth, banco,
+                    cadastro_motorista as cadastro, financeiro, operacao, ponte_vuupt, validacao_fotos)
 from nucleo.marketplace_remoto import ClienteMarketplace
 from nucleo.auth_motorista import AutenticacaoInvalida
 from nucleo.operacao import OperacaoInvalida
@@ -64,6 +64,11 @@ def _carregar_config() -> dict:
         return {}
     with open(caminho, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+
+def _sem_token(caminho: str) -> str:
+    """Token do link de atualização não vai pro journal."""
+    return re.sub(r"(/(?:atualizar|api/atualizacao)/)[^/?]+", r"\g<1>***", caminho)
 
 
 def _data(valor: str | None, padrao: date) -> date:
@@ -135,7 +140,7 @@ def criar_app(config: dict | None = None) -> Flask:
             ms = int((time.monotonic() - getattr(g, "inicio", time.monotonic())) * 1000)
             agente = (getattr(g, "motorista", None) or {}).get("agent_id")
             # chave_envio do cadastro pelo link não vai pro journal
-            caminho = re.sub(r"(chave_envio=)[^&]*", r"\g<1>***", request.full_path.rstrip("?"))
+            caminho = _sem_token(re.sub(r"(chave_envio=)[^&]*", r"\g<1>***", request.full_path.rstrip("?")))
             logger.info("%s %s -> %s %dms agent=%s ip=%s len=%s",
                         request.method, caminho, resp.status_code, ms, agente,
                         request.remote_addr, request.content_length)
@@ -144,17 +149,22 @@ def criar_app(config: dict | None = None) -> Flask:
     # ── erros ────────────────────────────────────────────────────────────────
     @app.errorhandler(OperacaoInvalida)
     def _erro_operacao(e):
-        logger.info("Regra recusou %s %s: %s", request.method, request.path, e.mensagem)
+        logger.info("Regra recusou %s %s: %s", request.method, _sem_token(request.path), e.mensagem)
         return jsonify({"erro": e.mensagem}), e.codigo
 
     @app.errorhandler(AutenticacaoInvalida)
     def _erro_auth(e):
-        logger.info("Auth recusou %s %s: %s", request.method, request.path, e.mensagem)
+        logger.info("Auth recusou %s %s: %s", request.method, _sem_token(request.path), e.mensagem)
         return jsonify({"erro": e.mensagem}), e.codigo
 
     @app.errorhandler(cadastro.CadastroInvalido)
     def _erro_cadastro(e):
-        logger.info("Cadastro recusou %s %s: %s", request.method, request.path, e.mensagem)
+        logger.info("Cadastro recusou %s %s: %s", request.method, _sem_token(request.path), e.mensagem)
+        return jsonify({"erro": e.mensagem}), e.codigo
+
+    @app.errorhandler(atualizacao.LinkInvalido)
+    def _erro_link(e):
+        logger.info("Link de atualizacao recusou %s %s: %s", request.method, _sem_token(request.path), e.mensagem)
         return jsonify({"erro": e.mensagem}), e.codigo
 
     @app.errorhandler(404)
@@ -305,10 +315,13 @@ def criar_app(config: dict | None = None) -> Flask:
         arq = request.files.get("arquivo")
         if arq is None or not arq.filename:
             raise cadastro.CadastroInvalido("Mande a foto no campo 'arquivo'.")
+        _exigir_link_vivo_do_rascunho(cadastro_id)
         c = cadastro.guardar_documento(conn(), cadastro_id, request.form.get("chave_envio"), request.form.get("tipo"),
                                        arq.filename, arq.read())
         # Cadastro do link: quem avisa o grupo é o processar, depois do Enviar.
-        if c["completo"] and not c.get("avisado_em") and c.get("origem") != cadastro.ORIGEM_LINK:
+        # Atualização de quem já é motorista nunca avisa o grupo de cadastro novo.
+        if (c["completo"] and not c.get("avisado_em")
+                and c.get("origem") not in (cadastro.ORIGEM_LINK, atualizacao.ORIGEM_ATUALIZACAO)):
             import notificar_whatsapp
             _avisar_whatsapp("cadastro_novo", notificar_whatsapp.texto_cadastro_motorista(c, f"{_url_painel()}/motoristas"),
                              assinatura=f"cadastro:{cadastro_id}")
@@ -337,6 +350,13 @@ def criar_app(config: dict | None = None) -> Flask:
                     f"<h1 style='font-size:20px'>{MSG_LINK_OFF}</h1></body></html>"), 503
         from regras.tipo_veiculo import TIPOS_VEICULO
         return render_template("cadastro_motorista.html", zonas=cadastro.ZONAS, dias=cadastro.DIAS, tipos=TIPOS_VEICULO)
+
+    @app.get("/como-funciona")
+    def como_funciona():
+        """Página informativa pública (operação, pagamento, app, obrigatoriedades)
+        pra quem vai se cadastrar. Não depende do link de cadastro estar ligado."""
+        from regras.tarifa_motorista import TARIFAS_PADRAO
+        return render_template("como_funciona_motorista.html", tarifas=list(TARIFAS_PADRAO.values()))
 
     @app.post("/api/cadastro-link")
     def cadastro_link_novo():
@@ -381,6 +401,65 @@ def criar_app(config: dict | None = None) -> Flask:
             logger.exception("Processar do cadastro #%s falhou (o timer retenta)", cadastro_id)
         finally:
             c.close()
+
+    # ── Atualização cadastral de quem já é motorista (link pessoal) ──────────
+    # Atrás de atualizacao_motoristas.ativo, independente do cadastro novo.
+    def _atualizacao_ativa() -> bool:
+        # mesmo critério do painel (_pagina_atualizacao_ligada): "false" entre aspas não liga
+        from regras.preferencias_motoristas import _parse_bool
+        return _parse_bool((app.config["CONFIG_PROJETO"].get("atualizacao_motoristas") or {}).get("ativo"))
+
+    def _exigir_atualizacao() -> None:
+        if not _atualizacao_ativa():
+            raise cadastro.CadastroInvalido(MSG_LINK_OFF, 503)
+
+    def _pagina_simples(texto: str, codigo: int):
+        return ("<!doctype html><html lang=pt-BR><meta charset=utf-8>"
+                "<meta name=viewport content='width=device-width,initial-scale=1'><title>Fresh Log</title>"
+                "<body style='font-family:sans-serif;padding:32px 16px;text-align:center'>"
+                f"<h1 style='font-size:20px'>{texto}</h1></body></html>"), codigo
+
+    def _exigir_link_vivo_do_rascunho(cadastro_id: int) -> None:
+        """Upload de documento de rascunho de atualização: o link dono do rascunho
+        tem de estar ligado, não cancelado, não vencido e não concluído. Outras
+        origens passam direto (a chave_envio e o status ficam com o guardar_documento)."""
+        c = conn()
+        row = c.execute("SELECT origem FROM motoristas_cadastros WHERE id = ?", (cadastro_id,)).fetchone()
+        if not row or row["origem"] != atualizacao.ORIGEM_ATUALIZACAO:
+            return
+        _exigir_atualizacao()
+        atualizacao.exigir_link_vivo_do_rascunho(c, cadastro_id)
+
+    @app.get("/atualizar/<token>")
+    def atualizacao_pagina(token):
+        if not _atualizacao_ativa():
+            return _pagina_simples(MSG_LINK_OFF, 503)
+        try:
+            atualizacao._conferir_aberto(atualizacao._link(conn(), token), atualizacao._ts(None))
+        except atualizacao.LinkInvalido:
+            return _pagina_simples(atualizacao.MSG_LINK_INVALIDO, 404)   # sem dizer o motivo
+        from regras.tipo_veiculo import TIPOS_VEICULO
+        return render_template("cadastro_motorista.html", modo="atualizar", token=token, tipos=TIPOS_VEICULO,
+                               zonas=[], dias=[])
+
+    @app.post("/api/atualizacao/<token>/abrir")
+    def atualizacao_abrir(token):
+        _exigir_atualizacao()
+        _freio("atualizacao")
+        return jsonify(atualizacao.abrir(conn(), token, corpo().get("cpf")))
+
+    @app.post("/api/atualizacao/<token>/dados")
+    def atualizacao_dados(token):
+        _exigir_atualizacao()
+        _freio("atualizacao")
+        d = corpo()
+        return jsonify(atualizacao.gravar(conn(), token, d.get("chave_envio"), d))
+
+    @app.post("/api/atualizacao/<token>/concluir")
+    def atualizacao_concluir(token):
+        _exigir_atualizacao()
+        _freio("atualizacao")
+        return jsonify(atualizacao.concluir(conn(), app.config["CONFIG_PROJETO"], token, corpo().get("chave_envio")))
 
     @app.post("/api/push-token")
     @requer_motorista
@@ -641,6 +720,20 @@ def criar_app(config: dict | None = None) -> Flask:
         if not isinstance(pontos, list):
             raise OperacaoInvalida("Envie {'pontos': [...]}.")
         return jsonify({"novos": operacao.registrar_gps(conn(), agent_id(), pontos[:2000])})
+
+    @app.get("/abrir/ofertas")
+    def abrir_ofertas():
+        """Link do aviso de rota disponivel (WhatsApp so torna clicavel https):
+        abre o app na aba Ofertas. Pagina fixa, sem dado nenhum."""
+        destino = "freshlogmotorista://ofertas"
+        return ("<!doctype html><html lang=pt-BR><meta charset=utf-8>"
+                "<meta name=viewport content='width=device-width,initial-scale=1'><title>Fresh Log</title>"
+                f"<meta http-equiv=refresh content='0;url={destino}'>"
+                "<body style='font-family:sans-serif;padding:32px 16px;text-align:center'>"
+                "<h1 style='font-size:20px'>Rota disponível</h1>"
+                f"<p><a href='{destino}' style='display:inline-block;padding:14px 22px;background:#1b7f4c;color:#fff;"
+                "border-radius:10px;text-decoration:none;font-weight:700'>Abrir o app Fresh Log</a></p>"
+                "<p style='color:#666'>Se não abrir, entre no app e toque em Ofertas.</p></body></html>")
 
     @app.get("/api/ofertas")
     @requer_motorista

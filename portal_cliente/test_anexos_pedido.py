@@ -206,6 +206,24 @@ class Gravacao(Base):
         self.assertEqual(tuple(conn.execute("SELECT tipo, numero_nf, cnpj_contraparte FROM documentos_processados").fetchone()),
                          ("Outro", None, None))
 
+    def test_xml_da_nfe_entra_no_pedido_um_so_e_fica_fora_do_romaneio(self):
+        conn = self._conn()
+        envio = self._envio(conn, "5001", codigo="PS-9", status="CRIADO")
+        previa = ax.guardar_previa("nota.xml", _xml_nf(5001), CNPJ)
+        self.assertEqual((previa["tipo"], previa["numero_nf"]), (ax.TIPO_XML, "5001"))
+        ax.anexar(conn, envio, [{"token": previa["token"]}], "cliente")
+        linha = conn.execute("SELECT tipo, arquivo FROM portal_envios_anexos").fetchone()
+        self.assertEqual(linha[0], ax.TIPO_XML)
+        self.assertEqual((self.raiz / "x" / "_anexos" / linha[1]).read_bytes(), _xml_nf(5001))
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM documentos_processados").fetchone()[0], 0)
+        outro = ax.guardar_previa("outra.xml", _xml_nf(5002), CNPJ)
+        with self.assertRaises(ep.ErroEnvio):
+            ax.anexar(conn, envio, [{"token": outro["token"]}], "cliente")
+
+    def test_xml_que_nao_e_nfe_e_recusado(self):
+        with self.assertRaises(ep.ErroEnvio):
+            ax.guardar_previa("qualquer.xml", b"<a><b/></a>", CNPJ)
+
     def test_recusa_pdf_com_paginas_demais(self):
         from pypdf import PdfWriter
         w = PdfWriter()
@@ -350,6 +368,24 @@ class Rotas(Base):
         outro = self.tc.post("/api/envios/anexos/ler", data={"arquivos": [(io.BytesIO(_pdf(40)), "b.pdf")]},
                              content_type="multipart/form-data").get_json()["anexos"][0]["token"]
         self.assertEqual(self.tc.post(url, json={"anexos": [outro], "conferido": True}).status_code, 409)
+
+    def test_xml_anexado_pela_rota_baixa_como_arquivo(self):
+        conn = self._conn()
+        envio = self._envio(conn, "5001", codigo="PS-78", status="CRIADO")
+        conn.commit()
+        ler = self.tc.post("/api/envios/anexos/ler", data={"arquivos": [(io.BytesIO(_xml_nf(5001)), "nota.xml")],
+                                                            "pedidos": '[{"chave": "%d"}]' % envio["id"]},
+                           content_type="multipart/form-data").get_json()
+        self.assertEqual(ler["anexos"][0]["tipo"], ax.TIPO_XML)
+        url = f"/api/envios/{envio['id']}/anexos"
+        self.assertEqual(self.tc.post(url, json={"anexos": [ler["anexos"][0]["token"]], "conferido": True}).status_code, 200)
+        anexo_id = conn.execute("SELECT id FROM portal_envios_anexos").fetchone()[0]
+        baixado = self.tc.get(f"{url}/{anexo_id}")
+        self.assertEqual((baixado.status_code, baixado.mimetype), (200, "application/xml"))
+        self.assertIn("attachment", baixado.headers["Content-Disposition"])
+        baixado.close()
+        lista = self.tc.get("/api/envios").get_json()["envios"]
+        self.assertEqual([a["tipo"] for a in lista[0]["anexos"]], [ax.TIPO_XML])
 
     def test_pedido_de_outro_embarcador_nao_aceita_anexo(self):
         conn = self._conn()

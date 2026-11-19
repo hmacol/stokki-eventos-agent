@@ -69,6 +69,7 @@ def cancelar_servico_completo(token: str, service_id: int, vuupt=None) -> dict:
                 "erro": f"servico {service_id} esta '{atual['status']}' na Vuupt: nao cancela sozinho"}
 
     rascunho_id, status_rascunho = rascunho_do_servico(service_id)
+    preparo = {}
     if rascunho_id and status_rascunho == rascunhos_rota.STATUS_ENVIADO:
         preparo = rascunhos_rota.preparar_cancelamento_de_parada(rascunho_id, service_id, token)
         if not preparo.get("ok"):
@@ -77,7 +78,9 @@ def cancelar_servico_completo(token: str, service_id: int, vuupt=None) -> dict:
     try:
         vuupt.cancelar_servico_oficial(service_id)
     except VuuptAPIError as e:
-        return {"ok": False, "ja_estava": False, "erro": f"Vuupt: {e}"}
+        # saiu de rota iniciada e nao cancelou: esta no carro -> Retornando (mesmo caso do Planejamento)
+        aviso = rascunhos_rota.retornando_se_cancelamento_falhou(preparo, service_id, str(e), "cancelar_servico")
+        return {"ok": False, "ja_estava": False, "erro": f"Vuupt: {e}" + (f" — {aviso}" if aviso else "")}
 
     if rascunho_id and status_rascunho != rascunhos_rota.STATUS_ENVIADO:
         rascunhos_rota.remover_parada(rascunho_id, service_id)

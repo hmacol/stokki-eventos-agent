@@ -171,6 +171,21 @@ class TestGerar(unittest.TestCase):
                          "https://homolog.freshhub.com.br/insucesso/x")
         self.assertEqual(cfg["externo"]["url_base"], "https://confirmacao.freshhub.com.br/")
 
+    def test_caminho_da_producao_vira_da_homologacao(self):
+        """O usuario homolog nao le /opt/stokki-eventos (dados/ fechado): planilha com caminho da
+        producao derrubava o Planejamento com Errno 13 (visto 11/11)."""
+        prod = {"complexidade_entrega": {"planilha": "/opt/stokki-eventos/dados/BD_CLIENTES.xlsx"},
+                "motoristas": {"planilha": "/opt/stokki-eventos/dados/BD_MOTORISTAS.xlsx",
+                               "json_fallback": "dados/motoristas.json"},
+                "pastas": ["/opt/stokki-eventos", "/opt/stokki-eventos-velho/x", "/opt/agente-importacao-stokki/y"]}
+        cfg, _, _ = _gerar(prod)
+        self.assertEqual(cfg["complexidade_entrega"]["planilha"], "/opt/stokki-homolog/dados/BD_CLIENTES.xlsx")
+        self.assertEqual(cfg["motoristas"]["planilha"], "/opt/stokki-homolog/dados/BD_MOTORISTAS.xlsx")
+        self.assertEqual(cfg["motoristas"]["json_fallback"], "dados/motoristas.json")
+        self.assertEqual(cfg["pastas"], ["/opt/stokki-homolog", "/opt/stokki-eventos-velho/x",
+                                         "/opt/agente-importacao-stokki/y"])
+        self.assertEqual(prod["complexidade_entrega"]["planilha"], "/opt/stokki-eventos/dados/BD_CLIENTES.xlsx")
+
     def test_secao_homologacao_com_cliente_teste(self):
         cfg, _, _ = _gerar({})
         self.assertEqual(cfg["homologacao"], {"portal_cnpjs_permitidos": ["00000000000191"]})

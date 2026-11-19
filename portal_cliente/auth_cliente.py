@@ -40,6 +40,7 @@ MAX_TENTATIVAS = 5
 BLOQUEIO_MINUTOS = 15
 LINK_PIN_SEGUNDOS = 24 * 3600
 _SALT_LINK_PIN = "portal-cliente-definir-pin"
+_ESCOPO_CONTA_EXCLUIDA = "conta_excluida"
 
 
 class AutenticacaoInvalida(Exception):
@@ -177,7 +178,7 @@ def listar_embarcadores(conn: sqlite3.Connection) -> list[dict]:
     (pra CLI de gestão)."""
     rows = conn.execute("""
         SELECT i.cnpj_embarcador AS cnpj, i.sender_id, i.apelido, i.nome_remetente, i.email,
-               c.pin_hash, c.ativo, c.ultimo_login_em
+               c.pin_hash, c.ativo, c.ultimo_login_em, c.trocar_pin
         FROM interno i LEFT JOIN clientes_portal c ON c.cnpj = i.cnpj_embarcador
         WHERE i.sender_id IS NOT NULL
         ORDER BY COALESCE(i.apelido, i.nome_remetente)
@@ -189,6 +190,7 @@ def listar_embarcadores(conn: sqlite3.Connection) -> list[dict]:
         "tem_pin": bool(r["pin_hash"]),
         "ativo": r["ativo"] if r["ativo"] is not None else None,
         "ultimo_login_em": r["ultimo_login_em"],
+        "trocar_pin": bool(r["trocar_pin"]),
     } for r in rows]
 
 
@@ -336,6 +338,22 @@ def definir_ativo(conn: sqlite3.Connection, cnpj: str, ativo: bool) -> bool:
     return cur.rowcount > 0
 
 
+def excluir_conta(conn: sqlite3.Connection, cnpj: str) -> bool:
+    """Apaga a conta do portal (16/11, tela /embarcadores do painel): o login
+    para de existir e a sessao aberta cai no proximo request. O embarcador
+    continua em `interno` e o grupo economico (portal_grupos) fica como esta,
+    entao criar a conta de novo devolve o mesmo acesso.
+    Sem a linha, a versao da conta volta a ser "novo": a marca conta_excluida
+    (portal_tentativas guarda 1 dia, o mesmo prazo do link) faz o
+    validar_token_definir_pin recusar link emitido antes da exclusao."""
+    cnpj = normalizar_cnpj(cnpj)
+    cur = conn.execute("DELETE FROM clientes_portal WHERE cnpj = ?", (cnpj,))
+    conn.commit()
+    if cur.rowcount > 0:
+        registrar_tentativa(conn, _ESCOPO_CONTA_EXCLUIDA, cnpj)
+    return cur.rowcount > 0
+
+
 def autenticar(conn: sqlite3.Connection, cnpj: str, pin: str) -> dict:
     """CNPJ + PIN com trava de tentativas. Mensagem sempre genérica."""
     generico = "CNPJ ou PIN incorretos."
@@ -398,7 +416,8 @@ def gerar_token_definir_pin(secret: str, conn: sqlite3.Connection, cnpj: str) ->
 def validar_token_definir_pin(secret: str, conn: sqlite3.Connection, token: str) -> dict:
     """Devolve {estado: ok|expirado|invalido|usado, cnpj, embarcador}."""
     try:
-        payload = URLSafeTimedSerializer(secret).loads(token, salt=_SALT_LINK_PIN, max_age=LINK_PIN_SEGUNDOS)
+        payload, emitido = URLSafeTimedSerializer(secret).loads(
+            token, salt=_SALT_LINK_PIN, max_age=LINK_PIN_SEGUNDOS, return_timestamp=True)
     except SignatureExpired:
         return {"estado": "expirado"}
     except BadSignature:
@@ -408,5 +427,10 @@ def validar_token_definir_pin(secret: str, conn: sqlite3.Connection, token: str)
     if not emb:
         return {"estado": "invalido"}
     if payload.get("v") != versao_conta(buscar_conta(conn, cnpj)):
+        return {"estado": "usado"}
+    # Conta excluida depois da emissao do link (16/11): o link antigo nao recria a conta.
+    excluida = conn.execute("SELECT MAX(criado_em) FROM portal_tentativas WHERE escopo = ? AND chave = ?",
+                            (_ESCOPO_CONTA_EXCLUIDA, cnpj)).fetchone()[0]
+    if excluida and emitido.astimezone().strftime("%Y-%m-%d %H:%M:%S") <= excluida:
         return {"estado": "usado"}
     return {"estado": "ok", "cnpj": cnpj, "embarcador": emb}

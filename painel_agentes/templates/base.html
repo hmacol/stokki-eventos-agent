@@ -145,13 +145,19 @@
   /* Sem largura pro rótulo, o cabeçalho do grupo vira só um divisor --
      o agrupamento continua visível, sem texto cortado. */
   html.sidebar-recolhida .sidebar nav .grupo-titulo { display: none; }
+  /* Sanfona recolhida (17/11): o cabeçalho da área vira só o ícone;
+     clicar nele abre os ícones das telas logo abaixo. */
+  html.sidebar-recolhida .sidebar nav summary { justify-content: center; padding: 9px 0; position: relative; }
+  html.sidebar-recolhida .sidebar nav summary .rotulo,
+  html.sidebar-recolhida .sidebar nav summary .seta { display: none; }
+  html.sidebar-recolhida .sidebar nav details.grupo > a { margin-left: 10px; }
   html.sidebar-recolhida .sidebar nav .grupo + .grupo {
     margin-top: 9px;
     padding-top: 9px;
     border-top: 1px solid rgba(255,255,255,0.09);
   }
   /* Recolhido não cabe número: o badge vira um ponto em cima do ícone. */
-  html.sidebar-recolhida .sidebar nav a .badge {
+  html.sidebar-recolhida .sidebar nav .badge {
     position: absolute;
     top: 4px;
     right: 9px;
@@ -168,7 +174,7 @@
     background: #C7C7E0;
     border: 1.5px solid var(--primaria);
   }
-  html.sidebar-recolhida .sidebar nav a .badge.critico { background: var(--erro); }
+  html.sidebar-recolhida .sidebar nav .badge.critico { background: var(--erro); }
   html.sidebar-recolhida .sidebar .rodape { padding: 12px 8px 16px; }
   html.sidebar-recolhida .sidebar .rodape .usuario { display: none; }
   html.sidebar-recolhida .sidebar .rodape .botoes { flex-direction: column; }
@@ -208,6 +214,10 @@
     html.sidebar-recolhida .sidebar nav a { justify-content: flex-start; padding: 9px 14px; }
     html.sidebar-recolhida .sidebar nav a .rotulo { display: block; }
     html.sidebar-recolhida .sidebar nav .grupo-titulo { display: block; }
+    html.sidebar-recolhida .sidebar nav summary { justify-content: flex-start; padding: 9px 14px; }
+    html.sidebar-recolhida .sidebar nav summary .rotulo,
+    html.sidebar-recolhida .sidebar nav summary .seta { display: block; }
+    html.sidebar-recolhida .sidebar nav details.grupo > a { margin-left: 24px; }
     html.sidebar-recolhida .sidebar .rodape .usuario { display: flex; }
     /* O botao de recolher e coisa de desktop; no celular quem fecha e o
        ☰, o veu ou o Esc. */

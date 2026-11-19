@@ -1298,6 +1298,7 @@ async function confirmarExclusaoChip(botao) {
     if (!resp.ok) throw new Error(dados.erro || "Falha ao excluir da rota.");
     fecharModalExcluir();
     carregarDados();
+    if (dados.aviso) alert(dados.aviso);
   } catch (e) {
     alert(`Falha ao excluir da rota: ${e.message}`);
     botao.disabled = false;

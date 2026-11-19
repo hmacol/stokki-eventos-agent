@@ -27,6 +27,7 @@ import json
 import logging
 import shutil
 import sqlite3
+import sys
 import unicodedata
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -34,6 +35,12 @@ from pathlib import Path
 import grupos_equipe
 from insucesso_entrega.motivos_falha import MOTIVOS_FALHA
 from nucleo.normalizacao import normalizar_codigo
+
+_RAIZ = Path(__file__).parent.parent
+for _p in (_RAIZ, _RAIZ / "roteirizacao"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+import pedidos_retornando  # noqa: E402
 
 logger = logging.getLogger("painel.retornos")
 
@@ -102,6 +109,7 @@ def conectar(caminho=None) -> sqlite3.Connection:
     conn.execute("INSERT OR IGNORE INTO retornos_config (chave, valor) VALUES ('inicio', ?)",
                  (date.today().isoformat(),))
     conn.commit()
+    pedidos_retornando.garantir_tabela(conn)  # fora de transacao aberta (executescript comita)
     return conn
 
 
@@ -166,26 +174,60 @@ _SQL_RETORNOS = """
     SELECT p.id AS parada_id, p.rota_id, p.service_id, p.codigo, p.destinatario_nome, p.remetente_nome,
            p.volume_caixas, p.situacao, p.motivo_id, p.motivo_texto, p.failed_reason_id, p.completed_at,
            r.motorista_nome, r.motorista_cpf, r.nome AS rota_nome, r.agent_id,
-           COALESCE(substr(p.completed_at, 1, 10), r.data_rota) AS dia_insucesso
+           CASE WHEN pr.id IS NOT NULL THEN substr(pr.criado_em, 1, 10)
+                ELSE COALESCE(substr(p.completed_at, 1, 10), r.data_rota) END AS dia_insucesso,
+           pr.id IS NOT NULL AS retirado, pr.motivo AS retirado_motivo
     FROM nucleo_paradas p
     JOIN nucleo_rotas r ON r.id = p.rota_id
     LEFT JOIN retornos_recebidos rr ON rr.parada_id = p.id
-    WHERE p.situacao IN ('INSUCESSO', 'PARCIAL')
+    LEFT JOIN pedidos_retornando pr ON pr.parada_id = p.id AND pr.recebido_em IS NULL
+    WHERE (p.situacao IN ('INSUCESSO', 'PARCIAL') OR pr.id IS NOT NULL)
 """
 
 
 def _pedido(row, nomes_agentes: dict[int, str]) -> dict:
-    parcial = row["situacao"] == "PARCIAL"
+    retirado = bool(row["retirado"])  # tirado de rota iniciada: esta no carro (pedidos_retornando)
+    parcial = row["situacao"] == "PARCIAL" and not retirado
+    tipo = "RETIRADO" if retirado else ("PARCIAL" if parcial else "INSUCESSO")
     agente = row["agent_id"]
     nome = (row["motorista_nome"] or nomes_agentes.get(agente)
             or (f"Agente {agente}" if agente else "Sem motorista"))
     return {"parada_id": row["parada_id"], "rota_id": row["rota_id"], "service_id": row["service_id"],
             "codigo": row["codigo"], "destinatario": row["destinatario_nome"] or "",
-            "embarcador": row["remetente_nome"] or "", "parcial": parcial,
+            "embarcador": row["remetente_nome"] or "", "parcial": parcial, "tipo": tipo,
             "caixas_esperadas": None if parcial else row["volume_caixas"],
-            "motivo": row["motivo_texto"] or "", "baixa_em": row["completed_at"] or "",
+            "motivo": (f"Retirado da rota: {row['retirado_motivo'] or ''}".strip() if retirado
+                       else row["motivo_texto"] or ""), "baixa_em": row["completed_at"] or "",
             "dia_insucesso": row["dia_insucesso"], "rota_nome": row["rota_nome"] or "",
-            "motorista_nome": nome, "motorista_cpf": row["motorista_cpf"] or "", "agent_id": agente}
+            "motorista_nome": nome, "motorista_cpf": row["motorista_cpf"] or "", "agent_id": agente,
+            "retornando_id": None, "chave": str(row["parada_id"])}
+
+
+# Retornando que o nucleo nunca espelhou (pedido incluido na rota enviada e
+# tirado antes do sync): sem parada, a chave da tela e do recebimento e o id
+# de pedidos_retornando ("retornando_id", chave "r<id>"), que nao colide com
+# parada_id. retornos_recebidos continua so com parada (NOT NULL UNIQUE).
+_SQL_RETORNANDO_SEM_PARADA = """
+    SELECT pr.id, pr.service_id, pr.codigo, pr.motivo, pr.criado_em, pr.agent_id, pr.motorista_nome,
+           (SELECT r.nome FROM nucleo_rotas r WHERE r.vuupt_route_id = pr.vuupt_route_id
+            ORDER BY r.id DESC LIMIT 1) AS rota_nome,
+           (SELECT r.motorista_cpf FROM nucleo_rotas r WHERE r.vuupt_route_id = pr.vuupt_route_id
+            ORDER BY r.id DESC LIMIT 1) AS motorista_cpf
+    FROM pedidos_retornando pr
+    WHERE pr.recebido_em IS NULL AND pr.parada_id IS NULL
+"""
+
+
+def _pedido_sem_parada(row, nomes_agentes: dict[int, str]) -> dict:
+    agente = row["agent_id"]
+    nome = (row["motorista_nome"] or nomes_agentes.get(agente)
+            or (f"Agente {agente}" if agente else "Sem motorista"))
+    return {"parada_id": None, "rota_id": None, "service_id": row["service_id"], "codigo": row["codigo"],
+            "destinatario": "", "embarcador": "", "parcial": False, "tipo": "RETIRADO",
+            "caixas_esperadas": None, "motivo": f"Retirado da rota: {row['motivo'] or ''}".strip(),
+            "baixa_em": "", "dia_insucesso": (row["criado_em"] or "")[:10], "rota_nome": row["rota_nome"] or "",
+            "motorista_nome": nome, "motorista_cpf": row["motorista_cpf"] or "", "agent_id": agente,
+            "retornando_id": row["id"], "chave": f"r{row['id']}"}
 
 
 def _chave_motorista(p: dict) -> str:
@@ -214,14 +256,20 @@ def _eh_lalamove(row, agent_ids_excluir) -> bool:
 
 
 def _retornos_pendentes(conn, hoje: date, dias: int, agent_ids_excluir=frozenset()) -> list[dict]:
+    pedidos_retornando.resolver_pendentes(conn)  # parada que o nucleo espelhou depois da retirada
     ids_nc = _ids_nao_coletado(conn)
     nomes = _nomes_agentes(conn)
     desde = max((hoje - timedelta(days=dias)).isoformat(), inicio(conn))
     rows = conn.execute(_SQL_RETORNOS + " AND rr.id IS NULL").fetchall()
-    return [_pedido(r, nomes) for r in rows
-            if r["dia_insucesso"] and desde <= r["dia_insucesso"] <= hoje.isoformat()
-            and not eh_nao_coletado(r["failed_reason_id"], r["motivo_id"], r["motivo_texto"], ids_nc)
-            and not _eh_lalamove(r, agent_ids_excluir)]
+    # Retirado (Retornando) esta no carro e segura o pedido ate ser recebido:
+    # nao some pela janela de dias nem pelo filtro da Lalamove.
+    pedidos = [_pedido(r, nomes) for r in rows
+               if r["retirado"] or (
+                   r["dia_insucesso"] and desde <= r["dia_insucesso"] <= hoje.isoformat()
+                   and not eh_nao_coletado(r["failed_reason_id"], r["motivo_id"], r["motivo_texto"], ids_nc)
+                   and not _eh_lalamove(r, agent_ids_excluir))]
+    pedidos += [_pedido_sem_parada(r, nomes) for r in conn.execute(_SQL_RETORNANDO_SEM_PARADA)]
+    return pedidos
 
 
 def listar_pendentes(conn, hoje: date, dias: int = JANELA_DIAS, agent_ids_excluir=frozenset()) -> list[dict]:
@@ -296,7 +344,7 @@ def _paradas_por_id(conn, ids: list[int]) -> dict[int, sqlite3.Row]:
     if not ids:
         return {}
     marcas = ",".join("?" * len(ids))
-    sql = _SQL_RETORNOS.replace("WHERE p.situacao", f"WHERE p.id IN ({marcas}) AND p.situacao")
+    sql = _SQL_RETORNOS.replace("WHERE (p.situacao", f"WHERE p.id IN ({marcas}) AND (p.situacao")
     sql = sql.replace("SELECT p.id AS parada_id", "SELECT rr.id AS recebido_id, p.id AS parada_id")
     return {r["parada_id"]: r for r in conn.execute(sql, ids)}
 
@@ -315,21 +363,31 @@ def registrar_descarga(conn, *, descarga_id: int, itens: list[dict], recebedor: 
     if not assinatura:
         raise ErroRetorno("Falta a assinatura do motorista.")
 
-    ids = [int(i["parada_id"]) for i in itens]
-    if len(set(ids)) != len(ids):
+    itens = _resolver_itens_retornando(conn, itens)
+    ids = [int(i["parada_id"]) for i in itens if i["parada_id"] is not None]
+    ids_retornando = [int(i["retornando_id"]) for i in itens if i["parada_id"] is None]
+    if len(set(ids)) != len(ids) or len(set(ids_retornando)) != len(ids_retornando):
         raise ErroRetorno("Pedido repetido na descarga.")
     paradas = _paradas_por_id(conn, ids)
+    sem_parada = _retornando_sem_parada_por_id(conn, ids_retornando)
     ids_nc = _ids_nao_coletado(conn)
     nomes = _nomes_agentes(conn)
     validos = set(motivos_validos())
     linhas, motoristas = [], set()
     for item in itens:
-        row = paradas.get(int(item["parada_id"]))
-        if row is None or eh_nao_coletado(row["failed_reason_id"], row["motivo_id"], row["motivo_texto"], ids_nc):
-            raise ErroRetorno("Pedido não está na lista de retornos.")
-        p = _pedido(row, nomes)
-        if row["recebido_id"] is not None:
-            raise ErroRetorno(f"{p['codigo']} já foi recebido.")
+        if item["parada_id"] is None:
+            row_sp = sem_parada.get(int(item["retornando_id"]))
+            if row_sp is None:
+                raise ErroRetorno("Pedido não está na lista de retornos.")
+            p = _pedido_sem_parada(row_sp, nomes)
+        else:
+            row = paradas.get(int(item["parada_id"]))
+            if row is None or (not row["retirado"] and eh_nao_coletado(
+                    row["failed_reason_id"], row["motivo_id"], row["motivo_texto"], ids_nc)):
+                raise ErroRetorno("Pedido não está na lista de retornos.")
+            p = _pedido(row, nomes)
+            if row["recebido_id"] is not None:
+                raise ErroRetorno(f"{p['codigo']} já foi recebido.")
         motoristas.add(_chave_motorista(p))
         caixas = item.get("caixas_recebidas")
         if caixas is None or caixas == "":
@@ -357,6 +415,8 @@ def registrar_descarga(conn, *, descarga_id: int, itens: list[dict], recebedor: 
     tem_divergencia = any(x["divergente"] for x in linhas)
     try:
         for x in linhas:
+            if x["parada_id"] is None:
+                continue  # sem parada no nucleo: so baixa o Retornando (abaixo)
             conn.execute("""
                 INSERT INTO retornos_recebidos (descarga_id, parada_id, rota_id, service_id, codigo, embarcador,
                     parcial, caixas_esperadas, caixas_recebidas, avaria, fotos_avaria, motivo_original,
@@ -366,6 +426,9 @@ def registrar_descarga(conn, *, descarga_id: int, itens: list[dict], recebedor: 
                   int(x["parcial"]), x["caixas_esperadas"], x["caixas_recebidas"], int(x["avaria"]),
                   json.dumps(x["fotos_avaria"]), x["motivo"], x["motivo_confirmado"], int(x["motivo_corrigido"]),
                   x["observacao"], int(x["divergente"])))
+        pedidos_retornando.marcar_recebidos(conn, ids, descarga_id)
+        if pedidos_retornando.marcar_recebidos_por_ids(conn, ids_retornando, descarga_id) != len(ids_retornando):
+            raise sqlite3.IntegrityError("retornando ja recebido")  # cai no rollback abaixo
         conn.execute("""
             UPDATE retornos_descargas SET motorista_nome = ?, motorista_cpf = ?, recebedor = ?, usuario = ?,
                 recebido_em = ?, fotos_carga = ?, assinatura = ?, tem_divergencia = ?
@@ -379,8 +442,35 @@ def registrar_descarga(conn, *, descarga_id: int, itens: list[dict], recebedor: 
         raise ErroRetorno("Um dos pedidos acabou de ser recebido por outra pessoa. Atualize a tela.")
 
     return {"descarga_id": descarga_id, "motorista_nome": primeiro["motorista_nome"],
-            "divergentes": [x for x in linhas if x["divergente"]],
-            "parciais": [x for x in linhas if x["parcial"]]}
+            "divergentes": [x for x in linhas if x["divergente"] and x["parada_id"] is not None],
+            "parciais": [x for x in linhas if x["parcial"]],
+            "sem_parada": [x for x in linhas if x["parada_id"] is None]}
+
+
+def _resolver_itens_retornando(conn, itens: list[dict]) -> list[dict]:
+    """Item que veio so com retornando_id: se o nucleo ja espelhou a parada
+    (resolver_pendentes acha agora), vira item comum de parada_id."""
+    if all(i.get("parada_id") not in (None, "") for i in itens):
+        return [{**i, "parada_id": int(i["parada_id"])} for i in itens]
+    pedidos_retornando.resolver_pendentes(conn)
+    saida = []
+    for i in itens:
+        if i.get("parada_id") not in (None, ""):
+            saida.append({**i, "parada_id": int(i["parada_id"])})
+            continue
+        if i.get("retornando_id") in (None, ""):
+            raise ErroRetorno("Pedido não está na lista de retornos.")
+        row = conn.execute("SELECT parada_id FROM pedidos_retornando WHERE id = ? AND recebido_em IS NULL",
+                           (int(i["retornando_id"]),)).fetchone()
+        saida.append({**i, "parada_id": row["parada_id"] if row else None})
+    return saida
+
+
+def _retornando_sem_parada_por_id(conn, ids: list[int]) -> dict[int, sqlite3.Row]:
+    if not ids:
+        return {}
+    marcas = ",".join("?" * len(ids))
+    return {r["id"]: r for r in conn.execute(_SQL_RETORNANDO_SEM_PARADA + f" AND pr.id IN ({marcas})", ids)}
 
 
 def _problemas(x: dict) -> list[str]:
@@ -396,9 +486,11 @@ def _problemas(x: dict) -> list[str]:
 
 def texto_alerta_descarga(resultado: dict, recebedor: str) -> str | None:
     """Mensagem do grupo Alertas pra uma descarga, ou None se nao ha o que avisar."""
-    if not resultado["divergentes"] and not resultado["parciais"]:
+    sem_parada = resultado.get("sem_parada") or []
+    if not resultado["divergentes"] and not resultado["parciais"] and not sem_parada:
         return None
-    titulo = "Retorno com divergência" if resultado["divergentes"] else "Retorno parcial recebido"
+    titulo = ("Retorno com divergência" if resultado["divergentes"]
+              else "Retorno parcial recebido" if resultado["parciais"] else "Retirado recebido sem parada no núcleo")
     linhas = [f"{titulo} · {resultado['motorista_nome']}", f"Recebido por {recebedor}"]
     vistos = set()
     for x in resultado["divergentes"] + resultado["parciais"]:
@@ -409,6 +501,14 @@ def texto_alerta_descarga(resultado: dict, recebedor: str) -> str | None:
         if x["parcial"]:
             partes.append(f"{x['caixas_recebidas']} cx voltaram · {TEXTO_PARCIAL}")
         linha = f"{x['codigo']} · {x['embarcador'] or 'sem embarcador'} · " + ", ".join(partes)
+        if x["observacao"]:
+            linha += f" · obs: {x['observacao']}"
+        linhas.append(linha)
+    for x in sem_parada:
+        # Sem parada no nucleo nao ha linha em retornos_recebidos: so o Retornando foi baixado.
+        partes = [f"{x['caixas_recebidas']} cx"] + _problemas(x)
+        linha = (f"{x['codigo']} · " + ", ".join(partes)
+                 + " · Retornando baixado sem registro em Recebidos (o núcleo não tem a parada da rota)")
         if x["observacao"]:
             linha += f" · obs: {x['observacao']}"
         linhas.append(linha)
@@ -484,7 +584,8 @@ def pendentes_atrasados(conn, hoje: date, dias: int = JANELA_DIAS, agent_ids_exc
     cobrados no grupo (cada um e cobrado uma vez so)."""
     alertados = {r[0] for r in conn.execute("SELECT parada_id FROM retornos_alertas_atraso")}
     pedidos = [p for p in _retornos_pendentes(conn, hoje, dias, agent_ids_excluir)
-               if p["dia_insucesso"] < hoje.isoformat() and p["parada_id"] not in alertados]
+               if p["parada_id"] is not None  # sem parada nao tem chave de "ja cobrado": fica so na lista
+               and p["dia_insucesso"] < hoje.isoformat() and p["parada_id"] not in alertados]
     return _agrupar(pedidos, hoje)
 
 

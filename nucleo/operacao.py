@@ -27,7 +27,7 @@ import math
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
-from nucleo import banco, pedidos as nucleo_pedidos, ponte_vuupt, tempos, validacao_fotos
+from nucleo import banco, ofertas_rota_enviada, pedidos as nucleo_pedidos, ponte_vuupt, tempos, validacao_fotos
 from nucleo.rotas import registrar_evento
 
 # Passos da parada no app (Hugo, 26/08): DESLOCAMENTO ("Iniciar deslocamento",
@@ -108,6 +108,17 @@ def _exigir_provedor_app(rota: sqlite3.Row):
         raise OperacaoInvalida("Essa rota é operada pelo app da VUUPT -- registre a entrega por lá.", 409)
 
 
+def rota_liberada(rota: sqlite3.Row) -> bool:
+    """Rota so abre pro motorista as 00h do dia dela (igual a Vuupt, Hugo
+    16/11): na vespera ele so ve que tem rota confirmada, sem paradas."""
+    return str(rota["data_rota"] or "") <= date.today().isoformat()
+
+
+def _exigir_liberada(rota: sqlite3.Row):
+    if not rota_liberada(rota):
+        raise OperacaoInvalida("Essa rota ainda não foi liberada -- ela abre às 00h do dia da rota.", 409)
+
+
 def listar_rotas_motorista(conn: sqlite3.Connection, agent_id: int | None, de: date, ate: date) -> list[dict]:
     if agent_id is None:
         return []
@@ -116,12 +127,20 @@ def listar_rotas_motorista(conn: sqlite3.Connection, agent_id: int | None, de: d
         WHERE agent_id = ? AND data_rota BETWEEN ? AND ? AND status != ?
         ORDER BY data_rota, start_at, nome
     """, (agent_id, de.isoformat(), ate.isoformat(), banco.ROTA_CANCELADA)).fetchall()
-    return [montar_rota(conn, r) for r in rows]
+    escondidas = ofertas_rota_enviada.rotas_escondidas(conn, agent_id)   # recusou e a rota foi pros outros
+    return [montar_rota(conn, r) for r in rows if r["id"] not in escondidas]
 
 
 def montar_rota(conn: sqlite3.Connection, rota: sqlite3.Row) -> dict:
+    if not rota_liberada(rota):
+        # So o aviso de que ha rota no dia: nada de paradas, nome ou valores.
+        return {"id": rota["id"], "data_rota": rota["data_rota"], "start_at": rota["start_at"],
+                "status": rota["status"], "nome": None, "liberada": False, "editavel": False,
+                "total_paradas": 0, "entregues": 0, "insucessos": 0,
+                "paradas": [], "pedagios": [], "confirmacao": None}
     d = dict(rota)
     d.pop("dados_json", None)
+    d["liberada"] = True
     d["editavel"] = rota_editavel(rota)
     paradas = conn.execute("SELECT * FROM nucleo_paradas WHERE rota_id = ? ORDER BY ordem", (rota["id"],)).fetchall()
     d["paradas"] = [montar_parada(conn, p) for p in paradas]
@@ -376,8 +395,12 @@ def _atualizar_confirmacao_vuupt(conn: sqlite3.Connection, rota: sqlite3.Row, st
 def aceitar_rota(conn: sqlite3.Connection, rota_id: int, agent_id: int, ocorrido_em: str | None = None,
                  latitude=None, longitude=None, uuid: str | None = None) -> dict:
     rota = rota_do_motorista(conn, rota_id, agent_id)
+    _exigir_liberada(rota)
     if rota["status"] in (banco.ROTA_CANCELADA, banco.ROTA_CONCLUIDA):
         raise OperacaoInvalida(f"Rota já está {rota['status'].lower()}.", 409)
+    em_oferta = ofertas_rota_enviada.ao_aceitar(conn, rota, agent_id)
+    if em_oferta:
+        raise OperacaoInvalida(em_oferta, 409)
     if rota["status"] == banco.ROTA_PLANEJADA:
         conn.execute("UPDATE nucleo_rotas SET status = ?, atualizado_em = ? WHERE id = ?",
                      (banco.ROTA_ACEITA, banco.agora(), rota_id))
@@ -393,6 +416,7 @@ def aceitar_rota(conn: sqlite3.Connection, rota_id: int, agent_id: int, ocorrido
 def recusar_rota(conn: sqlite3.Connection, rota_id: int, agent_id: int, motivo: str | None,
                  ocorrido_em: str | None = None, uuid: str | None = None) -> dict:
     rota = rota_do_motorista(conn, rota_id, agent_id)
+    _exigir_liberada(rota)
     if rota["status"] not in (banco.ROTA_PLANEJADA, banco.ROTA_ACEITA):
         raise OperacaoInvalida(f"Rota já está {rota['status'].lower()} -- não dá mais pra recusar.", 409)
     motivo = (motivo or "").strip()[:500] or None
@@ -408,6 +432,7 @@ def recusar_rota(conn: sqlite3.Connection, rota_id: int, agent_id: int, motivo: 
 def iniciar_rota(conn: sqlite3.Connection, rota_id: int, agent_id: int, ocorrido_em: str | None = None,
                  latitude=None, longitude=None, uuid: str | None = None) -> dict:
     rota = rota_do_motorista(conn, rota_id, agent_id)
+    _exigir_liberada(rota)
     _exigir_provedor_app(rota)
     if rota["status"] == banco.ROTA_EM_ROTA:
         return montar_rota(conn, rota)
@@ -447,6 +472,7 @@ def registrar_evento_parada(conn: sqlite3.Connection, parada_id: int, agent_id: 
     if not p:
         raise OperacaoInvalida("Parada não encontrada.", 404)
     rota = rota_do_motorista(conn, p["rota_id"], agent_id)
+    _exigir_liberada(rota)
     _exigir_provedor_app(rota)
     tipo = str(dados.get("tipo") or "").upper()
     if tipo not in TIPOS_EVENTO_PARADA:
@@ -804,8 +830,12 @@ def _onda_aberta(elegibilidade: dict | None, agora_utc: str) -> bool:
 
 
 def listar_ofertas(conn: sqlite3.Connection, agent_id: int | None) -> dict:
-    if agent_id is None or not _tem_tabela(conn, "ofertas_rota"):
+    if agent_id is None:
         return {"abertas": [], "minhas": []}
+    # Rota enviada que ficou sem aceite (nucleo/ofertas_rota_enviada.py) entra na mesma lista.
+    sem_aceite = ofertas_rota_enviada.listar_para_motorista(conn, agent_id)
+    if not _tem_tabela(conn, "ofertas_rota"):
+        return sem_aceite
     hoje = date.today().isoformat()
     agora_utc = _agora_utc_iso()
     abertas, minhas = [], []
@@ -817,7 +847,7 @@ def listar_ofertas(conn: sqlite3.Connection, agent_id: int | None) -> dict:
         elif o["status"] == "ESCOLHIDA" and o["escolhido_por"] == agent_id:
             item["aplicada"] = o["aplicado_em"] is not None
             minhas.append(item)
-    return {"abertas": abertas, "minhas": minhas}
+    return {"abertas": sem_aceite["abertas"] + abertas, "minhas": sem_aceite["minhas"] + minhas}
 
 
 def escolher_oferta(conn: sqlite3.Connection, agent_id: int | None, rascunho_id: int, marketplace=None) -> dict:
@@ -833,6 +863,11 @@ def escolher_oferta(conn: sqlite3.Connection, agent_id: int | None, rascunho_id:
     Sem `marketplace` (dev/testes): claim atômico só no banco local."""
     if agent_id is None:
         raise OperacaoInvalida("Motorista sem agent_id -- não pode escolher rota.", 403)
+    if rascunho_id >= ofertas_rota_enviada.ID_BASE:      # rota enviada sem aceite: disputa so aqui
+        erro = ofertas_rota_enviada.escolher(conn, agent_id, rascunho_id - ofertas_rota_enviada.ID_BASE)
+        if erro:
+            raise OperacaoInvalida(erro, 409)
+        return listar_ofertas(conn, agent_id)
     o = conn.execute("SELECT * FROM ofertas_rota WHERE rascunho_id = ?", (rascunho_id,)).fetchone()
     elegibilidade = _elegibilidade(o, agent_id) if o else None
     if not elegibilidade:
@@ -890,6 +925,11 @@ def cancelar_escolha_oferta(conn: sqlite3.Connection, agent_id: int | None, rasc
     """Desiste da escolha pelo app. Só antes de a escolha ser aplicada no
     planejamento (aplicado_em). Com `marketplace`, cancela primeiro na
     página pública (dona da escolha) e espelha aqui."""
+    if agent_id is not None and rascunho_id >= ofertas_rota_enviada.ID_BASE:
+        erro = ofertas_rota_enviada.cancelar(conn, agent_id, rascunho_id - ofertas_rota_enviada.ID_BASE)
+        if erro:
+            raise OperacaoInvalida(erro, 409)
+        return listar_ofertas(conn, agent_id)
     if marketplace is not None:
         from nucleo.marketplace_remoto import SemConexaoMarketplace
         o = conn.execute("SELECT * FROM ofertas_rota WHERE rascunho_id = ?", (rascunho_id,)).fetchone()

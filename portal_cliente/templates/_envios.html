@@ -134,7 +134,7 @@
           <div style="font-size:11.5px; margin-top:4px;">XML: vários .xml de uma vez ou um .zip (só NF-e de saída da sua empresa). Planilha: .xlsx no modelo Fresh Log ou a sua, uma linha por item (se os nomes das colunas forem outros, você indica qual é qual).</div>
           <div style="font-size:11.5px; margin-top:4px;">Documentos dos pedidos (boleto e outros, em PDF) podem vir juntos: o sistema coloca cada um no pedido certo e você confere antes de enviar. Eles saem impressos com a nota na entrega.</div>
         </label>
-        <input type="file" id="anx-arquivo" multiple accept=".pdf,application/pdf" hidden>
+        <input type="file" id="anx-arquivo" multiple accept=".pdf,.xml,application/pdf,text/xml,application/xml" hidden>
         <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:12px; color:var(--texto-suave);">
           <a class="botao-linha" id="btn-modelo" href="{{ request.script_root }}/api/envios/modelo-planilha" download style="text-decoration:none;">Baixar modelo de planilha (.xlsx)</a>
           <span>Sem XML da nota? Preencha o modelo e suba aqui -- os pedidos são criados do mesmo jeito.</span>
@@ -190,7 +190,7 @@
           <div><b style="color:var(--texto)">2.</b> A gente confere: NF-e precisa ser de saída da sua empresa e não pode ter sido enviada antes; na planilha, cada pedido precisa de destinatário, endereço completo e pelo menos um SKU com quantidade.</div>
           <div><b style="color:var(--texto)">3.</b> Na primeira vez que um destinatário aparece, você informa o horário em que ele recebe. Quem só recebe com agendamento pede a data (ou fica como <i>agendamento pendente</i>).</div>
           <div><b style="color:var(--texto)">4.</b> O pedido entra na fila e é criado na Stokki em instantes. Se der erro, aparece aqui e você recebe um e-mail.</div>
-          <div><b style="color:var(--texto)">5.</b> Boleto ou outro documento que precisa ir com a nota? Suba os PDFs junto com os pedidos, ou anexe depois em <i>Documentos</i>, na lista, enquanto o pedido não saiu pra entrega.</div>
+          <div><b style="color:var(--texto)">5.</b> Boleto ou outro documento que precisa ir com a nota? Suba os PDFs junto com os pedidos, ou anexe depois em <i>Documentos</i>, na lista, enquanto o pedido não saiu pra entrega. O XML da nota também pode ser anexado, pelo botão do próprio pedido (não é impresso).</div>
         </div>
       </div>
       <div class="card">
@@ -342,7 +342,7 @@
         ${PODE_ENVIAR && x.pode_em_espera ? `<button type="button" data-acao="em_espera" data-id="${x.id}">Tirar da rota</button>` : ''}
         ${PODE_ENVIAR && x.pode_reenviar ? `<button type="button" data-acao="reenviar" data-id="${x.id}">Reenviar</button>` : ''}
         ${PODE_ENVIAR && x.pode_cancelar ? `<button type="button" class="perigo" data-acao="cancelar" data-id="${x.id}">Cancelar</button>` : ''}
-        ${(PODE_ENVIAR && x.pode_anexar) || (x.anexos || []).length ? `<button type="button" data-acao="documentos" data-id="${x.id}" title="Documentos em PDF que vão impressos com a nota">Documentos${(x.anexos || []).length ? ' (' + x.anexos.length + ')' : ''}</button>` : ''}
+        ${(PODE_ENVIAR && x.pode_anexar) || (x.anexos || []).length ? `<button type="button" data-acao="documentos" data-id="${x.id}" title="Documentos do pedido: PDFs que vão impressos com a nota e o XML da nota">Documentos${(x.anexos || []).length ? ' (' + x.anexos.length + ')' : ''}</button>` : ''}
         <button type="button" data-acao="xml" data-id="${x.id}" title="${x.origem === 'planilha' ? 'Baixar a planilha enviada' : 'Baixar o XML enviado'}">${x.origem === 'planilha' ? 'Planilha' : 'XML'}</button>
       </div></td></tr>`).join('');
     const vazio = $('env-vazia');
@@ -514,7 +514,8 @@
   // usuário, que marca a conferência antes de enviar (o confirmar recusa sem).
   const nfLimpa = v => String(v || '').replace(/\D/g, '').replace(/^0+/, '');
   const rotIt = it => it.rotulo || ('NF ' + it.numero_nf);
-  const infoAnexo = a => esc(a.tipo || 'Documento') + (a.numero_nf ? ' · NF ' + esc(a.numero_nf) : '');
+  // ped: o pedido onde o documento está. Em pedido de planilha, o XML da nota é o XML do pedido.
+  const infoAnexo = (a, ped) => esc(a.tipo === 'XML da NF-e' && ped && ped.origem === 'planilha' ? 'XML do pedido' : a.tipo || 'Documento') + (a.numero_nf ? ' · NF ' + esc(a.numero_nf) : '');
   const diverge = (a, numeroNf) => a.numero_nf && numeroNf && nfLimpa(a.numero_nf) !== nfLimpa(numeroNf);
   // pedido (da prévia) que o sistema sugeriu, quando o usuário pôs o documento em outro
   const outroPedido = (a, it) => a.sugerido && a.sugerido !== it.token && a.motivo !== 'único pedido' && previa.itens.find(v => v.token === a.sugerido);
@@ -529,11 +530,11 @@
       if (!td) return;
       td.innerHTML = p.anexos.filter(a => a.pedido === it.token).map(a => `<div class="anx ${diverge(a, it.numero_nf) || outroPedido(a, it) ? 'diverge' : ''}">
           <span class="anx-nome">${esc(a.nome)}</span>
-          <span class="anx-info">${infoAnexo(a)} · ${a.manual ? 'escolhido por você' : 'colocado pelo sistema (' + esc(a.motivo) + ')'}</span>
+          <span class="anx-info">${infoAnexo(a, it)} · ${a.manual ? 'escolhido por você' : 'colocado pelo sistema (' + esc(a.motivo) + ')'}</span>
           ${diverge(a, it.numero_nf) ? `<span class="anx-alerta">Atenção: o documento cita a NF ${esc(a.numero_nf)}, e este pedido é a NF ${esc(it.numero_nf)}.</span>` : ''}
           ${outroPedido(a, it) ? `<span class="anx-alerta">Atenção: pelo nome ou conteúdo, este documento parece ser de ${esc(rotIt(outroPedido(a, it)))}.</span>` : ''}
           <button type="button" class="anx-link" data-anx="tirar" data-token="${esc(a.token)}">tirar deste pedido</button></div>`).join('') +
-        `<button type="button" class="anx-mais" data-anx="anexar" data-i="${i}">+ Anexar PDF</button>`;
+        `<button type="button" class="anx-mais" data-anx="anexar" data-i="${i}">+ Anexar PDF ou XML</button>`;
     });
     const soltos = p.anexos.filter(a => !p.itens.some(it => it.token === a.pedido));
     const box = $('previa-anexos');
@@ -593,13 +594,13 @@
     const pode = PODE_ENVIAR && x.pode_anexar, atuais = x.anexos || [];
     modal(`<h3>Documentos do pedido</h3>
       <p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}</p>
-      <p>Os documentos anexados aqui saem impressos junto da nota fiscal na entrega.</p>
-      <div class="anx-lista">${atuais.length ? atuais.map(a => `<div class="anx-solto"><a href="${BASE}/api/envios/${x.id}/anexos/${a.id}" target="_blank" rel="noopener" class="anx-nome">${esc(a.nome)}</a><span class="anx-info">${infoAnexo(a)}</span>${pode ? `<button type="button" class="anx-link" data-doc-remover="${a.id}">remover</button>` : ''}</div>`).join('') : '<div class="anx-info">Nenhum documento anexado ainda.</div>'}</div>
-      ${docNovos.length ? `<div class="anx-lista"><b style="font-size:12.5px;">Pra anexar agora:</b>${docNovos.map(a => `<div class="anx ${diverge(a, x.numero_nf) ? 'diverge' : ''}"><span class="anx-nome">${esc(a.nome)}</span><span class="anx-info">${infoAnexo(a)}</span>${diverge(a, x.numero_nf) ? `<span class="anx-alerta">Atenção: o documento cita a NF ${esc(a.numero_nf)}, e este pedido é a NF ${esc(x.numero_nf)}.</span>` : ''}</div>`).join('')}
+      <p>Os documentos em PDF anexados aqui saem impressos junto da nota fiscal na entrega. O XML da nota fica guardado no pedido e não é impresso.</p>
+      <div class="anx-lista">${atuais.length ? atuais.map(a => `<div class="anx-solto"><a href="${BASE}/api/envios/${x.id}/anexos/${a.id}" target="_blank" rel="noopener" class="anx-nome">${esc(a.nome)}</a><span class="anx-info">${infoAnexo(a, x)}</span>${pode ? `<button type="button" class="anx-link" data-doc-remover="${a.id}">remover</button>` : ''}</div>`).join('') : '<div class="anx-info">Nenhum documento anexado ainda.</div>'}</div>
+      ${docNovos.length ? `<div class="anx-lista"><b style="font-size:12.5px;">Pra anexar agora:</b>${docNovos.map(a => `<div class="anx ${diverge(a, x.numero_nf) ? 'diverge' : ''}"><span class="anx-nome">${esc(a.nome)}</span><span class="anx-info">${infoAnexo(a, x)}</span>${diverge(a, x.numero_nf) ? `<span class="anx-alerta">Atenção: o documento cita a NF ${esc(a.numero_nf)}, e este pedido é a NF ${esc(x.numero_nf)}.</span>` : ''}</div>`).join('')}
         <label class="anx-conf"><input type="checkbox" id="m-conf"> ${docNovos.length > 1 ? `Conferi os ${docNovos.length} documentos: são deste pedido.` : 'Conferi o documento: é deste pedido.'}</label></div>` : ''}
       ${!pode && PODE_ENVIAR ? '<p>Este pedido já saiu pra entrega ou foi encerrado: não aceita mais documentos.</p>' : ''}
       <div class="msg ${erro ? 'erro' : ''}" id="m-msg">${esc(erro)}</div>
-      <div class="pe"><button type="button" class="botao-linha" data-fechar>Fechar</button>${pode ? `<button type="button" class="botao-linha" id="m-escolher">${docNovos.length ? 'Escolher mais PDFs' : 'Escolher PDF…'}</button>` : ''}${pode && docNovos.length ? `<button type="button" class="botao" id="m-ok">Anexar ${docNovos.length} documento${docNovos.length > 1 ? 's' : ''}</button>` : ''}</div>`);
+      <div class="pe"><button type="button" class="botao-linha" data-fechar>Fechar</button>${pode ? `<button type="button" class="botao-linha" id="m-escolher">${docNovos.length ? 'Escolher mais arquivos' : 'Escolher PDF ou XML…'}</button>` : ''}${pode && docNovos.length ? `<button type="button" class="botao" id="m-ok">Anexar ${docNovos.length} documento${docNovos.length > 1 ? 's' : ''}</button>` : ''}</div>`);
     const falha = t => { const m = $('m-msg'); m.className = 'msg erro'; m.textContent = t; };
     const chamar = async (url, corpo) => {
       const r = await fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });

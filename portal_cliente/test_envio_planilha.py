@@ -570,3 +570,54 @@ def test_pares_tem_teto_de_itens_e_numero_absurdo_no_cabecalho_nao_derruba(monke
     with pytest.raises(ep.ErroEnvio, match="mais de 3 itens"):
         ep.ler_planilha(conteudo, "m.xlsx", CNPJ, indicado={"linha": 0, "colunas": col})
     assert ep._pares_de_itens(["Sku" + "9" * 5000, "Quantidade" + "9" * 5000, "Sku1", "Qtd 1"]) == [(2, 3)]
+
+
+# ── Coluna de item alterada pelo cliente: lê, avisa e não trava (17/11) ───────
+# As tres planilhas que a Marchef mandou em 17/11 (PO 7878) e que foram recusadas.
+
+COL_PARES = {"referencia": 0, "destinatario_nome": 1, "destinatario_doc": 4, "cep": 6, "logradouro": 7, "numero": 8,
+             "bairro": 10, "cidade": 11, "uf": 12}
+
+
+def _planilha_cab(cab_itens: list[str], linhas: list[list]) -> bytes:
+    wb = openpyxl.Workbook()
+    wb.active.append(CAB_PARES + cab_itens)
+    for fixos, itens in linhas:
+        wb.active.append(list(fixos) + list(itens))
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_quantidade_do_par_renomeada_e_lida_pela_coluna_ao_lado_com_aviso():
+    conteudo = _planilha_cab(["Sku1", "Volumes", "Sku2", "Quantidade2"], [(_fixos(7878), ["D21TCI30510D", 2, "ABC", 3])])
+    avisos: list = []
+    pedidos, rej = ep.ler_planilha(conteudo, "m.xlsx", CNPJ, indicado={"linha": 0, "colunas": COL_PARES}, avisos=avisos)
+    assert rej == []
+    assert [(i["sku"], i["quantidade"]) for i in pedidos[0]["itens_lista"]] == [("D21TCI30510D", 2), ("ABC", 3)]
+    assert len(avisos) == 1 and '"Volumes"' in avisos[0] and '"Sku1"' in avisos[0]
+    # com o mapa que ficou guardado na Marchef (Volumes -> a mesma coluna) continua lendo
+    guardado = {**{k: {"nome": ep._normalizar_texto(CAB_PARES[j]), "pos": j} for k, j in COL_PARES.items()},
+                "volumes": {"nome": "volumes", "pos": 17}}
+    pedidos, rej = ep.ler_planilha(conteudo, "m.xlsx", CNPJ, guardado=guardado)
+    assert rej == [] and pedidos[0]["itens"] == 2
+
+
+def test_colunas_do_modelo_no_lugar_do_primeiro_par_valem_como_item_com_aviso():
+    conteudo = _planilha_cab(["SKU do produto", "Quantidade", "Sku2", "Quantidade2"], [(_fixos(7878), ["D21TCI30510D", 2])])
+    avisos: list = []
+    pedidos, rej = ep.ler_planilha(conteudo, "m.xlsx", CNPJ, indicado={"linha": 0, "colunas": COL_PARES}, avisos=avisos)
+    assert rej == []
+    assert [(i["sku"], i["quantidade"]) for i in pedidos[0]["itens_lista"]] == [("D21TCI30510D", 2)]
+    assert len(avisos) == 1 and '"SKU do produto"' in avisos[0]
+
+
+def test_planilha_sem_alteracao_nao_gera_aviso_e_vizinho_que_e_campo_do_pedido_nao_vira_quantidade():
+    avisos: list = []
+    conteudo = _planilha_cab(["Sku1", "Quantidade1"], [(_fixos(1), ["ABC", 2])])
+    assert ep.ler_planilha(conteudo, "m.xlsx", CNPJ, indicado={"linha": 0, "colunas": COL_PARES}, avisos=avisos)[1] == []
+    assert ep.ler_planilha(_planilha([_linha()]), "p.xlsx", CNPJ, avisos=avisos)[1] == []
+    assert avisos == []
+    # Sku1 sem quantidade e a coluna ao lado e outro SKU ou um campo do pedido: nao adivinha
+    assert ep._pares_de_itens(["Sku1", "Sku2", "Quantidade2"]) == [(1, 2)]
+    assert ep._pares_de_itens(["Sku1", "Bairro", "Sku2", "Quantidade2"], ocupadas={1}) == [(2, 3)]

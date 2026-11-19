@@ -1181,12 +1181,13 @@ def api_envios_analisar():
                     n_planilhas += 1
                     indicado = colunas_indicadas.get(nome)
                     mapa_usado: dict = {}
+                    avisos_plan: list = []   # coluna de item alterada: lê, avisa e não trava (17/11)
                     try:
                         pedidos, rej = envios.ler_planilha(
                             conteudo, nome, padrao, {c: e["nome"] for c, e in grupo.items()} if grupo else None,
                             guardado=envios.carregar_mapa_planilha(conn, g.cliente["cnpj"]),
                             indicado=indicado if isinstance(indicado, dict) else None,
-                            pedir_indicacao=pedir_indicacao, mapa_usado=mapa_usado)
+                            pedir_indicacao=pedir_indicacao, mapa_usado=mapa_usado, avisos=avisos_plan)
                     except envios.ColunasPorIndicar as e:
                         indicar.append(e.dados)
                         continue
@@ -1196,6 +1197,8 @@ def api_envios_analisar():
                     if mapa_usado:   # lida com as colunas indicadas: valem pras próximas planilhas deste login
                         envios.guardar_mapa_planilha(conn, g.cliente["cnpj"], mapa_usado, _quem_envia())
                     rejeitados.extend(rej)
+                    if avisos_plan:
+                        logger.info(f"analisar planilha alterada cnpj={g.cliente['cnpj']} arquivo={nome!r}: {' '.join(avisos_plan)!r}")
                     token_plan = envios.guardar_temporario(conteudo, Path(nome).suffix.lstrip(".") or "xlsx")
                     for ped in pedidos:
                         rotulo = f"Pedido {ped['referencia']}"
@@ -1211,7 +1214,7 @@ def api_envios_analisar():
                             continue
                         token = envios.guardar_temporario_pedido(ped, token_plan)
                         item = {k: v_ for k, v_ in ped.items() if k not in ("emitente_cnpj",)}
-                        item.update({"token": token, "avisos": v["avisos"] + avisos_sku, "rotulo": rotulo,
+                        item.update({"token": token, "avisos": avisos_plan + v["avisos"] + avisos_sku, "rotulo": rotulo,
                                      "empresa_cnpj": emp, "empresa": ctx(emp)["nome"] if grupo else "",
                                      "destinatario_doc_formatado": envios.formatar_documento(ped["destinatario_doc"])})
                         itens.append(item)
@@ -1275,6 +1278,8 @@ def api_envios_analisar():
     _sugerir_pedidos(anexos, [{**it, "chave": it["token"]} for it in itens])
     logger.info(f"analisar cnpj={','.join(usadas)} por={_quem_envia()} validos={len(itens)} rejeitados={len(rejeitados)} "
                 f"planilhas={n_planilhas} anexos={len(anexos)}")
+    for r in rejeitados[:20]:   # o motivo fica no log: em 17/11 só deu pra saber baixando a planilha
+        logger.info(f"analisar rejeitado arquivo={r.get('arquivo')!r} {str(r.get('rotulo') or '')[:80]!r}: {str(r.get('erro'))[:300]!r}")
     return jsonify({"itens": itens, "rejeitados": rejeitados, "destinatarios": destinatarios, "anexos": anexos,
                     "indicar": indicar,
                     "regra_xml": cfg["regra_xml"], "regra_xml_rotulo": envios.REGRAS_XML.get(cfg["regra_xml"], ""),
@@ -1352,16 +1357,16 @@ def _sugerir_pedidos(anexos: list[dict], pedidos: list[dict]) -> None:
 @requer_cliente
 @exige_mesma_origem
 def api_envios_anexos_ler():
-    """So PDFs: le cada um, guarda no temporario e sugere o pedido entre os
+    """PDFs (ou o XML da NF-e): le cada um, guarda no temporario e sugere o pedido entre os
     que a tela mandou em `pedidos` (JSON [{chave, numero_nf, destinatario_doc,
     referencia}]) -- os da previa ou um pedido ja enviado. Nada e anexado
     aqui; quem anexa e o confirmar (previa) ou POST /api/envios/<id>/anexos."""
     _exige_pode_enviar()
     arquivos = request.files.getlist("arquivos")
     if not arquivos:
-        return jsonify({"erro": "Selecione pelo menos um PDF."}), 400
+        return jsonify({"erro": "Selecione pelo menos um arquivo."}), 400
     if len(arquivos) > anexos_pedido.MAX_PDFS_POR_ENVIO:
-        return jsonify({"erro": f"Envie no máximo {anexos_pedido.MAX_PDFS_POR_ENVIO} PDFs por vez."}), 400
+        return jsonify({"erro": f"Envie no máximo {anexos_pedido.MAX_PDFS_POR_ENVIO} arquivos por vez."}), 400
     try:
         pedidos = [p for p in json.loads(request.form.get("pedidos") or "[]") if isinstance(p, dict) and p.get("chave")]
     except ValueError:
@@ -1424,7 +1429,10 @@ def api_envios_anexo_baixar(envio_id, anexo_id):
         conn.close()
     if not anexo or not anexos_pedido.caminho(anexo).is_file():
         abort(404)
-    resposta = send_file(anexos_pedido.caminho(anexo), mimetype="application/pdf", download_name=anexo["nome_original"], max_age=0)
+    # XML sempre como download: aberto na pagina, um XML enviado pelo cliente poderia rodar script.
+    xml = anexo["tipo"] == anexos_pedido.TIPO_XML
+    resposta = send_file(anexos_pedido.caminho(anexo), mimetype="application/xml" if xml else "application/pdf",
+                         as_attachment=xml, download_name=anexo["nome_original"], max_age=0)
     resposta.headers["X-Content-Type-Options"] = "nosniff"
     return resposta
 

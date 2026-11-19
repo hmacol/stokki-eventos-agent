@@ -376,6 +376,12 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
     if operada_app and status_novo != banco.ROTA_CANCELADA and \
             _ORDEM_STATUS_ROTA.get(status_anterior, 0) > _ORDEM_STATUS_ROTA.get(status_novo, 0):
         status_novo = status_anterior
+    # ACEITA que a Vuupt nao confirma veio do nosso app (aqui ACEITA so nasce
+    # do 'accepted' dela): o aceite do motorista vale enquanto a rota for dele.
+    # Recusa pelo app ja grava PLANEJADA; troca de motorista derruba o aceite.
+    aceite_do_app = status_anterior == banco.ROTA_ACEITA and status_novo == banco.ROTA_PLANEJADA
+    if aceite_do_app and existente["agent_id"] == agent_id:
+        status_novo = banco.ROTA_ACEITA
     total_ativas = len(situacoes) if rota_cancelada else sum(1 for x in situacoes if x != banco.PARADA_CANCELADA)
     iniciada = vuupt_para_local(rota.get("started_at") or rota.get("done_started_at")) or started_min
     concluida = vuupt_para_local(rota.get("finished_at") or rota.get("done_finished_at")) or completed_max
@@ -383,6 +389,13 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
     # agent_id/vehicle_id vão CRUS (sem COALESCE): motorista tirado da rota
     # na VUUPT tem que sumir aqui também, senão a rota fica com dono errado.
     motorista_nome = ctx.nomes.get(agent_id) if agent_id else None
+    # Quem sincroniza sem a lista de nomes (espelho de servicos) nao apaga o
+    # nome do MESMO motorista; trocou de motorista, o nome antigo nao fica.
+    if motorista_nome is None and agent_id:
+        atual = existente or conn.execute("SELECT agent_id, motorista_nome FROM nucleo_rotas WHERE id = ?",
+                                          (rota_id,)).fetchone()
+        if atual["agent_id"] == agent_id:
+            motorista_nome = atual["motorista_nome"]
     conn.execute("""
         UPDATE nucleo_rotas SET
             nome = COALESCE(?, nome), agent_id = ?, vehicle_id = ?,
