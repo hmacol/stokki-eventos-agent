@@ -514,6 +514,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                                              até 05h30 vira oferta no app + aviso no grupo Rotas FRESHLOG; desligada = sai na hora)
  a cada 15 min               sincronizar-confirmacoes        roteirizacao/sincronizar_respostas_confirmacao.py
  a cada 15 min               sincronizar-lalamove            nucleo/sincronizar_lalamove.py
+ 07-22h a cada 15 min        cancelar-cancelados-stokki      roteirizacao/cancelar_cancelados_stokki.py (cancelado
+                                                             no galpão + vivo no núcleo: cancela na Vuupt só no
+                                                             pool; em rota só e-mail interno)
  a cada minuto               lancar-lalamove                 nucleo/lancar_lalamove_programados.py
  a cada 15 min               wms-reservar-pedidos            sincronizar_pedidos_wms.py
  xx:09 e xx:39               wms-recebimentos                sincronizar_recebimentos_wms.py
@@ -1078,6 +1081,13 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
  cancelar_servico.py       Cancela 1 serviço na Vuupt onde estiver (pool, rascunho,
                            rota enviada) fora do painel; sempre PUT /cancel. Usado
                            pelo portal. O Planejamento NÃO usa (escopo B, 06/10).
+ cancelar_cancelados_stokki.py  Timer 15 min (07-22h): pedido Cancelado em galpao_pedidos com
+                           serviço vivo no núcleo (inclui -R/-C). Lê o status AGORA na Vuupt:
+                           not_assigned fora de rascunho ENVIADO/OFERTADA -> cancelar_servico
+                           _completo; em rota -> e-mail interno 1x por serviço; done/canceled
+                           -> nada. Tabela cancelados_stokki_vuupt (CANCELADO|EM_ROTA|FALHA).
+                           Hugo 18/11: sozinho só cancela no pool. Coletor do galpão roda
+                           03:50-18:30: cancelado depois disso só aparece na manhã seguinte.
  edicao_rota.py            Regra unica de editar rota ENVIADA (10/11): le a rota ao vivo
                            (nunca o card), tirar_pedido (so not_assigned/assigned/accepted;
                            DELETE /routes/{id}/services/{sid}; ultimo pendente com entregue
@@ -2155,8 +2165,9 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
  - Pedido CANCELADO na Stokki depois da listagem da rodada (18/11, PS-44507):
    o pipeline lê a "Situação" no detalhe (stokki/pedidos.obter_detalhe) e
    não sobe (ignorado_cancelado_stokki); serviço not_assigned é cancelado na
-   Vuupt. Cancelamento direto na Stokki DEPOIS de o serviço existir continua
-   sem propagar (só o batimento acusa CANCELADO_STOKKI_SERVICO_VIVO).
+   Vuupt. Cancelamento direto na Stokki DEPOIS de o serviço existir: a cada
+   15 min roteirizacao/cancelar_cancelados_stokki.py cancela o que está no
+   pool e avisa por e-mail o que já está em rota (não mexe na rota).
    O portal mostra "Cancelado" pra pedido não entregue que galpao_pedidos
    marca Cancelado (portal_cliente/dados_cliente.cancelados_na_stokki).
  - documentos_pedido/selecionar_pedidos.py repete regra do pipeline.py.
