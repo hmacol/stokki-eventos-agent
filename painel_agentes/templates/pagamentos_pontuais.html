@@ -26,7 +26,7 @@
   .segmentos { display: inline-flex; border: 1px solid var(--borda); border-radius: 8px; overflow: hidden; background: var(--fundo); width: fit-content; }
   .campo .segmentos label { cursor: pointer; text-transform: none; letter-spacing: 0; font-size: inherit; font-weight: inherit; color: inherit; }
   .segmentos input { position: absolute; opacity: 0; pointer-events: none; }
-  .segmentos span { display: inline-flex; align-items: center; height: 34px; padding: 0 16px; font-size: 13px; font-weight: 600; color: var(--texto-suave); border-right: 1px solid var(--borda); }
+  .segmentos span { display: inline-flex; align-items: center; height: 34px; padding: 0 16px; white-space: nowrap; font-size: 13px; font-weight: 600; color: var(--texto-suave); border-right: 1px solid var(--borda); }
   .segmentos label:last-child span { border-right: none; }
   .segmentos input:checked + span { background: var(--primaria); color: #fff; }
   html.tema-escuro .segmentos input:checked + span { background: var(--acento); color: #06170F; }
@@ -38,7 +38,6 @@
   .campo.invalido .grupo-valor { border-color: var(--erro); }
 
   .ficha-motorista { font-size: 12px; color: var(--texto-suave); line-height: 1.5; min-height: 18px; }
-  .ficha-motorista .sem-pix { color: var(--timeout-texto); }
   .bloco-local { display: none; border: 1px dashed var(--borda); border-radius: 10px; padding: 12px; }
   .bloco-local.aberto { display: grid; }
 
@@ -64,6 +63,9 @@
   .chip { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; padding: 2px 8px; border-radius: 100px; background: var(--nunca-bg); color: var(--texto-suave); }
   .chip.descarga { background: var(--interrompido-bg); color: var(--interrompido-texto); }
   .chip.adiantamento { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .chip.frete_avulso { background: var(--sucesso-bg); color: var(--sucesso); }
+  .margem { font-size: 12px; color: var(--texto-suave); min-height: 16px; }
+  .margem.negativa { color: var(--erro); font-weight: 600; }
   .valor { font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
   .detalhes { font-size: 12.5px; color: var(--texto-suave); line-height: 1.55; margin-top: 4px; }
   .detalhes strong { color: var(--texto); }
@@ -97,7 +99,7 @@
 <div class="cabecalho-pagina">
   <div>
     <h1>Pagamentos pontuais</h1>
-    <p>Peça ao financeiro um <strong>Adiantamento</strong> ou uma <strong>Descarga</strong>. O pedido vai pro grupo <strong>{{ pp.NOME_GRUPO }}</strong> no WhatsApp. Quando o financeiro mandar o comprovante, confirme aqui anexando o comprovante. A Descarga ainda pede o documento depois do pagamento.</p>
+    <p>Peça ao financeiro um <strong>Adiantamento</strong>, uma <strong>Descarga</strong> ou o pagamento de um <strong>Frete avulso</strong> (frete avulso ou dedicado, combinado à parte). O pedido vai pro grupo <strong>{{ pp.NOME_GRUPO }}</strong> no WhatsApp. Quando o financeiro mandar o comprovante, confirme aqui anexando o comprovante. A Descarga ainda pede o documento depois do pagamento.</p>
   </div>
 </div>
 
@@ -111,11 +113,12 @@
 <form class="lancar" id="form-lancar" novalidate>
   <h2>Novo lançamento</h2>
   <div class="grade">
-    <div class="campo" id="c-tipo">
+    <div class="campo largo" id="c-tipo">
       <span class="rotulo" id="r-tipo">Tipo</span>
       <div class="segmentos" role="radiogroup" aria-labelledby="r-tipo">
         <label><input type="radio" name="tipo" value="ADIANTAMENTO"><span>Adiantamento</span></label>
         <label><input type="radio" name="tipo" value="DESCARGA"><span>Descarga</span></label>
+        <label><input type="radio" name="tipo" value="FRETE_AVULSO"><span>Frete avulso</span></label>
       </div>
     </div>
     <div class="campo" id="c-motorista">
@@ -128,9 +131,18 @@
       </select>
       <div class="ficha-motorista" id="ficha-motorista">{% if not motoristas %}Nenhum motorista ativo cadastrado.{% endif %}</div>
     </div>
+    <div class="campo largo" id="c-descricao" hidden>
+      <label for="f-descricao">Descrição do frete</label>
+      <input type="text" id="f-descricao" name="descricao" maxlength="300" placeholder="Ex.: Cliente X, Guarulhos → Campinas, 19/11, dedicado Fiorino">
+    </div>
     <div class="campo" id="c-valor">
-      <label for="f-valor">Valor</label>
+      <label for="f-valor" id="l-valor">Valor</label>
       <div class="grupo-valor"><span>R$</span><input type="text" id="f-valor" name="valor" inputmode="decimal" placeholder="0,00" autocomplete="off"></div>
+    </div>
+    <div class="campo" id="c-valor_cobrado" hidden>
+      <label for="f-valor-cobrado">Valor cobrado do cliente</label>
+      <div class="grupo-valor"><span>R$</span><input type="text" id="f-valor-cobrado" name="valor_cobrado" inputmode="decimal" placeholder="0,00" autocomplete="off"></div>
+      <div class="margem" id="margem" aria-live="polite"></div>
     </div>
     <div class="campo" id="c-favorecido" hidden>
       <span class="rotulo" id="r-favorecido">Pagar a</span>
@@ -138,6 +150,11 @@
         <label><input type="radio" name="favorecido" value="MOTORISTA" checked><span>Motorista</span></label>
         <label><input type="radio" name="favorecido" value="LOCAL"><span>Local da descarga</span></label>
       </div>
+    </div>
+    <div class="campo" id="c-pix">
+      <label for="f-pix">Chave PIX do motorista</label>
+      <input type="text" id="f-pix" name="pix" maxlength="200" autocomplete="off">
+      <div class="dica" id="dica-pix">Vem preenchida com a chave do app quando houver.</div>
     </div>
     <div class="campo largo grade bloco-local" id="bloco-local">
       <div class="campo" id="c-local_nome">
@@ -160,6 +177,10 @@
     <div class="campo largo">
       <label for="f-obs">Observação <span style="text-transform:none;font-weight:500">(opcional)</span></label>
       <textarea id="f-obs" name="observacao" maxlength="500" placeholder="Ex.: rota 1336, descarga no cliente X"></textarea>
+    </div>
+    <div class="campo largo" id="c-anexo" hidden>
+      <label for="f-anexo">Anexo <span style="text-transform:none;font-weight:500">(opcional: foto ou PDF do combinado, NF, romaneio)</span></label>
+      <input type="file" id="f-anexo" name="anexo" accept="image/*,application/pdf">
     </div>
   </div>
   <div class="rodape-form">
@@ -185,6 +206,8 @@
       </div>
       <div class="detalhes">
         <strong>{{ p.motorista_nome }}</strong>{% if p.motorista_placa %} · {{ p.motorista_placa }}{% endif %}
+        {% if p.descricao %}<br>Frete: {{ p.descricao }}{% endif %}
+        {% if p.valor_cobrado is not none %}{% set mg = pp.margem(p) %}<br>Cobrado do cliente: {{ moeda(p.valor_cobrado) }} · margem <span class="{{ 'margem negativa' if mg < 0 else '' }}">{{ '-' if mg < 0 else '' }}{{ moeda(mg|abs) }}</span>{% endif %}
         {% if p.favorecido == 'LOCAL' %}<br>Pagar ao local: <strong>{{ p.local_nome }}</strong> · {{ p.local_pagamento }}{% elif p.motorista_pix %}<br>PIX: {{ p.motorista_pix }}{% endif %}
         {% if p.observacao %}<br>Obs: {{ p.observacao }}{% endif %}
         <br>Lançado por {{ p.lancado_por or 'equipe' }} em {{ quando(p.lancado_em) }}
@@ -222,6 +245,7 @@
       {% else %}
         <span class="espaco"></span>
       {% endif %}
+      {% if p.anexo %}<a class="botao" href="{{ url_for('pagamento_arquivo', pagamento_id=p.id, nome=p.anexo) }}" target="_blank" rel="noopener">Anexo</a>{% endif %}
       {% if p.comprovante %}<a class="botao" href="{{ url_for('pagamento_arquivo', pagamento_id=p.id, nome=p.comprovante) }}" target="_blank" rel="noopener">Comprovante</a>{% endif %}
       {% if p.documento %}<a class="botao" href="{{ url_for('pagamento_arquivo', pagamento_id=p.id, nome=p.documento) }}" target="_blank" rel="noopener">Documento</a>{% endif %}
       {% if p.pode_reenviar %}<button type="button" data-acao="reenviar">Reenviar aviso</button>{% endif %}
@@ -244,6 +268,10 @@
   const ficha = document.getElementById("ficha-motorista");
   const cFav = document.getElementById("c-favorecido");
   const blocoLocal = document.getElementById("bloco-local");
+  const fPix = document.getElementById("f-pix");
+  const fCobrado = document.getElementById("f-valor-cobrado");
+  const elMargem = document.getElementById("margem");
+  let pixAuto = "";   // chave que a tela preencheu sozinha (troca quando muda o motorista)
 
   function valorDe(nome) {
     const el = form.querySelector(`[name="${nome}"]`);
@@ -261,19 +289,35 @@
     if (tel) partes.push("Tel " + tel.replace(/^(\d{2})(\d{4,5})(\d{4})$/, "($1) $2-$3"));
     if (o.dataset.veiculo || o.dataset.placa) partes.push([o.dataset.veiculo, o.dataset.placa].filter(Boolean).join(" · "));
     ficha.textContent = partes.join(" · ");
-    const pix = document.createElement("div");
-    if (o.dataset.pix) pix.textContent = "PIX: " + o.dataset.pix;
-    else { pix.textContent = "Sem chave PIX cadastrada no app"; pix.className = "sem-pix"; }
-    ficha.appendChild(pix);
+    if (!fPix.value.trim() || fPix.value.trim() === pixAuto) { fPix.value = o.dataset.pix || ""; pixAuto = fPix.value; }
+    document.getElementById("dica-pix").textContent = o.dataset.pix ? "Preenchida com a chave do app. Pode trocar." : "Motorista sem chave PIX no app: digite a chave.";
+    marcar("pix", false);
   }
   function atualizarTipo() {
-    const descarga = valorDe("tipo") === "DESCARGA";
+    const tipo = valorDe("tipo"), descarga = tipo === "DESCARGA", frete = tipo === "FRETE_AVULSO";
+    const aoLocal = descarga && valorDe("favorecido") === "LOCAL";
     cFav.hidden = !descarga;
-    blocoLocal.classList.toggle("aberto", descarga && valorDe("favorecido") === "LOCAL");
+    blocoLocal.classList.toggle("aberto", aoLocal);
+    document.getElementById("c-pix").hidden = aoLocal;
+    for (const id of ["c-descricao", "c-valor_cobrado", "c-anexo"]) document.getElementById(id).hidden = !frete;
+    document.getElementById("l-valor").textContent = frete ? "Valor a pagar ao motorista" : "Valor";
+    atualizarMargem();
+  }
+  function moeda(n) { return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
+  function atualizarMargem() {
+    const pago = lerValor(valorDe("valor")), cobrado = lerValor(fCobrado.value.trim());
+    elMargem.classList.remove("negativa");
+    if (!(pago > 0) || !(cobrado > 0)) { elMargem.textContent = ""; return; }
+    const m = Math.round((cobrado - pago) * 100) / 100;
+    elMargem.textContent = "Margem: " + moeda(m);
+    elMargem.classList.toggle("negativa", m < 0);
   }
   sel.addEventListener("change", () => { atualizarFicha(); marcar("motorista", false); });
   form.addEventListener("change", (e) => { if (e.target.name === "tipo" || e.target.name === "favorecido") atualizarTipo(); if (e.target.name === "tipo") marcar("tipo", false); });
-  document.getElementById("f-valor").addEventListener("input", () => marcar("valor", false));
+  document.getElementById("f-valor").addEventListener("input", () => { marcar("valor", false); atualizarMargem(); });
+  fCobrado.addEventListener("input", () => { marcar("valor_cobrado", false); atualizarMargem(); });
+  fPix.addEventListener("input", () => marcar("pix", false));
+  document.getElementById("f-descricao").addEventListener("input", () => marcar("descricao", false));
 
   function lerValor(txt) {
     let t = txt.replace(/R\$|\s/g, "");
@@ -288,13 +332,22 @@
       tipo: valorDe("tipo"), motorista_id: sel.value, valor: valorDe("valor"), favorecido: valorDe("favorecido"),
       observacao: valorDe("observacao"), local_nome: valorDe("local_nome"), local_pagamento: valorDe("local_pagamento"),
       local_endereco: valorDe("local_endereco"), local_documento: valorDe("local_documento"),
+      pix: valorDe("pix"), descricao: valorDe("descricao"), valor_cobrado: valorDe("valor_cobrado"),
     };
+    const frete = corpo.tipo === "FRETE_AVULSO";
+    const aoLocal = corpo.tipo === "DESCARGA" && corpo.favorecido === "LOCAL";
     const erros = [];
     if (!corpo.tipo) { marcar("tipo", true); erros.push("escolha o tipo"); }
     if (!corpo.motorista_id) { marcar("motorista", true); erros.push("escolha o motorista"); }
     const v = lerValor(corpo.valor);
     if (!(v > 0)) { marcar("valor", true); erros.push(corpo.valor ? "o valor precisa ser maior que zero" : "informe o valor"); }
-    if (corpo.tipo === "DESCARGA" && corpo.favorecido === "LOCAL") {
+    if (frete) {
+      if (!corpo.descricao) { marcar("descricao", true); erros.push("descreva o frete"); }
+      const c = lerValor(corpo.valor_cobrado);
+      if (!(c > 0)) { marcar("valor_cobrado", true); erros.push(corpo.valor_cobrado ? "o valor cobrado precisa ser maior que zero" : "informe o valor cobrado do cliente"); }
+    }
+    if (!aoLocal && !corpo.pix) { marcar("pix", true); erros.push("informe a chave PIX do motorista"); }
+    if (aoLocal) {
       if (!corpo.local_nome) { marcar("local_nome", true); erros.push("informe o nome do local"); }
       if (!corpo.local_pagamento) { marcar("local_pagamento", true); erros.push("informe o PIX ou os dados bancários do local"); }
     }
@@ -302,7 +355,11 @@
     const b = document.getElementById("b-lancar");
     b.disabled = true;
     try {
-      const r = await fetch(URL_LANCAR, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(corpo) });
+      const fd = new FormData();
+      for (const [k, val] of Object.entries(corpo)) fd.append(k, val);
+      const anexo = document.getElementById("f-anexo");
+      if (frete && anexo.files.length) fd.append("anexo", anexo.files[0]);
+      const r = await fetch(URL_LANCAR, { method: "POST", body: fd });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { erroForm.textContent = j.erro || "Não deu pra lançar. Tente de novo."; b.disabled = false; return; }
       location.href = `${URL_TELA}?situacao=AGUARDANDO_PAGAMENTO&aberto=${j.id}#p${j.id}`;
