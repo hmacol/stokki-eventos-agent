@@ -10,7 +10,15 @@
   .vistas button em.on { display: inline-block; }
   #vista-envios { display: flex; flex-direction: column; gap: 16px; }
   .env-grade { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
-  @media (max-width: 980px) { .env-grade { grid-template-columns: minmax(0, 1fr); } }
+  @media (max-width: 1280px) { .env-grade { grid-template-columns: minmax(0, 1fr); } }
+  /* Tabela de envios (19/11): colunas com largura pensada pra caber sem cortar "Ações" */
+  #env-tabela th, #env-tabela td { padding-left: 8px; padding-right: 8px; }
+  #env-tabela td:nth-child(1) { white-space: normal; width: 84px; }
+  #env-tabela td:nth-child(3) { min-width: 220px; }
+  #env-tabela th:nth-child(4), #env-tabela td:nth-child(4) { width: 1%; }
+  #env-tabela td:nth-child(7) { white-space: normal; min-width: 96px; }
+  #env-tabela td:nth-child(8) { min-width: 170px; }
+  #env-tabela .acoes-linha { max-width: 230px; }
   .zona { border: 2px dashed var(--borda); border-radius: 10px; padding: 26px 18px; text-align: center; color: var(--texto-suave); cursor: pointer; transition: border-color .15s, background .15s; }
   .zona:hover, .zona.sobre { border-color: var(--acento); background: var(--sucesso-bg); color: var(--texto); }
   .zona b { color: var(--texto); }
