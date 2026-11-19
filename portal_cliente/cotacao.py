@@ -40,6 +40,7 @@ Onde entra o que:
     consultar_cep(cep)                   -> ViaCEP (BrasilAPI de reserva)
 """
 import csv
+import itertools
 import io
 import json
 import logging
@@ -391,10 +392,20 @@ def modelo_lista() -> bytes:
     return buf.getvalue()
 
 
+# Tetos da lista enviada (19/11, revisão de segurança): um .xlsx de poucos KB pode declarar 16 mil
+# colunas e milhões de linhas, e o openpyxl (read_only) completa cada linha até a coluna declarada.
+# O modelo tem 8 colunas e a cotação aceita no máximo `max_paradas` (25) entregas.
+MAX_BYTES_LISTA = 2 * 1024 * 1024
+MAX_LINHAS_LISTA = 500
+MAX_COLUNAS_LISTA = 50
+
+
 def ler_lista(conteudo: bytes, nome_arquivo: str) -> list[dict]:
     """Planilha (.xlsx) ou .csv com as colunas do modelo -> lista de paradas
     (ainda sem validação; normalizar_paradas faz isso)."""
     nome = (nome_arquivo or "").lower()
+    if len(conteudo or b"") > MAX_BYTES_LISTA:
+        raise ErroCotacao("Arquivo grande demais (limite de 2 MB). Use o modelo .xlsx ou um .csv.")
     linhas: list[list] = []
     if nome.endswith(".csv") or nome.endswith(".txt"):
         texto = conteudo.decode("utf-8-sig", errors="replace")
@@ -403,15 +414,26 @@ def ler_lista(conteudo: bytes, nome_arquivo: str) -> list[dict]:
         except csv.Error:
             dialeto = csv.excel
             dialeto.delimiter = ";"
-        linhas = [r for r in csv.reader(io.StringIO(texto), dialeto)]
+        try:
+            linhas = [r[:MAX_COLUNAS_LISTA] for r in itertools.islice(csv.reader(io.StringIO(texto), dialeto),
+                                                                       MAX_LINHAS_LISTA + 1)]
+        except csv.Error:
+            raise ErroCotacao("Não consegui ler o arquivo. Use o modelo .xlsx ou um .csv.")
     else:
         import openpyxl
         try:
             wb = openpyxl.load_workbook(io.BytesIO(conteudo), read_only=True, data_only=True)
         except Exception:
             raise ErroCotacao("Não consegui ler o arquivo. Use o modelo .xlsx ou um .csv.")
-        ws = wb.active
-        linhas = [list(r) for r in ws.iter_rows(values_only=True)]
+        try:
+            linhas = [list(r) for r in wb.active.iter_rows(max_row=MAX_LINHAS_LISTA + 1, max_col=MAX_COLUNAS_LISTA,
+                                                           values_only=True)]
+        except Exception:
+            raise ErroCotacao("Não consegui ler o arquivo. Use o modelo .xlsx ou um .csv.")
+        finally:
+            wb.close()
+    if len(linhas) > MAX_LINHAS_LISTA:
+        raise ErroCotacao(f"Lista grande demais: no máximo {MAX_LINHAS_LISTA} linhas.")
     linhas = [l for l in linhas if any(c not in (None, "") for c in l)]
     if not linhas:
         raise ErroCotacao("Arquivo vazio.")

@@ -347,6 +347,17 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
                 status=None if rota_cancelada else _SITUACAO_PARA_PEDIDO.get(situacao),
                 vuupt_service_id=service_id,
             )
+            # Serviço por serviço (18/11): sobrevive à recriação com o mesmo código.
+            # Rota cancelada não diz em que rota o serviço ficou.
+            nucleo_pedidos.registrar_servico(
+                conn, service_id, s["code"],
+                {"vuupt_route_id": None if rota_cancelada else vuupt_route_id,
+                 "status_provedor": s.get("status"), "status_done_provedor": s.get("status_done"),
+                 "reentrega_de_service_id": s.get("recreated_order_origin_id"),
+                 "criado_em_provedor": vuupt_para_local(s.get("created_at")),
+                 "concluido_em": vuupt_para_local(s.get("completed_at"))},
+                status=None if rota_cancelada else _SITUACAO_PARA_PEDIDO.get(situacao),
+            )
 
     # Parada que SAIU da rota na VUUPT (movida pra outra rota, desatribuída
     # ou cancelada) continuava ativa aqui pra sempre: o laço só fazia upsert

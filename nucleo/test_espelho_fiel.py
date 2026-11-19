@@ -95,6 +95,40 @@ class TestUpsertPedido(_BaseTemp):
         self.assertEqual(pedidos.buscar_pedido("PS-6", conn=self.conn)["tipo"], "pickup")
 
 
+class TestReentregaMesmoCodigoPelasRotas(_BaseTemp):
+    """Bug de 29/09: a Vuupt recriou o serviço do PS-40151 com o MESMO código
+    (falhou em 28/09, entregue em 30/09). nucleo_pedidos guarda 1 linha por
+    código, então a contagem de serviços de 28/09 pelo núcleo saía menor."""
+
+    def test_cada_servico_fica_na_sua_rota_e_o_dia_conta_igual_a_vuupt(self):
+        falha = _servico(service_id=9101, code="#PS-40151", status_done="failed")
+        outro = _servico(service_id=9102, code="#PS-40152")
+        reentrega = _servico(service_id=9103, code="#PS-40151", recreated_order_origin_id=9101,
+                             completed_at="2026-09-16 13:00:00")
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(route_id=901, servicos=[falha, outro])], self.conn)
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(route_id=902, start_at="2026-09-16 09:00:00",
+                                                         servicos=[reentrega])], self.conn)
+
+        def servicos_do_dia(dia):
+            return self.conn.execute("""SELECT COUNT(*) FROM nucleo_servicos s
+                                          JOIN nucleo_rotas r ON r.vuupt_route_id = s.vuupt_route_id
+                                         WHERE r.data_rota = ? AND r.status <> 'CANCELADA'""", (dia,)).fetchone()[0]
+
+        self.assertEqual(servicos_do_dia("2026-09-14"), 2)    # a Vuupt: PS-40151 (falhou) + PS-40152
+        self.assertEqual(servicos_do_dia("2026-09-16"), 1)    # a reentrega
+        falhou = self.conn.execute("SELECT * FROM nucleo_servicos WHERE vuupt_service_id = 9101").fetchone()
+        self.assertEqual((falhou["codigo"], falhou["status"], falhou["vuupt_route_id"]), ("PS-40151", "INSUCESSO", 901))
+        self.assertEqual(falhou["concluido_em"], "2026-09-14 10:00:00")   # UTC -> hora local
+
+    def test_rota_cancelada_nao_apaga_status_nem_rota_do_servico(self):
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(route_id=903, servicos=[
+            _servico(service_id=9201, code="#PS-2", status_done="failed")])], self.conn)
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(route_id=903, status="canceled", servicos=[
+            _servico(service_id=9201, code="#PS-2", status_done="failed")])], self.conn)
+        s = self.conn.execute("SELECT status, vuupt_route_id FROM nucleo_servicos WHERE vuupt_service_id = 9201").fetchone()
+        self.assertEqual(tuple(s), ("INSUCESSO", 903))
+
+
 class TestSincronizarCorrigido(_BaseTemp):
     def test_horarios_viram_hora_local_e_data_rota_sai_do_local(self):
         sincronizar_vuupt.sincronizar_rotas([_rota_vuupt()], self.conn)

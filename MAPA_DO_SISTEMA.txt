@@ -1192,7 +1192,13 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
  fluxo_embarcador.py       Fluxo por embarcador (interno.fluxos: armazenagem,
                            full_cross, cross; vazio = armazenagem) e o produto XD
                            do Cross achado em wms_produtos (SKU começando com XD).
- pedidos.py                nucleo_pedidos (upsert, nunca apaga).
+ pedidos.py                nucleo_pedidos (upsert, nunca apaga) = estado ATUAL por código.
+                           registrar_servico -> nucleo_servicos (18/11): 1 linha por
+                           serviço da Vuupt (PK vuupt_service_id), gravada pelos dois
+                           syncs. Reentrega com o MESMO código não apaga a tentativa
+                           que falhou: contar serviços por dia de rota é por aqui
+                           (JOIN nucleo_rotas pelo vuupt_route_id). Só a partir do
+                           deploy; o histórico de antes não foi recuperado.
  rotas.py                  Materializa rota/paradas ao enviar rascunho.
  pool.py                   listar_pool_not_assigned: pool vem da Vuupt ou do
                            núcleo conforme config planejamento.fonte_pool.
@@ -2073,7 +2079,7 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
    grep "CREATE TABLE IF NOT EXISTS <nome>"
 
  Principais grupos
-   nucleo_*                  nucleo/ (pedidos, rotas, paradas, eventos,
+   nucleo_*                  nucleo/ (pedidos, servicos, rotas, paradas, eventos,
                              comprovantes, pedágios, reconciliações...)
    motoristas, tarifas_motorista  nucleo/banco.py
    bd_motoristas, bd_motoristas_alteracoes  regras/motoristas_banco.py (cadastro
