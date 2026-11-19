@@ -1169,8 +1169,13 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            que o tipo_veiculo da rota (Fiorino em rota VAN_HR) não escolhe e o
                            app mostra o motivo. Aviso SEMPRE no grupo "Rotas FRESHLOG" (achado
                            pelo nome no OpenWA; grupo_id no config troca) com entregas, região,
-                           saída, valor aprox. pela tabela de tarifas e link
-                           /motorista/abrir/ofertas. Escolha NÃO troca o motorista: avisa
+                           saída, valor aprox. pela tabela de tarifas e link da oferta
+                           /motorista/abrir/ofertas/<id>-<hmac> (19/11; assinado com
+                           api_motorista.secret_key; template nucleo/templates/oferta_rota.html):
+                           página pública com resumo, local de coleta fixo (base Rua Zilda),
+                           horário de coleta = saída da rota + alerta de janela >= 12h,
+                           pagamento "Alinhar no WhatsApp", botão do app e do /cadastro.
+                           Escolha NÃO troca o motorista: avisa
                            a equipe, que troca na Vuupt; o sync vira APLICADA. Quem recusou deixa
                            de ver a rota; no prazo o original ainda aceita se ninguém pegou.
                            Liga em api_motorista.rota_sem_aceite (ativo, horario_limite, todos,
