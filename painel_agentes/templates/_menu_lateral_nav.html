@@ -136,7 +136,7 @@
     {% set sanfona = titulo_area and visiveis | length > 1 %}
     {% if sanfona %}
     {# name= igual em todas: o navegador fecha a área aberta ao abrir outra. #}
-    <details class="grupo" name="menu-area" {% if visiveis | selectattr('rota', 'equalto', request.endpoint) | list %}open{% endif %}>
+    <details class="grupo" name="menu-area" data-area="{{ titulo_area }}" {% if visiveis | selectattr('rota', 'equalto', request.endpoint) | list %}open{% endif %}>
       <summary title="{{ titulo_area }}">
         <span class="icone"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">{{ icone_area | safe }}</svg></span>
         <span class="rotulo">{{ titulo_area }}</span>
@@ -162,3 +162,25 @@
     {% endif %}
   {% endfor %}
 </nav>
+<script>
+  // Sanfona permanente (Hugo, 19/11): a area que o usuario abriu ou
+  // fechou fica assim em todas as telas (por navegador). Sem nada
+  // salvo, vale o padrao: abre a area da tela atual. Roda logo depois
+  // do <nav> pra nao piscar.
+  (function() {
+    var CHAVE = "painel_menu_area";
+    var areas = document.querySelectorAll(".sidebar nav details.grupo[data-area]");
+    if (!areas.length) return;
+    var salvo = null;
+    try { salvo = localStorage.getItem(CHAVE); } catch (e) {}
+    if (salvo !== null) {
+      areas.forEach(function(d) { d.open = d.dataset.area === salvo; });
+    }
+    areas.forEach(function(d) {
+      d.addEventListener("toggle", function() {
+        var aberta = document.querySelector(".sidebar nav details.grupo[data-area][open]");
+        try { localStorage.setItem(CHAVE, aberta ? aberta.dataset.area : ""); } catch (e) {}
+      });
+    });
+  })();
+</script>
