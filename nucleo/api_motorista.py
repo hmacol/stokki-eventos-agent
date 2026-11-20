@@ -629,11 +629,17 @@ def criar_app(config: dict | None = None) -> Flask:
         elif r.get("guardar_como") == validacao_fotos.TIPO_FACHADA and parada is not None:
             # Fachada/portão: não vale como canhoto, mas fica guardada
             # (Hugo, 20/11). O app recusa a foto e pede o canhoto.
+            # Falha ao guardar NÃO pode virar erro HTTP: o app trata erro
+            # como "sem sinal" e aceitaria a fachada como canhoto.
             uuid = f"fachada-{sha[:16]}"
-            caminho, caminho_gcs = _guardar_foto(conteudo, parada["codigo"] or f"parada-{parada['id']}",
-                                                 validacao_fotos.TIPO_FACHADA, uuid, _extensao_foto(arquivo))
-            operacao.registrar_comprovante(conn(), parada["id"], agent_id(), validacao_fotos.TIPO_FACHADA, uuid,
-                                           caminho, sha, len(conteudo), banco.agora(), caminho_gcs, validacao=r)
+            try:
+                caminho, caminho_gcs = _guardar_foto(conteudo, parada["codigo"] or f"parada-{parada['id']}",
+                                                     validacao_fotos.TIPO_FACHADA, uuid, _extensao_foto(arquivo))
+                operacao.registrar_comprovante(conn(), parada["id"], agent_id(), validacao_fotos.TIPO_FACHADA, uuid,
+                                               caminho, sha, len(conteudo), banco.agora(), caminho_gcs, validacao=r)
+            except Exception as e:  # noqa: BLE001
+                conn().rollback()
+                logger.warning(f"Fachada da parada {parada['id']} não guardada ({type(e).__name__}: {e}); veredito segue.")
         return jsonify({**validacao_fotos.aplicar_tentativas(cfg, r, tentativa), "sha256": sha})
 
     @app.post("/api/paradas/<int:parada_id>/comprovantes")

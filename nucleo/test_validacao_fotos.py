@@ -526,6 +526,15 @@ class TestApiValidacao(unittest.TestCase):
         self.assertTrue((Path(api_motorista._RAIZ) / rows[0]["caminho_local"]).exists()
                         or Path(rows[0]["caminho_local"]).exists())
 
+    def test_falha_ao_guardar_fachada_ainda_devolve_o_veredito(self):
+        # Erro HTTP aqui faria o app achar que está sem sinal e ACEITAR a
+        # fachada como canhoto (revisão de segurança de 20/11).
+        with _modelo(_leitura_canhoto(documento="NAO_E_DOCUMENTO")), \
+                mock.patch.object(operacao, "registrar_comprovante", side_effect=operacao.OperacaoInvalida("x", 409)):
+            r = self._validar(_imagem(), tipo="CANHOTO", parada_id=self.parada_id, nf="12345", tentativa=1)
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertEqual((r.get_json()["resultado"], r.get_json()["pode_seguir"]), (vf.REPROVADO, False))
+
     def test_fachada_que_chega_pela_fila_nao_vira_canhoto(self):
         with _modelo(_leitura_canhoto(documento="NAO_E_DOCUMENTO")):
             env = self.cli.post(f"/api/paradas/{self.parada_id}/comprovantes", headers=self.h,
