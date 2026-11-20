@@ -50,7 +50,9 @@ _STATUS_PEDIDO_DA_SITUACAO = {
     banco.PARADA_PARCIAL: banco.PEDIDO_ENTREGUE,
     banco.PARADA_INSUCESSO: banco.PEDIDO_INSUCESSO,
 }
-TIPOS_COMPROVANTE = {"CANHOTO", "ASSINATURA", "NF_DEVOLUCAO", "PRODUTO", "OCORRENCIA", "DOCUMENTO"}
+# FACHADA: foto mandada como canhoto que não é documento; guardada, não vale
+# como canhoto (nucleo/validacao_fotos.py, Hugo 20/11). Só o servidor grava.
+TIPOS_COMPROVANTE = {"CANHOTO", "ASSINATURA", "NF_DEVOLUCAO", "PRODUTO", "OCORRENCIA", "DOCUMENTO", "FACHADA"}
 
 # Filtro de sanidade do km por GPS: ponto impreciso ou salto absurdo
 # entre leituras não entra na soma.

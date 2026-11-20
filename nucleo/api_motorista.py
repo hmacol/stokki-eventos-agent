@@ -558,14 +558,21 @@ def criar_app(config: dict | None = None) -> Flask:
         com o motorista ainda no cliente) chega depois pela fila offline e
         NÃO é cobrada de novo no modelo."""
         cfg = app.config["VALIDACAO_FOTOS"]
+        nfs = validacao_fotos.nfs_do_pedido(conn(), parada["codigo"]) if parada is not None else []
+        codigos = validacao_fotos.codigos_base(parada["codigo"]) if parada is not None else []
         ja = validacao_fotos.buscar_validacao(conn(), sha)
         if ja:
-            return {"resultado": ja["resultado"], "motivo": ja["motivo"], "nitidez": ja["nitidez"],
-                    "modelo": ja["modelo"], "no_ato": bool(ja["no_ato"]), **ja.get("dados", {})}
+            salvo = {"resultado": ja["resultado"], "motivo": ja["motivo"], "nitidez": ja["nitidez"],
+                     "modelo": ja["modelo"], **ja.get("dados", {})}
+            # A mesma foto pode servir a outra parada (canhoteira com
+            # várias entregas): refaz a decisão com a leitura guardada.
+            novo = validacao_fotos.redecidir_canhoto(cfg, salvo, nfs_esperadas=nfs, nf_alvo=nf, codigos_pedido=codigos) \
+                if tipo == validacao_fotos.TIPO_CANHOTO else None
+            return {**(novo or salvo), "no_ato": bool(ja["no_ato"])}
         if not cfg["ativo"]:
             return None
-        nfs = validacao_fotos.nfs_do_pedido(conn(), parada["codigo"]) if parada is not None else []
-        r = validacao_fotos.validar_foto(cfg, tipo, conteudo, nfs_esperadas=nfs, nf_alvo=nf, valor_informado=valor)
+        r = validacao_fotos.validar_foto(cfg, tipo, conteudo, nfs_esperadas=nfs, nf_alvo=nf, valor_informado=valor,
+                                         codigos_pedido=codigos)
         validacao_fotos.registrar_validacao(
             conn(), sha, tipo, r, agent_id(),
             f"parada:{parada['id']}" if parada is not None else (f"rota:{rota_id}" if rota_id else None),
@@ -619,6 +626,14 @@ def criar_app(config: dict | None = None) -> Flask:
                               nf=request.form.get("nf"), valor=valor_f, no_ato=True)
         if r is None:
             r = {"resultado": validacao_fotos.NAO_VERIFICADO, "motivo": "Validação automática desligada."}
+        elif r.get("guardar_como") == validacao_fotos.TIPO_FACHADA and parada is not None:
+            # Fachada/portão: não vale como canhoto, mas fica guardada
+            # (Hugo, 20/11). O app recusa a foto e pede o canhoto.
+            uuid = f"fachada-{sha[:16]}"
+            caminho, caminho_gcs = _guardar_foto(conteudo, parada["codigo"] or f"parada-{parada['id']}",
+                                                 validacao_fotos.TIPO_FACHADA, uuid, _extensao_foto(arquivo))
+            operacao.registrar_comprovante(conn(), parada["id"], agent_id(), validacao_fotos.TIPO_FACHADA, uuid,
+                                           caminho, sha, len(conteudo), banco.agora(), caminho_gcs, validacao=r)
         return jsonify({**validacao_fotos.aplicar_tentativas(cfg, r, tentativa), "sha256": sha})
 
     @app.post("/api/paradas/<int:parada_id>/comprovantes")
@@ -652,9 +667,18 @@ def criar_app(config: dict | None = None) -> Flask:
         # conferência não aconteceu com o motorista no cliente.
         validacao = _validar_conteudo(tipo, conteudo, sha, parada=p, nf=request.form.get("nf"), no_ato=False) \
             if tipo == validacao_fotos.TIPO_CANHOTO else None
-        caminho, caminho_gcs = _guardar_foto(conteudo, codigo, tipo, uuid or sha[:16], ext)
+        if validacao and validacao.get("guardar_como") == validacao_fotos.TIPO_FACHADA:
+            # Chegou pela fila (sem sinal na hora) e não é canhoto: guarda
+            # como FACHADA -- a parada continua sem canhoto (Hugo, 20/11).
+            tipo = validacao_fotos.TIPO_FACHADA
+        # Texto na posição de leitura (Hugo, 20/11); o sha256 segue o do
+        # original (idempotência e cache da validação).
+        gravar = validacao_fotos.corrigir_orientacao(conteudo, validacao)
+        if gravar is not conteudo:
+            ext = "jpg"
+        caminho, caminho_gcs = _guardar_foto(gravar, codigo, tipo, uuid or sha[:16], ext)
         resultado = operacao.registrar_comprovante(
-            conn(), parada_id, agent_id(), tipo, uuid or sha, caminho, sha, len(conteudo), capturado_em, caminho_gcs,
+            conn(), parada_id, agent_id(), tipo, uuid or sha, caminho, sha, len(gravar), capturado_em, caminho_gcs,
             validacao=validacao,
         )
         return jsonify({**resultado, "gcs": caminho_gcs is not None,

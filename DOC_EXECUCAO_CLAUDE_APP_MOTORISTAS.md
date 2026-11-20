@@ -244,7 +244,8 @@ testado; **desligado por padrão** — o Hugo não quer o custo agora.
 api_motorista:
   validacao_fotos:
     ativo: true                 # padrão false -- tudo se comporta como hoje
-    modelo: claude-haiku-4-5    # decisão do Hugo; Sonnet 5 custa 2x
+    modelo: claude-haiku-5-5    # padrão desde 20/11 (era haiku-4-5, que errava NF)
+    esforco: low                # o haiku-4-5 nunca recebe effort
     nitidez_minima: 40
     max_tentativas: 2
     exigir_nf: true
@@ -282,14 +283,47 @@ Depois de `max_tentativas` o servidor devolve `pode_seguir=true` e o app
 oferece "Não consigo melhorar" — a foto segue marcada pra revisão
 humana. Sem sinal, ou com a validação desligada, **nunca trava**.
 
-**Custo** (imagem reduzida a 1600 px ≈ 2.200 tokens + 600 de instrução +
-150 de resposta; ~4.000 fotos/mês estimadas a partir de 3.620 paradas em
-30 dias, 1,3 foto/parada e 15% de repetição):
+**Regras do Hugo de 20/11** (depois do teste com as 66 fotos reais de
+canhoto do app, nov/2026):
+
+- **Canhoteira da FreshLog vale como canhoto.** A folha junta várias
+  entregas, então a conferência é pela **linha do PS da parada**: a linha
+  tem que aparecer na foto e ter recebedor ou assinatura. NF não é
+  cobrada (a folha sai com "NF —"). Folha cortada sem cabeçalho também
+  conta: qualquer linha "PS-xxx" lida aciona essa regra. A mesma foto
+  serve a várias paradas — a decisão é refeita por parada a partir da
+  leitura guardada (`redecidir_canhoto`), sem pagar o modelo de novo.
+- **Fachada / portão / carga não vale.** A foto é gravada como
+  comprovante **FACHADA** (não conta como canhoto em nenhum lugar: telas,
+  expedição, ponte da Vuupt) e o app pede outra foto — **sem** o "não
+  consigo melhorar", nem depois das tentativas. Chegou pela fila (sem
+  sinal na hora)? Grava como FACHADA e a parada segue sem canhoto.
+- **Foto em pé.** A leitura diz em que sentido corre o texto
+  (`sentido_do_texto`) e a foto **gravada** sai girada. Como o modelo
+  troca direita por esquerda em ~4% das fotos (aí a foto sai de cabeça
+  pra baixo), a foto já girada volta pro modelo com uma pergunta só
+  ("em pé ou de cabeça pra baixo?") e, se invertida, ganha meia volta.
+  Resultado medido: 66 de 66 em pé (sem a conferência: 63-64 de 66).
+  O `sha256` gravado continua o do arquivo original.
+- A conferência continua **na hora da foto**, com o motorista no
+  cliente (o app manda pra `/api/fotos/validar` logo que a câmera fecha).
+  Nenhuma mudança no app: não precisa de OTA.
+
+**Teste de 20/11 (66 fotos reais, prod, só leitura):** Haiku 4.5
+reprovou 40 (23 eram canhotos bons com NF lida errada); Haiku 5.5 com as
+regras novas reprovou 14 — 11 fachadas/carga, 2 desfocadas de verdade e 1
+minuta de transportadora sem NF legível. O modelo barato oscila entre
+rodadas nos casos de fronteira (folha cortada, foto tremida): por isso a
+regra da canhoteira olha as linhas PS e não só o rótulo do documento.
+
+**Custo** medido no teste de 20/11 (≈ 6.300 tokens de entrada e 500 de
+saída por foto, contando a conferência do giro em ~55% delas; ~2.400
+fotos/mês = ~2.000 entregas + reenvios):
 
 | Modelo | Por foto | Por mês |
 |---|---|---|
-| Haiku 4.5 (escolhido) | US$ 0,0036 | ~US$ 14 (R$ 78) |
-| Sonnet 5 | US$ 0,0071 | ~US$ 28 (R$ 153) |
+| Haiku 5.5, esforço low (padrão) | US$ 0,0009 | ~US$ 2,10 |
+| Haiku 4.5 (antigo; sem regras de 20/11) | US$ 0,0030 | ~US$ 7 |
 
 Trocar de modelo é uma linha do config. **O resultado é guardado por
 `sha256`** (`nucleo_validacoes_foto`): a foto conferida no ato e depois
@@ -306,7 +340,8 @@ enviada pela fila **não paga o modelo duas vezes**.
 | Tela "Canhotos" (fila da revisão humana) + badge no menu | `painel_agentes/templates/canhotos.html`, `painel_agentes.py`, `contadores_menu.py` |
 | Veredito do recibo na tela de Pedágios | `painel_agentes/templates/pedagios.html` |
 | App: bloco por NF, conferência na captura, "não consigo melhorar" | `app_motorista/app/parada/[id].tsx`, `app/rota/[id].tsx`, `src/api.ts`, `src/tipos.ts`, `src/fila.ts` |
-| Testes (40, sem rede e sem custo) | `nucleo/test_validacao_fotos.py` |
+| Testes (60, sem rede e sem custo) | `nucleo/test_validacao_fotos.py` |
+| Tipo FACHADA; a ponte da Vuupt não conta FACHADA como foto enviada | `nucleo/operacao.py`, `nucleo/ponte_vuupt.py` |
 
 **Antes de ligar:** (1) rodar `calibrar_nitidez.py` com fotos do app;
 (2) OTA do app (a tela precisa do bloco por NF e do botão de conferir);

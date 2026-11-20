@@ -1341,7 +1341,11 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
  recalcular_km_rotas.py    Backfill de km.
  chamados_motorista.py     Chat "Ajuda" -> fila /atendimento do painel.
  assistente_motorista.py   Triagem com Claude.
- validacao_fotos.py        Nitidez + Claude conferindo NF/recibo.
+ validacao_fotos.py        Nitidez + Claude conferindo NF/recibo (DESLIGADA; liga em
+                           api_motorista.validacao_fotos.ativo). 20/11: Haiku 5.5,
+                           Canhoteira FreshLog pela linha do PS, foto que nao e
+                           documento vira comprovante FACHADA (nao conta como
+                           canhoto) e a foto gravada sai girada pra leitura.
  calibrar_nitidez.py       Calibra o limiar.
  marketplace_remoto.py     Cliente da página pública de ofertas.
 
