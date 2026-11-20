@@ -120,6 +120,20 @@ class TestReentregaMesmoCodigoPelasRotas(_BaseTemp):
         self.assertEqual((falhou["codigo"], falhou["status"], falhou["vuupt_route_id"]), ("PS-40151", "INSUCESSO", 901))
         self.assertEqual(falhou["concluido_em"], "2026-09-14 10:00:00")   # UTC -> hora local
 
+    def test_rota_operada_pelo_app_tambem_entra_com_o_resultado_do_app(self):
+        """20/11 em produção: 29 serviços de 19/11 faltavam -- rota com
+        operada_app=1 saía do laço (preserva_app) antes de gravar."""
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(route_id=904, status="started", servicos=[
+            _servico(service_id=9301, code="#PS-3", status="assigned", status_done=None)])], self.conn)
+        self.conn.execute("DELETE FROM nucleo_servicos")   # serviço visto só antes do deploy
+        self.conn.execute("UPDATE nucleo_rotas SET operada_app = 1 WHERE vuupt_route_id = 904")
+        self.conn.execute("UPDATE nucleo_paradas SET situacao = 'ENTREGUE' WHERE service_id = 9301")   # o app deu baixa
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(route_id=904, status="started", servicos=[
+            _servico(service_id=9301, code="#PS-3", status="assigned", status_done=None)])], self.conn)
+        s = self.conn.execute("SELECT status, vuupt_route_id FROM nucleo_servicos WHERE vuupt_service_id = 9301").fetchone()
+        self.assertIsNotNone(s, "serviço de rota operada pelo app não entrou em nucleo_servicos")
+        self.assertEqual(tuple(s), ("ENTREGUE", 904))     # vale o app, não a cópia atrasada da Vuupt
+
     def test_rota_cancelada_nao_apaga_status_nem_rota_do_servico(self):
         sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(route_id=903, servicos=[
             _servico(service_id=9201, code="#PS-2", status_done="failed")])], self.conn)
