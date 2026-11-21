@@ -121,6 +121,7 @@ import avisos_pendencias
 from galpao3d import banco as galpao3d_banco, estado as galpao3d_estado
 import retornos
 import pagamentos_pontuais
+import compras
 
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
@@ -4615,6 +4616,125 @@ def pagamento_arquivo(pagamento_id, nome):
     if caminho is None:
         abort(404)
     return send_file(caminho)
+
+
+# ── Demandas de compra (Hugo, 19/11) ──────────────────────────────────────────
+# A equipe registra o que precisa comprar, a Vivian marca como comprada. Lógica,
+# aprovação (desligada por padrão) e trava do WhatsApp em compras.py; aqui só HTTP.
+# Quem vê a tela é definido em /acessos (tela "Compras"); aprovar/recusar é só do nível total.
+
+NIVEIS_COMPRAS = ("total",)
+
+
+def _usuario_compras() -> str:
+    return getattr(g, "nome_usuario", "") or session.get("usuario") or g.nivel_acesso
+
+
+def _pode_aprovar_compras() -> bool:
+    return g.nivel_acesso == "total"
+
+
+@app.route("/compras")
+@requer_auth(niveis=NIVEIS_COMPRAS)
+def compras_tela():
+    situacao = (request.args.get("situacao") or compras.PENDENTE).upper()
+    if situacao != "TODAS" and situacao not in compras.SITUACOES:
+        situacao = compras.PENDENTE
+    config = _carregar_config()
+    conn = compras.conectar()
+    try:
+        itens = compras.listar(conn, None if situacao == "TODAS" else situacao)
+        contagem = compras.contagem(conn)
+    finally:
+        conn.close()
+    for d in itens:
+        d["pode_reenviar"] = compras.pode_reenviar(d)
+    cfg = compras.config_compras(config)
+    return render_template("compras.html", itens=itens, situacao=situacao, contagem=contagem, c=compras,
+                           envio_ligado=cfg["ativo"], aprovacao_ligada=cfg["aprovacao_ativa"],
+                           pode_aprovar=_pode_aprovar_compras(), hoje=date.today().isoformat())
+
+
+def _resposta_compra(conn, demanda_id: int, evento: str | None):
+    aviso = compras.disparar_aviso(conn, demanda_id, evento, _carregar_config()) if evento else None
+    return jsonify({"ok": True, "id": demanda_id, "demanda": compras.obter(conn, demanda_id), "aviso": aviso})
+
+
+def _acao_compra(demanda_id, evento, func, exige_aprovador=False):
+    if exige_aprovador and not _pode_aprovar_compras():
+        return jsonify({"erro": "Só o nível total aprova ou recusa compras."}), 403
+    conn = compras.conectar()
+    try:
+        func(conn)
+        return _resposta_compra(conn, demanda_id, evento)
+    except compras.ErroCompra as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/compras", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COMPRAS)
+@exige_mesma_origem
+def api_compras_criar():
+    dados = request.get_json(silent=True) or {}
+    conn = compras.conectar()
+    try:
+        novo_id = compras.criar(conn, dados, _usuario_compras(), _carregar_config())
+        return _resposta_compra(conn, novo_id, "criacao")
+    except compras.ErroCompra as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/compras/<int:demanda_id>/aprovar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COMPRAS)
+@exige_mesma_origem
+def api_compras_aprovar(demanda_id):
+    return _acao_compra(demanda_id, "aprovacao", lambda conn: compras.aprovar(conn, demanda_id, _usuario_compras()),
+                        exige_aprovador=True)
+
+
+@app.route("/api/compras/<int:demanda_id>/recusar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COMPRAS)
+@exige_mesma_origem
+def api_compras_recusar(demanda_id):
+    motivo = (request.get_json(silent=True) or {}).get("motivo")
+    return _acao_compra(demanda_id, "recusa", lambda conn: compras.recusar(conn, demanda_id, motivo, _usuario_compras()),
+                        exige_aprovador=True)
+
+
+@app.route("/api/compras/<int:demanda_id>/comprar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COMPRAS)
+@exige_mesma_origem
+def api_compras_comprar(demanda_id):
+    dados = request.get_json(silent=True) or {}
+    return _acao_compra(demanda_id, "compra", lambda conn: compras.marcar_comprada(conn, demanda_id, dados, _usuario_compras()))
+
+
+@app.route("/api/compras/<int:demanda_id>/cancelar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COMPRAS)
+@exige_mesma_origem
+def api_compras_cancelar(demanda_id):
+    motivo = (request.get_json(silent=True) or {}).get("motivo")
+    return _acao_compra(demanda_id, "cancelamento", lambda conn: compras.cancelar(conn, demanda_id, motivo, _usuario_compras()))
+
+
+@app.route("/api/compras/<int:demanda_id>/reenviar-aviso", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COMPRAS)
+@exige_mesma_origem
+def api_compras_reenviar_aviso(demanda_id):
+    conn = compras.conectar()
+    try:
+        d = compras.obter(conn, demanda_id)
+        if not d:
+            return jsonify({"erro": "Demanda não encontrada."}), 404
+        if not compras.pode_reenviar(d):
+            return jsonify({"erro": "Esse aviso não está pendente de reenvio."}), 400
+        return _resposta_compra(conn, demanda_id, d["aviso_evento"])
+    finally:
+        conn.close()
 
 
 # ── Canhotos: conferência das fotos do app (Hugo, 12/09) ─────────────────────
