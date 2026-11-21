@@ -25,7 +25,9 @@ O QUE SAI, em gs://<bucket>/arquivo_vuupt/:
 
 RETOMÁVEL: o estado fica em dados/arquivo_vuupt_estado.json (janelas
 prontas) e dados/arquivo_vuupt_pdfs.txt (ids de PDF já salvos). Rodar de
-novo continua de onde parou; janela pronta não é baixada duas vezes.
+novo continua de onde parou; janela pronta não é baixada duas vezes, exceto
+o mês corrente e o anterior (meses_em_aberto), refeitos toda noite pra pegar
+os canhotos novos.
 
 COMO USAR (VPS, como www-data):
     venv/bin/python nucleo/exportar_historico_vuupt.py --fase entidades
@@ -102,6 +104,13 @@ def meses(desde: str, ate: str) -> list[str]:
     return saida
 
 
+def meses_em_aberto(hoje: date) -> set[str]:
+    """Mês corrente e o anterior: ainda recebem rota/serviço/canhoto, então
+    são baixados de novo a cada rodada em vez de ficarem marcados prontos."""
+    anterior = (hoje.year - 1, 12) if hoje.month == 1 else (hoje.year, hoje.month - 1)
+    return {hoje.strftime("%Y-%m"), f"{anterior[0]:04d}-{anterior[1]:02d}"}
+
+
 def _limites(mes: str) -> tuple[str, str]:
     ano, m = (int(x) for x in mes.split("-"))
     inicio = f"{ano:04d}-{m:02d}-01 00:00:00"
@@ -148,15 +157,16 @@ def enviar_jsonl(config: dict, linhas: list[dict], caminho_gcs: str) -> int:
 
 
 def exportar_entidades(token: str, config: dict, estado: dict, desde: str, ate: str, rps: float,
-                       modo_teste: bool, apenas: list[str] | None) -> dict:
+                       modo_teste: bool, apenas: list[str] | None, hoje: date | None = None) -> dict:
     resumo = {}
+    em_aberto = meses_em_aberto(hoje or date.today())
     for entidade, (_, _, campo_data, _) in ENTIDADES.items():
         if apenas and entidade not in apenas:
             continue
         janelas = meses(desde, ate) if campo_data else ["completo"]
         for janela in janelas:
             chave = f"{entidade}/{janela}"
-            if chave in estado["janelas"]:
+            if chave in estado["janelas"] and janela not in em_aberto:
                 continue
             linhas, total = baixar_tudo(token, entidade, None if janela == "completo" else janela, rps)
             if not linhas:
