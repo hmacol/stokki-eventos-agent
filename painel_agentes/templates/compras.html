@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+{% block titulo %}Compras{% endblock %}
+{% block estilo_extra %}
+<style>
+  .cabecalho-pagina { margin-bottom: 16px; }
+  .cabecalho-pagina h1 { font-size: 21px; margin: 0; letter-spacing: -0.2px; }
+  .cabecalho-pagina p { margin: 5px 0 0; color: var(--texto-suave); font-size: 12.5px; max-width: 640px; line-height: 1.45; }
+  .aviso-simulacao { background: var(--teste-bg); color: var(--teste-texto); border-radius: 10px; padding: 10px 14px; font-size: 12.5px; line-height: 1.45; margin-bottom: 14px; }
+  .aviso-simulacao strong { display: block; }
+
+  .lancar { background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px; padding: 16px; margin-bottom: 18px; }
+  .lancar h2 { font-size: 14px; margin: 0 0 12px; }
+  .grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 14px; }
+  .campo { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .campo.largo { grid-column: 1 / -1; }
+  .campo label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--texto-suave); }
+  .campo input, .campo select, .campo textarea { padding: 0 10px; height: 36px; border: 1px solid var(--borda); border-radius: 7px; background: var(--fundo); color: var(--texto); font-size: 13.5px; font-family: inherit; width: 100%; box-sizing: border-box; }
+  .campo textarea { height: 58px; padding: 8px 10px; resize: vertical; }
+  .campo input:focus, .campo select:focus, .campo textarea:focus { outline: none; border-color: var(--acento); box-shadow: 0 0 0 3px color-mix(in srgb, var(--acento) 22%, transparent); }
+  .campo.invalido input, .campo.invalido select, .campo.invalido textarea { border-color: var(--erro); }
+  .rodape-form { display: flex; align-items: center; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+  .botao-principal { height: 38px; padding: 0 18px; border-radius: 8px; border: none; background: var(--acento); color: #06170F; font-weight: 700; font-size: 13.5px; cursor: pointer; font-family: inherit; }
+  .botao-principal:disabled { opacity: 0.55; cursor: default; }
+  .erro-form { color: var(--erro); font-size: 12.5px; font-weight: 600; }
+
+  .abas { display: flex; gap: 4px; flex-wrap: wrap; padding: 4px; background: var(--superficie); border: 1px solid var(--borda); border-radius: 100px; width: fit-content; margin-bottom: 12px; }
+  .abas a { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 100px; color: var(--texto-suave); font-size: 12.5px; font-weight: 600; text-decoration: none; }
+  .abas a:hover { background: var(--fundo); color: var(--texto); }
+  .abas a.ativa { background: var(--primaria); color: #fff; }
+  html.tema-escuro .abas a.ativa { background: var(--acento); color: #06170F; }
+  .abas a .n { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 100px; background: var(--fundo); color: var(--texto-suave); font-variant-numeric: tabular-nums; }
+  .abas a.ativa .n { background: rgba(255,255,255,0.22); color: inherit; }
+
+  .lista { display: flex; flex-direction: column; gap: 10px; }
+  .item { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .item .topo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .item .numero { font-weight: 800; font-variant-numeric: tabular-nums; }
+  .item .nome { font-weight: 700; font-size: 14.5px; }
+  .chip { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; padding: 2px 8px; border-radius: 100px; background: var(--nunca-bg); color: var(--texto-suave); }
+  .chip.urgente { background: var(--erro); color: #fff; }
+  .chip.alta { background: var(--interrompido-bg); color: var(--interrompido-texto); }
+  .chip.comprada { background: var(--sucesso-bg); color: var(--sucesso); }
+  .chip.aguardando_aprovacao { background: var(--teste-bg); color: var(--teste-texto); }
+  .detalhes { font-size: 12.5px; color: var(--texto-suave); line-height: 1.55; }
+  .detalhes strong { color: var(--texto); }
+  .linha-acoes { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; border-top: 1px solid var(--borda); padding-top: 10px; }
+  .linha-acoes button { height: 32px; padding: 0 12px; border-radius: 7px; font-size: 12.5px; font-weight: 600; cursor: pointer; border: 1px solid var(--borda); background: transparent; color: var(--texto); font-family: inherit; }
+  .linha-acoes button:hover { background: var(--fundo); }
+  .linha-acoes button.confirmar { background: var(--acento); color: #06170F; border-color: transparent; font-weight: 700; }
+  .linha-acoes button.cancelar { color: var(--erro); border-color: color-mix(in srgb, var(--erro) 45%, transparent); }
+  .linha-acoes button:disabled { opacity: 0.5; cursor: default; }
+  .linha-acoes .erro-linha { color: var(--erro); font-size: 12px; font-weight: 600; }
+  .painel-acao { border: 1px dashed var(--borda); border-radius: 10px; padding: 12px; }
+  .painel-acao[hidden] { display: none; }
+  .aviso-whats summary { cursor: pointer; color: var(--texto-suave); font-size: 12px; width: fit-content; }
+  .aviso-whats pre { white-space: pre-wrap; font-family: inherit; font-size: 12.5px; background: var(--fundo); border: 1px solid var(--borda); border-radius: 8px; padding: 10px 12px; margin: 8px 0 0; max-width: 560px; color: var(--texto); }
+  .vazio { padding: 40px 20px; text-align: center; color: var(--texto-suave); font-size: 13px; background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; }
+</style>
+{% endblock %}
+
+{% macro quando(iso) %}{% if iso %}{{ iso[8:10] }}/{{ iso[5:7] }} {{ iso[11:16] }}{% endif %}{% endmacro %}
+{% macro dia(iso) %}{% if iso %}{{ iso[8:10] }}/{{ iso[5:7] }}/{{ iso[0:4] }}{% endif %}{% endmacro %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <h1>Compras</h1>
+  <p>Registre o que precisa ser comprado. A lista fica <strong>por prioridade</strong> (urgente primeiro). Quem compra marca como comprada e guarda os dados da compra. Os avisos vão pro grupo <strong>{{ c.NOME_GRUPO }}</strong> no WhatsApp.
+  {% if aprovacao_ligada %}Toda demanda nova <strong>espera aprovação</strong> antes de aparecer como pendente para compra.{% endif %}</p>
+</div>
+
+{% if not envio_ligado %}
+<div class="aviso-simulacao" role="status"><strong>Modo simulação: nada é enviado ao WhatsApp.</strong>
+  Cada ação mostra a mensagem que iria pro grupo. O Hugo liga o envio real no config (<code>compras.ativo</code>).</div>
+{% endif %}
+
+<form class="lancar" id="form-nova" novalidate>
+  <h2>Nova demanda de compra</h2>
+  <div class="grade">
+    <div class="campo" id="c-item"><label for="f-item">Item</label><input type="text" id="f-item" name="item" maxlength="120" autocomplete="off"></div>
+    <div class="campo" id="c-quantidade"><label for="f-quantidade">Quantidade</label><input type="text" id="f-quantidade" name="quantidade" maxlength="40" placeholder="Ex.: 10 caixas" autocomplete="off"></div>
+    <div class="campo" id="c-prioridade"><label for="f-prioridade">Prioridade</label>
+      <select id="f-prioridade" name="prioridade">{% for k, v in c.PRIORIDADES.items() %}<option value="{{ k }}"{% if k == c.PRIORIDADE_PADRAO %} selected{% endif %}>{{ v }}</option>{% endfor %}</select></div>
+    <div class="campo largo" id="c-motivo"><label for="f-motivo">Motivo</label><input type="text" id="f-motivo" name="motivo" maxlength="300" autocomplete="off"></div>
+    <div class="campo largo"><label for="f-observacoes">Observações (opcional)</label><textarea id="f-observacoes" name="observacoes" maxlength="500"></textarea></div>
+  </div>
+  <div class="rodape-form"><button type="submit" class="botao-principal" id="btn-criar">Registrar demanda</button><span class="erro-form" id="erro-form" role="alert"></span></div>
+</form>
+
+<nav class="abas" aria-label="Situação">
+  {% for chave, rotulo in [('PENDENTE', 'Pendentes')] + ([('AGUARDANDO_APROVACAO', 'Aguardando aprovação')] if aprovacao_ligada or contagem['AGUARDANDO_APROVACAO'] else []) + [('COMPRADA', 'Compradas'), ('RECUSADA', 'Recusadas'), ('CANCELADA', 'Canceladas'), ('TODAS', 'Todas')] %}
+  <a href="{{ url_for('compras_tela', situacao=chave) }}" class="{{ 'ativa' if situacao == chave }}">{{ rotulo }}{% if chave != 'TODAS' %} <span class="n">{{ contagem[chave] }}</span>{% endif %}</a>
+  {% endfor %}
+</nav>
+
+{% if not itens %}
+<div class="vazio">Nenhuma demanda nesta lista.</div>
+{% else %}
+<div class="lista">
+  {% for d in itens %}
+  <article class="item" id="d{{ d.id }}" data-id="{{ d.id }}">
+    <div class="topo">
+      <span class="numero">#{{ d.id }}</span>
+      <span class="nome">{{ d.item }} — {{ d.quantidade }}</span>
+      <span class="chip {{ d.prioridade|lower }}">{{ c.PRIORIDADES[d.prioridade] }}</span>
+      <span class="chip {{ d.situacao|lower }}">{{ c.SITUACOES[d.situacao] }}</span>
+    </div>
+    <div class="detalhes">
+      <div><strong>Motivo:</strong> {{ d.motivo }}</div>
+      {% if d.observacoes %}<div><strong>Obs.:</strong> {{ d.observacoes }}</div>{% endif %}
+      <div>Pedida por {{ d.criado_por }} em {{ quando(d.criado_em) }}</div>
+      {% if d.aprovado_por %}<div>Aprovada por {{ d.aprovado_por }} em {{ quando(d.aprovado_em) }}</div>{% endif %}
+      {% if d.situacao == 'RECUSADA' %}<div><strong>Recusada</strong> por {{ d.recusado_por }} em {{ quando(d.recusado_em) }}: {{ d.motivo_recusa }}</div>{% endif %}
+      {% if d.situacao == 'CANCELADA' %}<div><strong>Cancelada</strong> por {{ d.cancelado_por }} em {{ quando(d.cancelado_em) }}: {{ d.motivo_cancelamento }}</div>{% endif %}
+      {% if d.situacao == 'COMPRADA' %}
+      <div><strong>Comprada</strong> por {{ d.comprado_por }} em {{ dia(d.data_compra) }}
+        {% if d.fornecedor %} · fornecedor {{ d.fornecedor }}{% endif %}
+        {% if d.valor is not none %} · R$ {{ "%.2f"|format(d.valor)|replace('.', ',') }}{% endif %}</div>
+      {% if d.compra_obs %}<div><strong>Obs. da compra:</strong> {{ d.compra_obs }}</div>{% endif %}
+      {% endif %}
+    </div>
+
+    {% if d.situacao in ('PENDENTE', 'AGUARDANDO_APROVACAO') %}
+    <div class="painel-acao" hidden data-painel="comprar">
+      <div class="grade">
+        <div class="campo"><label>Data da compra</label><input type="date" name="data_compra" value="{{ hoje }}" max="{{ hoje }}"></div>
+        <div class="campo"><label>Fornecedor (opcional)</label><input type="text" name="fornecedor" maxlength="120"></div>
+        <div class="campo"><label>Valor (opcional)</label><input type="text" name="valor" inputmode="decimal" placeholder="0,00"></div>
+        <div class="campo largo"><label>Observação da compra (opcional)</label><input type="text" name="compra_obs" maxlength="500"></div>
+      </div>
+      <div class="linha-acoes" style="border:none;padding-bottom:0"><button class="confirmar" data-enviar="comprar">Confirmar compra</button></div>
+    </div>
+    <div class="painel-acao" hidden data-painel="motivo">
+      <div class="campo"><label data-rotulo-motivo>Motivo</label><input type="text" name="motivo" maxlength="300"></div>
+      <div class="linha-acoes" style="border:none;padding-bottom:0"><button class="cancelar" data-enviar="">Confirmar</button></div>
+    </div>
+    <div class="linha-acoes">
+      {% if d.situacao == 'PENDENTE' %}<button class="confirmar" data-abrir="comprar">Marcar como comprada</button>{% endif %}
+      {% if d.situacao == 'AGUARDANDO_APROVACAO' and pode_aprovar %}
+      <button class="confirmar" data-direto="aprovar">Aprovar</button>
+      <button class="cancelar" data-abrir="motivo" data-acao="recusar" data-rotulo="Motivo da recusa">Recusar</button>
+      {% endif %}
+      <button class="cancelar" data-abrir="motivo" data-acao="cancelar" data-rotulo="Motivo do cancelamento">Cancelar demanda</button>
+      <span class="erro-linha" role="alert"></span>
+    </div>
+    {% endif %}
+
+    {% if d.aviso_texto %}
+    <details class="aviso-whats"><summary>Aviso no WhatsApp: {{ d.aviso_situacao }}{% if d.aviso_motivo %} ({{ d.aviso_motivo }}){% endif %}</summary><pre>{{ d.aviso_texto }}</pre>
+      {% if d.pode_reenviar %}<div class="linha-acoes" style="border:none"><button data-reenviar>Tentar enviar de novo</button></div>{% endif %}</details>
+    {% endif %}
+  </article>
+  {% endfor %}
+</div>
+{% endif %}
+
+<script>
+(function () {
+  const URL_TELA = {{ url_for('compras_tela')|tojson }};
+  const URL_API = {{ url_for('api_compras_criar')|tojson }};
+  const enviar = (url, corpo) => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(corpo || {}) })
+    .then(async r => ({ ok: r.ok, j: await r.json().catch(() => ({})) }))
+    .catch(() => ({ ok: false, j: { erro: "Sem conexão com o painel. Tente de novo." } }));
+
+  const form = document.getElementById("form-nova");
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const erro = document.getElementById("erro-form"), b = document.getElementById("btn-criar");
+    erro.textContent = ""; b.disabled = true;
+    const corpo = Object.fromEntries(new FormData(form).entries());
+    const { ok, j } = await enviar(URL_API, corpo);
+    if (!ok) { erro.textContent = j.erro || "Não deu pra registrar."; b.disabled = false; return; }
+    location.href = `${URL_TELA}?situacao=${j.demanda.situacao}#d${j.id}`;
+  });
+
+  document.querySelectorAll(".item").forEach(item => {
+    const id = item.dataset.id, erro = item.querySelector(".erro-linha");
+    const chamar = async (botao, acao, corpo) => {
+      if (erro) erro.textContent = "";
+      botao.disabled = true;
+      const { ok, j } = await enviar(`${URL_API}/${id}/${acao}`, corpo);
+      if (!ok) { if (erro) erro.textContent = j.erro || "Não deu certo."; botao.disabled = false; return; }
+      location.href = `${URL_TELA}?situacao=${j.demanda.situacao}#d${id}`;
+    };
+    item.querySelectorAll("[data-abrir]").forEach(b => b.addEventListener("click", () => {
+      const painel = item.querySelector(`[data-painel="${b.dataset.abrir}"]`);
+      item.querySelectorAll(".painel-acao").forEach(p => { if (p !== painel) p.hidden = true; });
+      if (b.dataset.acao) { painel.dataset.acao = b.dataset.acao; painel.querySelector("[data-rotulo-motivo]").textContent = b.dataset.rotulo; }
+      painel.hidden = !painel.hidden;
+    }));
+    item.querySelectorAll("[data-direto]").forEach(b => b.addEventListener("click", () => chamar(b, b.dataset.direto)));
+    item.querySelectorAll("[data-reenviar]").forEach(b => b.addEventListener("click", () => chamar(b, "reenviar-aviso")));
+    item.querySelectorAll(".painel-acao button[data-enviar]").forEach(b => b.addEventListener("click", () => {
+      const painel = b.closest(".painel-acao");
+      const corpo = {};
+      painel.querySelectorAll("input").forEach(i => { corpo[i.name] = i.value; });
+      chamar(b, b.dataset.enviar || painel.dataset.acao, corpo);
+    }));
+  });
+})();
+</script>
+{% endblock %}

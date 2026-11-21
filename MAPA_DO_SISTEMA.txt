@@ -272,6 +272,14 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              Frete avulso: descrição + valor cobrado do cliente (margem) + anexo opcional.
                                              Envio DESLIGADO por padrão (pagamentos_pontuais.ativo; desligado =
                                              só a prévia na tela). Não entra no extrato do motorista.
+ Compras (demandas de compra, 19/11)         painel_agentes/compras.py + tela /compras (menu lateral; so nivel total
+                                             por nivel, os demais entram por login nominal com a tela "Compras"
+                                             liberada em /acessos). Registra item/qtd/motivo/obs + prioridade, lista
+                                             por prioridade, marca como comprada (data, fornecedor, valor, obs).
+                                             Aviso no grupo "Freshlog Adm/Financeiro/RH" (achado pelo nome).
+                                             DESLIGADOS por padrao: compras.ativo (envio, desligado = so previa na
+                                             tela) e compras.aprovacao_ativa (fluxo de aprovacao: demanda nasce
+                                             AGUARDANDO_APROVACAO e so o nivel total aprova/recusa).
  Justificativas sem canhoto ................ nucleo/justificativas_sem_canhoto.py: lista fixa de justificativas (codigo -> rotulo) e validar()
                                               usada pela API da Torre/Planejamento e pela tela /baixa-sem-app (checklist Vuupt pelas telas).
  Baixa de motorista sem app (iPhone) ....... nucleo/baixa_sem_app.py: item "aguardando baixa" na Torre,
@@ -1485,6 +1493,12 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            pagamentos_pontuais.{ativo (false = "simulado", só prévia na tela),
                            grupo_id (vazio = acha pelo nome), teto_diario (30)}. Aviso que não
                            saiu tem "Reenviar aviso". Testes: test_pagamentos_pontuais.py.
+ compras.py                Demandas de compra (19/11): PENDENTE -> COMPRADA | CANCELADA; com
+                           aprovacao ligada: AGUARDANDO_APROVACAO -> PENDENTE | RECUSADA. Tabela
+                           compras_demandas. Aviso (criacao, aprovacao, recusa, compra, cancelamento) por
+                           notificar_whatsapp.despachar em thread (origem 'compras', cai no teto interno
+                           padrao: se ligar o envio, dar balde proprio como o pagamento_pontual). Config:
+                           compras.{ativo, aprovacao_ativa, grupo_id}. Testes: test_compras.py.
  demandas.py               Demandas (25/10): tarefas pra uma equipe e, opcional, uma
                            pessoa. Cria: total e líderes. Vê: o que é seu, das suas
                            equipes e o que criou (total vê tudo; login fixo vê as
