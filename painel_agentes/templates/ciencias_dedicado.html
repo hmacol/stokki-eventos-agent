@@ -122,8 +122,10 @@
           document.getElementById("hist-sub").textContent = d.envios.length + " tentativa(s) de envio";
           var prova = document.getElementById("hist-resposta");
           if (d.resposta) {
-            prova.textContent = "Respondido por " + d.resposta.por + " em " + fmt(d.resposta.em) + ", IP " + d.resposta.ip +
-              (d.resposta.data_nova ? ". Nova data: " + d.resposta.data_nova.slice(8, 10) + "/" + d.resposta.data_nova.slice(5, 7) : "") + ".";
+            prova.textContent = "Respondido por " + d.resposta.por + " em " + fmt(d.resposta.em) +
+              (d.resposta.origem ? ", " + d.resposta.origem : "") + ", IP " + d.resposta.ip +
+              (d.resposta.data_nova ? ". Nova data: " + d.resposta.data_nova.slice(8, 10) + "/" + d.resposta.data_nova.slice(5, 7) : "") + "." +
+              (d.resposta.navegador ? " Navegador: " + d.resposta.navegador : "");
           } else if (d.encerramento) {
             prova.textContent = "Encerrado pelo sistema em " + fmt(d.encerramento.em) + ": " + d.encerramento.motivo + ".";
           } else {

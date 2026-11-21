@@ -191,6 +191,14 @@ class TestEstadoDoPedido(_Base):
 
 
 class TestRotina(_Base):
+    def test_resposta_em_andamento_adia_o_encerramento_sem_contar(self):
+        cid = self._abrir("#PS-1", 10, agora=ANTES)
+        self._nucleo("PS-1", "CANCELADO")
+        self.assertTrue(cd.reivindicar_resposta(self.conn, cid, AGORA))   # cliente reagendando agora
+        res = self._executar(AGORA, CanaisFalsos())
+        self.assertEqual(res["encerrados"], 0)
+        self.assertEqual(self._ciencia(cid)["situacao"], cd.PENDENTE)
+
     def test_servico_recriado_e_entregue_encerra_a_ciencia(self):
         cid = self._abrir("#PS-1", 10, agora=ANTES)
         self._nucleo("PS-1", "ENTREGUE", service_id=21, criado_provedor="2026-11-17 09:20:00")

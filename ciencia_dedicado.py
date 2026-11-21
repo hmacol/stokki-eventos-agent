@@ -62,9 +62,12 @@ def conectar(db_path=DB_PATH) -> sqlite3.Connection:
             respondido_em TEXT,
             respondido_por TEXT,
             respondido_ip TEXT,
+            respondido_origem TEXT,
+            respondido_navegador TEXT,
             data_nova TEXT,
             proximo_lembrete_em TEXT,
-            alerta_equipe_em TEXT
+            alerta_equipe_em TEXT,
+            processando_desde TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_ciencias_dedicado_codigo ON ciencias_dedicado (codigo, situacao);
         CREATE INDEX IF NOT EXISTS idx_ciencias_dedicado_sender ON ciencias_dedicado (sender_id, situacao);
@@ -84,6 +87,11 @@ def conectar(db_path=DB_PATH) -> sqlite3.Connection:
         );
         CREATE INDEX IF NOT EXISTS idx_ciencias_dedicado_envios ON ciencias_dedicado_envios (ciencia_id);
     """)
+    # colunas de 19/11 (revisao de seguranca): a tabela de producao nasceu sem elas
+    existentes = {r[1] for r in conn.execute("PRAGMA table_info(ciencias_dedicado)")}
+    for coluna in ("respondido_origem", "respondido_navegador", "processando_desde"):
+        if coluna not in existentes:
+            conn.execute(f"ALTER TABLE ciencias_dedicado ADD COLUMN {coluna} TEXT")
     conn.commit()
     return conn
 
@@ -294,24 +302,52 @@ def reivindicar_lembrete(conn, ciencia_id, agora: datetime, intervalo_horas: int
     return cur.rowcount == 1
 
 
-def responder(conn, ciencia_id, situacao, nome, ip, agora: datetime, data_nova: date | None = None) -> bool:
-    """Registra a resposta do embarcador. So muda linha PENDENTE."""
+# trava de uma resposta em andamento (o reagendar espera a Vuupt); passou disso, o
+# processo caiu no meio e a ciencia volta a aceitar resposta
+TRAVA_RESPOSTA_MIN = 10
+
+
+def reivindicar_resposta(conn, ciencia_id, agora: datetime) -> bool:
+    """Trava a ciencia PENDENTE pra uma resposta, num UPDATE so. False = outra resposta
+    (ciente x reagendar, duas abas) esta em andamento ou ja respondeu: nao segue."""
+    cur = conn.execute("""
+        UPDATE ciencias_dedicado SET processando_desde = ?
+        WHERE id = ? AND situacao = ? AND (processando_desde IS NULL OR processando_desde < ?)
+    """, (_quando(agora), ciencia_id, PENDENTE, _quando(agora - timedelta(minutes=TRAVA_RESPOSTA_MIN))))
+    conn.commit()
+    return cur.rowcount == 1
+
+
+def liberar_resposta(conn, ciencia_id):
+    """Solta a trava de uma resposta que nao foi adiante (reagendamento recusado)."""
+    conn.execute("UPDATE ciencias_dedicado SET processando_desde = NULL WHERE id = ? AND situacao = ?",
+                 (ciencia_id, PENDENTE))
+    conn.commit()
+
+
+def responder(conn, ciencia_id, situacao, nome, ip, agora: datetime, data_nova: date | None = None,
+              origem: str | None = None, navegador: str | None = None) -> bool:
+    """Registra a resposta do embarcador. So muda linha PENDENTE; solta a trava.
+    `origem` = de qual link veio (canal do aviso, alerta da equipe ou painel:usuario)."""
     cur = conn.execute("""
         UPDATE ciencias_dedicado SET situacao = ?, respondido_em = ?, respondido_por = ?,
-            respondido_ip = ?, data_nova = ?
+            respondido_ip = ?, data_nova = ?, respondido_origem = ?, respondido_navegador = ?,
+            processando_desde = NULL
         WHERE id = ? AND situacao = ?
-    """, (situacao, _quando(agora), nome, ip, data_nova.isoformat() if data_nova else None,
-          ciencia_id, PENDENTE))
+    """, (situacao, _quando(agora), nome, ip, data_nova.isoformat() if data_nova else None, origem,
+          navegador, ciencia_id, PENDENTE))
     conn.commit()
     return cur.rowcount > 0
 
 
 def encerrar(conn, ciencia_id, motivo, agora: datetime) -> bool:
-    """Para os lembretes sem resposta (pedido entregue, cancelado, dedicado removido...)."""
+    """Para os lembretes sem resposta (pedido entregue, cancelado, dedicado removido...).
+    Ciencia com resposta em andamento fica pra proxima rodada."""
     cur = conn.execute("""
         UPDATE ciencias_dedicado SET situacao = ?, motivo_encerramento = ?, respondido_em = ?
-        WHERE id = ? AND situacao = ?
-    """, (ENCERRADO, motivo, _quando(agora), ciencia_id, PENDENTE))
+        WHERE id = ? AND situacao = ? AND (processando_desde IS NULL OR processando_desde < ?)
+    """, (ENCERRADO, motivo, _quando(agora), ciencia_id, PENDENTE,
+          _quando(agora - timedelta(minutes=TRAVA_RESPOSTA_MIN))))
     conn.commit()
     return cur.rowcount > 0
 
