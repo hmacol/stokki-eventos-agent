@@ -24,9 +24,9 @@ import { Deslizar } from '../../src/deslizar';
 import { Botao, Cartao, Carregando } from '../../src/componentes';
 import { cores, formatarData, situacaoCor, situacaoRotulo, statusRotaRotulo } from '../../src/tema';
 import { horaDe, nomeExibicao, partesEndereco, resumoJanela } from '../../src/textos';
-import type { Parada, Rota, SituacaoParada } from '../../src/tipos';
+import { abrirNavegacao, ehPendente, emAndamento, ordenarParadas, paradaDaVez, registrarPasso, rotaOperavel } from '../../src/paradaPasso';
+import type { Parada, Rota } from '../../src/tipos';
 
-const FINAIS: SituacaoParada[] = ['ENTREGUE', 'PARCIAL', 'INSUCESSO', 'CANCELADA'];
 // Rótulo da etapa no alto do cartão da vez -- o motorista lê isto antes do nome.
 const ETAPA_ROTULO: Record<string, string> = { PENDENTE: 'Próxima parada', EM_DESLOCAMENTO: 'A caminho', EM_ROTA: 'No local' };
 // Faixa da janela: neutra com folga, âmbar faltando 2h, vermelha depois de fechar.
@@ -36,18 +36,6 @@ const TOM_JANELA = {
   perigo: { fundo: cores.perigoBg, forte: cores.perigo, suave: cores.perigo, icone: cores.perigo },
   ausente: { fundo: cores.fundo, forte: cores.textoSuave, suave: cores.textoSuave, icone: cores.textoSuave },
 };
-const ehPendente = (p: Parada) => !FINAIS.includes(p.situacao);
-const emAndamento = (p: Parada) => p.situacao === 'EM_DESLOCAMENTO' || p.situacao === 'EM_ROTA';
-
-function abrirNavegacao(p: Parada) {
-  const destino = p.latitude !== null && p.longitude !== null ? `${p.latitude},${p.longitude}` : encodeURIComponent(p.endereco ?? '');
-  Alert.alert('Navegar até a parada', undefined, [
-    { text: 'Google Maps', onPress: () => void Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${destino}&travelmode=driving`) },
-    { text: 'Waze', onPress: () => void Linking.openURL(p.latitude !== null ? `https://waze.com/ul?ll=${destino}&navigate=yes` : `https://waze.com/ul?q=${destino}&navigate=yes`) },
-    { text: 'Cancelar', style: 'cancel' },
-  ]);
-}
-
 // WhatsApp exige só dígitos com DDI. Telefone cadastrado costuma vir como
 // "(11) 91234-5678" ou "11912345678"; sem DDI a gente assume Brasil (55).
 function numeroWhatsapp(telefone: string | null | undefined): string | null {
@@ -110,22 +98,12 @@ export default function DetalheRota() {
   const ativa = rota.paradas.find(emAndamento) ?? null;       // a parada em andamento (no máximo uma)
   const feitas = rota.paradas.filter((p) => ['ENTREGUE', 'PARCIAL', 'INSUCESSO'].includes(p.situacao)).length;
   const ativas = rota.paradas.filter((p) => p.situacao !== 'CANCELADA');
-  const operavel = rota.editavel && rota.status === 'EM_ROTA';
+  const operavel = rotaOperavel(rota);
 
-  // Ordem de exibição: sequência da rota, com as reagendadas "depois das
-  // outras" no fim e as reagendadas com horário no fim ordenadas por horário.
-  const paradasOrdenadas = [...rota.paradas].sort((a, b) => {
-    const ka = a.reagendado_para && ehPendente(a) ? (a.reagendado_para === 'FIM' ? 2 : 1) : 0;
-    const kb = b.reagendado_para && ehPendente(b) ? (b.reagendado_para === 'FIM' ? 2 : 1) : 0;
-    if (ka !== kb) return ka - kb;
-    if (ka === 1) return (a.reagendado_para ?? '').localeCompare(b.reagendado_para ?? '');
-    return a.ordem - b.ordem;
-  });
-
-  // A parada da vez: a que está em andamento ou, se nenhuma estiver, a
-  // primeira pendente da ordem. Só faz sentido com a rota em andamento --
-  // rota por aceitar ou já concluída vira lista compacta pura.
-  const atual = operavel ? ativa ?? paradasOrdenadas.find(ehPendente) ?? null : null;
+  // Ordem de exibição e parada da vez (rota por aceitar ou já concluída vira
+  // lista compacta pura): ver src/paradaPasso.ts.
+  const paradasOrdenadas = ordenarParadas(rota.paradas);
+  const atual = paradaDaVez(rota);
   const depoisDesta = paradasOrdenadas.filter((p) => ehPendente(p) && p.id !== atual?.id);
   const jaFeitas = paradasOrdenadas.filter((p) => !ehPendente(p));
 
@@ -165,12 +143,7 @@ export default function DetalheRota() {
   };
 
   const passoParada = async (p: Parada, tipo: 'DESLOCAMENTO' | 'CHEGADA') => {
-    const pos = await gps.posicaoAtual();
-    await local.marcarParada(p.id, tipo === 'DESLOCAMENTO' ? 'EM_DESLOCAMENTO' : 'EM_ROTA');
-    await fila.enfileirar({
-      uuid: fila.novoUuid(), tipo: 'EVENTO_PARADA', paradaId: p.id, criadoEm: fila.agoraIso(), tentativas: 0,
-      corpo: { tipo, ocorrido_em: fila.agoraIso(), ...pos },
-    });
+    await registrarPasso(p, tipo);
     await carregar();
   };
 
@@ -372,7 +345,16 @@ export default function DetalheRota() {
         <Text style={s.nome}>{rota.nome ?? `Rota #${rota.id}`}</Text>
         <Text style={s.sub}>{formatarData(rota.data_rota)}{rota.start_at ? ` · saída ${rota.start_at.slice(11, 16)}` : ''} · {statusRotaRotulo[rota.status]}</Text>
         <View style={s.barraFundo}><View style={[s.barra, { width: `${ativas.length ? (feitas / ativas.length) * 100 : 0}%` }]} /></View>
-        <Text style={s.sub}>{feitas} de {ativas.length} paradas com resultado{rota.km_estimado ? ` · ~${rota.km_estimado.toFixed(0)} km` : ''}</Text>
+        <View style={s.resumoLinha}>
+          <Text style={[s.sub, { flex: 1 }]}>{feitas} de {ativas.length} paradas com resultado{rota.km_estimado ? ` · ~${rota.km_estimado.toFixed(0)} km` : ''}</Text>
+          {rota.liberada !== false && rota.paradas.length > 0 ? (
+            <Pressable style={({ pressed }) => [s.botaoMapa, pressed && { backgroundColor: cores.fundo }]}
+              onPress={() => router.push(`/mapa/${rota.id}`)} accessibilityRole="button" accessibilityLabel="Ver a rota no mapa">
+              <Ionicons name="map" size={17} color={cores.primaria} />
+              <Text style={s.botaoMapaTexto}>Mapa</Text>
+            </Pressable>
+          ) : null}
+        </View>
 
         {rota.status === 'PLANEJADA' && !recusando ? (
           <View style={{ marginTop: 14 }}>
@@ -445,6 +427,9 @@ const s = StyleSheet.create({
   barraFundo: { height: 8, backgroundColor: cores.borda, borderRadius: 4, marginTop: 10, overflow: 'hidden' },
   barra: { height: 8, backgroundColor: cores.acento },
   vuupt: { color: cores.info, marginTop: 10 },
+  resumoLinha: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  botaoMapa: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 40, paddingHorizontal: 14, marginTop: 4, borderRadius: 10, borderWidth: 1, borderColor: cores.borda },
+  botaoMapaTexto: { fontSize: 14, fontWeight: '700', color: cores.primaria },
   campo: { backgroundColor: '#fff', borderWidth: 1, borderColor: cores.borda, borderRadius: 10, padding: 12, minHeight: 60, color: cores.texto },
   atalhoPedagio: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: cores.cartao, borderWidth: 1, borderColor: cores.borda, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 12 },
   atalhoPedagioTexto: { flex: 1, color: cores.texto, fontWeight: '600', fontSize: 14 },

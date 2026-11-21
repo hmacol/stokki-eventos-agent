@@ -1283,6 +1283,10 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            atualizar; token ruim = 404 sem dizer o motivo) e POST /api/atualizacao/<token>/
                            {abrir (CPF), dados, concluir}; documentos sobem pelo POST /api/cadastro/<id>/
                            documentos de sempre (recusado com o link morto). Mesmo freio por IP do cadastro.
+ trajeto_rota.py          Desenho do trajeto da rota pro mapa do app (Google Routes, guardado em
+                           nucleo_rotas_trajeto por assinatura dos pontos; falha = linha reta sem gravar).
+                           Rotas em api_motorista.py: GET /api/rotas/<id>/trajeto (login) e
+                           GET /api/app-versao (sem login; APK_VERSAO_ATUAL None = sem aviso).
  operacao.py               Regras: aceitar/iniciar, eventos, checklist,
                            comprovantes, GPS, ofertas, disponibilidade, pedágios.
  auth_motorista.py         Login CPF+PIN, tokens, troca de PIN (POST /api/trocar-pin).
@@ -1873,6 +1877,16 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
  app/rota/[id].tsx         Aceitar -> iniciar -> paradas -> finalizar.
  app/parada/[id].tsx       Entregue / Parcial / Não entregue / Reagendar,
                            checklist e fotos.
+ app/mapa/[id].tsx         Mapa da rota (botão "Mapa" na tela da rota): pinos numerados,
+                           linha do trajeto e cartão com os passos (Deslizar). Entregue /
+                           Não entregue abrem app/parada/[id].tsx?fluxo=... Peças em src/mapa/.
+ src/trajeto.ts            GET /api/rotas/<id>/trajeto; guarda o do Google por rota
+                           (AsyncStorage motorista.trajeto.v1.<id>, últimas 5) pra uso offline.
+ src/paradaPasso.ts        Passos da parada compartilhados entre rota e mapa (pendente,
+                           parada da vez, ordem, registrar deslocamento/chegada).
+ src/avisoVersao.tsx       Faixa "baixe a versão nova" (GET /api/app-versao x runtimeVersion).
+ react-native-maps         Mapa nativo (exige APK 1.2.0+). Chave Android do Google pela
+                           variável do EAS GOOGLE_MAPS_ANDROID_KEY (app.config.js); nunca no git.
  src/api.ts                Cliente HTTP com refresh de token.
  src/fila.ts               Fila offline idempotente (uuid).
  src/gps.ts, sessao.tsx, rotasStore.ts, local.ts, tipos.ts, tema.ts ...
