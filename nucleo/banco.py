@@ -369,6 +369,7 @@ _COLUNAS_MOTORISTAS_NOVAS = [
     ("trocar_pin", "INTEGER NOT NULL DEFAULT 0"),      # 1 = PIN inicial/resetado: o app obriga a troca no próximo login
     ("chave_pix", "TEXT"),            # 08/10: o motorista edita no app (nucleo/cadastro_motorista.py)
     ("placa", "TEXT"),                # idem; espelhada na BD_MOTORISTAS.xlsx
+    ("plataforma", "TEXT"),           # 22/11: web | android | ios, informado pelo app (header X-App-Plataforma); web = PWA no iPhone, avisa por WhatsApp
     ("app_versao", "TEXT"),           # 22/11: versao do APK que o app informa (header X-App-Versao); NULL = nunca informou (APK antigo)
     ("ve_financeiro", "INTEGER NOT NULL DEFAULT 1"),   # 0 = não é dono do carro: sem extrato no app (Hugo, 08/10)
 ]

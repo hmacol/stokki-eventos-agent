@@ -107,7 +107,8 @@ async function tentarRenovar(): Promise<boolean> {
 type Opcoes = { metodo?: 'GET' | 'POST' | 'PUT'; corpo?: unknown; semAuth?: boolean };
 
 export async function chamar<T>(caminho: string, op: Opcoes = {}, repetiu = false): Promise<T> {
-  const headers: Record<string, string> = { 'X-App-Versao': Constants.expoConfig?.version ?? '' };
+  // X-App-Plataforma: 'web' (PWA) é avisado por WhatsApp, não por push (nucleo/avisos_app_whatsapp.py).
+  const headers: Record<string, string> = { 'X-App-Versao': Constants.expoConfig?.version ?? '', 'X-App-Plataforma': Platform.OS };
   if (!op.semAuth && acesso) headers.Authorization = `Bearer ${acesso}`;
   let body: BodyInit | undefined;
   if (op.corpo !== undefined) {
