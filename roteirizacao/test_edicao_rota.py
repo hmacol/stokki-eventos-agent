@@ -199,7 +199,7 @@ class TestEdicaoRota(unittest.TestCase):
         erro = requests.exceptions.HTTPError("429 Too Many Requests", response=mock.Mock(status_code=429))
         r = self._com(_Rotas(erro_busca=erro))
         res = edicao_rota.tirar_pedido("t", 7, 1, interativo=True)
-        self.assertEqual(res, {"ok": False, "erro": edicao_rota.MSG_VUUPT_OCUPADA})
+        self.assertEqual(res, {"ok": False, "erro": edicao_rota.MSG_VUUPT_OCUPADA, "vuupt_indisponivel": True})
         self.assertEqual(r.deletes, [])
 
     def test_interativo_timeout_e_429_no_delete_viram_mensagem_curta(self):
@@ -207,7 +207,24 @@ class TestEdicaoRota(unittest.TestCase):
                           (requests.exceptions.HTTPError("429", response=mock.Mock(status_code=429)),
                            edicao_rota.MSG_VUUPT_OCUPADA)):
             self._com(_Rotas(_corpo([_servico(1), _servico(2)]), erro_escrita=erro))
-            self.assertEqual(edicao_rota.tirar_pedido("t", 7, 1, interativo=True), {"ok": False, "erro": msg})
+            self.assertEqual(edicao_rota.tirar_pedido("t", 7, 1, interativo=True),
+                             {"ok": False, "erro": msg, "vuupt_indisponivel": True})
+
+    def test_interativo_erro_comum_nao_marca_indisponivel(self):
+        self._com(_Rotas(_corpo([_servico(1), _servico(2)]), erro_escrita=RuntimeError("boom")))
+        self.assertEqual(edicao_rota.tirar_pedido("t", 7, 1, interativo=True), {"ok": False, "erro": "boom"})
+
+    def test_tempo_esgotado_antes_da_escrita_nao_chama_delete(self):
+        r = self._com(_Rotas(_corpo([_servico(1), _servico(2)])))
+        res = edicao_rota.tirar_pedido("t", 7, 1, interativo=True, tempo_esgotado=lambda: True)
+        self.assertEqual(res, {"ok": False, "erro": edicao_rota.MSG_TEMPO_ESGOTADO, "tempo_esgotado": True})
+        self.assertEqual((r.deletes, r.cancelamentos), ([], []))
+        self.assertEqual([k for k, _ in r.kwargs], ["buscar"])          # so a leitura
+
+    def test_tempo_sobrando_segue(self):
+        r = self._com(_Rotas(_corpo([_servico(1), _servico(2)])))
+        self.assertTrue(edicao_rota.tirar_pedido("t", 7, 1, tempo_esgotado=lambda: False)["ok"])
+        self.assertEqual(r.deletes, [(7, 1)])
 
     def test_padrao_429_mantem_mensagem_antiga(self):
         erro = requests.exceptions.HTTPError("429 Too Many Requests", response=mock.Mock(status_code=429))

@@ -36,7 +36,8 @@ API_BASE = "https://api.vuupt.com/api/v1"
 # Caminho interativo (checklist de carregamento do app: o motorista espera a
 # resposta numa das 4 threads do motorista-api; revisao de seguranca 22/11, M1):
 # 1 tentativa e timeout curto, sem os 3+6+12+24+48 s do retry de 429.
-TIMEOUT_INTERATIVO = 10
+# (conexao, leitura): pior caso ~10 s por chamada.
+TIMEOUT_INTERATIVO = (3, 7)
 
 # Captura o código COM sufixo de reentrega/canhoto (PS-1-R1, PS-1-C1):
 # antes só pegava "PS-\d+", a reentrega PS-1-R1 não casava com nenhum

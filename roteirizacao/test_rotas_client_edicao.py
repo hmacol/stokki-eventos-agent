@@ -97,7 +97,7 @@ class TestInterativo(unittest.TestCase):
                     chamar()
             dormir.assert_not_called()
             falso.assert_called_once()
-            self.assertEqual(falso.call_args.kwargs["timeout"], rotas_client.TIMEOUT_INTERATIVO)
+            self.assertEqual(falso.call_args.kwargs["timeout"], (3, 7))      # conexao, leitura
             self.assertEqual(cm.exception.response.status_code, 429)
 
     def test_padrao_continua_com_retry_e_timeout_30(self):

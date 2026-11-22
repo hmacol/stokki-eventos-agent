@@ -29,6 +29,7 @@ _STATUS_ROTA_ENCERRADA = STATUS_ROTA_ENCERRADA
 MSG_VUUPT_OCUPADA = "Vuupt ocupada, tente de novo em instantes."
 MSG_VUUPT_SEM_RESPOSTA = "Vuupt não respondeu a tempo, tente de novo em instantes."
 MSG_ROTA_DE_OUTRO = "Esta rota não é mais sua. Fale com a logística."
+MSG_TEMPO_ESGOTADO = "Tempo esgotado, tente de novo."
 
 
 class ErroEdicao(Exception):
@@ -119,17 +120,21 @@ def _erro_status_servico(servico: dict) -> str:
 
 
 def tirar_pedido(token: str, route_id: int, service_id: int, agent_id_esperado=None,
-                 interativo: bool = False) -> dict:
+                 interativo: bool = False, tempo_esgotado=None) -> dict:
     """Tira um pedido pendente da rota (status ao vivo). Se a rota ficaria sem
     nenhum servico e nada comecou, cancela a rota (unassign); senao DELETE.
     `agent_id_esperado` (checklist do app): a rota ao vivo tem que ser desse motorista,
-    senao recusa antes de qualquer DELETE/cancel. `interativo`: ver ler_rota.
-    Sem os dois (painel, rascunhos): comportamento de sempre."""
+    senao recusa antes de qualquer DELETE/cancel. `interativo`: ver ler_rota; 429/timeout
+    voltam com "vuupt_indisponivel". `tempo_esgotado()` (opcional) e conferido entre a leitura
+    e a escrita: True -> nao escreve. Sem nenhum dos tres (painel, rascunhos): comportamento de sempre."""
     extra = {"interativo": True} if interativo else {}
     try:
         rota = ler_rota(token, route_id, **extra)
     except ErroEdicao as e:
-        return {"ok": False, "erro": str(e)}
+        falha = {"ok": False, "erro": str(e)}
+        if interativo and str(e) in (MSG_VUUPT_OCUPADA, MSG_VUUPT_SEM_RESPOSTA):
+            falha["vuupt_indisponivel"] = True
+        return falha
     if agent_id_esperado is not None and str(rota.get("agent_id")) != str(agent_id_esperado):
         return {"ok": False, "erro": MSG_ROTA_DE_OUTRO, "rota_de_outro_motorista": True}
     erro = _recusa_rota_encerrada(rota)
@@ -146,13 +151,18 @@ def tirar_pedido(token: str, route_id: int, service_id: int, agent_id_esperado=N
     iniciada = rota_iniciada(rota)
     sobram = [s for s in rota["servicos"] if s["id"] != service_id]
     cancelar = not sobram and not iniciada
+    if tempo_esgotado is not None and tempo_esgotado():
+        return {"ok": False, "erro": MSG_TEMPO_ESGOTADO, "tempo_esgotado": True}
     try:
         if cancelar:
             rotas_client.cancelar_rota(token, route_id, services_action="unassign", **extra)
         else:
             rotas_client.remover_servico_da_rota(token, route_id, service_id, **extra)
     except Exception as e:
-        return {"ok": False, "erro": (interativo and _erro_curto(e)) or str(e)}
+        curto = interativo and _erro_curto(e)
+        if curto:
+            return {"ok": False, "erro": curto, "vuupt_indisponivel": True}
+        return {"ok": False, "erro": str(e)}
     return {"ok": True, "rota_cancelada": cancelar, "rota_iniciada": iniciada, "servico": alvo}
 
 

@@ -86,7 +86,7 @@ class _TirarFalso:
         self.cancelar_na_ultima = cancelar_na_ultima
         self.total = total
 
-    def __call__(self, rota, parada, motivo, observacao):
+    def __call__(self, rota, parada, motivo, observacao, **_kw):
         self.chamadas.append(parada["id"])
         if parada["id"] in self.falhas:
             return {"ok": False, "erro": self.falhas[parada["id"]]}
@@ -346,8 +346,8 @@ class TestConfirmar(unittest.TestCase):
 
     # ── M1 (revisao de seguranca 22/11): teto de falhas e orcamento de tempo ──
 
-    def _rota_vuupt(self, paradas=2):
-        return self._rota(provedor=banco.PROVEDOR_VUUPT, vuupt_route_id=4242, paradas=paradas)
+    def _rota_vuupt(self, paradas=2, vuupt_route_id=4242):
+        return self._rota(provedor=banco.PROVEDOR_VUUPT, vuupt_route_id=vuupt_route_id, paradas=paradas)
 
     def _cfg_ponte(self):
         cfg = {**_CFG_LIGADA, "api_motorista": {"checklist_carregamento": {"ativo": True},
@@ -369,7 +369,7 @@ class TestConfirmar(unittest.TestCase):
         self.assertEqual(ctx.exception.mensagem, carregamento.MSG_MUITAS_TENTATIVAS)
         self.assertEqual(tirar.chamadas, [])
         # o teto e por rota: outra rota segue
-        self.assertIsNone(carregamento.exigir_abaixo_do_teto(self.rota["id"]))
+        self.assertIsNone(carregamento.exigir_abaixo_do_teto(self.rota["id"], 10))
 
     def test_m1b_sucesso_zera_o_contador(self):
         with self._cfg_ponte():
@@ -378,9 +378,9 @@ class TestConfirmar(unittest.TestCase):
             for i in range(carregamento.TETO_FALHAS - 1):
                 self._confirmar([self._desm(p)], rota=rota, uuid=f"u{i}",
                                 tirar=_TirarFalso(falhas={p["id"]: "Vuupt ocupada"}))
-            self.assertIn(rota["id"], carregamento._falhas_por_rota)
+            self.assertIn((rota["id"], 10), carregamento._falhas_por_rota)
             self.assertTrue(self._confirmar([self._desm(p)], rota=rota, uuid="u-ok")["ok"])
-        self.assertNotIn(rota["id"], carregamento._falhas_por_rota)
+        self.assertNotIn((rota["id"], 10), carregamento._falhas_por_rota)
 
     def test_m1b_validacao_e_replay_nao_contam(self):
         with self._cfg_ponte():
@@ -390,13 +390,13 @@ class TestConfirmar(unittest.TestCase):
                 with self.assertRaises(operacao.OperacaoInvalida) as ctx:
                     self._confirmar([self._desm(p, "Sumiu")], rota=rota)
                 self.assertEqual(ctx.exception.codigo, 400)
-            self.assertNotIn(rota["id"], carregamento._falhas_por_rota)
+            self.assertEqual(carregamento._falhas_por_rota, {})
             tirar = _TirarFalso()
             self.assertTrue(self._confirmar([self._desm(p)], rota=rota, uuid="u-ok", tirar=tirar)["ok"])
             self.assertEqual(tirar.chamadas, [p["id"]])
             for _ in range(carregamento.TETO_FALHAS + 2):      # replay do mesmo uuid
                 self.assertTrue(self._confirmar([self._desm(p)], rota=rota, uuid="u-ok")["ok"])
-        self.assertNotIn(rota["id"], carregamento._falhas_por_rota)
+        self.assertEqual(carregamento._falhas_por_rota, {})
 
     def test_m1b_rota_do_app_nao_conta(self):
         p = self._paradas()[0]
@@ -407,14 +407,15 @@ class TestConfirmar(unittest.TestCase):
     def test_m1b_janela_de_10_minutos(self):
         rid = 31337
         for t in range(carregamento.TETO_FALHAS):
-            carregamento.registrar_falha(rid, agora=1000.0 + t)
+            carregamento.registrar_falha(rid, 10, agora=1000.0 + t)
         with self.assertRaises(operacao.OperacaoInvalida) as ctx:
-            carregamento.exigir_abaixo_do_teto(rid, agora=1000.0 + carregamento.JANELA_FALHAS_S - 1)
+            carregamento.exigir_abaixo_do_teto(rid, 10, agora=1000.0 + carregamento.JANELA_FALHAS_S - 1)
         self.assertEqual(ctx.exception.codigo, 429)
+        carregamento.exigir_abaixo_do_teto(rid, 20, agora=1000.0)          # outro motorista nao herda
         # a mais antiga sai da janela: volta a aceitar
-        carregamento.exigir_abaixo_do_teto(rid, agora=1000.0 + carregamento.JANELA_FALHAS_S + 0.5)
-        carregamento.zerar_falhas(rid)
-        self.assertNotIn(rid, carregamento._falhas_por_rota)
+        carregamento.exigir_abaixo_do_teto(rid, 10, agora=1000.0 + carregamento.JANELA_FALHAS_S + 0.5)
+        carregamento.zerar_falhas(rid, 10)
+        self.assertNotIn((rid, 10), carregamento._falhas_por_rota)
 
     def test_m1b_relogio_injetado_no_confirmar(self):
         relogio = mock.Mock(return_value=5000.0)
@@ -431,13 +432,15 @@ class TestConfirmar(unittest.TestCase):
         agora = [0.0]
 
         class _TirarLento(_TirarFalso):
-            def __call__(self, *a):
-                agora[0] += 30.0                    # cada parada leva 30 s na Vuupt
-                return super().__call__(*a)
+            def __call__(self, *a, **kw):
+                agora[0] += carregamento.ORCAMENTO_S / 2       # cada parada leva meio orcamento
+                return super().__call__(*a, **kw)
 
-        ps = self._paradas()
-        tirar = _TirarLento()
-        r = self._confirmar([self._desm(p) for p in ps], tirar=tirar, relogio=lambda: agora[0])
+        with self._cfg_ponte():
+            rota = self._rota_vuupt(paradas=3)
+            ps = self._paradas(rota)
+            tirar = _TirarLento()
+            r = self._confirmar([self._desm(p) for p in ps], tirar=tirar, relogio=lambda: agora[0], rota=rota)
         self.assertFalse(r["ok"])
         self.assertEqual(tirar.chamadas, [ps[0]["id"], ps[1]["id"]])     # a 3a nem chama
         self.assertEqual(r["falhas"], [{"parada_id": ps[2]["id"], "codigo": ps[2]["codigo"],
@@ -446,9 +449,124 @@ class TestConfirmar(unittest.TestCase):
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM nucleo_carregamento_itens "
                                            "WHERE removido_em IS NOT NULL").fetchone()[0], 2)
         tirar2 = _TirarFalso()
-        r2 = self._confirmar([self._desm(p) for p in ps], tirar=tirar2)
+        with self._cfg_ponte():
+            r2 = self._confirmar([self._desm(p) for p in ps], tirar=tirar2, rota=rota, uuid="u2")
         self.assertTrue(r2["ok"])
         self.assertEqual(tirar2.chamadas, [ps[2]["id"]])
+
+    # ── fix report 2 (revisao independente) ──────────────────────────────────
+
+    def _falhar_ate_o_teto(self, rota, p, agent_id=10):
+        for i in range(carregamento.TETO_FALHAS):
+            r = self._confirmar([self._desm(p)], rota=rota, uuid=f"f{agent_id}-{i}", agent_id=agent_id,
+                                tirar=_TirarFalso(falhas={p["id"]: "Vuupt ocupada"}))
+            self.assertFalse(r["ok"])
+
+    def test_fix2_post_sem_desmarcados_apos_o_teto_passa(self):
+        with self._cfg_ponte():
+            rota = self._rota_vuupt()
+            self._falhar_ate_o_teto(rota, self._paradas(rota)[0])
+            tirar = _TirarFalso()
+            r = self._confirmar([], rota=rota, uuid="u-tudo-carregado", tirar=tirar)
+        self.assertTrue(r["ok"])
+        self.assertEqual(tirar.chamadas, [])
+
+    def test_fix2_so_paradas_ja_removidas_apos_o_teto_passa(self):
+        with self._cfg_ponte():
+            rota = self._rota_vuupt()
+            p0, p1 = self._paradas(rota)
+            for i in range(carregamento.TETO_FALHAS):      # p0 sai na 1a; p1 falha sempre
+                self._confirmar([self._desm(p0), self._desm(p1)], rota=rota, uuid=f"f{i}",
+                                tirar=_TirarFalso(falhas={p1["id"]: "Vuupt ocupada"}))
+            p0 = self.conn.execute("SELECT * FROM nucleo_paradas WHERE id=?", (p0["id"],)).fetchone()
+            with self.assertRaises(operacao.OperacaoInvalida) as ctx:   # p1 ainda iria a Vuupt
+                self._confirmar([self._desm(p0), self._desm(p1)], rota=rota, uuid="u-x")
+            self.assertEqual(ctx.exception.codigo, 429)
+            tirar = _TirarFalso()
+            r = self._confirmar([self._desm(p0)], rota=rota, uuid="u-p1-carregado", tirar=tirar)
+        self.assertTrue(r["ok"])
+        self.assertEqual(tirar.chamadas, [])
+
+    def test_fix2_rota_de_outro_motorista_nao_conta(self):
+        tirar = mock.Mock(return_value={"ok": False, "erro": "Esta rota não é mais sua. Fale com a logística.",
+                                        "rota_de_outro_motorista": True})
+        with self._cfg_ponte():
+            rota = self._rota_vuupt()
+            p = self._paradas(rota)[0]
+            for i in range(carregamento.TETO_FALHAS + 2):
+                self.assertFalse(self._confirmar([self._desm(p)], rota=rota, uuid=f"u{i}", tirar=tirar)["ok"])
+        self.assertEqual(carregamento._falhas_por_rota, {})
+
+    def test_fix2_contador_por_motorista(self):
+        with self._cfg_ponte():
+            rota = self._rota_vuupt()
+            p = self._paradas(rota)[0]
+            self._falhar_ate_o_teto(rota, p, agent_id=10)
+            self.conn.execute("UPDATE nucleo_rotas SET agent_id = 20 WHERE id = ?", (rota["id"],))
+            self.conn.commit()
+            rota = self.conn.execute("SELECT * FROM nucleo_rotas WHERE id=?", (rota["id"],)).fetchone()
+            tirar = _TirarFalso()
+            r = self._confirmar([self._desm(p)], rota=rota, uuid="u-b", agent_id=20, tirar=tirar)
+        self.assertTrue(r["ok"])
+        self.assertEqual(tirar.chamadas, [p["id"]])
+
+    def test_fix2_orcamento_conta_desde_o_inicio_do_request(self):
+        tirar = _TirarFalso()
+        with self._cfg_ponte():
+            rota = self._rota_vuupt()
+            ps = self._paradas(rota)
+            # o request comecou ha ORCAMENTO_S (foto/modelo demoraram): nenhuma ida a Vuupt
+            r = self._confirmar([self._desm(p) for p in ps], rota=rota, tirar=tirar,
+                                relogio=lambda: 100.0, inicio=100.0 - carregamento.ORCAMENTO_S)
+        self.assertFalse(r["ok"])
+        self.assertEqual(tirar.chamadas, [])
+        self.assertEqual({f["erro"] for f in r["falhas"]}, {carregamento.MSG_TEMPO_ESGOTADO})
+        self.assertEqual(carregamento._falhas_por_rota, {})            # nao chamou a Vuupt: nao conta
+
+    def test_fix2_tirar_padrao_recebe_o_prazo(self):
+        agora = [0.0]
+        falso = mock.Mock(return_value={"ok": True, "rota_cancelada": False, "rota_iniciada": False})
+        with self._cfg_ponte(), mock.patch.object(carregamento, "_tirar_da_vuupt_ou_local", falso):
+            rota = self._rota_vuupt()
+            p = self._paradas(rota)[0]
+            carregamento.confirmar(self.conn, rota, 10, carregador="J", uuid="u", desmarcados=[self._desm(p)],
+                                   foto=dict(_FOTO), relogio=lambda: agora[0])
+        tempo_esgotado = falso.call_args.kwargs["tempo_esgotado"]
+        self.assertFalse(tempo_esgotado())
+        agora[0] = carregamento.ORCAMENTO_S
+        self.assertTrue(tempo_esgotado())
+
+    def test_fix2_laco_para_apos_429_ou_timeout(self):
+        for i, msg in enumerate(("Vuupt ocupada, tente de novo em instantes.",
+                                 "Vuupt não respondeu a tempo, tente de novo em instantes.")):
+            tirar = mock.Mock(return_value={"ok": False, "erro": msg, "vuupt_indisponivel": True})
+            with self._cfg_ponte():
+                rota = self._rota_vuupt(paradas=3, vuupt_route_id=5000 + i)
+                r = self._confirmar([self._desm(p) for p in self._paradas(rota)], rota=rota, tirar=tirar,
+                                    uuid=msg[:10])
+            self.assertEqual(tirar.call_count, 1, msg)
+            self.assertEqual([f["erro"] for f in r["falhas"]], [msg] * 3)
+
+    def test_fix2_tempo_esgotado_dentro_do_tirar_para_o_laco(self):
+        tirar = mock.Mock(return_value={"ok": False, "erro": carregamento.MSG_TEMPO_ESGOTADO, "tempo_esgotado": True})
+        with self._cfg_ponte():
+            rota = self._rota_vuupt(paradas=3)
+            r = self._confirmar([self._desm(p) for p in self._paradas(rota)], rota=rota, tirar=tirar)
+        self.assertEqual(tirar.call_count, 1)
+        self.assertEqual(len(r["falhas"]), 3)
+
+    def test_fix2_checklist_em_andamento(self):
+        with carregamento.checklist_em_andamento(7):
+            with self.assertRaises(operacao.OperacaoInvalida) as ctx:
+                with carregamento.checklist_em_andamento(7):
+                    pass
+            self.assertEqual((ctx.exception.codigo, ctx.exception.mensagem), (409, "Checklist em andamento, aguarde."))
+            with carregamento.checklist_em_andamento(8):     # outra rota segue
+                pass
+        with self.assertRaises(RuntimeError):
+            with carregamento.checklist_em_andamento(7):
+                raise RuntimeError("boom")
+        self.assertEqual(carregamento._em_andamento, set())
 
     # ── M2: rota de outro motorista e troca de motorista ─────────────────────
 
@@ -568,7 +686,8 @@ class TestTirarDaVuuptOuLocal(unittest.TestCase):
                 mock.patch.object(carregamento, "_efeitos_no_painel") as painel:
             r = carregamento._tirar_da_vuupt_ou_local(rota, parada, "Não coube", None)
         # M1/M2: caminho interativo e confere o motorista ao vivo na Vuupt
-        tp.assert_called_once_with("tok-teste", 5555, 777, agent_id_esperado=10, interativo=True)
+        tp.assert_called_once_with("tok-teste", 5555, 777, agent_id_esperado=10, interativo=True,
+                                   tempo_esgotado=None)
         self.assertTrue(r["ok"])
         painel.assert_called_once()
 
@@ -587,10 +706,11 @@ class TestTirarDaVuuptOuLocal(unittest.TestCase):
         with self._vuupt_real_com_requests_falso(get=get)[0], mock.patch("time.sleep") as dormir, \
                 mock.patch.object(carregamento, "_efeitos_no_painel") as painel:
             r = carregamento._tirar_da_vuupt_ou_local(rota, parada, "Não coube", None)
-        self.assertEqual(r, {"ok": False, "erro": "Vuupt ocupada, tente de novo em instantes."})
+        self.assertEqual(r, {"ok": False, "erro": "Vuupt ocupada, tente de novo em instantes.",
+                             "vuupt_indisponivel": True})
         dormir.assert_not_called()
         get.assert_called_once()
-        self.assertEqual(get.call_args.kwargs["timeout"], 10)
+        self.assertEqual(get.call_args.kwargs["timeout"], (3, 7))
         painel.assert_not_called()
 
     def test_m1a_timeout_da_vuupt_vira_falha_curta(self):
@@ -848,13 +968,68 @@ class TestApiCarregamento(unittest.TestCase):
         self.assertIn("Vuupt fora do ar", j["erro"])
         self.assertEqual(j["removidos"], [])
 
-    def test_m1b_teto_estourado_429_sem_modelo_nem_foto(self):
+    def _virar_vuupt(self):
+        cfg = self._config()
+        cfg["api_motorista"]["ponte_vuupt"] = {"ativo": True, "todos": True}
+        ponte_vuupt.definir_config(cfg)
+        conn = banco.conectar()
+        conn.execute("UPDATE nucleo_rotas SET provedor = ?, vuupt_route_id = 5555 WHERE id = ?",
+                     (banco.PROVEDOR_VUUPT, self.rota_id))
+        conn.commit()
+        conn.close()
+
+    def _teto_cheio(self):
         import time
-        with mock.patch.dict(carregamento._falhas_por_rota,
-                             {self.rota_id: [time.monotonic()] * carregamento.TETO_FALHAS}):
-            r = self._enviar_e_nada_gravado(429)
+        return mock.patch.dict(carregamento._falhas_por_rota,
+                               {(self.rota_id, self.AGENT): [time.monotonic()] * carregamento.TETO_FALHAS})
+
+    def test_m1b_teto_estourado_429_sem_modelo_nem_foto(self):
+        self._virar_vuupt()
+        p1, _ = self._paradas()
+        with self._teto_cheio():
+            r = self._enviar_e_nada_gravado(429, desmarcados=[{"parada_id": p1, "motivo": "Não coube"}])
         self.assertEqual(r.get_json()["erro"], carregamento.MSG_MUITAS_TENTATIVAS)
         self.assertEqual(self._fotos_em_disco(), [])
+
+    def test_fix2_api_sem_desmarcados_apos_o_teto_200(self):
+        self._virar_vuupt()
+        with self._teto_cheio(), self._modelo():
+            r = self._enviar()
+        self.assertEqual(r.status_code, 200, r.get_json())
+
+    def test_fix2_api_em_andamento_409_sem_modelo_nem_foto(self):
+        with carregamento.checklist_em_andamento(self.rota_id):
+            r = self._enviar_e_nada_gravado(409)
+        self.assertEqual(r.get_json()["erro"], "Checklist em andamento, aguarde.")
+        self.assertEqual(self._fotos_em_disco(), [])
+        with self._modelo():
+            self.assertEqual(self._enviar().status_code, 200)
+
+    def test_fix2_api_trava_liberada_mesmo_com_excecao(self):
+        with self._modelo(), mock.patch.object(carregamento, "confirmar", side_effect=RuntimeError("boom")):
+            self.assertEqual(self._enviar(uuid="x1").status_code, 500)
+        self.assertEqual(carregamento._em_andamento, set())
+        with self._modelo():
+            self.assertEqual(self._enviar(uuid="x2").status_code, 200)
+
+    def test_fix2_api_orcamento_conta_o_modelo(self):
+        from nucleo import validacao_fotos as vf
+        self._virar_vuupt()
+        p1, _ = self._paradas()
+        agora = [1000.0]
+
+        def modelo_lento(*_a, **_kw):
+            agora[0] += carregamento.ORCAMENTO_S              # a validacao da foto comeu o orcamento
+            return self._leitura(), {"entrada": 1, "saida": 1}
+
+        tirar = _TirarFalso()
+        with mock.patch.object(carregamento, "_relogio", lambda: agora[0]), \
+                mock.patch.object(vf, "_chamar_modelo", side_effect=modelo_lento), \
+                mock.patch.object(carregamento, "_tirar_da_vuupt_ou_local", tirar):
+            r = self._enviar(desmarcados=[{"parada_id": p1, "motivo": "Não coube"}])
+        self.assertEqual(r.status_code, 409, r.get_json())
+        self.assertEqual(tirar.chamadas, [])
+        self.assertEqual(r.get_json()["falhas"][0]["erro"], carregamento.MSG_TEMPO_ESGOTADO)
 
     def test_m2b_troca_de_motorista_pela_api(self):
         with self._modelo():
