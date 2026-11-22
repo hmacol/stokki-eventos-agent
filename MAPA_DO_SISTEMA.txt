@@ -111,7 +111,13 @@
                                              nucleo/tabela_pedidos.py (_sql_boleto_atrasado), conta em contar_filas.
 Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/acoes_pedidos.py (rotas POST /api/pedidos/acao/reenvio, .../cancelar-vuupt, .../cancelar-stokki, .../endereco, .../agendar, .../checar-dia-fixo, .../marcar-entregue (multipart, helper _marcar_entregue_pelo_form da Torre), .../validar-lote-foto; GET .../comprovantes?codigo= + /pedidos/canhoto/vuupt/<checklist_id>.pdf + /pedidos/canhoto/manual/<PS-N>.pdf (leitura, canhoto Vuupt/manual/app); cancelar-stokki SÓ PÕE NA FILA stokki_cancelamentos_fila (stokki/fila_cancelamento.py, 18/11) e a tela acompanha por GET .../cancelar-stokki/andamento?ids=; quem cancela é o worker portal-cliente-envios, e o concluído registra o pedido na fila stokki_devolucoes (origem 'pedidos'; devolução de estoque);
                                              confere Vuupt na hora, Stokki pela trava sessao_uso)
- Vigia de pedidos abertos (estado/prazo) ... vigia/ (regras.py = prazos; tela /vigia)
+ Vigia de pedidos abertos (estado/prazo) ... vigia/ (regras.py = prazos + O QUE FAZER e QUEM cuida por estado; tela /vigia)
+ Pedidos não entregues: o que fazer (21/11) . aba padrão da /vigia (_vigia_acao.html; vigia/consulta.lista_acao): grupos pelo que
+                                             fazer, equipe dona (Logística/Atendimento/Expedição, fixa por situação), placar do
+                                             último dia de rota, "Agir" (abre /pedidos?q=) e "Tratar" = decisão + data de retorno
+                                             (tabela vigia_decisoes; POST /api/vigia/decisao e .../desfazer; histórico em
+                                             tratativas VIGIA_DECISAO). Abre pra total, operador, logistica, atendimento (agem) e
+                                             leitura (só vê). A Torre mostra UMA linha por equipe (vencido sem decisão válida).
  Clientes que exigem agendamento (AGENDA) .. regras/clientes_agendamento.py; fila em
                                              marcar_clientes_agenda.py + tela /clientes-agenda
  Quem usa o portal / importa por lá ........ painel_agentes/adesao_portal.py (tela /adesao-portal)
@@ -2085,11 +2091,13 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
                novidades pro e-mail, tratar (POST /api/batimento/tratar).
 
  vigia/                    Vigia de pedidos abertos (DOC_EXECUCAO_CLAUDE_VIGIA.md).
-   regras.py   estados e prazos (puro, testado).
+   regras.py   estados e prazos (puro, testado) + acao_e_dono (o que fazer / equipe). 21/11: rascunho vence
+               05h30 do dia da rota; retirada no galpão = AGUARDANDO_RETIRADA (sem prazo, não é "sem serviço").
    vigiar.py   job de 15 min: junta núcleo + retrato da Stokki + rascunhos
                + insucessos, grava vigia_pedidos. Não chama Stokki/Vuupt.
    banco.py    tabelas; registrar_listagem_stokki (chamado pelo pipeline).
-   consulta.py leitura pra Torre (exceções "Vigia") e tela /vigia.
+   consulta.py leitura pra Torre (uma exceção "Vigia" por equipe) e tela /vigia: listar (aba Todos os abertos),
+               lista_acao (aba Não entregues, inclui ENTREGUE_NAO_EXPEDIDO do batimento), decidir/desfazer.
 
  infra/                    Units e timers systemd, sequencia_*.sh,
                            Caddyfile-motorista.
@@ -2187,7 +2195,7 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
    torre_excecoes_tratadas, torre_rotas_encerradas, torre_entregas_manuais
                              painel_agentes/torre_controle.py (fila tratada, rota
                              encerrada na torre, pedido fechado como entregue pelo painel)
-   vigia_*                   vigia/banco.py (stokki_abertos, pedidos, historico, listagens)
+   vigia_*                   vigia/banco.py (stokki_abertos, pedidos, historico, listagens, decisoes = o "Tratar" com data)
    geocache                  geocodificacao.py
    stokki_sessao_uso         stokki/sessao_uso.py
    stokki_cancelamentos_fila stokki/fila_cancelamento.py (Cancelar Stokki da tela /pedidos:

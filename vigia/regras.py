@@ -12,7 +12,9 @@ aberto está e quando o prazo dele vence. Prazos decididos pelo Hugo em
                                                                     prazo de 3 dias úteis (Hugo, 29/09)
                        (região semanal/quinzenal sem agendamento) 7 / 15 dias corridos (Hugo, 03/10)
   AGUARDANDO_CLIENTE   agendamento pedido ao embarcador            2 dias úteis
-  EM_RASCUNHO          rascunho não enviado                        19h do último dia útil antes da data
+  EM_RASCUNHO          rascunho não enviado                        05h30 do dia da rota (Hugo, 21/11: as
+                                                                    rotas saem de madrugada, 19h da véspera
+                                                                    alarmava toda noite)
   RASCUNHO_COM_ERRO    rascunho em ERRO_ENVIO                      na hora
   ROTA_PASSADA         em rota de dia anterior que não terminou    na hora
   INSUCESSO            insucesso sem reentrega nem decisão         1h depois da 1ª rodada da expedição
@@ -21,7 +23,11 @@ aberto está e quando o prazo dele vence. Prazos decididos pelo Hugo em
   RECUSADO             embarcador pediu pra não reenviar           2 dias úteis (cancelar/devolver na Stokki)
 
 Estados sem prazo (só aparecem na lista): AGENDADO (data futura), EM_ROTA
-(rota de hoje ou futura).
+(rota de hoje ou futura) e AGUARDANDO_RETIRADA (retirada no galpão: não sobe
+pra Vuupt desde 06/11, então não é "sem serviço"; prazo a definir, Hugo 21/11).
+
+Cada estado também diz O QUE FAZER e QUEM cuida (acao_e_dono, Hugo 21/11:
+dono fixo por situação) -- é o que a tela /vigia mostra em cada pedido.
 """
 import sys
 from datetime import date, datetime, time, timedelta
@@ -35,6 +41,7 @@ from regras import feriados  # noqa: E402
 SEM_SERVICO = "SEM_SERVICO"
 NO_POOL = "NO_POOL"
 AGENDADO = "AGENDADO"
+AGUARDANDO_RETIRADA = "AGUARDANDO_RETIRADA"
 AGUARDANDO_CLIENTE = "AGUARDANDO_CLIENTE"
 EM_RASCUNHO = "EM_RASCUNHO"
 RASCUNHO_COM_ERRO = "RASCUNHO_COM_ERRO"
@@ -42,11 +49,14 @@ EM_ROTA = "EM_ROTA"
 ROTA_PASSADA = "ROTA_PASSADA"
 INSUCESSO = "INSUCESSO"
 RECUSADO = "RECUSADO"
+# Não vem do vigia: é a divergência ENTREGUE_NAO_EXPEDIDO do batimento, listada junto.
+ENTREGUE_NAO_EXPEDIDO = "ENTREGUE_NAO_EXPEDIDO"
 
 ROTULOS = {
     SEM_SERVICO: "Aberto na Stokki sem serviço na Vuupt",
     NO_POOL: "No pool sem rota",
     AGENDADO: "Agendado pra frente",
+    AGUARDANDO_RETIRADA: "Aguardando retirada no galpão",
     AGUARDANDO_CLIENTE: "Aguardando o embarcador",
     EM_RASCUNHO: "Rascunho não enviado",
     RASCUNHO_COM_ERRO: "Rascunho com erro de envio",
@@ -54,18 +64,21 @@ ROTULOS = {
     ROTA_PASSADA: "Preso em rota de dia anterior",
     INSUCESSO: "Insucesso sem reentrega",
     RECUSADO: "Embarcador recusou o reenvio",
+    ENTREGUE_NAO_EXPEDIDO: "Entregue e não expedido na Stokki",
 }
 
 # Ordem de gravidade na tela e na Torre (primeiro = mais grave).
 ORDEM = [ROTA_PASSADA, INSUCESSO, SEM_SERVICO, RASCUNHO_COM_ERRO, EM_RASCUNHO,
-         NO_POOL, AGUARDANDO_CLIENTE, RECUSADO, AGENDADO, EM_ROTA]
+         NO_POOL, AGUARDANDO_CLIENTE, RECUSADO, AGUARDANDO_RETIRADA, AGENDADO, EM_ROTA]
 CRITICOS = {ROTA_PASSADA, INSUCESSO, SEM_SERVICO, RASCUNHO_COM_ERRO}
 
 HORAS_SEM_SERVICO = 4
 HORAS_REENTREGA_AUTO = 12  # espelha expedir_pedidos.HORAS_REENTREGA_AUTO
 DIAS_UTEIS_NO_POOL = 1
 DIAS_UTEIS_CLIENTE = 2
-HORA_LIMITE_RASCUNHO = time(19, 0)
+HORA_LIMITE_RASCUNHO = time(19, 0)  # só do pedido segurado (véspera do prazo final)
+HORA_LIMITE_ROTA = time(5, 30)      # rascunho não enviado: vence 05h30 do dia da rota
+LOGISTICA, ATENDIMENTO, EXPEDICAO = "Logística", "Atendimento", "Expedição"
 
 
 def eh_dia_util(d: date) -> bool:
@@ -134,7 +147,7 @@ def prazo(estado: str, desde: datetime, *, data_rascunho: date | None = None,
     if estado == EM_RASCUNHO:
         if data_rascunho is None:
             return None
-        return datetime.combine(ultimo_dia_util_antes(data_rascunho), HORA_LIMITE_RASCUNHO)
+        return datetime.combine(data_rascunho, HORA_LIMITE_ROTA)
     return None
 
 
@@ -163,6 +176,9 @@ def classificar(p: dict, hoje: date) -> tuple[str, str] | None:
         if not p.get("aberto_stokki"):
             return None
         acao = p.get("acao_pipeline") or "ainda não processado pelo pipeline"
+        if acao == "ignorado_retirada":
+            # Retirada no galpão nunca sobe pra Vuupt (06/11): não é "sem serviço".
+            return AGUARDANDO_RETIRADA, p.get("obs_pipeline") or "retirada no galpão"
         obs = p.get("obs_pipeline")
         return SEM_SERVICO, f"{acao}" + (f" -- {obs}" if obs else "")
 
@@ -203,6 +219,37 @@ def classificar(p: dict, hoje: date) -> tuple[str, str] | None:
     if ag and ag < hoje:
         return NO_POOL, f"agendamento de {ag:%d/%m} venceu sem rota"
     return NO_POOL, "aguardando roteirização"
+
+
+def acao_e_dono(estado: str, motivo: str | None = None) -> tuple[str, str]:
+    """(o que fazer, quem cuida) de um pedido no estado `estado`. `motivo` é o
+    texto gravado em vigia_pedidos: no insucesso é o motivo do motorista
+    ("Não coletado"...), no sem serviço começa pela ação do pipeline
+    ("pulado_cancelado_vuupt -- ...")."""
+    m = (motivo or "").strip().lower()
+    if estado == ROTA_PASSADA:
+        return "Confirmar a baixa com o motorista (Entregue ou Sem sucesso)", LOGISTICA
+    if estado == INSUCESSO:
+        if m.startswith("não coletado") or m.startswith("nao coletado"):
+            return "Criar a reentrega: a carga ficou no galpão", LOGISTICA
+        return "Decidir com o embarcador: reentregar ou devolver", ATENDIMENTO
+    if estado == SEM_SERVICO:
+        if m.startswith("pulado_cancelado_vuupt"):
+            return "Recriar o serviço na Vuupt ou cancelar na Stokki", ATENDIMENTO
+        return "Corrigir o motivo e reimportar o pedido", LOGISTICA
+    if estado in (NO_POOL, EM_RASCUNHO):
+        return "Roteirizar: pôr em rota ou enviar o rascunho", LOGISTICA
+    if estado == RASCUNHO_COM_ERRO:
+        return "Corrigir o erro e enviar o rascunho de novo", LOGISTICA
+    if estado == AGUARDANDO_CLIENTE:
+        return "Cobrar a data de agendamento do embarcador", ATENDIMENTO
+    if estado == RECUSADO:
+        return "Cancelar e devolver o pedido na Stokki", ATENDIMENTO
+    if estado == AGUARDANDO_RETIRADA:
+        return "Acompanhar a retirada (Coletas)", EXPEDICAO
+    if estado == ENTREGUE_NAO_EXPEDIDO:
+        return "Expedir o pedido na Stokki", EXPEDICAO
+    return "Acompanhar", LOGISTICA
 
 
 def vencido(vence_em: datetime | None, agora: datetime) -> bool:
