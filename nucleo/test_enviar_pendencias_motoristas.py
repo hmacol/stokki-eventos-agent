@@ -66,6 +66,19 @@ class EnviarTest(unittest.TestCase):
         self.assertEqual([x["situacao"] for x in r], ["teto", "nao_tentado"])
 
 
+    def test_pausa_sorteada_entre_envios_e_nao_antes_do_primeiro(self):
+        conn = mock.MagicMock()
+        dest = [{"principal_id": i, "nome": f"N{i}", "telefone": "11988887777", "pendencias": PEND} for i in (1, 2, 3)]
+        pausas = []
+        with mock.patch.object(env.atu, "gerar_link", return_value={"id": 7, "token": "t", "expira_em": "2026-12-06 10:00:00"}), \
+             mock.patch.object(env.banco, "agora", return_value="agora"):
+            r = env.enviar(conn, {"atualizacao_motoristas": {"forcar_destino_whatsapp": ""}}, dest, "https://x",
+                           avisar=lambda *a, **k: ("enviado", False), pausa=(45, 180), dormir=pausas.append)
+        self.assertEqual([x["situacao"] for x in r], ["enviado"] * 3)
+        self.assertEqual(len(pausas), 2)
+        self.assertTrue(all(45 <= p <= 180 for p in pausas))
+
+
 class PrivadoTest(unittest.TestCase):
     def test_sem_chave_no_config_nao_envia(self):
         self.assertEqual(nw.avisar_motorista_pendencias_privado(1, "11988887777", "Ana", "oi", {}), ("desligado", False))
