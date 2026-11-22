@@ -154,11 +154,22 @@ class RotaDoAppTest(unittest.TestCase):
         self.assertEqual(chamadas, [])
 
 
+class ChavesTest(unittest.TestCase):
+    def test_arquivo_ausente_e_tudo_desligado(self):
+        with mock.patch.object(f, "_RAIZ_PROJETO", f.Path("/nao/existe")):
+            self.assertEqual(f._carregar_chaves(), {})
+
+    def test_chaves_yaml_do_repo_liga_so_a_chave_combinada(self):
+        chaves = f._carregar_chaves()
+        self.assertIs(chaves["finalizar_rotas_entregues"]["fechar_app_nao_iniciada"], True)
+
+
 class MainTest(unittest.TestCase):
     def _main(self, chave, modo_teste, rotas, ids=frozenset({7, 8})):
         chamadas = []
-        config = {"vuupt_api": {"token": "t"}, "finalizar_rotas_entregues": {"fechar_app_nao_iniciada": chave}}
-        with mock.patch.multiple(f, _carregar_config=lambda: config, listar_rotas=lambda *a, **k: rotas,
+        config = {"vuupt_api": {"token": "t"}}
+        chaves = {"finalizar_rotas_entregues": {"fechar_app_nao_iniciada": chave}}
+        with mock.patch.multiple(f, _carregar_config=lambda: config, _carregar_chaves=lambda: chaves, listar_rotas=lambda *a, **k: rotas,
                                  _ids_rotas_do_app=lambda: set(ids),
                                  finalizar_rota_pela_troca=lambda t, rid, el: chamadas.append(rid) or True,
                                  finalizar_rota=lambda t, rid: chamadas.append(("finish", rid))):

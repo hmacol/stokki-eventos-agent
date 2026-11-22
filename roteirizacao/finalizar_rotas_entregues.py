@@ -24,8 +24,8 @@ de verdade nao foi medido se a troca manda aviso no app.
 
 22/11 (Hugo): o mesmo vale pra rota operada pelo NOSSO app (nucleo_rotas.operada_app=1),
 que fica "not_started" na Vuupt. Pela troca, devolvendo agente E veiculo e conferindo os
-dois. Atras da chave finalizar_rotas_entregues.fechar_app_nao_iniciada do config (desligada
-por padrao). Nao medido: se a troca manda aviso no app Vuupt do motorista.
+dois. Atras da chave finalizar_rotas_entregues.fechar_app_nao_iniciada do chaves.yaml (raiz; desligada
+por padrao se faltar). Nao medido: se a troca manda aviso no app Vuupt do motorista.
 
 Uso: python finalizar_rotas_entregues.py [--modo-teste]
 """
@@ -63,6 +63,15 @@ MAX_TROCAS_POR_RODADA = 15
 def _carregar_config() -> dict:
     with open(_RAIZ_PROJETO / "config.yaml", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+
+def _carregar_chaves() -> dict:
+    """chaves.yaml (raiz, versionado, sem segredo). Arquivo ausente = tudo desligado."""
+    try:
+        with open(_RAIZ_PROJETO / "chaves.yaml", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        return {}
 
 
 def _servicos(rota: dict) -> list[dict]:
@@ -154,7 +163,7 @@ def main(modo_teste: bool = False, hoje: date | None = None) -> int:
     hoje = hoje or date.today()
     config = _carregar_config()
     token = config.get("vuupt_api", {}).get("token", "")
-    chave_app = bool((config.get("finalizar_rotas_entregues") or {}).get("fechar_app_nao_iniciada"))
+    chave_app = bool((_carregar_chaves().get("finalizar_rotas_entregues") or {}).get("fechar_app_nao_iniciada"))
     if not token:
         raise RuntimeError("config.yaml sem vuupt_api.token.")
 

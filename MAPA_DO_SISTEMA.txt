@@ -1153,7 +1153,7 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
                            parada, km acumulado e 9h
                            (otimizacao_rotas.pedido_cabe_no_trajeto).
  cancelar_rotas_sem_motorista.py  15h45; só avisa rotas passadas sem baixa (28/10), não devolve.
- finalizar_rotas_entregues.py  23h30; finaliza na Vuupt (PUT /routes/{id}/finish) a rota iniciada; Lalamove e rota do app (nucleo operada_app=1) pela troca de agente (app so com finalizar_rotas_entregues.fechar_app_nao_iniciada=true no config; desligada)
+ finalizar_rotas_entregues.py  23h30; finaliza na Vuupt (PUT /routes/{id}/finish) a rota iniciada; Lalamove e rota do app (nucleo operada_app=1) pela troca de agente (chave em chaves.yaml (raiz, versionado, sem segredo): finalizar_rotas_entregues.fechar_app_nao_iniciada)
                            pelo motorista com tudo entregue (11/11). Rota nunca iniciada a
                            Vuupt não deixa fechar pela conta: só sai no log. Exceção (16/11):
                            rota da Lalamove fecha pela troca de agente (passa pro agente do
