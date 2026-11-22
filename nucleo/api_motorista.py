@@ -27,6 +27,7 @@ usado pelos documentos (documentos_pedido/storage_gcs.py, mesmo caminho
 pedidos/{codigo}/{tipo}/...).
 """
 import hashlib
+import json
 import logging
 import re
 import secrets
@@ -44,7 +45,7 @@ from flask import Flask, g, jsonify, render_template, request
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
-from nucleo import (atualizacao_motorista as atualizacao, auth_motorista as auth, banco,
+from nucleo import (atualizacao_motorista as atualizacao, auth_motorista as auth, banco, carregamento,
                     cadastro_motorista as cadastro, financeiro, operacao, ponte_vuupt, trajeto_rota, validacao_fotos)
 from nucleo.marketplace_remoto import ClienteMarketplace
 from nucleo.auth_motorista import AutenticacaoInvalida
@@ -109,6 +110,9 @@ def criar_app(config: dict | None = None) -> Flask:
     # Ponte núcleo -> Vuupt (12/11): rota da Vuupt operável pelo nosso app,
     # DESLIGADA por padrão -- liga em api_motorista.ponte_vuupt (ver o módulo).
     ponte_vuupt.definir_config(config)
+    # Checklist de carregamento: DESLIGADO por padrao (api_motorista.checklist_carregamento.ativo).
+    # operacao.montar_rota/iniciar_rota leem a mesma config pelo config global da ponte.
+    app.config["CHECKLIST_CARREGAMENTO"] = carregamento.config_carregamento(config)
     _ponte = ponte_vuupt.config_ponte(config)
     if _ponte["ativo"]:
         logger.info("Ponte Vuupt LIGADA (todos=%s, agentes=%s).", _ponte["todos"], sorted(_ponte["agentes"]))
@@ -482,7 +486,8 @@ def criar_app(config: dict | None = None) -> Flask:
     @requer_motorista
     def checklist():
         return jsonify({**operacao.carregar_checklist(conn()),
-                        "validacao_fotos": validacao_fotos.publico(app.config["VALIDACAO_FOTOS"])})
+                        "validacao_fotos": validacao_fotos.publico(app.config["VALIDACAO_FOTOS"]),
+                        "carregamento": {"ativo": app.config["CHECKLIST_CARREGAMENTO"]["ativo"]}})
 
     @app.get("/api/rotas")
     @requer_motorista
@@ -664,6 +669,53 @@ def criar_app(config: dict | None = None) -> Flask:
                 conn().rollback()
                 logger.warning(f"Fachada da parada {parada['id']} não guardada ({type(e).__name__}: {e}); veredito segue.")
         return jsonify({**validacao_fotos.aplicar_tentativas(cfg, r, tentativa), "sha256": sha})
+
+    @app.post("/api/rotas/<int:rota_id>/carregamento")
+    @requer_motorista
+    def confirmar_carregamento(rota_id):
+        """Checklist de carregamento (multipart): arquivo (foto do bau), carregador, uuid,
+        desmarcados (JSON [{parada_id, motivo, observacao}]), tentativa. Foto reprovada
+        trava (409 com o veredito, nada gravado) ate esgotar as tentativas."""
+        rota = operacao.rota_do_motorista(conn(), rota_id, agent_id())
+        uuid = (request.form.get("uuid") or "").strip()
+        ja = carregamento.carregamento_da_rota(conn(), rota["id"])
+        if ja and uuid and ja["uuid"] == uuid:
+            # reenvio do mesmo checklist (fila offline): nada de segunda foto em disco
+            return jsonify({"ok": True, "carregamento": ja, "rota": operacao.montar_rota(conn(), rota)})
+        arquivo = request.files.get("arquivo")
+        if arquivo is None or not arquivo.filename:
+            raise OperacaoInvalida("Envie a foto do baú no campo 'arquivo' (multipart).")
+        ext = _extensao_foto(arquivo)
+        try:
+            desmarcados = json.loads(request.form.get("desmarcados") or "[]")
+            if not isinstance(desmarcados, list) or not all(isinstance(d, dict) for d in desmarcados):
+                raise ValueError
+        except ValueError:
+            raise OperacaoInvalida("Campo 'desmarcados' deve ser uma lista JSON.")
+        try:
+            tentativa = int(request.form.get("tentativa") or 1)
+        except ValueError:
+            tentativa = 1
+
+        conteudo = arquivo.read()
+        sha = hashlib.sha256(conteudo).hexdigest()
+        r = _validar_conteudo(validacao_fotos.TIPO_CARREGAMENTO, conteudo, sha, rota_id=rota["id"], no_ato=True)
+        if r is None:
+            r = {"resultado": validacao_fotos.NAO_VERIFICADO, "motivo": "Validação automática desligada."}
+        veredito = validacao_fotos.aplicar_tentativas(app.config["VALIDACAO_FOTOS"], r, tentativa)
+        if not veredito["pode_seguir"]:
+            return jsonify({**veredito, "ok": False, "sha256": sha, "erro": veredito.get("motivo") or "Foto reprovada."}), 409
+
+        caminho, _gcs = _guardar_foto(conteudo, f"rota-{rota['id']}", validacao_fotos.TIPO_CARREGAMENTO, uuid, ext)
+        foto = {"caminho": caminho, "sha256": sha, "resultado": veredito.get("resultado"),
+                "ocupacao_pct": veredito.get("ocupacao_pct"), "revisao_humana": bool(veredito.get("revisao_humana"))}
+        res = carregamento.confirmar(conn(), rota, agent_id(), carregador=request.form.get("carregador"), uuid=uuid,
+                                     desmarcados=desmarcados, foto=foto)
+        if not res["ok"]:
+            erros = "; ".join(f"{f['codigo']}: {f['erro']}" for f in res["falhas"])
+            return jsonify({**res, "erro": f"Não foi possível tirar da rota: {erros}"}), 409
+        rota = conn().execute("SELECT * FROM nucleo_rotas WHERE id = ?", (rota["id"],)).fetchone()
+        return jsonify({"ok": True, "carregamento": res["carregamento"], "rota": operacao.montar_rota(conn(), rota)})
 
     @app.post("/api/paradas/<int:parada_id>/comprovantes")
     @requer_motorista

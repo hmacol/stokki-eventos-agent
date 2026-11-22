@@ -408,5 +408,185 @@ class TestTirarDaVuuptOuLocal(unittest.TestCase):
         self.assertTrue(carregamento._tirar_da_vuupt_ou_local(rota, parada, "Não coube", None)["ok"])
 
 
+# ── API (POST /api/rotas/<id>/carregamento) ───────────────────────────────────
+
+class TestApiCarregamento(unittest.TestCase):
+    CPF, PIN, AGENT = "12345678901", "123456", 4242
+
+    def _config(self, ativo=True):
+        return {"api_motorista": {"secret_key": "segredo-de-teste", "pasta_comprovantes": str(self.raiz / "fotos"),
+                                  "gcs_ativo": False, "validacao_fotos": {"ativo": True, "max_tentativas": 2},
+                                  "checklist_carregamento": {"ativo": ativo}},
+                "anthropic": {"api_key": "sk-teste"}, "vuupt_api": {"token": "tok-teste"}}
+
+    def setUp(self):
+        from nucleo import api_motorista, auth_motorista as auth
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.raiz = Path(self._tmp.name)
+        self._patch_db = mock.patch.object(banco, "DB_PATH", self.raiz / "t.db")
+        self._patch_db.start()
+        self._cfg_ponte = ponte_vuupt._config
+        self.app = api_motorista.criar_app(self._config())
+        self.cli = self.app.test_client()
+        conn = banco.conectar()
+        auth.criar_ou_atualizar_motorista(conn, self.CPF, "Motorista Teste", self.PIN, agent_id=self.AGENT,
+                                          tipo_veiculo="VAN_HR")
+        auth.criar_ou_atualizar_motorista(conn, "98765432100", "Outro", self.PIN, agent_id=777, tipo_veiculo="VAN_HR")
+        conn.close()
+        self.h = self._login(self.CPF)
+        self.rota_id = self._rota()
+
+    def tearDown(self):
+        ponte_vuupt.definir_config(self._cfg_ponte)
+        self._patch_db.stop()
+        self._tmp.cleanup()
+
+    def _login(self, cpf):
+        r = self.cli.post("/api/login", json={"cpf": cpf, "pin": self.PIN})
+        return {"Authorization": f"Bearer {r.get_json()['acesso']}"}
+
+    def _rota(self):
+        from datetime import date
+        from nucleo import rotas
+        hoje = date.today().isoformat()
+        conn = banco.conectar()
+        rota_id = rotas.materializar_rascunho({
+            "id": 1, "data_alvo": hoje, "lote_id": "L", "nome": "R", "agent_id": self.AGENT,
+            "vehicle_id": None, "motorista_nome": "Teste", "tipo_veiculo": None, "start_location_base_id": 1,
+            "end_location_base_id": 1, "start_at": f"{hoje} 07:00:00", "km_estimado": 10.0,
+            "status": "RASCUNHO", "vuupt_route_id": None,
+            "paradas": [{"ordem": i, "service_id": 900 + i, "codigo": f"PS-{900 + i}", "titulo": "A",
+                         "endereco": "Rua A", "latitude": -23.5, "longitude": -46.6, "nivel_dificuldade": 1,
+                         "volume_caixas": 1} for i in (1, 2)],
+        }, banco.PROVEDOR_APP, conn=conn)
+        conn.close()
+        return rota_id
+
+    def _paradas(self):
+        conn = banco.conectar()
+        ids = [r["id"] for r in conn.execute("SELECT id FROM nucleo_paradas WHERE rota_id = ? ORDER BY ordem",
+                                             (self.rota_id,))]
+        conn.close()
+        return ids
+
+    def _fotos_em_disco(self):
+        return [p for p in (self.raiz / "fotos").rglob("*") if p.is_file()]
+
+    @staticmethod
+    def _leitura(eh_carga=True):
+        return {"eh_carga": eh_carga, "legivel": True, "bau_inteiro": True, "ocupacao_pct": 70, "problemas": [],
+                "motivo": "ok"}
+
+    def _modelo(self, eh_carga=True):
+        from nucleo import validacao_fotos as vf
+        return mock.patch.object(vf, "_chamar_modelo", return_value=(self._leitura(eh_carga), {"entrada": 1, "saida": 1}))
+
+    def _enviar(self, foto=None, uuid="c1", desmarcados=None, tentativa=1, rota_id=None, headers=None):
+        import io
+        import json
+        from nucleo.test_validacao_fotos import _imagem
+        foto = foto if foto is not None else _imagem()
+        dados = {"arquivo": (io.BytesIO(foto), "foto.jpg"), "carregador": "Joao", "uuid": uuid,
+                 "desmarcados": json.dumps(desmarcados or []), "tentativa": str(tentativa)}
+        return self.cli.post(f"/api/rotas/{rota_id or self.rota_id}/carregamento", headers=headers or self.h,
+                             data=dados, content_type="multipart/form-data")
+
+    def _iniciar(self):
+        return self.cli.post(f"/api/rotas/{self.rota_id}/iniciar", json={}, headers=self.h)
+
+    def test_checklist_anuncia_a_chave(self):
+        c = self.cli.get("/api/checklist", headers=self.h).get_json()
+        self.assertEqual(c["carregamento"], {"ativo": True})
+
+    def test_aprovada_sem_desmarcados(self):
+        with self._modelo():
+            r = self._enviar()
+        j = r.get_json()
+        self.assertEqual(r.status_code, 200, j)
+        self.assertTrue(j["ok"])
+        self.assertEqual(j["carregamento"]["ocupacao_pct"], 70)
+        self.assertEqual(j["rota"]["carregamento"], {"exigido": True, "feito": True})
+        self.assertEqual(len(self._fotos_em_disco()), 1)
+
+    def test_rota_anuncia_exigido_antes_do_checklist(self):
+        rota = self.cli.get(f"/api/rotas/{self.rota_id}", headers=self.h).get_json()
+        self.assertEqual(rota["carregamento"], {"exigido": True, "feito": False})
+
+    def test_iniciar_antes_do_checklist_recusa(self):
+        r = self._iniciar()
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("checklist de carregamento", r.get_json()["erro"])
+
+    def test_iniciar_depois_do_checklist_passa(self):
+        with self._modelo():
+            self._enviar()
+        self.assertEqual(self._iniciar().status_code, 200)
+
+    def test_iniciar_com_chave_desligada_como_hoje(self):
+        ponte_vuupt.definir_config(self._config(ativo=False))
+        self.assertEqual(self._iniciar().status_code, 200)
+
+    def test_reprovada_na_primeira_tentativa_nao_grava_nada(self):
+        with self._modelo(eh_carga=False):
+            r = self._enviar(tentativa=1)
+        j = r.get_json()
+        self.assertEqual(r.status_code, 409, j)
+        self.assertFalse(j["pode_seguir"])
+        self.assertEqual(self._fotos_em_disco(), [])
+        conn = banco.conectar()
+        self.assertIsNone(carregamento.carregamento_da_rota(conn, self.rota_id))
+        conn.close()
+
+    def test_reprovada_na_ultima_tentativa_segue_com_revisao_humana(self):
+        with self._modelo(eh_carga=False):
+            r = self._enviar(tentativa=2)
+        j = r.get_json()
+        self.assertEqual(r.status_code, 200, j)
+        self.assertEqual(j["carregamento"]["revisao_humana"], 1)
+
+    def test_nao_verificado_segue(self):
+        from nucleo import validacao_fotos as vf
+        with mock.patch.object(vf, "_chamar_modelo", side_effect=RuntimeError("sem rede")):
+            r = self._enviar()
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertEqual(r.get_json()["carregamento"]["resultado_foto"], vf.NAO_VERIFICADO)
+
+    def test_rota_de_outro_motorista_404(self):
+        with self._modelo():
+            r = self._enviar(headers=self._login("98765432100"))
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(self._fotos_em_disco(), [])
+
+    def test_mesmo_uuid_repetido_devolve_o_mesmo_corpo_sem_segunda_foto(self):
+        from nucleo.test_validacao_fotos import _imagem
+        with self._modelo():
+            a = self._enviar(uuid="u-igual").get_json()
+            b = self._enviar(foto=_imagem() + b"\x00", uuid="u-igual")
+        self.assertEqual(b.status_code, 200)
+        self.assertEqual(a["carregamento"], b.get_json()["carregamento"])
+        self.assertEqual(len(self._fotos_em_disco()), 1)
+
+    def test_desmarcado_sai_da_rota(self):
+        p1, _ = self._paradas()
+        with self._modelo():
+            r = self._enviar(desmarcados=[{"parada_id": p1, "motivo": "Não coube"}])
+        j = r.get_json()
+        self.assertEqual(r.status_code, 200, j)
+        self.assertEqual(j["carregamento"]["qtd_desmarcados"], 1)
+        self.assertEqual(j["rota"]["total_paradas"], 1)
+
+    def test_falha_da_vuupt_devolve_409_com_falhas(self):
+        p1, _ = self._paradas()
+        falso = _TirarFalso(falhas={p1: "Vuupt fora do ar"})
+        with self._modelo(), mock.patch.object(carregamento, "_tirar_da_vuupt_ou_local", falso):
+            r = self._enviar(desmarcados=[{"parada_id": p1, "motivo": "Não coube"}])
+        j = r.get_json()
+        self.assertEqual(r.status_code, 409, j)
+        self.assertFalse(j["ok"])
+        self.assertEqual(j["falhas"][0]["parada_id"], p1)
+        self.assertIn("Vuupt fora do ar", j["erro"])
+        self.assertEqual(j["removidos"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
