@@ -331,6 +331,39 @@ CREATE TABLE IF NOT EXISTS nucleo_ofertas_rota (
 );
 CREATE INDEX IF NOT EXISTS idx_nucleo_ofertas_rota_status ON nucleo_ofertas_rota(status, data_rota);
 
+-- Checklist de carregamento (nucleo/carregamento.py): uma linha por rota, com a
+-- foto do bau carregado; itens = paradas que o motorista desmarcou (nao carregou).
+-- carregamento_id e NULL ate o carregamento ser gravado: o item e achado por (rota_id, service_id).
+CREATE TABLE IF NOT EXISTS nucleo_carregamentos (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    rota_id                 INTEGER NOT NULL UNIQUE,
+    agent_id                INTEGER,
+    uuid                    TEXT NOT NULL UNIQUE,
+    placa                   TEXT,
+    tipo_veiculo            TEXT,
+    carregador              TEXT,
+    foto_caminho            TEXT,
+    foto_sha256             TEXT,
+    resultado_foto          TEXT,
+    ocupacao_pct            REAL,
+    revisao_humana          INTEGER NOT NULL DEFAULT 0,
+    qtd_carregados          INTEGER NOT NULL DEFAULT 0,
+    qtd_desmarcados         INTEGER NOT NULL DEFAULT 0,
+    criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE TABLE IF NOT EXISTS nucleo_carregamento_itens (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    carregamento_id         INTEGER REFERENCES nucleo_carregamentos(id),
+    rota_id                 INTEGER NOT NULL,
+    service_id              INTEGER,
+    codigo                  TEXT,
+    motivo                  TEXT,
+    observacao              TEXT,
+    removido_em             TEXT,                           -- NULL = ainda nao saiu da Vuupt
+    criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_nucleo_carreg_itens_rota ON nucleo_carregamento_itens(rota_id, service_id);
+
 CREATE TABLE IF NOT EXISTS tarifas_motorista (
     tipo_veiculo            TEXT PRIMARY KEY,               -- FIORINO | VAN_HR | VUC | TRES_QUARTOS | TRUCK
     nome                    TEXT,

@@ -373,6 +373,14 @@ def sincronizar_pool_agora(config: dict | None = None) -> dict:
         _TRAVA_SINCRONIZACAO.release()
 
 
+def anotar_nao_carregados(pool: list[dict], conn) -> None:
+    """p["nao_carregado"] = {motivo, observacao, criado_em} | None. Tabela ausente -> tudo None."""
+    from nucleo import carregamento
+    achados = carregamento.nao_carregados_recentes(conn, [p.get("service_id") for p in pool])
+    for p in pool:
+        p["nao_carregado"] = achados.get(p.get("service_id"))
+
+
 def _simular_rascunho(paradas: list[dict], hora_saida: float | None = None) -> dict | None:
     """Linha do tempo (roteirizacao_dados.simular_horarios) das paradas
     de um rascunho, na ordem em que estão. None quando nenhuma parada
@@ -1053,6 +1061,16 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
                                 "criado_em": r.get("criado_em")} if r else None)
         marcar_pausados_cliente(pool, servicos_brutos)
         pool.sort(key=lambda p: p["codigo"])
+        # Nao carregado (checklist de carregamento): so rotula, nao bloqueia roterizacao
+        try:
+            from nucleo import banco as _banco_nucleo
+            _conn_nc = _banco_nucleo.conectar()
+            try:
+                anotar_nao_carregados(pool, _conn_nc)
+            finally:
+                _conn_nc.close()
+        except Exception as e:
+            logger.warning(f"Falha ao marcar nao carregado pro pool (tela segue sem o selo): {e}")
     # Situação na Stokki (Hugo, 19/10): bloco "Em separação na Stokki" do pool
     retrato_stokki, retrato_stokki_em = carregar_retrato_stokki()
     anotar_situacao_stokki(pool, retrato_stokki)
