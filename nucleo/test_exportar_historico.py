@@ -125,6 +125,28 @@ class TestExportarEntidades(unittest.TestCase):
             "arquivo_vuupt/rotas/2026-11.jsonl.gz", "arquivo_vuupt/rotas/2026-11.jsonl.gz",
         ])
 
+    def test_cadastros_completos_sao_refeitos_toda_rodada(self):
+        # clientes/usuarios/veiculos nao tem mes: o "completo" parou em 16/09.
+        falsa = _RespostaFalsa([[{"id": 1}, {"id": 2}]])
+        estado = exportador.ler_estado()
+        with mock.patch.object(exportador.requests, "get", falsa.get):
+            for _ in range(2):
+                exportador.exportar_entidades("tok", {}, estado, "2026-09", "2026-09", rps=0,
+                                              modo_teste=False, apenas=["clientes"], hoje=date(2026, 11, 20))
+        self.assertEqual(self.enviados, [("arquivo_vuupt/clientes/completo.jsonl.gz", 2)] * 2)
+
+    def test_cadastro_nao_sobrescreve_com_menos_linhas_que_o_guardado(self):
+        # Conta da Vuupt encerrada/devolvendo pouco nao pode apagar o historico.
+        falsa = _RespostaFalsa([[{"id": 1}]])
+        estado = exportador.ler_estado()
+        estado["janelas"]["clientes/completo"] = {"linhas": 5, "total_api": 5}
+        with mock.patch.object(exportador.requests, "get", falsa.get):
+            resumo = exportador.exportar_entidades("tok", {}, estado, "2026-09", "2026-09", rps=0,
+                                                   modo_teste=False, apenas=["clientes"], hoje=date(2026, 11, 20))
+        self.assertEqual(self.enviados, [])
+        self.assertEqual(resumo, {})
+        self.assertEqual(estado["janelas"]["clientes/completo"]["linhas"], 5)
+
     def test_meses_em_aberto_vira_o_ano(self):
         self.assertEqual(exportador.meses_em_aberto(date(2027, 1, 3)), {"2027-01", "2026-12"})
 
