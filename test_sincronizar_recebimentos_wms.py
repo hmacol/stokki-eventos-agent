@@ -337,6 +337,27 @@ class TestRodar(BaseRotina):
                 qtds = [r[0] for r in self.conn.execute("SELECT qtd_embalagem FROM wms_recebimento_itens").fetchall()]
                 self.assertEqual(qtds, [4.0] if gravados else [])
 
+    def test_item_em_un_de_produto_em_un_ja_vem_em_unidades(self):
+        # 22/11: recebimento nao traz EAN; a coluna "unidade" da Stokki resolve o caso UN x UN
+        for pid, sku, unidade in ((50, "TST-UN", "UN"), (51, "TST-CX", "CX")):
+            self.conn.execute(
+                "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, embarcador_id, qtd_por_caixa, "
+                "unidade, atualizado_em) VALUES (?, ?, ?, 'P', 'E', ?, 12, ?, '2026-09-21 10:00:00')",
+                (pid, 9000 + pid, sku, PILOTO_ID, unidade))
+        self.conn.commit()
+        itens = [{"linha": 1, "sku": "TST-UN", "ean_linha": "", "descricao": "", "qtd_embalagem": 120.0, "unidade": "UN"},
+                 {"linha": 2, "sku": "TST-CX", "ean_linha": "", "descricao": "", "qtd_embalagem": 5.0, "unidade": "UN"},
+                 {"linha": 3, "sku": "TST-UN", "ean_linha": "", "descricao": "", "qtd_embalagem": 7.0, "unidade": "CX"},
+                 {"linha": 4, "sku": "TST-UN", "ean_linha": "", "descricao": "", "qtd_embalagem": 9.0}]
+        rid = wms_pedidos.registrar_recebimento(self.conn, {"id_stokki": 7001, "codigo": "#PE-7001", "stkkc_id": PILOTO_ID}, itens)
+        self.conn.commit()
+        linhas = self.conn.execute("SELECT linha, produto_id, qtd_un, motivo_pendencia <> '' FROM wms_recebimento_itens "
+                                   "WHERE recebimento_id = ? ORDER BY linha", (rid,)).fetchall()
+        self.assertEqual([tuple(l) for l in linhas], [(1, 50, 120.0, 0), (2, 51, None, 1), (3, 50, None, 1), (4, 50, None, 1)])
+        # sem o embarcador no recebimento, nada muda
+        rid2 = wms_pedidos.registrar_recebimento(self.conn, {"id_stokki": 7002, "codigo": "#PE-7002"}, itens[:1])
+        self.assertIsNone(self.conn.execute("SELECT qtd_un FROM wms_recebimento_itens WHERE recebimento_id = ?", (rid2,)).fetchone()[0])
+
     def test_recebido_sem_tabela_de_itens_conta_como_erro_mas_nao_derruba_a_rodada(self):
         # sem a tabela de itens na pagina (formato mudou/pagina quebrada
         # de verdade) -- vira erro, e mesmo assim tem que aguentar sem

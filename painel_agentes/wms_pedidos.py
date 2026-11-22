@@ -825,6 +825,27 @@ def reservas_antigas(conn, dias: int = RESERVA_ANTIGA_DIAS, limite: int = 50) ->
     return out
 
 
+def _item_em_un(conn, item: dict, stkkc_id) -> dict:
+    """
+    Linha de recebimento sem EAN nao diz se a quantidade e caixa ou unidade, e o resolver_item
+    nao chuta. Mas a tabela da Stokki tem a coluna "unidade": quando ela diz UN e o produto
+    (unico, do proprio embarcador) tambem e cadastrado em UN, a quantidade JA e em unidades
+    (22/11/2026). Qualquer outro caso (CX, sem unidade, sem embarcador) segue a regra antiga.
+    """
+    if str(item.get("unidade") or "").strip().upper() != "UN" or not stkkc_id or not item.get("sku"):
+        return item
+    try:
+        emb = int(stkkc_id)
+    except (TypeError, ValueError):
+        return item
+    rows = conn.execute(
+        "SELECT unidade FROM wms_produtos WHERE ativo = 1 AND sku = ? COLLATE NOCASE AND embarcador_id = ?",
+        (str(item["sku"]).strip(), emb)).fetchall()
+    if len(rows) == 1 and str(rows[0]["unidade"] or "").strip().upper() == "UN":
+        return {**item, "unidade_do_produto": True, "embarcador_id": emb}
+    return item
+
+
 def registrar_recebimento(conn, recebimento: dict, itens: list[dict]) -> int:
     """
     Cria ou atualiza o espelho de um recebimento (entrada esperada) e as
@@ -871,7 +892,7 @@ def registrar_recebimento(conn, recebimento: dict, itens: list[dict]) -> int:
         recebimento_id = cur.lastrowid
 
     for item in itens:
-        r = resolver_item(conn, item)
+        r = resolver_item(conn, _item_em_un(conn, item, recebimento.get("stkkc_id")))
         conn.execute("""
             INSERT INTO wms_recebimento_itens (recebimento_id, linha, sku, ean_linha, descricao,
                                                qtd_embalagem, qtd_un, produto_id, motivo_pendencia)
