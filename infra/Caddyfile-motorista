@@ -14,31 +14,13 @@
 # Uploads de foto: o Flask limita a 15 MB (MAX_CONTENT_LENGTH); o Caddy não
 # precisa de request_body extra pra isso.
 #
-# PWA dos motoristas de iPhone (21/11): o export web do app_motorista fica na
-# VPS em dados/app_motorista/web (fora do git; publicar com app_motorista/
-# publicar_web.sh). Entra ANTES do handle_path /motorista/* da API. O app usa
-# experiments.baseUrl=/motorista/web, então todos os links já vêm com o prefixo.
-# index/sw/manifest nunca ficam em cache (é como o app pega versão nova); os
-# arquivos de _expo/static têm hash no nome e podem ficar pra sempre. A CSP existe
-# porque o token do motorista fica no localStorage desta origem (compartilhada com
-# painel e portal): script só do próprio app, sem inline. Endurecimento maior (domínio
-# próprio do app ou cookie HttpOnly) é decisão à parte.
+# PWA dos motoristas de iPhone: NÃO fica mais aqui. Mudou pra domínio próprio
+# (https://motorista.freshhub.com.br, ver infra/Caddyfile-motorista-pwa) porque o
+# token do motorista fica no localStorage e esta origem é dividida com painel e
+# portal. O que sobra neste site é só o redirecionamento do endereço antigo
+# (entra ANTES do handle_path /motorista/* da API):
 #
-# (ATIVO na VPS desde 21/11; backup /etc/caddy/Caddyfile.bak-21-11-pwa-*)
-# 	redir /motorista/web /motorista/web/ permanent
-# 	handle_path /motorista/web/* {
-# 		root * /opt/stokki-eventos/dados/app_motorista/web
-# 		@sempre_novo path / /index.html /sw.js /manifest.webmanifest /registrar-sw.js
-# 		header @sempre_novo Cache-Control "no-cache"
-# 		@manifesto path /manifest.webmanifest
-# 		header @manifesto Content-Type application/manifest+json
-# 		header /_expo/static/* Cache-Control "public, max-age=31536000, immutable"
-# 		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-# 		header X-Content-Type-Options nosniff
-# 		header Referrer-Policy same-origin
-# 		try_files {path} /index.html
-# 		file_server
-# 	}
+# 	redir /motorista/web* https://motorista.freshhub.com.br/ permanent
 #
 # APK com link fixo pros motoristas (08/10): o link do artefato do Expo
 # expira em 14-30 dias, então o arquivo fica na VPS em
