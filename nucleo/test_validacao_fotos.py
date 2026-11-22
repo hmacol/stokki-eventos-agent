@@ -313,6 +313,45 @@ class TestPedagio(unittest.TestCase):
         self.assertEqual((r["resultado"], r["motivo"]), (vf.REPROVADO, "Isso é uma nota de posto."))
 
 
+def _leitura_carregamento(**kw) -> dict:
+    return {"legivel": True, "eh_carga": True, "bau_inteiro": True, "ocupacao_pct": 73,
+            "problemas": [], "motivo": "Bau inteiro visivel.", **kw}
+
+
+class TestCarregamento(unittest.TestCase):
+    def test_aprova_bau_inteiro(self):
+        with _modelo(_leitura_carregamento()):
+            r = vf.validar_foto(_cfg(), "CARREGAMENTO", _imagem())
+        self.assertEqual(r["resultado"], vf.APROVADO)
+        self.assertEqual(r["ocupacao_pct"], 70)
+
+    def test_reprova_bau_cortado(self):
+        with _modelo(_leitura_carregamento(bau_inteiro=False, problemas=["CORTADA"], motivo="Bau cortado.")):
+            r = vf.validar_foto(_cfg(), "CARREGAMENTO", _imagem())
+        self.assertEqual(r["resultado"], vf.REPROVADO)
+        self.assertIn("baú inteiro", r["motivo"])
+        self.assertEqual(r["ocupacao_pct"], 70)
+
+    def test_reprova_nao_e_carga(self):
+        with _modelo(_leitura_carregamento(eh_carga=False, ocupacao_pct=None)):
+            r = vf.validar_foto(_cfg(), "CARREGAMENTO", _imagem())
+        self.assertEqual(r["resultado"], vf.REPROVADO)
+
+    def test_haiku_fora_nao_trava(self):
+        with mock.patch.object(vf, "_chamar_modelo", side_effect=RuntimeError("fora")):
+            r = vf.validar_foto(_cfg(), "CARREGAMENTO", _imagem())
+        self.assertEqual(r["resultado"], vf.NAO_VERIFICADO)
+        self.assertTrue(vf.aplicar_tentativas(_cfg(), r, 1)["pode_seguir"])
+
+    def test_libera_na_ultima_tentativa_sem_excecao_da_fachada(self):
+        cfg = _cfg()
+        with _modelo(_leitura_carregamento(bau_inteiro=False)):
+            r = vf.validar_foto(cfg, "CARREGAMENTO", _imagem())
+        p = vf.aplicar_tentativas(cfg, r, cfg["max_tentativas"])
+        self.assertTrue(p["pode_seguir"])
+        self.assertTrue(p["revisao_humana"])
+
+
 class TestTentativas(unittest.TestCase):
     def test_reprovado_trava_ate_o_limite(self):
         cfg = _cfg(max_tentativas=2)
