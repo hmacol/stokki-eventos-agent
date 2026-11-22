@@ -107,7 +107,7 @@ export default function DetalheRota() {
   const depoisDesta = paradasOrdenadas.filter((p) => ehPendente(p) && p.id !== atual?.id);
   const jaFeitas = paradasOrdenadas.filter((p) => !ehPendente(p));
 
-  const acaoRota = async (acao: 'aceitar' | 'iniciar' | 'finalizar', status: Rota['status'], extra: Record<string, unknown> = {}) => {
+  const acaoRota = async (acao: 'aceitar' | 'iniciar' | 'finalizar', status: Rota['status'], extra: Record<string, unknown> = {}): Promise<boolean> => {
     setOcupado(true);
     try {
       const pos = await gps.posicaoAtual();
@@ -121,8 +121,10 @@ export default function DetalheRota() {
       if (acao === 'iniciar') await gps.iniciar(rota.id);
       if (acao === 'finalizar') await gps.parar();
       await carregar();
+      return true;
     } catch (e) {
       Alert.alert('Não deu', e instanceof api.ErroRede ? 'Sem conexão. Tente de novo com sinal.' : (e as Error).message);
+      return false;
     } finally {
       setOcupado(false);
     }
@@ -149,7 +151,16 @@ export default function DetalheRota() {
 
   const finalizar = () => {
     if (pendentes.length > 0) return Alert.alert('Ainda faltam paradas', `${pendentes.length} parada(s) sem resultado.`);
-    void acaoRota('finalizar', 'CONCLUIDA');
+    const concluir = async (lancarDespesas: boolean) => {
+      const ok = await acaoRota('finalizar', 'CONCLUIDA');
+      if (ok && lancarDespesas) router.push({ pathname: '/financeiro', params: { rota: String(rota.id) } });
+    };
+    // Rota operada pela Vuupt não aceita despesa pelo app: finaliza direto.
+    if (!rota.editavel) return void concluir(false);
+    Alert.alert('Teve despesa nesta rota?', 'Pedágio, estacionamento, descarga ou outra despesa pra reembolso. Dá pra lançar agora, com a foto do recibo.', [
+      { text: 'Não teve', onPress: () => void concluir(false) },
+      { text: 'Lançar despesas', onPress: () => void concluir(true) },
+    ]);
   };
 
   const cancelarPedagioEnviado = (pedagioId: number, valor: number) => {
@@ -358,7 +369,7 @@ export default function DetalheRota() {
 
         {rota.status === 'PLANEJADA' && !recusando ? (
           <View style={{ marginTop: 14 }}>
-            <Deslizar titulo="Aceitar rota" icone="checkmark" onConfirmar={() => acaoRota('aceitar', 'ACEITA')} desabilitado={ocupado} />
+            <Deslizar titulo="Aceitar rota" icone="checkmark" onConfirmar={async () => { await acaoRota('aceitar', 'ACEITA'); }} desabilitado={ocupado} />
             <Pressable onPress={() => setRecusando(true)} style={{ marginTop: 10 }}><Text style={s.link}>Não posso fazer esta rota (recusar)</Text></Pressable>
           </View>
         ) : null}
@@ -373,7 +384,7 @@ export default function DetalheRota() {
         ) : null}
         {rota.status === 'ACEITA' && rota.editavel ? (
           <View style={{ marginTop: 14 }}>
-            <Deslizar titulo="Iniciar rota" icone="play" onConfirmar={() => acaoRota('iniciar', 'EM_ROTA')} desabilitado={ocupado} />
+            <Deslizar titulo="Iniciar rota" icone="play" onConfirmar={async () => { await acaoRota('iniciar', 'EM_ROTA'); }} desabilitado={ocupado} />
           </View>
         ) : null}
         {operavel && pendentes.length === 0 ? (
