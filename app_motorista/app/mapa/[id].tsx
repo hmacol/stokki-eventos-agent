@@ -16,7 +16,7 @@ import * as gps from '../../src/gps';
 import { carregarRotas } from '../../src/rotasStore';
 import { BASE_CD, carregarTrajeto } from '../../src/trajeto';
 import { ordenarParadas, paradaDaVez, registrarPasso } from '../../src/paradaPasso';
-import { CartaoParada, temCoordenada, type FluxoBaixa } from '../../src/mapa/CartaoParada';
+import { CartaoParada, temCoordenada } from '../../src/mapa/CartaoParada';
 import { PinoBase, PinoParada } from '../../src/mapa/PinoParada';
 import { Carregando } from '../../src/componentes';
 import { cores } from '../../src/tema';
@@ -128,8 +128,8 @@ export default function MapaRota() {
     await registrarPasso(p, tipo);
     await carregar();
   };
-  const baixa = (p: Parada, fluxo: FluxoBaixa) => {
-    router.push(`/parada/${p.id}?rota=${rota.id}&fluxo=${fluxo}`);
+  const finalizar = (p: Parada) => {
+    router.push(`/parada/${p.id}?rota=${rota.id}`);
   };
 
   return (
@@ -175,7 +175,7 @@ export default function MapaRota() {
             onAnterior={() => selecionar(cartoes[indice - 1], true)}
             onProxima={() => selecionar(cartoes[indice + 1], true)}
             onPasso={passo}
-            onBaixa={baixa}
+            onFinalizar={finalizar}
           />
         ) : (
           <Text style={s.vazio}>Esta rota não tem paradas.</Text>

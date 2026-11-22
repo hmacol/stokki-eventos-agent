@@ -49,7 +49,7 @@ SENHA_MINIMA = 6
 TELAS = [
     ("inicio", "Início", "", [r"^/inicio$", r"^/api/inicio/"]),
     ("torre", "Torre de Controle", "Entregas", [r"^/torre(/|$)", r"^/api/torre/"]),
-    ("vigia_pedidos", "Vigia", "Entregas", [r"^/vigia$", r"^/api/batimento/"]),
+    ("vigia_pedidos", "Vigia", "Entregas", [r"^/vigia$", r"^/api/batimento/", r"^/api/vigia/"]),
     ("canhotos_pendentes", "Canhotos pendentes", "Entregas", [r"^/canhotos-pendentes$", r"^/api/canhotos-pendentes$"]),
     ("ciencias_dedicado", "Ciências de dedicado", "Entregas", [r"^/ciencias-dedicado$", r"^/api/ciencias-dedicado/.*$"]),
     ("pedidos_parados", "Pedidos Parados", "Entregas", [r"^/pedidos-parados$", r"^/pedidos-parados/foto/", r"^/api/pedidos-parados/"]),

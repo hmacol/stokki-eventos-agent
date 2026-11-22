@@ -1542,14 +1542,25 @@ def historico_tratativas():
     )
 
 
+NIVEIS_DECIDIR_VIGIA = ("total", "operador", "logistica", "atendimento")
+
+
 @app.route("/vigia")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "leitura", "logistica", "atendimento"))
 def vigia_pedidos():
     """Vigia de pedidos abertos (Hugo, 28/09): cada pedido aberto com o
-    estado, há quanto tempo e se o prazo venceu. Só leitura -- quem
-    calcula é vigia/vigiar.py (timer de 15 min). Aba "fechamento" (05/10):
+    estado, há quanto tempo e se o prazo venceu. Quem calcula é
+    vigia/vigiar.py (timer de 15 min). Aba "acao" (21/11, a padrão): o que
+    deixamos de entregar, agrupado pelo que fazer, com dono e "Tratar".
+    Aba "abertos": a lista completa de antes. Aba "fechamento" (05/10):
     resultado do batimento (batimento/bater.py, 07h25)."""
-    aba = "fechamento" if (request.args.get("aba") or "").lower() == "fechamento" else "abertos"
+    pedida = (request.args.get("aba") or "").lower()
+    if pedida == "fechamento":
+        aba = "fechamento"
+    elif pedida == "abertos" or request.args.get("estado") or request.args.get("vencidos"):
+        aba = "abertos"
+    else:
+        aba = "acao"
     if aba == "fechamento":
         from batimento import consulta as batimento_consulta
         from batimento.regras import ROTULOS_DIVERGENCIA
@@ -1573,6 +1584,29 @@ def vigia_pedidos():
                                pode_tratar=g.nivel_acesso in ("total", "operador"))
 
     from vigia import consulta as vigia_consulta
+    if aba == "acao":
+        from vigia import banco as vigia_banco
+        equipe = request.args.get("equipe")
+        if equipe is None:  # sem escolha: abre na equipe de quem entrou (logística / atendimento)
+            equipe = vigia_consulta.equipe_do_nivel(g.nivel_acesso)
+        if equipe not in vigia_consulta.EQUIPES:
+            equipe = ""
+        filtros = {"equipe": equipe, "busca": request.args.get("busca", "")}
+        try:
+            dados = vigia_consulta.lista_acao(equipe, filtros["busca"])
+            erro = None
+        except Exception as e:
+            logging.getLogger(__name__).exception("Falha ao ler a lista de ação do vigia")
+            dados = {"grupos": [], "com_decisao": [], "equipes": [], "total_acao": 0, "decisoes_vencidas": 0,
+                     "placar": None, "ultima_rodada": None, "ultima_listagem_stokki": None}
+            erro = str(e)
+        return render_template("vigia_pedidos.html", aba=aba, dados=dados, filtros=filtros, erro=erro,
+                               equipes=vigia_consulta.EQUIPES,
+                               pode_tratar=g.nivel_acesso in NIVEIS_DECIDIR_VIGIA,
+                               opcoes_decisao=list(vigia_banco.OPCOES_DECISAO.items()),
+                               data_padrao=vigia_consulta.data_padrao_retorno().isoformat(),
+                               hoje=datetime.now().date().isoformat())
+
     filtros = {
         "estado": request.args.get("estado", ""),
         "vencidos": request.args.get("vencidos", "") == "1",
@@ -1589,6 +1623,46 @@ def vigia_pedidos():
     from vigia.regras import ORDEM, ROTULOS
     return render_template("vigia_pedidos.html", aba=aba, dados=dados, filtros=filtros, erro=erro,
                            estados=[(e, ROTULOS[e]) for e in ORDEM])
+
+
+def _usuario_da_sessao() -> str:
+    return session.get("usuario") or g.nivel_acesso
+
+
+@app.route("/api/vigia/decisao", methods=["POST"])
+@requer_auth(niveis=NIVEIS_DECIDIR_VIGIA)
+@exige_mesma_origem
+def api_vigia_decisao():
+    """"Tratar" da aba Não entregues (Hugo, 21/11): o que a equipe decidiu pro
+    pedido e até quando. Some da fila até a data e volta como decisão vencida."""
+    import tratativas
+    from vigia import banco as vigia_banco, consulta as vigia_consulta
+    body = request.get_json(force=True) or {}
+    codigo, decisao = str(body.get("codigo") or ""), str(body.get("decisao") or "")
+    ate, obs = str(body.get("ate") or ""), str(body.get("obs") or "")
+    try:
+        vigia_consulta.decidir(codigo, str(body.get("estado") or ""), decisao, ate, obs, _usuario_da_sessao())
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    tratativas.registrar_evento(codigo, "painel", "VIGIA_DECISAO",
+                                decisao=vigia_banco.OPCOES_DECISAO.get(decisao, decisao),
+                                texto=f"até {ate}" + (f" · {obs.strip()}" if obs.strip() else "")
+                                      + f" · por {_usuario_da_sessao()}")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/vigia/decisao/desfazer", methods=["POST"])
+@requer_auth(niveis=NIVEIS_DECIDIR_VIGIA)
+@exige_mesma_origem
+def api_vigia_decisao_desfazer():
+    import tratativas
+    from vigia import consulta as vigia_consulta
+    codigo = str((request.get_json(force=True) or {}).get("codigo") or "")
+    if not vigia_consulta.desfazer(codigo):
+        return jsonify({"erro": "Esse pedido não tem decisão."}), 400
+    tratativas.registrar_evento(codigo, "painel", "VIGIA_DECISAO_DESFEITA",
+                                texto=f"desfeita por {_usuario_da_sessao()}")
+    return jsonify({"ok": True})
 
 
 @app.route("/api/batimento/tratar", methods=["POST"])

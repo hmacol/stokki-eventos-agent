@@ -1,0 +1,188 @@
+{# Aba "Não entregues" da /vigia (Hugo, 21/11): o que deixamos de entregar, agrupado pelo
+   que fazer, com a equipe dona e o "Tratar" (decisão + data). Dados: vigia/consulta.lista_acao. #}
+<h1>Pedidos não entregues: o que fazer</h1>
+<p class="sub">
+  Só entra aqui o que já passou do prazo e ninguém decidiu. Cada grupo diz o que fazer e quem cuida;
+  <strong>Agir</strong> abre o pedido na tela de Pedidos e <strong>Tratar</strong> registra a decisão com uma data de retorno.
+  Última rodada do vigia: {{ dados.ultima_rodada or '—' }} · retrato da Stokki: {{ dados.ultima_listagem_stokki or 'nenhum ainda' }}.
+</p>
+
+{% if erro %}<p style="color:var(--erro);">Falha ao ler o vigia: {{ erro }}</p>{% endif %}
+
+{% if dados.placar %}
+{% set p = dados.placar %}
+<div class="placar" title="Último dia de rota antes de hoje">
+  <div class="tile"><div class="r">Rotas de {{ p.dia[8:10] }}/{{ p.dia[5:7] }}</div><div class="n">{{ p.programados }}</div><div class="r">programados</div></div>
+  <div class="tile"><div class="n">{{ p.entregues }}</div><div class="r">entregues</div></div>
+  <div class="tile {% if p.nao_entregues %}alerta{% endif %}"><div class="n">{{ p.nao_entregues }}</div><div class="r">não entregues</div></div>
+</div>
+<p class="placar-sub">
+  Dos {{ p.nao_entregues }} não entregues:
+  <strong>{{ p.sem_decisao }}</strong> sem decisão ·
+  <strong>{{ p.com_decisao }}</strong> com decisão ·
+  <strong>{{ p.no_prazo }}</strong> ainda no prazo ·
+  <strong>{{ p.resolvidos }}</strong> já resolvidos (reentrega, entrega ou cancelamento).
+</p>
+{% endif %}
+
+<div class="chips">
+  <a class="chip {% if not filtros.equipe %}ativo{% endif %}" href="{{ url_for('vigia_pedidos', equipe='', busca=filtros.busca or None) }}">
+    Todas · {{ dados.total_acao }}</a>
+  {% for e in dados.equipes %}
+  <a class="chip {% if filtros.equipe == e.equipe %}ativo{% endif %}"
+     href="{{ url_for('vigia_pedidos', equipe=e.equipe, busca=filtros.busca or None) }}">
+    {{ e.equipe }} · {{ e.total }}{% if e.vencida %} <span class="vc">({{ e.vencida }} com decisão vencida)</span>{% endif %}</a>
+  {% endfor %}
+  <form method="GET" action="{{ url_for('vigia_pedidos') }}" style="margin-left:auto; display:flex; gap:6px;">
+    <input type="hidden" name="equipe" value="{{ filtros.equipe }}">
+    <input type="text" name="busca" value="{{ filtros.busca }}" placeholder="PS, embarcador, destinatário"
+           style="padding:6px 10px; border:1px solid var(--borda); border-radius:6px; font-size:13px; min-width:220px;">
+    <button type="submit" class="botao pequeno">Buscar</button>
+  </form>
+</div>
+
+{% for g in dados.grupos %}
+<details class="grupo {% if g.critico %}critico{% endif %}" open>
+  <summary>
+    <span class="acao">{{ g.acao }}</span>
+    <span class="qtd">{{ g.total }}</span>
+    <span class="meta">equipe: <strong>{{ g.dono }}</strong> · {{ g.rotulo }} · mais antigo há {{ g.mais_antigo }}</span>
+  </summary>
+  <div class="tabela-wrap">
+  <table>
+    <thead><tr><th>Pedido</th><th>Embarcador / destinatário</th><th>Situação</th><th>Há quanto tempo</th>{% if pode_tratar %}<th></th>{% endif %}</tr></thead>
+    <tbody>
+    {% for l in g.linhas %}
+    <tr>
+      <td class="mono"><a href="{{ url_for('historico_tratativas', busca=l.codigo) }}">#{{ l.codigo }}</a></td>
+      <td>{{ l.detalhe or '—' }}</td>
+      <td>{{ (l.motivo or l.rotulo).split(' -- ', 1)[-1] }}
+        {% if l.decisao_vencida %}
+        <div><span class="selo-decisao vencida">Decisão vencida: {{ l.decisao.rotulo }} (até {{ l.decisao.ate_br }}, {{ l.decisao.por }})</span></div>
+        {% endif %}
+      </td>
+      <td class="mono">{{ l.idade }}<div class="suave">desde {{ l.desde[:16] }}</div></td>
+      {% if pode_tratar %}
+      <td class="botoes">
+        <a class="botao pequeno" href="{{ url_for('pedidos_tabela', q=l.codigo) }}">Agir</a>
+        <button type="button" class="botao pequeno neutro btn-tratar" data-codigo="{{ l.codigo }}"
+                data-estado="{{ l.estado }}" data-acao="{{ g.acao }}">Tratar</button>
+      </td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+{% else %}
+<p class="suave">
+  {% if dados.total_acao %}Nenhum pedido dessa equipe/busca. Há {{ dados.total_acao }} em outras equipes.
+  {% else %}Nada vencido sem decisão.{% endif %}
+</p>
+{% endfor %}
+
+{% if dados.com_decisao %}
+<details class="grupo">
+  <summary>
+    <span class="acao">Com decisão</span><span class="qtd" style="color:var(--texto);">{{ dados.com_decisao|length }}</span>
+    <span class="meta">somem da fila até a data de retorno e voltam sozinhos se continuarem parados</span>
+  </summary>
+  <div class="tabela-wrap">
+  <table>
+    <thead><tr><th>Pedido</th><th>Embarcador / destinatário</th><th>Decisão</th><th>Volta em</th>{% if pode_tratar %}<th></th>{% endif %}</tr></thead>
+    <tbody>
+    {% for l in dados.com_decisao %}
+    <tr>
+      <td class="mono"><a href="{{ url_for('historico_tratativas', busca=l.codigo) }}">#{{ l.codigo }}</a></td>
+      <td>{{ l.detalhe or '—' }}<div class="suave">{{ l.acao }} · {{ l.dono }}</div></td>
+      <td>{{ l.decisao.rotulo }}{% if l.decisao.observacao %}<div class="suave">{{ l.decisao.observacao }}</div>{% endif %}
+        <div class="suave">{{ l.decisao.por }}, {{ l.decisao.em[:16] }}</div></td>
+      <td class="mono">{{ l.decisao.ate_br }}</td>
+      {% if pode_tratar %}
+      <td class="botoes"><button type="button" class="botao pequeno neutro btn-desfazer" data-codigo="{{ l.codigo }}">Desfazer</button></td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+{% endif %}
+
+{% if pode_tratar %}
+<dialog id="dlg-tratar">
+  <form method="dialog" id="form-tratar">
+    <h3>Tratar <span id="dlg-codigo"></span></h3>
+    <div class="suave" id="dlg-acao" style="font-size:13px;"></div>
+    <div class="campo">
+      <label style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--texto-suave);">O que foi decidido</label>
+      {% for chave, rotulo in opcoes_decisao %}
+      <label class="op"><input type="radio" name="decisao" value="{{ chave }}"> {{ rotulo }}</label>
+      {% endfor %}
+    </div>
+    <div class="campo">
+      <label for="dlg-obs" style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--texto-suave);">Observação <span id="dlg-obs-obrig"></span></label>
+      <textarea id="dlg-obs" rows="2" maxlength="300"></textarea>
+    </div>
+    <div class="campo">
+      <label for="dlg-ate" style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--texto-suave);">Voltar a aparecer em</label>
+      <input type="date" id="dlg-ate" value="{{ data_padrao }}" min="{{ hoje }}">
+    </div>
+    <div class="erro-dlg" id="dlg-erro"></div>
+    <div class="rodape">
+      <button type="button" class="botao neutro" id="dlg-cancelar">Cancelar</button>
+      <button type="button" class="botao" id="dlg-salvar">Salvar decisão</button>
+    </div>
+  </form>
+</dialog>
+<script>
+(function () {
+  var dlg = document.getElementById('dlg-tratar'), atual = null;
+  function erro(t) { document.getElementById('dlg-erro').textContent = t || ''; }
+  function post(url, corpo) {
+    return fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(corpo)})
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return {ok: r.ok, status: r.status, j: j}; }); });
+  }
+  document.querySelectorAll('.btn-tratar').forEach(function (b) {
+    b.addEventListener('click', function () {
+      atual = {codigo: b.dataset.codigo, estado: b.dataset.estado};
+      document.getElementById('dlg-codigo').textContent = '#' + b.dataset.codigo;
+      document.getElementById('dlg-acao').textContent = b.dataset.acao;
+      document.querySelectorAll('#form-tratar input[name=decisao]').forEach(function (r) { r.checked = false; });
+      document.getElementById('dlg-obs').value = '';
+      document.getElementById('dlg-ate').value = '{{ data_padrao }}';
+      erro('');
+      dlg.showModal();
+    });
+  });
+  document.querySelectorAll('#form-tratar input[name=decisao]').forEach(function (r) {
+    r.addEventListener('change', function () {
+      document.getElementById('dlg-obs-obrig').textContent = r.value === 'outro' ? '(obrigatória)' : '(opcional)';
+    });
+  });
+  document.getElementById('dlg-cancelar').addEventListener('click', function () { dlg.close(); });
+  document.getElementById('dlg-salvar').addEventListener('click', async function () {
+    var marcada = document.querySelector('#form-tratar input[name=decisao]:checked');
+    if (!marcada) { erro('Escolha o que foi decidido.'); return; }
+    var salvar = this; salvar.disabled = true;
+    var r = await post('{{ url_for("api_vigia_decisao") }}', {
+      codigo: atual.codigo, estado: atual.estado, decisao: marcada.value,
+      obs: document.getElementById('dlg-obs').value, ate: document.getElementById('dlg-ate').value});
+    salvar.disabled = false;
+    if (r.ok) { location.reload(); return; }
+    erro(r.j.erro || ('Falha ao salvar (' + r.status + ')'));
+  });
+  document.querySelectorAll('.btn-desfazer').forEach(function (b) {
+    b.addEventListener('click', async function () {
+      if (!confirm('Desfazer a decisão de ' + b.dataset.codigo + '? O pedido volta pra fila.')) return;
+      b.disabled = true;
+      var r = await post('{{ url_for("api_vigia_decisao_desfazer") }}', {codigo: b.dataset.codigo});
+      if (r.ok) { location.reload(); return; }
+      alert(r.j.erro || ('Falha ao desfazer (' + r.status + ')'));
+      b.disabled = false;
+    });
+  });
+})();
+</script>
+{% endif %}
