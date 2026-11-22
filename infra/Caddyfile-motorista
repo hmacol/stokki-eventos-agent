@@ -19,7 +19,10 @@
 # publicar_web.sh). Entra ANTES do handle_path /motorista/* da API. O app usa
 # experiments.baseUrl=/motorista/web, então todos os links já vêm com o prefixo.
 # index/sw/manifest nunca ficam em cache (é como o app pega versão nova); os
-# arquivos de _expo/static têm hash no nome e podem ficar pra sempre.
+# arquivos de _expo/static têm hash no nome e podem ficar pra sempre. A CSP existe
+# porque o token do motorista fica no localStorage desta origem (compartilhada com
+# painel e portal): script só do próprio app, sem inline. Endurecimento maior (domínio
+# próprio do app ou cookie HttpOnly) é decisão à parte.
 #
 # 	redir /motorista/web /motorista/web/ permanent
 # 	handle_path /motorista/web/* {
@@ -27,6 +30,9 @@
 # 		@sempre_novo path / /index.html /sw.js /manifest.webmanifest
 # 		header @sempre_novo Cache-Control "no-cache"
 # 		header /_expo/static/* Cache-Control "public, max-age=31536000, immutable"
+# 		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+# 		header X-Content-Type-Options nosniff
+# 		header Referrer-Policy same-origin
 # 		try_files {path} /index.html
 # 		file_server
 # 	}
