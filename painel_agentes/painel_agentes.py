@@ -70,6 +70,7 @@ from executor import (
     encerrar_todas_execucoes, progresso_execucao,
 )
 from mapa_rotas import buscar_rotas_para_mapa
+import acompanhamento_rotas
 from laboratorio_rotas import buscar_dados_laboratorio
 from planejamento_rotas import (
     buscar_dados_planejamento, buscar_pool_e_agendados, sincronizar_pool_agora, gerar_romaneio_pdf,
@@ -4401,6 +4402,64 @@ def api_cadastro_embarcador_aprovar(cnpj):
 # PENDENTE). Aqui o Hugo aprova (com o valor que vale) ou rejeita; só o
 # APROVADO entra no extrato (nucleo/financeiro.py). Lógica em
 # nucleo/operacao.py; aqui só HTTP.
+
+# Acompanhamento detalhado das rotas (21/11): tela so de leitura da logistica.
+_NIVEIS_ACOMPANHAMENTO = ("total", "operador", "logistica", "leitura", "atendimento")   # os da Torre
+
+
+def _acompanhamento_ve_despesas() -> bool:
+    """Despesas so pra quem abre /financeiro/pedagios: pelo nivel, ou pela
+    lista de telas de quem tem acesso personalizado."""
+    telas = getattr(g, "telas_liberadas", None)
+    if telas is None:
+        return g.nivel_acesso in ("total", "operador", "logistica", "leitura")   # niveis de pedagios()
+    return acesso_telas.caminho_liberado("/financeiro/pedagios", telas)
+
+
+def _acompanhamento_data(bruto) -> str:
+    try:
+        return datetime.strptime(bruto or "", "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        return date.today().strftime("%Y-%m-%d")
+
+
+@app.route("/acompanhamento")
+@requer_auth(niveis=_NIVEIS_ACOMPANHAMENTO)
+def acompanhamento():
+    try:
+        chave_mapa = (_carregar_config().get("google_maps") or {}).get("api_key", "")
+    except Exception:
+        chave_mapa = ""
+    return render_template("acompanhamento_rotas.html", google_maps_key=chave_mapa,
+                           data_inicial=_acompanhamento_data(request.args.get("data")))
+
+
+@app.route("/api/acompanhamento/rotas")
+@requer_auth(niveis=_NIVEIS_ACOMPANHAMENTO)
+def api_acompanhamento_rotas():
+    from nucleo import banco as nucleo_banco
+    data_rota = _acompanhamento_data(request.args.get("data"))
+    conn = nucleo_banco.conectar()
+    try:
+        rotas = acompanhamento_rotas.listar_rotas(conn, data_rota)
+    finally:
+        conn.close()
+    return jsonify({"data": data_rota, "atualizado_em": datetime.now().strftime("%H:%M"), "rotas": rotas})
+
+
+@app.route("/api/acompanhamento/rota/<int:rota_id>")
+@requer_auth(niveis=_NIVEIS_ACOMPANHAMENTO)
+def api_acompanhamento_rota(rota_id):
+    from nucleo import banco as nucleo_banco
+    conn = nucleo_banco.conectar()
+    try:
+        detalhe = acompanhamento_rotas.detalhe_rota(conn, rota_id, com_despesas=_acompanhamento_ve_despesas())
+    finally:
+        conn.close()
+    if detalhe is None:
+        return jsonify({"erro": "Rota não encontrada."}), 404
+    return jsonify(detalhe)
+
 
 @app.route("/financeiro/pedagios")
 @requer_auth(niveis=("total", "operador", "logistica", "leitura"))

@@ -64,6 +64,7 @@ TELAS = [
     ("planejamento", "Planejamento", "Rotas", [r"^/planejamento(/|$)", r"^/api/planejamento/",
                                                   r"^/api/torre/(marcar-entregue|validar-lote-foto)$"]),
     ("mapa_rotas", "Mapa", "Rotas", [r"^/mapa-rotas$"]),
+    ("acompanhamento", "Acompanhamento", "Rotas", [r"^/acompanhamento$", r"^/api/acompanhamento/"]),
     ("laboratorio_rotas", "Laboratório", "Rotas", [r"^/laboratorio-rotas$"]),
     ("expedicao", "Expedição", "Galpão", [r"^/expedicao$", r"^/api/expedicao/(romaneio|excluir-pedido)(/|$)"]),
     ("expedicao_consulta", "Consultar pedido", "Galpão", [r"^/expedicao/consulta$", r"^/api/expedicao/consulta$"]),

@@ -1455,6 +1455,16 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                                              visibilidade por pessoa/equipe, badge + som em toda tela.
                                              Substitui as Demandas do Lovable (lovable/tasks.py).
  mapa_rotas.py, mapa_util.py, laboratorio_rotas.py  Mapas e laboratório.
+ acompanhamento_rotas.py   Dados da tela /acompanhamento (21/11): so LE o nucleo (rotas, paradas,
+                           eventos GPS, pedagios). Tempo por parada = conclusao da anterior ate a
+                           conclusao desta x trajeto + atendimento previstos da Vuupt
+                           (dados_json.route_service.prevision_initial_*); semaforo = atraso
+                           acumulado liquido (verde ate 10 min, amarelo ate 30). Deslocamento e
+                           espera so separados quando tempo_deslocamento_s >= 60 (70% das paradas
+                           tem os cliques juntos). GPS so de quem usa o nosso app; sem GPS o
+                           carro fica na ultima parada concluida. Dado chega com 15-30 min
+                           (timers stokki-nucleo-sincronizar-*). Despesas so pra quem abre
+                           /financeiro/pedagios (a chave nem vai no JSON).
  motoristas.py             Tela de motoristas.
  pedidos_parados_triagem.py  Pedidos parados (24/10: registro e triagem no próprio
                            painel, sem Lovable). Aba Registrar grava em
@@ -1548,6 +1558,7 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
    /planejamento              planejamento_rotas.html (maior arquivo do repo;
                               ?modo=mobile para celular; dia passado = só leitura)
    /mapa-rotas                mapa_rotas.html
+   /acompanhamento            acompanhamento_rotas.html (+ /api/acompanhamento/rotas e /rota/<id>)
    /laboratorio-rotas         laboratorio_rotas.html
    /expedicao                 expedicao.html
    /expedicao/coletas         coletas_expedicao.html (+ /api/expedicao/coletas/...: folha,
