@@ -142,6 +142,22 @@ def _erros_da_resposta(resp) -> str:
     return "" if resp.status_code == 200 else (resp.text or "")[:300]
 
 
+def enviar_nf(sessao, id_stokki: int, chave: str, conteudo: bytes, token: str) -> str:
+    """So o POST do "Informar Nota Fiscal". Devolve "" se a Stokki aceitou,
+    senao o erro. Quem chama confere o resultado do seu jeito."""
+    resp = sessao.post(
+        URL_NFE_STORE,
+        files={"_token": (None, token), "order_id_nfe": (None, str(id_stokki)), "action": (None, "invoice"),
+               "page": (None, "index"), "nfe": (None, chave), "file_nfe": (f"{chave}.xml", conteudo, "text/xml")},
+        headers={"X-Requested-With": "XMLHttpRequest", "Referer": URL_LISTAGEM,
+                 "Accept": "application/json, text/javascript, */*; q=0.01"},
+    )
+    erro = _erros_da_resposta(resp)
+    if resp.status_code != 200 or erro:
+        return f"Stokki {resp.status_code}: {erro or 'sem detalhe'}"
+    return ""
+
+
 def trocar_nf(sessao, id_stokki: int, caminho_xml_original: Path, numero_nf: str, client_id: str) -> dict:
     """Devolve {"ok", "ja_estava", "erro", "conferencia" ("itens"|"caminho"|""),
     "itens_original", "itens_pedido", "caminho_antes", "caminho_depois"}.
@@ -172,16 +188,8 @@ def trocar_nf(sessao, id_stokki: int, caminho_xml_original: Path, numero_nf: str
     if not token:
         r["erro"] = "token CSRF nao encontrado na pagina de pedidos"
         return r
-    resp = sessao.post(
-        URL_NFE_STORE,
-        files={"_token": (None, token), "order_id_nfe": (None, str(id_stokki)), "action": (None, "invoice"),
-               "page": (None, "index"), "nfe": (None, chave), "file_nfe": (f"{chave}.xml", original, "text/xml")},
-        headers={"X-Requested-With": "XMLHttpRequest", "Referer": URL_LISTAGEM,
-                 "Accept": "application/json, text/javascript, */*; q=0.01"},
-    )
-    erro = _erros_da_resposta(resp)
-    if resp.status_code != 200 or erro:
-        r["erro"] = f"Stokki {resp.status_code}: {erro or 'sem detalhe'}"
+    r["erro"] = enviar_nf(sessao, id_stokki, chave, original, token)
+    if r["erro"]:
         return r
 
     depois = caminho_nf_do_pedido(sessao, id_stokki, numero_nf, client_id)

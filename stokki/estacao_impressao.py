@@ -558,10 +558,32 @@ def _aguardar_fluxo_impressao(page, data_id: str, timeout_s: int = 60) -> bool:
     return False
 
 
-@na_vez_da_provider
 def imprimir_pedidos_pendentes(config: dict, dry_run: bool = False,
                                visivel: bool = False,
                                apenas_ids: set | None = None) -> dict:
+    """Etapa nova (22/11) + impressão. Antes de imprimir, informa na Stokki
+    as notas que o cliente anexou no portal (stokki/informar_nf_portal.py):
+    o pedido sai de 'Aguardando faturamento' e entra na fila desta mesma
+    rodada. Fica FORA da vez da provider (a etapa usa a conta admin; quem
+    segura a admin e espera a provider é o pipeline). Falha da etapa não
+    impede a impressão. O resultado ganha a chave "nfs_portal"."""
+    nfs_portal = None
+    if not apenas_ids:
+        try:
+            from stokki.informar_nf_portal import informar_nfs_do_portal
+            nfs_portal = informar_nfs_do_portal(config, dry_run=dry_run)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Informar NF do portal falhou (a impressão segue): {e}")
+            nfs_portal = {"erro": str(e)}
+    resultado = _imprimir_fila(config, dry_run=dry_run, visivel=visivel, apenas_ids=apenas_ids)
+    resultado["nfs_portal"] = nfs_portal
+    return resultado
+
+
+@na_vez_da_provider
+def _imprimir_fila(config: dict, dry_run: bool = False,
+                   visivel: bool = False,
+                   apenas_ids: set | None = None) -> dict:
     """
     Processa TODOS os pedidos pendentes na Estação de Impressão, clicando
     de verdade em 'Imprimir' (botão button.btn_finish) e fechando o popup
