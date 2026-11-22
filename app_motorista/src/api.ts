@@ -25,9 +25,12 @@ const TIMEOUT_MS = 20000;
 
 export class ErroApi extends Error {
   status: number;
-  constructor(status: number, mensagem: string) {
+  /** Corpo JSON da resposta (ex.: falhas do carregamento), quando veio. */
+  dados: unknown;
+  constructor(status: number, mensagem: string, dados: unknown = null) {
     super(mensagem);
     this.status = status;
+    this.dados = dados;
   }
 }
 export class ErroRede extends Error {}
@@ -130,14 +133,14 @@ export async function chamar<T>(caminho: string, op: Opcoes = {}, repetiu = fals
   }
   if (!r.ok) {
     const msg = (dados as { erro?: string } | null)?.erro ?? `Erro ${r.status}`;
-    throw new ErroApi(r.status, msg);
+    throw new ErroApi(r.status, msg, dados);
   }
   return dados as T;
 }
 
 // ── chamadas de alto nível ────────────────────────────────────────────────
 
-import type { Ajuste, CadastroCriado, CadastroSituacao, Checklist, EstadoAtendimento, Extrato, MeusDados, Motorista, MudancaCadastro, NovoCadastro, Oferta, Pedagio, RespostaChamado, ResultadoValidacao, Rota, TipoDespesa, Trajeto } from './tipos';
+import type { Ajuste, CadastroCriado, Desmarcado, RespostaCarregamento, CadastroSituacao, Checklist, EstadoAtendimento, Extrato, MeusDados, Motorista, MudancaCadastro, NovoCadastro, Oferta, Pedagio, RespostaChamado, ResultadoValidacao, Rota, TipoDespesa, Trajeto } from './tipos';
 
 export async function login(cpf: string, pin: string): Promise<Motorista> {
   const r = await chamar<{ acesso: string; refresh: string; motorista: Motorista }>('/login', {
@@ -229,7 +232,7 @@ async function enviarArquivo<T>(caminho: string, uri: string, campos: Record<str
   }
   if (r.status < 200 || r.status >= 300) {
     const msg = (dados as { erro?: string } | null)?.erro ?? `Erro ${r.status}`;
-    throw new ErroApi(r.status, msg);
+    throw new ErroApi(r.status, msg, dados);
   }
   return dados as T;
 }
@@ -246,7 +249,7 @@ export async function enviarComprovante(paradaId: number, uri: string, tipo: str
  * validação desligada no servidor volta NAO_VERIFICADO/pode_seguir. */
 export async function validarFoto(
   uri: string,
-  campos: { tipo: 'CANHOTO' | 'PEDAGIO'; paradaId?: number; rotaId?: number; nf?: string | null; valor?: number; tentativa: number },
+  campos: { tipo: 'CANHOTO' | 'PEDAGIO' | 'CARREGAMENTO'; paradaId?: number; rotaId?: number; nf?: string | null; valor?: number; tentativa: number },
 ): Promise<ResultadoValidacao> {
   return enviarArquivo<ResultadoValidacao>('/fotos/validar', uri, {
     tipo: campos.tipo,
@@ -255,6 +258,15 @@ export async function validarFoto(
     ...(campos.rotaId ? { rota_id: String(campos.rotaId) } : {}),
     ...(campos.nf ? { nf: campos.nf } : {}),
     ...(campos.valor !== undefined ? { valor: String(campos.valor) } : {}),
+  });
+}
+
+/** Checklist de carregamento (antes de iniciar a rota): foto do baú + quem carregou +
+ * pedidos desmarcados. NÃO usa a fila offline: tirar o pedido da Vuupt é síncrono, então
+ * precisa de rede. 409 vem como ErroApi com `dados` (falhas / veredito da foto). */
+export async function confirmarCarregamento(rotaId: number, uri: string, carregador: string, uuid: string, desmarcados: Desmarcado[], tentativa: number) {
+  return enviarArquivo<RespostaCarregamento>(`/rotas/${rotaId}/carregamento`, uri, {
+    carregador, uuid, desmarcados: JSON.stringify(desmarcados), tentativa: String(tentativa),
   });
 }
 

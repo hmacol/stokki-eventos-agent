@@ -50,6 +50,8 @@ export type ResultadoValidacao = {
   nf_confere?: boolean | null;
   avisos?: string[];
   valor_lido?: number | null;
+  /** Só no tipo CARREGAMENTO: quanto do baú parece ocupado (0-100). */
+  ocupacao_pct?: number | null;
 };
 
 export type Parada = {
@@ -128,7 +130,16 @@ export type Rota = {
   confirmacao: { status: string; respondido_em: string | null; motivo_recusa: string | null } | null;
   paradas: Parada[];
   pedagios?: Pedagio[];
+  /** Checklist de carregamento: exigido=true e feito=false trava o "Iniciar rota". */
+  carregamento?: { exigido: boolean; feito: boolean };
 };
+
+// Checklist de carregamento (POST /rotas/<id>/carregamento, nucleo/carregamento.py).
+export type MotivoDesmarcar = 'Não coube' | 'Não Encontrado' | 'Outros';
+export type Desmarcado = { parada_id: number; motivo: MotivoDesmarcar; observacao: string };
+export type RespostaCarregamento = { ok: true; carregamento: Record<string, unknown>; rota: Rota };
+/** Corpo do 409 quando a Vuupt não tirou algum pedido da rota. */
+export type FalhaCarregamento = { parada_id: number; codigo: string; erro: string };
 
 // Trajeto da rota pelas ruas (GET /rotas/<id>/trajeto, nucleo/trajeto_rota.py):
 // pontos [lat, lng] da base ate a base, na ordem planejada. LINHA_RETA = o

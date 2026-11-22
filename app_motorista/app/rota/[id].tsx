@@ -21,6 +21,7 @@ import * as gps from '../../src/gps';
 import * as local from '../../src/local';
 import { carregarRotas } from '../../src/rotasStore';
 import { Deslizar } from '../../src/deslizar';
+import { CarregamentoRota } from '../../src/carregamentoRota';
 import { Botao, Cartao, Carregando } from '../../src/componentes';
 import { cores, formatarData, situacaoCor, situacaoRotulo, statusRotaRotulo } from '../../src/tema';
 import { horaDe, nomeExibicao, partesEndereco, resumoJanela } from '../../src/textos';
@@ -93,6 +94,16 @@ export default function DetalheRota() {
   }, []);
 
   if (!rota) return <Carregando />;
+
+  // Carregamento confirmado: a rota volta atualizada (o "Iniciar rota" aparece).
+  // Todas desmarcadas = rota cancelada pelo servidor: sai da tela.
+  const aoConfirmarCarregamento = (atualizada: Rota) => {
+    setRota(atualizada);
+    if (atualizada.status === 'CANCELADA') {
+      Alert.alert('Rota cancelada', 'Todas as paradas foram tiradas, então a rota foi cancelada.');
+      router.back();
+    }
+  };
 
   const pendentes = rota.paradas.filter(ehPendente);
   const ativa = rota.paradas.find(emAndamento) ?? null;       // a parada em andamento (no máximo uma)
@@ -338,7 +349,7 @@ export default function DetalheRota() {
   };
 
   return (
-    <ScrollView style={s.tela} contentContainerStyle={{ padding: 16, paddingBottom: 48 }} refreshControl={<RefreshControl refreshing={false} onRefresh={carregar} />}>
+    <ScrollView style={s.tela} contentContainerStyle={{ padding: 16, paddingBottom: 48 }} keyboardShouldPersistTaps="handled" refreshControl={<RefreshControl refreshing={false} onRefresh={carregar} />}>
       {offline ? <Text style={s.aviso}>Sem conexão — trabalhando com a última versão salva.</Text> : null}
 
       <Cartao>
@@ -371,7 +382,10 @@ export default function DetalheRota() {
             </View>
           </View>
         ) : null}
-        {rota.status === 'ACEITA' && rota.editavel ? (
+        {rota.status === 'ACEITA' && rota.editavel && rota.carregamento?.exigido && !rota.carregamento.feito ? (
+          // Checklist de carregamento: trava o "Iniciar rota" até o servidor registrar.
+          <CarregamentoRota rota={rota} aoConfirmar={aoConfirmarCarregamento} />
+        ) : rota.status === 'ACEITA' && rota.editavel ? (
           <View style={{ marginTop: 14 }}>
             <Deslizar titulo="Iniciar rota" icone="play" onConfirmar={() => acaoRota('iniciar', 'EM_ROTA')} desabilitado={ocupado} />
           </View>
