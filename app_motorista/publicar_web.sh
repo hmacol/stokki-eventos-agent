@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Publica o PWA dos motoristas (iPhone) em app.freshhub.com.br/motorista/web.
+# Publica o PWA dos motoristas (iPhone) em https://motorista.freshhub.com.br/ (origem própria).
 # Roda na máquina do Hugo, dentro de app_motorista/:  bash publicar_web.sh
 #
-# 1. exporta o web (experiments.baseUrl = /motorista/web, public/ vai junto)
+# 1. exporta o web (public/ vai junto: manifest, service worker, ícones)
 # 2. envia pra VPS em dados/app_motorista/web.novo e troca de pasta de uma vez
 #    (quem está com o app aberto nunca vê a pasta pela metade)
-# O Caddy serve /motorista/web/* dessa pasta (bloco em infra/Caddyfile-motorista).
+# O Caddy serve motorista.freshhub.com.br dessa pasta (site em infra/Caddyfile-motorista-pwa).
 # A pasta fica fora do git, como o APK. Nada aqui mexe em serviço nem em banco.
 set -euo pipefail
 
@@ -17,8 +17,8 @@ cd "$(dirname "$0")"
 rm -rf dist
 CI=1 npx expo export --platform web --output-dir dist
 
-# Sem isto o app abriria em branco: o index tem que apontar pro baseUrl certo.
-grep -q '/motorista/web/_expo/static/js/web/' dist/index.html || { echo "index.html sem baseUrl /motorista/web: abortei"; exit 1; }
+# Sem isto o app abriria em branco: o index tem que apontar pra raiz do domínio.
+grep -q 'src="/_expo/static/js/web/' dist/index.html || { echo "index.html com caminho inesperado: abortei"; exit 1; }
 test -f dist/sw.js && test -f dist/manifest.webmanifest || { echo "faltou sw.js/manifest no export: abortei"; exit 1; }
 
 tar -C dist -cf - . | ssh -i "$CHAVE" "$VPS" "
@@ -32,4 +32,4 @@ tar -C dist -cf - . | ssh -i "$CHAVE" "$VPS" "
   mv $DESTINO/web.novo $DESTINO/web
   rm -rf $DESTINO/web.antigo
 "
-echo "Publicado. Abra https://app.freshhub.com.br/motorista/web/ (precisa do bloco do Caddy ativo)."
+echo "Publicado. Abra https://motorista.freshhub.com.br/ (precisa do DNS e do site no Caddy)."

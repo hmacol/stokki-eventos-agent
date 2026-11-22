@@ -161,6 +161,31 @@
   .ocupacao .pos.cheia { background: var(--sucesso-bg); border-color: var(--sucesso); }
   .ocupacao .pos small { display: block; font-weight: 400; color: var(--texto-suave); font-size: 10.5px; }
   @media (min-width: 700px) { main { max-width: 760px; } .acoes { grid-template-columns: repeat(3, 1fr); } }
+
+  /* Menu lateral (Hugo 21/11): no desktop fica fixo ao lado do app pra trocar de
+     pagina; no celular vira gaveta aberta pelo ☰ do topo. O CSS da sidebar e o
+     mesmo do painel (_menu_lateral_estilo.html), com a gaveta so abaixo de 760px. */
+  .shell { display: flex; align-items: stretch; min-height: 100vh; }
+  .area-conteudo { flex: 1; min-width: 0; }
+  {% include "_menu_lateral_estilo.html" %}
+  .sidebar .rodape { padding: 12px 14px 16px; border-top: 1px solid rgba(255,255,255,0.08); display: flex; flex-direction: column; gap: 9px; }
+  .sidebar .rodape .usuario { display: flex; flex-direction: column; padding: 0 4px; overflow: hidden; }
+  .sidebar .rodape .usuario .nome { font-size: 12.5px; font-weight: 600; color: #DCDCEC; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sidebar .rodape .usuario .nivel { font-size: 10.5px; color: #7F7FA3; white-space: nowrap; }
+  .sidebar .sair-form { margin: 0; }
+  .sidebar .rodape button { display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%; background: none; border: 1px solid #3A3A5C; color: #C7C7E0; font-size: 12px; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-family: inherit; }
+  .sidebar .rodape button:hover { color: #fff; border-color: #C7C7E0; background: rgba(255,255,255,0.05); }
+  .sidebar .rodape button svg { width: 14px; height: 14px; flex: none; }
+  .abre-menu { display: none; }
+  @media (min-width: 761px) {
+    /* a barra de abas fixa nao pode passar por baixo da sidebar */
+    .barra-inferior { left: 240px; }
+    .toast { left: calc(50% + 120px); }
+  }
+  @media (max-width: 760px) {
+    .abre-menu { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; flex: none; border: none; border-radius: 8px; background: rgba(255,255,255,0.1); color: #fff; cursor: pointer; }
+    .abre-menu svg { width: 22px; height: 22px; }
+  }
 </style>
 </head>
 <body>
@@ -169,10 +194,39 @@
   const BOOT = {{ boot | tojson }};
 </script>
 
+<div class="shell">
+<aside class="sidebar" id="menu-lateral">
+  <div class="marca">
+    <span class="nome">Painel de Agentes</span>
+    <span class="subtitulo">Agente Stokki Freshlog</span>
+  </div>
+  <button type="button" class="fecha-menu" id="fecha-menu" aria-label="Fechar menu">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+  </button>
+  {% include "_menu_lateral_nav.html" %}
+  <div class="rodape">
+    <span class="usuario">
+      <span class="nome">{{ g.get('nome_usuario') or session.get('usuario', '') }}</span>
+      <span class="nivel">{{ session.get('nivel_acesso') }}</span>
+    </span>
+    <form class="sair-form" method="post" action="{{ url_for('logout') }}">
+      <button type="submit" title="Sair">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3.5H5a1.5 1.5 0 00-1.5 1.5v10A1.5 1.5 0 005 16.5h3"/><path d="M13 13.5l3.5-3.5L13 6.5"/><path d="M16.3 10H8"/></svg>
+        Sair
+      </button>
+    </form>
+  </div>
+</aside>
+<div class="area-conteudo">
 <div class="topo">
-  <div>
-    <div class="marca">Galpão Freshlog</div>
-    <div class="sub" id="topo-sub">Endereçamento</div>
+  <div style="display:flex;align-items:center;gap:10px">
+    <button type="button" class="abre-menu" id="abre-menu" aria-label="Abrir menu" aria-expanded="false" aria-controls="menu-lateral">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
+    <div>
+      <div class="marca">Galpão Freshlog</div>
+      <div class="sub" id="topo-sub">Endereçamento</div>
+    </div>
   </div>
   <div style="display:flex;align-items:center;gap:10px">
     <a class="rede" href="{{ url_for('retornos_tela') }}" style="text-decoration:none">Retornos</a>
@@ -183,6 +237,9 @@
 <div class="faixa" id="faixa-fila" hidden><span id="faixa-texto"></span><button type="button" id="btn-reenviar">Reenviar</button></div>
 
 <main id="app"></main>
+</div>
+<div class="veu-menu" id="veu-menu"></div>
+</div>
 
 <nav class="barra-inferior">
   <button class="aba on" data-aba="inicio"><span class="ic">⌂</span>Início</button>
@@ -1848,7 +1905,8 @@
   if (S.fila.length && navigator.onLine) setTimeout(reenviarFila, 1500);
 })();
 </script>
+{# o _menu_lateral_script ja inclui o _demandas_aviso_script #}
+{% include "_menu_lateral_script.html" %}
 {% include "_sessao_inativa_script.html" %}
-{% include "_demandas_aviso_script.html" %}
 </body>
 </html>

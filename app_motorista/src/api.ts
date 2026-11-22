@@ -7,13 +7,17 @@
 //   repete a chamada. Falhou a renovação -> sessão cai (ouvintes avisados).
 // - Sem rede/timeout -> ErroRede (a fila offline usa isso pra decidir
 //   se guarda pra depois).
+import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as segredo from './segredo';
 import { postarArquivo } from './envioArquivo';
 
-export const API_URL: string =
-  (Constants.expoConfig?.extra as { apiUrl?: string } | undefined)?.apiUrl ?? 'http://10.0.2.2:8073/api';
+// PWA (motorista.freshhub.com.br): a API responde no MESMO domínio, em /api. É o que mantém
+// o token do motorista numa origem só dele (sem painel/portal por perto).
+export const API_URL: string = Platform.OS === 'web'
+  ? `${window.location.origin}/api`
+  : (Constants.expoConfig?.extra as { apiUrl?: string } | undefined)?.apiUrl ?? 'http://10.0.2.2:8073/api';
 
 const CHAVE_ACESSO = 'motorista.acesso';
 const CHAVE_REFRESH = 'motorista.refresh';

@@ -1,7 +1,7 @@
 // Service worker: deixa o app abrir sem sinal (a fila de envios já funciona offline).
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', function () {
-    navigator.serviceWorker.register('/motorista/web/sw.js', { scope: '/motorista/web/' }).catch(function () {});
+    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function () {});
     // Na 1ª visita os arquivos carregam antes do service worker assumir:
     // manda a lista pra ele guardar (senão o 2º acesso sem sinal não abre).
     var guardar = function () {
