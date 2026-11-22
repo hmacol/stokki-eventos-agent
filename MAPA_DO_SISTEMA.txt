@@ -1153,7 +1153,7 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
                            parada, km acumulado e 9h
                            (otimizacao_rotas.pedido_cabe_no_trajeto).
  cancelar_rotas_sem_motorista.py  15h45; só avisa rotas passadas sem baixa (28/10), não devolve.
- finalizar_rotas_entregues.py  23h30; finaliza na Vuupt (PUT /routes/{id}/finish) a rota iniciada
+ finalizar_rotas_entregues.py  23h30; finaliza na Vuupt (PUT /routes/{id}/finish) a rota iniciada; Lalamove e rota do app (nucleo operada_app=1) pela troca de agente (chave em chaves.yaml (raiz, versionado, sem segredo): finalizar_rotas_entregues.fechar_app_nao_iniciada)
                            pelo motorista com tudo entregue (11/11). Rota nunca iniciada a
                            Vuupt não deixa fechar pela conta: só sai no log. Exceção (16/11):
                            rota da Lalamove fecha pela troca de agente (passa pro agente do
@@ -1491,6 +1491,27 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                                              visibilidade por pessoa/equipe, badge + som em toda tela.
                                              Substitui as Demandas do Lovable (lovable/tasks.py).
  mapa_rotas.py, mapa_util.py, laboratorio_rotas.py  Mapas e laboratório.
+ acompanhamento_rotas.py   Dados da tela /acompanhamento (21/11): so LE o nucleo (rotas, paradas,
+                           eventos GPS, pedagios). Tempo por parada = conclusao da anterior ate a
+                           conclusao desta x trajeto + atendimento previstos da Vuupt
+                           (dados_json.route_service.prevision_initial_*); semaforo = atraso
+                           acumulado liquido (verde ate 10 min, amarelo ate 30). Deslocamento e
+                           espera so separados quando tempo_deslocamento_s >= 60 (70% das paradas
+                           tem os cliques juntos). GPS so de quem usa o nosso app; sem GPS o
+                           carro fica na ultima parada concluida. Dado chega com 15-30 min
+                           (timers stokki-nucleo-sincronizar-*). Despesas so pra quem abre
+                           /financeiro/pedagios (a chave nem vai no JSON).
+                           Cores por fase da parada (selo, borda, mapa). Botao "Documentos por
+                           e-mail" usa as rotas /api/pedidos/documentos/* da tela Pedidos.
+ cancelar_finalizacao.py   Botao "Cancelar finalizacao" da /acompanhamento (22/11): a Vuupt nao
+                           reabre servico, entao DUPLICA (duplicar_servico_por_insucesso, codigo
+                           -R), inclui na mesma rota e cria a parada nova PENDENTE no nucleo pro
+                           motorista refazer a baixa no nosso app. A parada antiga fica intacta
+                           (historico). So rota operada pela ponte, EM_ROTA, com motivo, 1 vez
+                           (fingerprint insucessos_duplicados + evento FINALIZACAO_CANCELADA).
+                           Nao desfaz e-mail nem expedicao na Stokki. POST
+                           /api/acompanhamento/parada/<id>/cancelar-finalizacao
+                           (total/operador/logistica). Escreve na Vuupt: bloqueado na homologacao.
  motoristas.py             Tela de motoristas.
  pedidos_parados_triagem.py  Pedidos parados (24/10: registro e triagem no próprio
                            painel, sem Lovable). Aba Registrar grava em
@@ -1584,6 +1605,7 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
    /planejamento              planejamento_rotas.html (maior arquivo do repo;
                               ?modo=mobile para celular; dia passado = só leitura)
    /mapa-rotas                mapa_rotas.html
+   /acompanhamento            acompanhamento_rotas.html (+ /api/acompanhamento/rotas e /rota/<id>)
    /laboratorio-rotas         laboratorio_rotas.html
    /expedicao                 expedicao.html
    /expedicao/coletas         coletas_expedicao.html (+ /api/expedicao/coletas/...: folha,
@@ -1931,7 +1953,8 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
  app/(tabs)/               rotas, ofertas (marketplace), financeiro,
                            disponibilidade, perfil, ajuda (chat; áudio .m4a
                            via expo-audio só com a conversa na logística).
- app/rota/[id].tsx         Aceitar -> iniciar -> paradas -> finalizar.
+ app/rota/[id].tsx         Aceitar -> iniciar -> paradas -> finalizar. Ao finalizar (rota do app, não
+                           Vuupt) pergunta "Teve despesa?"; "Lançar" leva a /financeiro?rota=<id>.
  src/carregamentoRota.tsx  Etapa de carregamento antes do "Iniciar rota" (foto do baú +
                            desmarcar paradas com motivo) -> POST /api/rotas/<id>/carregamento.
  app/parada/[id].tsx       Entregue / Parcial / Não entregue / Reagendar,

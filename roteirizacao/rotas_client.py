@@ -295,10 +295,12 @@ def comando_rota(token: str, route_id: int, acao: str) -> None:
     _verificar_resposta(resp)
 
 
-def trocar_agente_rota(token: str, route_id: int, agent_id: int) -> None:
+def trocar_agente_rota(token: str, route_id: int, agent_id: int, vehicle_id: int | None = None) -> None:
     """PUT /routes/{id} {"agent_id"}: troca o motorista sem mexer nas paradas.
-    Aceita ate com a rota "started"; rota "finished" nao troca mais."""
-    resp = chamar_com_retry(requests.put, f"{API_BASE}/routes/{route_id}", json={"agent_id": agent_id},
+    Aceita ate com a rota "started"; rota "finished" nao troca mais.
+    vehicle_id (opcional) vai junto, pra devolver a rota com o mesmo veiculo."""
+    corpo = {"agent_id": agent_id, **({"vehicle_id": vehicle_id} if vehicle_id else {})}
+    resp = chamar_com_retry(requests.put, f"{API_BASE}/routes/{route_id}", json=corpo,
                             headers=_headers(token), timeout=30)
     _verificar_resposta(resp)
 

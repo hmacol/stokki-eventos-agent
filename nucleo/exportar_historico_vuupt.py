@@ -27,7 +27,8 @@ RETOMÁVEL: o estado fica em dados/arquivo_vuupt_estado.json (janelas
 prontas) e dados/arquivo_vuupt_pdfs.txt (ids de PDF já salvos). Rodar de
 novo continua de onde parou; janela pronta não é baixada duas vezes, exceto
 o mês corrente e o anterior (meses_em_aberto), refeitos toda noite pra pegar
-os canhotos novos.
+os canhotos novos. Clientes, usuários e veículos (completo) são refeitos
+toda noite, sem nunca sobrescrever com menos linhas do que já estão guardadas.
 
 COMO USAR (VPS, como www-data):
     venv/bin/python nucleo/exportar_historico_vuupt.py --fase entidades
@@ -166,9 +167,15 @@ def exportar_entidades(token: str, config: dict, estado: dict, desde: str, ate: 
         janelas = meses(desde, ate) if campo_data else ["completo"]
         for janela in janelas:
             chave = f"{entidade}/{janela}"
-            if chave in estado["janelas"] and janela not in em_aberto:
+            # Cadastros ("completo") não têm mês: são refeitos toda rodada.
+            if chave in estado["janelas"] and janela not in em_aberto and janela != "completo":
                 continue
             linhas, total = baixar_tudo(token, entidade, None if janela == "completo" else janela, rps)
+            guardadas = (estado["janelas"].get(chave) or {}).get("linhas", 0)
+            if janela == "completo" and len(linhas) < guardadas:
+                # Não sobrescreve o arquivo com menos do que já se tem (conta encerrada, API falha).
+                logger.warning(f"{chave}: API devolveu {len(linhas)} < {guardadas} guardadas -- mantido o arquivo antigo.")
+                continue
             if not linhas:
                 # Mês sem nada (a conta só tem rota de dez/2023 em diante):
                 # marca como pronto pra não voltar na API todo dia.

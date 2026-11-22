@@ -1,0 +1,6 @@
+# Chaves de liga/desliga SEM segredo, versionadas: ligar ou desligar = commit + deploy.
+# Segredos e credenciais continuam so no config.yaml (gitignored).
+
+finalizar_rotas_entregues:
+  # 22/11 (Hugo): timer 23h30 fecha pela troca de agente a rota do app que ficou "nao iniciada" na Vuupt.
+  fechar_app_nao_iniciada: true
