@@ -1413,6 +1413,59 @@ def avisar_motorista_link_atualizacao(link_id: int, grupo_id: str, grupo_nome: s
         return "falhou", False
 
 
+_ROTULO_DOCUMENTO_PENDENTE = {"cnh": "CNH", "crlv": "documento do veículo (CRLV)", "selfie": "selfie",
+                              "antt": "ANTT", "residencia": "comprovante de residência"}
+_ROTULO_CAMPO_PENDENTE = {"PIX": "chave PIX", "nascimento": "data de nascimento"}
+
+
+def texto_pendencias_motorista(primeiro_nome: str, documentos: list, campos: list, link: str, expira) -> str:
+    """Mensagem pessoal com o que falta no cadastro do motorista e o link pessoal de atualizacao.
+    `documentos`/`campos` vem de atualizacao_motorista.pendencias. `expira`: date ou datetime."""
+    linhas = [f"Olá, {primeiro_nome}! Aqui é a Fresh Log. Seu cadastro de motorista está com pendências:"]
+    if documentos:
+        linhas.append("• Documentos: " + ", ".join(_ROTULO_DOCUMENTO_PENDENTE.get(d, d) for d in documentos))
+    if campos:
+        linhas.append("• Dados: " + ", ".join(_ROTULO_CAMPO_PENDENTE.get(c, c) for c in campos))
+    linhas.append(f"Preencha pelo link (uns 5 minutos, com os documentos em mãos): {link}")
+    linhas.append(f"O link vale até {expira:%d/%m}.")
+    return "\n".join(linhas)
+
+
+def avisar_motorista_pendencias_privado(link_id: int, telefone: str, nome: str, texto: str, config: dict,
+                                        modo_teste: bool = False, **kw) -> tuple[str, bool]:
+    """Manda a mensagem de pendencias NO PRIVADO do motorista (nao no grupo). Devolve (situacao, piloto).
+    Mesma trava do envio em grupo (atualizacao_motoristas.forcar_destino_whatsapp): ausente = 'desligado',
+    numero = piloto (vai pra la com '[teste -> nome]' na frente), '' = envio real. Real confere antes
+    se o numero tem WhatsApp. Mesma origem e teto diario do envio em grupo; uma mensagem por link."""
+    try:
+        destino = destino_link_atualizacao(config)
+        telefone = re.sub(r"\D", "", str(telefone or ""))
+        if destino is None or not telefone or not gateway_clientes_ok(config):
+            return "desligado", False
+        if len(telefone) in (10, 11):
+            telefone = "55" + telefone
+        piloto = bool(destino)
+        if piloto:
+            texto = f"[teste → {nome} +{telefone}]\n{texto}"
+        elif not modo_teste:
+            existe = integracao_openwa.numero_existe(_cfg(config), telefone)
+            if existe is None:
+                return "indeterminado", False
+            if not existe:
+                return "numero_sem_whatsapp", False
+        origem = ORIGEM_MOTORISTA_ATUALIZACAO_PILOTO if piloto else ORIGEM_MOTORISTA_ATUALIZACAO
+        assinatura = f"link_atualizacao:{link_id}"
+        situacao = despachar(config, origem, "link_atualizacao", texto, assinatura, modo_teste=modo_teste,
+                             grupo_id=f"{destino or telefone}@c.us", **kw)
+        if situacao == "nao_enviado":
+            motivo = _motivo_da_ultima_recusa(kw.get("conn"), origem, assinatura)
+            situacao = {MOTIVO_TETO: "teto", MOTIVO_CANAL_EM_PAUSA: "canal_em_pausa"}.get(motivo, situacao)
+        return situacao, piloto
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou", False
+
+
 def avisar_atendimento_pedido_grupo(cadastro_id: int, texto: str, config: dict,
                                     modo_teste: bool = False, **kw) -> str:
     """Pedido de criacao do grupo do motorista novo, no privado do Atendimento

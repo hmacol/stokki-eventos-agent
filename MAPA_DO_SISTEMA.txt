@@ -1340,6 +1340,13 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            travado; guarda nome_anterior; só com atualizacao_motoristas.renomear_grupos),
                            rotas_30d, candidatos_envio (ativo, com pendência, com CPF, com grupo, sem link real
                            em aberto; mais rotas primeiro) e enviar_lote (1 link por motorista no grupo dele).
+ enviar_pendencias_motoristas.py  Mensagem PESSOAL (privado do WhatsApp) a cada motorista ativo com pendência
+                           cadastral, listando o que falta + link pessoal de atualização (21/11). Pula teste/
+                           virtual, sem CPF, sem telefone e quem já tem link aberto. Sem flag só lista; --piloto
+                           NUMERO manda tudo pra lá; --real manda aos motoristas (não mexe no config.yaml).
+                           Texto e envio em notificar_whatsapp.texto_pendencias_motorista /
+                           avisar_motorista_pendencias_privado (mesma trava e teto do envio em grupo).
+                           Rodar na VPS: sudo -u www-data venv/bin/python -m nucleo.enviar_pendencias_motoristas
  vuupt_agentes.py          Cliente da Vuupt p/ criar/ligar/apagar agente e veículo
                            (POST /users, /vehicles) e gerar e-mail nome@freshhub.com.br.
  templates/cadastro_motorista.html  Página pública do link: 3 passos pelo celular (dados,
