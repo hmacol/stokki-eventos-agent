@@ -351,7 +351,6 @@ def notificar_oferta_motoristas(elegiveis: list[MotoristaPreferencias], data_alv
     from regras.prioridade_ofertas import agora_utc_str
 
     config_confirmacao = config.get("confirmacao_rotas", {})
-    config_email = config.get("email", {})
     config_evolution = config.get("evolution_api", {})
 
     liberacoes = [
@@ -388,13 +387,7 @@ def notificar_oferta_motoristas(elegiveis: list[MotoristaPreferencias], data_alv
                 config_evolution, motorista.telefone, motorista.nome, link):
             contagem["whatsapp_evolution"] += 1
             teve_contato = True
-        if motorista.email:
-            corpo_html = "<p style='white-space:pre-line;font-size:14px;line-height:1.6;'>" \
-                        + mensagem.replace("*", "").replace("\n", "<br>") + "</p>"
-            corpo = envelope_html(corpo_html, rodape="Mensagem automática — Agente Stokki Eventos.")
-            if enviar_email([motorista.email], "[Freshlog] Rota disponível para escolha", corpo, config_email):
-                contagem["email"] += 1
-                teve_contato = True
+        # E-mail de "rota disponível" cancelado (Hugo, 22/11): só WhatsApp + arquivo.
         if not teve_contato:
             contagem["sem_contato"] += 1
 

@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-fila-app-motoristas.service todo dia as 09h30 (so habilitar depois do OK do Hugo no texto)
+
+[Timer]
+OnCalendar=*-*-* 09:30:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

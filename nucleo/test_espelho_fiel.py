@@ -354,6 +354,28 @@ class TestComparador(_BaseTemp):
         self.assertEqual(len(d["parada_sobrando"]), 1)
         self.assertEqual(len(d["rota_ausente_no_nucleo"]), 0)
 
+    def test_horario_de_rota_operada_pelo_app_nao_e_divergencia(self):
+        """17-20/11 em produção: 115 'horario_parada_diferente', todas de parada
+        concluída pelo app -- a Vuupt carimba a hora em que a ponte repetiu."""
+        rota = _rota_vuupt()
+        sincronizar_vuupt.sincronizar_rotas([rota], self.conn)
+        self.conn.execute("UPDATE nucleo_rotas SET operada_app = 1")
+        self.conn.execute("UPDATE nucleo_paradas SET completed_at = '2026-09-14 09:59:50'")   # app; Vuupt 10:00:00
+        self.conn.commit()
+        resultado = comparar_vuupt.comparar_dia(date(2026, 9, 14), [rota], self.conn)
+        self.assertEqual({c: len(v) for c, v in resultado["divergencias"].items() if v}, {})
+        self.assertEqual(len(resultado["horario_do_app"]), 1)
+        self.assertIn("horario_do_app", comparar_vuupt.resumir([resultado], 1))
+
+    def test_horario_diferente_em_rota_que_nao_e_do_app_continua_divergencia(self):
+        rota = _rota_vuupt()
+        sincronizar_vuupt.sincronizar_rotas([rota], self.conn)
+        self.conn.execute("UPDATE nucleo_paradas SET completed_at = '2026-09-14 09:59:50'")
+        self.conn.commit()
+        resultado = comparar_vuupt.comparar_dia(date(2026, 9, 14), [rota], self.conn)
+        self.assertEqual(len(resultado["divergencias"]["horario_parada_diferente"]), 1)
+        self.assertEqual(resultado["horario_do_app"], [])
+
 
 class TestHistoricoDaComparacao(_BaseTemp):
     def _salvar(self, dia, divergencias, rotas=10):
