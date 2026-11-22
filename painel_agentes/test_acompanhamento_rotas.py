@@ -394,6 +394,66 @@ class TestTela(_Base):
         self.assertEqual(r.status_code, 200)
         self.assertNotIn("despesas", r.get_json())
 
+    def test_botao_de_documentos_so_pra_quem_pode_enviar(self):
+        marca = 'id="ac-modal-docs"'
+        self._logar("logistica")
+        self.assertIn(marca, self.cliente.get("/acompanhamento").get_data(as_text=True))
+        self._logar("leitura")   # le a tela, mas nao manda e-mail pela /pedidos
+        self.assertNotIn(marca, self.cliente.get("/acompanhamento").get_data(as_text=True))
+
+    def test_documentos_com_tela_personalizada(self):
+        marca = 'id="ac-modal-docs"'
+        self._logar()
+        self._com_telas(["acompanhamento"])
+        self.assertNotIn(marca, self.cliente.get("/acompanhamento").get_data(as_text=True))
+
+    def test_documentos_com_tela_de_pedidos_liberada(self):
+        self._logar()
+        self._com_telas(["acompanhamento", "pedidos_tabela"])
+        self.assertIn('id="ac-modal-docs"', self.cliente.get("/acompanhamento").get_data(as_text=True))
+
+    def _post_cancelar(self, parada_id, motivo="baixou o pedido errado"):
+        return self.cliente.post(f"/api/acompanhamento/parada/{parada_id}/cancelar-finalizacao", json={"motivo": motivo},
+                                 headers={"Origin": "http://localhost"})
+
+    def test_cancelar_finalizacao_so_pra_quem_pode(self):
+        for nivel in ("leitura", "atendimento"):
+            self._logar(nivel)
+            self.assertEqual(self._post_cancelar(1).status_code, 403, nivel)
+
+    def test_cancelar_finalizacao_recusa_vira_400_com_a_mensagem(self):
+        self._logar("logistica")
+        r = self._post_cancelar(999)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("não encontrada", r.get_json()["erro"])
+
+    def test_cancelar_finalizacao_chama_o_modulo(self):
+        self._logar("logistica")
+        rid = self.rota()
+        pid = self.parada(rid, 1, f"{DIA} 08:30:00")
+        with mock.patch.object(painel_agentes.cancelar_finalizacao, "cancelar_finalizacao",
+                               return_value={"ok": True, "novo_codigo": "PS-1-R1", "nova_parada_id": 77}) as chamada,                 mock.patch.object(painel_agentes.tratativas, "registrar_evento") as tratativa:
+            r = self._post_cancelar(pid)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(r.get_json()["novo_codigo"], "PS-1-R1")
+        self.assertEqual(chamada.call_args.args[1:4], (pid, "teste", "baixou o pedido errado"))
+        self.assertIn("PS-1-R1", tratativa.call_args.kwargs["texto"])
+
+    def test_detalhe_diz_se_pode_cancelar_finalizacao(self):
+        rid = self.rota()
+        pid = self.parada(rid, 1, f"{DIA} 08:30:00")
+        from nucleo import ponte_vuupt
+        with mock.patch.object(ponte_vuupt, "rota_operavel", return_value=True):
+            self._logar("logistica")
+            d = self.cliente.get(f"/api/acompanhamento/rota/{rid}").get_json()
+            self.assertTrue(d["rota"]["pode_cancelar_finalizacao"])
+            self.assertEqual((d["paradas"][0]["parada_id"], d["paradas"][0]["finalizacao_cancelada"]), (pid, False))
+            self._logar("leitura")
+            self.assertFalse(self.cliente.get(f"/api/acompanhamento/rota/{rid}").get_json()["rota"]["pode_cancelar_finalizacao"])
+        with mock.patch.object(ponte_vuupt, "rota_operavel", return_value=False):
+            self._logar("logistica")
+            self.assertFalse(self.cliente.get(f"/api/acompanhamento/rota/{rid}").get_json()["rota"]["pode_cancelar_finalizacao"])
+
     def test_api_rota_inexistente_404(self):
         self._logar()
         self.assertEqual(self.cliente.get("/api/acompanhamento/rota/999").status_code, 404)

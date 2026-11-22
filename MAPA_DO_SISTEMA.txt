@@ -1465,6 +1465,17 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            carro fica na ultima parada concluida. Dado chega com 15-30 min
                            (timers stokki-nucleo-sincronizar-*). Despesas so pra quem abre
                            /financeiro/pedagios (a chave nem vai no JSON).
+                           Cores por fase da parada (selo, borda, mapa). Botao "Documentos por
+                           e-mail" usa as rotas /api/pedidos/documentos/* da tela Pedidos.
+ cancelar_finalizacao.py   Botao "Cancelar finalizacao" da /acompanhamento (22/11): a Vuupt nao
+                           reabre servico, entao DUPLICA (duplicar_servico_por_insucesso, codigo
+                           -R), inclui na mesma rota e cria a parada nova PENDENTE no nucleo pro
+                           motorista refazer a baixa no nosso app. A parada antiga fica intacta
+                           (historico). So rota operada pela ponte, EM_ROTA, com motivo, 1 vez
+                           (fingerprint insucessos_duplicados + evento FINALIZACAO_CANCELADA).
+                           Nao desfaz e-mail nem expedicao na Stokki. POST
+                           /api/acompanhamento/parada/<id>/cancelar-finalizacao
+                           (total/operador/logistica). Escreve na Vuupt: bloqueado na homologacao.
  motoristas.py             Tela de motoristas.
  pedidos_parados_triagem.py  Pedidos parados (24/10: registro e triagem no próprio
                            painel, sem Lovable). Aba Registrar grava em

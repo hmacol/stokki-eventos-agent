@@ -180,11 +180,15 @@ def detalhe_rota(conn, rota_id: int, agora: datetime | None = None, com_despesas
     agora = agora or datetime.now()
     paradas = _paradas(conn, rota_id)
     ciclos = ciclos_paradas(paradas, r["iniciada_em"])
+    ja_canceladas = {e["parada_id"] for e in conn.execute(
+        "SELECT parada_id FROM nucleo_eventos INDEXED BY idx_nucleo_eventos_rota"
+        " WHERE rota_id = ? AND tipo = 'FINALIZACAO_CANCELADA'", (rota_id,))}
     vazio = {"real_s": None, "plan_s": None, "dif_s": None, "junto": False, "cliques_ok": False}
     linhas = []
     for p in paradas:
         c = ciclos.get(p["id"], vazio)
         linhas.append({
+            "parada_id": p["id"], "finalizacao_cancelada": p["id"] in ja_canceladas,
             "ordem": p["ordem"], "codigo": p["codigo"], "destinatario": p["destinatario_nome"],
             "situacao": p["situacao"], "concluida_em": p["completed_at"] if p["id"] in ciclos else None,
             "real_s": c["real_s"], "plan_s": c["plan_s"] if p["id"] in ciclos else _plan_s(p),
