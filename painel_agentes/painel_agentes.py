@@ -70,6 +70,8 @@ from executor import (
     encerrar_todas_execucoes, progresso_execucao,
 )
 from mapa_rotas import buscar_rotas_para_mapa
+import acompanhamento_rotas
+import cancelar_finalizacao
 from laboratorio_rotas import buscar_dados_laboratorio
 from planejamento_rotas import (
     buscar_dados_planejamento, buscar_pool_e_agendados, sincronizar_pool_agora, gerar_romaneio_pdf,
@@ -4475,6 +4477,123 @@ def api_cadastro_embarcador_aprovar(cnpj):
 # PENDENTE). Aqui o Hugo aprova (com o valor que vale) ou rejeita; só o
 # APROVADO entra no extrato (nucleo/financeiro.py). Lógica em
 # nucleo/operacao.py; aqui só HTTP.
+
+# Acompanhamento detalhado das rotas (21/11): tela so de leitura da logistica.
+_NIVEIS_ACOMPANHAMENTO = ("total", "operador", "logistica", "leitura", "atendimento")   # os da Torre
+
+
+def _acompanhamento_ve_despesas() -> bool:
+    """Despesas so pra quem abre /financeiro/pedagios: pelo nivel, ou pela
+    lista de telas de quem tem acesso personalizado."""
+    telas = getattr(g, "telas_liberadas", None)
+    if telas is None:
+        return g.nivel_acesso in ("total", "operador", "logistica", "leitura")   # niveis de pedagios()
+    return acesso_telas.caminho_liberado("/financeiro/pedagios", telas)
+
+
+def _acompanhamento_data(bruto) -> str:
+    try:
+        return datetime.strptime(bruto or "", "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        return date.today().strftime("%Y-%m-%d")
+
+
+@app.route("/acompanhamento")
+@requer_auth(niveis=_NIVEIS_ACOMPANHAMENTO)
+def acompanhamento():
+    try:
+        chave_mapa = (_carregar_config().get("google_maps") or {}).get("api_key", "")
+    except Exception:
+        chave_mapa = ""
+    # "Documentos por e-mail" usa as rotas da tela Pedidos: so pra quem pode chama-las.
+    telas = getattr(g, "telas_liberadas", None)
+    pode_documentos = (g.nivel_acesso in acoes_pedidos.NIVEIS_ACAO if telas is None
+                       else acesso_telas.caminho_liberado("/api/pedidos/documentos/enviar", telas))
+    return render_template("acompanhamento_rotas.html", google_maps_key=chave_mapa, pode_documentos=pode_documentos,
+                           data_inicial=_acompanhamento_data(request.args.get("data")))
+
+
+@app.route("/api/acompanhamento/rotas")
+@requer_auth(niveis=_NIVEIS_ACOMPANHAMENTO)
+def api_acompanhamento_rotas():
+    from nucleo import banco as nucleo_banco
+    data_rota = _acompanhamento_data(request.args.get("data"))
+    conn = nucleo_banco.conectar()
+    try:
+        rotas = acompanhamento_rotas.listar_rotas(conn, data_rota)
+    finally:
+        conn.close()
+    return jsonify({"data": data_rota, "atualizado_em": datetime.now().strftime("%H:%M"), "rotas": rotas})
+
+
+@app.route("/api/acompanhamento/rota/<int:rota_id>")
+@requer_auth(niveis=_NIVEIS_ACOMPANHAMENTO)
+def api_acompanhamento_rota(rota_id):
+    from nucleo import banco as nucleo_banco
+    conn = nucleo_banco.conectar()
+    try:
+        detalhe = acompanhamento_rotas.detalhe_rota(conn, rota_id, com_despesas=_acompanhamento_ve_despesas())
+    finally:
+        conn.close()
+    if detalhe is None:
+        return jsonify({"erro": "Rota não encontrada."}), 404
+    detalhe["rota"]["pode_cancelar_finalizacao"] = _acompanhamento_pode_cancelar(rota_id, detalhe["rota"]["status"])
+    return jsonify(detalhe)
+
+
+def _acompanhamento_pode_cancelar(rota_id: int, status: str) -> bool:
+    """Botao so pra quem pode, com a rota em andamento e operada pelo nosso app."""
+    from nucleo import banco as nucleo_banco, ponte_vuupt
+    if g.nivel_acesso not in cancelar_finalizacao.NIVEIS or status != nucleo_banco.ROTA_EM_ROTA:
+        return False
+    conn = nucleo_banco.conectar()
+    try:
+        rota = conn.execute("SELECT * FROM nucleo_rotas WHERE id = ?", (rota_id,)).fetchone()
+    finally:
+        conn.close()
+    return bool(rota and ponte_vuupt.rota_operavel(rota))
+
+
+@app.route("/api/acompanhamento/parada/<int:parada_id>/cancelar-finalizacao", methods=["POST"])
+@requer_auth(niveis=cancelar_finalizacao.NIVEIS)
+@exige_mesma_origem
+def api_acompanhamento_cancelar_finalizacao(parada_id):
+    """Duplica o servico na Vuupt, poe na mesma rota e cria a parada nova pro motorista refazer a baixa."""
+    body = request.get_json(silent=True) or {}
+    from nucleo import banco as nucleo_banco, ponte_vuupt
+    import edicao_rota
+    import fingerprint_duplicacao_insucesso as fp
+    usuario = session.get("usuario") or g.nivel_acesso
+    try:
+        token = (_carregar_config().get("vuupt_api") or {}).get("token", "")
+        conn = nucleo_banco.conectar()
+        try:
+            r = cancelar_finalizacao.cancelar_finalizacao(
+                conn, parada_id, usuario, str(body.get("motivo") or ""),
+                vuupt=torre_controle.VuuptClient(token),
+                duplicar=torre_controle._expedir_pedidos_raiz().duplicar_servico_por_insucesso,
+                adicionar=lambda route_id, ids: edicao_rota.adicionar_pedidos(token, route_id, ids, position="end"),
+                rota_operavel=ponte_vuupt.rota_operavel,
+                ja_duplicado=lambda sid: (fp.buscar_novo_code(sid) or "outro serviço") if fp.ja_duplicado(sid) else None,
+                marcar_duplicado=fp.marcar_duplicado)
+            codigo = conn.execute("SELECT codigo FROM nucleo_paradas WHERE id = ?", (parada_id,)).fetchone()["codigo"]
+        finally:
+            conn.close()
+    except cancelar_finalizacao.Recusado as e:
+        return jsonify({"erro": str(e)}), 400
+    except _EnvioBloqueadoHomolog:
+        raise
+    except Exception:
+        logging.getLogger(__name__).exception("cancelar finalizacao pela tela Acompanhamento falhou")
+        return jsonify({"erro": "Falha inesperada; o erro ficou no log do painel."}), 500
+    try:   # historico do pedido (best-effort: a parada nova ja existe)
+        tratativas.registrar_evento(
+            codigo, "ACOMPANHAMENTO", "REENVIO_MANUAL",
+            texto=f"Finalização cancelada por {usuario}: {str(body.get('motivo') or '').strip()} → {r['novo_codigo']}")
+    except Exception:
+        logging.getLogger(__name__).exception("tratativa do cancelamento de finalizacao nao gravou")
+    return jsonify(r)
+
 
 @app.route("/financeiro/pedagios")
 @requer_auth(niveis=("total", "operador", "logistica", "leitura"))
