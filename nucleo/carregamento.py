@@ -153,7 +153,8 @@ def _veiculo(conn: sqlite3.Connection, agent_id: int) -> tuple:
 def confirmar(conn: sqlite3.Connection, rota: sqlite3.Row, agent_id: int, *, carregador: str, uuid: str,
               desmarcados: list[dict], foto: dict, tirar=None) -> dict:
     """Checklist de carregamento: tira cada parada desmarcada da rota e, se TODAS sairam, grava
-    nucleo_carregamentos. Idempotente por uuid (e por rota: um checklist por rota).
+    nucleo_carregamentos. Idempotente por uuid da mesma rota; outro uuid numa rota ja
+    confirmada (ou uuid de outra rota) levanta 409.
     `foto` ja vem gravada em disco por quem chama: {caminho, sha256, resultado, ocupacao_pct, revisao_humana}.
     `tirar(rota, parada, motivo, observacao)` e injetavel (teste sem rede).
     Devolve {"ok": True, "carregamento", "rota_cancelada"} ou
@@ -162,10 +163,15 @@ def confirmar(conn: sqlite3.Connection, rota: sqlite3.Row, agent_id: int, *, car
     if not uuid:
         raise operacao.OperacaoInvalida("Carregamento sem uuid (gerado no aparelho).")
     rota = operacao.rota_do_motorista(conn, rota["id"], agent_id)
-    ja = conn.execute("SELECT * FROM nucleo_carregamentos WHERE uuid = ? OR rota_id = ?",
+    ja = conn.execute("SELECT * FROM nucleo_carregamentos WHERE uuid = ? AND rota_id = ?",
                       (uuid, rota["id"])).fetchone()
     if ja:
         return {"ok": True, "carregamento": dict(ja), "rota_cancelada": rota["status"] == banco.ROTA_CANCELADA}
+    if carregamento_da_rota(conn, rota["id"]):
+        raise operacao.OperacaoInvalida("Checklist de carregamento já confirmado para esta rota.", 409)
+    if conn.execute("SELECT 1 FROM nucleo_carregamentos WHERE uuid = ?", (uuid,)).fetchone():
+        # uuid de outro checklist: o INSERT ia quebrar no UNIQUE depois de ja ter tirado pedidos da rota
+        raise operacao.OperacaoInvalida("Identificador do checklist já usado em outra rota.", 409)
 
     carregador = str(carregador or "").strip()[:120]
     if not carregador:
@@ -213,13 +219,18 @@ def confirmar(conn: sqlite3.Connection, rota: sqlite3.Row, agent_id: int, *, car
         return {"ok": False, "falhas": falhas, "removidos": removidos}
 
     contadores = operacao._recalcular_contadores(conn, rota["id"])
-    if not rota_cancelada and pedidos and contadores["total"] == 0:
+    if (not rota_cancelada and pedidos and contadores["total"] == 0
+            and rota["provedor"] == banco.PROVEDOR_APP):
         # rota do app sem nenhuma parada: cancela como a Vuupt faz com a ultima
         rota_cancelada = True
         agora = banco.agora()
         conn.execute("UPDATE nucleo_rotas SET status = ?, cancelada_em = COALESCE(cancelada_em, ?), "
                      "atualizado_em = ? WHERE id = ?", (banco.ROTA_CANCELADA, agora, agora, rota["id"]))
     placa, tipo_veiculo = _veiculo(conn, agent_id)
+    # desmarcados = tudo que saiu desta rota pelo checklist, inclusive em tentativa anterior
+    qtd_desmarcados = conn.execute(
+        "SELECT COUNT(*) FROM nucleo_carregamento_itens "
+        "WHERE rota_id = ? AND carregamento_id IS NULL AND removido_em IS NOT NULL", (rota["id"],)).fetchone()[0]
     cur = conn.execute("""
         INSERT INTO nucleo_carregamentos (rota_id, agent_id, uuid, placa, tipo_veiculo, carregador, foto_caminho,
                                           foto_sha256, resultado_foto, ocupacao_pct, revisao_humana,
@@ -227,20 +238,19 @@ def confirmar(conn: sqlite3.Connection, rota: sqlite3.Row, agent_id: int, *, car
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (rota["id"], agent_id, uuid, placa, tipo_veiculo, carregador, foto.get("caminho"), foto.get("sha256"),
           foto.get("resultado"), foto.get("ocupacao_pct"), 1 if foto.get("revisao_humana") else 0,
-          contadores["total"], len(pedidos)))
+          contadores["total"], qtd_desmarcados))
     carregamento_id = cur.lastrowid
-    for parada, _motivo, _obs in pedidos:
-        conn.execute("UPDATE nucleo_carregamento_itens SET carregamento_id = ? "
-                     "WHERE rota_id = ? AND service_id IS ? AND codigo IS ? AND carregamento_id IS NULL",
-                     (carregamento_id, rota["id"], parada["service_id"], parada["codigo"]))
+    conn.execute("UPDATE nucleo_carregamento_itens SET carregamento_id = ? "
+                 "WHERE rota_id = ? AND carregamento_id IS NULL AND removido_em IS NOT NULL",
+                 (carregamento_id, rota["id"]))
     operacao.registrar_evento(
         conn, "CARREGAMENTO", banco.ORIGEM_APP, None, rota_id=rota["id"], agent_id=agent_id, uuid=uuid,
         dados={"carregamento_id": carregamento_id, "carregador": carregador, "qtd_carregados": contadores["total"],
-               "qtd_desmarcados": len(pedidos), "ocupacao_pct": foto.get("ocupacao_pct"),
+               "qtd_desmarcados": qtd_desmarcados, "ocupacao_pct": foto.get("ocupacao_pct"),
                "rota_cancelada": rota_cancelada,
                "desmarcados": [{"parada_id": p["id"], "codigo": p["codigo"], "motivo": m, "observacao": o}
                                for p, m, o in pedidos]})
     conn.commit()
     logger.info(f"Carregamento rota {rota['id']} (agent {agent_id}): {contadores['total']} carregados, "
-                f"{len(pedidos)} desmarcados, rota_cancelada={rota_cancelada}")
+                f"{qtd_desmarcados} desmarcados, rota_cancelada={rota_cancelada}")
     return {"ok": True, "carregamento": carregamento_da_rota(conn, rota["id"]), "rota_cancelada": rota_cancelada}

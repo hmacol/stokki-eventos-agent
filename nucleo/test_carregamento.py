@@ -220,6 +220,48 @@ class TestConfirmar(unittest.TestCase):
         self.assertTrue(segunda["ok"])
         self.assertEqual(segunda["carregamento"]["id"], primeira["carregamento"]["id"])
 
+    def test_outro_uuid_na_mesma_rota_409(self):
+        self._confirmar(uuid="u1")
+        tirar = _TirarFalso()
+        with self.assertRaises(operacao.OperacaoInvalida) as ctx:
+            self._confirmar([self._desm(self._paradas()[0])], uuid="u2", tirar=tirar)
+        self.assertEqual(ctx.exception.codigo, 409)
+        self.assertEqual(tirar.chamadas, [])
+
+    def test_uuid_de_outra_rota_nao_devolve_o_carregamento_dela(self):
+        self._confirmar(uuid="u1")
+        outra = self._rota()
+        tirar = _TirarFalso()
+        with self.assertRaises(operacao.OperacaoInvalida) as ctx:
+            self._confirmar([self._desm(self._paradas(outra)[0])], uuid="u1", tirar=tirar, rota=outra)
+        self.assertEqual(ctx.exception.codigo, 409)
+        self.assertEqual(tirar.chamadas, [])
+        self.assertIsNone(carregamento.carregamento_da_rota(self.conn, outra["id"]))
+
+    def test_rota_vuupt_sem_rota_cancelada_nao_cancela_pelo_contador(self):
+        cfg = {**_CFG_LIGADA, "api_motorista": {"checklist_carregamento": {"ativo": True},
+                                                "ponte_vuupt": {"ativo": True, "todos": True}}}
+        with mock.patch.object(ponte_vuupt, "_config", cfg):
+            rota = self._rota(provedor=banco.PROVEDOR_VUUPT, vuupt_route_id=4242, paradas=1)
+            r = self._confirmar([self._desm(self._paradas(rota)[0])], rota=rota)
+        self.assertTrue(r["ok"])
+        self.assertFalse(r["rota_cancelada"])
+        self.assertEqual(self.conn.execute("SELECT status FROM nucleo_rotas WHERE id=?",
+                                           (rota["id"],)).fetchone()[0], banco.ROTA_ACEITA)
+
+    def test_item_removido_antes_e_omitido_na_retentativa_fica_ligado(self):
+        ps = self._paradas()
+        r = self._confirmar([self._desm(ps[0]), self._desm(ps[1])],
+                            tirar=_TirarFalso(falhas={ps[1]["id"]: "Vuupt fora do ar"}))
+        self.assertFalse(r["ok"])
+        r2 = self._confirmar([self._desm(ps[2])])          # ps[0] ja saiu; ps[1] foi carregado afinal
+        self.assertTrue(r2["ok"])
+        c = r2["carregamento"]
+        self.assertEqual((c["qtd_desmarcados"], c["qtd_carregados"]), (2, 1))
+        ligados = {row[0] for row in self.conn.execute(
+            "SELECT service_id FROM nucleo_carregamento_itens WHERE carregamento_id = ?", (c["id"],))}
+        self.assertEqual(ligados, {ps[0]["service_id"], ps[2]["service_id"]})
+
     def test_reenvio_depois_de_iniciada_devolve_o_mesmo(self):
         primeira = self._confirmar()
         self.conn.execute("UPDATE nucleo_rotas SET status='EM_ROTA' WHERE id=?", (self.rota["id"],))
