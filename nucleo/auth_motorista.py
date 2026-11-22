@@ -204,6 +204,22 @@ def registrar_versao_app(conn: sqlite3.Connection, cpf: str, versao: str | None)
         conn.commit()
 
 
+PLATAFORMAS_APP = ("web", "android", "ios")
+
+
+def registrar_plataforma(conn: sqlite3.Connection, cpf: str, plataforma: str | None) -> None:
+    """Guarda onde o motorista usa o app (header X-App-Plataforma): 'web' = PWA no navegador
+    (iPhone), que nao recebe push e e avisado por WhatsApp (nucleo/avisos_app_whatsapp.py).
+    Vale o ultimo valor valido; so grava se mudou."""
+    plataforma = str(plataforma or "").strip().lower()
+    if plataforma not in PLATAFORMAS_APP:
+        return
+    cur = conn.execute("UPDATE motoristas SET plataforma = ? WHERE cpf = ? AND COALESCE(plataforma, '') <> ?",
+                       (plataforma, normalizar_cpf(cpf), plataforma))
+    if cur.rowcount:
+        conn.commit()
+
+
 # ── Tokens ─────────────────────────────────────────────────────────────────────
 
 def _serializador(secret: str) -> URLSafeTimedSerializer:

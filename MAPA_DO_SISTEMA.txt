@@ -1364,6 +1364,17 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            quando o app informa a versao nova (header X-App-Versao -> auth.registrar_versao_app).
                            Sem flag lista; --piloto NUMERO; --real. Timer infra/stokki-fila-app-motoristas.* (09h30,
                            NAO habilitado ate o OK do Hugo). VERSAO_ALVO no topo do modulo: subir a cada APK novo.
+ avisos_app_whatsapp.py    "Push" do iPhone (22/11): WhatsApp PRIVADO pro motorista com motoristas.plataforma='web'
+                           (PWA em motorista.freshhub.com.br; o app informa no header X-App-Plataforma ->
+                           auth.registrar_plataforma). O servidor não manda push nenhum. Avisa: nova_rota,
+                           rota_alterada, rota_cancelada (rotas de hoje/amanhã; baixa do próprio motorista não conta;
+                           só depois de ficar igual por 2 rodadas; quem acabou de virar 'web' não recebe o passado) e
+                           chamado (equipe respondeu no chat de Ajuda e ele não leu em 3 min). Canal próprio em
+                           notificar_whatsapp (origem motorista_aviso_app, teto avisos_app_motoristas.teto_diario=40) com
+                           trava avisos_app_motoristas.forcar_destino_whatsapp (ausente = DESLIGADO, número = piloto,
+                           "" = real). Sem flag mostra o que avisaria; --exemplos [NUMERO] manda os 4 textos de teste;
+                           --real roda conforme a trava. Timer infra/stokki-avisos-app-whatsapp.* (5 min, NAO habilitado
+                           até o OK do Hugo). Tabelas avisos_app_motoristas / avisos_app_rotas / avisos_app_chamados.
  vuupt_agentes.py          Cliente da Vuupt p/ criar/ligar/apagar agente e veículo
                            (POST /users, /vehicles) e gerar e-mail nome@freshhub.com.br.
  templates/cadastro_motorista.html  Página pública do link: 3 passos pelo celular (dados,

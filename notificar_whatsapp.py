@@ -133,6 +133,13 @@ ORIGEM_MOTORISTA_ATUALIZACAO = "motorista_atualizacao"
 ORIGEM_MOTORISTA_ATUALIZACAO_PILOTO = "motorista_atualizacao_piloto"
 ORIGENS_ATUALIZACAO = (ORIGEM_MOTORISTA_ATUALIZACAO, ORIGEM_MOTORISTA_ATUALIZACAO_PILOTO)
 TETO_ATUALIZACAO_PADRAO = 15
+# Avisos de rota/chat ao motorista que usa o app pelo navegador (PWA, iPhone): origem e teto PROPRIOS
+# (rota nova nao pode ficar sem aviso porque a campanha de atualizacao gastou a cota). Trava:
+# avisos_app_motoristas.forcar_destino_whatsapp (ausente = desligado, numero = piloto, "" = real).
+ORIGEM_AVISO_APP = "motorista_aviso_app"
+ORIGEM_AVISO_APP_PILOTO = "motorista_aviso_app_piloto"
+ORIGENS_AVISO_APP = (ORIGEM_AVISO_APP, ORIGEM_AVISO_APP_PILOTO)
+TETO_AVISO_APP_PADRAO = 40
 ORIGENS_PILOTO = (ORIGEM_CLIENTE_PILOTO, ORIGEM_CADASTRO_PILOTO, ORIGEM_TRANSPORTADORA_PILOTO,
                   ORIGEM_FORA_DIA_FIXO_PILOTO)
 TETO_PILOTO_PADRAO = 20
@@ -221,6 +228,7 @@ NOMES_DAS_TAREFAS = {
     "notificar-transportadoras": "Aviso às transportadoras",
     "nucleo-sincronizar-servicos": "Atualização dos pedidos fora de rota",
     "nucleo-sincronizar-vuupt": "Atualização das rotas no app dos motoristas",
+    "avisos-app-whatsapp": "Avisos de rota e chat por WhatsApp ao motorista do iPhone",
     "ofertar-rotas-sem-aceite": "Oferta aos motoristas da rota que ficou sem aceite",
     "pipeline-horario": "Importação de pedidos de hora em hora",
     "ponte-vuupt": "Envio pra Vuupt do que o motorista fez no app",
@@ -684,13 +692,14 @@ def _enviados_hoje(conn, agora: datetime, origem: str) -> int:
         filtro, args = "origem = ?", (ORIGEM_CLIENTE,)
     elif origem == ORIGEM_MOTORISTA:
         filtro, args = "origem = ?", (ORIGEM_MOTORISTA,)
-    elif origem in ORIGENS_ATUALIZACAO or origem == ORIGEM_PAGAMENTO:
+    elif origem in ORIGENS_ATUALIZACAO or origem == ORIGEM_PAGAMENTO or origem in ORIGENS_AVISO_APP:
         filtro, args = "origem = ?", (origem,)
     elif origem in ORIGENS_PILOTO:
         filtro, args = f"origem IN ({marcas})", ORIGENS_PILOTO
     else:
-        filtro, args = (f"origem NOT IN (?, ?, ?, ?, ?) AND origem NOT IN ({marcas})",
-                        (ORIGEM_CLIENTE, ORIGEM_MOTORISTA, *ORIGENS_ATUALIZACAO, ORIGEM_PAGAMENTO, *ORIGENS_PILOTO))
+        proprias = (ORIGEM_CLIENTE, ORIGEM_MOTORISTA, *ORIGENS_ATUALIZACAO, ORIGEM_PAGAMENTO, *ORIGENS_AVISO_APP)
+        filtro, args = (f"origem NOT IN ({','.join('?' * len(proprias))}) AND origem NOT IN ({marcas})",
+                        (*proprias, *ORIGENS_PILOTO))
     return conn.execute(
         f"SELECT COUNT(*) FROM notificacoes_whatsapp WHERE situacao = 'enviado' AND criado_em >= ? "
         f"AND {filtro}", (inicio_do_dia, *args)).fetchone()[0]
@@ -707,6 +716,8 @@ def _teto(cfg: dict, origem: str, config: dict | None = None) -> int:
         return _inteiro((config or {}).get("atualizacao_motoristas") or {}, "teto_diario", TETO_ATUALIZACAO_PADRAO)
     if origem == ORIGEM_PAGAMENTO:
         return _inteiro((config or {}).get("pagamentos_pontuais") or {}, "teto_diario", TETO_PAGAMENTO_PADRAO)
+    if origem in ORIGENS_AVISO_APP:
+        return _inteiro((config or {}).get("avisos_app_motoristas") or {}, "teto_diario", TETO_AVISO_APP_PADRAO)
     if origem in ORIGENS_PILOTO:
         return _inteiro(cfg.get("clientes") or {}, "teto_piloto", TETO_PILOTO_PADRAO)
     return _inteiro(cfg, "teto_diario", 20)
@@ -1456,6 +1467,56 @@ def avisar_motorista_pendencias_privado(link_id: int, telefone: str, nome: str, 
         origem = ORIGEM_MOTORISTA_ATUALIZACAO_PILOTO if piloto else ORIGEM_MOTORISTA_ATUALIZACAO
         assinatura = assinatura or f"link_atualizacao:{link_id}"
         situacao = despachar(config, origem, "link_atualizacao", texto, assinatura, modo_teste=modo_teste,
+                             grupo_id=f"{destino or telefone}@c.us", **kw)
+        if situacao == "nao_enviado":
+            motivo = _motivo_da_ultima_recusa(kw.get("conn"), origem, assinatura)
+            situacao = {MOTIVO_TETO: "teto", MOTIVO_CANAL_EM_PAUSA: "canal_em_pausa"}.get(motivo, situacao)
+        return situacao, piloto
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou", False
+
+
+def destino_aviso_app(config: dict) -> str | None:
+    """Trava dos avisos ao motorista do PWA (avisos_app_motoristas.forcar_destino_whatsapp):
+    None = desligado (chave ausente, nula ou sem digitos), numero = piloto (so pra la),
+    "" = envio real no privado do motorista. Esquecer ou errar a chave nunca libera o envio."""
+    cfg_app = (config or {}).get("avisos_app_motoristas") or {}
+    if "forcar_destino_whatsapp" not in cfg_app or cfg_app["forcar_destino_whatsapp"] is None:
+        return None
+    bruto = str(cfg_app["forcar_destino_whatsapp"]).strip()
+    digitos = re.sub(r"\D", "", bruto)
+    if bruto and not digitos:
+        return None
+    return digitos
+
+
+def avisar_motorista_app_privado(nome: str, telefone: str | None, texto: str, config: dict, tipo: str,
+                                 assinatura: str, modo_teste: bool = False, **kw) -> tuple[str, bool]:
+    """Aviso NO PRIVADO do motorista que usa o app pelo navegador (PWA/iPhone), que nao recebe push.
+    Devolve (situacao, piloto). Situacoes: desligado | modo_teste | enviado | falhou | teto |
+    canal_em_pausa | numero_sem_whatsapp | indeterminado | nao_enviado.
+    Piloto (trava com numero): vai so pra la, com '[teste -> nome +tel]' na frente, e NAO exige
+    telefone do motorista (usuario de teste). Real ("") confere se o numero tem WhatsApp.
+    Origem e teto proprios (avisos_app_motoristas.teto_diario, padrao 40)."""
+    try:
+        destino = destino_aviso_app(config)
+        telefone = re.sub(r"\D", "", str(telefone or ""))
+        if len(telefone) in (10, 11):
+            telefone = "55" + telefone
+        if destino is None or not gateway_clientes_ok(config) or (not destino and not telefone):
+            return "desligado", False
+        piloto = bool(destino)
+        if piloto:
+            texto = f"[teste → {nome} {'+' + telefone if telefone else '(sem telefone)'}]\n{texto}"
+        elif not modo_teste:
+            existe = integracao_openwa.numero_existe(_cfg(config), telefone)
+            if existe is None:
+                return "indeterminado", False
+            if not existe:
+                return "numero_sem_whatsapp", False
+        origem = ORIGEM_AVISO_APP_PILOTO if piloto else ORIGEM_AVISO_APP
+        situacao = despachar(config, origem, tipo, texto, assinatura, modo_teste=modo_teste,
                              grupo_id=f"{destino or telefone}@c.us", **kw)
         if situacao == "nao_enviado":
             motivo = _motivo_da_ultima_recusa(kw.get("conn"), origem, assinatura)
