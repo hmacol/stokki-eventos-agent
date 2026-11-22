@@ -12,6 +12,7 @@ import * as rascunho from '../src/rascunhoParada';
 import { cores } from '../src/tema';
 import { AvisoVersao } from '../src/avisoVersao';
 import { AlertaHost } from '../src/alertaHost';
+import { GuiaInstalacao } from '../src/guiaInstalacao';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: false }),
@@ -98,6 +99,7 @@ export default function Layout() {
       <StatusBar style="light" />
       <Guarda />
       <AlertaHost />
+      <GuiaInstalacao />
     </ProvedorSessao>
   );
 }
