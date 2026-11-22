@@ -14,6 +14,23 @@
 # Uploads de foto: o Flask limita a 15 MB (MAX_CONTENT_LENGTH); o Caddy não
 # precisa de request_body extra pra isso.
 #
+# PWA dos motoristas de iPhone (21/11): o export web do app_motorista fica na
+# VPS em dados/app_motorista/web (fora do git; publicar com app_motorista/
+# publicar_web.sh). Entra ANTES do handle_path /motorista/* da API. O app usa
+# experiments.baseUrl=/motorista/web, então todos os links já vêm com o prefixo.
+# index/sw/manifest nunca ficam em cache (é como o app pega versão nova); os
+# arquivos de _expo/static têm hash no nome e podem ficar pra sempre.
+#
+# 	redir /motorista/web /motorista/web/ permanent
+# 	handle_path /motorista/web/* {
+# 		root * /opt/stokki-eventos/dados/app_motorista/web
+# 		@sempre_novo path / /index.html /sw.js /manifest.webmanifest
+# 		header @sempre_novo Cache-Control "no-cache"
+# 		header /_expo/static/* Cache-Control "public, max-age=31536000, immutable"
+# 		try_files {path} /index.html
+# 		file_server
+# 	}
+#
 # APK com link fixo pros motoristas (08/10): o link do artefato do Expo
 # expira em 14-30 dias, então o arquivo fica na VPS em
 # dados/app_motorista/freshlog-motorista.apk (fora do git) e o Caddy serve

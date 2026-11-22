@@ -58,6 +58,11 @@ TIPOS_COMPROVANTE = {"CANHOTO", "ASSINATURA", "NF_DEVOLUCAO", "PRODUTO", "OCORRE
 # entre leituras não entra na soma.
 GPS_PRECISAO_MAX_M = 100.0
 GPS_SALTO_MAX_KM = 20.0
+# Trilha de verdade: pelo menos este tanto de pontos do tipo GPS. Sem isso
+# (PWA no iPhone, que só manda a posição na hora de chegar/entregar) a soma
+# viraria linha reta entre paradas, ~35% menor que a rota real, e ainda
+# venceria o km estimado. Sem trilha, calcular_km_gps devolve None.
+GPS_MIN_PONTOS_TRILHA = 3
 
 
 class OperacaoInvalida(Exception):
@@ -755,14 +760,18 @@ def _haversine_km(lat1, lng1, lat2, lng2) -> float:
 
 def calcular_km_gps(conn: sqlite3.Connection, rota_id: int) -> float | None:
     """Soma dos trechos entre pontos GPS da rota (ordem cronológica), com
-    filtro de precisão e de salto. None se não houver ao menos 2 pontos."""
+    filtro de precisão e de salto. None se não houver ao menos 2 pontos ou
+    se faltar trilha (menos de GPS_MIN_PONTOS_TRILHA pontos do tipo GPS)."""
     rows = conn.execute("""
-        SELECT latitude, longitude, precisao_m FROM nucleo_eventos
+        SELECT latitude, longitude, precisao_m, tipo FROM nucleo_eventos
         WHERE rota_id = ? AND latitude IS NOT NULL AND longitude IS NOT NULL
           AND tipo IN ('GPS', 'CHEGADA', 'ENTREGUE', 'PARCIAL', 'INSUCESSO', 'ROTA_EM_ROTA', 'ROTA_CONCLUIDA')
         ORDER BY ocorrido_em, id
     """, (rota_id,)).fetchall()
-    pontos = [(r[0], r[1]) for r in rows if r[2] is None or float(r[2]) <= GPS_PRECISAO_MAX_M]
+    boas = [r for r in rows if r[2] is None or float(r[2]) <= GPS_PRECISAO_MAX_M]
+    if sum(1 for r in boas if r[3] == "GPS") < GPS_MIN_PONTOS_TRILHA:
+        return None
+    pontos = [(r[0], r[1]) for r in boas]
     if len(pontos) < 2:
         return None
     total = 0.0

@@ -1,0 +1,15 @@
+{
+  "name": "FreshLog Motorista",
+  "short_name": "FreshLog",
+  "lang": "pt-BR",
+  "start_url": "/motorista/web/",
+  "scope": "/motorista/web/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FFFFFF",
+  "theme_color": "#141428",
+  "icons": [
+    { "src": "/motorista/web/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/motorista/web/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

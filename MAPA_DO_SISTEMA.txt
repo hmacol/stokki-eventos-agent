@@ -50,6 +50,11 @@
    - Central de WhatsApp    -> atendimento.freshhub.com.br
    - Confirmação de rota    -> confirmacao.freshhub.com.br
    - App Expo dos motoristas (app_motorista/)
+   - PWA dos motoristas de iPhone -> app.freshhub.com.br/motorista/web (mesmo
+     código do app_motorista exportado como web; arquivos *.web.ts ao lado dos
+     nativos; public/ = manifest, sw.js, ícones; publicar com
+     app_motorista/publicar_web.sh; Caddy em infra/Caddyfile-motorista; sem GPS
+     contínuo: km pago = estimado, ver GPS_MIN_PONTOS_TRILHA em nucleo/operacao.py)
    - "Núcleo": tabelas próprias (nucleo_*) que espelham a Vuupt e vão
      substituí-la aos poucos (ver DOC_EXECUCAO_CLAUDE_SAIDA_VUUPT.md).
    - SISTEMA NOVO (freshhub): plano mestre de 17/10/2026, sem Stokki,
