@@ -51,19 +51,57 @@
   .selo.erro { background: var(--erro); color: #fff; }
   .evid { font-size: 12px; color: var(--texto-suave); }
   h2.secao { font-size: 15px; margin: 22px 0 8px; }
-  @media (max-width: 700px) { .card { min-width: calc(50% - 5px); } }
+  .placar { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 6px; }
+  .placar .tile { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 10px 16px; min-width: 130px; }
+  .placar .tile .n { font-size: 24px; font-weight: 700; }
+  .placar .tile .r { font-size: 11px; color: var(--texto-suave); font-weight: 700; text-transform: uppercase; }
+  .placar .tile.alerta .n { color: var(--erro); }
+  .placar-sub { font-size: 13px; color: var(--texto-suave); margin: 0 0 18px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; align-items: center; }
+  .chip { text-decoration: none; color: var(--texto); background: var(--superficie); border: 1px solid var(--borda);
+          border-radius: 100px; padding: 6px 14px; font-size: 13px; font-weight: 700; }
+  .chip.ativo { background: var(--acento-real); color: #fff; border-color: var(--acento-real); }
+  .chip .vc { color: var(--erro); }
+  .chip.ativo .vc { color: #fff; }
+  details.grupo { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; margin: 0 0 12px; }
+  details.grupo > summary { cursor: pointer; padding: 12px 16px; display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; list-style: none; }
+  details.grupo > summary::-webkit-details-marker { display: none; }
+  details.grupo.critico { border-left: 4px solid var(--erro); }
+  details.grupo .acao { font-size: 15px; font-weight: 700; }
+  details.grupo .qtd { font-size: 15px; font-weight: 700; color: var(--erro); }
+  details.grupo .meta { font-size: 12px; color: var(--texto-suave); }
+  details.grupo .tabela-wrap { border-radius: 0 0 10px 10px; }
+  .botoes { white-space: nowrap; display: flex; gap: 6px; }
+  .botao.pequeno { padding: 5px 10px; font-size: 12px; }
+  .botao.neutro { background: var(--texto-suave); }
+  .selo-decisao { display: inline-block; margin-top: 4px; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 700;
+                  background: var(--teste-bg); color: var(--teste-texto); }
+  .selo-decisao.vencida { background: var(--erro); color: #fff; }
+  dialog#dlg-tratar { border: 1px solid var(--borda); border-radius: 12px; padding: 20px 22px; max-width: 460px; width: calc(100% - 32px);
+                      background: var(--superficie); color: var(--texto); }
+  dialog#dlg-tratar::backdrop { background: rgba(0, 0, 0, .45); }
+  dialog#dlg-tratar h3 { margin: 0 0 4px; font-size: 16px; }
+  dialog#dlg-tratar .campo { display: flex; flex-direction: column; gap: 4px; margin: 12px 0; }
+  dialog#dlg-tratar label.op { display: flex; gap: 8px; align-items: center; font-size: 14px; padding: 4px 0; }
+  dialog#dlg-tratar textarea, dialog#dlg-tratar input[type="date"] { padding: 7px 10px; border: 1px solid var(--borda); border-radius: 6px; font-size: 13px; }
+  dialog#dlg-tratar .erro-dlg { color: var(--erro); font-size: 13px; min-height: 18px; }
+  dialog#dlg-tratar .rodape { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+  @media (max-width: 700px) { .card { min-width: calc(50% - 5px); } .placar .tile { min-width: calc(50% - 5px); } }
 </style>
 {% endblock %}
 
 {% block conteudo %}
 <nav class="abas">
-  <a href="{{ url_for('vigia_pedidos') }}" class="{{ 'ativa' if aba != 'fechamento' }}">Pedidos abertos</a>
+  <a href="{{ url_for('vigia_pedidos') }}" class="{{ 'ativa' if aba == 'acao' }}">Não entregues</a>
+  <a href="{{ url_for('vigia_pedidos', aba='abertos') }}" class="{{ 'ativa' if aba == 'abertos' }}">Todos os abertos</a>
   <a href="{{ url_for('vigia_pedidos', aba='fechamento') }}" class="{{ 'ativa' if aba == 'fechamento' }}">Fechamento</a>
 </nav>
 {% if aba == 'fechamento' %}
 {% include "_vigia_fechamento.html" %}
+{% elif aba == 'acao' %}
+{% include "_vigia_acao.html" %}
 {% else %}
-<h1>Vigia de pedidos abertos</h1>
+<h1>Todos os pedidos abertos</h1>
 <p class="sub">
   Todo pedido aberto, em que pé está, há quanto tempo e se o prazo venceu.
   {{ dados.total }} vigiado(s), <strong>{{ dados.vencidos }} com prazo vencido</strong>.
@@ -84,6 +122,7 @@
 </div>
 
 <form class="filtros" method="GET" action="{{ url_for('vigia_pedidos') }}">
+  <input type="hidden" name="aba" value="abertos">
   <div class="campo">
     <label for="busca">Buscar</label>
     <input type="text" id="busca" name="busca" value="{{ filtros.busca }}" placeholder="PS, embarcador, destinatário, motivo">
@@ -100,14 +139,14 @@
   <label class="campo check"><input type="checkbox" name="vencidos" value="1" {% if filtros.vencidos %}checked{% endif %}> Só prazo vencido</label>
   <div class="campo"><button type="submit" class="botao">Filtrar</button></div>
   {% if filtros.busca or filtros.estado or filtros.vencidos %}
-  <div class="campo"><a class="botao" style="background:var(--texto-suave);" href="{{ url_for('vigia_pedidos') }}">Limpar</a></div>
+  <div class="campo"><a class="botao" style="background:var(--texto-suave);" href="{{ url_for('vigia_pedidos', aba='abertos') }}">Limpar</a></div>
   {% endif %}
 </form>
 
 <div class="tabela-wrap">
 <table>
   <thead>
-    <tr><th>Pedido</th><th>Estado</th><th>Há quanto tempo</th><th>Prazo</th><th>Motivo</th><th>Embarcador / destinatário</th></tr>
+    <tr><th>Pedido</th><th>Estado</th><th>Há quanto tempo</th><th>Prazo</th><th>Motivo</th><th>O que fazer</th><th>Embarcador / destinatário</th></tr>
   </thead>
   <tbody>
     {% for l in dados.linhas %}
@@ -122,10 +161,11 @@
         {% else %}<span class="suave">sem prazo</span>{% endif %}
       </td>
       <td>{{ l.motivo or '—' }}</td>
+      <td>{{ l.acao }}<div class="suave">{{ l.dono }}</div></td>
       <td>{{ l.detalhe or '—' }}</td>
     </tr>
     {% else %}
-    <tr><td colspan="6" class="suave">Nenhum pedido nesse filtro.</td></tr>
+    <tr><td colspan="7" class="suave">Nenhum pedido nesse filtro.</td></tr>
     {% endfor %}
   </tbody>
 </table>

@@ -192,6 +192,7 @@ def criar_app(config: dict | None = None) -> Flask:
             if not cabecalho.startswith("Bearer "):
                 raise AutenticacaoInvalida("Faça login.")
             g.motorista = auth.motorista_do_token_acesso(app.config["SECRET_TOKENS"], cabecalho[7:].strip(), conn())
+            auth.registrar_versao_app(conn(), g.motorista["cpf"], request.headers.get("X-App-Versao"))
             # PIN provisório (revisão 08/10): até trocar, o motorista só vê o
             # próprio cadastro e troca o PIN -- nada de rota, extrato ou chat.
             if g.motorista.get("trocar_pin") and request.endpoint not in ("eu", "trocar_pin"):
@@ -216,6 +217,7 @@ def criar_app(config: dict | None = None) -> Flask:
     def login():
         d = corpo()
         m = auth.autenticar(conn(), d.get("cpf", ""), d.get("pin", ""))
+        auth.registrar_versao_app(conn(), m["cpf"], request.headers.get("X-App-Versao"))
         return jsonify({**auth.emitir_tokens(app.config["SECRET_TOKENS"], m), "motorista": auth.publico(m)})
 
     @app.post("/api/refresh")

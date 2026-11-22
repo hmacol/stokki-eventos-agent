@@ -12,7 +12,7 @@
 // ações e o deslizar) e as outras viram linhas de uma altura que abrem no
 // toque. Com 14 paradas a rota inteira cabe em pouco mais de uma tela.
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Linking, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as api from '../../src/api';
@@ -347,7 +347,7 @@ export default function DetalheRota() {
         <View style={s.barraFundo}><View style={[s.barra, { width: `${ativas.length ? (feitas / ativas.length) * 100 : 0}%` }]} /></View>
         <View style={s.resumoLinha}>
           <Text style={[s.sub, { flex: 1 }]}>{feitas} de {ativas.length} paradas com resultado{rota.km_estimado ? ` · ~${rota.km_estimado.toFixed(0)} km` : ''}</Text>
-          {rota.liberada !== false && rota.paradas.length > 0 ? (
+          {Platform.OS !== 'web' && rota.liberada !== false && rota.paradas.length > 0 ? (
             <Pressable style={({ pressed }) => [s.botaoMapa, pressed && { backgroundColor: cores.fundo }]}
               onPress={() => router.push(`/mapa/${rota.id}`)} accessibilityRole="button" accessibilityLabel="Ver a rota no mapa">
               <Ionicons name="map" size={17} color={cores.primaria} />

@@ -193,6 +193,17 @@ def autenticar(conn: sqlite3.Connection, cpf: str, pin: str) -> dict:
     return m
 
 
+def registrar_versao_app(conn: sqlite3.Connection, cpf: str, versao: str | None) -> None:
+    """Guarda a versao do APK informada pelo app (header X-App-Versao). So grava se mudou."""
+    versao = str(versao or "").strip()[:20]
+    if not re.fullmatch(r"\d+(\.\d+){0,3}", versao):
+        return
+    cur = conn.execute("UPDATE motoristas SET app_versao = ? WHERE cpf = ? AND COALESCE(app_versao, '') <> ?",
+                       (versao, normalizar_cpf(cpf), versao))
+    if cur.rowcount:
+        conn.commit()
+
+
 # ── Tokens ─────────────────────────────────────────────────────────────────────
 
 def _serializador(secret: str) -> URLSafeTimedSerializer:
