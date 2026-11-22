@@ -206,15 +206,18 @@ def _entregues_nao_expedidos(conn: sqlite3.Connection) -> list[dict]:
 
 def placar_anterior(conn: sqlite3.Connection, hoje: date, em_acao: set[str], com_decisao: set[str],
                     no_prazo: set[str]) -> dict | None:
-    """Fechamento do último dia de rota antes de hoje: programados, entregues,
+    """Fechamento do último dia útil de rota antes de hoje: programados, entregues,
     não entregues e o que já foi feito com eles. None se não há rota antes."""
     if not (_tabela_existe(conn, "nucleo_rotas") and _tabela_existe(conn, "nucleo_paradas")):
         return None
-    dia = conn.execute("""
-        SELECT MAX(r.data_rota) FROM nucleo_rotas r
+    # Último DIA ÚTIL com rota: feriado/fim de semana tem 5 paradas de dedicado e
+    # mostraria "0 não entregues" (20/11/2026 foi assim).
+    candidatos = [r[0] for r in conn.execute("""
+        SELECT DISTINCT r.data_rota FROM nucleo_rotas r
         WHERE r.data_rota < ? AND r.cancelada_em IS NULL
-          AND EXISTS (SELECT 1 FROM nucleo_paradas p WHERE p.rota_id = r.id)""",
-                       (hoje.isoformat(),)).fetchone()[0]
+          AND EXISTS (SELECT 1 FROM nucleo_paradas p WHERE p.rota_id = r.id)
+        ORDER BY r.data_rota DESC LIMIT 15""", (hoje.isoformat(),))]
+    dia = next((d for d in candidatos if feriados.eh_dia_util(date.fromisoformat(d))), None)
     if not dia:
         return None
     paradas = conn.execute("""

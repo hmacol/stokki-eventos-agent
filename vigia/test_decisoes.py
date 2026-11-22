@@ -175,6 +175,20 @@ class TestPlacar(Base):
         self.assertEqual((p["sem_decisao"], p["com_decisao"], p["no_prazo"], p["resolvidos"]), (1, 1, 1, 1))
 
 
+    def test_feriado_e_fim_de_semana_nao_viram_o_dia_do_placar(self):
+        # segunda 23/11; 20/11 foi feriado (Consciência Negra) com 1 parada só -> vale quinta 19/11
+        self.conn.execute("INSERT INTO nucleo_rotas VALUES (1, '2026-11-19', NULL)")
+        self.conn.execute("INSERT INTO nucleo_rotas VALUES (2, '2026-11-20', NULL)")
+        self.conn.execute("INSERT INTO nucleo_rotas VALUES (3, '2026-11-21', NULL)")
+        for rota, cod, sit in ((1, "PS-1", "ENTREGUE"), (1, "PS-2", "INSUCESSO"), (2, "PS-3", "ENTREGUE"),
+                               (3, "PS-4", "PENDENTE")):
+            self.conn.execute("INSERT INTO nucleo_paradas (rota_id, codigo, situacao) VALUES (?, ?, ?)",
+                              (rota, cod, sit))
+        self.conn.commit()
+        p = consulta.lista_acao(db_path=self.db, agora=datetime(2026, 11, 23, 10, 0))["placar"]
+        self.assertEqual((p["dia"], p["programados"], p["nao_entregues"]), ("2026-11-19", 2, 1))
+
+
 class TestTorrePorEquipe(Base):
     def setUp(self):
         super().setUp()
