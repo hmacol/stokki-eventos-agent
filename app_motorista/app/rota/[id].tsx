@@ -99,6 +99,7 @@ export default function DetalheRota() {
   // Todas desmarcadas = rota cancelada pelo servidor: sai da tela.
   const aoConfirmarCarregamento = (atualizada: Rota) => {
     setRota(atualizada);
+    void carregar();          // atualiza o cache local: reabrir sem rede nao volta a pedir o carregamento
     if (atualizada.status === 'CANCELADA') {
       Alert.alert('Rota cancelada', 'Todas as paradas foram tiradas, então a rota foi cancelada.');
       router.back();

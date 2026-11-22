@@ -7,7 +7,7 @@
 // Confirmar exige rede: tirar o pedido da Vuupt é síncrono, então NÃO passa
 // pela fila offline (src/fila.ts só empresta o gerador de uuid). Falha parcial
 // ("este pedido não saiu da rota") reenvia com o MESMO uuid.
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -63,13 +63,16 @@ export function CarregamentoRota({ rota, aoConfirmar }: { rota: Rota; aoConfirma
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [falhas, setFalhas] = useState<FalhaCarregamento[]>([]);
+  // Paradas que o servidor já tirou da rota numa tentativa anterior: não dá mais pra remarcar.
+  const [jaSairam, setJaSairam] = useState<number[]>([]);
+  // Guarda síncrona: dois toques seguidos entram antes de o setEnviando renderizar.
+  const enviandoRef = useRef(false);
 
   useEffect(() => { void lerCarregadores().then(setSugestoes); }, []);
 
   const nomeLimpo = carregador.trim();
   const todasDesmarcadas = paradas.length > 0 && paradas.every((p) => desmarcados[p.id]);
   const podeConfirmar = nomeLimpo.length > 0 && foto !== null && !conferindo && !enviando;
-  const maxTentativas = veredito ? veredito.tentativa + veredito.tentativas_restantes : null;
 
   const aceitarFoto = (uri: string, nota: string | null, v: ResultadoValidacao | null) => {
     setFoto({ uri, nota });
@@ -122,7 +125,7 @@ export function CarregamentoRota({ rota, aoConfirmar }: { rota: Rota; aoConfirma
   };
 
   const alternarParada = (p: Parada) => {
-    if (enviando) return;
+    if (enviando || jaSairam.includes(p.id)) return;
     if (desmarcados[p.id]) {
       // volta a marcar
       setDesmarcados((d) => { const { [p.id]: _, ...resto } = d; return resto; });
@@ -141,7 +144,8 @@ export function CarregamentoRota({ rota, aoConfirmar }: { rota: Rota; aoConfirma
   };
 
   const enviar = async () => {
-    if (!foto || !nomeLimpo) return;
+    if (!foto || !nomeLimpo || enviandoRef.current) return;
+    enviandoRef.current = true;
     setEnviando(true);
     setErro(null);
     setFalhas([]);
@@ -156,9 +160,10 @@ export function CarregamentoRota({ rota, aoConfirmar }: { rota: Rota; aoConfirma
       if (e instanceof api.ErroRede) {
         setErro('Sem conexão. Confirmar o carregamento precisa de sinal — tente de novo quando tiver rede.');
       } else if (e instanceof api.ErroApi && e.status === 409) {
-        const d = (e.dados ?? {}) as { falhas?: FalhaCarregamento[]; resultado?: string; motivo?: string | null };
+        const d = (e.dados ?? {}) as { falhas?: FalhaCarregamento[]; removidos?: number[]; resultado?: string; motivo?: string | null };
         if (Array.isArray(d.falhas) && d.falhas.length > 0) {
           setFalhas(d.falhas);
+          if (Array.isArray(d.removidos)) setJaSairam((atuais) => Array.from(new Set([...atuais, ...d.removidos!])));
         } else if (d.resultado === 'REPROVADO') {
           // O servidor reconferiu a foto e não aceitou: pede outra.
           setFoto(null);
@@ -170,6 +175,7 @@ export function CarregamentoRota({ rota, aoConfirmar }: { rota: Rota; aoConfirma
         setErro((e as Error).message);
       }
     } finally {
+      enviandoRef.current = false;
       setEnviando(false);
     }
   };
@@ -220,7 +226,7 @@ export function CarregamentoRota({ rota, aoConfirmar }: { rota: Rota; aoConfirma
       <Text style={s.rotulo}>Foto do baú *</Text>
       <Text style={s.dica}>Fotografe o baú INTEIRO, com a porta aberta, mostrando toda a carga.</Text>
       {foto ? <Image source={{ uri: foto.uri }} style={s.foto} /> : null}
-      {foto && veredito?.ocupacao_pct != null ? <Text style={s.ok}>Baú inteiro · ocupação ~{Math.round(veredito.ocupacao_pct)}%</Text> : null}
+      {foto && veredito?.resultado === 'APROVADO' && veredito.ocupacao_pct != null ? <Text style={s.ok}>Baú inteiro · ocupação ~{Math.round(veredito.ocupacao_pct)}%</Text> : null}
       {foto && !foto.nota && veredito?.resultado === 'APROVADO' ? <Text style={s.ok}>Foto aprovada.</Text> : null}
       {foto?.nota ? <Text style={s.aviso}>{foto.nota}</Text> : null}
       {msgFoto ? <Text style={s.erro}>{msgFoto}</Text> : null}
@@ -237,23 +243,24 @@ export function CarregamentoRota({ rota, aoConfirmar }: { rota: Rota; aoConfirma
       <Text style={s.dica}>Desmarque a parada que NÃO foi pro baú (todos os pedidos dela saem da rota).</Text>
       {paradas.map((p) => {
         const d = desmarcados[p.id];
+        const saiu = jaSairam.includes(p.id);
         const aberto = editando === p.id;
         const pedidos = pedidosDa(p);
         return (
-          <View key={p.id} style={[s.parada, d && s.paradaOff]}>
+          <View key={p.id} style={[s.parada, d && s.paradaOff, saiu && { opacity: 0.6 }]}>
             <Pressable
               style={s.paradaTopo}
               onPress={() => alternarParada(p)}
-              disabled={enviando}
+              disabled={enviando || saiu}
               accessibilityRole="checkbox"
-              accessibilityState={{ checked: !d }}
+              accessibilityState={{ checked: !d, disabled: saiu }}
               accessibilityLabel={`${nomeExibicao(p)}, parada ${p.ordem}`}
             >
               <Ionicons name={d ? 'square-outline' : 'checkbox'} size={26} color={d ? cores.textoSuave : cores.acento} />
               <View style={{ flex: 1 }}>
                 <Text style={[s.paradaNome, d && s.riscado]} numberOfLines={2}>{p.ordem}. {nomeExibicao(p)}</Text>
                 {pedidos.length > 0 ? <Text style={s.paradaPedidos}>{pedidos.join(' · ')}{p.volume_caixas ? ` · ${p.volume_caixas} cx` : ''}</Text> : null}
-                {d ? <Text style={s.paradaMotivo}>Fora da rota: {d.motivo}{d.observacao ? ` — ${d.observacao}` : ''}</Text> : null}
+                {d ? <Text style={s.paradaMotivo}>{saiu ? 'Já saiu da rota: ' : 'Fora da rota: '}{d.motivo}{d.observacao ? ` — ${d.observacao}` : ''}</Text> : null}
               </View>
             </Pressable>
             {aberto ? (
