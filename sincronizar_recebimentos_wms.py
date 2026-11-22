@@ -167,7 +167,11 @@ def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste:
         # Leitura HTTP fora da transacao; commit por recebimento, porque o
         # dados.db e compartilhado com o painel e todos os agentes.
         try:
-            itens = stokki_recebimentos.ler_itens(sess, dados["id_stokki"])
+            # "Aguardando recebimento" (22/11, Hugo): a mercadoria chegou e quem recebe e o
+            # NOSSO app. A Stokki ainda nao tem a quantidade recebida, entao a entrada
+            # esperada nasce com a quantidade do pedido de compra. "Em transito" segue fora.
+            aguardando = "AGUARDANDO" in _sem_acento(dados.get("situacao", "")).upper()
+            itens = stokki_recebimentos.ler_itens(sess, dados["id_stokki"], usar_esperada=aguardando)
         except Exception as e:  # noqa: BLE001 -- um recebimento ruim nao derruba a rodada
             logger.warning("Leitura do recebimento %s falhou: %s", dados["id_stokki"], e)
             res["erros"] += 1

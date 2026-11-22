@@ -320,6 +320,23 @@ class TestRodar(BaseRotina):
         recebimento = self.conn.execute("SELECT * FROM wms_recebimentos WHERE id_stokki = 2483").fetchone()
         self.assertIsNone(recebimento)
 
+    def test_aguardando_recebimento_entra_com_a_quantidade_esperada(self):
+        # 22/11 (PE-2659 da OIE): a mercadoria chegou e quem recebe e o NOSSO app. A Stokki
+        # ainda nao tem "Quantidade total recebida"; a entrada esperada nasce da "Quantidade".
+        sem_recebida = _HTML_ITENS.replace("<td>4</td><td></td>\n    </tr>\n  </tbody>\n</table>\n\"\"\"", "") \
+            .replace("<td>4</td><td></td>", "<td></td><td></td>")
+        self.assertNotEqual(sem_recebida, _HTML_ITENS)
+        for situacao, gravados in (("Aguardando recebimento", 1), ("Em transito", 0), ("Recebimento iniciado", 0)):
+            with self.subTest(situacao=situacao):
+                self.conn.execute("DELETE FROM wms_recebimento_itens")
+                self.conn.execute("DELETE FROM wms_recebimentos")
+                self.conn.commit()
+                sess = SessaoFalsa([_linha(2659, PILOTO_ID, situacao=situacao)], {"2659": sem_recebida})
+                res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+                self.assertEqual(res["gravados"], gravados)
+                qtds = [r[0] for r in self.conn.execute("SELECT qtd_embalagem FROM wms_recebimento_itens").fetchall()]
+                self.assertEqual(qtds, [4.0] if gravados else [])
+
     def test_recebido_sem_tabela_de_itens_conta_como_erro_mas_nao_derruba_a_rodada(self):
         # sem a tabela de itens na pagina (formato mudou/pagina quebrada
         # de verdade) -- vira erro, e mesmo assim tem que aguentar sem
