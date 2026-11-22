@@ -1945,7 +1945,8 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
  app/(tabs)/               rotas, ofertas (marketplace), financeiro,
                            disponibilidade, perfil, ajuda (chat; áudio .m4a
                            via expo-audio só com a conversa na logística).
- app/rota/[id].tsx         Aceitar -> iniciar -> paradas -> finalizar.
+ app/rota/[id].tsx         Aceitar -> iniciar -> paradas -> finalizar. Ao finalizar (rota do app, não
+                           Vuupt) pergunta "Teve despesa?"; "Lançar" leva a /financeiro?rota=<id>.
  app/parada/[id].tsx       Entregue / Parcial / Não entregue / Reagendar,
                            checklist e fotos.
  app/mapa/[id].tsx         Mapa da rota (botão "Mapa" na tela da rota): pinos numerados,
