@@ -24,11 +24,14 @@
 # painel e portal): script só do próprio app, sem inline. Endurecimento maior (domínio
 # próprio do app ou cookie HttpOnly) é decisão à parte.
 #
+# (ATIVO na VPS desde 21/11; backup /etc/caddy/Caddyfile.bak-21-11-pwa-*)
 # 	redir /motorista/web /motorista/web/ permanent
 # 	handle_path /motorista/web/* {
 # 		root * /opt/stokki-eventos/dados/app_motorista/web
-# 		@sempre_novo path / /index.html /sw.js /manifest.webmanifest
+# 		@sempre_novo path / /index.html /sw.js /manifest.webmanifest /registrar-sw.js
 # 		header @sempre_novo Cache-Control "no-cache"
+# 		@manifesto path /manifest.webmanifest
+# 		header @manifesto Content-Type application/manifest+json
 # 		header /_expo/static/* Cache-Control "public, max-age=31536000, immutable"
 # 		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 # 		header X-Content-Type-Options nosniff
