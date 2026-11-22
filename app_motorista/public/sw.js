@@ -1,11 +1,12 @@
 // Service worker do PWA do motorista.
-// Só cuida do que está em /motorista/web/ (o app em si). Chamadas da API
-// (/motorista/api) passam direto: nunca ficam em cache, senão o motorista
-// veria rota velha como se fosse atual.
+// Cuida só do app (arquivos do próprio domínio). Chamadas da API (/api/...)
+// passam direto: nunca ficam em cache, senão o motorista veria rota velha
+// como se fosse atual.
 //  - Navegação (abrir o app): rede primeiro; sem sinal, usa a última cópia.
 //  - Arquivos do app (_expo/static/... têm hash no nome): cache primeiro.
 const CACHE = 'freshlog-motorista-v1';
-const BASE = '/motorista/web/';
+const BASE = '/';
+const ehApp = (url) => url.origin === self.location.origin && !url.pathname.startsWith('/api/');
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.add(BASE)).catch(() => undefined));
@@ -27,7 +28,7 @@ self.addEventListener('message', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => Promise.all(d.urls.map((u) => {
     try {
       const url = new URL(u);
-      if (url.origin !== self.location.origin || !url.pathname.startsWith(BASE)) return undefined;
+      if (!ehApp(url)) return undefined;
       return c.match(u).then((ja) => ja || c.add(u)).catch(() => undefined);
     } catch {
       return undefined;
@@ -39,7 +40,7 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.origin !== self.location.origin || !url.pathname.startsWith(BASE)) return;
+  if (!ehApp(url)) return;
 
   if (req.mode === 'navigate') {
     e.respondWith(

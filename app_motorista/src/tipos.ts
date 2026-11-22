@@ -18,7 +18,7 @@ export type Motorista = {
 };
 
 /** Campos que o motorista edita em "Meus dados" (valem na hora, Hugo 08/10). */
-export type MeusDados = { telefone?: string; email?: string; chave_pix?: string; placa?: string };
+export type MeusDados = { telefone?: string; email?: string; chave_pix?: string; placa?: string; /** exigido pela API só quando a chave PIX muda */ pin_atual?: string };
 export type MudancaCadastro = { campo: string; rotulo: string; de: string | null; para: string | null };
 
 /** Pedido de cadastro de motorista novo (sem login) e o que a API devolve. */

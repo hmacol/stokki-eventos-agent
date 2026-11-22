@@ -84,9 +84,6 @@
     },
     "updates": {
       "url": "https://u.expo.dev/89779e04-58f3-4c02-995b-f05e0a6a8d2e"
-    },
-    "experiments": {
-      "baseUrl": "/motorista/web"
     }
   }
 }

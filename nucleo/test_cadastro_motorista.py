@@ -77,7 +77,7 @@ class TestCadastroMotorista(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
 
         r = self.cli.put("/api/eu", json={"telefone": "+55 (11) 98888-7777", "chave_pix": " 123.456.789-01 ",
-                                           "placa": "abc1d23", "email": ""}, headers=h)
+                                           "placa": "abc1d23", "email": "", "pin_atual": PIN}, headers=h)
         self.assertEqual(r.status_code, 200, r.get_json())
         d = r.get_json()
         self.assertEqual(d["motorista"]["telefone"], "11988887777")
@@ -103,6 +103,43 @@ class TestCadastroMotorista(unittest.TestCase):
         conn.close()
         self.assertEqual(len(hist), 3)
         self.assertEqual({(x["campo"], x["valor_novo"]) for x in hist} & {("placa", "ABC1D23")}, {("placa", "ABC1D23")})
+
+    def test_trocar_pix_exige_o_pin(self):
+        """Token roubado não pode desviar pagamento: a chave PIX só muda com o PIN."""
+        h = self._auth()
+        base = self.cli.get("/api/eu", headers=h).get_json()
+
+        def mudou():
+            eu = self.cli.get("/api/eu", headers=h).get_json()
+            return (eu["chave_pix"], eu["telefone"]) != (base["chave_pix"], base["telefone"])
+
+        pedido = {"chave_pix": "golpe@exemplo.com", "telefone": "11977776666"}
+        r = self.cli.put("/api/eu", json=pedido, headers=h)             # sem PIN
+        self.assertEqual(r.status_code, 400)
+        self.assertFalse(mudou())                                       # nada mudou, nem o telefone
+        r = self.cli.put("/api/eu", json={**pedido, "pin_atual": "000000"}, headers=h)   # PIN errado
+        self.assertEqual(r.status_code, 403)
+        self.assertFalse(mudou())
+        self.whats_mock.assert_not_called()
+
+        r = self.cli.put("/api/eu", json={**pedido, "pin_atual": PIN}, headers=h)        # PIN certo
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertEqual(r.get_json()["motorista"]["chave_pix"], "golpe@exemplo.com")
+
+        # Sem trocar o PIX o PIN não é pedido (telefone, placa), nem repetindo o PIX atual
+        r = self.cli.put("/api/eu", json={"telefone": "11955554444"}, headers=h)
+        self.assertEqual(r.status_code, 200, r.get_json())
+        r = self.cli.put("/api/eu", json={"chave_pix": "golpe@exemplo.com"}, headers=h)
+        self.assertEqual(r.get_json()["mudancas"], [])
+
+    def test_trocar_pix_chutando_pin_trava_como_no_login(self):
+        h = self._auth()
+        for _ in range(5):
+            r = self.cli.put("/api/eu", json={"chave_pix": "x@exemplo.com", "pin_atual": "111111"}, headers=h)
+            self.assertEqual(r.status_code, 403)
+        r = self.cli.put("/api/eu", json={"chave_pix": "x@exemplo.com", "pin_atual": PIN}, headers=h)   # até o certo trava
+        self.assertEqual(r.status_code, 429)
+        self.assertIsNone(self.cli.get("/api/eu", headers=h).get_json()["chave_pix"])
 
     def test_quem_nao_e_dono_do_carro_nao_ve_extrato(self):
         # Hugo, 08/10: sem extrato, mas pedágio continua
