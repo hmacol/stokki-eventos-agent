@@ -544,6 +544,19 @@
     background: rgba(255,92,80,0.18);
     color: var(--erro-texto);
   }
+  /* Nao carregado (checklist de carregamento): so rotula, continua selecionavel */
+  .item-parada .badge-nao-carregado {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 100px;
+    margin-top: 3px;
+    background: rgba(255,92,80,0.18);
+    color: var(--erro-texto);
+  }
   #lista-pool .item-parada.retornando { cursor: default; opacity: 0.8; }
   /* status da parada na VUUPT no card da rota enviada (10/11): neutro
      enquanto o pedido pode sair da rota, em negrito quando já começou */
@@ -889,6 +902,7 @@
   body.cards-numeros .item-parada .badge-fora-area,
   body.cards-numeros .item-parada .badge-dedicado,
   body.cards-numeros .item-parada .badge-retornando,
+  body.cards-numeros .item-parada .badge-nao-carregado,
   body.cards-numeros .item-parada .badge-status-vuupt,
   body.cards-numeros .item-parada .janela,
   body.cards-numeros .item-parada .nf-pedido { display: none; }
@@ -3033,6 +3047,9 @@
     const partes = [];
     // Retornando (10/11): tirado de rota já iniciada, ainda no carro do
     // motorista -- só volta a ser roteirizável depois que /retornos receber
+    if (p.nao_carregado) {
+      partes.push(`<span class="badge-nao-carregado" title="${escaparHtml(p.nao_carregado.observacao || "")}">↺ Não carregado: ${escaparHtml(p.nao_carregado.motivo || "")}</span>`);
+    }
     if (p.retornando) {
       const motivo = p.retornando.motivo ? ` Motivo: ${p.retornando.motivo}.` : "";
       partes.push(`<span class="badge-retornando" title="Tirado de rota já iniciada: não entra em rota até o galpão receber em Retornos.${escaparHtml(motivo)}">↩ Retornando — no carro de ${escaparHtml(p.retornando.motorista_nome || "?")}</span>`);

@@ -51,6 +51,27 @@ def carregamento_da_rota(conn: sqlite3.Connection, rota_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+# ── Selo no pool ──────────────────────────────────────────────────────────────
+
+def nao_carregados_recentes(conn: sqlite3.Connection, service_ids: list[int], dias: int = 2) -> dict[int, dict]:
+    """Pedidos que o motorista desmarcou no carregamento (removido_em preenchido) nos ultimos `dias`
+    dias: o item mais recente por service_id. Tabela ausente (banco antigo) -> {}."""
+    ids = [int(i) for i in service_ids if i is not None]
+    if not ids:
+        return {}
+    marcas = ",".join("?" * len(ids))
+    try:
+        linhas = conn.execute(
+            f"SELECT service_id, motivo, observacao, criado_em FROM nucleo_carregamento_itens "
+            f"WHERE service_id IN ({marcas}) AND removido_em IS NOT NULL "
+            f"AND removido_em >= datetime('now','localtime', ?) ORDER BY removido_em, id",
+            (*ids, f"-{int(dias)} days")).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    # ordem crescente: o ultimo de cada service_id (mais recente) sobrescreve
+    return {r[0]: {"motivo": r[1], "observacao": r[2], "criado_em": r[3]} for r in linhas}
+
+
 # ── Tirar da rota ─────────────────────────────────────────────────────────────
 
 def _efeitos_no_painel(rota: sqlite3.Row, parada: sqlite3.Row, resultado: dict, motivo: str,

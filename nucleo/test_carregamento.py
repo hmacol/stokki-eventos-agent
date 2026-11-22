@@ -590,3 +590,45 @@ class TestApiCarregamento(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestNaoCarregadosRecentes(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self._patch = mock.patch.object(banco, "DB_PATH", Path(self._tmp.name) / "t.db")
+        self._patch.start()
+        self.conn = banco.conectar()
+
+    def tearDown(self):
+        self.conn.close()
+        self._patch.stop()
+        self._tmp.cleanup()
+
+    def _item(self, service_id, removido_em, motivo="Não coube", obs=None):
+        self.conn.execute(
+            "INSERT INTO nucleo_carregamento_itens (rota_id, service_id, codigo, motivo, observacao, removido_em) "
+            "VALUES (1, ?, 'PS-1', ?, ?, ?)", (service_id, motivo, obs, removido_em))
+        self.conn.commit()
+
+    def _antes(self, dias):
+        return self.conn.execute(f"SELECT datetime('now','localtime','-{dias} days')").fetchone()[0]
+
+    def test_so_removido_e_recente(self):
+        self._item(1, self._antes(0))            # recente
+        self._item(2, None)                      # carregado (nunca saiu)
+        self._item(3, self._antes(5))            # antigo
+        r = carregamento.nao_carregados_recentes(self.conn, [1, 2, 3, 4])
+        self.assertEqual(list(r), [1])
+        self.assertEqual(r[1]["motivo"], "Não coube")
+
+    def test_mais_recente_por_service_id(self):
+        self._item(1, self._antes(1), motivo="Outros", obs="velho")
+        self._item(1, self._antes(0), motivo="Não Encontrado", obs="novo")
+        r = carregamento.nao_carregados_recentes(self.conn, [1])
+        self.assertEqual((r[1]["motivo"], r[1]["observacao"]), ("Não Encontrado", "novo"))
+        self.assertIn("criado_em", r[1])
+
+    def test_lista_vazia_e_tabela_ausente(self):
+        self.assertEqual(carregamento.nao_carregados_recentes(self.conn, []), {})
+        self.conn.execute("DROP TABLE nucleo_carregamento_itens")
+        self.assertEqual(carregamento.nao_carregados_recentes(self.conn, [1]), {})

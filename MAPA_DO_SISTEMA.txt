@@ -1208,6 +1208,14 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
 
  Base
  banco.py                  Esquema idempotente e conexão.
+ carregamento.py           Checklist de carregamento (22/11): antes de iniciar a rota o motorista
+                           fotografa o baú e desmarca o que não carregou. POST
+                           /api/rotas/<id>/carregamento (api_motorista.py). Tabelas
+                           nucleo_carregamentos (1 por rota: foto, carregador, uuid) e
+                           nucleo_carregamento_itens (1 por parada: motivo, observação, removido_em).
+                           nao_carregados_recentes() alimenta o selo "Não carregado" do pool
+                           (planejamento_rotas.anotar_nao_carregados). Config
+                           api_motorista.checklist_carregamento.{ativo, pilotos}: DESLIGADA por padrão.
  normalizacao.py           Código do pedido (sem "#", maiúsculo) e fuso. NÃO tira
                            sufixo -R/-C ("PS-1-R2" é outro pedido). Use antes
                            de comparar códigos.
@@ -1924,6 +1932,8 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
                            disponibilidade, perfil, ajuda (chat; áudio .m4a
                            via expo-audio só com a conversa na logística).
  app/rota/[id].tsx         Aceitar -> iniciar -> paradas -> finalizar.
+ src/carregamentoRota.tsx  Etapa de carregamento antes do "Iniciar rota" (foto do baú +
+                           desmarcar paradas com motivo) -> POST /api/rotas/<id>/carregamento.
  app/parada/[id].tsx       Entregue / Parcial / Não entregue / Reagendar,
                            checklist e fotos.
  app/mapa/[id].tsx         Mapa da rota (botão "Mapa" na tela da rota): pinos numerados,
@@ -2307,6 +2317,11 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
    recebimento (ajustes_complexidade_cliente, inclusive os feitos no
    Planejamento) vence o horário extraído das mensagens da Stokki. Teste:
    test_pipeline_alteracao_portal.py.
+ - Checklist de carregamento: desmarcar = tirar a PARADA inteira da rota (nunca cancela o
+   pedido). A remoção na Vuupt é síncrona e trava o "Iniciar rota" até todos os desmarcados
+   saírem (o que já saiu fica em nucleo_carregamento_itens e a nova tentativa repete só os que
+   faltam). O pedido desmarcado volta ao pool com o selo "Não carregado" por 2 dias; o selo
+   não bloqueia roterização (diferente de "Retornando").
  - Vuupt: created_at/start_at em UTC SEM fuso. Use nucleo/normalizacao.py.
  - Códigos de pedido variam (#PS-1, PS-1, #PS-1-R2): normalize antes de
    comparar (nucleo/normalizacao.normalizar_codigo; normalizar_order_number
