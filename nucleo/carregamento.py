@@ -12,10 +12,20 @@ Desmarcar NUNCA cancela pedido: so tira a parada da rota (volta ao pool).
 Falha ao tirar trava o checklist: o que ja saiu fica gravado em
 nucleo_carregamento_itens (carregamento_id NULL) e a nova tentativa so
 repete os que faltam.
+
+Revisao de seguranca 22/11 (docs/revisoes/2026-11-22-checklist-carregamento-seguranca.md):
+M1 - a ida a Vuupt e interativa (1 tentativa, timeout curto, sem retry de 429), o laco
+     tem orcamento total (ORCAMENTO_S) e cada rota aceita no maximo TETO_FALHAS POSTs
+     com falha em JANELA_FALHAS_S (depois 429 sem chamar a Vuupt).
+M2 - a rota ao vivo na Vuupt tem que ser do motorista que confirma, e o checklist so
+     vale pro motorista atual da rota: trocou o motorista, o novo faz o dele e o antigo
+     e arquivado (rota_id = -id, rota em rota_id_original, evento CARREGAMENTO_SUBSTITUIDO).
 """
 import logging
 import sqlite3
 import sys
+import threading
+import time
 from datetime import date
 from pathlib import Path
 
@@ -28,6 +38,13 @@ _RAIZ = Path(__file__).parent.parent
 # Subconjunto de expedicao.MOTIVOS_EXCLUSAO que o motorista pode escolher.
 MOTIVOS_DESMARCAR = ("Não coube", "Não Encontrado", "Outros")
 MOTIVO_OUTROS = "Outros"
+
+# M1: teto de POSTs com falha na Vuupt por rota e orcamento de tempo do laco de paradas.
+TETO_FALHAS = 5
+JANELA_FALHAS_S = 600
+ORCAMENTO_S = 45
+MSG_MUITAS_TENTATIVAS = "Muitas tentativas. Chame a logística."
+MSG_TEMPO_ESGOTADO = "Tempo esgotado, tente de novo."
 
 
 def config_carregamento(config: dict | None = None) -> dict:
@@ -47,8 +64,54 @@ def exigido(rota: sqlite3.Row, cfg: dict) -> bool:
 
 
 def carregamento_da_rota(conn: sqlite3.Connection, rota_id: int) -> dict | None:
+    """Checklist gravado na rota (de qualquer motorista; os arquivados tem rota_id negativo)."""
     row = conn.execute("SELECT * FROM nucleo_carregamentos WHERE rota_id = ?", (rota_id,)).fetchone()
     return dict(row) if row else None
+
+
+def carregamento_do_motorista_atual(conn: sqlite3.Connection, rota: sqlite3.Row) -> dict | None:
+    """O checklist so vale pro motorista atual da rota (M2): trocou o motorista, o novo faz o dele."""
+    c = carregamento_da_rota(conn, rota["id"])
+    return c if c and c["agent_id"] == rota["agent_id"] else None
+
+
+# ── Teto de tentativas com falha (M1) ─────────────────────────────────────────
+# Conta so POST que falhou na Vuupt (validacao 400/409 e replay de uuid nao contam).
+# Estado em memoria do processo: o motorista-api e UM waitress com threads, dai o lock.
+# Reiniciar o servico zera os contadores (aceitavel: o teto so freia repeticao).
+
+_falhas_por_rota: dict[int, list[float]] = {}
+_trava_falhas = threading.Lock()
+
+
+def _falhas_na_janela(rota_id: int, agora: float) -> list[float]:
+    """Chamar com _trava_falhas: descarta as falhas fora da janela e devolve as que ficam."""
+    lista = [t for t in _falhas_por_rota.get(rota_id, []) if agora - t < JANELA_FALHAS_S]
+    if lista:
+        _falhas_por_rota[rota_id] = lista
+    else:
+        _falhas_por_rota.pop(rota_id, None)
+    return lista
+
+
+def exigir_abaixo_do_teto(rota_id: int, agora: float | None = None) -> None:
+    """TETO_FALHAS falhas da rota em JANELA_FALHAS_S -> OperacaoInvalida 429 (sem chamar a Vuupt)."""
+    agora = time.monotonic() if agora is None else agora
+    with _trava_falhas:
+        if len(_falhas_na_janela(rota_id, agora)) >= TETO_FALHAS:
+            raise operacao.OperacaoInvalida(MSG_MUITAS_TENTATIVAS, 429)
+
+
+def registrar_falha(rota_id: int, agora: float | None = None) -> None:
+    agora = time.monotonic() if agora is None else agora
+    with _trava_falhas:
+        _falhas_na_janela(rota_id, agora)
+        _falhas_por_rota.setdefault(rota_id, []).append(agora)
+
+
+def zerar_falhas(rota_id: int) -> None:
+    with _trava_falhas:
+        _falhas_por_rota.pop(rota_id, None)
 
 
 # ── Selo no pool ──────────────────────────────────────────────────────────────
@@ -102,7 +165,8 @@ def _efeitos_no_painel(rota: sqlite3.Row, parada: sqlite3.Row, resultado: dict, 
 def _tirar_da_vuupt_ou_local(rota: sqlite3.Row, parada: sqlite3.Row, motivo: str, observacao: str | None) -> dict:
     """Tira a parada da rota de verdade. Rota APP: so confere se a parada ainda nao comecou
     (os efeitos locais sao de `confirmar`). Rota da Vuupt: edicao_rota.tirar_pedido (status ao
-    vivo; recusa pedido comecado); `fora_da_rota` conta como sucesso.
+    vivo; recusa pedido comecado e rota que na Vuupt ja e de outro motorista); `fora_da_rota`
+    conta como sucesso. Interativo: 1 tentativa e timeout curto, 429/timeout viram erro curto.
     Devolve o formato de tirar_pedido: {"ok", "rota_cancelada", "rota_iniciada"} | {"ok": False, "erro"}."""
     if rota["provedor"] == banco.PROVEDOR_APP:
         if parada["situacao"] not in (banco.PARADA_PENDENTE, banco.PARADA_CANCELADA):
@@ -114,7 +178,9 @@ def _tirar_da_vuupt_ou_local(rota: sqlite3.Row, parada: sqlite3.Row, motivo: str
         sys.path.insert(0, str(_RAIZ / "roteirizacao"))
     import edicao_rota
     token = (ponte_vuupt._config_projeto().get("vuupt_api") or {}).get("token") or ""
-    resultado = edicao_rota.tirar_pedido(token, rota["vuupt_route_id"], parada["service_id"])
+    # rota veio de rota_do_motorista: rota["agent_id"] e o motorista que esta confirmando
+    resultado = edicao_rota.tirar_pedido(token, rota["vuupt_route_id"], parada["service_id"],
+                                         agent_id_esperado=rota["agent_id"], interativo=True)
     if not resultado["ok"] and resultado.get("fora_da_rota"):
         resultado = {"ok": True, "ja_fora_da_rota": True, "rota_cancelada": False, "rota_iniciada": False}
     if resultado["ok"]:
@@ -171,24 +237,40 @@ def _veiculo(conn: sqlite3.Connection, agent_id: int) -> tuple:
     return (row["placa"] or None, row["tipo_veiculo"] or None) if row else (None, None)
 
 
+def _arquivar_de_outro_motorista(conn: sqlite3.Connection, rota: sqlite3.Row, antigo: dict, agent_novo: int) -> None:
+    """Motorista da rota trocou: o checklist do anterior deixa de valer (M2). rota_id e NOT NULL
+    UNIQUE, entao a linha fica com rota_id = -id (unico; rota real e sempre positiva) e a rota em
+    rota_id_original. Os itens continuam ligados a ela; nada e desfeito na Vuupt."""
+    conn.execute("UPDATE nucleo_carregamentos SET rota_id = ?, rota_id_original = ?, substituido_em = ? WHERE id = ?",
+                 (-antigo["id"], antigo["rota_id"], banco.agora(), antigo["id"]))
+    operacao.registrar_evento(
+        conn, "CARREGAMENTO_SUBSTITUIDO", banco.ORIGEM_APP, None, rota_id=rota["id"], agent_id=agent_novo,
+        dados={"carregamento_antigo_id": antigo["id"], "agent_antigo": antigo["agent_id"], "agent_novo": agent_novo})
+    logger.info(f"Carregamento rota {rota['id']}: checklist {antigo['id']} do agent {antigo['agent_id']} "
+                f"arquivado (motorista agora e {agent_novo})")
+
+
 def confirmar(conn: sqlite3.Connection, rota: sqlite3.Row, agent_id: int, *, carregador: str, uuid: str,
-              desmarcados: list[dict], foto: dict, tirar=None) -> dict:
+              desmarcados: list[dict], foto: dict, tirar=None, relogio=None) -> dict:
     """Checklist de carregamento: tira cada parada desmarcada da rota e, se TODAS sairam, grava
-    nucleo_carregamentos. Idempotente por uuid da mesma rota; outro uuid numa rota ja
-    confirmada (ou uuid de outra rota) levanta 409.
+    nucleo_carregamentos. Idempotente por uuid da mesma rota e motorista; outro uuid numa rota ja
+    confirmada pelo mesmo motorista (ou uuid ja usado) levanta 409. Checklist de OUTRO motorista
+    (rota trocou de dono) nao bloqueia: e arquivado quando este grava o dele.
     `foto` ja vem gravada em disco por quem chama: {caminho, sha256, resultado, ocupacao_pct, revisao_humana}.
-    `tirar(rota, parada, motivo, observacao)` e injetavel (teste sem rede).
+    `tirar(rota, parada, motivo, observacao)` e `relogio()` (segundos, monotonic) sao injetaveis (teste).
     Devolve {"ok": True, "carregamento", "rota_cancelada"} ou
-    {"ok": False, "falhas": [{parada_id, codigo, erro}], "removidos": [parada_id]} sem gravar o checklist."""
+    {"ok": False, "falhas": [{parada_id, codigo, erro}], "removidos": [parada_id]} sem gravar o checklist.
+    Rota com TETO_FALHAS falhas na Vuupt em JANELA_FALHAS_S levanta 429 sem chamar a Vuupt."""
     tirar = tirar or _tirar_da_vuupt_ou_local
+    relogio = relogio or time.monotonic
     if not uuid:
         raise operacao.OperacaoInvalida("Carregamento sem uuid (gerado no aparelho).")
     rota = operacao.rota_do_motorista(conn, rota["id"], agent_id)
     ja = conn.execute("SELECT * FROM nucleo_carregamentos WHERE uuid = ? AND rota_id = ?",
                       (uuid, rota["id"])).fetchone()
-    if ja:
+    if ja and ja["agent_id"] == agent_id:
         return {"ok": True, "carregamento": dict(ja), "rota_cancelada": rota["status"] == banco.ROTA_CANCELADA}
-    if carregamento_da_rota(conn, rota["id"]):
+    if carregamento_do_motorista_atual(conn, rota):
         raise operacao.OperacaoInvalida("Checklist de carregamento já confirmado para esta rota.", 409)
     if conn.execute("SELECT 1 FROM nucleo_carregamentos WHERE uuid = ?", (uuid,)).fetchone():
         # uuid de outro checklist: o INSERT ia quebrar no UNIQUE depois de ja ter tirado pedidos da rota
@@ -205,21 +287,30 @@ def confirmar(conn: sqlite3.Connection, rota: sqlite3.Row, agent_id: int, *, car
     if not exigido(rota, config_carregamento()):
         raise operacao.OperacaoInvalida("Essa rota não pede checklist de carregamento.", 409)
     pedidos = _validar_desmarcados(conn, rota["id"], desmarcados)
+    exigir_abaixo_do_teto(rota["id"], relogio())
 
     replica = operacao.eh_rota_replica(rota)
     falhas, removidos, rota_cancelada = [], [], False
+    inicio, parar = relogio(), None
     for parada, motivo, observacao in pedidos:
         item = _item(conn, rota["id"], parada)
         if item and item["removido_em"] and parada["situacao"] == banco.PARADA_CANCELADA:
             removidos.append(parada["id"])          # saiu numa tentativa anterior
+            continue
+        if parar is None and relogio() - inicio >= ORCAMENTO_S:
+            parar = MSG_TEMPO_ESGOTADO              # orcamento do POST acabou: nao chama a Vuupt pras outras
+        if parar:
+            falhas.append({"parada_id": parada["id"], "codigo": parada["codigo"], "erro": parar})
             continue
         try:
             resultado = tirar(rota, parada, motivo, observacao)
         except Exception as e:  # noqa: BLE001
             resultado = {"ok": False, "erro": f"Falha ao tirar da rota: {e}"}
         if not resultado.get("ok"):
-            falhas.append({"parada_id": parada["id"], "codigo": parada["codigo"],
-                           "erro": resultado.get("erro") or "Não foi possível tirar da rota."})
+            erro = resultado.get("erro") or "Não foi possível tirar da rota."
+            falhas.append({"parada_id": parada["id"], "codigo": parada["codigo"], "erro": erro})
+            if resultado.get("rota_de_outro_motorista"):
+                parar = erro                        # a rota nao e mais dele: nenhuma outra parada sai
             continue
         agora = banco.agora()
         conn.execute("UPDATE nucleo_paradas SET situacao = ?, atualizado_em = ? WHERE id = ?",
@@ -240,7 +331,10 @@ def confirmar(conn: sqlite3.Connection, rota: sqlite3.Row, agent_id: int, *, car
 
     if falhas:
         logger.warning(f"Carregamento rota {rota['id']}: {len(falhas)} parada(s) nao sairam da rota: {falhas}")
+        if rota["provedor"] != banco.PROVEDOR_APP:
+            registrar_falha(rota["id"], relogio())   # rota do app nao chama a Vuupt: nao conta
         return {"ok": False, "falhas": falhas, "removidos": removidos}
+    zerar_falhas(rota["id"])
 
     contadores = operacao._recalcular_contadores(conn, rota["id"])
     if (not rota_cancelada and pedidos and contadores["total"] == 0
@@ -255,6 +349,9 @@ def confirmar(conn: sqlite3.Connection, rota: sqlite3.Row, agent_id: int, *, car
     qtd_desmarcados = conn.execute(
         "SELECT COUNT(*) FROM nucleo_carregamento_itens "
         "WHERE rota_id = ? AND carregamento_id IS NULL AND removido_em IS NOT NULL", (rota["id"],)).fetchone()[0]
+    antigo = carregamento_da_rota(conn, rota["id"])
+    if antigo and antigo["agent_id"] != agent_id:
+        _arquivar_de_outro_motorista(conn, rota, antigo, agent_id)
     cur = conn.execute("""
         INSERT INTO nucleo_carregamentos (rota_id, agent_id, uuid, placa, tipo_veiculo, carregador, foto_caminho,
                                           foto_sha256, resultado_foto, ocupacao_pct, revisao_humana,

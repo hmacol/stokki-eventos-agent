@@ -28,22 +28,31 @@ def _corpo(servicos, status="not_started", agent_id=10, vehicle_id=20, rid=7):
 class _Rotas:
     """Duble de rotas_client com a rota em memoria."""
 
-    def __init__(self, corpo=None, erro_busca=None):
+    def __init__(self, corpo=None, erro_busca=None, erro_escrita=None):
         self.corpo = corpo
         self.erro_busca = erro_busca
+        self.erro_escrita = erro_escrita
         self.deletes, self.cancelamentos, self.puts, self.adds = [], [], [], []
+        self.kwargs = []          # kwargs extras de cada chamada (interativo so quando pedido)
         self.resp_add = {"data": {"info": {"failed": []}}}
 
-    def buscar_rota(self, token, route_id, include=None):
+    def buscar_rota(self, token, route_id, include=None, **kw):
+        self.kwargs.append(("buscar", kw))
         if self.erro_busca:
             raise self.erro_busca
         return self.corpo
 
-    def remover_servico_da_rota(self, token, route_id, service_id):
+    def remover_servico_da_rota(self, token, route_id, service_id, **kw):
+        self.kwargs.append(("remover", kw))
+        if self.erro_escrita:
+            raise self.erro_escrita
         self.deletes.append((route_id, service_id))
         return {"success": True}
 
-    def cancelar_rota(self, token, route_id, services_action="keep"):
+    def cancelar_rota(self, token, route_id, services_action="keep", **kw):
+        self.kwargs.append(("cancelar", kw))
+        if self.erro_escrita:
+            raise self.erro_escrita
         self.cancelamentos.append((route_id, services_action))
 
     def atualizar_motorista_veiculo(self, token, route_id, agent_id, vehicle_id):
@@ -172,6 +181,58 @@ class TestEdicaoRota(unittest.TestCase):
         res = edicao_rota.adicionar_pedidos("t", 7, [8])
         self.assertFalse(res["ok"])
         self.assertIn("boom", res["erro"])
+
+    # ── M1/M2 (revisao de seguranca 22/11): checklist de carregamento ─────────
+
+    def test_padrao_nao_passa_interativo_ao_client(self):
+        r = self._com(_Rotas(_corpo([_servico(1), _servico(2)])))
+        edicao_rota.tirar_pedido("t", 7, 1)
+        self.assertEqual(r.kwargs, [("buscar", {}), ("remover", {})])
+
+    def test_interativo_chega_ao_client(self):
+        r = self._com(_Rotas(_corpo([_servico(1)])))
+        res = edicao_rota.tirar_pedido("t", 7, 1, interativo=True)
+        self.assertTrue(res["rota_cancelada"])
+        self.assertEqual(r.kwargs, [("buscar", {"interativo": True}), ("cancelar", {"interativo": True})])
+
+    def test_interativo_429_na_leitura_vira_mensagem_curta(self):
+        erro = requests.exceptions.HTTPError("429 Too Many Requests", response=mock.Mock(status_code=429))
+        r = self._com(_Rotas(erro_busca=erro))
+        res = edicao_rota.tirar_pedido("t", 7, 1, interativo=True)
+        self.assertEqual(res, {"ok": False, "erro": edicao_rota.MSG_VUUPT_OCUPADA})
+        self.assertEqual(r.deletes, [])
+
+    def test_interativo_timeout_e_429_no_delete_viram_mensagem_curta(self):
+        for erro, msg in ((requests.exceptions.ReadTimeout("lento"), edicao_rota.MSG_VUUPT_SEM_RESPOSTA),
+                          (requests.exceptions.HTTPError("429", response=mock.Mock(status_code=429)),
+                           edicao_rota.MSG_VUUPT_OCUPADA)):
+            self._com(_Rotas(_corpo([_servico(1), _servico(2)]), erro_escrita=erro))
+            self.assertEqual(edicao_rota.tirar_pedido("t", 7, 1, interativo=True), {"ok": False, "erro": msg})
+
+    def test_padrao_429_mantem_mensagem_antiga(self):
+        erro = requests.exceptions.HTTPError("429 Too Many Requests", response=mock.Mock(status_code=429))
+        self._com(_Rotas(erro_busca=erro))
+        res = edicao_rota.tirar_pedido("t", 7, 1)
+        self.assertEqual(res["erro"], "Falha ao consultar a rota #7 na Vuupt: 429 Too Many Requests")
+
+    def test_rota_de_outro_motorista_na_vuupt_nao_mexe_em_nada(self):
+        for servicos in ([_servico(1), _servico(2)], [_servico(1)]):      # DELETE e cancel
+            r = self._com(_Rotas(_corpo(servicos, agent_id=10)))
+            res = edicao_rota.tirar_pedido("t", 7, 1, agent_id_esperado=99)
+            self.assertEqual(res, {"ok": False, "rota_de_outro_motorista": True,
+                                   "erro": "Esta rota não é mais sua. Fale com a logística."})
+            self.assertEqual((r.deletes, r.cancelamentos), ([], []))
+
+    def test_rota_sem_motorista_na_vuupt_conta_como_de_outro(self):
+        r = self._com(_Rotas(_corpo([_servico(1), _servico(2)], agent_id=None)))
+        res = edicao_rota.tirar_pedido("t", 7, 1, agent_id_esperado=10)
+        self.assertTrue(res["rota_de_outro_motorista"])
+        self.assertEqual(r.deletes, [])
+
+    def test_mesmo_motorista_segue(self):
+        r = self._com(_Rotas(_corpo([_servico(1), _servico(2)], agent_id=10)))
+        self.assertTrue(edicao_rota.tirar_pedido("t", 7, 1, agent_id_esperado=10)["ok"])
+        self.assertEqual(r.deletes, [(7, 1)])
 
     def test_rota_iniciada(self):
         self.assertFalse(edicao_rota.rota_iniciada({"status": "not_started", "servicos": [{"status": "assigned"}]}))

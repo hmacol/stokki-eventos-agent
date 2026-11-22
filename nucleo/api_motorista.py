@@ -678,7 +678,7 @@ def criar_app(config: dict | None = None) -> Flask:
         trava (409 com o veredito, nada gravado) ate esgotar as tentativas."""
         rota = operacao.rota_do_motorista(conn(), rota_id, agent_id())
         uuid = (request.form.get("uuid") or "").strip()
-        ja = carregamento.carregamento_da_rota(conn(), rota["id"])
+        ja = carregamento.carregamento_do_motorista_atual(conn(), rota)   # de outro motorista nao vale
         if ja and uuid and ja["uuid"] == uuid:
             # reenvio do mesmo checklist (fila offline): nada de segunda foto em disco
             return jsonify({"ok": True, "carregamento": ja, "rota": operacao.montar_rota(conn(), rota)})
@@ -702,6 +702,7 @@ def criar_app(config: dict | None = None) -> Flask:
         except ValueError:
             raise OperacaoInvalida("Campo 'desmarcados' deve ser uma lista JSON.")
         carregamento._validar_desmarcados(conn(), rota["id"], desmarcados)   # 400/409 antes do modelo e da foto
+        carregamento.exigir_abaixo_do_teto(rota["id"])                      # 429 antes do modelo e da foto
         try:
             tentativa = int(request.form.get("tentativa") or 1)
         except ValueError:

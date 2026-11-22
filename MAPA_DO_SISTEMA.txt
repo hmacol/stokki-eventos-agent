@@ -1213,6 +1213,9 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            /api/rotas/<id>/carregamento (api_motorista.py). Tabelas
                            nucleo_carregamentos (1 por rota: foto, carregador, uuid) e
                            nucleo_carregamento_itens (1 por parada: motivo, observação, removido_em).
+                           Checklist só vale pro motorista ATUAL da rota: trocou o motorista, o do
+                           anterior é arquivado (rota_id = -id, rota em rota_id_original +
+                           substituido_em, evento CARREGAMENTO_SUBSTITUIDO) e o novo refaz o dele.
                            nao_carregados_recentes() alimenta o selo "Não carregado" do pool
                            (planejamento_rotas.anotar_nao_carregados). Config
                            api_motorista.checklist_carregamento.{ativo, pilotos}: DESLIGADA por padrão.
@@ -2344,7 +2347,11 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
    pedido). A remoção na Vuupt é síncrona e trava o "Iniciar rota" até todos os desmarcados
    saírem (o que já saiu fica em nucleo_carregamento_itens e a nova tentativa repete só os que
    faltam). O pedido desmarcado volta ao pool com o selo "Não carregado" por 2 dias; o selo
-   não bloqueia roterização (diferente de "Retornando").
+   não bloqueia roterização (diferente de "Retornando"). Revisão de segurança 22/11: a ida à
+   Vuupt é interativa (1 tentativa, timeout 10 s, sem retry de 429), o laço tem orçamento de
+   45 s, a rota ao vivo tem que ser do motorista que confirma, e no máximo 5 POSTs com falha
+   por rota em 10 min (o 6º leva 429 sem chamar a Vuupt; contador em memória do motorista-api,
+   reiniciar o serviço zera).
  - Vuupt: created_at/start_at em UTC SEM fuso. Use nucleo/normalizacao.py.
  - Códigos de pedido variam (#PS-1, PS-1, #PS-1-R2): normalize antes de
    comparar (nucleo/normalizacao.normalizar_codigo; normalizar_order_number
