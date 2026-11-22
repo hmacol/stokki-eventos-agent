@@ -81,6 +81,7 @@ NAO_VERIFICADO = "NAO_VERIFICADO"
 
 TIPO_CANHOTO = "CANHOTO"
 TIPO_PEDAGIO = "PEDAGIO"
+TIPO_CARREGAMENTO = "CARREGAMENTO"   # foto do bau carregado, porta aberta (checklist de carregamento)
 TIPO_FACHADA = "FACHADA"   # foto mandada como canhoto que não é documento: fica guardada, não vale (Hugo, 20/11)
 
 # Em que sentido se lê o texto na foto -> transposição do PIL que o deixa
@@ -432,6 +433,31 @@ Julgue APENAS o que está na foto:
 6. motivo: uma frase curta em português (vai ser mostrada ao motorista)."""
 
 
+_SCHEMA_CARREGAMENTO = {
+    "type": "object",
+    "properties": {
+        "legivel": {"type": "boolean"},
+        "eh_carga": {"type": "boolean", "description": "É a foto do interior de um baú/carroceria com carga (ou vazio) de veículo de entrega"},
+        "bau_inteiro": {"type": "boolean", "description": "Porta aberta e o baú inteiro visível, de ponta a ponta, sem cortar"},
+        "ocupacao_pct": {"type": ["integer", "null"], "description": "Estimativa de 0 a 100 de quanto do baú está ocupado"},
+        "problemas": {"type": "array", "items": {"type": "string", "enum": ["DESFOCADA", "ESCURA", "CORTADA", "PORTA_FECHADA"]}},
+        "motivo": {"type": "string"},
+    },
+    "required": ["legivel", "eh_carga", "bau_inteiro", "ocupacao_pct", "problemas", "motivo"],
+    "additionalProperties": False,
+}
+
+_PROMPT_CARREGAMENTO = """Você confere a foto do baú/carroceria já carregado, tirada pelo motorista da FreshLog antes de sair pra rota.
+
+Julgue APENAS o que está na foto:
+1. legivel: dá pra enxergar o interior do baú com clareza (nem escura, nem tremida)?
+2. eh_carga: é mesmo o interior de um baú/carroceria de veículo (com carga ou vazio)? Foto de outra coisa = false.
+3. bau_inteiro: a porta está aberta e o baú aparece INTEIRO, de ponta a ponta (chão, teto e laterais), sem cortar?
+4. ocupacao_pct: estime de 0 a 100 quanto do baú está ocupado pela carga (inteiro), ou null se não der pra estimar.
+5. problemas: os que se aplicam.
+6. motivo: uma frase curta em português (vai ser mostrada ao motorista)."""
+
+
 def _chamar_modelo(cfg: dict, imagem: bytes, media_type: str, prompt: str, schema: dict) -> tuple[dict | None, dict]:
     """Uma chamada de visão com saída estruturada. Devolve (dict da
     resposta ou None se recusou, tokens). Levanta exceção em falha de
@@ -481,7 +507,7 @@ def validar_foto(cfg: dict, tipo: str, conteudo: bytes, *, nfs_esperadas: list[s
     bate no painel); não reprova.
     """
     tipo = (tipo or "").upper()
-    if tipo not in (TIPO_CANHOTO, TIPO_PEDAGIO):
+    if tipo not in (TIPO_CANHOTO, TIPO_PEDAGIO, TIPO_CARREGAMENTO):
         return _nao_verificado(f"Tipo de foto sem validação: {tipo}.")
     if not cfg.get("ativo"):
         return _nao_verificado("Validação automática desligada.")
@@ -498,7 +524,9 @@ def validar_foto(cfg: dict, tipo: str, conteudo: bytes, *, nfs_esperadas: list[s
         return {**base, "resultado": NAO_VERIFICADO, "motivo": "Sem chave do modelo (anthropic.api_key)."}
     try:
         imagem, media_type = preparar_para_modelo(conteudo)
-        prompt, schema = (_PROMPT_CANHOTO, _SCHEMA_CANHOTO) if tipo == TIPO_CANHOTO else (_PROMPT_PEDAGIO, _SCHEMA_PEDAGIO)
+        prompt, schema = {TIPO_CANHOTO: (_PROMPT_CANHOTO, _SCHEMA_CANHOTO),
+                          TIPO_PEDAGIO: (_PROMPT_PEDAGIO, _SCHEMA_PEDAGIO),
+                          TIPO_CARREGAMENTO: (_PROMPT_CARREGAMENTO, _SCHEMA_CARREGAMENTO)}[tipo]
         leitura, tokens = _chamar_modelo(cfg, imagem, media_type, prompt, schema)
     except Exception as e:
         logger.warning(f"Validação de {tipo} sem modelo ({type(e).__name__}: {e}) -- NAO_VERIFICADO.")
@@ -516,6 +544,8 @@ def validar_foto(cfg: dict, tipo: str, conteudo: bytes, *, nfs_esperadas: list[s
             giro = _conferir_giro(cfg, imagem, giro, base["tokens"])
         base["giro"] = giro
         return _decidir_canhoto(cfg, base, leitura, nfs_esperadas or [], nf_alvo, codigos_pedido or [])
+    if tipo == TIPO_CARREGAMENTO:
+        return _decidir_carregamento(base, leitura)
     return _decidir_pedagio(base, leitura, valor_informado)
 
 
@@ -630,6 +660,23 @@ def aplicar_tentativas(cfg: dict, resultado: dict, tentativa: int) -> dict:
         "pode_seguir": (not reprovado) or libera,
         "revisao_humana": reprovado and libera,
     }
+
+
+def _decidir_carregamento(base: dict, leitura: dict) -> dict:
+    motivo_modelo = (leitura.get("motivo") or "").strip()
+    pct = leitura.get("ocupacao_pct")
+    if isinstance(pct, (int, float)) and not isinstance(pct, bool):
+        base["ocupacao_pct"] = max(0, min(100, int(round(pct / 10.0)) * 10))
+    else:
+        base["ocupacao_pct"] = None
+    if not leitura.get("eh_carga"):
+        return {**base, "resultado": REPROVADO, "motivo": motivo_modelo or "A foto não parece ser do baú carregado."}
+    if not leitura.get("legivel"):
+        return {**base, "resultado": REPROVADO, "motivo": motivo_modelo or "Não dá pra enxergar o baú. Tire de novo com mais luz."}
+    if not leitura.get("bau_inteiro"):
+        motivo = motivo_modelo if "baú inteiro" in motivo_modelo.lower() else             (f"{motivo_modelo} " if motivo_modelo else "") + "Abra a porta e mostre o baú inteiro na foto."
+        return {**base, "resultado": REPROVADO, "motivo": motivo}
+    return {**base, "resultado": APROVADO, "motivo": motivo_modelo or "Baú inteiro visível."}
 
 
 def _decidir_pedagio(base: dict, leitura: dict, valor_informado: float | None) -> dict:

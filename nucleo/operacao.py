@@ -138,6 +138,14 @@ def listar_rotas_motorista(conn: sqlite3.Connection, agent_id: int | None, de: d
     return [montar_rota(conn, r) for r in rows if r["id"] not in escondidas]
 
 
+def _estado_carregamento(conn: sqlite3.Connection, rota: sqlite3.Row) -> dict:
+    """Checklist de carregamento: {exigido, feito}. Import lazy (carregamento importa operacao).
+    A config vem do mesmo config global da ponte (`ponte_vuupt.definir_config`)."""
+    from nucleo import carregamento
+    return {"exigido": carregamento.exigido(rota, carregamento.config_carregamento()),
+            "feito": carregamento.carregamento_da_rota(conn, rota["id"]) is not None}
+
+
 def montar_rota(conn: sqlite3.Connection, rota: sqlite3.Row) -> dict:
     if not rota_liberada(rota):
         # So o aviso de que ha rota no dia: nada de paradas, nome ou valores.
@@ -153,6 +161,7 @@ def montar_rota(conn: sqlite3.Connection, rota: sqlite3.Row) -> dict:
     d["paradas"] = [montar_parada(conn, p) for p in paradas]
     d["pedagios"] = listar_pedagios(conn, rota["id"])
     # Confirmação (badge do Planejamento) quando a rota é da VUUPT
+    d["carregamento"] = _estado_carregamento(conn, rota)
     d["confirmacao"] = None
     if rota["vuupt_route_id"] and _tem_tabela(conn, "confirmacoes_rota"):
         c = conn.execute("SELECT status, respondido_em, motivo_recusa FROM confirmacoes_rota WHERE vuupt_route_id = ? AND agent_id = ?",
@@ -445,6 +454,9 @@ def iniciar_rota(conn: sqlite3.Connection, rota_id: int, agent_id: int, ocorrido
         return montar_rota(conn, rota)
     if rota["status"] not in (banco.ROTA_PLANEJADA, banco.ROTA_ACEITA):
         raise OperacaoInvalida(f"Rota está {rota['status'].lower()}.", 409)
+    estado = _estado_carregamento(conn, rota)
+    if estado["exigido"] and not estado["feito"]:
+        raise OperacaoInvalida("Faça o checklist de carregamento antes de iniciar a rota.", 409)
     agora = banco.agora()
     conn.execute("UPDATE nucleo_rotas SET status = ?, iniciada_em = COALESCE(iniciada_em, ?), atualizado_em = ? WHERE id = ?",
                  (banco.ROTA_EM_ROTA, ocorrido_em or agora, agora, rota_id))
