@@ -117,6 +117,14 @@ def enviar(conn, config: dict, destinatarios: list[dict], url_base: str, *,
     return resultado
 
 
+def teto_do_lote(conn, atu_cfg: dict, tamanho: int) -> int:
+    """Teto do dia pro envio real: o lote sai inteiro, entao o teto tem de cobrir o que JA saiu hoje
+    (mesma origem, que o teto conta) mais o tamanho do lote. Comparar so com o tamanho do lote
+    barrava o 1o envio quando o dia ja tinha mensagens (22/11: 5 motoristas ficaram sem link)."""
+    ja_enviados = notificar_whatsapp._enviados_hoje(conn, datetime.now(), notificar_whatsapp.ORIGEM_MOTORISTA_ATUALIZACAO)
+    return max(int(atu_cfg.get("teto_diario") or notificar_whatsapp.TETO_ATUALIZACAO_PADRAO), ja_enviados + tamanho)
+
+
 def _url_base(config: dict) -> str:
     url = str((((config or {}).get("portal_cliente") or {}).get("chamados") or {}).get("url_painel")
               or "https://app.freshhub.com.br/painel").rstrip("/")
@@ -166,8 +174,8 @@ def main(argv=None) -> int:
             return 0
         atu_cfg = {**(config.get("atualizacao_motoristas") or {}),
                    "forcar_destino_whatsapp": args.piloto if args.piloto else ""}
-        if args.real:   # o lote sai inteiro (as pausas espalham o envio): teto do dia >= tamanho do lote
-            atu_cfg["teto_diario"] = max(int(atu_cfg.get("teto_diario") or 15), len(recebem))
+        if args.real:   # o lote sai inteiro (as pausas espalham o envio)
+            atu_cfg["teto_diario"] = teto_do_lote(conn, atu_cfg, len(recebem))
         resultado = enviar(conn, {**config, "atualizacao_motoristas": atu_cfg}, recebem, _url_base(config),
                            pausa=pausa)
         print("\nResultado:")
