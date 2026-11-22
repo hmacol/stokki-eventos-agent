@@ -193,8 +193,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              APIs /api/envios/anexos/ler e /api/envios/<id>/anexos[/<aid>[/remover]]
                                              XML da NF-e (17/11): tambem anexa, so pelo botao do proprio pedido (.xml
                                              solto no lote continua sendo pedido novo); um por pedido, tipo 'XML da
-                                             NF-e'; em pedido de planilha e o XML do pedido. Fica so em
-                                             portal_envios_anexos: nao vai pro romaneio nem pra Stokki (proximas etapas)
+                                             NF-e'; em pedido de planilha e o XML do pedido. Fica em
+                                             portal_envios_anexos: nao vai pro romaneio; pra Stokki vai pela
+                                             etapa stokki/informar_nf_portal.py da Estacao de Impressao (22/11)
  Endereço de entrega conferido no envio .... portal_cliente/endereco_entrega.py (prévia: casos nota/
                                              terceiros/sugestao/livre; <entrega> no XML do lote);
                                              chave portal_cliente.envios.endereco_entrega_ativo
@@ -943,6 +944,17 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
                       nfe=chave, file_nfe). Idempotente: confere chave + cProd do
                       XML do pedido (data-url do btn_danfe na listagem). Fluxo
                       Cross, 25/10; sondado só leitura, POST real ainda não provado.
+ informar_nf_portal.py Etapa da Estação de Impressão (22/11): informa na Stokki o XML
+                      da NF-e que o cliente anexou no portal (pedido de planilha
+                      nasce sem nota e fica em "Aguardando faturamento"). Chamado por
+                      estacao_impressao.imprimir_pedidos_pendentes antes de imprimir.
+                      Confere emitente (raiz do CNPJ) e destinatário; POST =
+                      trocar_nf.enviar_nf; só vale se o pedido sair da aba
+                      awaiting_billing. Tabela portal_xml_stokki (INFORMADA |
+                      PENDENTE | ERRO; 3 rodadas; e-mail interno ao desistir).
+                      Chave estacao_impressao.informar_nf_portal.ativo (padrão
+                      DESLIGADO) + so_codigos (piloto). --modo-teste só lista.
+                      Testes: stokki/test_informar_nf_portal.py.
  sondar_trocar_nf.py  Sonda SÓ LEITURA (cookies salvos, sem login) do _token e do
                       download do XML que a troca usa. Passo 0 do piloto do Cross.
  ajuste_estoque.py    Ajuste Manual de estoque (CLI, --modo-teste só mostra):
