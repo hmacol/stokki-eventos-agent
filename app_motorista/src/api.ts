@@ -9,7 +9,8 @@
 //   se guarda pra depois).
 import Constants from 'expo-constants';
 import * as FileSystem from 'expo-file-system/legacy';
-import * as SecureStore from 'expo-secure-store';
+import * as segredo from './segredo';
+import { postarArquivo } from './envioArquivo';
 
 export const API_URL: string =
   (Constants.expoConfig?.extra as { apiUrl?: string } | undefined)?.apiUrl ?? 'http://10.0.2.2:8073/api';
@@ -40,23 +41,23 @@ export function aoCairSessao(fn: () => void): () => void {
 }
 
 export async function carregarTokens(): Promise<boolean> {
-  acesso = await SecureStore.getItemAsync(CHAVE_ACESSO);
-  refresh = await SecureStore.getItemAsync(CHAVE_REFRESH);
+  acesso = await segredo.ler(CHAVE_ACESSO);
+  refresh = await segredo.ler(CHAVE_REFRESH);
   return !!acesso;
 }
 
 export async function guardarTokens(t: { acesso: string; refresh: string }) {
   acesso = t.acesso;
   refresh = t.refresh;
-  await SecureStore.setItemAsync(CHAVE_ACESSO, t.acesso);
-  await SecureStore.setItemAsync(CHAVE_REFRESH, t.refresh);
+  await segredo.gravar(CHAVE_ACESSO, t.acesso);
+  await segredo.gravar(CHAVE_REFRESH, t.refresh);
 }
 
 export async function limparTokens() {
   acesso = null;
   refresh = null;
-  await SecureStore.deleteItemAsync(CHAVE_ACESSO);
-  await SecureStore.deleteItemAsync(CHAVE_REFRESH);
+  await segredo.apagar(CHAVE_ACESSO);
+  await segredo.apagar(CHAVE_REFRESH);
 }
 
 export function temSessao(): boolean {
@@ -200,27 +201,15 @@ export const cancelarPedagio = (rotaId: number, pedagioId: number) =>
 // nativo lê o arquivo direto do disco, sem timeout de JS, e devolve o
 // status HTTP como qualquer chamada.
 async function enviarArquivo<T>(caminho: string, uri: string, campos: Record<string, string>, repetiu = false, campoArquivo = 'arquivo'): Promise<T> {
-  const info = await FileSystem.getInfoAsync(uri).catch((e) => {
-    throw new ErroRede(`leitura da foto: ${(e as Error).message}`);
-  });
-  if (!info.exists) {
-    // Foto sumiu do cache do aparelho: não adianta insistir (vira "recusado" na fila)
-    throw new ErroApi(410, 'A foto não está mais no aparelho -- registre de novo.');
-  }
-  const nome = uri.split('/').pop() ?? 'foto.jpg';
-  const ext = (nome.split('.').pop() ?? 'jpg').toLowerCase();
-  let r: FileSystem.FileSystemUploadResult;
+  let r: { status: number; body: string } | null;
   try {
-    r = await FileSystem.uploadAsync(`${API_URL}${caminho}`, uri, {
-      httpMethod: 'POST',
-      uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-      fieldName: campoArquivo,
-      mimeType: ext === 'png' ? 'image/png' : 'image/jpeg',
-      parameters: campos,
-      headers: acesso ? { Authorization: `Bearer ${acesso}` } : {},
-    });
+    r = await postarArquivo(`${API_URL}${caminho}`, uri, campoArquivo, campos, acesso ? { Authorization: `Bearer ${acesso}` } : {});
   } catch (e) {
     throw new ErroRede((e as Error).message || 'falha no envio da foto');
+  }
+  if (!r) {
+    // Foto sumiu do aparelho: não adianta insistir (vira "recusado" na fila)
+    throw new ErroApi(410, 'A foto não está mais no aparelho -- registre de novo.');
   }
   if (r.status === 401 && !repetiu) {
     if (await tentarRenovar()) return enviarArquivo<T>(caminho, uri, campos, true, campoArquivo);

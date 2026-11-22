@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { AppState, View } from 'react-native';
+import { AppState, Platform, View } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
@@ -11,6 +11,7 @@ import * as fila from '../src/fila';
 import * as rascunho from '../src/rascunhoParada';
 import { cores } from '../src/tema';
 import { AvisoVersao } from '../src/avisoVersao';
+import { AlertaHost } from '../src/alertaHost';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: false }),
@@ -18,6 +19,7 @@ Notifications.setNotificationHandler({
 
 async function registrarPush() {
   try {
+    if (Platform.OS === 'web') return; // PWA: aviso vai por WhatsApp, não por push
     if (!Device.isDevice) return;
     const { status } = await Notifications.requestPermissionsAsync();
     if (status !== 'granted') return;
@@ -95,6 +97,7 @@ export default function Layout() {
     <ProvedorSessao>
       <StatusBar style="light" />
       <Guarda />
+      <AlertaHost />
     </ProvedorSessao>
   );
 }

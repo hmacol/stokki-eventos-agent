@@ -9,6 +9,7 @@
 // mostrar ao motorista (ex.: "insucesso exige motivo").
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as api from './api';
+import * as fotoLocal from './fotoLocal';
 import { ErroApi, ErroRede } from './api';
 import type { TipoDespesa } from './tipos';
 
@@ -91,6 +92,8 @@ export async function tamanho(): Promise<number> {
 }
 
 export async function enfileirar(item: ItemFila): Promise<void> {
+  // Web: a foto vai pro IndexedDB antes de entrar na fila (sobrevive a recarregar a página).
+  if ('uri' in item) item = { ...item, uri: await fotoLocal.guardar(item.uri) };
   await mudar((itens) => [...itens, item]);
   void processar();
 }
@@ -202,6 +205,7 @@ export async function processar(): Promise<{ enviados: number; pendentes: number
         await enviar(item);
         enviados++;
         await tirar(item.uuid);
+        if ('uri' in item) void fotoLocal.liberar(item.uri);
       } catch (e) {
         const temporario = e instanceof ErroRede
           || (e instanceof ErroApi && (e.status === 401 || e.status === 408 || e.status === 429 || e.status >= 500));

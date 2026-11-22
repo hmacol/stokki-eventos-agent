@@ -50,6 +50,11 @@
    - Central de WhatsApp    -> atendimento.freshhub.com.br
    - Confirmação de rota    -> confirmacao.freshhub.com.br
    - App Expo dos motoristas (app_motorista/)
+   - PWA dos motoristas de iPhone -> app.freshhub.com.br/motorista/web (mesmo
+     código do app_motorista exportado como web; arquivos *.web.ts ao lado dos
+     nativos; public/ = manifest, sw.js, ícones; publicar com
+     app_motorista/publicar_web.sh; Caddy em infra/Caddyfile-motorista; sem GPS
+     contínuo: km pago = estimado, ver GPS_MIN_PONTOS_TRILHA em nucleo/operacao.py)
    - "Núcleo": tabelas próprias (nucleo_*) que espelham a Vuupt e vão
      substituí-la aos poucos (ver DOC_EXECUCAO_CLAUDE_SAIDA_VUUPT.md).
    - SISTEMA NOVO (freshhub): plano mestre de 17/10/2026, sem Stokki,
@@ -1346,6 +1351,13 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            travado; guarda nome_anterior; só com atualizacao_motoristas.renomear_grupos),
                            rotas_30d, candidatos_envio (ativo, com pendência, com CPF, com grupo, sem link real
                            em aberto; mais rotas primeiro) e enviar_lote (1 link por motorista no grupo dele).
+ enviar_pendencias_motoristas.py  Mensagem PESSOAL (privado do WhatsApp) a cada motorista ativo com pendência
+                           cadastral, listando o que falta + link pessoal de atualização (21/11). Pula teste/
+                           virtual, sem CPF, sem telefone e quem já tem link aberto. Sem flag só lista; --piloto
+                           NUMERO manda tudo pra lá; --real manda aos motoristas (não mexe no config.yaml).
+                           Texto e envio em notificar_whatsapp.texto_pendencias_motorista /
+                           avisar_motorista_pendencias_privado (mesma trava e teto do envio em grupo).
+                           Rodar na VPS: sudo -u www-data venv/bin/python -m nucleo.enviar_pendencias_motoristas
  vuupt_agentes.py          Cliente da Vuupt p/ criar/ligar/apagar agente e veículo
                            (POST /users, /vehicles) e gerar e-mail nome@freshhub.com.br.
  templates/cadastro_motorista.html  Página pública do link: 3 passos pelo celular (dados,
