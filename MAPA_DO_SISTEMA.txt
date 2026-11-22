@@ -1358,6 +1358,12 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            Texto e envio em notificar_whatsapp.texto_pendencias_motorista /
                            avisar_motorista_pendencias_privado (mesma trava e teto do envio em grupo).
                            Rodar na VPS: sudo -u www-data venv/bin/python -m nucleo.enviar_pendencias_motoristas
+ fila_app_motoristas.py    Fila (tabela motoristas_fila_app) de mensagens pessoais pra levar os motoristas ao app
+                           novo (22/11): 'atualizar' (entrou no app mas sem versao >= 1.2.0 em motoristas.app_versao)
+                           e 'adotar' (nunca entrou). Lote do dia (--limite), lembrete 1x apos 3 dias, sai da fila
+                           quando o app informa a versao nova (header X-App-Versao -> auth.registrar_versao_app).
+                           Sem flag lista; --piloto NUMERO; --real. Timer infra/stokki-fila-app-motoristas.* (09h30,
+                           NAO habilitado ate o OK do Hugo). VERSAO_ALVO no topo do modulo: subir a cada APK novo.
  vuupt_agentes.py          Cliente da Vuupt p/ criar/ligar/apagar agente e veículo
                            (POST /users, /vehicles) e gerar e-mail nome@freshhub.com.br.
  templates/cadastro_motorista.html  Página pública do link: 3 passos pelo celular (dados,

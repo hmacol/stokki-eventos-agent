@@ -103,7 +103,7 @@ async function tentarRenovar(): Promise<boolean> {
 type Opcoes = { metodo?: 'GET' | 'POST' | 'PUT'; corpo?: unknown; semAuth?: boolean };
 
 export async function chamar<T>(caminho: string, op: Opcoes = {}, repetiu = false): Promise<T> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { 'X-App-Versao': Constants.expoConfig?.version ?? '' };
   if (!op.semAuth && acesso) headers.Authorization = `Bearer ${acesso}`;
   let body: BodyInit | undefined;
   if (op.corpo !== undefined) {

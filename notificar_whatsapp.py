@@ -1432,7 +1432,7 @@ def texto_pendencias_motorista(primeiro_nome: str, documentos: list, campos: lis
 
 
 def avisar_motorista_pendencias_privado(link_id: int, telefone: str, nome: str, texto: str, config: dict,
-                                        modo_teste: bool = False, **kw) -> tuple[str, bool]:
+                                        modo_teste: bool = False, assinatura: str | None = None, **kw) -> tuple[str, bool]:
     """Manda a mensagem de pendencias NO PRIVADO do motorista (nao no grupo). Devolve (situacao, piloto).
     Mesma trava do envio em grupo (atualizacao_motoristas.forcar_destino_whatsapp): ausente = 'desligado',
     numero = piloto (vai pra la com '[teste -> nome]' na frente), '' = envio real. Real confere antes
@@ -1454,7 +1454,7 @@ def avisar_motorista_pendencias_privado(link_id: int, telefone: str, nome: str, 
             if not existe:
                 return "numero_sem_whatsapp", False
         origem = ORIGEM_MOTORISTA_ATUALIZACAO_PILOTO if piloto else ORIGEM_MOTORISTA_ATUALIZACAO
-        assinatura = f"link_atualizacao:{link_id}"
+        assinatura = assinatura or f"link_atualizacao:{link_id}"
         situacao = despachar(config, origem, "link_atualizacao", texto, assinatura, modo_teste=modo_teste,
                              grupo_id=f"{destino or telefone}@c.us", **kw)
         if situacao == "nao_enviado":
