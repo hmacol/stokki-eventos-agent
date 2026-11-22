@@ -319,6 +319,23 @@ class TestConfirmar(unittest.TestCase):
         self.assertEqual(self.conn.execute("SELECT status FROM nucleo_pedidos WHERE codigo=?",
                                            (p["codigo"],)).fetchone()[0], banco.PEDIDO_EM_ROTA)
 
+    def test_ja_fora_da_rota_nao_devolve_pedido_ao_pool(self):
+        p = self._paradas()[0]
+        tirar = mock.Mock(return_value={"ok": True, "ja_fora_da_rota": True, "rota_cancelada": False})
+        with mock.patch.object(carregamento.nucleo_pedidos, "marcar_aberto_por_service_ids") as marcar:
+            r = self._confirmar([self._desm(p)], tirar=tirar)
+        self.assertTrue(r["ok"])
+        marcar.assert_not_called()
+
+    def test_falha_em_marcar_aberto_nao_derruba_o_confirmar(self):
+        p = self._paradas()[0]
+        with mock.patch.object(carregamento.nucleo_pedidos, "marcar_aberto_por_service_ids",
+                               side_effect=RuntimeError("banco travado")):
+            r = self._confirmar([self._desm(p)])
+        self.assertTrue(r["ok"])
+        self.assertEqual(self.conn.execute("SELECT situacao FROM nucleo_paradas WHERE id=?", (p["id"],)).fetchone()[0],
+                         banco.PARADA_CANCELADA)
+
     def test_veiculo_sem_placa_grava_null(self):
         self._motorista(placa=None, tipo=None)
         c = self._confirmar()["carregamento"]
@@ -409,6 +426,10 @@ class TestTirarDaVuuptOuLocal(unittest.TestCase):
 
 
 # ── API (POST /api/rotas/<id>/carregamento) ───────────────────────────────────
+
+def json_sem_parada(_parada_id):
+    return '[{"motivo": "Não coube"}]'
+
 
 class TestApiCarregamento(unittest.TestCase):
     CPF, PIN, AGENT = "12345678901", "123456", 4242
@@ -588,8 +609,71 @@ class TestApiCarregamento(unittest.TestCase):
         self.assertEqual(j["removidos"], [])
 
 
-if __name__ == "__main__":
-    unittest.main()
+
+
+    def _enviar_e_nada_gravado(self, esperado, **kw):
+        with self._modelo() as modelo:
+            r = self._enviar(**kw)
+        self.assertEqual(r.status_code, esperado, r.get_json())
+        modelo.assert_not_called()
+        return r
+
+    def test_uuid_vazio_recusa_sem_modelo_nem_foto(self):
+        self._enviar_e_nada_gravado(400, uuid="")
+        self.assertEqual(self._fotos_em_disco(), [])
+
+    def test_outro_uuid_em_rota_ja_confirmada_recusa_sem_modelo_nem_foto(self):
+        with self._modelo():
+            self._enviar(uuid="u-1")
+        antes = len(self._fotos_em_disco())
+        self._enviar_e_nada_gravado(409, uuid="u-2")
+        self.assertEqual(len(self._fotos_em_disco()), antes)
+
+    def test_chave_desligada_recusa_sem_modelo_nem_foto(self):
+        ponte_vuupt.definir_config(self._config(ativo=False))
+        self._enviar_e_nada_gravado(409)
+        self.assertEqual(self._fotos_em_disco(), [])
+
+    def test_rota_em_rota_recusa_sem_modelo_nem_foto(self):
+        conn = banco.conectar()
+        conn.execute("UPDATE nucleo_rotas SET status = 'EM_ROTA' WHERE id = ?", (self.rota_id,))
+        conn.commit()
+        conn.close()
+        self._enviar_e_nada_gravado(409)
+        self.assertEqual(self._fotos_em_disco(), [])
+
+    def test_desmarcados_malformado_devolve_400(self):
+        import io
+        from nucleo.test_validacao_fotos import _imagem
+        p1, _ = self._paradas()
+        for bruto in ("{nao-json", '{"a": 1}', "[1, 2]", json_sem_parada(p1)):
+            dados = {"arquivo": (io.BytesIO(_imagem()), "foto.jpg"), "carregador": "Joao", "uuid": "m1",
+                     "desmarcados": bruto, "tentativa": "1"}
+            with self._modelo():
+                r = self.cli.post(f"/api/rotas/{self.rota_id}/carregamento", headers=self.h, data=dados,
+                                  content_type="multipart/form-data")
+            self.assertEqual(r.status_code, 400, (bruto, r.get_json()))
+            self.assertEqual(self._fotos_em_disco(), [])
+
+    def test_tentativa_menor_que_1_vale_1(self):
+        with self._modelo(eh_carga=False):
+            r = self._enviar(tentativa=0)
+        self.assertEqual(r.status_code, 409, r.get_json())   # com tentativa 0 nao liberaria por esgotar
+
+    def test_cache_por_sha_nao_vale_de_outro_tipo(self):
+        from nucleo import validacao_fotos as vf
+        from nucleo.test_validacao_fotos import _imagem
+        foto = _imagem()
+        import hashlib
+        sha = hashlib.sha256(foto).hexdigest()
+        conn = banco.conectar()
+        vf.registrar_validacao(conn, sha, vf.TIPO_CANHOTO, {"resultado": vf.REPROVADO, "motivo": "x"}, self.AGENT, "PS-1")
+        conn.commit()
+        conn.close()
+        with self._modelo() as modelo:
+            r = self._enviar(foto=foto)
+        self.assertEqual(r.status_code, 200, r.get_json())
+        modelo.assert_called_once()
 
 
 class TestNaoCarregadosRecentes(unittest.TestCase):
@@ -632,3 +716,7 @@ class TestNaoCarregadosRecentes(unittest.TestCase):
         self.assertEqual(carregamento.nao_carregados_recentes(self.conn, []), {})
         self.conn.execute("DROP TABLE nucleo_carregamento_itens")
         self.assertEqual(carregamento.nao_carregados_recentes(self.conn, [1]), {})
+
+
+if __name__ == "__main__":
+    unittest.main()

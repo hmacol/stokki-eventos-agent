@@ -589,7 +589,7 @@ def criar_app(config: dict | None = None) -> Flask:
         nfs = validacao_fotos.nfs_do_pedido(conn(), parada["codigo"]) if parada is not None else []
         codigos = validacao_fotos.codigos_base(parada["codigo"]) if parada is not None else []
         ja = validacao_fotos.buscar_validacao(conn(), sha)
-        if ja:
+        if ja and ja["tipo"] == tipo:
             salvo = {"resultado": ja["resultado"], "motivo": ja["motivo"], "nitidez": ja["nitidez"],
                      "modelo": ja["modelo"], **ja.get("dados", {})}
             # A mesma foto pode servir a outra parada (canhoteira com
@@ -682,6 +682,15 @@ def criar_app(config: dict | None = None) -> Flask:
         if ja and uuid and ja["uuid"] == uuid:
             # reenvio do mesmo checklist (fila offline): nada de segunda foto em disco
             return jsonify({"ok": True, "carregamento": ja, "rota": operacao.montar_rota(conn(), rota)})
+        # barreiras antes de gastar o modelo e de gravar foto em disco (confirmar() repete, mas tarde demais)
+        if not uuid:
+            raise OperacaoInvalida("Carregamento sem uuid (gerado no aparelho).")
+        if ja:
+            raise OperacaoInvalida("Checklist de carregamento já confirmado para esta rota.", 409)
+        if rota["status"] == banco.ROTA_EM_ROTA:
+            raise OperacaoInvalida("Rota já iniciada: o checklist de carregamento é antes de sair.", 409)
+        if not carregamento.exigido(rota, carregamento.config_carregamento()):
+            raise OperacaoInvalida("Essa rota não pede checklist de carregamento.", 409)
         arquivo = request.files.get("arquivo")
         if arquivo is None or not arquivo.filename:
             raise OperacaoInvalida("Envie a foto do baú no campo 'arquivo' (multipart).")
@@ -692,10 +701,12 @@ def criar_app(config: dict | None = None) -> Flask:
                 raise ValueError
         except ValueError:
             raise OperacaoInvalida("Campo 'desmarcados' deve ser uma lista JSON.")
+        carregamento._validar_desmarcados(conn(), rota["id"], desmarcados)   # 400/409 antes do modelo e da foto
         try:
             tentativa = int(request.form.get("tentativa") or 1)
         except ValueError:
             tentativa = 1
+        tentativa = max(tentativa, 1)
 
         conteudo = arquivo.read()
         sha = hashlib.sha256(conteudo).hexdigest()

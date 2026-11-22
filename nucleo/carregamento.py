@@ -231,8 +231,11 @@ def confirmar(conn: sqlite3.Connection, rota: sqlite3.Row, agent_id: int, *, car
                          "atualizado_em = ? WHERE id = ?", (banco.ROTA_CANCELADA, agora, agora, rota["id"]))
         operacao._recalcular_contadores(conn, rota["id"])
         conn.commit()                               # cada remocao fica gravada mesmo se outra falhar
-        if not replica and parada["service_id"]:
-            nucleo_pedidos.marcar_aberto_por_service_ids([parada["service_id"]], conn=conn)
+        if not replica and parada["service_id"] and not resultado.get("ja_fora_da_rota"):
+            try:
+                nucleo_pedidos.marcar_aberto_por_service_ids([parada["service_id"]], conn=conn)
+            except Exception as e:  # noqa: BLE001 - a remocao ja esta gravada; o sync recupera o pedido
+                logger.warning(f"Carregamento rota {rota['id']}: pedido da parada {parada['id']} nao voltou ao pool: {e}")
         removidos.append(parada["id"])
 
     if falhas:
