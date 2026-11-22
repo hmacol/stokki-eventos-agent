@@ -253,7 +253,7 @@ def _itens_da_tabela_de_itens(tabela, usar_esperada: bool = False) -> list[dict]
     indice = {}
     for i, th in enumerate(tabela.find_all("th")):
         nome = th.get_text(strip=True).upper()
-        if nome in ("SKU", "NOME", "QUANTIDADE", "QUANTIDADE TOTAL RECEBIDA") and nome not in indice:
+        if nome in ("SKU", "NOME", "QUANTIDADE", "UNIDADE", "QUANTIDADE TOTAL RECEBIDA") and nome not in indice:
             indice[nome] = i
     if "SKU" not in indice or "QUANTIDADE TOTAL RECEBIDA" not in indice:
         return []
@@ -292,6 +292,8 @@ def _itens_da_tabela_de_itens(tabela, usar_esperada: bool = False) -> list[dict]
         }
         if esperada:
             item["esperada"] = True
+        if "UNIDADE" in indice:      # a Stokki diz em que unidade a quantidade esta ("UN", "CX"...)
+            item["unidade"] = celulas[indice["UNIDADE"]].get_text(" ", strip=True)
         itens.append(item)
     return itens
 
