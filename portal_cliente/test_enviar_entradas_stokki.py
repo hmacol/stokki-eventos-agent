@@ -77,6 +77,25 @@ class SessaoQuebrada:
         raise RuntimeError("rede caiu")
 
 
+_AVISAR_ERROS_REAL = worker._avisar_erros   # o setUp das outras classes troca por um no-op
+
+
+class TestEmailDeErroEscapaHtml(unittest.TestCase):
+    def test_rotulo_erro_e_nome_vao_escapados(self):
+        # revisão de segurança 23/11 (M2): texto de XML/planilha/Stokki não pode virar HTML no e-mail
+        enviados = []
+        lote = [{"numero_nf": "<a href='http://evil'>clique</a>", "erro": "<script>alert(1)</script>"}]
+        cfg = {"nome": "<b>Cliente</b>", "emails": ["c@t.com"]}
+        with mock.patch.object(worker, "enviar_email", lambda *a, **k: enviados.append(a) or True), \
+             mock.patch("bloqueio_area.forcar_destino", return_value="hugo@teste.com"):
+            _AVISAR_ERROS_REAL({"email": {}}, cfg, lote, "Cabecalho")
+        self.assertEqual(len(enviados), 1)
+        corpo = enviados[0][2]
+        for perigo in ("<script>", "<a href='http://evil'>", "<b>Cliente</b>"):
+            self.assertNotIn(perigo, corpo)
+        self.assertIn("&lt;script&gt;", corpo)
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

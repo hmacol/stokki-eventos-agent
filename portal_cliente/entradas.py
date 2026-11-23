@@ -159,6 +159,11 @@ def ler_nfe_entrada(conteudo: bytes, nome_arquivo: str = "") -> dict:
     """NF-e de remessa pra armazenagem (D1): aceita tpNF 0 ou 1; a
     validação de quem emitiu fica em validar_entrada."""
     nfe = ep.ler_nfe(conteudo, nome_arquivo, permitir_entrada=True)
+    # Dígitos 7-20 da chave de acesso são o CNPJ de quem emitiu. Sem essa conferência, um XML
+    # com <emit> do cliente e a chave de NF de OUTRA empresa passaria (a chave é única global).
+    chave, emit = _so_digitos(nfe.get("chave_nfe")), _so_digitos(nfe.get("emitente_cnpj"))
+    if len(chave) == 44 and emit and chave[6:20] != emit:
+        raise ErroEnvio(f"{nome_arquivo or 'XML'}: a chave de acesso não corresponde ao CNPJ emitente da nota.")
     nfe["origem"] = ORIGEM_XML
     nfe["referencia"] = ""
     nfe["data_prevista"] = ""
@@ -230,9 +235,13 @@ def validar_entrada(conn: sqlite3.Connection, item: dict, cnpj_cliente: str, con
         else:
             erros.append(f"O CNPJ emitente da nota ({formatar_documento(item.get('emitente_cnpj') or '')} · "
                          f"{item.get('emitente_nome') or ''}) não é o da sua empresa.")
-    existente = conn.execute("SELECT id, status, criado_em, stokki_codigo FROM portal_entradas WHERE chave_nfe = ?",
+    existente = conn.execute("SELECT id, status, criado_em, stokki_codigo, cnpj_embarcador FROM portal_entradas WHERE chave_nfe = ?",
                              (item["chave_nfe"],)).fetchone()
-    if existente and existente["status"] != STATUS_CANCELADO:
+    if existente and _so_digitos(existente["cnpj_embarcador"]) != emb:
+        # chave já registrada por OUTRA empresa: erro genérico, sem dado da entrada alheia
+        erros.append("Esta nota não pode ser anunciada por aqui. Fale com a Fresh Log.")
+        existente = None
+    elif existente and existente["status"] != STATUS_CANCELADO:
         erros.append(f"{rotulo_entrada(item)} já anunciada em {_quando_br(existente['criado_em'])} "
                      f"({ROTULOS_STATUS.get(existente['status'], existente['status'])}"
                      + (f", {existente['stokki_codigo']}" if existente["stokki_codigo"] else "") + ").")
@@ -550,8 +559,8 @@ def confirmar_entradas(conn: sqlite3.Connection, cnpj_embarcador: str, itens: li
         existente = v["existente"]
         if existente:
             sets = ", ".join(f"{k} = ?" for k in campos if k != "chave_nfe")
-            conn.execute(f"UPDATE portal_entradas SET {sets} WHERE id = ?",
-                         (*[x for k, x in campos.items() if k != "chave_nfe"], existente["id"]))
+            conn.execute(f"UPDATE portal_entradas SET {sets} WHERE id = ? AND cnpj_embarcador = ?",   # nunca troca o dono da linha
+                         (*[x for k, x in campos.items() if k != "chave_nfe"], existente["id"], emb))
             entrada_id = existente["id"]
             conn.execute("DELETE FROM portal_entrada_itens WHERE entrada_id = ?", (entrada_id,))
         else:
@@ -826,9 +835,12 @@ def amarrar_recebimento(conn: sqlite3.Connection, recebimento_id: int, id_stokki
         # AND (stokki_id IS NULL OR stokki_id = ?): a entrada pode já estar
         # ligada a OUTRO #PE (stokki_id diferente) -- a chave da NF-e sozinha
         # não pode roubar essa entrada pro #PE que está chegando agora.
-        e = conn.execute("SELECT id, data_prevista FROM portal_entradas WHERE chave_nfe = ? AND status IN ('ANUNCIADO','CHEGOU') "
-                         "AND wms_recebimento_id IS NULL AND (stokki_id IS NULL OR stokki_id = ?)",
-                         (chave_nfe, int(id_stokki))).fetchone()
+        # E o #PE tem que ser do MESMO embarcador da entrada (revisão 23/11, B1); #PE de stkkc
+        # desconhecido não amarra por chave.
+        cnpj_pe = _cnpj_do_stkkc(conn, stkkc_id)
+        e = conn.execute("SELECT id, data_prevista FROM portal_entradas WHERE chave_nfe = ? AND cnpj_embarcador = ? "
+                         "AND status IN ('ANUNCIADO','CHEGOU') AND wms_recebimento_id IS NULL AND (stokki_id IS NULL OR stokki_id = ?)",
+                         (chave_nfe, cnpj_pe, int(id_stokki))).fetchone() if cnpj_pe else None
     if e is None and ref_pedido:
         cnpj = _cnpj_do_stkkc(conn, stkkc_id)
         if cnpj:

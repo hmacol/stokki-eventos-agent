@@ -49,6 +49,7 @@ COMO RODAR:
     py -3 portal_cliente/enviar_entradas_stokki.py --uma-vez --visivel # navegador na tela
 """
 import argparse
+import html
 import json
 import logging
 import shutil
@@ -694,9 +695,12 @@ def _avisar_erros(config: dict, cfg: dict, lote: list[dict], cabecalho: str) -> 
     if not destinos and not cc:
         return
     url = (_cfg_portal(config).get("url_base") or "https://app.freshhub.com.br/cliente").rstrip("/")
-    linhas = "".join(f"<tr><td style='padding:6px 10px;border-bottom:1px solid #E5E7EB'><b>{en.rotulo_entrada(e)}</b></td>"
-                     f"<td style='padding:6px 10px;border-bottom:1px solid #E5E7EB;color:#B91C1C'>{(e.get('erro') or '')[:300]}</td></tr>" for e in lote)
-    corpo = envelope_html(f"<p>Olá, <strong>{cfg['nome']}</strong>.</p><p>{cabecalho}</p>"
+    # rótulo (nº da NF do XML / referência da planilha), erro da Stokki e nome vêm de texto livre: escapar
+    # tudo (revisão de segurança 23/11, M2). `cabecalho` e o resto do HTML são nossos.
+    linhas = "".join(f"<tr><td style='padding:6px 10px;border-bottom:1px solid #E5E7EB'><b>{html.escape(en.rotulo_entrada(e))}</b></td>"
+                     f"<td style='padding:6px 10px;border-bottom:1px solid #E5E7EB;color:#B91C1C'>{html.escape((e.get('erro') or '')[:300])}</td></tr>" for e in lote)
+    url = html.escape(url, quote=True)
+    corpo = envelope_html(f"<p>Olá, <strong>{html.escape(str(cfg['nome']))}</strong>.</p><p>{cabecalho}</p>"
                           f"<table style='border-collapse:collapse;font-size:13px;width:100%'><tr><th align='left' style='padding:6px 10px'>Entrada</th>"
                           f"<th align='left' style='padding:6px 10px'>Motivo</th></tr>{linhas}</table>"
                           f"<p style='margin-top:20px'>Você pode cancelar e anunciar de novo pelo portal: <a href='{url}/?aba=entradas'>{url}</a>.</p>",

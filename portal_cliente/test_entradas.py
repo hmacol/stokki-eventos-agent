@@ -36,7 +36,8 @@ def _agora_txt():
 def xml_remessa(nf="41221", emitente=CNPJ, dest=CNPJ_FRESHLOG, tp_nf="1", itens=None, chave=None):
     """NF-e de remessa pra armazenagem: emitente = cliente, destinatário =
     Fresh Log. tpNF=1 (saída do ponto de vista de quem emite)."""
-    chave = chave or f"3526091234567800019555001000{nf.zfill(6)}1000000017"[:44]
+    # chave de acesso real: dígitos 7-20 são o CNPJ do emitente (a leitura confere isso)
+    chave = chave or f"352609{emitente}55001000{nf.zfill(6)}1000000017"[:44]
     itens = itens or [("NUU001FD", "7891234567890", "MINI CX PAO DE QUEIJO", 20, "CX", 64.77)]
     dets = "".join(
         f'<det nItem="{i}"><prod><cProd>{sku}</cProd><cEAN>{ean}</cEAN><xProd>{desc}</xProd>'
@@ -62,6 +63,18 @@ class TestLerNfeEntrada(unittest.TestCase):
             nfe = ep.ler_nfe(xml_remessa(tp_nf=tp), "x.xml", permitir_entrada=True)
             self.assertEqual(nfe["tipo_nf"], tp)
             self.assertEqual(nfe["numero_nf"], "41221")
+
+    def test_chave_que_nao_bate_com_o_emitente_e_recusada(self):
+        # revisão de segurança 23/11 (M1): chave de NF de outra empresa num XML que diz ser do cliente
+        chave_alheia = f"352609{OUTRO}55001000" + "000777" + "1000000017"
+        self.assertEqual(len(chave_alheia), 44)
+        with self.assertRaises(ep.ErroEnvio) as c:
+            entradas.ler_nfe_entrada(xml_remessa(emitente=CNPJ, chave=chave_alheia), "x.xml")
+        self.assertIn("chave de acesso", str(c.exception))
+
+    def test_chave_que_bate_com_o_emitente_passa(self):
+        nfe = entradas.ler_nfe_entrada(xml_remessa(), "x.xml")
+        self.assertEqual(nfe["chave_nfe"][6:20], CNPJ)
 
     def test_itens_lista_vem_do_det(self):
         nfe = ep.ler_nfe(xml_remessa(itens=[("A", "7890000000001", "Prod A", "2.5", "CX", "10.00"),
@@ -136,6 +149,25 @@ class TestValidarEntrada(BasePortal):
         v = entradas.validar_entrada(self.conn, self._item(), CNPJ, self.config)
         self.assertTrue(v["ok"], v["erros"])
         self.assertEqual(v["avisos"], [])
+
+    def test_chave_ja_registrada_por_outra_empresa_nao_vaza_nem_reabre(self):
+        # revisão de segurança 23/11 (M1), defesa em profundidade: mesmo que uma chave alheia
+        # chegue até aqui, nada da entrada do outro cliente aparece e nada é reaberto.
+        item = self._item()
+        chave = item["chave_nfe"]
+        for status in ("ANUNCIADO", "CANCELADO"):
+            self.conn.execute("DELETE FROM portal_entradas")
+            self.conn.execute(
+                "INSERT INTO portal_entradas (cnpj_embarcador, origem, chave_nfe, data_prevista, arquivo_path, status, stokki_codigo, "
+                "criado_em, atualizado_em) VALUES (?, 'xml', ?, '2030-01-01', 'x.xml', ?, '#PE-9999', '2026-11-01 10:00:00', '2026-11-01 10:00:00')",
+                (OUTRO, chave, status))
+            self.conn.commit()
+            v = entradas.validar_entrada(self.conn, item, CNPJ, self.config)
+            self.assertFalse(v["ok"], status)
+            self.assertIsNone(v["existente"], status)
+            texto = " ".join(v["erros"] + v["avisos"])
+            self.assertNotIn("#PE-9999", texto)
+            self.assertNotIn("01/11/2026", texto)
 
     def test_emitente_diferente_do_cliente_e_erro(self):
         v = entradas.validar_entrada(self.conn, self._item(emitente=OUTRO), CNPJ, self.config)
@@ -615,6 +647,17 @@ class TestAmarracaoEStatus(BasePortal):
         self.assertEqual(eid, 1)
         e = entradas.buscar_entrada(self.conn, 1, CNPJ)
         self.assertEqual((e["stokki_id"], e["stokki_codigo"], e["stokki_status"]), (2497, "#PE-2497", "CRIADO"))
+
+    def test_amarrar_por_chave_nao_liga_pe_de_outro_embarcador(self):
+        # revisão de segurança 23/11 (B1): a chave bate, mas o #PE é de outro embarcador (stkkc 77)
+        criados = _confirmar(self)
+        chave = entradas.buscar_entrada(self.conn, criados[0]["id"], CNPJ)["chave_nfe"]
+        self.conn.execute("UPDATE interno SET stkkc_id = 77 WHERE cnpj_embarcador = ?", (OUTRO,))
+        self.conn.execute("INSERT INTO wms_recebimentos (id, id_stokki, codigo, stkkc_id, situacao, estado) VALUES (9, 2700, '#PE-2700', '77', 'Em transito', 'ESPERADO')")
+        self.conn.commit()
+        self.assertIsNone(entradas.amarrar_recebimento(self.conn, 9, 2700, "#PE-2700", "77", chave_nfe=chave, ref_pedido=""))
+        e = entradas.buscar_entrada(self.conn, 1, CNPJ)
+        self.assertIsNone(e["wms_recebimento_id"])
 
     def test_amarrar_por_chave_nao_rouba_entrada_ja_ligada_a_outro_pe(self):
         # entrada já ligada ao #PE 2497 (stokki_id): um #PE NOVO (2600) com a
