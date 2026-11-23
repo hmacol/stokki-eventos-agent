@@ -132,6 +132,11 @@
   .aba { flex: 1 0 auto; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 8px 7px; color: var(--texto-suave); background: none; border: none; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; cursor: pointer; font-family: inherit; }
   .aba .ic { font-size: 19px; line-height: 1; }
   .aba.on { color: var(--acento); }
+  .fotos { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .fotos .mini { position: relative; }
+  .fotos .mini img { width: 72px; height: 72px; object-fit: cover; border-radius: 8px; border: 1px solid var(--borda); display: block; }
+  .fotos .mini button { position: absolute; top: -7px; right: -7px; width: 24px; height: 24px; border-radius: 50%; border: none; background: var(--erro); color: #fff; font-weight: 700; cursor: pointer; line-height: 1; }
+  .fotos .tirar { display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 10px; border: 1px dashed var(--acento); color: var(--acento); font-weight: 700; font-size: 13px; cursor: pointer; }
   .vazio { color: var(--texto-suave); font-size: 13.5px; padding: 14px 4px; text-align: center; }
   .toast { position: fixed; left: 50%; bottom: calc(86px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 60; background: var(--texto); color: var(--fundo); padding: 10px 16px; border-radius: 10px; font-size: 14px; font-weight: 600; max-width: 92vw; box-shadow: 0 6px 20px rgba(0,0,0,.25); opacity: 0; transition: opacity .15s; pointer-events: none; }
   .toast.erro { background: var(--erro); color: #fff; }
@@ -296,7 +301,8 @@
   async function api(caminho, opts) {
     opts = opts || {};
     const init = { method: opts.method || 'GET', headers: { 'Accept': 'application/json' }, credentials: 'same-origin' };
-    if (opts.body !== undefined) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(opts.body); }
+    if (opts.form) init.body = opts.form;   // multipart: o navegador define o Content-Type
+    else if (opts.body !== undefined) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(opts.body); }
     const r = await fetch(API + caminho, init);
     let j = null;
     try { j = await r.json(); } catch (e) { /* html de erro */ }
@@ -323,6 +329,7 @@
     if (empilhar !== false && S.tela !== tela) S.pilha.push({ tela: S.tela, ctx: S.ctx });
     if (S.pilha.length > 12) S.pilha.shift();
     S.tela = tela; S.ctx = ctx || {}; S.aguardando = null;
+    if (S.timerChegada) { clearInterval(S.timerChegada); S.timerChegada = null; }
     const abaDe = { onda: 'separar', conferir: 'separar', conferencia: 'separar', conferenciaFim: 'separar', volumes: 'separar', separarReserva: 'separar', separacao: 'separar' };
     document.querySelectorAll('.aba').forEach((a) => a.classList.toggle('on', a.dataset.aba === (abaDe[tela] || tela)));
     render();
@@ -369,6 +376,7 @@
     </div>
     <div id="ini-frio"></div>
     <div class="acoes">
+      ${S.etapasAtivo ? `<button class="primario" data-ir="receberChegada" style="grid-column:1 / -1"><b>Receber <span class="badge badge-atencao" id="ini-chegada-n">0</span></b><span>cargas esperadas · checklist da chegada do caminhão</span></button>` : ''}
       <button class="primario" data-ir="receber" style="grid-column:1 / -1"><b>${S.etapasAtivo ? 'Conferir Recebimento' : 'Receber'}</b><span id="ini-receber">entradas esperadas da Stokki</span></button>
       ${S.etapasAtivo || S.guardaPendente > 0 ? `<button class="primario" data-ir="guardar" style="grid-column:1 / -1"><b>Guardar <span class="badge badge-atencao" id="ini-guardar-n">${S.guardaPendente}</span></b><span>itens na doca sem lugar</span></button>` : ''}
       <button class="primario" data-ir="mov" data-tipo="ENTRADA"><b>Entrada</b><span>produto chega na posição</span></button>
@@ -393,7 +401,8 @@
     const lr = document.getElementById('btn-limpar-recusados');
     if (lr) lr.addEventListener('click', () => { S.recusados = []; salvarRecusados(); render(); });
     api('/recebimentos?estado=ESPERADO').then((r) => {
-      const el = document.getElementById('ini-receber'); const n = (r.recebimentos || []).length;
+      const el = document.getElementById('ini-receber'); const n = (r.recebimentos || []).filter(paraConferir).length;
+      const nc = document.getElementById('ini-chegada-n'); if (nc) nc.textContent = (r.recebimentos || []).filter(paraReceber).length;
       if (el) el.textContent = n ? n + (n === 1 ? ' entrada esperada' : ' entradas esperadas') + ' · encerre ao terminar' : 'nenhuma entrada esperada agora';
     }).catch(() => { /* sem rede: fica o texto padrão */ });
     if (S.etapasAtivo || S.guardaPendente > 0) {
@@ -769,6 +778,259 @@
     } catch (e) { el.innerHTML = '<div class="vazio">' + esc(e.message) + '</div>'; }
   }
 
+  // Receber -- checklist da chegada do caminhão (só com etapas)
+  const paraReceber = (x) => x.usa_etapas && ['SEM_CHEGADA', 'RASCUNHO', 'AGUARDANDO_ESCRITORIO'].includes(x.chegada_estado);
+  const paraConferir = (x) => !S.etapasAtivo || !x.usa_etapas || x.chegada_estado === 'LIBERADA';
+  const donoDe = (x) => String(x.stkkc_id || '').trim() || String(x.embarcador || '').trim().toUpperCase();
+  const ROTULO_FOTO = { CAMINHAO_ABERTO: 'Caminhão aberto', PLACA: 'Placa', NOTA_FISCAL: 'Nota fiscal', TERMOMETRO: 'Termômetro', CARGA: 'Carga', AVARIA: 'Avaria' };
+  const ROTULO_CLASSE = { REFRIGERADO: 'Refrigerado', CONGELADO: 'Congelado' };
+  const chaveRascunho = (id) => 'wms_chegada_' + id;
+  function lerRascunho(id) { try { return JSON.parse(localStorage.getItem(chaveRascunho(id)) || '{}') || {}; } catch (e) { return {}; } }
+  function guardarRascunho(id, campos) { try { localStorage.setItem(chaveRascunho(id), JSON.stringify(Object.assign(lerRascunho(id), campos))); } catch (e) { /* sem armazenamento: segue sem rascunho */ } }
+  function apagarRascunho(id) { try { localStorage.removeItem(chaveRascunho(id)); } catch (e) { /* idem */ } }
+  const faixaTexto = (f) => f ? 'Faixa esperada: ' + String(f[0]).replace('.', ',') + ' a ' + String(f[1]).replace('.', ',') + ' °C' : '';
+
+  TELAS.receberChegada = (ctx) => `
+    <button class="voltar" id="btn-voltar">‹ Voltar</button>
+    <h1>Receber<small>checklist da chegada do caminhão · antes de conferir a carga</small></h1>
+    <div class="lista" id="lista-chegada"><div class="vazio">Carregando…</div></div>
+    <div class="botoes"><button class="botao" type="button" id="btn-comecar" disabled>Começar o Receber</button></div>`;
+  TELAS_POS.receberChegada = async (ctx) => {
+    document.getElementById('btn-voltar').addEventListener('click', voltar);
+    const el = document.getElementById('lista-chegada'); const btn = document.getElementById('btn-comecar');
+    let lista;
+    try { lista = (await api('/recebimentos?estado=ESPERADO')).recebimentos.filter(paraReceber); }
+    catch (e) { el.innerHTML = '<div class="vazio">' + esc(e.status ? e.message : 'Sem rede: não consegui carregar as cargas.') + '</div>'; return; }
+    if (S.tela !== 'receberChegada') return;
+    const marcados = new Set();
+    const selo = { SEM_CHEGADA: '', RASCUNHO: '<span class="badge badge-neutro">checklist em andamento</span>', AGUARDANDO_ESCRITORIO: '<span class="badge badge-erro">aguardando o escritório</span>' };
+    const pintar = () => {
+      const dono = marcados.size ? donoDe(lista.find((x) => marcados.has(x.id))) : null;
+      el.innerHTML = lista.map((x) => {
+        const livre = x.chegada_estado === 'SEM_CHEGADA';
+        const outro = livre && dono && !marcados.has(x.id) && donoDe(x) !== dono;
+        const nota = livre ? (outro ? 'outro embarcador: faça um Receber separado' : (marcados.has(x.id) ? 'marcado' : (dono ? '+ outro recebimento no mesmo caminhão' : 'toque para marcar'))) : (x.chegada_estado === 'RASCUNHO' ? 'toque para continuar' : 'toque para ver');
+        return `<div class="item ${marcados.has(x.id) ? 'escolhido' : ''}" data-rec="${x.id}" style="grid-template-columns:1fr;${outro ? 'opacity:.5;cursor:not-allowed' : ''}">
+          <div class="cod">${esc(x.codigo)}</div>
+          <div class="meta">${curto(x.embarcador)} · ${x.itens} item(ns) ${selo[x.chegada_estado] || ''}<span>${nota}</span></div></div>`;
+      }).join('') || '<div class="vazio">Nenhuma carga esperando o Receber.</div>';
+      btn.disabled = !marcados.size;
+      btn.textContent = marcados.size > 1 ? 'Começar o Receber (' + marcados.size + ' cargas)' : 'Começar o Receber';
+      el.querySelectorAll('[data-rec]').forEach((d) => d.addEventListener('click', () => {
+        const x = lista.find((y) => y.id === Number(d.dataset.rec));
+        if (x.chegada_estado !== 'SEM_CHEGADA') return abrirChegada(x.chegada_id);
+        if (marcados.has(x.id)) marcados.delete(x.id);
+        else if (!marcados.size || donoDe(x) === dono) marcados.add(x.id);
+        pintar();
+      }));
+    };
+    pintar();
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        const r = await api('/chegadas', { method: 'POST', body: { uuid: uuid(), recebimento_ids: Array.from(marcados) } });
+        ir('chegada1', r);
+      } catch (e) { toast(e.status ? e.message : 'Sem rede: não consegui abrir o Receber. Tente de novo.', true); btn.disabled = false; }
+    });
+  };
+  async function abrirChegada(id) {
+    try {
+      const r = await api('/chegadas/' + id);
+      ir(r.chegada.estado === 'RASCUNHO' ? 'chegada1' : 'chegadaAguardando', r);
+    } catch (e) { toast(e.message, true); }
+  }
+
+  // Fotos do checklist: sobem na hora; a miniatura vem da rota de foto
+  function blocoFoto(tipo, nota) {
+    return `<div class="campo"><label>${ROTULO_FOTO[tipo]}${nota ? ' ' + nota : ''}</label><div class="fotos" id="fotos-${tipo}"></div></div>`;
+  }
+  function pintarFotos(ctx, tipo) {
+    const el = document.getElementById('fotos-' + tipo); if (!el) return;
+    const id = ctx.chegada.id;
+    el.innerHTML = ctx.chegada.fotos.filter((f) => f.tipo === tipo).map((f) => `<div class="mini"><img src="${BASE_PATH}/wms/chegadas/${id}/foto/${f.id}" alt="${ROTULO_FOTO[tipo]}"><button type="button" data-fx="${f.id}" aria-label="Remover foto">×</button></div>`).join('')
+      + `<label class="tirar">+ Foto<input type="file" accept="image/*" capture="environment" hidden data-up="${tipo}"></label>`;
+    el.querySelectorAll('[data-fx]').forEach((b) => b.addEventListener('click', async () => {
+      try {
+        await api('/chegadas/' + id + '/fotos/' + b.dataset.fx, { method: 'DELETE' });
+        ctx.chegada.fotos = ctx.chegada.fotos.filter((f) => f.id !== Number(b.dataset.fx)); pintarFotos(ctx, tipo);
+      } catch (e) { toast(e.status ? e.message : 'Sem rede: a foto não foi removida. Tente de novo.', true); }
+    }));
+    el.querySelector('[data-up]').addEventListener('change', async (ev) => {
+      const arq = ev.target.files && ev.target.files[0]; if (!arq) return;
+      const fd = new FormData(); fd.append('tipo', tipo); fd.append('foto', arq, arq.name || 'foto.jpg');
+      el.querySelector('.tirar').textContent = 'Enviando…';
+      try { const r = await api('/chegadas/' + id + '/fotos', { method: 'POST', form: fd }); ctx.chegada.fotos.push(r.foto); }
+      catch (e) { toast(e.status ? e.message : 'Sem rede: a foto não foi enviada. Tente de novo.', true); }
+      pintarFotos(ctx, tipo);
+    });
+  }
+  const temFoto = (ctx, tipo) => ctx.chegada.fotos.some((f) => f.tipo === tipo);
+  function ligarRascunho(ctx, ids) {
+    ids.forEach((campo) => { const e = document.getElementById('ch-' + campo); if (e) e.addEventListener('input', () => guardarRascunho(ctx.chegada.id, { [campo]: e.value })); });
+  }
+
+  TELAS.chegada1 = (ctx) => {
+    const c = ctx.chegada; const rasc = Object.assign({ motorista: '', placa: '', transportadora: '' }, lerRascunho(c.id));
+    return `
+    <button class="voltar" id="btn-voltar">‹ Voltar</button>
+    <h1>Quem chegou<small>passo 1 de 2 · ${c.recebimentos.map((r) => esc(r.codigo)).join(', ')}</small></h1>
+    <div class="campo"><label>Motorista</label><input type="text" id="ch-motorista" value="${esc(rasc.motorista)}" autocomplete="off"></div>
+    <div class="duas">
+      <div class="campo"><label>Placa</label><input type="text" id="ch-placa" value="${esc(rasc.placa)}" autocomplete="off" style="text-transform:uppercase"></div>
+      <div class="campo"><label>Transportadora (opcional)</label><input type="text" id="ch-transportadora" value="${esc(rasc.transportadora)}" autocomplete="off"></div>
+    </div>
+    ${blocoFoto('CAMINHAO_ABERTO')}${blocoFoto('PLACA', '(opcional)')}${blocoFoto('NOTA_FISCAL', '(opcional)')}
+    <div class="botoes"><button class="botao" type="button" id="btn-continuar">Continuar</button></div>`;
+  };
+  TELAS_POS.chegada1 = (ctx) => {
+    document.getElementById('btn-voltar').addEventListener('click', voltar);
+    ['CAMINHAO_ABERTO', 'PLACA', 'NOTA_FISCAL'].forEach((t) => pintarFotos(ctx, t));
+    ligarRascunho(ctx, ['motorista', 'placa', 'transportadora']);
+    document.getElementById('btn-continuar').addEventListener('click', () => {
+      if (document.getElementById('ch-motorista').value.trim().length < 3) return toast('Informe o nome do motorista.', true);
+      if (!document.getElementById('ch-placa').value.trim()) return toast('Informe a placa.', true);
+      if (!temFoto(ctx, 'CAMINHAO_ABERTO')) return toast('Falta a foto do caminhão aberto.', true);
+      ir('chegada2', ctx);
+    });
+  };
+
+  TELAS.chegada2 = (ctx) => {
+    const c = ctx.chegada; const rasc = Object.assign({ volumes: '', lacre: '', integra: null, observacao: '', temps: {} }, lerRascunho(c.id));
+    return `
+    <button class="voltar" id="btn-voltar">‹ Voltar</button>
+    <h1>Como chegou<small>passo 2 de 2 · ${c.recebimentos.map((r) => esc(r.codigo)).join(', ')}</small></h1>
+    ${ctx.classes.map((k) => `<div class="campo"><label>Temperatura (°C) · ${ROTULO_CLASSE[k] || esc(k)}</label><input type="text" id="ch-temp-${k}" inputmode="decimal" value="${esc((rasc.temps || {})[k] || '')}" autocomplete="off"><div class="ajuda">${faixaTexto((ctx.faixas || {})[k])}</div></div>`).join('')}
+    ${ctx.classes.length ? blocoFoto('TERMOMETRO') : ''}
+    <div class="duas">
+      <div class="campo"><label>Volumes / pallets</label><input type="text" id="ch-volumes" value="${esc(rasc.volumes)}" placeholder="ex.: 4 pallets" autocomplete="off"></div>
+      <div class="campo"><label>Lacre</label><input type="text" id="ch-lacre" value="${esc(rasc.lacre)}" autocomplete="off"></div>
+    </div>
+    <div class="campo"><label>A carga chegou inteira?</label>
+      <div class="botoes linha"><button type="button" class="botao neutro" data-integra="1">Sim</button><button type="button" class="botao neutro" data-integra="0">Tem avaria</button></div></div>
+    ${blocoFoto('CARGA')}
+    <div id="bloco-avaria" hidden>${blocoFoto('AVARIA')}</div>
+    <div class="campo"><label>Observação</label><textarea id="ch-observacao" rows="3">${esc(rasc.observacao)}</textarea><div class="ajuda" id="ajuda-obs"></div></div>
+    <div class="botoes"><button class="botao" type="button" id="btn-concluir">Concluir recebimento</button></div>`;
+  };
+  TELAS_POS.chegada2 = (ctx) => {
+    const id = ctx.chegada.id;
+    document.getElementById('btn-voltar').addEventListener('click', voltar);
+    const rasc = lerRascunho(id); let integra = rasc.integra === undefined ? null : rasc.integra;
+    const temps = Object.assign({}, rasc.temps || {});
+    const pintarIntegra = () => {
+      app.querySelectorAll('[data-integra]').forEach((b) => { const on = integra !== null && (b.dataset.integra === '1') === integra; b.style.outline = on ? '3px solid var(--acento)' : ''; });
+      document.getElementById('bloco-avaria').hidden = integra !== false;
+      document.getElementById('ajuda-obs').textContent = integra === false ? 'Obrigatória com avaria: descreva o que aconteceu.' : '';
+    };
+    app.querySelectorAll('[data-integra]').forEach((b) => b.addEventListener('click', () => { integra = b.dataset.integra === '1'; guardarRascunho(id, { integra }); pintarIntegra(); }));
+    ['CARGA', 'AVARIA'].concat(ctx.classes.length ? ['TERMOMETRO'] : []).forEach((t) => pintarFotos(ctx, t));
+    ligarRascunho(ctx, ['volumes', 'lacre', 'observacao']);
+    ctx.classes.forEach((k) => document.getElementById('ch-temp-' + k).addEventListener('input', (e) => { temps[k] = e.target.value; guardarRascunho(id, { temps }); }));
+    pintarIntegra();
+    const btn = document.getElementById('btn-concluir');
+    btn.addEventListener('click', async () => {
+      for (const k of ctx.classes) if (!String(temps[k] || '').trim()) return toast('Informe a temperatura do ' + (ROTULO_CLASSE[k] || k).toLowerCase() + '.', true);
+      if (ctx.classes.length && !temFoto(ctx, 'TERMOMETRO')) return toast('Falta a foto do termômetro.', true);
+      if (integra === null) return toast('Diga se a carga chegou inteira.', true);
+      if (!temFoto(ctx, 'CARGA')) return toast('Falta pelo menos uma foto da carga.', true);
+      if (integra === false && !temFoto(ctx, 'AVARIA')) return toast('Falta a foto da avaria.', true);
+      const r1 = lerRascunho(id);
+      btn.disabled = true;
+      try {
+        const r = await api('/chegadas/' + id + '/concluir', { method: 'POST', body: {
+          motorista: r1.motorista || '', placa: r1.placa || '', transportadora: r1.transportadora || '',
+          volumes: document.getElementById('ch-volumes').value, lacre: document.getElementById('ch-lacre').value,
+          integra, observacao: document.getElementById('ch-observacao').value, temperaturas: temps } });
+        apagarRascunho(id);
+        S.pilha = [{ tela: 'inicio', ctx: {} }];
+        if (r.chegada.estado === 'LIBERADA') { toast('Recebido. A carga está em Conferir Recebimento.'); ir('receberChegada', {}, false); }
+        else ir('chegadaAguardando', { chegada: r.chegada, classes: ctx.classes, faixas: ctx.faixas }, false);
+      } catch (e) { toast(e.status ? e.message : 'Sem rede: não consegui concluir. Tente de novo.', true); btn.disabled = false; }
+    });
+  };
+
+  function blocoDecisao(id, rotulo, ajuda, botao) {
+    return `<div class="cartao"><div class="campo"><label>${rotulo}</label><textarea id="dec-texto" rows="3"></textarea><div class="ajuda">${ajuda}</div></div>
+      <div class="botoes linha"><button class="botao neutro" type="button" id="dec-cancelar">Cancelar</button><button class="botao ${id === 'nao' ? 'perigo' : ''}" type="button" id="dec-ok">${botao}</button></div></div>`;
+  }
+  TELAS.chegadaAguardando = (ctx) => {
+    const c = ctx.chegada; const env = ctx.envio;
+    const fora = (c.temperaturas || []).filter((t) => t.fora);
+    const cabeca = `<button class="voltar" id="btn-voltar">‹ Voltar</button><h1>${c.recebimentos.map((r) => esc(r.codigo)).join(', ')}<small>${esc(c.motorista)} · ${esc(c.placa)}</small></h1>`;
+    if (c.estado === 'LIBERADA') return cabeca + `<div class="cartao ok"><div class="rotulo">Carga liberada</div><div class="valor">${c.liberacao_via === 'CLIENTE' ? 'O cliente autorizou' : 'Liberada pelo escritório'}</div><div class="sub">${esc(c.liberacao_nome)}${c.liberacao_texto ? ' · ' + esc(c.liberacao_texto) : ''}</div></div><div class="sub">A carga está em Conferir Recebimento.</div>`;
+    if (c.estado === 'NAO_RECEBIDA') return cabeca + `<div class="cartao erro"><div class="rotulo">Carga não recebida</div><div class="valor">${esc(c.nao_recebida_motivo)}</div><div class="sub">${esc(c.nao_recebida_por)}</div></div>`;
+    return cabeca + `
+    ${fora.map((t) => `<div class="cartao erro"><div class="rotulo">Temperatura fora da faixa</div><div class="valor">${ROTULO_CLASSE[t.classe] || esc(t.classe)}: ${String(t.medida_c).replace('.', ',')} °C</div><div class="sub">Faixa: ${String(t.faixa_min).replace('.', ',')} a ${String(t.faixa_max).replace('.', ',')} °C</div></div>`).join('')}
+    <div class="cartao atencao"><div class="rotulo">Aguardando o escritório</div><div class="valor">Não descarregue para o estoque até a decisão.</div><div class="sub">Esta tela se atualiza sozinha a cada 30 segundos.</div></div>
+    ${c.resposta_cliente ? `<div class="cartao ${c.resposta_cliente === 'AUTORIZADO' ? 'ok' : 'erro'}"><div class="rotulo">Resposta do cliente</div><div class="valor">${c.resposta_cliente === 'AUTORIZADO' ? 'Autorizou' : 'Não autorizou'}</div><div class="sub">${esc(c.resposta_cliente_nome)} · ${dataHoraBr(c.resposta_cliente_em)}</div></div>` : ''}
+    ${S.podeAdministrar ? `
+    ${ctx.link ? `<div class="cartao"><div class="rotulo">Link de liberação</div>
+      <div class="campo"><div class="com-botao"><input type="text" id="inp-link" readonly value="${esc(ctx.link)}"><button type="button" id="btn-copiar">Copiar</button></div></div>
+      <div class="sub">${env && env.enviado ? 'E-mail enviado ao cliente.' : 'O e-mail não saiu' + (env && env.motivo ? ' (' + esc(env.motivo) + ')' : '') + '. Copie o link e mande por outro meio, como WhatsApp.'}</div></div>` : ''}
+    <div class="botoes">
+      <button class="botao" type="button" id="btn-pedir">Pedir liberação ao cliente</button>
+      <button class="botao secundario" type="button" id="btn-fora">Registrar liberação recebida por fora</button>
+      <button class="botao perigo" type="button" id="btn-nao">Não receber</button>
+    </div><div id="area-decisao"></div>` : '<div class="sub">A decisão é do escritório.</div>'}`;
+  };
+  TELAS_POS.chegadaAguardando = (ctx) => {
+    const c = ctx.chegada; const id = c.id;
+    document.getElementById('btn-voltar').addEventListener('click', () => { S.pilha = []; ir('receberChegada', {}, false); });
+    if (c.estado === 'AGUARDANDO_ESCRITORIO') {
+      S.timerChegada = setInterval(async () => {
+        if (S.tela !== 'chegadaAguardando') { clearInterval(S.timerChegada); S.timerChegada = null; return; }
+        try {
+          const n = (await api('/chegadas/' + id)).chegada;
+          if (n.estado !== c.estado || n.resposta_cliente !== c.resposta_cliente) {
+            if (n.estado === 'LIBERADA') toast('Liberada. A carga está em Conferir Recebimento.');
+            ir('chegadaAguardando', Object.assign({}, ctx, { chegada: n }), false);
+          }
+        } catch (e) { /* sem rede: tenta de novo em 30 s */ }
+      }, 30000);
+    }
+    if (!S.podeAdministrar || c.estado !== 'AGUARDANDO_ESCRITORIO') return;
+    const copiar = document.getElementById('btn-copiar');
+    if (copiar) copiar.addEventListener('click', async () => {
+      const campo = document.getElementById('inp-link');
+      try { await navigator.clipboard.writeText(campo.value); toast('Link copiado.'); }
+      catch (e) { campo.focus(); campo.select(); toast('Link selecionado: use Copiar do aparelho.'); }
+    });
+    document.getElementById('btn-pedir').addEventListener('click', async (ev) => {
+      ev.target.disabled = true;
+      try {
+        const r = await api('/chegadas/' + id + '/pedir-liberacao', { method: 'POST', body: {} });
+        ir('chegadaAguardando', Object.assign({}, ctx, { link: r.link, envio: r.envio }), false);
+      } catch (e) { toast(e.status ? e.message : 'Sem rede. Tente de novo.', true); ev.target.disabled = false; }
+    });
+    const abrirDecisao = (tipo) => {
+      const area = document.getElementById('area-decisao');
+      area.innerHTML = tipo === 'fora'
+        ? blocoDecisao('fora', 'Quem autorizou e por onde', 'Ex.: Maria, do cliente, autorizou por telefone às 10h. Mínimo de 10 letras.', 'Registrar liberação')
+        : blocoDecisao('nao', 'Motivo de não receber', 'Mínimo de 5 letras.', 'Não receber');
+      document.getElementById('dec-cancelar').addEventListener('click', () => { area.innerHTML = ''; });
+      document.getElementById('dec-ok').addEventListener('click', async (ev) => {
+        const texto = document.getElementById('dec-texto').value.trim();
+        if (!texto) return toast(tipo === 'fora' ? 'Descreva quem autorizou e por onde.' : 'Informe o motivo.', true);
+        ev.target.disabled = true;
+        try {
+          const r = await api('/chegadas/' + id + (tipo === 'fora' ? '/liberar-por-fora' : '/nao-receber'), { method: 'POST', body: tipo === 'fora' ? { texto } : { motivo: texto } });
+          toast(tipo === 'fora' ? 'Liberada. A carga está em Conferir Recebimento.' : 'Carga marcada como não recebida.');
+          ir('chegadaAguardando', Object.assign({}, ctx, { chegada: r.chegada }), false);
+        } catch (e) { toast(e.status ? e.message : 'Sem rede. Tente de novo.', true); ev.target.disabled = false; }
+      });
+    };
+    document.getElementById('btn-fora').addEventListener('click', () => abrirDecisao('fora'));
+    document.getElementById('btn-nao').addEventListener('click', () => abrirDecisao('nao'));
+  };
+
+  function cartaoChegada(c) {
+    if (!c) return '';
+    const temp = (c.temperaturas || []).map((t) => (ROTULO_CLASSE[t.classe] || t.classe) + ' ' + String(t.medida_c).replace('.', ',') + ' °C').join(' · ');
+    return `<div class="cartao"><div class="rotulo">Chegada</div><div class="valor">${esc(c.motorista)} · ${esc(c.placa)}</div>
+      <div class="sub">${horaBr(c.concluida_em)}${temp ? ' · ' + esc(temp) : ''}</div>
+      <div class="sub"><a href="${BASE_PATH}/wms/chegadas/${c.id}/relatorio.pdf" target="_blank">Relatório de Recebimento (PDF)</a></div></div>`;
+  }
+
   // Receber -- recebimentos esperados da Stokki (WMS fase 2, Task 8+10)
   TELAS.receber = () => `
     <h1>${S.etapasAtivo ? 'Conferir Recebimento' : 'Receber'}<small>entradas esperadas -- lote e validade você lê na caixa</small></h1>
@@ -777,7 +1039,7 @@
     const el = document.getElementById('lista-receber');
     try {
       const r = await api('/recebimentos?estado=ESPERADO');
-      el.innerHTML = r.recebimentos.map((x) => `
+      el.innerHTML = r.recebimentos.filter(paraConferir).map((x) => `
         <div class="item" data-rec="${x.id}" style="grid-template-columns:1fr">
           <div class="cod">${esc(x.codigo)}</div>
           <div class="meta">${esc((x.embarcador || '').split(' ').slice(0, 3).join(' '))}${x.situacao ? ' · ' + esc(x.situacao) : ''} · ${x.itens} item(ns)${x.chegada ? ' · chegada ' + esc(x.chegada) : ''}</div>
@@ -788,7 +1050,8 @@
   async function abrirRecebimento(id) {
     try {
       const r = await api('/recebimentos/' + id);
-      ir('recebimento', { recebimento: Object.assign({}, r.recebimento, { itens: r.itens }) });
+      const chegada = S.etapasAtivo && r.recebimento.chegada_id ? (await api('/chegadas/' + r.recebimento.chegada_id)).chegada : null;
+      ir('recebimento', { recebimento: Object.assign({}, r.recebimento, { itens: r.itens }), chegada });
     } catch (e) { toast(e.message, true); }
   }
 
@@ -797,6 +1060,7 @@
     return `
     <button class="voltar" id="btn-voltar">‹ Voltar</button>
     <h1>${esc(r.codigo)}<small>${esc((r.embarcador || '').split(' ').slice(0, 3).join(' '))} · ${itens.length} item(ns)</small></h1>
+    ${cartaoChegada(ctx.chegada)}
     ${itens.filter((it) => it.produto_id && it.usa_caixas && it.usa_etapas).length > 1 && r.estado === 'ESPERADO' ? '<div class="botoes"><button class="botao neutro" type="button" id="btn-pedir-todas">Pedir etiquetas de todas as linhas</button></div>' : ''}
     <div class="lista">${itens.map((it, i) => {
       const feito = it.produto_id && Number(it.qtd_enderecada || 0) >= Number(it.qtd_un || 0) - 0.001;

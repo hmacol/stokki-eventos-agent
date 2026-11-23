@@ -343,5 +343,17 @@ class Escritorio(Base):
         self.assertEqual(r.get_json()["erro"], "Informe o motivo.")
 
 
+class TelasNoHtml(Base):
+    """Marcadores das telas Receber no HTML do /wms (nao ha harness de JS)."""
+
+    def test_marcadores(self):
+        self.entrar("galpao")
+        h = self.cliente.get("/wms").get_data(as_text=True)
+        for m in ("TELAS.receberChegada", "TELAS.chegada1", "TELAS.chegada2", "TELAS.chegadaAguardando",
+                  "Pedir liberação ao cliente", 'capture="environment"', "Relatório de Recebimento (PDF)",
+                  "outro embarcador: faça um Receber separado", "Sem rede: a foto não foi enviada. Tente de novo."):
+            self.assertIn(m, h)
+
+
 if __name__ == "__main__":
     unittest.main()
