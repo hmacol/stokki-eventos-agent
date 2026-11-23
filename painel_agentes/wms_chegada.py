@@ -193,8 +193,12 @@ def abrir(conn, *, uuid: str, recebimento_ids: list, operador: dict) -> dict:
         raise ErroChegada("Escolha ao menos um recebimento.")
     conn.execute("BEGIN IMMEDIATE")
     try:
+        existente = conn.execute("SELECT id FROM wms_chegadas WHERE uuid = ?", (uuid,)).fetchone()
+        if existente:  # outra chamada com o mesmo uuid venceu a corrida
+            conn.rollback()
+            return detalhe(conn, existente["id"])
         for rid in ids:
-            rec = conn.execute("SELECT estado FROM wms_recebimentos WHERE id = ?", (rid,)).fetchone()
+            rec =conn.execute("SELECT estado FROM wms_recebimentos WHERE id = ?", (rid,)).fetchone()
             if not rec:
                 raise ErroChegada("Recebimento não encontrado.")
             if rec["estado"] != "ESPERADO":
@@ -237,7 +241,11 @@ def salvar_foto(conn, chegada_id: int, tipo: str, conteudo: bytes, pasta: Path |
     pasta.mkdir(parents=True, exist_ok=True)
     nome = f"CHG-{chegada_id}-{_uuid.uuid4().hex[:8]}.jpg"
     destino = pasta / nome
-    img.save(destino, format="JPEG", quality=85)
+    try:
+        img.save(destino, format="JPEG", quality=85)
+    except Exception:
+        destino.unlink(missing_ok=True)
+        raise ErroChegada("Não consegui gravar a foto.")
     try:
         cur = conn.execute(
             "INSERT INTO wms_chegada_fotos (chegada_id, tipo, arquivo, criado_em) VALUES (?, ?, ?, ?)",

@@ -4,6 +4,7 @@ Testes da etapa Receber (chegada do caminhao): faixas de temperatura.
 Rodar (de dentro de painel_agentes/): py -3.11 -m unittest test_wms_chegada -v
 """
 import io
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -200,6 +201,30 @@ class TestChegada(_Base):
         if msg:
             self.assertEqual(str(cm.exception), msg)
         self.assertEqual(self.n("wms_chegada_fotos"), 0)
+        self.assertEqual(list(self.pasta.glob("*")), [])
+
+    def test_abrir_e_atomico_com_um_recebimento_invalido(self):
+        with self.assertRaises(wms_chegada.ErroChegada):
+            self._abrir(ids=[self.rec, 9999])
+        self.assertEqual(self.n("wms_chegadas"), 0)
+        self.assertEqual(self.n("wms_chegada_recebimentos"), 0)
+
+    def test_foto_save_falhando_nao_deixa_rastro(self):
+        from unittest import mock
+        c = self._abrir()
+        png = self._png((100, 100))
+        with mock.patch("PIL.Image.Image.save", side_effect=OSError("disco cheio")):
+            with self.assertRaises(wms_chegada.ErroChegada) as cm:
+                wms_chegada.salvar_foto(self.conn, c["id"], "PLACA", png, pasta=self.pasta)
+        self.assertEqual(str(cm.exception), "Não consegui gravar a foto.")
+        self.assertEqual(self.n("wms_chegada_fotos"), 0)
+        self.assertEqual(list(self.pasta.glob("*")), [])
+
+    def test_foto_insert_falhando_apaga_o_arquivo(self):
+        c = self._abrir()
+        self.conn.execute("DROP TABLE wms_chegada_fotos")
+        with self.assertRaises(sqlite3.OperationalError):
+            wms_chegada.salvar_foto(self.conn, c["id"], "PLACA", self._png((100, 100)), pasta=self.pasta)
         self.assertEqual(list(self.pasta.glob("*")), [])
 
     def test_foto_que_nao_e_imagem(self):
