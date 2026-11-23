@@ -151,6 +151,10 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              nula = faixa padrão da classe; área tipo DOCA em wms.py); bootstrap do
                                              wms traz etapas_ativo, doca, guarda_pendente. Telas no wms.html:
                                              Conferir Recebimento sem posição, TELAS.guardar e TELAS.guardarItem.
+                                             A doca só esvazia pelo Guardar (leva a reserva, marcada g-<uuid> em
+                                             wms_reservas.movimento_uuid), pela separação/baixa ou por Saída:
+                                             TRANSFERENCIA com origem na doca e mover caixa que está na doca -> 400
+                                             "use Guardar" (painel_agentes.py, _wms_registrar e rota .../mover).
                                              Testes: test_wms_doca.py, test_wms_doca_tela.py.
  Receber / checklist da chegada (etapas) ... painel_agentes/wms_chegada.py (tabelas wms_chegadas, wms_chegada_recebimentos,
                                              wms_chegada_fotos, wms_chegada_temperaturas, wms_chegada_envios; faixas de
@@ -160,15 +164,21 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              wms_chegada_pdf.py (Relatório de Recebimento). Fotos em dados/chegadas/
                                              (CHG-<id>-<8 hex>.jpg). Só embarcador com etapas; sem checklist LIBERADO a
                                              conferência é barrada no servidor (ativar caixa, enderecar item e encerrar
-                                             -> 400). Rotas (galpão): POST /api/wms/chegadas, GET /api/wms/chegadas/<id>,
-                                             POST .../fotos, DELETE .../fotos/<foto_id>, POST .../concluir,
+                                             -> 400; o escritório encerra recebimento sem chegada viva, e recebimento
+                                             que já tinha conferido antes das etapas segue sem checklist,
+                                             chegada_estado JA_EM_CONFERENCIA). Rotas (galpão): POST /api/wms/chegadas,
+                                             GET /api/wms/chegadas/<id>, DELETE /api/wms/chegadas/<id> (descarta o
+                                             rascunho: fotos, dados e vínculo), POST .../fotos, DELETE
+                                             .../fotos/<foto_id>, POST .../concluir,
                                              GET /wms/chegadas/<id>/foto/<foto_id>, GET /wms/chegadas/<id>/relatorio.pdf.
                                              Escritório (total/operador): POST .../pedir-liberacao (devolve o link),
                                              .../liberar-por-fora, .../nao-receber. GET /api/wms/recebimentos traz
                                              usa_etapas, chegada_estado, chegada_id. Página pública /liberacao/<token>
                                              do portal: portal_cliente/link_liberacao.py + templates liberacao.html e
                                              liberacao_erro.html. E-mails pendentes saem no timer wms-recebimentos
-                                             (sincronizar_recebimentos_wms.py -> wms_chegada_avisos.enviar_pendentes).
+                                             (sincronizar_recebimentos_wms.py -> wms_chegada_avisos.enviar_pendentes),
+                                             fora da trava da Stokki e com conexão própria: rodam também com a Stokki
+                                             ocupada ou a sessão falhando (nunca no --modo-teste).
                                              Regras: movimento ENTRADA na doca só pela conferência de um recebimento
                                              ESPERADO com o produto e chegada liberada (painel_agentes.py,
                                              _wms_exige_recebimento_liberado); uma chegada só aceita recebimentos de
