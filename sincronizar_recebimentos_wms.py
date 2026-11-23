@@ -57,7 +57,6 @@ if hasattr(sys.stdout, "reconfigure"):
 import yaml
 
 import wms_pedidos
-import wms_chegada_avisos
 import wms_pilotos
 from stokki import recebimentos as stokki_recebimentos
 from stokki import sessao_uso
@@ -258,6 +257,7 @@ def main(argv=None) -> int:
             # derruba a sincronizacao.
             if not args.modo_teste:
                 try:
+                    import wms_chegada_avisos  # tardio: puxa o PDF (PIL); falha de import nao derruba a rodada
                     logger.info("E-mails da chegada: %s", wms_chegada_avisos.enviar_pendentes(conn, config))
                 except Exception:  # noqa: BLE001
                     logger.exception("E-mails da chegada falharam (a sincronizacao segue)")

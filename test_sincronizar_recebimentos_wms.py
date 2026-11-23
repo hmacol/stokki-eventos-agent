@@ -534,7 +534,7 @@ class TestEmailsDaChegada(unittest.TestCase):
              mock.patch("sincronizar_recebimentos_wms.wms_pedidos.conectar", return_value=mock.Mock()), \
              mock.patch("sincronizar_recebimentos_wms.StokkiSession"), \
              mock.patch("sincronizar_recebimentos_wms.rodar", return_value={"lidos": 0}), \
-             mock.patch("sincronizar_recebimentos_wms.wms_chegada_avisos.enviar_pendentes", **pendentes_kw) as env:
+             mock.patch("wms_chegada_avisos.enviar_pendentes", **pendentes_kw) as env:
             codigo = mod.main(argv)
         return codigo, env
 
@@ -547,6 +547,12 @@ class TestEmailsDaChegada(unittest.TestCase):
         codigo, env = self._main([], side_effect=RuntimeError("smtp caiu"))
         self.assertEqual(codigo, 0)
         env.assert_called_once()
+
+    def test_falha_de_import_dos_emails_nao_derruba_a_rodada(self):
+        with mock.patch("stokki.sessao_uso.adquirir", return_value=True),              mock.patch("stokki.sessao_uso.liberar"),              mock.patch("sincronizar_recebimentos_wms._carregar_config", return_value={"wms": {"pilotos": [
+                 {"id": 48, "nome": "Maria Dolores"}]}}),              mock.patch("sincronizar_recebimentos_wms.wms_pedidos.conectar", return_value=mock.Mock()),              mock.patch("sincronizar_recebimentos_wms.StokkiSession"),              mock.patch("sincronizar_recebimentos_wms.rodar", return_value={"lidos": 0}),              mock.patch.dict(sys.modules, {"wms_chegada_avisos": None}):  # import levanta ImportError
+            codigo = mod.main([])
+        self.assertEqual(codigo, 0)
 
     def test_modo_teste_nao_manda_email(self):
         codigo, env = self._main(["--modo-teste"])

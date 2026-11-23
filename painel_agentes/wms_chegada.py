@@ -197,8 +197,10 @@ def abrir(conn, *, uuid: str, recebimento_ids: list, operador: dict) -> dict:
         if existente:  # outra chamada com o mesmo uuid venceu a corrida
             conn.rollback()
             return detalhe(conn, existente["id"])
+        donos = []
         for rid in ids:
-            rec =conn.execute("SELECT estado FROM wms_recebimentos WHERE id = ?", (rid,)).fetchone()
+            rec = conn.execute("SELECT estado, stkkc_id, embarcador FROM wms_recebimentos WHERE id = ?",
+                               (rid,)).fetchone()
             if not rec:
                 raise ErroChegada("Recebimento não encontrado.")
             if rec["estado"] != "ESPERADO":
@@ -207,6 +209,12 @@ def abrir(conn, *, uuid: str, recebimento_ids: list, operador: dict) -> dict:
                     "SELECT 1 FROM wms_chegada_recebimentos cr JOIN wms_chegadas c ON c.id = cr.chegada_id "
                     "WHERE cr.recebimento_id = ? AND c.estado != 'NAO_RECEBIDA'", (rid,)).fetchone():
                 raise ErroChegada("Esse recebimento já tem chegada registrada.")
+            donos.append(rec)
+        # relatorio, e-mail e pagina de liberacao mostram a chegada inteira: so de um embarcador
+        por_id = {str(d["stkkc_id"] or "").strip() for d in donos}
+        por_nome = {str(d["embarcador"] or "").strip().upper() for d in donos}
+        if len(por_nome if "" in por_id else por_id) > 1:
+            raise ErroChegada("Recebimentos de embarcadores diferentes: faça um Receber para cada embarcador.")
         agora = _agora()
         cur = conn.execute(
             "INSERT INTO wms_chegadas (uuid, estado, chegada_em, operador_id, operador_nome, criado_em) "

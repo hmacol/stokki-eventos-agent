@@ -156,6 +156,32 @@ class TestChegada(_Base):
         c = self._abrir(ids=[self.rec, self.rec_seco])
         self.assertEqual(sorted(r["id"] for r in c["recebimentos"]), [self.rec, self.rec_seco])
 
+    def test_abrir_mesmo_embarcador_por_stkkc_id(self):
+        self.conn.execute("UPDATE wms_recebimentos SET stkkc_id = '48', embarcador = 'A' WHERE id = ?", (self.rec,))
+        self.conn.execute("UPDATE wms_recebimentos SET stkkc_id = '48', embarcador = 'B' WHERE id = ?", (self.rec_seco,))
+        self.conn.commit()
+        self.assertEqual(len(self._abrir(ids=[self.rec, self.rec_seco])["recebimentos"]), 2)
+
+    def test_abrir_embarcadores_diferentes_recusa_sem_gravar(self):
+        self.conn.execute("UPDATE wms_recebimentos SET stkkc_id = '48' WHERE id = ?", (self.rec,))
+        self.conn.execute("UPDATE wms_recebimentos SET stkkc_id = '22' WHERE id = ?", (self.rec_seco,))
+        self.conn.commit()
+        with self.assertRaises(wms_chegada.ErroChegada) as cm:
+            self._abrir(ids=[self.rec, self.rec_seco])
+        self.assertEqual(str(cm.exception), "Recebimentos de embarcadores diferentes: "
+                                            "faça um Receber para cada embarcador.")
+        self.assertEqual((self.n("wms_chegadas"), self.n("wms_chegada_recebimentos")), (0, 0))
+
+    def test_abrir_sem_stkkc_id_compara_o_nome_do_embarcador(self):
+        self.conn.execute("UPDATE wms_recebimentos SET embarcador = ' maria ' WHERE id = ?", (self.rec,))
+        self.conn.execute("UPDATE wms_recebimentos SET embarcador = 'MARIA' WHERE id = ?", (self.rec_seco,))
+        self.conn.commit()
+        self.assertEqual(len(self._abrir(ids=[self.rec, self.rec_seco])["recebimentos"]), 2)
+        self.conn.execute("UPDATE wms_recebimentos SET embarcador = 'OUTRO' WHERE id = ?", (self.rec_seco,))
+        self.conn.commit()
+        with self.assertRaises(wms_chegada.ErroChegada):
+            self._abrir("u2", ids=[self.rec, self.rec_seco])
+
     def test_abrir_recebimento_ja_em_outra_chegada_recusa(self):
         self._abrir("u1")
         with self.assertRaises(wms_chegada.ErroChegada) as cm:

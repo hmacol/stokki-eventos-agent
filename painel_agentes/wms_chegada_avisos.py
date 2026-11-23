@@ -45,6 +45,7 @@ TIPO_NOTIFICACAO = "chegada_recebimento"
 SECAO_CONFIG = "notificacao_chegada_recebimento"
 EMAIL_ESCRITORIO_PADRAO = "entregas@freshlogbr.com"
 MOTIVOS_ESCRITORIO = ("TEMPERATURA", "AVARIA", "RESPOSTA_CLIENTE")
+JANELA_PENDENTES_HORAS = 48  # a varredura nao olha chegada mais antiga que isso
 
 
 # --- Config -------------------------------------------------------------------
@@ -236,14 +237,18 @@ def avisar_escritorio(conn, chegada_id: int, config: dict, motivo: str, enviar=N
 
 # --- Cliente: sua carga chegou ------------------------------------------------
 
-def avisar_cliente_chegada(conn, chegada_id: int, config: dict, enviar=None, modo_teste: bool = False) -> list:
+def avisar_cliente_chegada(conn, chegada_id: int, config: dict, enviar=None, modo_teste: bool = False,
+                           so_recebimentos=None) -> list:
     """Um e-mail por recebimento da chegada LIBERADA, com o PDF. Idempotente por `chegou-{recebimento_id}`
-    (`-teste` quando redirecionado: ligar o envio real depois ainda manda o que so o Hugo viu)."""
+    (`-teste` quando redirecionado: ligar o envio real depois ainda manda o que so o Hugo viu).
+    `so_recebimentos`: ids a considerar (a varredura passa so os que nunca tiveram aviso)."""
     enviar = enviar or email_utils.enviar_email
     chegada = wms_chegada.detalhe(conn, chegada_id)
     resultados = []
     pdf = None  # gerado uma vez por chegada, so se alguem for receber
     for rec in _recebimentos(conn, chegada):
+        if so_recebimentos is not None and rec["id"] not in so_recebimentos:
+            continue
         r = {"enviado": False, "motivo": "", "destinos": [], "redirecionado": False}
         resultados.append(r)
         if chegada["estado"] != "LIBERADA":
@@ -270,6 +275,8 @@ def avisar_cliente_chegada(conn, chegada_id: int, config: dict, enviar=None, mod
                  + _paragrafo(f"Olá, <strong>{html.escape(str(emb['nome']))}</strong>! O caminhão com a carga do "
                               f"recebimento <strong>{html.escape(codigo)}</strong> chegou ao galpão da Freshlog "
                               f"e foi conferido. O relatório completo, com as fotos, está em anexo.")
+                 + (_paragrafo(f"Recebimentos desta chegada: <strong>{html.escape(_codigos(chegada))}</strong>.")
+                    if len(chegada["recebimentos"]) > 1 else "")
                  + _ficha(chegada) + _linhas_temperatura(chegada)
                  + _paragrafo("Carga chegou inteira." if chegada["integra"] == 1 else
                               f"<strong>Atenção:</strong> {html.escape(chegada['observacao'])}"))
@@ -338,25 +345,37 @@ def _ids(conn, sql: str, parametros=()) -> list:
 
 
 def enviar_pendentes(conn, config: dict, enviar=None) -> dict:
-    """Manda o que ficou por mandar. Conta so o que saiu com sucesso."""
+    """Manda o que ficou por mandar. Conta so o que saiu com sucesso.
+
+    Sem retroativo: recebimento que ja teve qualquer aviso (`chegou-{id}` ou `chegou-{id}-teste`) esta
+    resolvido, e so entram chegadas liberadas/concluidas ha ate JANELA_PENDENTES_HORAS. Ligar o tipo na
+    tela Notificacoes vale so daqui pra frente."""
     wms_chegada.garantir_tabelas(conn)
     total = {"chegou": 0, "escritorio": 0}
-    sem_envio = ("NOT EXISTS (SELECT 1 FROM wms_chegada_envios e WHERE e.chave = 'escritorio-{motivo}-' || c.id)")
+    recente = ("COALESCE(NULLIF(c.liberacao_em, ''), c.concluida_em) >= "
+               "datetime('now', 'localtime', '-%d hours')" % JANELA_PENDENTES_HORAS)
 
-    for cid in _ids(conn, (
-            "SELECT c.id FROM wms_chegadas c WHERE c.estado = 'LIBERADA' AND EXISTS ("
-            "SELECT 1 FROM wms_chegada_recebimentos cr WHERE cr.chegada_id = c.id AND NOT EXISTS ("
-            "SELECT 1 FROM wms_chegada_envios e WHERE e.chave = 'chegou-' || cr.recebimento_id)) ORDER BY c.id")):
-        total["chegou"] += sum(1 for r in avisar_cliente_chegada(conn, cid, config, enviar=enviar) if r["enviado"])
+    novos = {}  # chegada -> recebimentos que nunca tiveram aviso
+    for cid, rid in conn.execute(
+            "SELECT c.id, cr.recebimento_id FROM wms_chegadas c "
+            "JOIN wms_chegada_recebimentos cr ON cr.chegada_id = c.id "
+            f"WHERE c.estado = 'LIBERADA' AND {recente} AND NOT EXISTS (SELECT 1 FROM wms_chegada_envios e "
+            "WHERE e.chave IN ('chegou-' || cr.recebimento_id, 'chegou-' || cr.recebimento_id || '-teste')) "
+            "ORDER BY c.id, cr.recebimento_id").fetchall():
+        novos.setdefault(cid, set()).add(rid)
+    for cid, rids in novos.items():
+        total["chegou"] += sum(1 for r in avisar_cliente_chegada(conn, cid, config, enviar=enviar,
+                                                                 so_recebimentos=rids) if r["enviado"])
 
     consultas = (
         ("TEMPERATURA", "c.estado = 'AGUARDANDO_ESCRITORIO'"),
-        ("AVARIA", "c.estado NOT IN ('RASCUNHO') AND c.integra = 0"),
+        ("AVARIA", "c.estado != 'RASCUNHO' AND c.integra = 0"),
         ("RESPOSTA_CLIENTE", "c.resposta_cliente != ''"),
     )
     for motivo, filtro in consultas:
-        for cid in _ids(conn, f"SELECT c.id FROM wms_chegadas c WHERE {filtro} AND "
-                              + sem_envio.format(motivo=motivo) + " ORDER BY c.id"):
+        for cid in _ids(conn, f"SELECT c.id FROM wms_chegadas c WHERE {filtro} AND {recente} AND NOT EXISTS ("
+                              f"SELECT 1 FROM wms_chegada_envios e WHERE e.chave = 'escritorio-{motivo}-' || c.id) "
+                              "ORDER BY c.id"):
             if avisar_escritorio(conn, cid, config, motivo, enviar=enviar)["enviado"]:
                 total["escritorio"] += 1
     return total

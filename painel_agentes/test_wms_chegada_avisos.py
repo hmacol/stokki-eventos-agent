@@ -273,6 +273,47 @@ class TestPendentes(_Avisos):
         self.assertEqual(avisos.enviar_pendentes(self.conn, {}, enviar=self.envio), {"chegou": 0, "escritorio": 0})
         self.assertEqual(len(self.envio.chamadas), 2)
 
+    def _envelhecer(self, cid, horas):
+        self.conn.execute("UPDATE wms_chegadas SET concluida_em = datetime('now', 'localtime', ?) WHERE id = ?",
+                          (f"-{horas} hours", cid))
+        self.conn.commit()
+
+    def test_pendentes_nao_e_retroativo_ao_ligar_o_tipo(self):
+        cid = self.liberada()
+        self.cliente(cid)  # preso: grava so a chave -teste
+        self.assertEqual(self.envios(), [f"chegou-{self.rec_seco}-teste"])
+        self._tela(cn.definir_estado, "chegada_recebimento", "LIGADO")
+        r = avisos.enviar_pendentes(self.conn, {"notificacao_chegada_recebimento": {"forcar_destino": ""}},
+                                    enviar=self.envio)
+        self.assertEqual(r["chegou"], 0)
+        self.assertEqual(len(self.envio.chamadas), 1)  # so o primeiro, preso
+
+    def test_pendentes_ignora_chegada_com_mais_de_48_horas(self):
+        cid = self.liberada()
+        self._envelhecer(cid, 72)
+        self.assertEqual(avisos.enviar_pendentes(self.conn, {}, enviar=self.envio), {"chegou": 0, "escritorio": 0})
+        self.assertEqual(self.envio.chamadas, [])
+
+    def test_pendentes_pega_chegada_de_1_hora(self):
+        cid = self.liberada()
+        self._envelhecer(cid, 1)
+        self.assertEqual(avisos.enviar_pendentes(self.conn, {}, enviar=self.envio)["chegou"], 1)
+
+    def test_pendentes_nao_avisa_escritorio_de_chegada_antiga(self):
+        cid = self.aguardando()
+        self._envelhecer(cid, 72)
+        self.assertEqual(avisos.enviar_pendentes(self.conn, {}, enviar=self.envio), {"chegou": 0, "escritorio": 0})
+        self.assertEqual(self.envio.chamadas, [])
+
+    def test_cliente_chegou_com_dois_recebimentos_cita_os_dois_codigos(self):
+        cid = self.liberada(ids=[self.rec_seco, self.rec], temperaturas={"REFRIGERADO": "5", "CONGELADO": "-15"})
+        self.cliente(cid)
+        self.assertEqual(len(self.envio.chamadas), 2)
+        for c in self.envio.chamadas:
+            self.assertIn("#PE-1", c["assunto"] + c["corpo"])
+            self.assertIn("#PE-2", c["assunto"] + c["corpo"])
+            self.assertEqual(c["para"], [avisos.EMAIL_TESTE])
+
     def test_pendentes_cobre_avaria_e_resposta_do_cliente(self):
         avaria = self.liberada(integra=False, observacao="caixas amassadas")
         aguard = self.aguardando(uuid="u9")
