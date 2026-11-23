@@ -298,25 +298,40 @@ def guardar(conn, *, produto_id: int, lote: str, validade: str | None, destino: 
 # Fila "Guardar": o que esta na doca esperando posicao (so leitura)
 # ---------------------------------------------------------------------------
 
-def fila_guarda(conn) -> list[dict]:
-    """Um item por produto + lote + validade com saldo na doca. Frio (REFRIGERADO,
-    CONGELADO) primeiro; depois o mais antigo. Nao filtra por embarcador."""
+def _saldos_para_guardar(conn) -> list[tuple]:
+    """(saldo, caixas livres em estoque) de cada chave com saldo na doca e algo para guardar.
+    Item com caixa so tem o que guardar se sobra caixa sem unidade separada para pedido
+    (a separada nao sai da doca ate a baixa); a devolvida tambem e guardada."""
     saldos = conn.execute(
         "SELECT s.produto_id, s.lote, s.validade, s.quantidade, p.descricao, p.sku, p.embarcador, "
         "p.embarcador_id, p.unidade, s.atualizado_em FROM wms_saldos s "
         "JOIN wms_produtos p ON p.id = s.produto_id WHERE s.posicao = ? AND s.quantidade > 0.0004",
         (DOCA_POSICAO,)).fetchall()
-    fila = []
+    marcas = ",".join("?" * len(wms_caixas.NO_SALDO))
+    resultado = []
     for s in saldos:
+        chave = (DOCA_POSICAO, s["produto_id"], s["lote"], s["validade"] or "")
+        na_doca = conn.execute(
+            f"SELECT serial, situacao FROM wms_caixas WHERE posicao = ? AND produto_id = ? AND lote = ? "
+            f"AND COALESCE(validade, '') = ? AND situacao IN ({marcas})", (*chave, *wms_caixas.NO_SALDO)).fetchall()
+        livres = [c["situacao"] for c in na_doca if c["situacao"] in ("EM_ESTOQUE", "ABERTA", "DEVOLVIDA")
+                  and wms_caixas._prometido(conn, c["serial"]) <= 0.0004]
+        if na_doca and not livres:
+            continue
+        resultado.append((s, sum(1 for x in livres if x != "DEVOLVIDA")))
+    return resultado
+
+
+def fila_guarda(conn) -> list[dict]:
+    """Um item por produto + lote + validade com saldo na doca e algo para guardar. Frio
+    (REFRIGERADO, CONGELADO) primeiro; depois o mais antigo. Nao filtra por embarcador."""
+    fila = []
+    for s, caixas in _saldos_para_guardar(conn):
         pid, lote, val = s["produto_id"], s["lote"], s["validade"] or ""
         chave = (DOCA_POSICAO, pid, lote, val)
         desde = conn.execute(
             "SELECT MIN(criado_em) FROM wms_movimentos WHERE tipo = 'ENTRADA' AND posicao_destino = ? "
             "AND produto_id = ? AND lote = ? AND COALESCE(validade, '') = ?", chave).fetchone()[0]
-        caixas = sum(1 for c in conn.execute(
-            "SELECT serial FROM wms_caixas WHERE posicao = ? AND produto_id = ? AND lote = ? "
-            "AND COALESCE(validade, '') = ? AND situacao IN ('EM_ESTOQUE', 'ABERTA')", chave)
-            if wms_caixas._prometido(conn, c["serial"]) <= 0.0004)
         recebimentos = [r[0] for r in conn.execute(
             "SELECT DISTINCT r.codigo FROM wms_recebimento_enderecamentos e "
             "JOIN wms_recebimentos r ON r.id = e.recebimento_id "

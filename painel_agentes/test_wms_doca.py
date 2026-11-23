@@ -528,6 +528,19 @@ class TestFilaGuarda(unittest.TestCase):
         self.conn.commit()
         self.assertEqual(wms_doca.fila_guarda(self.conn)[0]["caixas"], 1)
 
+    def test_fila_sem_caixa_para_guardar_some(self):
+        # a unica caixa do item tem unidade separada para pedido: nao sai da doca ate a baixa
+        s = self.caixas(1)[0]
+        pid = self.pedido(5)
+        sep.separar_caixa(self.conn, sep.onda_de_um_pedido(self.conn, pid, ANA), s, qtd_un=5,
+                          uuid="sep-uuid-m1", operador=ANA)
+        self.assertEqual(wms_doca.fila_guarda(self.conn), [])
+        outra = self.caixas(1)[0]
+        self.assertEqual([i["caixas"] for i in wms_doca.fila_guarda(self.conn)], [1])
+        self.conn.execute("UPDATE wms_caixas SET situacao = 'DEVOLVIDA' WHERE serial = ?", (outra,))
+        self.conn.commit()   # devolvida tambem e guardada pelo Guardar: o item continua na fila
+        self.assertEqual(len(wms_doca.fila_guarda(self.conn)), 1)
+
     def test_fila_sem_caixa_e_zero(self):
         self.entrada(10)
         self.assertEqual(wms_doca.fila_guarda(self.conn)[0]["caixas"], 0)
