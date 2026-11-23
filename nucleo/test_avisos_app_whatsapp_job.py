@@ -160,8 +160,16 @@ class JobTest(unittest.TestCase):
         self.assertIn("amanhã", avisos[0]["texto"])
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM avisos_app_rotas WHERE rota_id = ?", (vazia,)).fetchone()[0], 0)
 
-    def test_so_motorista_web_ativo_recebe(self):
+    def test_motorista_android_tambem_recebe(self):
         self.conn.execute("UPDATE motoristas SET plataforma = 'android' WHERE cpf = ?", (CPF,))
+        self.conn.commit()
+        self.coletar()
+        self.rota(["PS-1"])
+        self.coletar()
+        self.assertEqual(self.tipos(self.coletar()), ["nova_rota"])
+
+    def test_so_motorista_do_app_ativo_recebe(self):
+        self.conn.execute("UPDATE motoristas SET plataforma = NULL WHERE cpf = ?", (CPF,))     # nunca abriu o app
         self.conn.commit()
         self.coletar()
         self.rota(["PS-1"])
