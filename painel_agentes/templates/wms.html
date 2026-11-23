@@ -1558,17 +1558,29 @@
       </div>`).join('') || '<div class="vazio">Nada na doca esperando lugar.</div>';
     lista.querySelectorAll('[data-gi]').forEach((el) => el.addEventListener('click', () => abrirGuardaItem(ctx.fila[Number(el.dataset.gi)])));
   };
+  // uuid da guarda por item (produto + lote + validade) até o servidor responder sucesso: reabrir o item
+  // ou trocar a posição repete a MESMA guarda (no retry o servidor usa o destino já gravado), nunca move de novo
+  const GUARDA_UUID = {};
+  const chaveGuarda = (x) => 'wms_guarda_uuid_' + x.produto_id + '|' + (x.lote || '') + '|' + (x.validade || '');
+  function uuidGuarda(x) {
+    const k = chaveGuarda(x);
+    if (!GUARDA_UUID[k]) { try { GUARDA_UUID[k] = localStorage.getItem(k) || ''; } catch (e) { /* sem armazenamento: só memória */ } }
+    if (!GUARDA_UUID[k]) { GUARDA_UUID[k] = uuid(); try { localStorage.setItem(k, GUARDA_UUID[k]); } catch (e) { /* idem */ } }
+    return GUARDA_UUID[k];
+  }
+  function soltarUuidGuarda(x) { const k = chaveGuarda(x); delete GUARDA_UUID[k]; try { localStorage.removeItem(k); } catch (e) { /* idem */ } }
   async function abrirGuardaItem(it) {
     const q = '?produto_id=' + it.produto_id + '&lote=' + encodeURIComponent(it.lote || '') + '&validade=' + encodeURIComponent(it.validade || '');
     let d = null;
     try { d = await api('/guarda/item' + q); }
     catch (e) { if (e.status) return toast(e.message, true); /* sem rede: segue com os dados da fila, sem sugestão */ }
-    ir('guardarItem', { item: d ? d.item : it, sugestoes: d ? d.sugestoes : null, caixas: d ? d.caixas : null, destino: '', modo: null, bipadas: [], conflito: null, corpo: null, uuid: uuid() });
+    ir('guardarItem', { item: d ? d.item : it, sugestoes: d ? d.sugestoes : null, caixas: d ? d.caixas : null, destino: '', modo: null, bipadas: [], conflito: null, corpo: null, uuid: uuidGuarda(it) });
   }
   async function enviarGuarda(ctx, corpo) {
     if (!S.operador) { toast('Identifique o operador primeiro', true); return ir('operador'); }
     try {
       const r = await api('/guarda/guardar', { method: 'POST', body: corpo });
+      soltarUuidGuarda(corpo);
       if ((r.nao_movidas || []).length) toast('Não saíram da doca: ' + r.nao_movidas.map((n) => n.serial + ' (' + n.motivo + ')').join('; '), true);
       else toast('Guardado em ' + rotuloPos(r.destino));
       voltar();
@@ -1622,7 +1634,7 @@
       const p = String(cod || '').trim().toUpperCase().replace(/^POS:/, '');
       if (!p) return;
       if (p === S.doca || p === 'DOCA') return toast('Bipe a posição de destino, não a doca.', true);
-      ctx.destino = p; ctx.conflito = null; ctx.corpo = null; ctx.modo = null; ctx.bipadas = []; ctx.uuid = uuid();
+      ctx.destino = p; ctx.conflito = null; ctx.corpo = null; ctx.modo = null; ctx.bipadas = [];
       render();
     };
     const biparParte = (cod) => {
@@ -2479,6 +2491,7 @@
         const corpo = Object.assign({}, gd); delete corpo.tipo;
         try {
           await api('/guarda/guardar', { method: 'POST', body: corpo });
+          soltarUuidGuarda(corpo);
           enviados++;
         } catch (e) {
           if (e.status === 409 && e.dados && e.dados.sem_operador) { toast('Identifique o operador pra enviar a fila', true); ir('operador'); return; }

@@ -370,6 +370,12 @@ class GuardarNaTela(ConferirRecebimentoNaTela):
                   "Posição não combina", "itens na doca sem lugar", "O item conferido vai para a fila Guardar."):
             self.assertIn(m, h)
 
+    def test_uuid_da_guarda_estavel_por_item_ate_o_sucesso(self):
+        h = self.html()
+        self.assertIn("uuid: uuidGuarda(it) });", h)
+        self.assertEqual(h.count("soltarUuidGuarda(corpo);"), 2)   # sucesso na tela e no envio da fila
+        self.assertNotIn("ctx.uuid = uuid()", h)   # trocar a posicao nao troca o uuid
+
     def test_mover_nao_oferece_a_doca_como_origem(self):
         h = self.html()
         self.assertIn("semDoca(p.saldos || [], b.dataset.mov)", h)
