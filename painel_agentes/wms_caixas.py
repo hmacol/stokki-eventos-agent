@@ -396,8 +396,11 @@ def _prometido(conn, serial: str) -> float:
     return round(float(row[0] or 0), 3)
 
 
-def mover_caixa(conn, serial: str, destino: str, *, uuid: str, operador: dict | None = None) -> dict:
-    """TRANSFERENCIA da caixa (leva o saldo junto). uuid do aparelho obrigatorio."""
+def mover_caixa(conn, serial: str, destino: str, *, uuid: str, operador: dict | None = None,
+                levar_reserva: bool = False) -> dict:
+    """TRANSFERENCIA da caixa (leva o saldo junto). uuid do aparelho obrigatorio.
+    levar_reserva=True (so a guarda da doca, wms_doca.guardar): nao recusa caixa
+    reservada, porque quem chama reaponta a reserva para o destino logo depois."""
     uuid = str(uuid or "").strip()
     if not uuid:
         raise ErroWMS("uuid do aparelho obrigatorio para mover.")
@@ -441,7 +444,8 @@ def mover_caixa(conn, serial: str, destino: str, *, uuid: str, operador: dict | 
         return {"caixa": _caixa_ou_erro(conn, serial), "duplicado": True, "movimento_uuid": uuid}
     if caixa["posicao"] == destino:
         raise ErroWMS(f"Caixa {serial} ja esta em {destino}.")
-    _recusar_se_reservada(conn, caixa)
+    if not levar_reserva:
+        _recusar_se_reservada(conn, caixa)
     origem = caixa["posicao"]
     wms.registrar_movimento(conn, tipo="TRANSFERENCIA", produto_id=caixa["produto_id"],
                             quantidade=caixa["qtd_un"], lote=caixa["lote"], validade=caixa["validade"],

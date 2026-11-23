@@ -805,6 +805,15 @@ class TestRevisaoFinal(BaseCaixas):
         self.assertEqual(self.sit(s[0]), ("EM_ESTOQUE", 6))
         self.assertEqual(cx.divergencias(self.conn, 48), [])
 
+    def test_mover_reservada_continua_recusando_fora_da_doca(self):
+        # levar_reserva (guarda da doca) fica desligado por padrao: posicao comum segue recusando
+        s = self.ativar(1)[0]
+        self.pedido(1012, 6)
+        with self.assertRaises(wms.ErroWMS) as ctx:
+            cx.mover_caixa(self.conn, s, "C9-E2-N1", uuid="x" + "c" * 16)
+        self.assertIn("reservada", str(ctx.exception))
+        self.assertEqual(cx.obter_caixa(self.conn, s)["posicao"], self.POS)
+
     def test_mover_ignora_reserva_de_outra_chave_e_consumida(self):
         s = self.ativar(1)[0]
         pid = self.pedido(1011, 6)

@@ -12,9 +12,13 @@ _RAIZ = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ))
 sys.path.insert(0, str(Path(__file__).parent))
 
+from unittest import mock  # noqa: E402
+
 import wms  # noqa: E402
+import wms_caixas as cx  # noqa: E402
 import wms_doca  # noqa: E402
 import wms_pedidos  # noqa: E402
+import wms_separacao as sep  # noqa: E402
 
 
 class TestDoca(unittest.TestCase):
@@ -172,6 +176,243 @@ class TestSugerirPosicoes(unittest.TestCase):
         s = self._sug(lote="", validade=None)
         self.assertEqual(s[0], {"posicao": "C1-E1-N1", "criterio": "MESMO_LOTE",
                                 "motivo": "Já tem este produto aqui (5 UN)"})
+
+
+DOC, DEST, VAL = "DOC1-P1", "C1-E1-N1", "2027-01-01"
+ANA = {"id": "1", "nome": "Ana"}
+
+
+class TestGuardar(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self._tmp.cleanup)
+        self.conn = sep.conectar(Path(self._tmp.name) / "dados.db")
+        self.addCleanup(self.conn.close)
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, embarcador_id, ean, dun, "
+            "qtd_por_caixa, unidade, controla_validade, atualizado_em) VALUES (1, 900, '72400017', "
+            "'COXINHA FESTA', 'MARIA DOLORES', 48, '724000170000', NULL, 12, 'UN', 1, '2026-09-21 10:00:00')")
+        self.conn.commit()
+        wms_doca.garantir_doca(self.conn)
+        wms.criar_area(self.conn, "C1", "CONTAINER")
+        wms.gerar_posicoes(self.conn, "C1", estantes=2, niveis=2)
+        self._stokki = 5000
+
+    def entrada(self, qtd, lote="L1", validade=VAL):
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=qtd,
+                                lote=lote, validade=validade, destino=DOC)
+
+    def caixas(self, n, lote="L1"):
+        seriais = cx.criar_caixas(self.conn, produto_id=1, lote=lote, validade=VAL, qtd_un=12,
+                                  quantidade=n)["seriais"]
+        for s in seriais:
+            cx.ativar_caixa(self.conn, s, DOC)
+        return seriais
+
+    def saldo(self, pos, lote="L1", validade=VAL):
+        return wms._saldo_atual(self.conn, pos, 1, lote, validade or "")
+
+    def pedido(self, qtd):
+        self._stokki += 1
+        pid = wms_pedidos.registrar_pedido(self.conn, {
+            "id_stokki": self._stokki, "codigo_ps": f"PS-{self._stokki}", "embarcador": "MARIA DOLORES",
+            "situacao": "Open", "embarcador_id": 48},
+            [{"linha": 1, "sku": "72400017", "ean_linha": "", "descricao": "X", "qtd_embalagem": qtd,
+              "unidade_do_produto": True}])
+        wms_pedidos.reservar_pedido(self.conn, pid)
+        self.conn.commit()
+        return pid
+
+    def reservas(self, pid):
+        return [tuple(r) for r in self.conn.execute(
+            "SELECT posicao, quantidade_un, item_id FROM wms_reservas WHERE pedido_id = ? AND estado = 'ATIVA' "
+            "ORDER BY posicao", (pid,))]
+
+    def guardar(self, **kw):
+        args = dict(produto_id=1, lote="L1", validade=VAL, destino=DEST, uuid="u1", operador=ANA)
+        args.update(kw)
+        return wms_doca.guardar(self.conn, **args)
+
+    def test_guardar_sem_caixa_tudo(self):
+        self.entrada(120)
+        r = self.guardar()
+        self.assertEqual((self.saldo(DOC), self.saldo(DEST)), (0, 120))
+        self.assertEqual(r, {"movidas": [], "quantidade": 120.0, "restante_na_doca": 0.0, "nao_movidas": [],
+                             "reservas_levadas": 0, "destino": DEST})
+        mov = self.conn.execute("SELECT tipo, observacao, operador_nome FROM wms_movimentos WHERE uuid = 'g-u1'").fetchone()
+        self.assertEqual(tuple(mov), ("TRANSFERENCIA", "Guarda da doca", "Ana"))
+
+    def test_guardar_sem_caixa_parte(self):
+        self.entrada(120)
+        r = self.guardar(quantidade=40)
+        self.assertEqual((self.saldo(DOC), self.saldo(DEST)), (80, 40))
+        self.assertEqual((r["quantidade"], r["restante_na_doca"]), (40, 80))
+
+    def test_guardar_caixas_todas(self):
+        s = self.caixas(3)
+        r = self.guardar(quantidade=5)   # quantidade e ignorada com caixa
+        self.assertEqual(r["movidas"], s)
+        for serial in s:
+            self.assertEqual(cx.obter_caixa(self.conn, serial)["posicao"], DEST)
+        self.assertEqual((self.saldo(DOC), self.saldo(DEST), r["quantidade"]), (0, 36, 36))
+        self.assertEqual(cx.divergencias(self.conn, 48), [])
+
+    def test_guardar_caixas_so_as_bipadas(self):
+        s = self.caixas(3)
+        r = self.guardar(seriais=[s[0].lower()])
+        self.assertEqual(r["movidas"], [s[0]])
+        self.assertEqual([cx.obter_caixa(self.conn, x)["posicao"] for x in s], [DEST, DOC, DOC])
+        self.assertEqual(r["restante_na_doca"], 24)
+        self.assertEqual(cx.divergencias(self.conn, 48), [])
+
+    def test_serial_de_outro_lote_recusa_sem_mover_nada(self):
+        s = self.caixas(2)
+        outro = self.caixas(1, lote="L2")[0]
+        with self.assertRaises(wms.ErroWMS):
+            self.guardar(seriais=[s[0], outro])
+        self.assertEqual([cx.obter_caixa(self.conn, x)["posicao"] for x in s + [outro]], [DOC, DOC, DOC])
+        self.assertEqual(self.saldo(DEST), 0)
+        self.assertFalse(self.conn.in_transaction)
+
+    def test_reserva_acompanha_inteira(self):
+        s = self.caixas(2)
+        pid = self.pedido(24)
+        item = self.reservas(pid)[0][2]
+        r = self.guardar()
+        self.assertEqual(r["movidas"], s)
+        self.assertEqual(r["reservas_levadas"], 1)
+        self.assertEqual(self.reservas(pid), [(DEST, 24.0, item)])
+        b = wms_pedidos.baixar_por_expedicao(self.conn, f"PS-{self._stokki}")
+        self.assertEqual((b["baixas"], b["erros"], b["negativos"]), (1, [], []))
+        self.assertEqual(self.saldo(DEST), 0)
+        self.assertEqual(cx.divergencias(self.conn, 48), [])
+
+    def test_reserva_divide_quando_guarda_parte(self):
+        self.entrada(36)
+        pid = self.pedido(30)
+        item = self.reservas(pid)[0][2]
+        r = self.guardar(quantidade=12)
+        self.assertEqual(self.saldo(DOC), 24)
+        self.assertEqual(self.reservas(pid), [(DEST, 6.0, item), (DOC, 24.0, item)])
+        self.assertEqual(r["reservas_levadas"], 1)
+        b = wms_pedidos.baixar_por_expedicao(self.conn, f"PS-{self._stokki}")
+        self.assertEqual((b["baixas"], b["erros"], b["negativos"]), (2, [], []))
+        self.assertEqual((self.saldo(DOC), self.saldo(DEST)), (0, 6))
+
+    def test_reserva_que_cabe_na_doca_nao_muda(self):
+        self.entrada(36)
+        pid = self.pedido(10)
+        antes = self.conn.execute("SELECT * FROM wms_reservas WHERE pedido_id = ?", (pid,)).fetchall()
+        r = self.guardar(quantidade=12)
+        self.assertEqual(r["reservas_levadas"], 0)
+        depois = self.conn.execute("SELECT * FROM wms_reservas WHERE pedido_id = ?", (pid,)).fetchall()
+        self.assertEqual([tuple(x) for x in antes], [tuple(x) for x in depois])
+
+    def test_retry_mesmo_uuid_nao_move_duas_vezes(self):
+        self.entrada(36)
+        pid = self.pedido(30)
+        self.guardar(quantidade=12)
+        r = self.guardar(quantidade=12)
+        self.assertEqual((self.saldo(DOC), self.saldo(DEST)), (24, 12))
+        self.assertEqual((r["quantidade"], r["restante_na_doca"], r["reservas_levadas"]), (12, 24, 0))
+        self.assertEqual([x[:2] for x in self.reservas(pid)], [(DEST, 6.0), (DOC, 24.0)])
+
+    def test_retry_depois_de_queda_antes_da_reserva(self):
+        # caiu entre o movimento e a reserva; o aparelho repete o POST (ate com outra posicao)
+        s = self.caixas(2)
+        pid = self.pedido(24)
+        with mock.patch.object(wms_doca, "_levar_reservas", side_effect=RuntimeError("queda")):
+            with self.assertRaises(RuntimeError):
+                self.guardar()
+        self.assertEqual(self.reservas(pid)[0][0], DOC)
+        r = self.guardar(destino="C1-E2-N1")
+        self.assertEqual((r["movidas"], r["destino"], r["quantidade"], r["reservas_levadas"]), (s, DEST, 24, 1))
+        self.assertEqual([x[:2] for x in self.reservas(pid)], [(DEST, 24.0)])
+        self.assertEqual((self.saldo(DOC), self.saldo(DEST), self.saldo("C1-E2-N1")), (0, 24, 0))
+        self.assertEqual(cx.divergencias(self.conn, 48), [])
+
+    def test_pedir_mais_do_que_sobrou(self):
+        self.entrada(10)
+        with self.assertRaises(wms.ErroWMS):
+            self.guardar(quantidade=20)
+        self.assertEqual((self.saldo(DOC), self.saldo(DEST)), (10, 0))
+        self.assertFalse(self.conn.in_transaction)
+
+    def test_lote_vazio_validade_nula(self):
+        self.conn.execute("UPDATE wms_produtos SET controla_validade = 0 WHERE id = 1")
+        self.conn.commit()
+        self.entrada(5, lote="", validade=None)
+        pid = self.pedido(5)
+        r = self.guardar(lote="", validade=None)
+        self.assertEqual((self.saldo(DOC, "", None), self.saldo(DEST, "", None)), (0, 5))
+        self.assertEqual((r["quantidade"], r["reservas_levadas"]), (5, 1))
+        self.assertEqual([x[:2] for x in self.reservas(pid)], [(DEST, 5.0)])
+
+    def test_caixa_aberta_guarda_com_quantidade_atual(self):
+        s = self.caixas(1)[0]
+        wms.registrar_movimento(self.conn, tipo="SAIDA", produto_id=1, quantidade=5, lote="L1", validade=VAL,
+                                origem=DOC, uuid="m-saida")
+        self.conn.execute("BEGIN IMMEDIATE")
+        cx.consumir_caixas(self.conn, posicao=DOC, produto_id=1, lote="L1", validade=VAL, qtd_un=5,
+                           movimento_uuid="m-saida")
+        self.conn.commit()
+        r = self.guardar()
+        c = cx.obter_caixa(self.conn, s)
+        self.assertEqual((r["movidas"], c["situacao"], c["qtd_un"], c["posicao"]), ([s], "ABERTA", 7, DEST))
+        self.assertEqual((self.saldo(DOC), self.saldo(DEST), r["quantidade"]), (0, 7, 7))
+        self.assertEqual(cx.divergencias(self.conn, 48), [])
+
+    def test_caixa_com_unidade_separada_nao_move(self):
+        s = self.caixas(2)
+        pid = self.pedido(5)
+        onda = sep.onda_de_um_pedido(self.conn, pid, ANA)
+        sep.separar_caixa(self.conn, onda, s[1], qtd_un=5, uuid="sep-uuid-1", operador=ANA)
+        r = self.guardar()
+        self.assertEqual(r["movidas"], [s[0]])
+        self.assertEqual(r["nao_movidas"], [{"serial": s[1], "motivo": "unidades separadas para pedido"}])
+        self.assertEqual(cx.obter_caixa(self.conn, s[1])["posicao"], DOC)
+        self.assertEqual(r["restante_na_doca"], 12)
+        self.assertEqual(cx.divergencias(self.conn, 48), [])
+
+    def test_reserva_de_caixa_separada_fica_na_doca(self):
+        # B separou a caixa inteira s[2] (reserva MANUAL na doca); A reservou depois (id maior).
+        # A guarda leva a reserva de A, nunca a de B, que sai da doca com a caixa.
+        s = self.caixas(3)
+        pid_b = self.pedido(12)
+        onda = sep.onda_de_um_pedido(self.conn, pid_b, ANA)
+        sep.separar_caixa(self.conn, onda, s[2], uuid="sep-uuid-b", operador=ANA)
+        codigo_b = f"PS-{self._stokki}"
+        pid_a = self.pedido(12)
+        r = self.guardar()
+        self.assertEqual((r["movidas"], r["nao_movidas"][0]["serial"], r["reservas_levadas"]), (s[:2], s[2], 1))
+        self.assertEqual([x[:2] for x in self.reservas(pid_b)], [(DOC, 12.0)])
+        self.assertEqual([x[:2] for x in self.reservas(pid_a)], [(DEST, 12.0)])
+        for codigo in (codigo_b, f"PS-{self._stokki}"):
+            b = wms_pedidos.baixar_por_expedicao(self.conn, codigo)
+            self.assertEqual((b["erros"], b["negativos"]), ([], []))
+        self.assertEqual(cx.obter_caixa(self.conn, s[2])["situacao"], "EXPEDIDA")
+        self.assertEqual((self.saldo(DOC), self.saldo(DEST)), (0, 12))
+        self.assertEqual(cx.divergencias(self.conn, 48), [])
+
+    def test_temperatura_diferente_pede_confirmacao(self):
+        wms.definir_temperatura_produto(self.conn, 1, "REFRIGERADO")
+        wms.criar_area(self.conn, "CR1", "CAM_REFRIGERADA"); wms.criar_posicao(self.conn, "CR1-P1")
+        self.entrada(10)
+        with self.assertRaises(wms_doca.TemperaturaDiferente) as ctx:
+            self.guardar()
+        self.assertEqual(ctx.exception.dados, {"produto": "REFRIGERADO", "area": "AMBIENTE", "sugerida": "CR1-P1"})
+        self.assertEqual(self.saldo(DOC), 10)
+        self.guardar(confirmar_temperatura=True)
+        self.assertEqual(self.saldo(DEST), 10)
+        obs = self.conn.execute("SELECT observacao FROM wms_movimentos WHERE uuid = 'g-u1'").fetchone()[0]
+        self.assertEqual(obs, "Guarda da doca · temperatura diferente confirmada")
+
+    def test_destino_doca_recusa(self):
+        self.entrada(10)
+        with self.assertRaises(wms.ErroWMS) as ctx:
+            self.guardar(destino="doc1-p1")
+        self.assertEqual(str(ctx.exception), "Bipe a posição de destino, não a doca.")
+        self.assertEqual(self.saldo(DOC), 10)
 
 
 if __name__ == "__main__":
