@@ -138,7 +138,8 @@
   .toast.on { opacity: 1; }
   .modal-cam { position: fixed; inset: 0; z-index: 70; background: #000; display: none; flex-direction: column; }
   .modal-cam.on { display: flex; }
-  .modal-cam video { flex: 1; width: 100%; object-fit: cover; }
+  .modal-cam video { flex: 1; min-height: 0; width: 100%; object-fit: cover; }
+  .modal-cam .x-cam { position: absolute; top: calc(10px + env(safe-area-inset-top)); left: 10px; z-index: 2; width: 44px; height: 44px; border-radius: 50%; border: 0; background: rgba(0,0,0,.55); color: #fff; font-size: 22px; line-height: 1; }
   .modal-cam .mira { position: absolute; left: 10%; right: 10%; top: 30%; height: 28%; border: 2px solid rgba(255,255,255,.85); border-radius: 12px; box-shadow: 0 0 0 100vmax rgba(0,0,0,.35); pointer-events: none; }
   .modal-cam .rodape-cam { padding: 14px; padding-bottom: calc(14px + env(safe-area-inset-bottom)); display: grid; gap: 8px; background: #000; }
   .modal-cam .rodape-cam p { margin: 0; color: #ccc; font-size: 13px; text-align: center; }
@@ -255,6 +256,7 @@
 
 <div class="modal-cam" id="modal-cam">
   <video id="video" playsinline muted autoplay></video>
+  <button type="button" class="x-cam" id="btn-x-cam" aria-label="Voltar">✕</button>
   <div class="mira"></div>
   <div class="rodape-cam">
     <p id="cam-status">Aponte para o código de barras ou QR</p>
@@ -1822,8 +1824,12 @@
   async function abrirCamera(onCodigo) {
     const modal = document.getElementById('modal-cam'); const video = document.getElementById('video'); const st = document.getElementById('cam-status');
     modal.classList.add('on'); st.textContent = 'Abrindo câmera…';
-    const fechar = () => { modal.classList.remove('on'); if (camLoop) cancelAnimationFrame(camLoop); camLoop = null; if (zxingReader) { try { zxingReader.reset(); } catch (e) {} } if (camStream) { camStream.getTracks().forEach((t) => t.stop()); camStream = null; } };
-    document.getElementById('btn-fechar-cam').onclick = fechar;
+    // gesto/botao "voltar" do celular fecha so a camera (nao sai da tela de bipagem)
+    const aoVoltar = () => fechar(true);
+    try { history.pushState({ cam: 1 }, ''); window.addEventListener('popstate', aoVoltar); } catch (e) {}
+    const fechar = (viaVoltar) => { window.removeEventListener('popstate', aoVoltar); if (viaVoltar !== true) { try { if (history.state && history.state.cam) history.back(); } catch (e) {} } modal.classList.remove('on'); if (camLoop) cancelAnimationFrame(camLoop); camLoop = null; if (zxingReader) { try { zxingReader.reset(); } catch (e) {} } if (camStream) { camStream.getTracks().forEach((t) => t.stop()); camStream = null; } };
+    document.getElementById('btn-fechar-cam').onclick = () => fechar();
+    document.getElementById('btn-x-cam').onclick = () => fechar();
     let ultimo = '', ultimoT = 0;
     const achou = (texto) => { const t = Date.now(); if (texto === ultimo && t - ultimoT < 2500) return; ultimo = texto; ultimoT = t; if (navigator.vibrate) navigator.vibrate(60); fechar(); onCodigo(texto); };
     try {
