@@ -6152,10 +6152,21 @@ def _wms_recebimento_usa_etapas(conn, recebimento_id, etapas=None) -> bool:
     return False
 
 
+def _wms_ja_em_conferencia(conn, recebimento_id) -> bool:
+    """Conferencia comecou no fluxo antigo (linha com qtd_enderecada > 0) e nunca teve chegada:
+    segue sem checklist. Recebimento novo nao cai aqui, porque conferir ja exige o Receber."""
+    rid = int(recebimento_id)
+    if conn.execute("SELECT 1 FROM wms_chegada_recebimentos WHERE recebimento_id = ?", (rid,)).fetchone():
+        return False
+    return conn.execute("SELECT 1 FROM wms_recebimento_itens WHERE recebimento_id = ? AND qtd_enderecada > 0",
+                        (rid,)).fetchone() is not None
+
+
 def _wms_trava_chegada(conn, recebimento_id):
     """None se pode conferir; senao a resposta 400 (a conferencia exige o Receber liberado)."""
     wms_chegada.garantir_tabelas(conn)
-    if _wms_recebimento_usa_etapas(conn, recebimento_id) and not wms_chegada.pode_conferir(conn, recebimento_id):
+    if (_wms_recebimento_usa_etapas(conn, recebimento_id) and not wms_chegada.pode_conferir(conn, recebimento_id)
+            and not _wms_ja_em_conferencia(conn, recebimento_id)):
         return _wms_json_erro(_MSG_TRAVA_CHEGADA)
     return None
 
@@ -6169,6 +6180,8 @@ def _wms_marcar_chegada(conn, rec: dict, etapas=None) -> None:
         return
     rec["usa_etapas"] = _wms_recebimento_usa_etapas(conn, rec["id"], etapas)
     rec["chegada_estado"] = wms_chegada.estado_do_recebimento(conn, rec["id"])
+    if rec["usa_etapas"] and rec["chegada_estado"] == "SEM_CHEGADA" and _wms_ja_em_conferencia(conn, rec["id"]):
+        rec["chegada_estado"] = "JA_EM_CONFERENCIA"   # vai para Conferir Recebimento, nao para o Receber
     viva = conn.execute(
         "SELECT c.id FROM wms_chegada_recebimentos cr JOIN wms_chegadas c ON c.id = cr.chegada_id "
         "WHERE cr.recebimento_id = ? AND c.estado != 'NAO_RECEBIDA' ORDER BY c.id DESC LIMIT 1",

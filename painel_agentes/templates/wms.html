@@ -875,7 +875,7 @@
 
   // Receber -- checklist da chegada do caminhão (só com etapas)
   const paraReceber = (x) => x.usa_etapas && ['SEM_CHEGADA', 'RASCUNHO', 'AGUARDANDO_ESCRITORIO'].includes(x.chegada_estado);
-  const paraConferir = (x) => !S.etapasAtivo || !x.usa_etapas || x.chegada_estado === 'LIBERADA';
+  const paraConferir = (x) => !S.etapasAtivo || !x.usa_etapas || ['LIBERADA', 'JA_EM_CONFERENCIA'].includes(x.chegada_estado);
   const donoDe = (x) => String(x.stkkc_id || '').trim() || String(x.embarcador || '').trim().toUpperCase();
   const ROTULO_FOTO = { CAMINHAO_ABERTO: 'Caminhão aberto', PLACA: 'Placa', NOTA_FISCAL: 'Nota fiscal', TERMOMETRO: 'Termômetro', CARGA: 'Carga', AVARIA: 'Avaria' };
   const ROTULO_CLASSE = { REFRIGERADO: 'Refrigerado', CONGELADO: 'Congelado' };

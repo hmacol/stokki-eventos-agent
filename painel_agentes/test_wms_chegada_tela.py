@@ -187,6 +187,33 @@ class Trava(Base):
         self.assertEqual((r.status_code, r.get_json()["erro"]), (400, self.MSG))
         m.assert_not_called()
 
+    def ja_conferido(self, rid, qtd=2):
+        conn = wms_caixas.conectar()
+        conn.execute("UPDATE wms_recebimento_itens SET qtd_enderecada = ? WHERE recebimento_id = ?", (qtd, rid))
+        conn.commit()
+        conn.close()
+
+    def test_recebimento_ja_em_conferencia_segue_sem_checklist(self):
+        rid = self.receb()
+        self.ja_conferido(rid)   # comecou no fluxo antigo, antes de o embarcador ganhar etapas
+        self.entrar("galpao")
+        rec = self.cliente.get("/api/wms/recebimentos").get_json()["recebimentos"][0]
+        self.assertEqual((rec["usa_etapas"], rec["chegada_estado"], rec["chegada_id"]), (True, "JA_EM_CONFERENCIA", None))
+        r = self.enviar(f"/api/wms/recebimentos/{rid}/itens/1/enderecar", {"qtd": 1, "uuid": "x2"})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        r, _ = self.encerrar(rid)
+        self.assertEqual(r.status_code, 200, r.get_json())
+
+    def test_recebimento_com_chegada_recusada_continua_na_trava(self):
+        rid, cid = self.aguardando()
+        self.enviar(f"/api/wms/chegadas/{cid}/nao-receber", {"motivo": "carga quente"})
+        self.ja_conferido(rid)
+        self.entrar("galpao")
+        self.assertEqual(self.cliente.get(f"/api/wms/recebimentos/{rid}").get_json()["recebimento"]["chegada_estado"],
+                         "SEM_CHEGADA")
+        for r in self.tres_rotas(rid):
+            self.assertEqual(r.get_json()["erro"], self.MSG)
+
     def test_embarcador_sem_etapas_nao_tem_trava(self):
         self.cfg["wms"]["pilotos"] = []
         rid = self.receb()
@@ -434,6 +461,11 @@ class TelasNoHtml(Base):
                   "Pedir liberação ao cliente", 'capture="environment"', "Relatório de Recebimento (PDF)",
                   "outro embarcador: faça um Receber separado", "Sem rede: a foto não foi enviada. Tente de novo."):
             self.assertIn(m, h)
+
+    def test_ja_em_conferencia_vai_para_conferir(self):
+        self.entrar("galpao")
+        h = self.cliente.get("/wms").get_data(as_text=True)
+        self.assertIn("['LIBERADA', 'JA_EM_CONFERENCIA'].includes(x.chegada_estado)", h)
 
     def test_descartar_nas_duas_telas(self):
         self.entrar("galpao")
