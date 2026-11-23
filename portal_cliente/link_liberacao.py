@@ -14,7 +14,7 @@ from itsdangerous import BadData, URLSafeTimedSerializer
 _SALT = "liberacao-recebimento"
 VALIDADE_DIAS = 7
 
-_ERRO_NOME = "Informe o seu nome (de 3 a 80 letras) para registrar a resposta."
+_ERRO_NOME = "Informe o seu nome (de 3 a 80 letras)."
 _ROTULO_FOTO = {"CAMINHAO_ABERTO": "Caminhão aberto", "PLACA": "Placa", "NOTA_FISCAL": "Nota fiscal",
                 "TERMOMETRO": "Termômetro", "CARGA": "Carga", "AVARIA": "Avaria"}
 
@@ -114,8 +114,10 @@ def registrar(app, *, config: dict, secret: str, db_path=None, enviar=None):
                      f"<strong>{'autorizou' if autorizou else 'não autorizou'}</strong> o recebimento de "
                      f"{html.escape(codigos)}.</p>"
                      "<p>Entre no <strong>/wms</strong> do painel para decidir o que fazer com a carga.</p>")
-            destino = (config.get("notificacao_chegada_recebimento") or {}).get("email_escritorio") \
-                or "entregas@freshlogbr.com"
+            # assunto, destino padrao e chave tem par em painel_agentes/wms_chegada_avisos.avisar_escritorio
+            # (..., "RESPOSTA_CLIENTE") e mudam juntos
+            destino = str((config.get("notificacao_chegada_recebimento") or {}).get("email_escritorio")
+                          or "").strip() or "entregas@freshlogbr.com"
             if enviar is None:
                 import email_utils
                 enviar_ = email_utils.enviar_email
@@ -146,16 +148,17 @@ def registrar(app, *, config: dict, secret: str, db_path=None, enviar=None):
             d = _chegada(conn, chegada_id)
             if d is None:
                 return _erro()
-            if resposta not in ("autorizo", "nao_autorizo") or len(nome) > 80:
-                return _pagina(token, d, erro=_ERRO_NOME if resposta in ("autorizo", "nao_autorizo")
-                               else "Escolha uma das duas respostas.", nome=nome[:80], status=400)
+            # primeiro o estado: carga que ja nao aguarda ou ja respondida mostra o modo leitura, seja qual for o form
+            if d["estado"] != "AGUARDANDO_ESCRITORIO" or d["resposta_cliente"]:
+                return redirect(url_for("liberacao_pagina", token=token), code=303)
+            if resposta not in ("autorizo", "nao_autorizo"):
+                return _pagina(token, d, erro="Escolha uma das duas respostas.", nome=nome[:80], status=400)
+            if not 3 <= len(nome) <= 80:
+                return _pagina(token, d, erro=_ERRO_NOME, nome=nome[:80], status=400)
             try:
                 d = wms_chegada.responder_cliente(conn, chegada_id, nome, resposta == "autorizo")
-            except wms_chegada.ErroChegada as e:
-                atual = _chegada(conn, chegada_id)
-                if atual and atual["estado"] == "AGUARDANDO_ESCRITORIO" and not atual["resposta_cliente"]:
-                    return _pagina(token, atual, erro=str(e), nome=nome, status=400)   # nome curto
-                return redirect(url_for("liberacao_pagina", token=token), code=303)    # ja decidido
+            except wms_chegada.ErroChegada:   # outra resposta ou o escritorio decidiu no meio
+                return redirect(url_for("liberacao_pagina", token=token), code=303)
             logger.info(f"liberacao {chegada_id}: {d['resposta_cliente']} por {nome}")
             _avisar_escritorio(conn, d)
         return redirect(url_for("liberacao_pagina", token=token), code=303)
@@ -168,6 +171,8 @@ def registrar(app, *, config: dict, secret: str, db_path=None, enviar=None):
         try:
             with closing(wms_chegada.conectar(db)) as conn:
                 caminho = wms_chegada.caminho_foto(conn, chegada_id, foto_id, pasta_fotos)
+            if not caminho.resolve().is_relative_to(pasta_fotos.resolve()):
+                abort(404)
             resposta = send_file(caminho, mimetype="image/jpeg", max_age=0)
         except (wms_chegada.ErroChegada, OSError):
             abort(404)

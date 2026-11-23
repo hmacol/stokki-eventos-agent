@@ -6,6 +6,8 @@ e `enviar` falso: nenhum e-mail sai.
 
 Rodar (da raiz): py -3.11 -m unittest portal_cliente.test_link_liberacao
 """
+import builtins
+import io
 import sys
 import tempfile
 import time
@@ -22,9 +24,12 @@ for _p in (_RAIZ, _AQUI):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
+import auth_cliente  # noqa: E402
 import link_liberacao  # noqa: E402
 from painel_agentes import wms_chegada  # noqa: E402
 
+HTTPS = "https://localhost"
+CNPJ = "54993021000184"
 SEGREDO = "segredo-de-teste"
 CONFIG = {"notificacao_chegada_recebimento": {"email_escritorio": "escritorio@teste.local"}}
 
@@ -222,16 +227,100 @@ class PaginaLiberacao(unittest.TestCase):
         self.assertEqual(c.get(self._url(cid, f"/foto/{foto_outra}")).status_code, 404)
         self.assertEqual(c.get(self._url(cid, "/foto/99999")).status_code, 404)
 
-    def test_rota_livre_sem_login(self):
-        """No app real, sem sessao, os tres endpoints passam antes do login e da troca de PIN."""
-        texto = (_AQUI / "app.py").read_text(encoding="utf-8")
-        trecho = texto[texto.index("_LIVRES_ANTES_DA_TROCA = {"):texto.index("\n_LIVRES_ANTES_DO_CADASTRO =")]
-        for endpoint in ("liberacao_pagina", "liberacao_responder", "liberacao_foto"):
-            self.assertIn(f'"{endpoint}"', trecho)
+    def test_token_adulterado_ou_vencido_na_rota_404(self):
         cid = self._chegada()
-        r = self._cliente().get(self._url(cid))
+        c = self._cliente()
+        token = link_liberacao.gerar(cid, SEGREDO)
+        trocado = token[:-1] + ("A" if token[-1] != "A" else "B")
+        self.assertEqual(c.get(f"/liberacao/{trocado}").status_code, 404)
+        self.assertEqual(c.post(f"/liberacao/{trocado}/responder", data={"nome": "Maria Souza",
+                                                                        "resposta": "autorizo"}).status_code, 404)
+        with mock.patch.object(time, "time", return_value=time.time() + 8 * 86400):
+            self.assertEqual(c.get(f"/liberacao/{token}").status_code, 404)
+        self.assertEqual(self._estado(cid)["resposta_cliente"], "")
+
+    def test_ja_respondida_com_form_invalido_mostra_leitura(self):
+        cid = self._chegada()
+        c = self._cliente()
+        c.post(self._url(cid, "/responder"), data={"nome": "Maria Souza", "resposta": "autorizo"})
+        r = c.post(self._url(cid, "/responder"), data={"nome": "", "resposta": "x"})
+        self.assertEqual(r.status_code, 303)
+
+    def test_foto_com_arquivo_fora_da_pasta_404(self):
+        cid = self._chegada()
+        (self.db.parent / "fora.jpg").write_bytes(b"segredo")
+        (self.db.parent / "chegadas").mkdir(exist_ok=True)
+        cur = self.conn.execute("INSERT INTO wms_chegada_fotos (chegada_id, tipo, arquivo) VALUES (?, 'CARGA', ?)",
+                                (cid, "../fora.jpg"))
+        self.conn.commit()
+        self.assertEqual(self._cliente().get(self._url(cid, f"/foto/{cur.lastrowid}")).status_code, 404)
+
+
+class RotaLivreNoAppReal(unittest.TestCase):
+    """Sem login e com a troca de PIN pendente, os tres endpoints passam pelo before_request do app real."""
+
+    @classmethod
+    def setUpClass(cls):
+        real_open = builtins.open
+
+        def abrir(arq, *a, **k):  # worktree sem config.yaml (segredo): so o import do app ve um de teste
+            if str(arq).endswith("config.yaml") and not Path(arq).exists():
+                return io.StringIO("portal_cliente: {secret_key: teste-teste-teste-teste-teste-teste-1234}")
+            return real_open(arq, *a, **k)
+
+        try:
+            with mock.patch.object(builtins, "open", abrir):
+                import app as portal
+        except Exception as e:  # noqa: BLE001
+            raise unittest.SkipTest(f"app do portal nao importa neste ambiente ({e})")
+        cls.portal = portal
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        db = Path(tmp.name) / "dados.db"
+        original = wms_chegada.conectar
+        for p in (mock.patch.object(auth_cliente, "DB_PATH", db),   # nada grava no dados.db do repo
+                  mock.patch.object(wms_chegada, "conectar", lambda *_: original(db))):
+            p.start()
+            self.addCleanup(p.stop)
+        conn = original(db)
+        self.addCleanup(conn.close)
+        conn.execute("CREATE TABLE wms_recebimentos (id INTEGER PRIMARY KEY, codigo TEXT, embarcador TEXT)")
+        conn.execute("INSERT INTO wms_chegadas (uuid, estado, chegada_em, criado_em) VALUES "
+                     "('u', 'AGUARDANDO_ESCRITORIO', '2026-11-22 08:30:00', '2026-11-22 08:30:00')")
+        conn.execute("INSERT INTO wms_chegada_fotos (chegada_id, tipo, arquivo) VALUES (1, 'CARGA', 'nao-existe.jpg')")
+        conn.commit()
+        c = auth_cliente.conectar()
+        c.execute("CREATE TABLE interno (cnpj_embarcador TEXT, sender_id INTEGER, nome_remetente TEXT, "
+                  "apelido TEXT, email TEXT)")
+        c.execute("INSERT INTO interno VALUES (?, 100, 'LOJA', NULL, 'a@b.c')", (CNPJ,))
+        c.commit()
+        conta = auth_cliente.definir_pin(c, CNPJ, "135790", trocar_pin=True)
+        c.close()
+        self.cli = self.portal.app.test_client()
+        with self.cli.session_transaction(base_url=HTTPS) as s:
+            s["cnpj"], s["v"] = CNPJ, auth_cliente.versao_conta(conta)
+        self.token = link_liberacao.gerar(1, self.portal._SECRET)
+
+    def test_endpoints_abrem_com_troca_de_pin_pendente(self):
+        self.assertEqual(self.cli.get("/", base_url=HTTPS).status_code, 302)   # a trava da troca vale
+        r = self.cli.get(f"/liberacao/{self.token}", base_url=HTTPS)
         self.assertEqual(r.status_code, 200)
-        self.assertNotIn("/login", r.headers.get("Location", ""))
+        self.assertIn("Autorizo o recebimento", r.get_data(as_text=True))
+        # nome vazio: a propria pagina responde 400 (sem gravar nem mandar e-mail), nunca 302
+        r = self.cli.post(f"/liberacao/{self.token}/responder", data={"nome": "", "resposta": "autorizo"},
+                          base_url=HTTPS)
+        self.assertEqual(r.status_code, 400)
+        # foto cadastrada sem arquivo: 404 da propria rota, nunca 302
+        self.assertEqual(self.cli.get(f"/liberacao/{self.token}/foto/1", base_url=HTTPS).status_code, 404)
+
+    def test_endpoints_abrem_sem_sessao(self):
+        cli = self.portal.app.test_client()
+        self.assertEqual(cli.get(f"/liberacao/{self.token}", base_url=HTTPS).status_code, 200)
+        self.assertEqual(cli.get(f"/liberacao/{self.token}/foto/1", base_url=HTTPS).status_code, 404)
+        self.assertEqual(cli.post(f"/liberacao/{self.token}/responder", data={"nome": ""},
+                                  base_url=HTTPS).status_code, 400)
 
 
 if __name__ == "__main__":
