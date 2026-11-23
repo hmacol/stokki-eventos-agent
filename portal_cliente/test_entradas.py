@@ -159,7 +159,69 @@ class TestValidarEntrada(BasePortal):
         item = self._item(itens=[("NAO-EXISTE", "", "X", 1, "UN", 1)])
         v = entradas.validar_entrada(self.conn, item, CNPJ, self.config)
         self.assertFalse(v["ok"])
-        self.assertIn("SKU não encontrado no catálogo", v["erros"][0])
+        self.assertIn("não existe(m) no cadastro", v["erros"][0])
+
+    # ── conferência produto por produto (spec v2, V4) ──
+
+    def _catalogo(self, linhas):
+        self.conn.execute("DELETE FROM wms_produtos")
+        for i, (sku, ean, dun, qtd_cx, un) in enumerate(linhas, start=1):
+            self.conn.execute("INSERT INTO wms_produtos VALUES (?, ?, ?, ?, ?, ?, 'CLIENTE TESTE', 48, ?, ?, 1, '2026-09-25 10:00:00')",
+                              (i, 900 + i, sku, ean, dun, f"DESC {sku}", qtd_cx, un))
+        self.conn.commit()
+
+    def _cfg(self):
+        return {"client_id": 48, "nome": "CLIENTE TESTE"}
+
+    def test_conferencia_converte_cx_e_un(self):
+        self._catalogo([("A", None, None, 12, "UN"), ("B", None, None, None, "UN")])
+        item = {"itens_lista": [
+            {"linha": 1, "sku": "A", "descricao": "a", "quantidade": 20, "unidade": "CX"},
+            {"linha": 2, "sku": "A", "descricao": "a", "quantidade": 96, "unidade": "UN"},
+            {"linha": 3, "sku": "B", "descricao": "b", "quantidade": 5, "unidade": "UN"},
+            {"linha": 4, "sku": "B", "descricao": "b", "quantidade": 5, "unidade": "cx"},
+        ]}
+        c = entradas.conferir_itens(self.conn, item, self._cfg())
+        self.assertEqual((c[0]["caixas"], c[0]["unidades"], c[0]["qtd_por_caixa"]), (20, 240, 12))
+        self.assertEqual((c[1]["caixas"], c[1]["unidades"]), (8, 96))
+        self.assertIsNone(c[2]["caixas"])
+        self.assertEqual(c[2]["unidades"], 5)
+        self.assertEqual(c[3]["caixas"], 5)
+        self.assertIsNone(c[3]["unidades"])
+        self.assertTrue(all(x["cadastrado"] for x in c))
+        self.assertEqual(c[0]["descricao"], "DESC A")   # descrição do catálogo
+
+    def test_conferencia_aceita_ean_e_dun(self):
+        self._catalogo([("A", "7891111111111", "17891111111118", 6, "UN")])
+        item = {"itens_lista": [
+            {"linha": 1, "sku": "7891111111111", "descricao": "x", "quantidade": 1, "unidade": "UN"},
+            {"linha": 2, "sku": "17891111111118", "descricao": "y", "quantidade": 1, "unidade": "UN"},
+            {"linha": 3, "sku": "a", "descricao": "z", "quantidade": 1, "unidade": "UN"},
+        ]}
+        c = entradas.conferir_itens(self.conn, item, self._cfg())
+        self.assertEqual([x["cadastrado"] for x in c], [True, True, True])
+
+    def test_produto_fora_do_cadastro_trava_com_texto(self):
+        item = self._item(itens=[("NUU001FD", "7891234567890", "MINI", 1, "UN", 1), ("X9", "", "FORA", 1, "UN", 1)])
+        v = entradas.validar_entrada(self.conn, item, CNPJ, self.config)
+        self.assertFalse(v["ok"])
+        self.assertEqual(v["erros"], ["1 produto(s) não existe(m) no cadastro: X9. Peça o cadastro à Fresh Log."])
+        self.assertEqual([x["cadastrado"] for x in v["conferencia"]], [True, False])
+
+    def test_sem_catalogo_trava(self):
+        # V4: sem nenhum produto do embarcador no cadastro, trava (na v1 era só aviso)
+        self.conn.execute("DELETE FROM wms_produtos")
+        self.conn.commit()
+        v = entradas.validar_entrada(self.conn, self._item(), CNPJ, self.config)
+        self.assertFalse(v["ok"])
+        self.assertEqual(v["erros"], ["Nenhum produto seu está no cadastro da Fresh Log ainda. Peça o cadastro à Fresh Log antes de anunciar."])
+        self.assertIsNone(v["conferencia"])
+
+    def test_nota_ok_devolve_conferencia(self):
+        v = entradas.validar_entrada(self.conn, self._item(), CNPJ, self.config)
+        self.assertTrue(v["ok"])
+        self.assertEqual(len(v["conferencia"]), 1)
+        self.assertTrue(v["conferencia"][0]["cadastrado"])
 
     def test_chave_ja_anunciada_e_cancelada(self):
         item = self._item()
@@ -628,6 +690,54 @@ class TestAmarracaoEStatus(BasePortal):
         self.conn.commit()
         entradas.sincronizar_status(self.conn)
         self.assertEqual(entradas.buscar_entrada(self.conn, 1, CNPJ)["status"], "CANCELADO")   # CANCELADO nunca reabre
+
+
+class TestRotaAnalisar(BasePortal):
+    """Lote com várias notas: a que tem produto fora do cadastro trava sozinha
+    (vai pra `rejeitados` com a conferência); as outras seguem confirmáveis."""
+
+    @classmethod
+    def setUpClass(cls):
+        # antes do setUp: o BasePortal troca ep._RAIZ, e o app.py resolve
+        # documentos_pedido/ a partir dele ao ser importado
+        from test_endereco_entrega_api import _importar_app
+        cls.app_mod = _importar_app()
+
+    def test_conferencia_trava_so_a_nota_com_produto_fora(self):
+        import io
+        app = self.app_mod
+        entradas.definir_entradas_ativo(self.conn, CNPJ, True)
+        cliente = {"cnpj": CNPJ, "sender_id": 1, "nome": "CLIENTE TESTE", "cnpj_formatado": "12.345.678/0001-95",
+                   "versao": "x", "sender_ids": [1],
+                   "empresas": [{"cnpj": CNPJ, "cnpj_formatado": "12.345.678/0001-95", "sender_id": 1, "nome": "CLIENTE TESTE"}]}
+        patches = [
+            mock.patch.object(ep, "config_stokki_cliente", return_value={"client_id": 48, "nome": "CLIENTE TESTE"}),
+            mock.patch.object(app.auth, "sessao_valida", lambda c, cnpj, v: dict(cliente)),
+            mock.patch.object(app, "_CONFIG", self.config),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        (ep.PASTA_TEMP).mkdir(parents=True, exist_ok=True)
+        app.app.config["TESTING"] = True
+        tc = app.app.test_client()
+        with tc.session_transaction() as s:
+            s["cnpj"] = CNPJ
+            s["v"] = "x"
+        boa = xml_remessa(nf="100", chave="35260912345678000195550010000001001000000011")
+        ruim = xml_remessa(nf="101", chave="35260912345678000195550010000001011000000012",
+                           itens=[("NUU001FD", "7891234567890", "MINI", 1, "UN", 1), ("X9", "", "FORA", 1, "UN", 1)])
+        r = tc.post("/api/entradas/analisar", data={"arquivos": [(io.BytesIO(boa), "boa.xml"), (io.BytesIO(ruim), "ruim.xml")]},
+                    content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        j = r.get_json()
+        self.assertEqual(len(j["itens"]), 1)
+        self.assertEqual(len(j["rejeitados"]), 1)
+        self.assertEqual(j["itens"][0]["numero_nf"], "100")
+        self.assertTrue(j["itens"][0]["conferencia"])
+        rej = j["rejeitados"][0]
+        self.assertIn("X9", rej["erro"])
+        self.assertEqual([x["cadastrado"] for x in rej["conferencia"]], [True, False])
 
 
 class TestCli(BasePortal):

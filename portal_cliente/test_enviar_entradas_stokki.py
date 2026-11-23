@@ -90,6 +90,10 @@ class Base(unittest.TestCase):
         self.conn = entradas.conectar()
         self.conn.execute("CREATE TABLE interno (cnpj_embarcador TEXT, apelido TEXT, nome_remetente TEXT, stkkc_id INTEGER, sender_id INTEGER, email TEXT, notificar_email INTEGER)")
         self.conn.execute("INSERT INTO interno VALUES (?, 'CLIENTE TESTE', 'CLIENTE TESTE', 48, 1, 'c@t.com', 1)", (CNPJ,))
+        # sem produto no cadastro a entrada nem é anunciada (spec v2, V4)
+        self.conn.execute("CREATE TABLE wms_produtos (id INTEGER PRIMARY KEY, sku TEXT, ean TEXT, dun TEXT, descricao TEXT, embarcador TEXT, "
+                          "embarcador_id INTEGER, qtd_por_caixa REAL, unidade TEXT, ativo INTEGER)")
+        self.conn.execute("INSERT INTO wms_produtos VALUES (1, 'NUU001FD', '7891234567890', NULL, 'MINI CX PAO DE QUEIJO', 'CLIENTE TESTE', 48, 1, 'UN', 1)")
         self.conn.commit()
         entradas.definir_entradas_ativo(self.conn, CNPJ, True)
         self.config = {"portal_cliente": {}}

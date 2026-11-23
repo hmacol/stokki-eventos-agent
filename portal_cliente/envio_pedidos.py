@@ -1017,6 +1017,31 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
     return pedidos, rejeitados
 
 
+def produtos_do_embarcador(conn: sqlite3.Connection, cfg: dict) -> list[sqlite3.Row] | None:
+    """Produtos ativos do embarcador no catálogo local (wms_produtos), com as
+    colunas sku, ean, dun, descricao, unidade, qtd_por_caixa (NULL pra coluna
+    que o banco não tenha). None = sem tabela, ou cfg sem client_id nem nome."""
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(wms_produtos)")}
+    except sqlite3.Error:
+        cols = set()
+    if not cols:
+        return None
+    cid = cfg.get("client_id")
+    nome = (cfg.get("nome") or "").strip()
+    cond, args = [], []
+    if cid:
+        cond.append("embarcador_id = ?")
+        args.append(int(cid))
+    if nome:
+        cond.append("LOWER(embarcador) = LOWER(?)")
+        args.append(nome)
+    if not cond:
+        return None
+    sel = ", ".join(c if c in cols else f"NULL AS {c}" for c in ("sku", "ean", "dun", "descricao", "unidade", "qtd_por_caixa"))
+    return conn.execute(f"SELECT {sel} FROM wms_produtos WHERE ativo = 1 AND ({' OR '.join(cond)})", args).fetchall()
+
+
 def validar_skus(conn: sqlite3.Connection, pedido: dict, cfg: dict) -> tuple[list[str], list[str]]:
     """Confere os SKUs no catálogo local do Stokki (wms_produtos, sincronizado
     pelo WMS). Se o catálogo tem produtos desse embarcador e o SKU não está
@@ -1028,18 +1053,9 @@ def validar_skus(conn: sqlite3.Connection, pedido: dict, cfg: dict) -> tuple[lis
         tem = None
     if not tem:
         return erros, ["Catálogo de produtos indisponível -- os SKUs serão conferidos pela Stokki."]
-    cid = cfg.get("client_id")
-    nome = (cfg.get("nome") or "").strip()
-    cond, args = [], []
-    if cid:
-        cond.append("embarcador_id = ?")
-        args.append(int(cid))
-    if nome:
-        cond.append("LOWER(embarcador) = LOWER(?)")
-        args.append(nome)
-    if not cond:
+    rows = produtos_do_embarcador(conn, cfg)
+    if rows is None:   # cfg sem client_id nem nome
         return erros, avisos
-    rows = conn.execute(f"SELECT sku, ean, dun, descricao FROM wms_produtos WHERE ativo = 1 AND ({' OR '.join(cond)})", args).fetchall()
     if not rows:
         return erros, ["Catálogo do seu embarcador ainda não sincronizado -- os SKUs serão conferidos pela Stokki."]
     conhecidos = {}

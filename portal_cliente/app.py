@@ -1805,10 +1805,11 @@ def api_entradas_analisar():
                     vistos.add(item["chave_nfe"])
                     v = entradas_mod.validar_entrada(conn, item, cnpj, _CONFIG, _outras_empresas_envio())
                     if not v["ok"]:
-                        rejeitados.append({"arquivo": nome, "rotulo": rotulo, "erro": " ".join(v["erros"])})
+                        rejeitados.append({"arquivo": nome, "rotulo": rotulo, "erro": " ".join(v["erros"]),
+                                           "conferencia": v["conferencia"]})
                         continue
                     previa = {k: x for k, x in item.items() if k not in ("emitente_cnpj",)}
-                    previa.update({"token": guardar(), "avisos": v["avisos"], "rotulo": rotulo})
+                    previa.update({"token": guardar(), "avisos": v["avisos"], "rotulo": rotulo, "conferencia": v["conferencia"]})
                     itens.append(previa)
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)

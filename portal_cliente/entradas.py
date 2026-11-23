@@ -180,10 +180,46 @@ def _quando_br(valor: str | None) -> str:
         return valor
 
 
+def _e_caixa(unidade) -> bool:
+    u = str(unidade or "").strip().upper()
+    return u.startswith("CX") or u == "CAIXA"
+
+
+def conferir_itens(conn: sqlite3.Connection, item: dict, cfg: dict) -> list[dict] | None:
+    """Conferência produto por produto da nota contra o cadastro (wms_produtos)
+    do embarcador, uma linha por item de `itens_lista`. None = sem catálogo.
+    Casa por SKU, EAN ou DUN (maiúsculas), como o Envio. A quantidade da nota
+    na unidade CX é de caixas; em qualquer outra, de unidades -- a outra ponta
+    sai de `qtd_por_caixa` (None quando o cadastro não tem)."""
+    rows = ep.produtos_do_embarcador(conn, cfg)
+    if not rows:
+        return None
+    conhecidos = {}
+    for r in rows:
+        for k in (r["sku"], r["ean"], r["dun"]):
+            if k:
+                conhecidos[str(k).strip().upper()] = r
+    saida = []
+    for it in item.get("itens_lista") or []:
+        prod = conhecidos.get(str(it["sku"]).strip().upper())
+        qtd = float(it["quantidade"])
+        qpc = float(prod["qtd_por_caixa"]) if prod is not None and prod["qtd_por_caixa"] else None
+        if _e_caixa(it.get("unidade")):
+            caixas, unidades = qtd, (round(qtd * qpc, 3) if qpc else None)
+        else:
+            caixas, unidades = (round(qtd / qpc, 2) if qpc else None), qtd
+        saida.append({"linha": it.get("linha"), "sku": it["sku"],
+                      "descricao": (prod["descricao"] if prod is not None and prod["descricao"] else it.get("descricao")) or "",
+                      "quantidade": qtd, "unidade": it.get("unidade") or "", "cadastrado": prod is not None,
+                      "qtd_por_caixa": qpc, "caixas": caixas, "unidades": unidades})
+    return saida
+
+
 def validar_entrada(conn: sqlite3.Connection, item: dict, cnpj_cliente: str, config: dict | None,
                     outras_empresas: dict[str, str] | None = None) -> dict:
-    """{ok, erros[], avisos[], existente} -- as 5 regras da spec (7.1),
-    menos a data prevista, que só existe na confirmação."""
+    """{ok, erros[], avisos[], existente, conferencia} -- as 5 regras da spec
+    (7.1), menos a data prevista, que só existe na confirmação. Produto fora
+    do cadastro (ou embarcador sem nenhum produto) trava (spec v2, V4)."""
     erros, avisos = [], []
     emb = _so_digitos(cnpj_cliente)
     if item.get("emitente_cnpj") != emb:
@@ -211,13 +247,23 @@ def validar_entrada(conn: sqlite3.Connection, item: dict, cnpj_cliente: str, con
     except ErroEnvio as e:
         erros.append(str(e))
         cfg = None
+    conferencia = None
     if cfg is not None:
-        erros_sku, avisos_sku = ep.validar_skus(conn, item, cfg)
-        erros.extend(erros_sku)
-        avisos.extend(avisos_sku)
+        conferencia = conferir_itens(conn, item, cfg)
+        if conferencia is None:
+            erros.append("Nenhum produto seu está no cadastro da Fresh Log ainda. Peça o cadastro à Fresh Log antes de anunciar.")
+        else:
+            fora = sorted({c["sku"] for c in conferencia if not c["cadastrado"]})
+            if fora:
+                erros.append(f"{len(fora)} produto(s) não existe(m) no cadastro: " + ", ".join(fora[:8]) + ("…" if len(fora) > 8 else "")
+                             + ". Peça o cadastro à Fresh Log.")
+            else:
+                for it, c in zip(item["itens_lista"], conferencia):
+                    it["descricao"] = c["descricao"]   # a descrição do cadastro vai pro portal_entrada_itens
     if not item.get("itens_lista"):
         erros.append("A nota não tem itens (<det>) -- não dá pra anunciar o que vai chegar.")
-    return {"ok": not erros, "erros": erros, "avisos": avisos, "existente": dict(existente) if existente else None}
+    return {"ok": not erros, "erros": erros, "avisos": avisos, "existente": dict(existente) if existente else None,
+            "conferencia": conferencia}
 
 
 # ── Planilha de entrada ────────────────────────────────────────────────────────
