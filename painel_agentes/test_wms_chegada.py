@@ -263,6 +263,17 @@ class TestChegada(_Base):
     def test_foto_tipo_invalido(self):
         self._recusa_foto("SELFIE", self._png((100, 100)))
 
+    def test_foto_so_em_rascunho(self):
+        for estado, rec in (("LIBERADA", self.rec), ("AGUARDANDO_ESCRITORIO", self.rec_seco)):
+            c = self._abrir(uuid="u-" + estado, ids=[rec])
+            self.conn.execute("UPDATE wms_chegadas SET estado = ? WHERE id = ?", (estado, c["id"]))
+            self.conn.commit()
+            with self.assertRaises(wms_chegada.ErroChegada) as cm:
+                wms_chegada.salvar_foto(self.conn, c["id"], "CARGA", self._png((100, 100)), pasta=self.pasta)
+            self.assertEqual(str(cm.exception), "Esse checklist já foi concluído: não dá para mudar as fotos.")
+        self.assertEqual(self.n("wms_chegada_fotos"), 0)
+        self.assertEqual(list(self.pasta.glob("*")), [])
+
     def test_remover_foto_so_em_rascunho(self):
         c = self._abrir()
         f = wms_chegada.salvar_foto(self.conn, c["id"], "CARGA", self._png((100, 100)), pasta=self.pasta)

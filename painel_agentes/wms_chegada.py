@@ -237,8 +237,11 @@ def salvar_foto(conn, chegada_id: int, tipo: str, conteudo: bytes, pasta: Path |
         raise ErroChegada("Tipo de foto inválido.")
     if len(conteudo or b"") > MAX_FOTO_BYTES:
         raise ErroChegada("Foto grande demais (máximo 12 MB).")
-    if not conn.execute("SELECT 1 FROM wms_chegadas WHERE id = ?", (chegada_id,)).fetchone():
+    atual = conn.execute("SELECT estado FROM wms_chegadas WHERE id = ?", (chegada_id,)).fetchone()
+    if not atual:
         raise ErroChegada("Chegada não encontrada.")
+    if atual["estado"] != "RASCUNHO":
+        raise ErroChegada("Esse checklist já foi concluído: não dá para mudar as fotos.")
     try:
         img = ImageOps.exif_transpose(Image.open(io.BytesIO(conteudo or b"")))
         img.thumbnail((2200, 2200))
@@ -389,7 +392,7 @@ def concluir(conn, chegada_id: int, dados: dict, config: dict, operador: dict) -
     return _resultado(conn, chegada_id)
 
 
-_MSG_NAO_AGUARDA = "Essa carga não está mais aguardando decisão."
+MSG_NAO_AGUARDA = "Essa carga não está mais aguardando decisão."
 
 
 def _decidir(conn, chegada_id: int, campos: dict, exige_sem_resposta: bool = False) -> dict:
@@ -403,7 +406,7 @@ def _decidir(conn, chegada_id: int, campos: dict, exige_sem_resposta: bool = Fal
         conn.rollback()
         atual = detalhe(conn, chegada_id)
         if atual["estado"] != "AGUARDANDO_ESCRITORIO":
-            raise ErroChegada(_MSG_NAO_AGUARDA)
+            raise ErroChegada(MSG_NAO_AGUARDA)
         raise ErroChegada("Esse pedido de liberação já foi respondido.")
     conn.commit()
     return detalhe(conn, chegada_id)
@@ -413,7 +416,7 @@ def responder_cliente(conn, chegada_id: int, nome: str, autorizado: bool) -> dic
     """Resposta do cliente ao link de liberacao. Autorizado libera; nao autorizado continua aguardando."""
     atual = detalhe(conn, chegada_id)
     if atual["estado"] != "AGUARDANDO_ESCRITORIO":
-        raise ErroChegada(_MSG_NAO_AGUARDA)
+        raise ErroChegada(MSG_NAO_AGUARDA)
     if atual["resposta_cliente"]:
         raise ErroChegada("Esse pedido de liberação já foi respondido.")
     nome = str(nome or "").strip()
@@ -430,7 +433,7 @@ def responder_cliente(conn, chegada_id: int, nome: str, autorizado: bool) -> dic
 def liberar_por_fora(conn, chegada_id: int, texto: str, usuario: str) -> dict:
     """Escritorio registra uma liberacao recebida por fora do sistema (telefone, e-mail...)."""
     if detalhe(conn, chegada_id)["estado"] != "AGUARDANDO_ESCRITORIO":
-        raise ErroChegada(_MSG_NAO_AGUARDA)
+        raise ErroChegada(MSG_NAO_AGUARDA)
     texto = str(texto or "").strip()
     if len(texto) < 10:
         raise ErroChegada("Descreva quem autorizou e por onde.")
@@ -442,7 +445,7 @@ def liberar_por_fora(conn, chegada_id: int, texto: str, usuario: str) -> dict:
 def nao_receber(conn, chegada_id: int, motivo: str, usuario: str) -> dict:
     """Escritorio decide nao receber a carga: o recebimento volta para a lista sem chegada."""
     if detalhe(conn, chegada_id)["estado"] != "AGUARDANDO_ESCRITORIO":
-        raise ErroChegada(_MSG_NAO_AGUARDA)
+        raise ErroChegada(MSG_NAO_AGUARDA)
     motivo = str(motivo or "").strip()
     if len(motivo) < 5:
         raise ErroChegada("Informe o motivo.")

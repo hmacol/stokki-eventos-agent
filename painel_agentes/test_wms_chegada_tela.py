@@ -7,6 +7,7 @@ Rotas do painel da chegada (Receber) e trava da conferencia sem checklist.
 Nenhum e-mail sai: as funcoes de wms_chegada_avisos sao trocadas por mock.
 """
 import io
+import uuid
 import sys
 import unittest
 from pathlib import Path
@@ -22,6 +23,7 @@ import wms  # noqa: E402
 import wms_caixas  # noqa: E402
 import wms_chegada  # noqa: E402
 import wms_chegada_avisos  # noqa: E402
+import wms_doca  # noqa: E402
 from test_fila_etiquetas_tela import painel_agentes  # noqa: E402
 
 ORIGEM = doca.ORIGEM
@@ -129,8 +131,11 @@ class Trava(Base):
     def test_conferir_com_chegada_liberada_passa(self):
         rid = self.receb()
         self.chegada_pronta(rid)
+        self.assertEqual(self.tres_rotas(rid)[0].status_code, 400)  # caixa inexistente: passou da trava
         for r in self.tres_rotas(rid):
             self.assertNotEqual((r.get_json() or {}).get("erro"), self.MSG)
+        r = self.enviar(f"/api/wms/recebimentos/{rid}/itens/1/enderecar", {"qtd": 1, "uuid": "x1"})
+        self.assertEqual(r.status_code, 200, r.get_json())
 
     def test_embarcador_sem_etapas_nao_tem_trava(self):
         self.cfg["wms"]["pilotos"] = []
@@ -139,6 +144,77 @@ class Trava(Base):
             self.assertNotEqual((r.get_json() or {}).get("erro"), self.MSG)
         rec = self.cliente.get(f"/api/wms/recebimentos/{rid}").get_json()["recebimento"]
         self.assertFalse(rec["usa_etapas"])
+
+
+class EntradaNaDoca(Base):
+    """ENTRADA por quantidade na doca (/movimentos) so pela conferencia de recebimento liberado."""
+    def saldo_doca(self):
+        conn = wms.conectar()
+        try:
+            return sum(s["quantidade"] for s in wms.saldos_produto(conn, 1) if s["posicao"] == "DOC1-P1")
+        finally:
+            conn.close()
+
+    def entrada(self, rota="/api/wms/movimentos", **mud):
+        m = {"uuid": "x" + uuid.uuid4().hex, "tipo": "ENTRADA", "produto_id": 1,
+             "lote": "L1", "quantidade": 3, "destino": "DOC1-P1"}
+        m.update(mud)
+        if rota.endswith("lote"):
+            return self.enviar(rota, {"movimentos": [m]})
+        return self.enviar(rota, m)
+
+    def setUp(self):
+        super().setUp()
+        self.cfg["wms"]["pilotos"] = [{"id": 48, "nome": "X", "etapas": True}]   # sem caixas: entrada por quantidade
+        conn = wms.conectar()
+        wms_doca.garantir_doca(conn)
+        wms.criar_area(conn, "C1", "CONTAINER", "Container 1")
+        wms.criar_posicao(conn, doca.POS)
+        conn.close()
+
+    def test_entrada_na_doca_sem_recebimento_e_barrada(self):
+        r = self.entrada()
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json()["erro"], "Entrada na doca só pela conferência de um recebimento.")
+        self.assertEqual(self.saldo_doca(), 0)
+
+    def test_entrada_na_doca_sem_chegada_liberada_e_barrada(self):
+        rid = self.receb()
+        r = self.entrada(recebimento_id=rid)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json()["erro"], Trava.MSG)
+        self.assertEqual(self.saldo_doca(), 0)
+
+    def test_entrada_na_doca_com_chegada_liberada_passa(self):
+        rid = self.receb()
+        self.chegada_pronta(rid)
+        r = self.entrada(recebimento_id=rid)
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertEqual(self.saldo_doca(), 3)
+
+    def test_entrada_na_doca_de_produto_de_outro_recebimento_e_barrada(self):
+        rid = self.receb()
+        self.chegada_pronta(rid)
+        conn = wms.conectar()
+        conn.execute("INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, embarcador_id, unidade, "
+                     "atualizado_em) VALUES (2, 901, 'X2', 'OUTRO', 'EMB', 48, 'UN', '2026-09-21 10:00:00')")
+        conn.commit()
+        conn.close()
+        r = self.entrada(recebimento_id=rid, produto_id=2)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json()["erro"], "Esse produto não é deste recebimento.")
+
+    def test_entrada_avulsa_fora_da_doca_continua_livre(self):
+        r = self.entrada(destino=doca.POS)
+        self.assertEqual(r.status_code, 200, r.get_json())
+
+    def test_lote_com_entrada_na_doca_respeita_a_trava(self):
+        rid = self.receb()
+        r = self.entrada("/api/wms/movimentos/lote", recebimento_id=rid)
+        res = r.get_json()["resultados"][0]
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["erro"], Trava.MSG)
+        self.assertEqual(self.saldo_doca(), 0)
 
 
 class Fluxo(Base):
@@ -170,6 +246,21 @@ class Fluxo(Base):
         cid, r = self.chegada_pronta(rid)
         self.assertEqual(r["chegada"]["estado"], "LIBERADA")
         self.assertEqual(r["avisos"]["cliente"], None)
+
+    def test_falha_do_aviso_do_escritorio_nao_desfaz(self):
+        self.produto_frio()
+        self.m_avisar_escritorio.side_effect = RuntimeError("smtp")
+        rid = self.receb()
+        cid, r = self.chegada_pronta(rid, temperaturas={"REFRIGERADO": "12"})
+        self.assertEqual(r["chegada"]["estado"], "AGUARDANDO_ESCRITORIO")
+        self.assertEqual(r["avisos"]["escritorio"], {"TEMPERATURA": None})
+
+    def test_foto_e_remocao_depois_de_concluir_400(self):
+        cid, _ = self.chegada_pronta(self.receb())
+        self.assertEqual(self.foto(cid, "CARGA").status_code, 400)
+        fid = self.cliente.get(f"/api/wms/chegadas/{cid}").get_json()["chegada"]["fotos"][0]["id"]
+        r = self.cliente.delete(f"/api/wms/chegadas/{cid}/fotos/{fid}", headers=ORIGEM)
+        self.assertEqual(r.status_code, 400)
 
     def test_concluir_invalido_400(self):
         cid = self.abrir(self.receb())

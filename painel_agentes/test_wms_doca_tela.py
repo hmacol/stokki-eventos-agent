@@ -266,6 +266,9 @@ class ConferirRecebimentoNaTela(Base):
                   "Conferido, está na DOCA", "vão para a fila Guardar"):
             self.assertIn(m, h)
 
+    def test_movimento_da_conferencia_leva_recebimento_id(self):
+        self.assertIn("destino: posicao, recebimento_id: r.id,", self.html())
+
     def test_pedir_todas_so_com_etapas_e_sem_duplicar(self):
         h = self.html()
         self.assertIn("it.usa_caixas && it.usa_etapas", h)

@@ -6170,6 +6170,25 @@ def _wms_marcar_chegada(conn, rec: dict) -> None:
     rec["chegada_id"] = viva["id"] if viva else None
 
 
+def _wms_exige_recebimento_liberado(conn, item: dict) -> None:
+    """ENTRADA na doca so pela conferencia de um recebimento ESPERADO que tem o produto e,
+    com etapas, chegada LIBERADA (a trava vale tambem para o saldo, nao so para a contagem)."""
+    rec_id = item.get("recebimento_id")
+    if rec_id in (None, ""):
+        raise wms.ErroWMS("Entrada na doca só pela conferência de um recebimento.")
+    rec_id = int(rec_id)
+    rec = conn.execute("SELECT estado FROM wms_recebimentos WHERE id = ?", (rec_id,)).fetchone()
+    if not rec:
+        raise wms.ErroWMS("Recebimento não encontrado.")
+    if rec["estado"] != "ESPERADO":
+        raise wms.ErroWMS("Esse recebimento já foi encerrado.")
+    if not conn.execute("SELECT 1 FROM wms_recebimento_itens WHERE recebimento_id = ? AND produto_id = ?",
+                        (rec_id, int(item.get("produto_id") or 0))).fetchone():
+        raise wms.ErroWMS("Esse produto não é deste recebimento.")
+    if _wms_trava_chegada(conn, rec_id):
+        raise wms.ErroWMS(_MSG_TRAVA_CHEGADA)
+
+
 def _wms_pasta_chegadas() -> Path:
     """Fotos das chegadas ficam ao lado do banco do WMS (dados/chegadas/)."""
     return Path(wms.DB_PATH).parent / "chegadas"
@@ -6399,6 +6418,8 @@ def _wms_registrar(conn, item: dict, op: dict) -> dict:
     produto = wms.obter_produto(conn, int(item.get("produto_id") or 0))
     if produto and wms_caixas.produto_usa_caixas(produto, _wms_ids_caixas()):
         raise wms.ErroWMS("Produto controlado por caixa: use Inventario, Receber ou Mover caixa.")
+    if str(item.get("tipo", "")).upper() == "ENTRADA" and wms_doca.e_doca(item.get("destino")):
+        _wms_exige_recebimento_liberado(conn, item)
     return wms.registrar_movimento(
         conn, tipo=item.get("tipo", ""), produto_id=int(item.get("produto_id") or 0),
         quantidade=item.get("quantidade"), lote=item.get("lote", ""), validade=item.get("validade"),
@@ -6887,7 +6908,7 @@ def api_wms_chegada_pedir_liberacao(chegada_id):
     conn = _wms_chegada_conn()
     try:
         if wms_chegada.detalhe(conn, chegada_id)["estado"] != "AGUARDANDO_ESCRITORIO":
-            raise wms_chegada.ErroChegada(wms_chegada._MSG_NAO_AGUARDA)
+            raise wms_chegada.ErroChegada(wms_chegada.MSG_NAO_AGUARDA)
         if not segredo:
             return _wms_json_erro("Portal sem secret_key: não dá pra gerar o link de liberação.")
         link = link_liberacao.url(chegada_id, segredo, chamados.url_base(config))
@@ -6984,7 +7005,7 @@ def api_wms_caixa_ativar(serial):
             barrado = _wms_trava_chegada(conn, int(rec_id))
             if barrado:
                 return barrado
-            caixa =wms_caixas.obter_caixa(conn, serial)
+            caixa = wms_caixas.obter_caixa(conn, serial)
             produto = wms.obter_produto(conn, caixa["produto_id"]) if caixa else None
             if produto and produto.get("embarcador_id") in _wms_ids_etapas():
                 posicao = wms_doca.garantir_doca(conn)   # etapas: a conferência lança na doca

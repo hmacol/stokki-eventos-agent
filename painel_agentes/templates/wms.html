@@ -1110,7 +1110,7 @@
     const idMov = uuid();
     try {
       await api('/movimentos', { method: 'POST', body: {
-        uuid: idMov, tipo: 'ENTRADA', produto_id: it.produto_id, lote, validade, quantidade: qtd, destino: posicao,
+        uuid: idMov, tipo: 'ENTRADA', produto_id: it.produto_id, lote, validade, quantidade: qtd, destino: posicao, recebimento_id: r.id,
         observacao: 'Recebimento ' + r.codigo + ' linha ' + it.linha,
         criado_em: new Date().toISOString().slice(0, 19).replace('T', ' '), operador: S.operador,
       } });
