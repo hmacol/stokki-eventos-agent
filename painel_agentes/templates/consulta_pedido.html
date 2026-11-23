@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block titulo %}{{ d.codigo }}{% endblock %}
+{% block titulo %}{{ d.codigo }} · NF {{ d.nf or '—' }}{% endblock %}
 {#
   Detalhe de um pedido no histórico (Hugo, 12/09): por onde ele passou.
 
@@ -62,7 +62,7 @@
 <a class="voltar" href="{{ url_for('consulta') }}">← Consulta</a>
 
 <div class="cabecalho-pedido">
-  <h1>{{ d.codigo }}</h1>
+  <h1>{{ d.codigo }} <small class="suave">· NF {{ d.nf or '—' }}</small></h1>
   <div class="suave">
     {{ (p.destinatario_nome if p else (ultima.destinatario_nome if ultima else '')) or 'destinatário não registrado' }}
     {% if p and p.status %}· {{ chip_situacao(p.status) }}

@@ -35,6 +35,7 @@ if str(_RAIZ) not in sys.path:
 
 import email_utils  # noqa: E402
 from documentos_pedido.localizar_arquivos import resolver_arquivo_local  # noqa: E402
+from nucleo.nf_pedido import SEM_NF  # noqa: E402
 
 PASTA_XML = _RAIZ / "dados" / "xml_stokki"
 MAX_PEDIDOS = 50
@@ -253,11 +254,20 @@ def _partes(arquivos: list[dict], limite: int) -> list[list[dict]]:
     return partes + ([atual] if atual else [])
 
 
+def nf_do_pedido(p: dict) -> str:
+    """NF(s) dos documentos do pedido ("111, 222"); o traco quando nao ha."""
+    nfs = []
+    for a in p["arquivos"]:
+        if a.get("nf") and a["nf"] not in nfs:
+            nfs.append(a["nf"])
+    return ", ".join(nfs) or SEM_NF
+
+
 def resumo(pedidos: list[dict]) -> dict:
     """O que a tela mostra na conferencia (sem caminho de arquivo)."""
     arquivos = [a for p in pedidos for a in p["arquivos"]]
     return {
-        "pedidos": [{"codigo": p["codigo"], "faltando": p["faltando"],
+        "pedidos": [{"codigo": p["codigo"], "nf": nf_do_pedido(p), "faltando": p["faltando"],
                      "arquivos": [{"ref": a["ref"], "tipo": a["tipo"], "nome": a["nome"], "tamanho": a["tamanho"]}
                                   for a in p["arquivos"]]} for p in pedidos],
         "total_arquivos": len(arquivos),
@@ -278,12 +288,16 @@ def _assunto(arquivos: list[dict], pedidos: list[dict], i: int, n: int) -> str:
     return f"Documentos fiscais - {alvo}" + (f" ({i}/{n})" if n > 1 else "")
 
 
-def _corpo(parte: list[dict], i: int, n: int) -> str:
+def _corpo(parte: list[dict], i: int, n: int, pedidos: list[dict] | None = None) -> str:
     linhas = "".join(f"<li>{html.escape(a['nome'])}</li>" for a in parte)
+    refs = {a["ref"] for a in parte}
+    ped = "".join(f"<li>{html.escape(p['codigo'])} &middot; NF {html.escape(nf_do_pedido(p))}</li>"
+                  for p in (pedidos or []) if any(a["ref"] in refs for a in p["arquivos"]))
+    ped = f"<p>Pedidos:</p><ul>{ped}</ul>" if ped else ""
     extra = f"<p>Este é o e-mail {i} de {n}: os documentos foram divididos pelo tamanho dos anexos.</p>" if n > 1 else ""
     return email_utils.envelope_html(
         "<p>Olá,</p><p>Seguem em anexo os documentos fiscais solicitados:</p>"
-        f"<ul>{linhas}</ul>{extra}<p>Qualquer dúvida, é só responder este e-mail.</p>",
+        f"{ped}<ul>{linhas}</ul>{extra}<p>Qualquer dúvida, é só responder este e-mail.</p>",
         rodape="Freshlog")
 
 
@@ -316,7 +330,7 @@ def enviar(conn, itens: list[dict], emails_texto, usuario: str, config_email: di
     quando = (agora or datetime.now()).strftime(FMT)
     erro = None
     for i, parte in enumerate(partes, 1):
-        ok = enviar_email(emails, _assunto(parte, pedidos, i, len(partes)), _corpo(parte, i, len(partes)),
+        ok = enviar_email(emails, _assunto(parte, pedidos, i, len(partes)), _corpo(parte, i, len(partes), pedidos),
                           config_email, anexos=[(a["caminho"], a["nome"]) for a in parte])
         if not ok:
             erro = (f"Falha ao enviar o e-mail {i} de {len(partes)}"

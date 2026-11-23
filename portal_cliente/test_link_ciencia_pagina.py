@@ -149,6 +149,25 @@ class PaginaCiencia(unittest.TestCase):
     def _datas(self):
         return link_ciencia.datas_de_visita(self.regra, date.today())
 
+    def _nfs(self):
+        self.conn.executescript(
+            "CREATE TABLE documentos_pedido (id_pedido, tipo_doc, status, numero_nf);"
+            "CREATE TABLE documentos_processados (codigo_pedido, tipo, status, numero_nf);"
+            "INSERT INTO documentos_pedido VALUES ('PS-1','nf','casado','777'),"
+            "('PS-2','nf','casado','888'),('PS-2','nf','casado','889');")
+        self.conn.commit()
+
+    def test_pagina_mostra_ps_e_nf(self):
+        self._nfs()
+        self._ciencia()                                   # PS-1: uma NF
+        respondido = self._ciencia(sid=1002, code="#PS-2")  # duas NFs
+        self._ciencia(sid=1003, code="#PS-4")             # sem NF
+        cd.responder(self.conn, respondido, cd.CIENTE, "Joana Lima", IP, datetime.now())
+        corpo = self._cliente().get(self._url(101)).get_data(as_text=True)
+        self.assertIn("PS-1 · NF 777", corpo)
+        self.assertIn("PS-4 · NF —", corpo)
+        self.assertIn("PS-2 · NF 888, 889", corpo)
+
     # ── token e lista ─────────────────────────────────────────────────────────
 
     def test_token_invalido_ou_expirado_da_404_sem_listar_pedido(self):

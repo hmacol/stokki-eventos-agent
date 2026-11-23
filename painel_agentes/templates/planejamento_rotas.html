@@ -3121,7 +3121,7 @@
       : "";
     // NF já casada (documentos_processados) -- Hugo, 14/08: mostrar
     // pra confirmar visualmente que achou o pedido certo ao buscar por NF
-    const nf = p.numero_nf ? ` <span class="nf-pedido">NF ${escaparHtml(p.numero_nf)}</span>` : "";
+    const nf = ` <span class="nf-pedido">NF ${escaparHtml(p.numero_nf || "—")}</span>`;
     // cancela o pedido de verdade na VUUPT (Hugo, 15/08) -- leitura não
     // recebe o botão (mesma trava dos demais controles de ação)
     let botaoCancelar = PODE_EDITAR
@@ -4466,7 +4466,7 @@
         ? `<label class="check-retirada" title="Marcar pra expedir na Stokki (a pessoa veio buscar)">
              <input type="checkbox" data-codigo="${escaparHtml(p.codigo)}" aria-label="Marcar ${escaparHtml(p.codigo)} pra expedir" ${marcada ? "checked" : ""}></label>`
         : "";
-      const nf = p.numero_nf ? ` <span class="nf">NF ${escaparHtml(p.numero_nf)}</span>` : "";
+      const nf = ` <span class="nf">NF ${escaparHtml(p.numero_nf || "—")}</span>`;
       const destinatario = p.destinatario_nome ? `<br><span class="destinatario">${escaparHtml(p.destinatario_nome)}</span>` : "";
       const transportadora = p.transportadora ? `<br><span class="transportadora">retira: ${escaparHtml(p.transportadora)}</span>` : "";
       const caixas = p.volume_caixas ? ` · ${p.volume_caixas} cx` : "";
@@ -6855,7 +6855,7 @@
     if (!itens.length) { alert("Só pedidos com código podem ser marcados."); return; }
     dedicadoPendente = { itens };
     document.getElementById("dedicado-resumo").textContent = `${itens.length} pedido(s)`;
-    document.getElementById("dedicado-lista").innerHTML = itens.map(it => `<li>${escaparHtml(it.codigo)} · ${escaparHtml(it.remetente_nome || "")}</li>`).join("");
+    document.getElementById("dedicado-lista").innerHTML = itens.map(it => `<li>${escaparHtml(it.codigo)} · NF ${escaparHtml(it.numero_nf || "—")} · ${escaparHtml(it.remetente_nome || "")}</li>`).join("");
     document.getElementById("dedicado-valor").value = "";
     atualizarPreviaDedicado();
     document.getElementById("modal-dedicado").classList.add("aberto");

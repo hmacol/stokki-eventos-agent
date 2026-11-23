@@ -492,6 +492,11 @@ def texto_alerta_descarga(resultado: dict, recebedor: str) -> str | None:
     titulo = ("Retorno com divergência" if resultado["divergentes"]
               else "Retorno parcial recebido" if resultado["parciais"] else "Retirado recebido sem parada no núcleo")
     linhas = [f"{titulo} · {resultado['motorista_nome']}", f"Recebido por {recebedor}"]
+    from nucleo import nf_pedido   # NF ao lado do PS (uma busca em lote)
+    mapa_nf = nf_pedido.nf_por_codigo([x["codigo"] for x in resultado["divergentes"] + resultado["parciais"] + sem_parada])
+
+    def ps_nf(codigo):
+        return f"{codigo} · NF {nf_pedido.nf_do_codigo(codigo, mapa_nf) or nf_pedido.SEM_NF}"
     vistos = set()
     for x in resultado["divergentes"] + resultado["parciais"]:
         if x["parada_id"] in vistos:
@@ -500,14 +505,14 @@ def texto_alerta_descarga(resultado: dict, recebedor: str) -> str | None:
         partes = _problemas(x)
         if x["parcial"]:
             partes.append(f"{x['caixas_recebidas']} cx voltaram · {TEXTO_PARCIAL}")
-        linha = f"{x['codigo']} · {x['embarcador'] or 'sem embarcador'} · " + ", ".join(partes)
+        linha = f"{ps_nf(x['codigo'])} · {x['embarcador'] or 'sem embarcador'} · " + ", ".join(partes)
         if x["observacao"]:
             linha += f" · obs: {x['observacao']}"
         linhas.append(linha)
     for x in sem_parada:
         # Sem parada no nucleo nao ha linha em retornos_recebidos: so o Retornando foi baixado.
         partes = [f"{x['caixas_recebidas']} cx"] + _problemas(x)
-        linha = (f"{x['codigo']} · " + ", ".join(partes)
+        linha = (f"{ps_nf(x['codigo'])} · " + ", ".join(partes)
                  + " · Retornando baixado sem registro em Recebidos (o núcleo não tem a parada da rota)")
         if x["observacao"]:
             linha += f" · obs: {x['observacao']}"

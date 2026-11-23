@@ -17,7 +17,7 @@ import * as fila from './fila';
 import { conferirPermissao } from './permissoes';
 import { Botao } from './componentes';
 import { cores } from './tema';
-import { nomeExibicao } from './textos';
+import { codigoComNf, nomeExibicao } from './textos';
 import type { Desmarcado, FalhaCarregamento, MotivoDesmarcar, Parada, ResultadoValidacao, Rota } from './tipos';
 
 const CHAVE_CARREGADORES = 'carregadores';
@@ -195,7 +195,7 @@ export function CarregamentoRota({ rota, aoConfirmar }: { rota: Rota; aoConfirma
 
   const rotuloParada = (id: number) => {
     const p = paradas.find((x) => x.id === id);
-    return p ? `${nomeExibicao(p)}${p.codigo ? ` (${p.codigo})` : ''}` : `parada ${id}`;
+    return p ? `${nomeExibicao(p)}${p.codigo ? ` (${codigoComNf(p)})` : ''}` : `parada ${id}`;
   };
 
   return (

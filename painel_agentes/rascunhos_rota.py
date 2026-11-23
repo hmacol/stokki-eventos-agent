@@ -230,29 +230,9 @@ def carregar_nf_por_codigo_pedido(codigos_base: set[str]) -> dict[str, str]:
     novo, que acabou de entrar) simplesmente não entra no dict --
     ausência aqui não é erro.
     """
-    if not codigos_base:
-        return {}
-    try:
-        con = _conectar()
-        try:
-            nf_por_codigo: dict[str, set[str]] = {}
-            lista = sorted(codigos_base)
-            # SQLite limita em 999 variáveis por statement -- lotes de 900.
-            for i in range(0, len(lista), 900):
-                lote = lista[i:i + 900]
-                marcadores = ",".join("?" * len(lote))
-                for row in con.execute(
-                        f"SELECT codigo_pedido, numero_nf FROM documentos_processados "
-                        f"WHERE status='ENVIADO' AND tipo='Nota Fiscal' AND numero_nf IS NOT NULL "
-                        f"AND codigo_pedido IN ({marcadores})", lote):
-                    if row["numero_nf"]:
-                        nf_por_codigo.setdefault(row["codigo_pedido"], set()).add(row["numero_nf"])
-            return {codigo: ", ".join(sorted(numeros)) for codigo, numeros in nf_por_codigo.items()}
-        finally:
-            con.close()
-    except Exception as e:
-        logger.warning(f"Falha ao carregar NF por código de pedido: {e}")
-        return {}
+    # Fonte unica (23/11): nucleo/nf_pedido -- documentos_pedido e, na falta, documentos_processados.
+    from nucleo import nf_pedido
+    return nf_pedido.nf_por_codigo(codigos_base) if codigos_base else {}
 
 
 def _parada_de_servico(servico: dict, remetentes_por_id: dict[int, str]) -> dict:

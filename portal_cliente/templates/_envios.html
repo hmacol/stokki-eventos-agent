@@ -589,6 +589,8 @@
   // usuário, que marca a conferência antes de enviar (o confirmar recusa sem).
   const nfLimpa = v => String(v || '').replace(/\D/g, '').replace(/^0+/, '');
   const rotIt = it => it.rotulo || ('NF ' + it.numero_nf);
+  // rótulo que não é a NF (pedido de planilha): mostra a NF junto, traço se não houver
+  const nfExtra = x => (x.rotulo && x.rotulo.indexOf('NF') !== 0) ? ' · NF ' + (x.numero_nf ? esc(x.numero_nf) : '—') : '';
   // ped: o pedido onde o documento está. Em pedido de planilha, o XML da nota é o XML do pedido.
   const infoAnexo = (a, ped) => esc(a.tipo === 'XML da NF-e' && ped && ped.origem === 'planilha' ? 'XML do pedido' : a.tipo || 'Documento') + (a.numero_nf ? ' · NF ' + esc(a.numero_nf) : '');
   const diverge = (a, numeroNf) => a.numero_nf && numeroNf && nfLimpa(a.numero_nf) !== nfLimpa(numeroNf);
@@ -668,7 +670,7 @@
     if (!x) { fecharModal(); return; }
     const pode = PODE_ENVIAR && x.pode_anexar, atuais = x.anexos || [];
     modal(`<h3>Documentos do pedido</h3>
-      <p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}</p>
+      <p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}${nfExtra(x)}</p>
       <p>Os documentos em PDF anexados aqui saem impressos junto da nota fiscal na entrega. O XML da nota fica guardado no pedido e não é impresso.</p>
       <div class="anx-lista">${atuais.length ? atuais.map(a => `<div class="anx-solto"><a href="${BASE}/api/envios/${x.id}/anexos/${a.id}" target="_blank" rel="noopener" class="anx-nome">${esc(a.nome)}</a><span class="anx-info">${infoAnexo(a, x)}</span>${pode ? `<button type="button" class="anx-link" data-doc-remover="${a.id}">remover</button>` : ''}</div>`).join('') : '<div class="anx-info">Nenhum documento anexado ainda.</div>'}</div>
       ${docNovos.length ? `<div class="anx-lista"><b style="font-size:12.5px;">Pra anexar agora:</b>${docNovos.map(a => `<div class="anx ${diverge(a, x.numero_nf) ? 'diverge' : ''}"><span class="anx-nome">${esc(a.nome)}</span><span class="anx-info">${infoAnexo(a, x)}</span>${diverge(a, x.numero_nf) ? `<span class="anx-alerta">Atenção: o documento cita a NF ${esc(a.numero_nf)}, e este pedido é a NF ${esc(x.numero_nf)}.</span>` : ''}</div>`).join('')}
@@ -1059,7 +1061,7 @@
     if (tipo === 'alterar_endereco') { alterarEndereco(x); return; }
     if (tipo === 'xml') { window.open(`${BASE}/api/envios/${id}/xml`, '_blank'); return; }
     if (tipo === 'documentos') { docNovos = []; abrirDocumentos(x.id); return; }
-    const cab = `<p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}</p>`;
+    const cab = `<p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}${nfExtra(x)}</p>`;
     const textos = {
       cancelar: ['Cancelar pedido', x.status === 'NA_FILA' || x.status === 'ERRO' ? 'O pedido ainda não foi criado na Stokki — será cancelado na hora.' : 'O pedido já existe na Stokki. A Fresh Log vai cancelá-lo e você acompanha por aqui.'],
       em_espera: ['Tirar da rota', 'O pedido fica em espera (não sai pra entrega) até você pedir pra reenviar. A Fresh Log aplica e avisa aqui.'],

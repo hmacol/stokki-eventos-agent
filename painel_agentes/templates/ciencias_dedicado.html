@@ -61,7 +61,7 @@
   <tbody>
   {% for l in linhas %}
     <tr data-id="{{ l.id }}">
-      <td class="mono">{{ l.codigo }}<div class="suave">{{ l.destinatario or '' }}</div></td>
+      <td class="mono">{{ l.codigo }} · NF {{ l.nf or '—' }}<div class="suave">{{ l.destinatario or '' }}</div></td>
       <td>{{ l.embarcador }}</td>
       <td class="mono">{% if l.data_entrega %}{{ l.data_entrega[8:10] }}/{{ l.data_entrega[5:7] }}{% else %}—{% endif %}<div class="suave">{{ l.dias_visita or '' }}</div></td>
       <td class="mono">{% if l.valor_pendente %}a calcular{% elif l.valor is not none %}R$ {{ '%.2f'|format(l.valor)|replace('.', ',') }}{% else %}—{% endif %}</td>
@@ -118,7 +118,7 @@
         .then(function (r) { return r.json(); })
         .then(function (d) {
           if (!d.ciencia) { return; }
-          document.getElementById("hist-titulo").textContent = "Avisos do pedido " + d.ciencia.codigo;
+          document.getElementById("hist-titulo").textContent = "Avisos do pedido " + d.ciencia.codigo + " · NF " + (d.ciencia.nf || "—");
           document.getElementById("hist-sub").textContent = d.envios.length + " tentativa(s) de envio";
           var prova = document.getElementById("hist-resposta");
           if (d.resposta) {

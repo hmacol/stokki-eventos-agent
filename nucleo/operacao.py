@@ -27,7 +27,7 @@ import math
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
-from nucleo import banco, ofertas_rota_enviada, pedidos as nucleo_pedidos, ponte_vuupt, tempos, validacao_fotos
+from nucleo import banco, nf_pedido, ofertas_rota_enviada, pedidos as nucleo_pedidos, ponte_vuupt, tempos, validacao_fotos
 from nucleo.rotas import registrar_evento
 
 # Passos da parada no app (Hugo, 26/08): DESLOCAMENTO ("Iniciar deslocamento",
@@ -159,7 +159,8 @@ def montar_rota(conn: sqlite3.Connection, rota: sqlite3.Row) -> dict:
     d["liberada"] = True
     d["editavel"] = rota_editavel(rota)
     paradas = conn.execute("SELECT * FROM nucleo_paradas WHERE rota_id = ? ORDER BY ordem", (rota["id"],)).fetchall()
-    d["paradas"] = [montar_parada(conn, p) for p in paradas]
+    mapa_nf = nf_pedido.nf_por_codigo([p["codigo"] for p in paradas if p["codigo"]], conn)  # 1 busca por rota
+    d["paradas"] = [montar_parada(conn, p, mapa_nf) for p in paradas]
     d["pedagios"] = listar_pedagios(conn, rota["id"])
     # Confirmação (badge do Planejamento) quando a rota é da VUUPT
     d["carregamento"] = _estado_carregamento(conn, rota)
@@ -171,7 +172,7 @@ def montar_rota(conn: sqlite3.Connection, rota: sqlite3.Row) -> dict:
     return d
 
 
-def montar_parada(conn: sqlite3.Connection, p: sqlite3.Row) -> dict:
+def montar_parada(conn: sqlite3.Connection, p: sqlite3.Row, mapa_nf: dict | None = None) -> dict:
     d = dict(p)
     d.pop("dados_json", None)
     # Pedido: telefone/horário de atendimento vêm do espelho de pedidos quando existir
@@ -193,6 +194,10 @@ def montar_parada(conn: sqlite3.Connection, p: sqlite3.Row) -> dict:
     # vazia = pedido sem NF conhecida (Fruta Fina/placeholder da Stokki),
     # aí é um canhoto só, sem cobrança de número.
     d["nfs"] = validacao_fotos.nfs_do_pedido(conn, p["codigo"])
+    # NF(s) ao lado do PS ("111, 222"; "" = sem NF, o app mostra "—")
+    if mapa_nf is None:
+        mapa_nf = nf_pedido.nf_por_codigo([p["codigo"]], conn) if p["codigo"] else {}
+    d["nf"] = nf_pedido.nf_do_codigo(p["codigo"], mapa_nf) if p["codigo"] else ""
     return d
 
 

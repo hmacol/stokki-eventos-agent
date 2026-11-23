@@ -24,7 +24,7 @@ import { Deslizar } from '../../src/deslizar';
 import { CarregamentoRota } from '../../src/carregamentoRota';
 import { Botao, Cartao, Carregando } from '../../src/componentes';
 import { cores, formatarData, situacaoCor, situacaoRotulo, statusRotaRotulo } from '../../src/tema';
-import { horaDe, nomeExibicao, partesEndereco, resumoJanela } from '../../src/textos';
+import { codigoComNf, horaDe, nomeExibicao, partesEndereco, resumoJanela } from '../../src/textos';
 import { abrirNavegacao, ehPendente, emAndamento, ordenarParadas, paradaDaVez, registrarPasso, rotaOperavel } from '../../src/paradaPasso';
 import type { Parada, Rota } from '../../src/tipos';
 
@@ -48,7 +48,7 @@ function numeroWhatsapp(telefone: string | null | undefined): string | null {
 function abrirWhatsapp(p: Parada) {
   const numero = numeroWhatsapp(p.telefone);
   if (!numero) return;
-  const texto = encodeURIComponent(`Olá! Sou o motorista da Fresh Log e estou a caminho com a sua entrega (${p.codigo}).`);
+  const texto = encodeURIComponent(`Olá! Sou o motorista da Fresh Log e estou a caminho com a sua entrega (${p.codigo}${p.nf ? `, NF ${p.nf}` : ''}).`);
   Linking.openURL(`https://wa.me/${numero}?text=${texto}`).catch(() => Alert.alert('WhatsApp', 'Não foi possível abrir o WhatsApp neste aparelho.'));
 }
 
@@ -302,6 +302,9 @@ export default function DetalheRota() {
             {p.codigo ? (
               <View><Text style={s.dadoRotulo}>Pedido</Text><Text style={s.dadoValor}>{p.codigo}</Text></View>
             ) : null}
+            {p.codigo ? (
+              <View><Text style={s.dadoRotulo}>NF</Text><Text style={s.dadoValor}>{(p.nf || '').trim() || '—'}</Text></View>
+            ) : null}
           </View>
 
           {avisosParada(p)}
@@ -337,7 +340,7 @@ export default function DetalheRota() {
           <View style={{ flex: 1 }}>
             <Text style={[s.linhaNome, final && s.linhaNomeFeita]} numberOfLines={1}>{nomeExibicao(p)}</Text>
             <Text style={s.linhaSub} numberOfLines={1}>
-              {[end.bairro, p.volume_caixas ? `${p.volume_caixas} cx` : ''].filter(Boolean).join(' · ') || (p.codigo ?? '')}
+              {[end.bairro, p.volume_caixas ? `${p.volume_caixas} cx` : ''].filter(Boolean).join(' · ') || codigoComNf(p)}
             </Text>
           </View>
           <View style={{ alignItems: 'flex-end' }}>
@@ -349,7 +352,7 @@ export default function DetalheRota() {
         {expandida ? (
           <View style={s.linhaAberta}>
             <Text style={s.linhaEndereco}>{end.completo || 'Endereço não informado'}</Text>
-            {p.remetente_nome ? <Text style={s.avisoParada}>Remetente: {nomeExibicao({ destinatario_nome: p.remetente_nome })}{p.codigo ? ` · ${p.codigo}` : ''}</Text> : null}
+            {p.remetente_nome ? <Text style={s.avisoParada}>Remetente: {nomeExibicao({ destinatario_nome: p.remetente_nome })}{p.codigo ? ` · ${codigoComNf(p)}` : ''}</Text> : null}
             {avisosParada(p)}
             {ehPendente(p) ? acoesContato(p) : null}
             {controle ? <View style={{ marginTop: 10 }}>{controle}</View> : null}

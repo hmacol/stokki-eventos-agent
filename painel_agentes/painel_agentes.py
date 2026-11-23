@@ -97,6 +97,8 @@ from portal_cliente import aula as aula_videos
 # dos clientes; a Torre entra como equipe pelo passe assinado (/torre/cotacao, 16/11).
 from portal_cliente import entrada_equipe
 import rascunhos_rota
+import nf_tela
+from nucleo import nf_pedido
 import torre_controle
 from nucleo import justificativas_sem_canhoto
 import tratativas
@@ -863,6 +865,10 @@ def api_solicitacoes_portal():
         "criado_em": _criado_em_curto(s.get("criado_em")),
         "detalhe": s.get("detalhes") or "",
     } for s in linhas]
+    nf_pedido.anotar_nf(itens, "codigo_pedido", "nf")   # NF que o envio nao guardou vem do pedido
+    for it in itens:
+        it["numero_nf"] = it["numero_nf"] or it.pop("nf")
+        it.pop("nf", None)
     return jsonify({"solicitacoes": itens})
 
 
@@ -1054,7 +1060,9 @@ def api_expedicao_consulta():
     """Veredito de UM pedido cruzando Vuupt e Stokki ao vivo -- ver
     consulta_expedicao.py. 400 código inválido, 503 Vuupt fora."""
     try:
-        return jsonify(consulta_expedicao.consultar(request.args.get("codigo", "")))
+        veredito = consulta_expedicao.consultar(request.args.get("codigo", ""))
+        nf_pedido.anotar_nf([veredito], "codigo", "nf")
+        return jsonify(veredito)
     except ValueError as e:
         return jsonify({"erro": str(e)}), 400
     except consulta_expedicao.ConsultaIndisponivel as e:
@@ -1108,6 +1116,12 @@ def _coletas_despachar(conn, coleta_id: int, codigos: list) -> dict:
     return {"ok": True, "execucao_id": r["execucao_id"], "na_fila": r["na_fila"]}
 
 
+def _coletas_com_nf(*listas_de_pedidos) -> None:
+    """Completa `nf` dos pedidos das folhas/grupos de coleta (a folha guarda a NF da hora
+    em que foi gerada; sem ela, vale a de nucleo/nf_pedido). UMA busca em lote."""
+    nf_tela.completar_nf([p for lista in listas_de_pedidos for p in lista])
+
+
 @app.route("/expedicao/coletas")
 @requer_auth(niveis=NIVEIS_COLETA_VER)
 def expedicao_coletas():
@@ -1123,6 +1137,8 @@ def expedicao_coletas():
         assinatura = coletas_regras.assinatura(conn)
     finally:
         conn.close()
+    _coletas_com_nf(*[c["pedidos"] for c in folhas], *[gr["pedidos"] for gr in lista["grupos"]],
+                    *[h.get("pedidos") or [] for h in historico])
     atrasada = not exemplo
     if ultima and not exemplo:
         atrasada = (datetime.now() - datetime.strptime(ultima, coletas_banco.FMT)).total_seconds() > 60 * _COLETA_LEITURA_ATRASADA_MIN
@@ -1144,6 +1160,7 @@ def expedicao_coleta_tela(coleta_id: int):
         abort(404)
     finally:
         conn.close()
+    _coletas_com_nf(c["pedidos"])
     return render_template("coletas_expedicao.html", foco=c, folhas=[c], grupos=[], sem_cadastro=[], historico=[],
                            ultima_leitura=None, leitura_atrasada=False, exemplo=_homolog_ativo(),
                            pode_agir=g.nivel_acesso in NIVEIS_COLETA_AGIR, max_pedidos=coletas_regras.MAX_PEDIDOS)
@@ -1530,6 +1547,7 @@ def historico_tratativas():
     }
     try:
         resultado = tratativas.buscar(filtros, pagina=pagina)
+        nf_pedido.anotar_nf(resultado["linhas"], "pedido_code", "nf")   # quando o historico nao guardou a NF
         erro = None
     except Exception as e:
         logging.getLogger(__name__).exception("Falha ao buscar histórico de tratativas")
@@ -1616,6 +1634,13 @@ def vigia_pedidos():
     }
     try:
         dados = vigia_consulta.listar(filtros["estado"], filtros["vencidos"], filtros["busca"])
+        # busca por NF (so digitos): soma os pedidos dessa NF ao que a busca por texto achou
+        por_nf = set(nf_tela.codigos_por_nf(filtros["busca"]))
+        if por_nf:
+            ja = {l["codigo"] for l in dados["linhas"]}
+            todas = vigia_consulta.listar(filtros["estado"], filtros["vencidos"], "")["linhas"]
+            dados["linhas"] += [l for l in todas if l["codigo"] not in ja and nf_pedido.codigo_base(l["codigo"]) in por_nf]
+        nf_pedido.anotar_nf(dados["linhas"], "codigo", "nf")
         erro = None
     except Exception as e:
         logging.getLogger(__name__).exception("Falha ao ler o vigia")
@@ -2028,6 +2053,7 @@ def ciencias_dedicado():
         conn.close()
     # link so daquele pedido e marcado com quem copiou: a resposta por ele nao se passa por do cliente
     origem = f"painel:{session.get('usuario') or 'equipe'}"
+    nf_pedido.anotar_nf(linhas, "codigo", "nf")
     for l in linhas:
         l["link"] = (link_ciencia.url(l["sender_id"], segredo, base, [l["id"]], origem)
                      if segredo and l["sender_id"] else "")
@@ -2057,7 +2083,8 @@ def api_ciencia_dedicado(ciencia_id):
                     "navegador": linha["respondido_navegador"] or ""}
     elif linha["situacao"] == cd.ENCERRADO:
         encerramento = {"motivo": linha["motivo_encerramento"], "em": linha["respondido_em"]}
-    return jsonify({"ciencia": {"codigo": linha["codigo"], "situacao": linha["situacao"]},
+    return jsonify({"ciencia": {"codigo": linha["codigo"], "nf": nf_pedido.anotar_nf([{"codigo": linha["codigo"]}])[0]["nf"],
+                                "situacao": linha["situacao"]},
                     "resposta": resposta, "encerramento": encerramento, "envios": envios})
 
 
@@ -2105,6 +2132,7 @@ def clientes_agenda():
     except Exception as e:
         logging.getLogger(__name__).exception("Falha ao listar clientes com agendamento")
         linhas, erro = [], str(e)
+    nf_pedido.anotar_nf([p for l in linhas for p in (l.get("pedidos") or []) if isinstance(p, dict)])
     pendentes = [l for l in linhas if l["situacao"] == marcar_clientes_agenda.PENDENTE]
     decididos = [l for l in linhas if l["situacao"] != marcar_clientes_agenda.PENDENTE][:50]
     # Atendimento (21/10, Hugo) so ve a fila: decidir continua total/logistica.
@@ -4956,6 +4984,7 @@ def canhotos():
     conn = nucleo_banco.conectar()
     try:
         itens = nucleo_operacao.listar_comprovantes_painel(conn, resultado)
+        nf_pedido.anotar_nf(itens, "codigo", "nf", conn)
         contagem = {(r[0] or "PENDENTE"): r[1] for r in conn.execute(
             "SELECT resultado_validacao, COUNT(*) FROM nucleo_comprovantes GROUP BY resultado_validacao")}
     finally:
@@ -5043,6 +5072,13 @@ def consulta():
         if termo:
             # Busca manda na tela: ignora aba e filtros de listagem
             resultado = nucleo_consulta.buscar(termo, de=de, ate=ate, conn=conn)
+            # NF digitada (so digitos): junta os pedidos dessa NF, alem do que a busca ja achou
+            for cod in nf_tela.codigos_por_nf(termo, conn)[:30]:
+                extra = nucleo_consulta.buscar(cod, de=de, ate=ate, conn=conn)
+                vistos = {p["codigo"] for p in resultado["pedidos"]}
+                resultado["pedidos"] += [p for p in extra["pedidos"] if p["codigo"] not in vistos]
+                ids = {x["id"] for x in resultado["rotas"]}
+                resultado["rotas"] += [x for x in extra["rotas"] if x["id"] not in ids]
         elif aba == "pedidos":
             resultado = nucleo_consulta.listar_pedidos(de, ate, status=status, conn=conn)
             resultado["rotas"] = []
@@ -5050,6 +5086,7 @@ def consulta():
             resultado = nucleo_consulta.listar_rotas(de, ate, status=status, provedor=provedor,
                                                      agent_id=agent_id, conn=conn)
             resultado["pedidos"] = []
+        nf_pedido.anotar_nf(resultado.get("pedidos") or [], "codigo", "nf", conn)
     finally:
         conn.close()
 
@@ -5066,6 +5103,7 @@ def consulta_rota(rota_id):
     rota = nucleo_consulta.detalhar_rota(rota_id)
     if not rota:
         abort(404)
+    nf_pedido.anotar_nf(rota.get("paradas") or [], "codigo", "nf")
     return render_template("consulta_rota.html", rota=rota)
 
 
@@ -5076,6 +5114,7 @@ def consulta_pedido(codigo):
     detalhe = nucleo_consulta.detalhar_pedido(codigo)
     if not detalhe:
         abort(404)
+    nf_pedido.anotar_nf([detalhe], "codigo", "nf")
     # Retorno conferido no galpão (tela /retornos); leitura nunca derruba a consulta.
     try:
         conn_r = retornos.conectar()
@@ -5118,7 +5157,7 @@ def _pedido_celular(l: dict, formatar) -> dict:
         return (v or "")[11:16]
     return {
         "chave": f"{l.get('sender_id')}|{l.get('pedido_base')}",
-        "codigo": l.get("codigo") or "", "servico": l.get("codigo_servico") or "",
+        "codigo": l.get("codigo") or "", "nf": l.get("nf") or "", "servico": l.get("codigo_servico") or "",
         "status": l.get("status") or "", "status_txt": formatar("status", l.get("status")),
         "stokki": l.get("situacao_stokki") or "",   # só no Importado/cancelado antes da Vuupt (12/11)
         "destinatario": l.get("destinatario") or "", "embarcador": l.get("embarcador") or "",
