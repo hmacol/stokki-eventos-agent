@@ -261,3 +261,179 @@ class TestChegada(_Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestConcluir(_Base):
+    OP = {"id": 7, "nome": "Ana"}
+
+    def setUp(self):
+        super().setUp()
+        self.pasta = Path(self._tmp.name) / "fotos"
+
+    def _png(self):
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", (40, 30), (200, 10, 10)).save(buf, format="PNG")
+        return buf.getvalue()
+
+    def _chegada(self, ids=None, fotos=("CAMINHAO_ABERTO", "CARGA", "TERMOMETRO"), uuid="u1"):
+        c = wms_chegada.abrir(self.conn, uuid=uuid, recebimento_ids=ids or [self.rec], operador=self.OP)
+        for tipo in fotos:
+            wms_chegada.salvar_foto(self.conn, c["id"], tipo, self._png(), pasta=self.pasta)
+        return c["id"]
+
+    def _dados(self, **mudancas):
+        d = {"motorista": "Jose Silva", "placa": "abc-1d23", "transportadora": "TransX", "volumes": "12",
+             "lacre": "L99", "integra": True, "observacao": "",
+             "temperaturas": {"REFRIGERADO": "5", "CONGELADO": "-15"}}
+        d.update(mudancas)
+        return d
+
+    def _concluir(self, cid, dados=None):
+        return wms_chegada.concluir(self.conn, cid, dados if dados is not None else self._dados(), {}, self.OP)
+
+    def _recusa(self, cid, dados, msg):
+        with self.assertRaises(wms_chegada.ErroChegada) as cm:
+            self._concluir(cid, dados)
+        self.assertEqual(str(cm.exception), msg)
+        # nada gravado
+        c = wms_chegada.detalhe(self.conn, cid)
+        self.assertEqual(c["estado"], "RASCUNHO")
+        self.assertEqual(c["motorista"], "")
+        self.assertEqual(c["temperaturas"], [])
+
+    def test_motorista_curto(self):
+        self._recusa(self._chegada(), self._dados(motorista=" Jo "), "Informe o nome do motorista.")
+
+    def test_placa_invalida(self):
+        cid = self._chegada()
+        for placa in ("ABC123", "ABC-12345", "", "AB#1234"):
+            self._recusa(cid, self._dados(placa=placa), "Placa inválida.")
+
+    def test_falta_foto_caminhao(self):
+        self._recusa(self._chegada(fotos=("CARGA", "TERMOMETRO")), self._dados(), "Falta a foto do caminhão aberto.")
+
+    def test_falta_foto_carga(self):
+        self._recusa(self._chegada(fotos=("CAMINHAO_ABERTO", "TERMOMETRO")), self._dados(),
+                     "Falta pelo menos uma foto da carga.")
+
+    def test_integra_indefinida(self):
+        cid = self._chegada()
+        self._recusa(cid, self._dados(integra=None), "Diga se a carga chegou inteira.")
+        self._recusa(cid, self._dados(integra="sim"), "Diga se a carga chegou inteira.")
+
+    def test_avaria_sem_foto(self):
+        self._recusa(self._chegada(), self._dados(integra=False, observacao="caixas amassadas"),
+                     "Avaria precisa de foto e de observação.")
+
+    def test_avaria_sem_observacao(self):
+        cid = self._chegada(ids=[self.rec_seco], fotos=("CAMINHAO_ABERTO", "CARGA", "AVARIA"))
+        self._recusa(cid, self._dados(integra=False, observacao="ruim", temperaturas={}),
+                     "Avaria precisa de foto e de observação.")
+
+    def test_avaria_completa_conclui(self):
+        cid = self._chegada(ids=[self.rec_seco], fotos=("CAMINHAO_ABERTO", "CARGA", "AVARIA"))
+        r = self._concluir(cid, self._dados(integra=False, observacao="caixas amassadas", temperaturas={}))
+        self.assertIs(r["avaria"], True)
+        self.assertEqual(r["chegada"]["integra"], 0)
+        self.assertEqual(r["chegada"]["estado"], "LIBERADA")
+
+    def test_temperatura_faltando_por_classe(self):
+        cid = self._chegada()
+        self._recusa(cid, self._dados(temperaturas={"CONGELADO": "-15"}), "Informe a temperatura do refrigerado.")
+        self._recusa(cid, self._dados(temperaturas={"REFRIGERADO": "5"}), "Informe a temperatura do congelado.")
+
+    def test_temperatura_vazia_ou_texto(self):
+        cid = self._chegada()
+        for ruim in ("", "  ", "abc", None, "nan", "inf", "5 graus"):
+            self._recusa(cid, self._dados(temperaturas={"REFRIGERADO": ruim, "CONGELADO": "-15"}),
+                         "Informe a temperatura do refrigerado.")
+
+    def test_falta_foto_termometro(self):
+        self._recusa(self._chegada(fotos=("CAMINHAO_ABERTO", "CARGA")), self._dados(), "Falta a foto do termômetro.")
+
+    def test_concluir_na_faixa_libera(self):
+        cid = self._chegada()
+        r = self._concluir(cid)
+        c = r["chegada"]
+        self.assertEqual(c["estado"], "LIBERADA")
+        self.assertIs(r["fora_da_faixa"], False)
+        self.assertIs(r["avaria"], False)
+        self.assertEqual((c["motorista"], c["placa"], c["transportadora"], c["volumes"], c["lacre"]),
+                         ("Jose Silva", "ABC1D23", "TransX", 12, "L99"))
+        self.assertEqual((c["operador_id"], c["operador_nome"]), (7, "Ana"))
+        self.assertTrue(c["concluida_em"])
+        self.assertEqual([(t["classe"], t["medida_c"], t["faixa_min"], t["faixa_max"], t["fora"])
+                          for t in c["temperaturas"]],
+                         [("CONGELADO", -15.0, -18.0, -12.0, 0), ("REFRIGERADO", 5.0, 0.0, 7.0, 0)])
+
+    def test_limite_da_faixa_esta_dentro(self):
+        for i, (r, c) in enumerate((("7,0", "-12"), ("0,0", "-18"))):
+            rec = self._receb(20 + i, [1, 2])
+            self.conn.commit()
+            cid = self._chegada(uuid=f"l{i}", ids=[rec])
+            res = self._concluir(cid, self._dados(temperaturas={"REFRIGERADO": r, "CONGELADO": c}))
+            self.assertEqual(res["chegada"]["estado"], "LIBERADA", (r, c))
+
+    def test_fora_da_faixa_aguarda_escritorio(self):
+        cid = self._chegada()
+        r = self._concluir(cid, self._dados(temperaturas={"REFRIGERADO": "5", "CONGELADO": "-9,0"}))
+        self.assertEqual(r["chegada"]["estado"], "AGUARDANDO_ESCRITORIO")
+        self.assertIs(r["fora_da_faixa"], True)
+        fora = {t["classe"]: t["fora"] for t in r["chegada"]["temperaturas"]}
+        self.assertEqual(fora, {"CONGELADO": 1, "REFRIGERADO": 0})
+
+    def test_faixas_disjuntas_vao_para_o_escritorio(self):
+        wms.definir_temperatura_produto(self.conn, 1, "REFRIGERADO", temp_min=0, temp_max=3)
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, embarcador_id, unidade, "
+            "temperatura, temp_min, temp_max, atualizado_em) VALUES (5, 905, 'R2', 'PROD R2', 'MARIA', 48, 'UN', "
+            "'REFRIGERADO', 5, 7, '2026-09-21 10:00:00')")
+        rec = self._receb(11, [1, 5])
+        self.conn.commit()
+        cid = self._chegada(ids=[rec])
+        r = self._concluir(cid, self._dados(temperaturas={"REFRIGERADO": "2"}))
+        self.assertEqual(r["chegada"]["estado"], "AGUARDANDO_ESCRITORIO")
+        (t,) = r["chegada"]["temperaturas"]
+        self.assertEqual(t["fora"], 1)
+        self.assertEqual((t["faixa_min"], t["faixa_max"]), (0.0, 7.0))
+
+    def test_temperatura_com_virgula_e_negativa(self):
+        cid = self._chegada()
+        c = self._concluir(cid, self._dados(temperaturas={"REFRIGERADO": "6,5", "CONGELADO": "-18"}))["chegada"]
+        self.assertEqual({t["classe"]: t["medida_c"] for t in c["temperaturas"]},
+                         {"REFRIGERADO": 6.5, "CONGELADO": -18.0})
+
+    def test_carga_seca_nao_pede_temperatura(self):
+        cid = self._chegada(ids=[self.rec_seco], fotos=("CAMINHAO_ABERTO", "CARGA"))
+        r = self._concluir(cid, self._dados(temperaturas={}))
+        self.assertEqual(r["chegada"]["estado"], "LIBERADA")
+        self.assertEqual(r["chegada"]["temperaturas"], [])
+
+    def test_carga_mista_pede_as_duas(self):
+        cid = self._chegada()
+        self.assertEqual(len(self._concluir(cid)["chegada"]["temperaturas"]), 2)
+
+    def test_concluir_duas_vezes_nao_muda(self):
+        cid = self._chegada()
+        primeira = self._concluir(cid)
+        segunda = self._concluir(cid, self._dados(motorista="Outro Nome",
+                                                  temperaturas={"REFRIGERADO": "30", "CONGELADO": "0"}))
+        self.assertEqual(primeira, segunda)
+
+    def test_pode_conferir_so_liberada(self):
+        self.assertEqual(wms_chegada.estado_do_recebimento(self.conn, self.rec), "SEM_CHEGADA")
+        self.assertIs(wms_chegada.pode_conferir(self.conn, self.rec), False)
+        cid = self._chegada()
+        self.assertEqual(wms_chegada.estado_do_recebimento(self.conn, self.rec), "RASCUNHO")
+        self.assertIs(wms_chegada.pode_conferir(self.conn, self.rec), False)
+        self._concluir(cid, self._dados(temperaturas={"REFRIGERADO": "5", "CONGELADO": "-9"}))
+        self.assertEqual(wms_chegada.estado_do_recebimento(self.conn, self.rec), "AGUARDANDO_ESCRITORIO")
+        self.assertIs(wms_chegada.pode_conferir(self.conn, self.rec), False)
+        self.conn.execute("UPDATE wms_chegadas SET estado = 'LIBERADA' WHERE id = ?", (cid,))
+        self.assertIs(wms_chegada.pode_conferir(self.conn, self.rec), True)
+
+    def test_chegada_nao_recebida_nao_conta(self):
+        cid = self._chegada()
+        self.conn.execute("UPDATE wms_chegadas SET estado = 'NAO_RECEBIDA' WHERE id = ?", (cid,))
+        self.assertEqual(wms_chegada.estado_do_recebimento(self.conn, self.rec), "SEM_CHEGADA")

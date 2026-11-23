@@ -280,3 +280,102 @@ def remover_foto(conn, chegada_id: int, foto_id: int, pasta: Path | None = None)
 def caminho_foto(conn, chegada_id: int, foto_id: int, pasta: Path | None = None) -> Path:
     foto = _foto(conn, chegada_id, foto_id)
     return (Path(pasta) if pasta else PASTA_FOTOS) / foto["arquivo"]
+
+
+_ROTULO_CLASSE = {"REFRIGERADO": "refrigerado", "CONGELADO": "congelado"}
+
+
+def estado_do_recebimento(conn, recebimento_id: int) -> str:
+    """'SEM_CHEGADA' ou o estado da chegada viva (a que nao e NAO_RECEBIDA) do recebimento."""
+    linha = conn.execute(
+        "SELECT c.estado FROM wms_chegada_recebimentos cr JOIN wms_chegadas c ON c.id = cr.chegada_id "
+        "WHERE cr.recebimento_id = ? AND c.estado != 'NAO_RECEBIDA' ORDER BY c.id DESC LIMIT 1",
+        (int(recebimento_id),)).fetchone()
+    return linha["estado"] if linha else "SEM_CHEGADA"
+
+
+def pode_conferir(conn, recebimento_id: int) -> bool:
+    return estado_do_recebimento(conn, recebimento_id) == "LIBERADA"
+
+
+def _numero(texto):
+    """Aceita virgula e sinal; None se nao for numero finito."""
+    try:
+        valor = float(str(texto).strip().replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    return valor if valor == valor and abs(valor) != float("inf") else None
+
+
+def _resultado(conn, chegada_id: int) -> dict:
+    c = detalhe(conn, chegada_id)
+    return {"chegada": c,
+            "fora_da_faixa": any(t["fora"] for t in c["temperaturas"]),
+            "avaria": c["integra"] == 0}
+
+
+def concluir(conn, chegada_id: int, dados: dict, config: dict, operador: dict) -> dict:
+    """Valida o checklist e conclui a chegada: LIBERADA, ou AGUARDANDO_ESCRITORIO se alguma
+    temperatura ficou fora da faixa. So age em RASCUNHO; nos demais estados devolve o estado atual."""
+    atual = detalhe(conn, chegada_id)
+    if atual["estado"] != "RASCUNHO":
+        return _resultado(conn, chegada_id)
+    dados = dados or {}
+    motorista = str(dados.get("motorista") or "").strip()
+    if len(motorista) < 3:
+        raise ErroChegada("Informe o nome do motorista.")
+    placa = "".join(str(dados.get("placa") or "").replace("-", "").split()).upper()
+    if len(placa) != 7 or not placa.isascii() or not placa.isalnum():
+        raise ErroChegada("Placa inválida.")
+    tipos_foto = {f["tipo"] for f in atual["fotos"]}
+    if "CAMINHAO_ABERTO" not in tipos_foto:
+        raise ErroChegada("Falta a foto do caminhão aberto.")
+    if "CARGA" not in tipos_foto:
+        raise ErroChegada("Falta pelo menos uma foto da carga.")
+    integra = dados.get("integra")
+    if integra is not True and integra is not False:
+        raise ErroChegada("Diga se a carga chegou inteira.")
+    observacao = str(dados.get("observacao") or "").strip()
+    if not integra and ("AVARIA" not in tipos_foto or len(observacao) < 5):
+        raise ErroChegada("Avaria precisa de foto e de observação.")
+    recebimento_ids = [r["id"] for r in atual["recebimentos"]]
+    classes = classes_da_carga(conn, recebimento_ids)
+    informadas = dados.get("temperaturas") or {}
+    medidas = {}
+    for classe in classes:
+        medidas[classe] = _numero(informadas.get(classe))
+        if medidas[classe] is None:
+            raise ErroChegada(f"Informe a temperatura do {_ROTULO_CLASSE[classe]}.")
+    if classes and "TERMOMETRO" not in tipos_foto:
+        raise ErroChegada("Falta a foto do termômetro.")
+
+    linhas = []
+    for classe, medida in medidas.items():
+        minimo, maximo = faixa_da_carga(conn, recebimento_ids, classe, config)
+        fora = not medida_dentro(conn, recebimento_ids, classe, medida, config)
+        linhas.append((chegada_id, classe, medida, minimo, maximo, 1 if fora else 0))
+    estado = "AGUARDANDO_ESCRITORIO" if any(l[5] for l in linhas) else "LIBERADA"
+    volumes = str(dados.get("volumes") or "").strip()
+
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if conn.execute("SELECT estado FROM wms_chegadas WHERE id = ?", (chegada_id,)).fetchone()["estado"] != "RASCUNHO":
+            conn.rollback()  # outra chamada concluiu antes
+            return _resultado(conn, chegada_id)
+        conn.execute("DELETE FROM wms_chegada_temperaturas WHERE chegada_id = ?", (chegada_id,))
+        conn.executemany(
+            "INSERT INTO wms_chegada_temperaturas (chegada_id, classe, medida_c, faixa_min, faixa_max, fora) "
+            "VALUES (?, ?, ?, ?, ?, ?)", linhas)
+        conn.execute(
+            "UPDATE wms_chegadas SET estado = ?, motorista = ?, placa = ?, transportadora = ?, volumes = ?, "
+            "lacre = ?, integra = ?, observacao = ?, concluida_em = ?, operador_id = ?, operador_nome = ? "
+            "WHERE id = ?",
+            (estado, motorista, placa, str(dados.get("transportadora") or "").strip(),
+             int(volumes) if volumes.isdigit() else None, str(dados.get("lacre") or "").strip(),
+             1 if integra else 0, observacao, _agora(), (operador or {}).get("id"),
+             (operador or {}).get("nome") or "", chegada_id))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return _resultado(conn, chegada_id)
