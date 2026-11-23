@@ -185,6 +185,22 @@ O cadastro do produto não tem temperatura hoje (só as áreas têm). *Chamado m
 - Saldo que já está em posição não muda.
 - Tirar um embarcador da lista com saldo na doca: a fila Guardar continua mostrando esse saldo até zerar.
 
+## Mudanças decididas durante a implementação (23/11)
+
+Decisões do controlador da execução, tomadas a partir de achados de revisão. Onde contradizem o texto acima, vale o que está aqui. Todas esperam a conferência do Hugo.
+
+- **Uma chegada, um embarcador.** O checklist só junta recebimentos do mesmo embarcador. Caminhão com carga de dois clientes exige um checklist para cada um. Motivo: o PDF, o e-mail e a página de liberação mostram a chegada inteira; com dois embarcadores, um cliente veria a carga do outro.
+- **Faixa própria substitui a da classe.** A faixa de temperatura do produto, quando existe, vale no lugar da faixa padrão da classe (não é cruzada com ela). A medição só está dentro se couber na faixa de todos os produtos daquela classe na carga; produtos com faixas incompatíveis na mesma carga mandam qualquer medição para o escritório.
+- **A doca só recebe entrada pela conferência.** O servidor recusa lançar saldo na doca que não venha da conferência de um recebimento com a chegada liberada. O botão "Entrada" avulso, direto numa posição, continua livre.
+- **Fotos e dados do checklist travam ao concluir.** Depois de concluído, não dá para acrescentar nem tirar foto.
+- **E-mail "sua carga chegou" sem retroativo.** O tipo de notificação próprio (`chegada_recebimento`, "Chegada do caminhão no galpão") nasce preso. Quando o Hugo ligar na tela Notificações, vale só para chegadas dali em diante; a rotina de pendentes olha só as últimas 48 horas. O cliente pode desligar essa notificação no portal; o pedido de liberação por temperatura vai mesmo assim.
+- **A guarda leva reserva só até o que ela moveu.** Reserva sobrando na doca por outro motivo não é levada junto.
+- **Sem etapas, nada muda.** O botão "Pedir etiquetas de todas as linhas" e o aviso da fila Guardar só aparecem em recebimento de embarcador com etapas.
+- **Aba inferior "Receber".** Com etapas ligadas, abre o checklist; a conferência fica no botão "Conferir Recebimento" do Início.
+- **Volumes é texto livre** (ex.: "4 pallets").
+- **Fotos obrigatórias:** caminhão aberto e carga; termômetro quando há produto frio; avaria quando marcada. Placa e nota fiscal são opcionais.
+- **Carga com refrigerado e congelado:** uma medição para cada classe, uma foto de termômetro para as duas.
+
 ## Fica com quem implementar
 
 - Código da posição DOCA, estados novos e migração.
