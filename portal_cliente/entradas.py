@@ -574,9 +574,14 @@ def _tem_tabela(conn, nome: str) -> bool:
     return conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", (nome,)).fetchone() is not None
 
 
-def _conferencia_do_galpao(conn, recebimento_id: int | None) -> list[dict]:
+def _conferencia_do_galpao(conn, recebimento_id: int | None, estado: str = "") -> list[dict]:
     """Anunciado × recebido × falta POR SKU, em UN, do wms_recebimento_itens
-    ligado. Vazio sem ligação ou sem as tabelas do WMS (banco só do portal)."""
+    ligado. Vazio sem ligação ou sem as tabelas do WMS (banco só do portal).
+    `sobra` e `situacao` (OK/FALTA/SOBRA) por SKU: o portal não importa
+    wms_pedidos (que faz `import wms` fora de pacote), então repete aqui os
+    critérios do resumo_encerramento -- por SKU, porque o wizard soma as
+    linhas do mesmo SKU. Em recebimento ainda aberto, recebido < anunciado
+    não é falta (ainda está chegando)."""
     if not recebimento_id or not _tem_tabela(conn, "wms_recebimento_itens"):
         return []
     if _tem_tabela(conn, "wms_produtos"):
@@ -588,12 +593,39 @@ def _conferencia_do_galpao(conn, recebimento_id: int | None) -> list[dict]:
         sql = ("SELECT i.sku, '' AS descricao, 'UN' AS unidade, SUM(COALESCE(i.qtd_un, 0)) AS anunciado, "
                "SUM(COALESCE(i.qtd_enderecada, 0)) AS recebido, SUM(COALESCE(i.falta_un, 0)) AS falta "
                "FROM wms_recebimento_itens i WHERE i.recebimento_id = ? GROUP BY i.sku ORDER BY MIN(i.linha)")
+    encerrado = estado in ("ENDERECADO", "DIVERGENCIA")
     saida = []
     for r in conn.execute(sql, (int(recebimento_id),)):
+        anunciado, recebido, falta = round(float(r["anunciado"]), 3), round(float(r["recebido"]), 3), round(float(r["falta"]), 3)
+        if falta > 0 or (encerrado and recebido < anunciado):
+            situacao = "FALTA"
+        elif recebido > anunciado:
+            situacao = "SOBRA"
+        else:
+            situacao = "OK"
         saida.append({"sku": r["sku"], "descricao": r["descricao"], "unidade": r["unidade"],
-                      "anunciado": round(float(r["anunciado"]), 3), "recebido": round(float(r["recebido"]), 3),
-                      "falta": round(float(r["falta"]), 3)})
+                      "anunciado": anunciado, "recebido": recebido, "falta": falta,
+                      "sobra": round(max(recebido - anunciado, 0), 3), "situacao": situacao})
     return saida
+
+
+def _situacao_rotulo(d: dict, conferencia: list[dict]) -> str:
+    """Situação da lista em linguagem de operação (spec v2, seção 3)."""
+    if d["status"] == STATUS_CANCELADO:
+        return "Cancelado"
+    if d["stokki_status"] == STOKKI_ERRO:
+        return "Stokki recusou"
+    if d["status"] == STATUS_DIVERGENCIA:
+        falta = round(sum(c["falta"] for c in conferencia), 3)
+        return f"Com divergência · falta {f'{falta:g}'.replace('.', ',')} un"
+    if d["status"] == STATUS_ENDERECADO:
+        return "Encerrado"
+    if d["status"] == STATUS_CHEGOU:
+        recebidos = sum(1 for c in conferencia if c["recebido"] > 0)
+        return f"Recebendo · {recebidos} de {len(conferencia)} itens"
+    if d["stokki_status"] == STOKKI_CRIADO:
+        return f"Criado na Stokki · {d.get('stokki_codigo') or ''}".rstrip(" ·")
+    return "Enviando pra Stokki"
 
 
 def _linha(conn, r: sqlite3.Row, itens: dict[int, list[dict]]) -> dict:
@@ -602,6 +634,7 @@ def _linha(conn, r: sqlite3.Row, itens: dict[int, list[dict]]) -> dict:
     rec = None
     if d.get("wms_recebimento_id") and _tem_tabela(conn, "wms_recebimentos"):
         rec = conn.execute("SELECT * FROM wms_recebimentos WHERE id = ?", (d["wms_recebimento_id"],)).fetchone()
+    conferencia = _conferencia_do_galpao(conn, d.get("wms_recebimento_id"), (rec["estado"] if rec is not None and "estado" in rec.keys() else "") or "")
     d.update({
         "rotulo": rotulo_entrada(d),
         "status_rotulo": ROTULOS_STATUS.get(d["status"], d["status"]),
@@ -610,7 +643,11 @@ def _linha(conn, r: sqlite3.Row, itens: dict[int, list[dict]]) -> dict:
         "data_prevista_br": "/".join(reversed(d["data_prevista"].split("-"))) if d.get("data_prevista") else "",
         "atrasada": d["status"] == STATUS_ANUNCIADO and bool(d.get("data_prevista")) and d["data_prevista"] < hoje,
         "itens_lista": itens.get(d["id"], []),
-        "conferencia": _conferencia_do_galpao(conn, d.get("wms_recebimento_id")),
+        "conferencia": conferencia,
+        "situacao_rotulo": _situacao_rotulo(d, conferencia),
+        "itens_recebidos": sum(1 for c in conferencia if c["recebido"] > 0),
+        "itens_total": len(conferencia),
+        "lancado_pela_equipe": str(d.get("enviado_por") or "").startswith("equipe:"),
         "observacao_divergencia": (rec["observacao_divergencia"] if rec is not None and "observacao_divergencia" in rec.keys() else "") or "",
         "encerrado_em_br": _quando_br(rec["encerrado_em"]) if rec is not None and "encerrado_em" in rec.keys() else "",
         "pode_cancelar": d["status"] == STATUS_ANUNCIADO and d["stokki_status"] != STOKKI_ENVIANDO,

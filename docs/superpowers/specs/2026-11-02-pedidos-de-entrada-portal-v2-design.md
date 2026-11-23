@@ -150,9 +150,8 @@ Na ordem, cada passo provado antes do próximo:
   Envio (catálogo do embarcador sincronizado da Stokki). "Sem catálogo" =
   nenhum produto do embarcador no catálogo; não há limite de idade.
 - **`qtd_por_caixa` vazio** só mostra "—" na coluna Caixas e não trava.
-- **"Lançado pela equipe"** vem de uma coluna nova
-  `portal_entradas.lancado_por_equipe` (1 quando a sessão é `/equipe`),
-  não da leitura do `enviado_por`. A equipe pode lançar por qualquer cliente
+- **"Lançado pela equipe"** vem do carimbo `enviado_por = "equipe:<usuario>"`
+  que o portal já grava (sem coluna nova). A equipe pode lançar por qualquer cliente
   com `entradas_ativo` (hoje só a Maria Dolores).
 - **Recebendo com caixas ligadas:** o plano confere no código do
   `galpao-caixas` que ativar caixa soma `qtd_enderecada` na linha (é o que

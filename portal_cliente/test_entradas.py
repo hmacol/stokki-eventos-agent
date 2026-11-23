@@ -427,7 +427,7 @@ class TestListar(BasePortal):
         e = entradas.listar_entradas(self.conn, CNPJ)[0]
         self.assertEqual(len(e["itens_lista"]), 2)
         self.assertEqual(e["conferencia"], [{"sku": "NUU001FD", "descricao": "MINI CX PAO DE QUEIJO", "unidade": "UN",
-                                             "anunciado": 25.0, "recebido": 22.0, "falta": 3.0}])
+                                             "anunciado": 25.0, "recebido": 22.0, "falta": 3.0, "sobra": 0.0, "situacao": "FALTA"}])
         self.assertEqual(e["observacao_divergencia"], "chegou avariado")
         self.assertFalse(e["pode_cancelar"])
 
@@ -690,6 +690,102 @@ class TestAmarracaoEStatus(BasePortal):
         self.conn.commit()
         entradas.sincronizar_status(self.conn)
         self.assertEqual(entradas.buscar_entrada(self.conn, 1, CNPJ)["status"], "CANCELADO")   # CANCELADO nunca reabre
+
+
+class TestSituacaoDaLista(BasePortal):
+    """Rótulos em linguagem de operação (spec v2, seção 3), itens recebidos,
+    sobra/falta por SKU na conferência e a marca da equipe."""
+
+    def setUp(self):
+        super().setUp()
+        self.conn.execute("CREATE TABLE wms_recebimentos (id INTEGER PRIMARY KEY, id_stokki INTEGER, codigo TEXT, estado TEXT, situacao TEXT, "
+                          "observacao_divergencia TEXT DEFAULT '', encerrado_em TEXT DEFAULT '')")
+        self.conn.execute("CREATE TABLE wms_recebimento_itens (id INTEGER PRIMARY KEY, recebimento_id INTEGER, linha INTEGER, sku TEXT, "
+                          "qtd_embalagem REAL, qtd_un REAL, produto_id INTEGER, qtd_enderecada REAL DEFAULT 0, falta_un REAL DEFAULT 0)")
+        self.conn.commit()
+
+    def _entrada(self, **campos):
+        _confirmar(self, itens=[("NUU001FD", "7891234567890", "MINI", 10, "UN", 1), ("SKU-B", "", "B", 10, "UN", 1)])
+        sets = ", ".join(f"{k} = ?" for k in campos)
+        self.conn.execute(f"UPDATE portal_entradas SET {sets}", tuple(campos.values()))
+        self.conn.commit()
+
+    def _rotulo(self):
+        return entradas.listar_entradas(self.conn, CNPJ)[0]["situacao_rotulo"]
+
+    def _receber(self, estado, itens):
+        """itens: [(sku, qtd_un, qtd_enderecada, falta_un)]"""
+        self.conn.execute("INSERT INTO wms_recebimentos VALUES (7, 1188, '#PE-1188', ?, 'Recebido', '', '')", (estado,))
+        for i, (sku, qtd, end, falta) in enumerate(itens, start=1):
+            self.conn.execute("INSERT INTO wms_recebimento_itens (recebimento_id, linha, sku, qtd_embalagem, qtd_un, produto_id, qtd_enderecada, falta_un) "
+                              "VALUES (7, ?, ?, ?, ?, 1, ?, ?)", (i, sku, qtd, qtd, end, falta))
+        self.conn.execute("UPDATE portal_entradas SET wms_recebimento_id = 7")
+        self.conn.commit()
+
+    def test_situacao_rotulo_em_cada_estado(self):
+        self._entrada(stokki_status="NA_FILA")
+        self.assertEqual(self._rotulo(), "Enviando pra Stokki")
+        self.conn.execute("UPDATE portal_entradas SET stokki_status = 'ENVIANDO'")
+        self.conn.commit()
+        self.assertEqual(self._rotulo(), "Enviando pra Stokki")
+        self.conn.execute("UPDATE portal_entradas SET stokki_status = 'CRIADO', stokki_codigo = '#PE-1188'")
+        self.conn.commit()
+        self.assertEqual(self._rotulo(), "Criado na Stokki · #PE-1188")
+        self.conn.execute("UPDATE portal_entradas SET stokki_status = 'ERRO', stokki_erro = 'x'")
+        self.conn.commit()
+        self.assertEqual(self._rotulo(), "Stokki recusou")
+        self.conn.execute("UPDATE portal_entradas SET stokki_status = 'CRIADO', status = 'CANCELADO'")
+        self.conn.commit()
+        self.assertEqual(self._rotulo(), "Cancelado")
+        self.conn.execute("UPDATE portal_entradas SET status = 'ENDERECADO'")
+        self.conn.commit()
+        self.assertEqual(self._rotulo(), "Encerrado")
+
+    def test_recebendo_conta_itens_recebidos_e_total(self):
+        self._entrada(stokki_status="CRIADO", stokki_codigo="#PE-1188", status="CHEGOU")
+        self._receber("ESPERADO", [("NUU001FD", 10, 4, 0), ("SKU-B", 10, 0, 0)])
+        e = entradas.listar_entradas(self.conn, CNPJ)[0]
+        self.assertEqual(e["situacao_rotulo"], "Recebendo · 1 de 2 itens")
+        self.assertEqual((e["itens_recebidos"], e["itens_total"]), (1, 2))
+
+    def test_sem_recebimento_itens_zerados(self):
+        self._entrada(stokki_status="CRIADO")
+        e = entradas.listar_entradas(self.conn, CNPJ)[0]
+        self.assertEqual((e["itens_recebidos"], e["itens_total"]), (0, 0))
+
+    def test_divergencia_com_falta(self):
+        self._entrada(stokki_status="CRIADO", status="DIVERGENCIA")
+        self._receber("DIVERGENCIA", [("NUU001FD", 10, 0, 12), ("SKU-B", 10, 10, 0)])
+        self.assertEqual(self._rotulo(), "Com divergência · falta 12 un")
+
+    def test_linha_com_sobra_e_falta(self):
+        self._entrada(stokki_status="CRIADO", status="DIVERGENCIA")
+        self._receber("DIVERGENCIA", [("NUU001FD", 10, 12, 0), ("SKU-B", 10, 0, 10)])
+        e = entradas.listar_entradas(self.conn, CNPJ)[0]
+        a, b = e["conferencia"]
+        self.assertEqual((a["sku"], a["situacao"], a["sobra"]), ("NUU001FD", "SOBRA", 2))
+        self.assertEqual((b["sku"], b["situacao"], b["sobra"]), ("SKU-B", "FALTA", 0))
+        self.assertEqual(e["situacao_rotulo"], "Com divergência · falta 10 un")
+
+    def test_situacao_por_sku_ok_e_falta_sem_falta_congelada(self):
+        # encerrado com recebido < anunciado mas sem falta_un gravada: ainda é FALTA
+        self._entrada(stokki_status="CRIADO", status="ENDERECADO")
+        self._receber("ENDERECADO", [("NUU001FD", 10, 10, 0), ("SKU-B", 10, 6, 0)])
+        c = entradas.listar_entradas(self.conn, CNPJ)[0]["conferencia"]
+        self.assertEqual([x["situacao"] for x in c], ["OK", "FALTA"])
+
+    def test_em_andamento_recebido_menor_nao_e_falta(self):
+        self._entrada(stokki_status="CRIADO", status="CHEGOU")
+        self._receber("ESPERADO", [("NUU001FD", 10, 4, 0), ("SKU-B", 10, 0, 0)])
+        c = entradas.listar_entradas(self.conn, CNPJ)[0]["conferencia"]
+        self.assertEqual([x["situacao"] for x in c], ["OK", "OK"])
+
+    def test_lancado_pela_equipe(self):
+        self._entrada(enviado_por="equipe:hugo")
+        self.assertTrue(entradas.listar_entradas(self.conn, CNPJ)[0]["lancado_pela_equipe"])
+        self.conn.execute("UPDATE portal_entradas SET enviado_por = 'cliente'")
+        self.conn.commit()
+        self.assertFalse(entradas.listar_entradas(self.conn, CNPJ)[0]["lancado_pela_equipe"])
 
 
 class TestRotaAnalisar(BasePortal):
