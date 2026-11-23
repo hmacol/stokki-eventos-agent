@@ -7,6 +7,7 @@ import io
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
@@ -64,6 +65,31 @@ class TestPdf(unittest.TestCase):
     def test_liberacao_via_cliente(self):
         d = dict(self.detalhe, liberacao_via="CLIENTE", liberacao_nome="Maria", liberacao_texto="")
         self.assertTrue(wms_chegada_pdf.gerar(d, []).startswith(b"%PDF"))
+
+    def textos(self, detalhe):
+        with mock.patch.object(wms_chegada_pdf, "_texto", wraps=wms_chegada_pdf._texto) as m:
+            self.assertTrue(wms_chegada_pdf.gerar(detalhe, []).startswith(b"%PDF"))
+        return [c.args[3] for c in m.call_args_list]
+
+    def test_recusa_do_cliente_aparece_mesmo_com_liberacao_por_fora(self):
+        d = dict(self.detalhe, liberacao_texto="Diretor autorizou por e-mail", resposta_cliente="NAO_AUTORIZADO",
+                 resposta_cliente_nome="Maria Souza", resposta_cliente_em="2026-11-22 08:50:00")
+        t = self.textos(d)
+        self.assertIn("Resposta do cliente pelo link: não autorizado por Maria Souza em 22/11/2026 08:50", t)
+        self.assertIn("Registrado por hugo em 22/11/2026 09:00: Diretor autorizou por e-mail", t)
+
+    def test_resposta_autorizada_do_cliente(self):
+        d = dict(self.detalhe, liberacao_via="CLIENTE", liberacao_nome="Maria Souza", resposta_cliente="AUTORIZADO",
+                 resposta_cliente_nome="Maria Souza", resposta_cliente_em="2026-11-22 08:50:00")
+        t = self.textos(d)
+        self.assertIn("Resposta do cliente pelo link: autorizado por Maria Souza em 22/11/2026 08:50", t)
+        self.assertFalse([x for x in t if x.startswith("Registrado por")])
+
+    def test_rascunho_sem_integra_mostra_traco(self):
+        t = self.textos(dict(self.detalhe_seco, integra=None))
+        self.assertNotIn("Com avaria", t)
+        self.assertNotIn("Íntegra", t)
+        self.assertIn("Com avaria", self.textos(dict(self.detalhe_seco, integra=0)))
 
     def test_texto_da_temperatura(self):
         self.assertEqual(wms_chegada_pdf._graus(-9.0), "-9,0 °C")

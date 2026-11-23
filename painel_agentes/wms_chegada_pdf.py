@@ -172,22 +172,29 @@ def gerar(detalhe: dict, fotos: list, emitido_em: datetime | None = None) -> byt
 
     y = _secao(d, y + 10, "Condição da carga")
     integra = detalhe.get("integra")
-    y = _texto(d, MARGEM, y, "Íntegra" if integra else "Com avaria", _fonte(28, True),
-               VERDE if integra else VERMELHO)
+    condicao, cor = ("—", PRETO) if integra is None else (("Íntegra", VERDE) if integra else ("Com avaria", VERMELHO))
+    y = _texto(d, MARGEM, y, condicao, _fonte(28, True), cor)
     y = _texto(d, MARGEM, y + 4, "OBSERVAÇÃO", _fonte(17, True), CINZA_TXT)
     y = _texto(d, MARGEM, y + 2, detalhe.get("observacao") or "—", _fonte(24))
     y = _campo(d, MARGEM, y + 14, "Operador", detalhe.get("operador_nome"), LARGURA)
 
     via = detalhe.get("liberacao_via")
-    if via:
+    resposta = detalhe.get("resposta_cliente")
+    if via or resposta:
         y = _secao(d, y + 6, "Liberação")
         quando = _data(detalhe.get("liberacao_em"))
         nome = detalhe.get("liberacao_nome") or "—"
-        if via == "CLIENTE":
-            frase = f"Autorizado por {nome} em {quando}, pelo link de liberação"
-        else:
-            frase = f"Registrado por {nome} em {quando}: {detalhe.get('liberacao_texto') or '—'}"
-        y = _texto(d, MARGEM, y, frase, _fonte(24))
+        frases = []
+        if resposta:   # a resposta do cliente sempre aparece, inclusive a recusa seguida de liberacao por fora
+            o_que = "autorizado" if resposta == "AUTORIZADO" else "não autorizado"
+            frases.append(f"Resposta do cliente pelo link: {o_que} por {detalhe.get('resposta_cliente_nome') or '—'} "
+                          f"em {_data(detalhe.get('resposta_cliente_em'))}")
+        if via == "CLIENTE" and not resposta:
+            frases.append(f"Autorizado por {nome} em {quando}, pelo link de liberação")
+        elif via and via != "CLIENTE":
+            frases.append(f"Registrado por {nome} em {quando}: {detalhe.get('liberacao_texto') or '—'}")
+        for frase in frases:
+            y = _texto(d, MARGEM, y, frase, _fonte(24))
 
     abertas = [(tipo, f) for tipo, f in ((t, _abrir_foto(b)) for t, b in fotos) if f is not None]
     if abertas:

@@ -336,6 +336,12 @@ def pode_conferir(conn, recebimento_id: int) -> bool:
     return estado_do_recebimento(conn, recebimento_id) == "LIBERADA"
 
 
+def _limitar(texto: str, maximo: int) -> str:
+    if len(texto) > maximo:
+        raise ErroChegada(f"Texto longo demais (máximo {maximo} caracteres).")
+    return texto
+
+
 def _numero(texto):
     """Aceita virgula e sinal; None se nao for numero finito."""
     try:
@@ -373,7 +379,7 @@ def concluir(conn, chegada_id: int, dados: dict, config: dict, operador: dict) -
     integra = dados.get("integra")
     if integra is not True and integra is not False:
         raise ErroChegada("Diga se a carga chegou inteira.")
-    observacao = str(dados.get("observacao") or "").strip()
+    observacao = _limitar(str(dados.get("observacao") or "").strip(), 500)
     if not integra and ("AVARIA" not in tipos_foto or len(observacao) < 5):
         raise ErroChegada("Avaria precisa de foto e de observação.")
     recebimento_ids = [r["id"] for r in atual["recebimentos"]]
@@ -464,6 +470,7 @@ def liberar_por_fora(conn, chegada_id: int, texto: str, usuario: str) -> dict:
     texto = str(texto or "").strip()
     if len(texto) < 10:
         raise ErroChegada("Descreva quem autorizou e por onde.")
+    _limitar(texto, 500)
     return _decidir(conn, chegada_id, {"estado": "LIBERADA", "liberacao_via": "ESCRITORIO",
                                        "liberacao_nome": usuario, "liberacao_texto": texto,
                                        "liberacao_em": _agora()})
@@ -476,6 +483,7 @@ def nao_receber(conn, chegada_id: int, motivo: str, usuario: str) -> dict:
     motivo = str(motivo or "").strip()
     if len(motivo) < 5:
         raise ErroChegada("Informe o motivo.")
+    _limitar(motivo, 300)
     return _decidir(conn, chegada_id, {"estado": "NAO_RECEBIDA", "nao_recebida_motivo": motivo,
                                        "nao_recebida_por": usuario})
 

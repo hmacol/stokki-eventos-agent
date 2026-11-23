@@ -594,6 +594,17 @@ class TestConcluir(_Base):
         self.assertEqual((c["nao_recebida_motivo"], c["nao_recebida_por"]), ("Carga quente demais", "Ana"))
         self.assertEqual(wms_chegada.estado_do_recebimento(self.conn, self.rec), "SEM_CHEGADA")
 
+    def test_textos_tem_limite(self):
+        cid = self._chegada()
+        self._recusa(cid, self._dados(observacao="x" * 501), "Texto longo demais (máximo 500 caracteres).")
+        self._concluir(cid, self._dados(temperaturas={"REFRIGERADO": "5", "CONGELADO": "-9"}, observacao="x" * 500))
+        self._erro("Texto longo demais (máximo 500 caracteres).", wms_chegada.liberar_por_fora, cid, "y" * 501, "Ana")
+        self._erro("Texto longo demais (máximo 300 caracteres).", wms_chegada.nao_receber, cid, "z" * 301, "Ana")
+        self.assertEqual(wms_chegada.detalhe(self.conn, cid)["estado"], "AGUARDANDO_ESCRITORIO")
+        self.assertEqual(wms_chegada.nao_receber(self.conn, cid, "z" * 300, "Ana")["estado"], "NAO_RECEBIDA")
+        cid = self._aguardando(uuid="u2")
+        self.assertEqual(wms_chegada.liberar_por_fora(self.conn, cid, "y" * 500, "Ana")["estado"], "LIBERADA")
+
     def test_decisao_em_chegada_liberada_recusa(self):
         cid = self._chegada()
         self._concluir(cid)
