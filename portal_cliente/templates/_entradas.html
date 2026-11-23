@@ -16,6 +16,12 @@
   .ent-itens th, .ent-itens td { padding: 3px 8px; border-bottom: 1px dashed var(--borda); text-align: left; }
   .ent-itens td.num { text-align: right; }
   .ent-itens .falta { color: var(--st-falha); font-weight: 700; }
+  .ent-itens .sobra { color: var(--st-rota); font-weight: 700; }
+  .ent-itens .nao-cad { color: var(--st-falha); font-weight: 700; }
+  .ent-itens .cad-ok { color: var(--st-sucesso); font-weight: 600; }
+  .ent-faixa { font-size: 12.5px; background: var(--rodando-bg); color: var(--rodando-texto); border-radius: 6px; padding: 6px 10px; }
+  .ent-faixa a { color: inherit; margin-left: 6px; }
+  @media (max-width: 480px) { .vistas button { padding: 6px 8px; font-size: 12.5px; } }   /* 3 botões cabem em 390 px */
   tr.ent-detalhe td { background: var(--fundo); }
   .ent-expandir { border: none; background: none; color: var(--acento); cursor: pointer; font-size: 12px; padding: 0; }
 </style>
@@ -24,6 +30,7 @@
   <div class="env-grade">
     <div class="coluna">
       <div class="card" id="ent-card-anunciar" style="display:flex; flex-direction:column; gap:14px;">
+        {% if equipe %}<div class="ent-faixa">Lançando como <b>{{ cliente.nome }}</b> · equipe Fresh Log ({{ equipe.usuario }}) <a href="{{ url_for('equipe_cliente') }}">trocar</a></div>{% endif %}
         <div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;">
           <h3 style="margin:0;">Anunciar mercadoria que vai chegar</h3>
           {% if empresas_envio | length > 1 %}
@@ -70,7 +77,7 @@
           </div>
           <button type="button" class="botao-linha" id="ent-atualizar">Atualizar</button>
         </div>
-        <div class="rolagem"><table id="ent-tabela"><thead><tr><th>Anunciado em</th><th>NF / Remessa</th><th>Data prevista</th><th style="text-align:center">Itens</th><th style="text-align:center">Vol.</th><th>Situação</th><th>Stokki</th><th>Ações</th></tr></thead><tbody></tbody></table></div>
+        <div class="rolagem"><table id="ent-tabela"><thead><tr><th>Anunciado em</th><th>NF / Remessa</th><th>Data prevista</th><th style="text-align:center">Itens</th><th style="text-align:center">Vol.</th><th>Situação</th><th>Ações</th></tr></thead><tbody></tbody></table></div>
         <div class="vazio oculto" id="ent-vazia"></div>
         <div class="rodape-tabela"><span id="ent-contagem"></span><span id="ent-carimbo" style="font-size:12px;"></span></div>
       </div>
@@ -170,22 +177,21 @@
   function detalhe(x) {
     const itens = `<table class="ent-itens"><thead><tr><th>SKU</th><th>Descrição</th><th class="num">Qtd anunciada</th></tr></thead><tbody>` +
       (x.itens_lista || []).map(i => `<tr><td class="mono">${esc(i.sku)}</td><td>${esc(i.descricao || '')}</td><td class="num">${num(i.quantidade)} ${esc(i.unidade || '')}</td></tr>`).join('') + '</tbody></table>';
-    const conf = (x.conferencia || []).length ? `<div style="margin-top:8px;font-size:12px;font-weight:600">Conferência do galpão (por SKU)</div><table class="ent-itens"><thead><tr><th>SKU</th><th>Descrição</th><th class="num">Anunciado</th><th class="num">Recebido</th><th class="num">Faltou</th></tr></thead><tbody>` +
-      x.conferencia.map(c => `<tr><td class="mono">${esc(c.sku)}</td><td>${esc(c.descricao)}</td><td class="num">${num(c.anunciado)} ${esc(c.unidade)}</td><td class="num">${num(c.recebido)} ${esc(c.unidade)}</td><td class="num ${c.falta > 0 ? 'falta' : ''}">${c.falta > 0 ? num(c.falta) + ' ' + esc(c.unidade) : '—'}</td></tr>`).join('') + '</tbody></table>' +
+    const conf = (x.conferencia || []).length ? `<div style="margin-top:8px;font-size:12px;font-weight:600">Conferência do galpão (por SKU)</div><table class="ent-itens"><thead><tr><th>SKU</th><th>Descrição</th><th class="num">Anunciado</th><th class="num">Recebido</th><th class="num">Faltou</th><th class="num">Sobrou</th></tr></thead><tbody>` +
+      x.conferencia.map(c => `<tr class="${c.situacao === 'SOBRA' ? 'sobra' : ''}"><td class="mono">${esc(c.sku)}</td><td>${esc(c.descricao)}</td><td class="num">${num(c.anunciado)} ${esc(c.unidade)}</td><td class="num">${num(c.recebido)} ${esc(c.unidade)}</td><td class="num ${c.falta > 0 ? 'falta' : ''}">${c.falta > 0 ? num(c.falta) + ' ' + esc(c.unidade) : '—'}</td><td class="num ${c.sobra > 0 ? 'sobra' : ''}">${c.sobra > 0 ? num(c.sobra) + ' ' + esc(c.unidade) : '—'}</td></tr>`).join('') + '</tbody></table>' +
       (x.observacao_divergencia ? `<div style="margin-top:6px;font-size:12px"><b>Observação de quem recebeu:</b> ${esc(x.observacao_divergencia)}</div>` : '') : '';
-    return `<tr class="ent-detalhe"><td colspan="8">${itens}${conf}${x.observacoes ? `<div style="margin-top:6px;font-size:12px;color:var(--texto-suave)">Obs.: ${esc(x.observacoes)}</div>` : ''}</td></tr>`;
+    return `<tr class="ent-detalhe"><td colspan="7">${itens}${conf}${x.observacoes ? `<div style="margin-top:6px;font-size:12px;color:var(--texto-suave)">Obs.: ${esc(x.observacoes)}</div>` : ''}</td></tr>`;
   }
 
   function renderTabela() {
     const lista = filtradas();
     $('ent-tabela').querySelector('tbody').innerHTML = lista.map(x => `<tr>
-      <td class="nw num">${esc(x.criado_em_br)}${x.enviado_por && x.enviado_por.startsWith('equipe') ? ' <span class="chip" title="Anunciado pela equipe Fresh Log">equipe</span>' : ''}</td>
+      <td class="nw num">${esc(x.criado_em_br)}${x.lancado_pela_equipe ? ' <span class="chip" title="Anunciado pela equipe Fresh Log">lançado pela equipe Fresh Log</span>' : ''}</td>
       <td class="nw"><span class="mono num" style="font-weight:600">${esc(x.numero_nf || x.referencia || '—')}</span>${x.origem === 'planilha' ? ' <span class="chip">planilha</span>' : ''}${x.origem === 'planilha' && x.numero_nf && x.referencia ? `<div class="end">${esc(x.referencia)}</div>` : ''}</td>
       <td class="nw num">${esc(x.data_prevista_br)}${x.atrasada ? ' <span class="chip atrasada">atrasada</span>' : ''}</td>
-      <td class="num nw" style="text-align:center"><button type="button" class="ent-expandir" data-exp="${x.id}">${(x.itens_lista || []).length} ${abertos.has(x.id) ? '▴' : '▾'}</button></td>
+      <td class="num nw" style="text-align:center"><button type="button" class="ent-expandir" data-exp="${x.id}">${x.status === 'DIVERGENCIA' ? 'ver divergência' : (x.itens_lista || []).length} ${abertos.has(x.id) ? '▴' : '▾'}</button></td>
       <td class="num nw" style="text-align:center">${x.volumes || '—'}</td>
-      <td class="nw"><span class="badge b-${x.status}"><span class="pt"></span>${esc(x.status_rotulo)}</span>${x.encerrado_em_br ? `<div class="end">${esc(x.encerrado_em_br)}</div>` : ''}</td>
-      <td class="nw">${x.stokki_codigo ? `<span class="mono">${esc(x.stokki_codigo)}</span>` : (x.stokki_status === 'ERRO' ? `<span class="chip stokki-erro" title="${esc(x.stokki_erro || '')}">erro na Stokki</span><div class="erro-txt">${esc((x.stokki_erro || '').slice(0, 90))}</div>` : (x.status === 'ANUNCIADO' ? `<span style="color:var(--texto-suave)">${esc(x.stokki_rotulo)}</span>` : '—'))}</td>
+      <td><span class="badge ${x.stokki_status === 'ERRO' && x.status === 'ANUNCIADO' ? 'b-DIVERGENCIA' : 'b-' + x.status}" title="${esc(x.stokki_erro || '')}"><span class="pt"></span>${esc(x.situacao_rotulo || x.status_rotulo)}</span>${x.stokki_status === 'ERRO' && x.stokki_erro ? `<div class="erro-txt">${esc(x.stokki_erro.slice(0, 120))}</div>` : ''}${x.encerrado_em_br ? `<div class="end">${esc(x.encerrado_em_br)}</div>` : ''}</td>
       <td><div class="acoes-linha">
         ${PODE_ENVIAR && x.pode_cancelar ? `<button type="button" class="perigo" data-acao="cancelar" data-id="${x.id}">Cancelar</button>` : ''}
         <button type="button" data-acao="arquivo" data-id="${x.id}">${x.origem === 'planilha' ? 'Planilha' : 'XML'}</button>
@@ -213,6 +219,17 @@
     $('ent-arquivos').value = '';
   }
 
+  // Conferência produto por produto (spec V3/V4): SKU, produto, qtd (un), caixas e se está no cadastro.
+  function tabelaConferencia(conf, itensBrutos) {
+    if (!conf || !conf.length) {
+      return (itensBrutos || []).slice(0, 4).map(x => `<div class="end">${esc(x.sku)} × ${num(x.quantidade)} ${esc(x.unidade || '')}</div>`).join('');
+    }
+    const un = v => (v === null || v === undefined) ? '—' : num(v);
+    return `<table class="ent-itens"><thead><tr><th>SKU</th><th>Produto</th><th class="num">Qtd (un)</th><th class="num">Caixas</th><th>Cadastro</th></tr></thead><tbody>` +
+      conf.map(c => `<tr><td class="mono">${esc(c.sku)}</td><td>${esc(c.descricao || '')}</td><td class="num">${un(c.unidades)}</td><td class="num">${un(c.caixas)}</td>` +
+        `<td class="${c.cadastrado ? 'cad-ok' : 'nao-cad'}">${c.cadastrado ? 'OK' : 'Não cadastrado'}</td></tr>`).join('') + '</tbody></table>';
+  }
+
   function renderPrevia() {
     const p = previa, box = $('ent-previa');
     if (!p.itens.length && !p.rejeitados.length) { box.classList.remove('aberta'); return; }
@@ -221,13 +238,13 @@
     if (p.rejeitados.length) {
       rej.classList.remove('oculto');
       rej.innerHTML = `<b>${p.rejeitados.length} ${p.rejeitados.length > 1 ? 'itens não podem ser anunciados' : 'item não pode ser anunciado'}:</b>` +
-        p.rejeitados.map(r => `<div>• ${esc(r.rotulo || r.arquivo)} — ${esc(r.erro)}</div>`).join('');
+        p.rejeitados.map(r => `<div>• ${esc(r.rotulo || r.arquivo)} — <b>${esc(r.erro)}</b>${r.conferencia && r.conferencia.length ? tabelaConferencia(r.conferencia) : ''}</div>`).join('');
     } else { rej.classList.add('oculto'); rej.innerHTML = ''; }
     $('ent-previa-titulo').textContent = p.itens.length ? `${p.itens.length} remessa${p.itens.length > 1 ? 's' : ''} pronta${p.itens.length > 1 ? 's' : ''} pra anunciar` : 'Nenhuma remessa válida neste lote';
     $('ent-data-todas').min = p.hoje;
     $('ent-previa-tabela').querySelector('tbody').innerHTML = p.itens.map((it, i) => `<tr data-i="${i}">
       <td class="nw"><span class="mono num" style="font-weight:600">${esc(it.rotulo)}</span>${it.avisos.length ? `<div class="avisos">${esc(it.avisos.join(' '))}</div>` : ''}</td>
-      <td>${(it.itens_lista || []).slice(0, 4).map(x => `<div class="end">${esc(x.sku)} × ${num(x.quantidade)} ${esc(x.unidade || '')}</div>`).join('')}${(it.itens_lista || []).length > 4 ? `<div class="end">e mais ${it.itens_lista.length - 4}…</div>` : ''}</td>
+      <td>${tabelaConferencia(it.conferencia, it.itens_lista)}</td>
       <td class="num nw" style="text-align:center">${it.volumes}</td>
       <td class="nw"><input type="date" class="ent-data" min="${p.hoje}" value="${esc(it.data_prevista || '')}" required></td>
       <td><input type="text" class="ent-obs" maxlength="500" placeholder="opcional" style="width:100%"></td>
