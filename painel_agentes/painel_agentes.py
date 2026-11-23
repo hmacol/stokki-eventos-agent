@@ -2123,6 +2123,19 @@ def adesao_portal():
                            dias_ativo=_adesao.DIAS_ATIVO, gerado_em=datetime.now().strftime("%d/%m %H:%M"))
 
 
+@app.route("/adesao-motoristas")
+@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
+def adesao_motoristas():
+    """Adesão dos motoristas ao app novo e leva de cada um (23/11, saída da Vuupt).
+    Só leitura; a página se recarrega a cada 2h."""
+    import adesao_motoristas as _adesao
+    linhas = _adesao.listar()
+    return render_template("adesao_motoristas.html", linhas=linhas, resumo=_adesao.resumo(linhas),
+                           levas=_adesao.resumo_levas(linhas), dias=_adesao.DIAS_RECENTE,
+                           versao_alvo=".".join(map(str, _adesao.VERSAO_ALVO)),
+                           gerado_em=datetime.now().strftime("%d/%m %H:%M"))
+
+
 _NIVEIS_EDITA_TRANSPORTADORAS = ("total", "operador", "logistica")
 
 
