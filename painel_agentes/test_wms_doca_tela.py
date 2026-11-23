@@ -245,6 +245,18 @@ class ConferirRecebimentoNaTela(Base):
                   "Conferido, está na DOCA", "vão para a fila Guardar"):
             self.assertIn(m, h)
 
+    def test_pedir_todas_so_com_etapas_e_sem_duplicar(self):
+        h = self.html()
+        self.assertIn("it.usa_caixas && it.usa_etapas", h)
+        self.assertIn("estadoCx(i).impressaoId) { jaPedidas.push", h)
+        self.assertIn("Já pedidas: linha", h)
+        self.assertIn("Falhou: linha", h)
+
+    def test_cartao_guardar_so_com_linha_de_etapas(self):
+        h = self.html()
+        self.assertIn("etapasPorLinha[l.linha]", h)
+        self.assertNotIn("S.etapasAtivo && nConferidos", h)
+
     def test_caminho_antigo_continua(self):
         h = self.html()
         for m in ("Registrar entrada", "Encerrar recebimento", "Entrada registrada em"):

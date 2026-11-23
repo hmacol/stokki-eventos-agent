@@ -789,7 +789,7 @@
     return `
     <button class="voltar" id="btn-voltar">‹ Voltar</button>
     <h1>${esc(r.codigo)}<small>${esc((r.embarcador || '').split(' ').slice(0, 3).join(' '))} · ${itens.length} item(ns)</small></h1>
-    ${itens.filter((it) => it.produto_id && it.usa_caixas).length > 1 && r.estado === 'ESPERADO' ? '<div class="botoes"><button class="botao neutro" type="button" id="btn-pedir-todas">Pedir etiquetas de todas as linhas</button></div>' : ''}
+    ${itens.filter((it) => it.produto_id && it.usa_caixas && it.usa_etapas).length > 1 && r.estado === 'ESPERADO' ? '<div class="botoes"><button class="botao neutro" type="button" id="btn-pedir-todas">Pedir etiquetas de todas as linhas</button></div>' : ''}
     <div class="lista">${itens.map((it, i) => {
       const feito = it.produto_id && Number(it.qtd_enderecada || 0) >= Number(it.qtd_un || 0) - 0.001;
       const restante = Math.max(0, Math.round(((it.qtd_un || 0) - (it.qtd_enderecada || 0)) * 1000) / 1000);
@@ -883,7 +883,8 @@
     try { res = await api('/recebimentos/' + r.id + '/encerramento'); }
     catch (e) { el.innerHTML = '<div class="vazio">' + esc(e.message) + '</div>'; return; }
     const dif = (l) => l.diferenca === null ? '—' : (l.diferenca > 0 ? '+' : '') + num(l.diferenca);
-    const nConferidos = res.linhas.filter((l) => l.recebido > 0).length;
+    const etapasPorLinha = {}; (r.itens || []).forEach((x) => { if (x.usa_etapas) etapasPorLinha[x.linha] = true; });
+    const nConferidos = res.linhas.filter((l) => l.recebido > 0 && etapasPorLinha[l.linha]).length;   // só linhas de embarcador com etapas vão pra Guarda
     el.innerHTML = `
       <div class="cartao ${res.divergente ? 'atencao' : 'ok'}">
         <div class="rotulo">${res.divergente ? 'Com divergência' : 'Tudo bateu'}</div>
@@ -894,7 +895,7 @@
         </table>
       </div>
       ${res.faltas ? '<div class="cartao erro"><div class="sub">Há falta em ' + res.faltas + ' item(ns): ao confirmar, <b>o cliente recebe o relatório de faltas por e-mail</b>. O que já foi endereçado continua no estoque.</div></div>' : ''}
-      ${S.etapasAtivo && nConferidos ? '<div class="cartao"><div class="sub">' + (nConferidos === 1 ? 'O item conferido vai para a fila Guardar.' : 'Os ' + nConferidos + ' itens conferidos vão para a fila Guardar.') + '</div></div>' : ''}
+      ${nConferidos ? '<div class="cartao"><div class="sub">' + (nConferidos === 1 ? 'O item conferido vai para a fila Guardar.' : 'Os ' + nConferidos + ' itens conferidos vão para a fila Guardar.') + '</div></div>' : ''}
       ${res.sem_cadastro ? '<div class="cartao"><div class="sub">' + res.sem_cadastro + ' linha(s) sem produto no catálogo: não contam como falta, ficam registradas como pendência.</div></div>' : ''}
       <div class="campo"><label>Observação${res.faltas ? ' (vai no e-mail do cliente)' : ''}</label>
         <input type="text" id="enc-obs" maxlength="300" placeholder="${res.divergente ? 'ex.: 2 caixas chegaram avariadas' : 'opcional'}"></div>
@@ -969,17 +970,21 @@
     }));
     const btnTodas = g('btn-pedir-todas');
     if (btnTodas) btnTodas.addEventListener('click', async () => {
-      const feitas = []; const puladas = [];
+      const feitas = []; const puladas = []; const jaPedidas = []; const falhas = [];
       btnTodas.disabled = true;
       for (let i = 0; i < itens.length; i++) {
         if (!g('rec-ncx-' + i)) continue;   // sem caixa serializada ou recebimento fechado
         const n = Number(g('rec-ncx-' + i).value);
-        const lote = g('rec-lote-' + i).value.trim(); const val = g('rec-val-' + i).value;
-        if (!lote || !val || !(n >= 1 && n <= 200)) { puladas.push('linha ' + itens[i].linha); continue; }
-        if (await pedirLinha(i, n)) feitas.push(i); else puladas.push('linha ' + itens[i].linha);
+        if (estadoCx(i).impressaoId) { jaPedidas.push(itens[i].linha); continue; }   // pedir mais: botão da própria linha (confirma)
+        if (!(n >= 1 && n <= 200)) { puladas.push(itens[i].linha); continue; }
+        pedirErro = '';
+        if (await pedirLinha(i, n)) feitas.push(i); else falhas.push(itens[i].linha + ' (' + (pedirErro || 'erro') + ')');
       }
       btnTodas.disabled = false;
-      toast('Etiquetas pedidas para ' + feitas.length + ' linha(s)' + (puladas.length ? '. Puladas (incompletas): ' + puladas.join(', ') : ''), !feitas.length);
+      toast('Etiquetas pedidas para ' + feitas.length + ' linha(s)'
+        + (jaPedidas.length ? '. Já pedidas: linha ' + jaPedidas.join(', ') : '')
+        + (puladas.length ? '. Puladas (nº de caixas de 1 a 200): linha ' + puladas.join(', ') : '')
+        + (falhas.length ? '. Falhou: linha ' + falhas.join(', linha ') : ''), !feitas.length || falhas.length > 0);
     });
     const bipar = async (i, codigo) => {
       const it = itens[i]; const serial = serialDe(codigo);
@@ -1042,12 +1047,14 @@
       return { ok: false, erro: e.message };
     }
   }
+  let pedirErro = '';   // motivo da última recusa, pro resumo do "pedir de todas as linhas"
   async function pedirEtiquetas(corpo) {
     if (!S.operador) { toast('Identifique o operador primeiro', true); ir('operador'); return null; }
     try { return await api('/caixas', { method: 'POST', body: corpo }); }
     catch (e) {
       if (e.status === 409 && e.dados && e.dados.sem_operador) { S.operador = null; toast(e.message, true); ir('operador'); }
       else toast(e.message, true);
+      pedirErro = e.message;
       return null;
     }
   }
