@@ -379,3 +379,64 @@ def concluir(conn, chegada_id: int, dados: dict, config: dict, operador: dict) -
         conn.rollback()
         raise
     return _resultado(conn, chegada_id)
+
+
+_MSG_NAO_AGUARDA = "Essa carga não está mais aguardando decisão."
+
+
+def _decidir(conn, chegada_id: int, campos: dict, exige_sem_resposta: bool = False) -> dict:
+    """Aplica uma decisao a uma chegada AGUARDANDO_ESCRITORIO. O UPDATE condicional (com rowcount)
+    garante que de duas decisoes simultaneas so uma passa."""
+    where = "id = ? AND estado = 'AGUARDANDO_ESCRITORIO'" + (" AND resposta_cliente = ''" if exige_sem_resposta else "")
+    cur = conn.execute(
+        f"UPDATE wms_chegadas SET {', '.join(c + ' = ?' for c in campos)} WHERE {where}",
+        (*campos.values(), chegada_id))
+    if cur.rowcount != 1:
+        conn.rollback()
+        atual = detalhe(conn, chegada_id)
+        if atual["estado"] != "AGUARDANDO_ESCRITORIO":
+            raise ErroChegada(_MSG_NAO_AGUARDA)
+        raise ErroChegada("Esse pedido de liberação já foi respondido.")
+    conn.commit()
+    return detalhe(conn, chegada_id)
+
+
+def responder_cliente(conn, chegada_id: int, nome: str, autorizado: bool) -> dict:
+    """Resposta do cliente ao link de liberacao. Autorizado libera; nao autorizado continua aguardando."""
+    atual = detalhe(conn, chegada_id)
+    if atual["estado"] != "AGUARDANDO_ESCRITORIO":
+        raise ErroChegada(_MSG_NAO_AGUARDA)
+    if atual["resposta_cliente"]:
+        raise ErroChegada("Esse pedido de liberação já foi respondido.")
+    nome = str(nome or "").strip()
+    if len(nome) < 3:
+        raise ErroChegada("Informe o seu nome.")
+    agora = _agora()
+    campos = {"resposta_cliente": "AUTORIZADO" if autorizado else "NAO_AUTORIZADO",
+              "resposta_cliente_nome": nome, "resposta_cliente_em": agora}
+    if autorizado:
+        campos.update(estado="LIBERADA", liberacao_via="CLIENTE", liberacao_nome=nome, liberacao_em=agora)
+    return _decidir(conn, chegada_id, campos, exige_sem_resposta=True)
+
+
+def liberar_por_fora(conn, chegada_id: int, texto: str, usuario: str) -> dict:
+    """Escritorio registra uma liberacao recebida por fora do sistema (telefone, e-mail...)."""
+    if detalhe(conn, chegada_id)["estado"] != "AGUARDANDO_ESCRITORIO":
+        raise ErroChegada(_MSG_NAO_AGUARDA)
+    texto = str(texto or "").strip()
+    if len(texto) < 10:
+        raise ErroChegada("Descreva quem autorizou e por onde.")
+    return _decidir(conn, chegada_id, {"estado": "LIBERADA", "liberacao_via": "ESCRITORIO",
+                                       "liberacao_nome": usuario, "liberacao_texto": texto,
+                                       "liberacao_em": _agora()})
+
+
+def nao_receber(conn, chegada_id: int, motivo: str, usuario: str) -> dict:
+    """Escritorio decide nao receber a carga: o recebimento volta para a lista sem chegada."""
+    if detalhe(conn, chegada_id)["estado"] != "AGUARDANDO_ESCRITORIO":
+        raise ErroChegada(_MSG_NAO_AGUARDA)
+    motivo = str(motivo or "").strip()
+    if len(motivo) < 5:
+        raise ErroChegada("Informe o motivo.")
+    return _decidir(conn, chegada_id, {"estado": "NAO_RECEBIDA", "nao_recebida_motivo": motivo,
+                                       "nao_recebida_por": usuario})

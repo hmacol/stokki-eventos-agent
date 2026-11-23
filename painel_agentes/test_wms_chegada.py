@@ -437,3 +437,90 @@ class TestConcluir(_Base):
         cid = self._chegada()
         self.conn.execute("UPDATE wms_chegadas SET estado = 'NAO_RECEBIDA' WHERE id = ?", (cid,))
         self.assertEqual(wms_chegada.estado_do_recebimento(self.conn, self.rec), "SEM_CHEGADA")
+
+    # --- decisoes sobre carga fora da faixa ---
+    def _aguardando(self, uuid="u1"):
+        cid = self._chegada(uuid=uuid)
+        self._concluir(cid, self._dados(temperaturas={"REFRIGERADO": "5", "CONGELADO": "-9"}))
+        return cid
+
+    def _erro(self, msg, fn, *args):
+        with self.assertRaises(wms_chegada.ErroChegada) as cm:
+            fn(self.conn, *args)
+        self.assertEqual(str(cm.exception), msg)
+
+    def test_cliente_autoriza_libera(self):
+        cid = self._aguardando()
+        c = wms_chegada.responder_cliente(self.conn, cid, "Maria Souza", True)
+        self.assertEqual(c["estado"], "LIBERADA")
+        self.assertEqual((c["liberacao_via"], c["liberacao_nome"]), ("CLIENTE", "Maria Souza"))
+        self.assertEqual((c["resposta_cliente"], c["resposta_cliente_nome"]), ("AUTORIZADO", "Maria Souza"))
+        self.assertTrue(c["liberacao_em"])
+        self.assertTrue(c["resposta_cliente_em"])
+        self.assertIs(wms_chegada.pode_conferir(self.conn, self.rec), True)
+
+    def test_cliente_nao_autoriza_continua_aguardando(self):
+        cid = self._aguardando()
+        c = wms_chegada.responder_cliente(self.conn, cid, "Maria Souza", False)
+        self.assertEqual(c["estado"], "AGUARDANDO_ESCRITORIO")
+        self.assertEqual((c["resposta_cliente"], c["resposta_cliente_nome"]), ("NAO_AUTORIZADO", "Maria Souza"))
+        self.assertTrue(c["resposta_cliente_em"])
+        self.assertEqual(c["liberacao_via"], "")
+
+    def test_cliente_nome_curto(self):
+        cid = self._aguardando()
+        self._erro("Informe o seu nome.", wms_chegada.responder_cliente, cid, " Jo ", True)
+        self.assertEqual(wms_chegada.detalhe(self.conn, cid)["estado"], "AGUARDANDO_ESCRITORIO")
+
+    def test_cliente_responde_duas_vezes(self):
+        cid = self._aguardando()
+        wms_chegada.responder_cliente(self.conn, cid, "Maria Souza", False)
+        self._erro("Esse pedido de liberação já foi respondido.", wms_chegada.responder_cliente, cid, "Outro Nome", True)
+        c = wms_chegada.detalhe(self.conn, cid)
+        self.assertEqual((c["estado"], c["resposta_cliente"], c["resposta_cliente_nome"]),
+                         ("AGUARDANDO_ESCRITORIO", "NAO_AUTORIZADO", "Maria Souza"))
+
+    def test_cliente_responde_depois_do_escritorio_decidir(self):
+        cid = self._aguardando()
+        wms_chegada.liberar_por_fora(self.conn, cid, "Joao autorizou por telefone", "Ana")
+        self._erro("Essa carga não está mais aguardando decisão.", wms_chegada.responder_cliente, cid, "Maria Souza", False)
+        c = wms_chegada.detalhe(self.conn, cid)
+        self.assertEqual((c["estado"], c["liberacao_via"], c["resposta_cliente"]), ("LIBERADA", "ESCRITORIO", ""))
+
+    def test_liberar_por_fora_exige_texto(self):
+        cid = self._aguardando()
+        self._erro("Descreva quem autorizou e por onde.", wms_chegada.liberar_por_fora, cid, "  curto  ", "Ana")
+        self.assertEqual(wms_chegada.detalhe(self.conn, cid)["estado"], "AGUARDANDO_ESCRITORIO")
+        c = wms_chegada.liberar_por_fora(self.conn, cid, "Joao autorizou por telefone", "Ana")
+        self.assertEqual(c["estado"], "LIBERADA")
+        self.assertEqual((c["liberacao_via"], c["liberacao_nome"], c["liberacao_texto"]),
+                         ("ESCRITORIO", "Ana", "Joao autorizou por telefone"))
+        self.assertTrue(c["liberacao_em"])
+
+    def test_liberar_por_fora_depois_de_nao_autorizado_e_permitido(self):
+        cid = self._aguardando()
+        wms_chegada.responder_cliente(self.conn, cid, "Maria Souza", False)
+        c = wms_chegada.liberar_por_fora(self.conn, cid, "Diretor autorizou por e-mail", "Ana")
+        self.assertEqual(c["estado"], "LIBERADA")
+        self.assertEqual(c["resposta_cliente"], "NAO_AUTORIZADO")
+
+    def test_nao_receber_exige_motivo(self):
+        cid = self._aguardando()
+        self._erro("Informe o motivo.", wms_chegada.nao_receber, cid, " abc ", "Ana")
+        self.assertEqual(wms_chegada.detalhe(self.conn, cid)["estado"], "AGUARDANDO_ESCRITORIO")
+
+    def test_nao_receber_devolve_recebimento_para_a_lista(self):
+        cid = self._aguardando()
+        c = wms_chegada.nao_receber(self.conn, cid, "Carga quente demais", "Ana")
+        self.assertEqual(c["estado"], "NAO_RECEBIDA")
+        self.assertEqual((c["nao_recebida_motivo"], c["nao_recebida_por"]), ("Carga quente demais", "Ana"))
+        self.assertEqual(wms_chegada.estado_do_recebimento(self.conn, self.rec), "SEM_CHEGADA")
+
+    def test_decisao_em_chegada_liberada_recusa(self):
+        cid = self._chegada()
+        self._concluir(cid)
+        msg = "Essa carga não está mais aguardando decisão."
+        self._erro(msg, wms_chegada.responder_cliente, cid, "Maria Souza", True)
+        self._erro(msg, wms_chegada.liberar_por_fora, cid, "Joao autorizou por telefone", "Ana")
+        self._erro(msg, wms_chegada.nao_receber, cid, "Carga quente demais", "Ana")
+        self.assertEqual(wms_chegada.detalhe(self.conn, cid)["estado"], "LIBERADA")
