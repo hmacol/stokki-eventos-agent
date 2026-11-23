@@ -331,12 +331,13 @@
     S.tela = tela; S.ctx = ctx || {}; S.aguardando = null;
     if (S.timerChegada) { clearInterval(S.timerChegada); S.timerChegada = null; }
     const abaDe = { onda: 'separar', conferir: 'separar', conferencia: 'separar', conferenciaFim: 'separar', volumes: 'separar', separarReserva: 'separar', separacao: 'separar' };
+    if (S.etapasAtivo) Object.assign(abaDe, { receber: 'inicio', receberChegada: 'receber', chegada1: 'receber', chegada2: 'receber', chegadaAguardando: 'receber' });
     document.querySelectorAll('.aba').forEach((a) => a.classList.toggle('on', a.dataset.aba === (abaDe[tela] || tela)));
     render();
     window.scrollTo(0, 0);
   }
   function voltar() { const p = S.pilha.pop(); if (p) ir(p.tela, p.ctx, false); else ir('inicio', {}, false); }
-  document.querySelectorAll('.aba').forEach((a) => a.addEventListener('click', () => ir(a.dataset.aba)));
+  document.querySelectorAll('.aba').forEach((a) => a.addEventListener('click', () => ir(S.etapasAtivo && a.dataset.aba === 'receber' ? 'receberChegada' : a.dataset.aba)));
   document.getElementById('btn-operador').addEventListener('click', () => ir('operador'));
 
   function atualizarTopo() {
@@ -866,11 +867,12 @@
   }
   const temFoto = (ctx, tipo) => ctx.chegada.fotos.some((f) => f.tipo === tipo);
   function ligarRascunho(ctx, ids) {
-    ids.forEach((campo) => { const e = document.getElementById('ch-' + campo); if (e) e.addEventListener('input', () => guardarRascunho(ctx.chegada.id, { [campo]: e.value })); });
+    ctx.dados = ctx.dados || {};   // em memória: o localStorage só restaura ao reabrir
+    ids.forEach((campo) => { const e = document.getElementById('ch-' + campo); if (e) { ctx.dados[campo] = e.value; e.addEventListener('input', () => { ctx.dados[campo] = e.value; guardarRascunho(ctx.chegada.id, { [campo]: e.value }); }); } });
   }
 
   TELAS.chegada1 = (ctx) => {
-    const c = ctx.chegada; const rasc = Object.assign({ motorista: '', placa: '', transportadora: '' }, lerRascunho(c.id));
+    const c = ctx.chegada; const rasc = Object.assign({ motorista: '', placa: '', transportadora: '' }, lerRascunho(c.id), ctx.dados || {});
     return `
     <button class="voltar" id="btn-voltar">‹ Voltar</button>
     <h1>Quem chegou<small>passo 1 de 2 · ${c.recebimentos.map((r) => esc(r.codigo)).join(', ')}</small></h1>
@@ -934,7 +936,7 @@
       if (integra === null) return toast('Diga se a carga chegou inteira.', true);
       if (!temFoto(ctx, 'CARGA')) return toast('Falta pelo menos uma foto da carga.', true);
       if (integra === false && !temFoto(ctx, 'AVARIA')) return toast('Falta a foto da avaria.', true);
-      const r1 = lerRascunho(id);
+      const r1 = ctx.dados || {};
       btn.disabled = true;
       try {
         const r = await api('/chegadas/' + id + '/concluir', { method: 'POST', body: {
@@ -981,6 +983,7 @@
         if (S.tela !== 'chegadaAguardando') { clearInterval(S.timerChegada); S.timerChegada = null; return; }
         try {
           const n = (await api('/chegadas/' + id)).chegada;
+          if (S.tela !== 'chegadaAguardando' || S.ctx.chegada.id !== id) return;
           if (n.estado !== c.estado || n.resposta_cliente !== c.resposta_cliente) {
             if (n.estado === 'LIBERADA') toast('Liberada. A carga está em Conferir Recebimento.');
             ir('chegadaAguardando', Object.assign({}, ctx, { chegada: n }), false);
