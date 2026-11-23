@@ -83,6 +83,20 @@ class Temperatura(Base):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.get_json()["produto"]["temperatura"], "CONGELADO")
 
+    def test_grava_faixa_e_mantem_sem_as_chaves(self):
+        self.entrar("total")
+        r = self.post({"temperatura": "CONGELADO", "temp_min": "-25", "temp_max": "-20"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual((r.get_json()["produto"]["temp_min"], r.get_json()["produto"]["temp_max"]), (-25.0, -20.0))
+        r = self.post({"temperatura": "CONGELADO"})
+        self.assertEqual((r.get_json()["produto"]["temp_min"], r.get_json()["produto"]["temp_max"]), (-25.0, -20.0))
+
+    def test_chaves_vazias_limpam_a_faixa(self):
+        self.entrar("total")
+        self.post({"temperatura": "CONGELADO", "temp_min": "-25", "temp_max": "-20"})
+        r = self.post({"temperatura": "CONGELADO", "temp_min": "", "temp_max": ""})
+        self.assertIsNone(r.get_json()["produto"]["temp_min"])
+
     def test_valor_invalido_400(self):
         self.entrar("total")
         self.assertEqual(self.post({"temperatura": "MORNO"}).status_code, 400)

@@ -563,6 +563,8 @@ def definir_temperatura_produto(conn, produto_id: int, temperatura: str,
     temperatura = str(temperatura or "").strip().upper()
     if temperatura and temperatura not in TEMPERATURAS:
         raise ErroWMS("Temperatura inválida: use " + ", ".join(TEMPERATURAS) + " ou deixe em branco.")
+    if temperatura not in ("REFRIGERADO", "CONGELADO"):
+        temp_min = temp_max = None  # faixa so faz sentido pra produto frio
     if (temp_min is None) != (temp_max is None):
         raise ErroWMS("Informe a temperatura mínima e a máxima, ou nenhuma das duas.")
     if temp_min is not None:

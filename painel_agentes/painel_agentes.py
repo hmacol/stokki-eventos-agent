@@ -6325,9 +6325,13 @@ def api_wms_produto_temperatura(produto_id):
     try:
         def _num(v):
             return None if v is None or str(v).strip() == "" else str(v).strip().replace(",", ".")
+        if "temp_min" in body or "temp_max" in body:
+            faixa = {"temp_min": _num(body.get("temp_min")), "temp_max": _num(body.get("temp_max"))}
+        else:  # corpo sem a faixa: mantem a atual (se a temperatura continuar fria, o wms.py zera senao)
+            atual = wms.obter_produto(conn, produto_id)
+            faixa = {"temp_min": atual.get("temp_min"), "temp_max": atual.get("temp_max")}
         return jsonify({"ok": True, "produto": wms.definir_temperatura_produto(
-            conn, produto_id, body.get("temperatura", ""),
-            temp_min=_num(body.get("temp_min")), temp_max=_num(body.get("temp_max")))})
+            conn, produto_id, body.get("temperatura", ""), **faixa)})
     except wms.ErroWMS as e:
         return _wms_json_erro(e)
     finally:

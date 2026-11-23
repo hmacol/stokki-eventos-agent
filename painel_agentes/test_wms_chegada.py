@@ -69,9 +69,39 @@ class TestFaixas(_Base):
         # congelado sem faixa propria continua no padrao
         self.assertEqual(wms_chegada.faixa_da_carga(self.conn, [self.rec], "CONGELADO", {}), (-18.0, -12.0))
 
-    def test_faixa_do_produto_nao_alarga_a_da_classe(self):
-        wms.definir_temperatura_produto(self.conn, self.p_refri, "REFRIGERADO", temp_min=-5, temp_max=20)
+    def test_faixa_propria_substitui_a_da_classe(self):
+        # sorvete: faixa propria fora do padrao da classe
+        wms.definir_temperatura_produto(self.conn, 2, "CONGELADO", temp_min=-25, temp_max=-20)
+        rec = self._receb(10, [2])
+        self.conn.commit()
+        self.assertEqual(wms_chegada.faixa_da_carga(self.conn, [rec], "CONGELADO", {}), (-25.0, -20.0))
+        self.assertIs(wms_chegada.medida_dentro(self.conn, [rec], "CONGELADO", -22, {}), True)
+        self.assertIs(wms_chegada.medida_dentro(self.conn, [rec], "CONGELADO", -15, {}), False)
+
+    def test_faixas_disjuntas_na_mesma_carga(self):
+        wms.definir_temperatura_produto(self.conn, 1, "REFRIGERADO", temp_min=0, temp_max=3)
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, embarcador_id, unidade, "
+            "temperatura, temp_min, temp_max, atualizado_em) VALUES (5, 905, 'R2', 'PROD R2', 'MARIA', 48, 'UN', "
+            "'REFRIGERADO', 5, 7, '2026-09-21 10:00:00')")
+        rec = self._receb(11, [1, 5])
+        self.conn.commit()
+        self.assertEqual(wms_chegada.faixa_da_carga(self.conn, [rec], "REFRIGERADO", {}), (0.0, 7.0))
+        for t in (2, 6, 4):
+            self.assertIs(wms_chegada.medida_dentro(self.conn, [rec], "REFRIGERADO", t, {}), False)
+
+    def test_medida_nos_limites_esta_dentro(self):
+        for t, esperado in ((0.0, True), (7.0, True), (-0.1, False), (7.1, False)):
+            self.assertIs(wms_chegada.medida_dentro(self.conn, [self.rec], "REFRIGERADO", t, {}), esperado)
+
+    def test_faixa_de_outra_classe_nao_interfere(self):
+        wms.definir_temperatura_produto(self.conn, 2, "CONGELADO", temp_min=-25, temp_max=-20)
         self.assertEqual(wms_chegada.faixa_da_carga(self.conn, [self.rec], "REFRIGERADO", {}), (0.0, 7.0))
+
+    def test_temperatura_nao_fria_zera_a_faixa(self):
+        p = wms.definir_temperatura_produto(self.conn, 1, "AMBIENTE", temp_min=2, temp_max=5)
+        self.assertIsNone(p["temp_min"])
+        self.assertIsNone(p["temp_max"])
 
     def test_limpar_faixa(self):
         wms.definir_temperatura_produto(self.conn, self.p_refri, "REFRIGERADO", temp_min=2, temp_max=5)

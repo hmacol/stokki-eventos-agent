@@ -133,14 +133,36 @@ def classes_da_carga(conn, recebimento_ids) -> list:
     return [c for c in CLASSES_FRIAS if c in presentes]
 
 
-def faixa_da_carga(conn, recebimento_ids, classe, config) -> tuple:
-    """Faixa da classe estreitada pelas faixas proprias dos produtos dessa classe na carga."""
-    minimo, maximo = faixas(config)[classe]
+def _faixas_efetivas(conn, recebimento_ids, classe, config) -> list:
+    """Faixa de cada produto da classe na carga: a propria (substitui a da classe) ou a da classe."""
+    da_classe = faixas(config)[classe]
+    efetivas = []
     for p in _produtos_da_carga(conn, recebimento_ids):
-        if p["temperatura"] == classe and p["temp_min"] is not None and p["temp_max"] is not None:
-            minimo = max(minimo, p["temp_min"])
-            maximo = min(maximo, p["temp_max"])
-    return (minimo, maximo)
+        if p["temperatura"] != classe:
+            continue
+        if p["temp_min"] is not None and p["temp_max"] is not None:
+            efetivas.append((float(p["temp_min"]), float(p["temp_max"])))
+        else:
+            efetivas.append(da_classe)
+    return efetivas
+
+
+def faixa_da_carga(conn, recebimento_ids, classe, config) -> tuple:
+    """Faixa esperada da carga (so para mostrar): intersecao das faixas efetivas dos produtos da classe.
+    Sem produto da classe ou com intersecao vazia, devolve a faixa da classe."""
+    da_classe = faixas(config)[classe]
+    efetivas = _faixas_efetivas(conn, recebimento_ids, classe, config)
+    if not efetivas:
+        return da_classe
+    minimo = max(f[0] for f in efetivas)
+    maximo = min(f[1] for f in efetivas)
+    return (minimo, maximo) if minimo <= maximo else da_classe
+
+
+def medida_dentro(conn, recebimento_ids, classe, medida, config) -> bool:
+    """True so se a medida esta dentro (limites inclusos) da faixa efetiva de TODOS os produtos da classe."""
+    efetivas = _faixas_efetivas(conn, recebimento_ids, classe, config) or [faixas(config)[classe]]
+    return all(minimo <= medida <= maximo for minimo, maximo in efetivas)
 
 
 def detalhe(conn, chegada_id: int) -> dict:
