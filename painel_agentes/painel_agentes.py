@@ -112,6 +112,7 @@ import wms
 import wms_pedidos
 import wms_etiqueta_produto
 import wms_caixas
+import wms_doca
 import wms_pilotos
 import wms_separacao
 import wms_lotes_planilha
@@ -6125,10 +6126,34 @@ def _wms_ids_caixas() -> set:
     return wms_pilotos.ids_com_caixas(_carregar_config() or {})
 
 
+def _wms_ids_etapas() -> set:
+    """Embarcadores com recebimento por etapas (config wms.pilotos com etapas: true): a
+    conferência lança na doca (DOC1-P1) e a fila Guardar leva dali pra posição final."""
+    return wms_pilotos.ids_com_etapas(_carregar_config() or {})
+
+
+def _wms_guarda_pendente(conn) -> int:
+    """Itens na fila Guardar. Sem a área DOCA, zero (nunca cria a área)."""
+    if not wms.obter_area(conn, wms_doca.DOCA_AREA):
+        return 0
+    conn = wms_doca.conectar()   # garante o esquema das caixas, que a fila consulta
+    try:
+        return len(wms_doca.fila_guarda(conn))
+    finally:
+        conn.close()
+
+
 def _wms_bootstrap(conn) -> dict:
+    etapas = _wms_ids_etapas()
+    if etapas:
+        wms_doca.garantir_doca(conn)
     return {
         "caixas_embarcadores": sorted(_wms_ids_caixas()),
         "caixas_ativo": bool(_wms_ids_caixas()),
+        "etapas_embarcadores": sorted(etapas),
+        "etapas_ativo": bool(etapas),
+        "doca": wms_doca.DOCA_POSICAO,
+        "guarda_pendente": _wms_guarda_pendente(conn),
         "operador": _wms_operador_atual(),
         "operadores": wms.listar_operadores(conn),
         "areas": wms.listar_areas(conn),
@@ -6632,9 +6657,11 @@ def api_wms_recebimento(recebimento_id):
         # essa coluna -- a tela mostrava "undefined" no rótulo da quantidade).
         itens = wms_pedidos.itens_do_recebimento(conn, recebimento_id)
         com_caixas = _wms_ids_caixas()
+        com_etapas = _wms_ids_etapas()
         for it in itens:
             produto = wms.obter_produto(conn, int(it.get("produto_id") or 0))
             it["usa_caixas"] = bool(produto and wms_caixas.produto_usa_caixas(produto, com_caixas))
+            it["usa_etapas"] = bool(produto and produto.get("embarcador_id") in com_etapas)
         return jsonify({"recebimento": dict(rec), "itens": itens})
     finally:
         conn.close()
@@ -6689,8 +6716,14 @@ def api_wms_caixa_ativar(serial):
     conn = wms_caixas.conectar()
     try:
         rec_id, item_id = body.get("recebimento_id"), body.get("item_id")
+        posicao = body.get("posicao", "")
+        if rec_id not in (None, ""):
+            caixa = wms_caixas.obter_caixa(conn, serial)
+            produto = wms.obter_produto(conn, caixa["produto_id"]) if caixa else None
+            if produto and produto.get("embarcador_id") in _wms_ids_etapas():
+                posicao = wms_doca.garantir_doca(conn)   # etapas: a conferência lança na doca
         r = wms_caixas.ativar_caixa(
-            conn, serial, body.get("posicao", ""), operador=op,
+            conn, serial, posicao, operador=op,
             recebimento_id=int(rec_id) if rec_id not in (None, "") else None,
             item_id=int(item_id) if item_id not in (None, "") else None,
             dispositivo=(request.user_agent.string or "")[:80], criado_em=body.get("criado_em"),
@@ -6698,6 +6731,67 @@ def api_wms_caixa_ativar(serial):
         return jsonify({"caixa": r["caixa"], "duplicado": r["duplicado"]})
     except wms_caixas.SobraRecebimento as e:
         return jsonify({"erro": str(e), "sobra": e.dados}), 409
+    except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/guarda/fila")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_guarda_fila():
+    conn = wms_doca.conectar()
+    try:
+        return jsonify({"itens": wms_doca.fila_guarda(conn)})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/guarda/item")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_guarda_item():
+    conn = wms_doca.conectar()
+    try:
+        try:
+            produto_id = int(request.args.get("produto_id") or 0)
+        except ValueError:
+            produto_id = 0
+        lote = " ".join((request.args.get("lote") or "").split()).upper()
+        validade = request.args.get("validade") or ""
+        item = next((i for i in wms_doca.fila_guarda(conn)
+                     if i["produto_id"] == produto_id and i["lote"] == lote and i["validade"] == validade), None)
+        if not item:
+            return _wms_json_erro("Item não está na fila de guarda.", 404)
+        marcas = ",".join("?" * len(wms_caixas.NO_SALDO))
+        caixas = [dict(r) for r in conn.execute(
+            f"SELECT serial, qtd_un, situacao FROM wms_caixas WHERE posicao = ? AND produto_id = ? "
+            f"AND lote = ? AND COALESCE(validade, '') = ? AND situacao IN ({marcas}) ORDER BY serial",
+            (wms_doca.DOCA_POSICAO, produto_id, lote, validade, *wms_caixas.NO_SALDO))]
+        return jsonify({"item": item, "caixas": caixas,
+                        "sugestoes": wms_doca.sugerir_posicoes(conn, produto_id, lote, validade)})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/guarda/guardar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_guarda_guardar():
+    op = _wms_exige_operador()
+    body = request.get_json(force=True) or {}
+    conn = wms_doca.conectar()
+    try:
+        _wms_exige_uuid_do_aparelho(body.get("uuid"))
+        quantidade = body.get("quantidade")
+        r = wms_doca.guardar(
+            conn, produto_id=int(body.get("produto_id") or 0), lote=body.get("lote", ""),
+            validade=body.get("validade") or None, destino=body.get("destino", ""),
+            uuid=body.get("uuid") or "", operador=op,
+            quantidade=float(quantidade) if quantidade not in (None, "") else None,
+            seriais=body.get("seriais"), confirmar_temperatura=body.get("confirmar_temperatura") is True)
+        return jsonify(r)
+    except wms_doca.TemperaturaDiferente as e:
+        return jsonify({"erro": str(e), "temperatura": e.dados}), 409
     except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
         return _wms_json_erro(e)
     finally:

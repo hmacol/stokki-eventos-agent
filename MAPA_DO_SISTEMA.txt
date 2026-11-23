@@ -142,6 +142,10 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                               lista vazia; pra voltar, True + restart do painel-agentes)
  Login / níveis de acesso do painel ........ painel_agentes/painel_agentes.py (requer_auth)
  WMS do galpão ............................. painel_agentes/wms.py, wms_pedidos.py, wms_caixas.py
+ Recebimento por etapas (doca + Guardar) ... painel_agentes/wms_doca.py (posição DOC1-P1: a conferência lança na doca,
+                                             a fila Guardar leva à posição final). Rotas GET /api/wms/guarda/fila,
+                                             GET /api/wms/guarda/item, POST /api/wms/guarda/guardar; ativar caixa
+                                             com recebimento vai pra doca se o embarcador tem etapas.
  Separação/conferência/volumes do galpão .. painel_agentes/wms_separacao.py (17/11: ondas por embarcador, bipe de
                                              caixa, distribuição, conferência cega, falta, volumes; tabelas
                                              wms_ondas, wms_onda_pedidos, wms_separacao_itens, wms_conferencias,
@@ -833,6 +837,7 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
 Pilotos (17/11): lista wms.pilotos no config ({id, nome, caixas}); lida por painel_agentes/wms_pilotos.py.
 Os três scripts abaixo rodam um piloto por vez; `caixas: true` liga o controle por caixa só daquele
 embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um piloto só).
+`etapas: true` liga o recebimento por etapas (conferência na doca + fila Guardar) só daquele embarcador.
  sincronizar_pedidos_wms.py      Reserva estoque (FEFO) para os pedidos.
                                  Desde 17/11 le tambem os pedidos ABERTOS (itens pela tabela
                                  #example1, stokki.pedidos.extrair_itens_tabela_pedido) e grava
@@ -1602,7 +1607,7 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            nível, resumo do dia via snapshot da Torre,
                            rotinas do painel). Nunca chama fonte cara.
  wms.py, wms_pedidos.py, wms_etiqueta_produto.py, wms_faltas_recebimento.py,
- wms_caixas.py, wms_fila_impressao.py
+ wms_caixas.py, wms_fila_impressao.py, wms_doca.py
                            WMS do galpão (posições, movimentos, reservas,
                            recebimentos, etiquetas, caixas com serial, fila de impressão).
  test_*.py                 Testes.
