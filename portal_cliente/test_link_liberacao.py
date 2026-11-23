@@ -128,7 +128,8 @@ class PaginaLiberacao(unittest.TestCase):
         c = self._cliente()
         r = c.post(self._url(cid, "/responder"), data={"nome": "Maria Souza", "resposta": "autorizo"})
         self.assertEqual(r.status_code, 303)
-        self.assertTrue(r.headers["Location"].endswith(self._url(cid)))
+        # o token leva o instante da assinatura: compara o id que ele carrega, nao o texto
+        self.assertEqual(link_liberacao.ler(r.headers["Location"].rsplit("/", 1)[1], SEGREDO), cid)
         d = self._estado(cid)
         self.assertEqual((d["estado"], d["resposta_cliente"], d["resposta_cliente_nome"], d["liberacao_via"]),
                          ("LIBERADA", "AUTORIZADO", "Maria Souza", "CLIENTE"))
@@ -231,7 +232,9 @@ class PaginaLiberacao(unittest.TestCase):
         cid = self._chegada()
         c = self._cliente()
         token = link_liberacao.gerar(cid, SEGREDO)
-        trocado = token[:-1] + ("A" if token[-1] != "A" else "B")
+        corpo, assinatura = token.rsplit(".", 1)   # o 1o caractere da assinatura nao e preenchimento base64
+        trocado = f"{corpo}.{'A' if assinatura[0] != 'A' else 'B'}{assinatura[1:]}"
+        self.assertNotEqual(trocado, token)
         self.assertEqual(c.get(f"/liberacao/{trocado}").status_code, 404)
         self.assertEqual(c.post(f"/liberacao/{trocado}/responder", data={"nome": "Maria Souza",
                                                                         "resposta": "autorizo"}).status_code, 404)
@@ -271,8 +274,12 @@ class RotaLivreNoAppReal(unittest.TestCase):
         try:
             with mock.patch.object(builtins, "open", abrir):
                 import app as portal
-        except Exception as e:  # noqa: BLE001
-            raise unittest.SkipTest(f"app do portal nao importa neste ambiente ({e})")
+        except ModuleNotFoundError as e:
+            # so a falta de biblioteca externa pula; modulo do proprio repo ausente e regressao e falha
+            nome = (e.name or "").split(".")[0]
+            if not nome or (_RAIZ / nome).exists() or (_RAIZ / f"{nome}.py").exists()                     or (_AQUI / f"{nome}.py").exists():
+                raise
+            raise unittest.SkipTest(f"app do portal nao importa neste ambiente (falta {e.name})")
         cls.portal = portal
 
     def setUp(self):
