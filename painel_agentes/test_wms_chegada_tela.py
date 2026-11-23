@@ -462,6 +462,12 @@ class TelasNoHtml(Base):
                   "outro embarcador: faça um Receber separado", "Sem rede: a foto não foi enviada. Tente de novo."):
             self.assertIn(m, h)
 
+    def test_pedir_liberacao_desabilitado_depois_da_resposta(self):
+        self.entrar("galpao")
+        h = self.cliente.get("/wms").get_data(as_text=True)
+        self.assertIn("id=\"btn-pedir\" ${c.resposta_cliente ? 'disabled' : ''}>Pedir liberação ao cliente", h)
+        self.assertIn("O cliente já respondeu pelo link.", h)
+
     def test_ja_em_conferencia_vai_para_conferir(self):
         self.entrar("galpao")
         h = self.cliente.get("/wms").get_data(as_text=True)

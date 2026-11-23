@@ -1085,7 +1085,7 @@
       <div class="campo"><div class="com-botao"><input type="text" id="inp-link" readonly value="${esc(ctx.link)}"><button type="button" id="btn-copiar">Copiar</button></div></div>
       <div class="sub">${env && env.enviado ? 'E-mail enviado ao cliente.' : 'O e-mail não saiu' + (env && env.motivo ? ' (' + esc(env.motivo) + ')' : '') + '. Copie o link e mande por outro meio, como WhatsApp.'}</div></div>` : ''}
     <div class="botoes">
-      <button class="botao" type="button" id="btn-pedir">Pedir liberação ao cliente</button>
+      <button class="botao" type="button" id="btn-pedir" ${c.resposta_cliente ? 'disabled' : ''}>Pedir liberação ao cliente</button>${c.resposta_cliente ? '<div class="ajuda">O cliente já respondeu pelo link.</div>' : ''}
       <button class="botao secundario" type="button" id="btn-fora">Registrar liberação recebida por fora</button>
       <button class="botao perigo" type="button" id="btn-nao">Não receber</button>
     </div><div id="area-decisao"></div>` : '<div class="sub">A decisão é do escritório.</div>'}`;
