@@ -169,8 +169,21 @@ def pendentes(conn: sqlite3.Connection, desde: str, embarcador: str = "", motori
         filtros.append("UPPER(r.motorista_nome) LIKE ?")
         params.append(f"%{motorista.strip().upper()}%")
     if busca.strip():
-        filtros.append("ped.codigo LIKE ?")
-        params.append(f"%{normalizar(busca)}%")
+        # PS ou NF (a NF vem de nucleo/nf_pedido: documentos_pedido e, na falta, documentos_processados)
+        ou, p_ou = ["ped.codigo LIKE ?"], [f"%{normalizar(busca)}%"]
+        tabelas = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN "
+            "('documentos_pedido', 'documentos_processados')")}
+        if "documentos_pedido" in tabelas:
+            ou.append("EXISTS (SELECT 1 FROM documentos_pedido dn WHERE dn.tipo_doc = 'nf' AND dn.status IN ('casado', 'baixado')"
+                      " AND dn.id_pedido IN (ped.codigo, '#' || ped.codigo) AND dn.numero_nf LIKE ?)")
+            p_ou.append(f"%{busca.strip()}%")
+        if "documentos_processados" in tabelas:
+            ou.append("EXISTS (SELECT 1 FROM documentos_processados dp WHERE dp.status = 'ENVIADO' AND dp.tipo = 'Nota Fiscal'"
+                      " AND dp.codigo_pedido IN (ped.codigo, '#' || ped.codigo) AND dp.numero_nf LIKE ?)")
+            p_ou.append(f"%{busca.strip()}%")
+        filtros.append("(" + " OR ".join(ou) + ")")
+        params.extend(p_ou)
     extra = "".join(f" AND {f}" for f in filtros)
     data = "COALESCE(r.data_rota, SUBSTR(ped.atualizado_em, 1, 10))"
     base = f"""
@@ -197,4 +210,6 @@ def pendentes(conn: sqlite3.Connection, desde: str, embarcador: str = "", motori
         l = dict(zip(("codigo", "service_id", "data_rota", "motorista", "embarcador", "destinatario"), row[:6]))
         l["data_aproximada"] = bool(row[6])
         linhas.append(l)
+    from nucleo import nf_pedido
+    nf_pedido.anotar_nf(linhas, "codigo", "nf", conn)
     return {"linhas": linhas, "total": total, "pagina": pagina, "por_pagina": por_pagina}

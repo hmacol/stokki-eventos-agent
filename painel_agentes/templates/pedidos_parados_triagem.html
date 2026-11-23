@@ -174,6 +174,7 @@
   <thead>
     <tr>
       <th>Pedido</th>
+      <th>NF</th>
       <th>Embarcador</th>
       <th>Volumes</th>
       <th>Registrado em</th>
@@ -185,6 +186,7 @@
     </tr>
     <tr>
       <th class="col-filtro"><input type="text" id="filtro-pedido" placeholder="Filtrar…" oninput="atualizarFiltro('pedido', this.value)"></th>
+      <th class="col-filtro"><input type="text" id="filtro-nf" placeholder="Filtrar…" oninput="atualizarFiltro('nf', this.value)"></th>
       <th class="col-filtro">
         <select id="filtro-embarcador" onchange="atualizarFiltro('embarcador', this.value)">
           <option value="">-- todos --</option>
@@ -218,7 +220,7 @@
     </tr>
   </thead>
   <tbody id="corpo-tabela">
-    <tr><td colspan="9" class="carregando">Carregando pedidos parados…</td></tr>
+    <tr><td colspan="10" class="carregando">Carregando pedidos parados…</td></tr>
   </tbody>
 </table>
 </div>
@@ -249,7 +251,7 @@ const CRIAM_DEMANDA = ["Cancelados", "Devolução Parcial", "Descartar", "Retorn
 let pedidosAtuais = [];
 let ultimoOk = null;
 let houveErro = false;
-const filtros = { pedido: "", embarcador: "", volumes: "", registrado: "", por: "", foto: "", dias: "", classificacao: "", tratativa: "" };
+const filtros = { pedido: "", nf: "", embarcador: "", volumes: "", registrado: "", por: "", foto: "", dias: "", classificacao: "", tratativa: "" };
 const URL_REGISTRAR = "{{ url_for('api_pedidos_parados_registrar') }}";
 const URL_REGISTROS_HOJE = "{{ url_for('api_pedidos_parados_registros_hoje') }}";
 const URL_APAGAR = "{{ url_for('api_pedidos_parados_registro_apagar') }}";
@@ -291,6 +293,7 @@ function atualizarFiltro(campo, valor) {
 function linhaPassaFiltros(p) {
   const contem = (valor, termo) => String(valor ?? "").toLowerCase().includes(termo.toLowerCase());
   if (filtros.pedido && !contem(p.order_number, filtros.pedido)) return false;
+  if (filtros.nf && !contem(p.nf, filtros.nf)) return false;
   if (filtros.embarcador) {
     if (filtros.embarcador === "__vazio__") {
       if (p.embarcador) return false;
@@ -337,7 +340,7 @@ function renderTabela() {
   const linhas = linhasFiltradas();
 
   if (!linhas.length) {
-    alvo.innerHTML = `<tr><td colspan="9" class="carregando">Nenhum pedido parado por aqui.</td></tr>`;
+    alvo.innerHTML = `<tr><td colspan="10" class="carregando">Nenhum pedido parado por aqui.</td></tr>`;
     return;
   }
 
@@ -394,6 +397,7 @@ function renderTabela() {
           </div>
           ${stokkiInfo}${vuuptInfo}
         </td>
+        <td class="mono">${p.nf ? esc(p.nf) : `<span class="sem-dado">—</span>`}</td>
         <td>${p.embarcador ? esc(p.embarcador) : `<span class="sem-dado">—</span>`}</td>
         <td>${esc(p.volumes)}</td>
         <td class="mono">${esc(p.created_at.replace('T', ' ').slice(0, 16))}</td>
@@ -594,7 +598,7 @@ async function copiarTabela() {
   if (!linhas.length) { alert("Nenhum pedido para copiar com o filtro atual."); return; }
 
   const texto = linhas
-    .map(p => `${p.order_number} - ${p.volumes} - ${p.classificacao || "Sem classificação"}`)
+    .map(p => `${p.order_number} - NF ${p.nf || "—"} - ${p.volumes} - ${p.classificacao || "Sem classificação"}`)
     .join("\n");
 
   const botao = document.getElementById("botao-copiar-tabela");
@@ -615,8 +619,8 @@ function exportarCsv() {
   const tratativa = p => p.acao_status === "concluida" ? `concluída: ${p.acao_detalhe || ""}`
     : p.acao_status === "erro" ? `erro: ${p.acao_detalhe || ""}` : (estaTratado(p) ? "revisado" : "pendente");
   const campo = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const cab = ["Pedido", "Embarcador", "Volumes", "Registrado em", "Registrado por", "Dias parado", "Classificação", "Tratativa"];
-  const corpo = linhas.map(p => [p.order_number, p.embarcador || "", p.volumes, p.created_at.replace('T', ' ').slice(0, 16),
+  const cab = ["Pedido", "NF", "Embarcador", "Volumes", "Registrado em", "Registrado por", "Dias parado", "Classificação", "Tratativa"];
+  const corpo = linhas.map(p => [p.order_number, p.nf || "—", p.embarcador || "", p.volumes, p.created_at.replace('T', ' ').slice(0, 16),
     p.registrado_por || "", p.dias_parado, p.classificacao || "", tratativa(p)].map(campo).join(";"));
   const blob = new Blob(["﻿" + [cab.join(";"), ...corpo].join("\r\n")], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
@@ -655,7 +659,7 @@ function itemRegistro(r, ontem) {
     ? `<button type="button" class="pill acao" onclick="apagarRegistro(${r.id}, this)" title="Só quem registrou, até 15 min depois">Apagar</button>` : "";
   const foto = r.foto ? ` <a class="foto-link" href="${URL_FOTO}${r.id}" target="_blank" rel="noopener" title="Abrir foto">📷</a>` : "";
   const quando = ontem ? `ontem ${horaBr(r.criado_em)}` : horaBr(r.criado_em);
-  return `<div class="item"><div><b class="mono">${esc(r.order_number)}</b> · ${esc(r.volumes)} vol${foto}
+  return `<div class="item"><div><b class="mono">${esc(r.order_number)}</b> · NF ${esc(r.nf || "—")} · ${esc(r.volumes)} vol${foto}
     <div class="q">${quando} · ${esc(r.registrado_por)} · parado há ${r.dias_parado} dia${r.dias_parado > 1 ? "s" : ""}</div></div>
     <div class="acoes">${pill}${apagar}</div></div>`;
 }

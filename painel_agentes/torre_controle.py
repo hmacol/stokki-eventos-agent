@@ -2083,6 +2083,26 @@ def _opcoes_embarcador() -> list[dict]:
     return montar_opcoes_embarcador(linhas)
 
 
+_RE_PS_NA_DESCRICAO = re.compile(r"#?PS-\d+(?:-[RC]\d+)?", re.I)
+
+
+def _anotar_nf_torre(rotas: list, excecoes: list) -> None:
+    """NF ao lado do PS (nucleo/nf_pedido): chips e paradas do mapa ganham `nf`; nas
+    descricoes das excecoes cada PS vira "PS-1 · NF 123". UMA busca em lote."""
+    from nucleo import nf_pedido
+    itens = [p for r in rotas for p in (r.get("pedidos") or []) + (r.get("paradas") or []) if isinstance(p, dict)]
+    mapa = nf_pedido.nf_por_codigo(
+        [p.get("codigo") for p in itens] + [m for x in excecoes for m in _RE_PS_NA_DESCRICAO.findall(x.get("descricao") or "")])
+    for p in itens:
+        p["nf"] = nf_pedido.nf_do_codigo(p.get("codigo"), mapa) or nf_pedido.SEM_NF
+    for x in excecoes:
+        if x.get("codigo"):
+            x["nf"] = nf_pedido.nf_do_codigo(x["codigo"], mapa) or nf_pedido.SEM_NF
+        x["descricao"] = _RE_PS_NA_DESCRICAO.sub(
+            lambda m: f"{m.group(0)} · NF {nf_pedido.nf_do_codigo(m.group(0), mapa) or nf_pedido.SEM_NF}",
+            x.get("descricao") or "")
+
+
 def buscar_dados_torre(data_alvo: date | None = None) -> dict:
     """Tudo que a torre mostra, menos o funil Stokki (endpoint próprio,
     com cache e trava de sessão) -- 1 fetch de serviços + 1 de rotas +
@@ -2118,6 +2138,10 @@ def buscar_dados_torre(data_alvo: date | None = None) -> dict:
     tendencia = _tendencia_com_cache(vuupt, data_alvo)
     kpis_periodo = _montar_kpis_periodo(token, data_alvo, rotas_brutas_hoje, motoristas_ativos)
     excecoes, tratadas = _montar_excecoes(pedidos, rotas, etapas, amanha, data_alvo)
+    try:
+        _anotar_nf_torre(rotas, excecoes)
+    except Exception:  # noqa: BLE001  (a NF e informativa: nunca derruba a Torre)
+        logger.exception("[torre] Falha ao anotar a NF")
 
     # Base do mini mapa (mesmo endereço/geocache do mapa_rotas.py).
     base = None

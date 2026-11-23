@@ -1113,7 +1113,7 @@ function chipsPedidosHtml(pedidos, rotaId) {
   if (!pedidos || !pedidos.length) return `<div class="chips-pedidos"></div>`;
   const partes = pedidos.map((p, i) => {
     const rotulo = ROTULO_SITUACAO_PEDIDO[p.situacao] || p.situacao;
-    const titulo = [p.codigo, p.titulo].filter(Boolean).join(" — ");
+    const titulo = [p.codigo ? `${p.codigo} · NF ${p.nf || "—"}` : "", p.titulo].filter(Boolean).join(" — ");
     // Só pendente/em rota pode ser excluído da rota por aqui (Hugo,
     // 25/08) -- já entregue/insucesso já aconteceu, não tem o que tirar.
     const acionavel = PODE_EXCLUIR_PEDIDO && (p.situacao === "pendente" || p.situacao === "em_rota");
@@ -1121,7 +1121,7 @@ function chipsPedidosHtml(pedidos, rotaId) {
       ? `Excluído da rota — ${esc(p.motivo || "")}${p.observacao ? ": " + esc(p.observacao) : ""}`
       : `Parada ${p.ordem ?? (i + 1)} — ${esc(titulo)} (${rotulo})`;
     const chip = `<span class="chip-pedido ${p.situacao}${acionavel ? " acionavel" : ""}"` +
-      ` data-rota-id="${rotaId}" data-service-id="${p.service_id ?? ""}" data-codigo="${esc(p.codigo || "")}"` +
+      ` data-rota-id="${rotaId}" data-service-id="${p.service_id ?? ""}" data-codigo="${esc(p.codigo || "")}" data-nf="${esc(p.nf || "—")}"` +
       ` title="${tituloAttr}">${p.ordem ?? (i + 1)}</span>`;
     if (i === pedidos.length - 1) return chip;
     const finalizado = p.situacao === "entregue" || p.situacao === "insucesso";
@@ -1259,7 +1259,7 @@ document.addEventListener("scroll", fecharMenuContextoChip, true);
 
 function abrirModalExcluir(chip) {
   chipPendenteExclusao = chip;
-  document.getElementById("excluir-codigo").textContent = chip.dataset.codigo || `#${chip.dataset.serviceId}`;
+  document.getElementById("excluir-codigo").textContent = chip.dataset.codigo ? `${chip.dataset.codigo} · NF ${chip.dataset.nf || "—"}` : `#${chip.dataset.serviceId}`;
   document.getElementById("excluir-motivo").value = "";
   document.getElementById("excluir-observacao").value = "";
   document.getElementById("modal-excluir").classList.add("aberto");
@@ -1313,7 +1313,7 @@ let chipPendenteEntregue = null;
 
 function abrirModalEntregue(chip) {
   chipPendenteEntregue = chip;
-  document.getElementById("entregue-codigo").textContent = chip.dataset.codigo || `#${chip.dataset.serviceId}`;
+  document.getElementById("entregue-codigo").textContent = chip.dataset.codigo ? `${chip.dataset.codigo} · NF ${chip.dataset.nf || "—"}` : `#${chip.dataset.serviceId}`;
   document.getElementById("entregue-foto-canhoto").value = "";
   document.getElementById("entregue-foto-nota").value = "";
   document.getElementById("entregue-justificativa").value = "";
@@ -1958,12 +1958,12 @@ function renderMapa(d) {
   d.rotas.forEach(r => (r.paradas || []).forEach(p => {
     const cor = COR_SITUACAO[p.situacao] || "#8A8F98";
     const marcador = new google.maps.Marker({
-      position: { lat: p.lat, lng: p.lng }, map: mapa, title: p.codigo,
+      position: { lat: p.lat, lng: p.lng }, map: mapa, title: `${p.codigo} · NF ${p.nf || "—"}`,
       icon: { path: google.maps.SymbolPath.CIRCLE, scale: 6, fillColor: cor, fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
     });
     marcador.addListener("click", () => {
       infoWindow.setContent(`<div style="font:12px 'Segoe UI',sans-serif;max-width:260px;">
-        <strong>${esc(p.codigo)}</strong> · ${esc(ROTULO_SITUACAO[p.situacao] || p.situacao)}<br>
+        <strong>${esc(p.codigo)}</strong> · NF ${esc(p.nf || "—")} · ${esc(ROTULO_SITUACAO[p.situacao] || p.situacao)}<br>
         ${esc(p.titulo)}<br>
         <span style="color:#6B7280;">${esc(r.nome)}${r.motorista ? " · " + esc(r.motorista) : ""}</span>
       </div>`);

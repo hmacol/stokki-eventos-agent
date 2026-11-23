@@ -15,7 +15,7 @@ import * as fila from './fila';
 import { Botao, Cartao } from './componentes';
 import { conferirPermissao } from './permissoes';
 import { cores, formatarData, formatarReal } from './tema';
-import { nomeExibicao } from './textos';
+import { codigoComNf, nomeExibicao } from './textos';
 import type { Parada, Rota, TipoDespesa } from './tipos';
 
 const STATUS_ROTULO: Record<string, string> = { PENDENTE: 'aguardando aprovação', APROVADO: 'aprovado', REJEITADO: 'rejeitado', CANCELADO: 'cancelado por você' };
@@ -35,7 +35,7 @@ export const aceitaPedagio = (r: Rota) => r.editavel && (r.status === 'EM_ROTA' 
 
 const real = (v: number) => `R$ ${v.toFixed(2).replace('.', ',')}`;
 const codigoLimpo = (c?: string | null) => (c ?? '').replace(/^#/, '');
-const rotuloParada = (p: Parada) => `${p.ordem} · ${nomeExibicao(p)}${p.codigo ? ` · ${codigoLimpo(p.codigo)}` : ''}`;
+const rotuloParada = (p: Parada) => `${p.ordem} · ${nomeExibicao(p)}${p.codigo ? ` · ${codigoComNf({ codigo: codigoLimpo(p.codigo), nf: p.nf })}` : ''}`;
 
 /** Menu suspenso simples: o campo mostra a escolha; o toque abre a lista logo abaixo. */
 function Seletor<T extends string | number>({ rotulo, placeholder, valor, opcoes, aoEscolher, mostrarSub = false, estilo }: {
@@ -214,7 +214,7 @@ export function LancarPedagio({ rotas, rotaInicial, aoMudar }: { rotas: Rota[]; 
   const pendentesDaRota = naFila.filter((f) => f.rotaId === rota?.id && !enviados.some((p) => p.uuid === f.uuid));
   const detalheParada = (id?: number | null) => {
     const p = id ? paradasDaRota.find((x) => x.id === id) : null;
-    return p ? `Pedido ${codigoLimpo(p.codigo)} · ${nomeExibicao(p)}` : null;
+    return p ? `Pedido ${codigoComNf({ codigo: codigoLimpo(p.codigo), nf: p.nf })} · ${nomeExibicao(p)}` : null;
   };
 
   return (

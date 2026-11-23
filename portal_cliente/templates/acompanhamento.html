@@ -278,6 +278,8 @@
   }
 
   // ── Colunas ────────────────────────────────────────────────────────────────
+  // PS · NF (NF vem do pedido de mesmo código; sem NF = traço)
+  const psNf = (c, nf) => `${c} · NF ${nf || '—'}`;
   const COLUNAS = [
     ...(GRUPO ? [{ id: 'empresa',            rotulo: 'Empresa',                 padrao: true }] : []),
     { id: 'data',                  rotulo: 'Data',                    padrao: true },
@@ -415,7 +417,7 @@
             <div class="topo">
               <div style="flex:1; min-width:0; display:flex; flex-direction:column; gap:6px;">
                 <div style="font-weight:700; font-size:14px;">${esc(g.motivo)}${GRUPO && g.empresa ? ` <span style="font-weight:500; color:var(--texto-suave);">· ${esc(g.empresa)}</span>` : ''}</div>
-                <div class="codigos">${g.codigos.map(c => `<span>${esc(c)}</span>`).join('')}</div>
+                <div class="codigos">${g.codigos.map(c => `<span>${esc(psNf(c, (g.nfs || {})[c]))}</span>`).join('')}</div>
               </div>
               <span class="badge b-insucesso"><span class="pt"></span>Insucesso</span>
             </div>
@@ -489,7 +491,7 @@
       case 'empresa': return `<td class="col-empresa" title="${esc(p.empresa)}">${esc(p.empresa) || '<span style="color:var(--texto-suave)">—</span>'}</td>`;
       // Só o dia/mês: o dia da semana já está na faixa e na dica da célula.
       case 'data': return `<td class="col-data" title="${esc(p.data_rotulo)}">${esc((p.data || '').slice(5).split('-').reverse().join('/')) || '—'}</td>`;
-      case 'codigo': return `<td class="nw"><span class="mono" style="font-weight:600;">${esc(p.codigo)}</span></td>`;
+      case 'codigo': return `<td class="nw"><span class="mono" style="font-weight:600;">${esc(p.codigo)}</span>${visiveis.includes('nf') ? '' : `<div class="mono num" style="font-size:11.5px;color:var(--texto-suave)">NF ${esc(p.nf) || '—'}</div>`}</td>`;
       case 'nf': return `<td class="nw"><span class="mono num">${esc(p.nf) || '<span style="color:var(--texto-suave)">—</span>'}</span></td>`;
       case 'destinatario': return `<td class="col-dest"><div class="dest">${esc(p.destinatario)}</div><div class="end">${esc(p.endereco)}</div></td>`;
       case 'volumes': return `<td class="num nw" style="text-align:center;">${p.volumes}</td>`;
@@ -605,7 +607,7 @@
 
     const saida = d.aguardando_saida || [];
     $('saida-titulo').textContent = `Aguardando saída (${saida.length})`;
-    $('lista-saida').innerHTML = saida.length ? saida.slice(0, 8).map(p => `<div class="linha"><span><span class="mono">${esc(p.codigo)}</span> ${esc(p.destinatario)}</span><span class="suave">${esc(p.situacao === 'programado' ? (p.detalhe.split('·').pop() || '').trim() : 'sem rota')}</span></div>`).join('') + (saida.length > 8 ? `<div class="vazio-lat">e mais ${saida.length - 8}…</div>` : '') : '<div class="vazio-lat">Nada aguardando saída.</div>';
+    $('lista-saida').innerHTML = saida.length ? saida.slice(0, 8).map(p => `<div class="linha"><span><span class="mono">${esc(psNf(p.codigo, p.nf))}</span> ${esc(p.destinatario)}</span><span class="suave">${esc(p.situacao === 'programado' ? (p.detalhe.split('·').pop() || '').trim() : 'sem rota')}</span></div>`).join('') + (saida.length > 8 ? `<div class="vazio-lat">e mais ${saida.length - 8}…</div>` : '') : '<div class="vazio-lat">Nada aguardando saída.</div>';
 
     const prox = d.proximos_dias || [];
     $('lista-proximos').innerHTML = prox.length ? prox.map(x => `<div class="linha"><a href="#" data-ver-agendado="${x.data}">${esc(x.rotulo)}</a><b>${x.pedidos} pedido${x.pedidos > 1 ? 's' : ''}</b></div>`).join('') : '<div class="vazio-lat">Nenhum pedido agendado pra frente.</div>';
@@ -722,7 +724,7 @@
   }
   const $alt = () => $('alt-caixa');
   function abrirAlteracao(sid, pedido) {
-    alt = { sid, cnpj: cnpjDaEmpresa(pedido && pedido.sender_id), codigo: pedido ? pedido.codigo : '', d: null, carregando: true,
+    alt = { sid, cnpj: cnpjDaEmpresa(pedido && pedido.sender_id), codigo: pedido ? pedido.codigo : '', nf: pedido ? pedido.nf : '', d: null, carregando: true,
             end: { aberto: false, cep: '', numero: '', complemento: '', logradouro: '', bairro: '', cidade: '', erro: '' },
             data: { aberto: false, v: '' }, hor: { aberto: false, ini: '', fim: '' },
             avisos: null, msg: '', erro: '', enviando: false, feito: false };
@@ -753,7 +755,7 @@
   }
   function renderAlteracao() {
     const a = alt, caixa = $alt();
-    const cab = `<h3 id="alt-titulo">Alterar entrega${a.codigo ? ' · ' + esc(a.codigo) : ''}</h3>`;
+    const cab = `<h3 id="alt-titulo">Alterar entrega${a.codigo ? ' · ' + esc(psNf(a.codigo, a.nf)) : ''}</h3>`;
     const fechar = `<div class="pe"><button type="button" class="botao-linha" data-alt-fechar>Fechar</button></div>`;
     if (a.carregando) { caixa.innerHTML = `${cab}<p class="carregando">Consultando o pedido…</p>`; return; }
     if (!a.d) { caixa.innerHTML = `${cab}<div class="alt-msg erro">${esc(a.erro)}</div>${fechar}`; return; }

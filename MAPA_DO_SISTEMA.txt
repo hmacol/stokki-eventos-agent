@@ -103,6 +103,9 @@
  Tela de planejamento (HTML/JS) ............ painel_agentes/templates/planejamento_rotas.html
  Rascunhos de rota (tabelas) ............... painel_agentes/rascunhos_rota.py
  Torre de Controle ......................... painel_agentes/torre_controle.py
+ NF ao lado do PS (23/11) .................. nucleo/nf_pedido.py (fonte unica: documentos_pedido + apoio documentos_processados;
+                                             UMA busca em lote por tela) e painel_agentes/nf_tela.py (busca reversa NF->PS,
+                                             texto "PS-1 · NF 123"). Sem NF = traco; varias = virgula. Telas/e-mails do painel usam.
  Documentos por e-mail na /pedidos ......... painel_agentes/documentos_email.py (13/11): XML, DANFE e boleto(s) guardados
                                              de um ou varios pedidos num e-mail so, pro endereco digitado (envio REAL,
                                              sem forcar_destino); anexos XML_NF<n>/DANFE_NF<n>/BOLETO_NF<n>; lembra o

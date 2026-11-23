@@ -10,7 +10,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Deslizar } from '../deslizar';
 import { cores, situacaoCor, situacaoRotulo } from '../tema';
-import { nomeExibicao, partesEndereco, resumoJanela } from '../textos';
+import { codigoComNf, nomeExibicao, partesEndereco, resumoJanela } from '../textos';
 import { abrirNavegacao, ehPendente, emAndamento, rotaOperavel } from '../paradaPasso';
 import type { Parada, Rota } from '../tipos';
 
@@ -87,7 +87,7 @@ export function CartaoParada({ parada: p, rota, total, indice, onAnterior, onPro
         <View style={{ flex: 1 }}>
           <Text style={s.endereco} numberOfLines={2}>{end.completo ? `${end.rua}${end.bairro ? ` — ${end.bairro}` : ''}` : 'Endereço não informado'}</Text>
           <Text style={s.linha} numberOfLines={2}>
-            {[p.codigo, p.remetente_nome ? nomeExibicao({ destinatario_nome: p.remetente_nome }) : null, janela.texto].filter(Boolean).join(' · ')}
+            {[codigoComNf(p), p.remetente_nome ? nomeExibicao({ destinatario_nome: p.remetente_nome }) : null, janela.texto].filter(Boolean).join(' · ')}
           </Text>
         </View>
         {pendente ? (

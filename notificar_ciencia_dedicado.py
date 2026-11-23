@@ -351,6 +351,8 @@ def enviar_embarcador(conn, sender_id, pendentes: list[dict], emb: dict, config:
             return "nao_enviado", "sem_whatsapp", ""
         piloto = d_wpp.acao == "PILOTO"
         link_whats = link("whatsapp-piloto" if piloto else "whatsapp")
+        from nucleo.nf_pedido import anotar_nf
+        anotar_nf(pendentes, conn=conn)  # PS · NF no texto (sem NF: "NF —")
         texto = notificar_whatsapp.texto_ciencia_dedicado(nome, pendentes, link_whats,
                                                           lembrete_piloto if piloto else lembrete)
         assinatura = f"{TIPO}:{sender_id}:{rodada_msg}:{agora:%Y%m%d%H%M}"

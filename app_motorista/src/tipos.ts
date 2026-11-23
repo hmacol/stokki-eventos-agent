@@ -59,6 +59,7 @@ export type Parada = {
   rota_id: number;
   ordem: number;
   codigo: string | null;
+  nf?: string;            // NF(s) do pedido ("111, 222"); vazio/ausente = sem NF (API antiga nao manda)
   titulo: string | null;
   destinatario_nome: string | null;
   endereco: string | null;
@@ -222,6 +223,7 @@ export type PedidoOpcao = {
   ordem: number;
   nome: string;
   codigo: string;
+  nf?: string;
   bairro: string;
   caixas: number | null;
   situacao: string;

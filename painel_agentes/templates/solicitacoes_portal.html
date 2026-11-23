@@ -77,7 +77,7 @@
     tr.dataset.id = s.id;
     var c = el('td');
     c.appendChild(el('div', 'mono', s.codigo_pedido || '—'));
-    c.appendChild(el('div', 'suave', s.numero_nf ? 'NF ' + s.numero_nf : ''));
+    c.appendChild(el('div', 'suave', 'NF ' + (s.numero_nf || '—')));
     tr.appendChild(c);
     c = el('td');
     c.appendChild(el('div', null, cnpj(s.embarcador) || '—'));

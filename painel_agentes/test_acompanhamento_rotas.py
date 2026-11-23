@@ -289,7 +289,7 @@ class TestDetalhe(_Base):
         self.parada(r, 1, "2026-11-20 08:30:00", motivo="Cliente ausente", situacao="INSUCESSO")
         self.parada(r, 2, "2026-11-20 09:00:00")
         d = ar.detalhe_rota(self.conn, r, agora=AGORA)
-        self.assertEqual(d["ocorrencias"], [{"codigo": "PS-1", "destinatario": "Cliente 1", "motivo": "Cliente ausente"}])
+        self.assertEqual(d["ocorrencias"], [{"codigo": "PS-1", "nf": "", "destinatario": "Cliente 1", "motivo": "Cliente ausente"}])
         self.assertEqual(d["paradas"][0]["ocorrencia"], "Cliente ausente")
         self.assertIsNone(d["paradas"][1]["ocorrencia"])
 

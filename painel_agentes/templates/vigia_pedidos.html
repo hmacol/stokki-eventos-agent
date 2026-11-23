@@ -146,12 +146,13 @@
 <div class="tabela-wrap">
 <table>
   <thead>
-    <tr><th>Pedido</th><th>Estado</th><th>Há quanto tempo</th><th>Prazo</th><th>Motivo</th><th>O que fazer</th><th>Embarcador / destinatário</th></tr>
+    <tr><th>Pedido</th><th>NF</th><th>Estado</th><th>Há quanto tempo</th><th>Prazo</th><th>Motivo</th><th>O que fazer</th><th>Embarcador / destinatário</th></tr>
   </thead>
   <tbody>
     {% for l in dados.linhas %}
     <tr class="{% if l.vencido %}vencido{% endif %}">
       <td class="mono"><a href="{{ url_for('historico_tratativas', busca=l.codigo) }}">#{{ l.codigo }}</a></td>
+      <td class="mono">{{ l.nf or '—' }}</td>
       <td><span class="pilula">{{ l.rotulo }}</span></td>
       <td class="mono">{{ l.idade }}<div class="suave">desde {{ l.desde[:16] }}</div></td>
       <td class="mono">
@@ -165,7 +166,7 @@
       <td>{{ l.detalhe or '—' }}</td>
     </tr>
     {% else %}
-    <tr><td colspan="7" class="suave">Nenhum pedido nesse filtro.</td></tr>
+    <tr><td colspan="8" class="suave">Nenhum pedido nesse filtro.</td></tr>
     {% endfor %}
   </tbody>
 </table>

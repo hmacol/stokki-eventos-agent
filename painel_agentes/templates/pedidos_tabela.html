@@ -316,7 +316,7 @@
     </div>
     <form class="pm-busca" id="pm-busca" method="get" action="{{ url_for('pedidos_tabela') }}" role="search"{% if not filtros.q %} hidden{% endif %}>
       {% for k, v in request.args.items() if k not in ('q', 'pagina') and v %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
-      <input type="search" name="q" value="{{ filtros.q }}" placeholder="Código, destinatário, CNPJ, motorista…" aria-label="Buscar pedido" enterkeyhint="search">
+      <input type="search" name="q" value="{{ filtros.q }}" placeholder="Código, NF, destinatário, CNPJ, motorista…" aria-label="Buscar pedido" enterkeyhint="search">
       <button type="submit" class="pm-texto-botao">Buscar</button>
     </form>
     <nav class="pm-abas" aria-label="Status">
@@ -343,7 +343,7 @@
           {%- elif l.status in ('IMPORTADO', 'COLETADO') %}{% set info = [l.situacao_stokki, (formatar('caixas', l.caixas) ~ ' cx') if l.caixas is not none else '', l.embarcador] %}
           {%- elif l.status == 'ABERTO' and l.agendamento %}{% set info = ['agendado ' ~ formatar('agendamento', l.agendamento)[:5] ~ ' ' ~ formatar('agendamento', l.agendamento)[11:]] %}
           {%- else %}{% set info = [(formatar('caixas', l.caixas) ~ ' cx') if l.caixas is not none else '', l.zona] %}{% endif %}
-          {%- set info = info|select|join(' · ') %}
+          {%- set info = (['NF ' ~ l.nf] + info)|select|join(' · ') %}
           <span class="pm-l2"><span class="pm-st st-{{ l.status }}">{{ formatar('status', l.status) or 'Sem status' }}</span>
             {% if info %}<span class="pm-info">· {{ info }}</span>{% else %}<span class="pm-info"></span>{% endif %}
             {% if l.historico|length > 1 %}<span class="pm-tent" title="{{ l.historico|length }} tentativas">{{ l.historico|length }}×</span>{% endif %}</span>
@@ -489,7 +489,7 @@
   <input type="hidden" name="direcao" value="{{ direcao }}">
   {% if filtros.documentos == 'boleto_atrasado' %}<input type="hidden" name="documentos" value="boleto_atrasado">{% endif %}
   <div class="linha-busca">
-    <input type="search" name="q" value="{{ filtros.q }}" placeholder="Buscar código, destinatário, CNPJ, endereço, embarcador, motorista…" aria-label="Busca livre">
+    <input type="search" name="q" value="{{ filtros.q }}" placeholder="Buscar código, NF, destinatário, CNPJ, endereço, embarcador, motorista…" aria-label="Busca livre">
     <button type="submit" class="botao primario">Filtrar</button>
   </div>
   <details class="mais-filtros" id="mais-filtros">
@@ -1182,7 +1182,7 @@
     d.pedidos.forEach((p) => {
       const item = document.createElement("li");
       const forte = document.createElement("strong");
-      forte.textContent = `${p.codigo}: `;
+      forte.textContent = `${p.codigo} · NF ${p.nf || "—"}: `;
       item.appendChild(forte);
       p.arquivos.forEach((a) => {
         const rotulo = document.createElement("label");
@@ -1963,7 +1963,7 @@
   const ROTULO = { reenvio: "Criar reenvio", baixa: "Dar baixa na Vuupt", agendar: "Agendar" };
 
   function montarDetalhe(li, p) {
-    $("pm-det-cod").textContent = p.codigo;
+    $("pm-det-cod").textContent = `${p.codigo} · NF ${p.nf || "—"}`;
     const chip = $("pm-det-chip");
     chip.textContent = p.status_txt || "Sem status";
     chip.className = `pm-chip st-${p.status}`;

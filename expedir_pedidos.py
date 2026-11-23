@@ -717,12 +717,18 @@ def reentregar_insucessos_sem_resposta(vuupt_token: str, insucessos: list, modo_
 
 def _itens_whatsapp_insucesso(insucessos: list, embarcadores: dict) -> list:
     """Insucessos no formato de notificar_whatsapp.avisar_insucessos."""
-    return [{
+    itens = [{
         "codigo": s.get("code") or "",
         "destinatario": s.get("title") or "",
         "remetente": (embarcadores.get(s.get("sender_id")) or {}).get("nome", ""),
         "motivo": s.get("note") or texto_do_motivo(s.get("failed_reason_id")),
     } for s in insucessos]
+    try:
+        from nucleo.nf_pedido import anotar_nf
+        anotar_nf(itens)  # PS · NF no aviso (sem NF: "NF —")
+    except Exception:  # noqa: BLE001 -- NF e enfeite: aviso sai igual sem ela
+        pass
+    return itens
 
 
 def avisar_insucessos_whatsapp(novos: list, config: dict, modo_teste: bool):

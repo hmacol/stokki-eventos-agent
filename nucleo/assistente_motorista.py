@@ -39,7 +39,7 @@ sys.path.insert(0, str(_RAIZ))
 sys.path.insert(0, str(_RAIZ / "portal_cliente"))
 
 import chamados as ch  # noqa: E402  (portal_cliente/chamados.py)
-from nucleo import banco, financeiro  # noqa: E402
+from nucleo import banco, financeiro, nf_pedido  # noqa: E402
 from regras import tarifa_motorista  # noqa: E402
 
 logger = logging.getLogger("nucleo.assistente_motorista")
@@ -106,7 +106,7 @@ def _modelo(config: dict) -> str:
 
 def _resumo_parada(p: dict) -> dict:
     campos = ("ordem", "codigo", "destinatario_nome", "endereco", "situacao", "volume_caixas",
-              "janela_inicio", "janela_fim", "motivo_texto", "reagendado_para", "tentativas")
+              "janela_inicio", "janela_fim", "motivo_texto", "reagendado_para", "tentativas", "nf")
     return {k: p.get(k) for k in campos if p.get(k) not in (None, "", [])}
 
 
@@ -133,7 +133,7 @@ def contexto_motorista(motorista: dict, config: dict) -> dict:
             out["rota"] = {k: rota.get(k) for k in ("id", "data_rota", "nome", "status", "provedor", "start_at",
                                                     "km_estimado", "km_real", "total_paradas", "entregues", "insucessos")}
             paradas = conn.execute("SELECT * FROM nucleo_paradas WHERE rota_id = ? ORDER BY ordem", (rota["id"],)).fetchall()
-            out["paradas"] = [dict(p) for p in paradas]
+            out["paradas"] = nf_pedido.anotar_nf([dict(p) for p in paradas], conn=conn)  # NF ao lado do PS
         tipo = motorista.get("tipo_veiculo")
         t = tarifa_motorista.calcular_valor_rota(tipo, 0, tarifa_motorista.carregar_tarifas(conn))
         out["tarifa"] = t.como_dict() if t else None
@@ -225,7 +225,7 @@ def _opcoes_paradas(paradas: list[dict]) -> list[dict]:
             "valor": p.get("codigo") or str(p.get("ordem")),
             "acao": "chip",
             "pedido": {
-                "ordem": p.get("ordem"), "nome": nome, "codigo": codigo_base(p.get("codigo")),
+                "ordem": p.get("ordem"), "nome": nome, "codigo": codigo_base(p.get("codigo")), "nf": p.get("nf") or "",
                 "bairro": _bairro(p.get("endereco")), "caixas": p.get("volume_caixas"),
                 "situacao": p.get("situacao"), "situacao_rotulo": SITUACAO_ROTULO.get(p.get("situacao") or "", ""),
                 "janela": f"{p['janela_inicio']}-{p['janela_fim']}" if p.get("janela_inicio") and p.get("janela_fim") else "",

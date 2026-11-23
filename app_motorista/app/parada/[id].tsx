@@ -21,6 +21,7 @@ import { Deslizar } from '../../src/deslizar';
 import { conferirPermissao } from '../../src/permissoes';
 import { Botao, Cartao, Carregando } from '../../src/componentes';
 import { cores, hoje } from '../../src/tema';
+import { codigoComNf } from '../../src/textos';
 import type { CampoChecklist, Checklist, Parada, SituacaoParada } from '../../src/tipos';
 
 type Fluxo = 'ENTREGUE' | 'PARCIAL' | 'NAO_ENTREGUE' | 'REAGENDAR';
@@ -365,7 +366,7 @@ export default function RegistroParada() {
       <Cartao>
         <Text style={s.titulo}>{parada.ordem}. {parada.destinatario_nome || parada.titulo}</Text>
         <Text style={s.sub}>{parada.endereco}</Text>
-        <Text style={s.sub}>{parada.codigo}{parada.volume_caixas ? ` · ${parada.volume_caixas} caixa(s)` : ''}{parada.tentativas > 0 ? ` · ${parada.tentativas}ª tentativa já feita` : ''}</Text>
+        <Text style={s.sub}>{codigoComNf(parada)}{parada.volume_caixas ? ` · ${parada.volume_caixas} caixa(s)` : ''}{parada.tentativas > 0 ? ` · ${parada.tentativas}ª tentativa já feita` : ''}</Text>
       </Cartao>
 
       {!fluxo ? (

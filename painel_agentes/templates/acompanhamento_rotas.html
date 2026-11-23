@@ -272,7 +272,7 @@
         tempos = '<div class="fino">previsto ' + dur(p.plan_s) + "</div>";
       }
       return '<div class="ac-parada ' + esc(p.situacao) + (p.concluida_em ? "" : " pendente") + '"><div class="l1"><span class="n">' + esc(p.ordem) +
-        '</span><span class="cod">' + esc(p.codigo || "") + "</span>" + (p.reentrega ? '<span class="ac-selo">reentrega</span>' : "") +
+        '</span><span class="cod">' + esc(p.codigo || "") + (p.codigo ? " · NF " + esc(p.nf || "—") : "") + "</span>" + (p.reentrega ? '<span class="ac-selo">reentrega</span>' : "") +
         '<span class="ac-selo ac-fase ' + esc(p.situacao) + '" style="margin-left:auto">' + esc(SITUACAO[p.situacao] || p.situacao) + "</span></div>" +
         '<div class="dest" style="margin-left:28px">' + esc(p.destinatario || "") + "</div>" + tempos +
         (p.ocorrencia ? '<div class="ac-ocorrencia">' + esc(p.ocorrencia) + "</div>" : "") +
@@ -282,7 +282,7 @@
     }).join("") : '<div class="ac-vazio">Rota sem paradas.</div>';
 
     el("ac-ocorrencias").innerHTML = d.ocorrencias.length ? d.ocorrencias.map((o) =>
-      '<div class="ac-linha"><strong>' + esc(o.codigo || "") + "</strong><span>" + esc(o.destinatario || "") +
+      '<div class="ac-linha"><strong>' + esc(o.codigo || "") + (o.codigo ? " · NF " + esc(o.nf || "—") : "") + "</strong><span>" + esc(o.destinatario || "") +
       '</span><span class="valor" style="color:var(--erro)">' + esc(o.motivo) + "</span></div>").join("")
       : '<div class="ac-vazio">Nenhuma ocorrência nesta rota.</div>';
 
@@ -325,7 +325,7 @@
       if (p.lat == null || p.lng == null) return;
       const pos = { lat: p.lat, lng: p.lng };
       marcas.push(new google.maps.Marker({
-        map: mapa, position: pos, title: (p.codigo || "") + " " + (p.destinatario || ""),
+        map: mapa, position: pos, title: (p.codigo || "") + (p.codigo ? " · NF " + (p.nf || "—") : "") + " " + (p.destinatario || ""),
         label: { text: String(p.ordem), color: "#fff", fontSize: "11px", fontWeight: "700" },
         icon: { path: google.maps.SymbolPath.CIRCLE, scale: 11, fillColor: COR[p.situacao] || "#7a8591", fillOpacity: 1,
                 strokeColor: "#fff", strokeWeight: 2 },
@@ -407,7 +407,8 @@
       const ul = document.createElement("ul");
       d.pedidos.forEach((p) => {
         const li = document.createElement("li"), forte = document.createElement("strong");
-        forte.textContent = p.codigo + ": ";
+        const par = detalheAtual && detalheAtual.paradas.find((x) => x.codigo === p.codigo);
+        forte.textContent = p.codigo + " · NF " + ((par && par.nf) || "—") + ": ";
         li.appendChild(forte);
         p.arquivos.forEach((a, i) => {
           if (i) li.appendChild(document.createTextNode(" · "));
@@ -479,7 +480,7 @@
       if (!b || !detalheAtual) return;
       parada = detalheAtual.paradas.find((p) => String(p.parada_id) === b.dataset.cancelar);
       if (!parada) return;
-      el("ac-cancelar-pedido").textContent = (parada.codigo || "") + " · " + (parada.destinatario || "") + " · " + (SITUACAO[parada.situacao] || parada.situacao);
+      el("ac-cancelar-pedido").textContent = (parada.codigo || "") + " · NF " + (parada.nf || "—") + " · " + (parada.destinatario || "") + " · " + (SITUACAO[parada.situacao] || parada.situacao);
       campo.value = ""; falhar(""); botao.disabled = false; botao.textContent = "Cancelar finalização";
       modal.showModal(); campo.focus();
     });

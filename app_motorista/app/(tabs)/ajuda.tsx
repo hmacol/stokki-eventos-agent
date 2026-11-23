@@ -15,6 +15,7 @@ import * as api from '../../src/api';
 import { Botao, Cartao, Carregando, Vazio } from '../../src/componentes';
 import { conferirPermissao } from '../../src/permissoes';
 import { cores } from '../../src/tema';
+import { codigoComNf } from '../../src/textos';
 import type { Chamado, EstadoAtendimento, MensagemChamado, OpcaoMensagem, SituacaoAtendimento } from '../../src/tipos';
 
 const INTERVALO_MS = 6000;      // poll enquanto a tela está aberta
@@ -33,7 +34,7 @@ const COR_SITUACAO: Record<string, string> = {
 // (ordem, cliente, bairro, caixas) -- tocar é mais rápido que digitar código.
 function CartaoPedido({ o, onPress, desativado }: { o: OpcaoMensagem; onPress: () => void; desativado: boolean }) {
   const p = o.pedido!;
-  const detalhes = [p.codigo, p.bairro, p.caixas ? `${p.caixas} cx` : '', p.janela].filter(Boolean).join(' · ');
+  const detalhes = [codigoComNf(p), p.bairro, p.caixas ? `${p.caixas} cx` : '', p.janela].filter(Boolean).join(' · ');
   return (
     <Pressable onPress={onPress} disabled={desativado}
       style={({ pressed }) => [s.pedido, pressed && { backgroundColor: cores.fundo }, desativado && { opacity: 0.5 }]}>
