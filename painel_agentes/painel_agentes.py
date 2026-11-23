@@ -6426,6 +6426,9 @@ def _wms_registrar(conn, item: dict, op: dict) -> dict:
         raise wms.ErroWMS("Produto controlado por caixa: use Inventario, Receber ou Mover caixa.")
     if str(item.get("tipo", "")).upper() == "ENTRADA" and wms_doca.e_doca(item.get("destino")):
         _wms_exige_recebimento_liberado(conn, item)
+    # A doca so esvazia pelo Guardar (que leva a reserva junto), pela separacao ou por Saida.
+    if str(item.get("tipo", "")).upper() == "TRANSFERENCIA" and wms_doca.e_doca(item.get("origem")):
+        raise wms.ErroWMS("Produto na doca: use Guardar.")
     return wms.registrar_movimento(
         conn, tipo=item.get("tipo", ""), produto_id=int(item.get("produto_id") or 0),
         quantidade=item.get("quantidade"), lote=item.get("lote", ""), validade=item.get("validade"),
@@ -7101,6 +7104,9 @@ def api_wms_caixa_mover(serial):
     conn = wms_caixas.conectar()
     try:
         _wms_exige_uuid_do_aparelho(body.get("uuid"))
+        caixa = wms_caixas.obter_caixa(conn, serial)
+        if caixa and wms_doca.e_doca(caixa["posicao"]):   # sair da doca e pelo Guardar (leva a reserva)
+            return _wms_json_erro("Caixa na doca: use Guardar.")
         r = wms_caixas.mover_caixa(conn, serial, body.get("destino", ""), uuid=body.get("uuid") or "", operador=op)
         return jsonify({"ok": True, "caixa": r["caixa"], "duplicado": r["duplicado"]})
     except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:

@@ -8,6 +8,7 @@ import copy
 import sys
 import tempfile
 import unittest
+import uuid
 from datetime import datetime
 from pathlib import Path
 from unittest import mock
@@ -252,6 +253,79 @@ class Rotas(Base):
         self.assertEqual(r.status_code, 400)
 
 
+class SaidaDaDoca(Base):
+    """A doca so esvazia pelo Guardar, pela separacao/baixa ou por Saida (o Mover leva a reserva para tras)."""
+    na_doca, nova_caixa, posicao_da_caixa, corpo = Rotas.na_doca, Rotas.nova_caixa, Rotas.posicao_da_caixa, Rotas.corpo
+
+    def setUp(self):
+        super().setUp()
+        self.entrar("galpao")
+        self.operador()
+        conn = wms.conectar()
+        wms.criar_area(conn, "C1", "CONTAINER", "Container 1")
+        wms.criar_posicao(conn, POS)
+        conn.close()
+
+    def mov(self, tipo, rota="/api/wms/movimentos", **mud):
+        m = dict({"uuid": "x" + uuid.uuid4().hex, "tipo": tipo, "produto_id": 1,
+                  "lote": "L1", "quantidade": 2}, **mud)
+        return self.enviar(rota, {"movimentos": [m]} if rota.endswith("lote") else m)
+
+    def saldo(self, pos):
+        conn = wms.conectar()
+        try:
+            return sum(s["quantidade"] for s in wms.saldos_produto(conn, 1) if s["posicao"] == pos)
+        finally:
+            conn.close()
+
+    def caixa_na_doca(self):
+        s = self.nova_caixa()
+        conn = wms_caixas.conectar()
+        try:
+            wms_doca.garantir_doca(conn)
+            wms_caixas.ativar_caixa(conn, s, wms_doca.DOCA_POSICAO)
+        finally:
+            conn.close()
+        return s
+
+    def test_transferencia_da_doca_e_barrada(self):
+        self.na_doca()
+        r = self.mov("TRANSFERENCIA", origem="doc1-p1", destino=POS)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json()["erro"], "Produto na doca: use Guardar.")
+        res = self.mov("TRANSFERENCIA", "/api/wms/movimentos/lote", origem="DOC1-P1", destino=POS).get_json()
+        self.assertEqual(res["resultados"][0]["erro"], "Produto na doca: use Guardar.")
+        self.assertEqual((self.saldo("DOC1-P1"), self.saldo(POS)), (6, 0))
+
+    def test_saida_da_doca_continua_livre(self):
+        self.na_doca()
+        r = self.mov("SAIDA", origem="DOC1-P1", observacao="Perda / avaria")
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(self.saldo("DOC1-P1"), 4)
+
+    def test_transferencia_para_a_doca_continua_livre(self):
+        conn = wms.conectar()
+        wms_doca.garantir_doca(conn)
+        wms.registrar_movimento(conn, tipo="ENTRADA", produto_id=1, quantidade=5, lote="L1", destino=POS)
+        conn.close()
+        r = self.mov("TRANSFERENCIA", origem=POS, destino="DOC1-P1")
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(self.saldo("DOC1-P1"), 2)
+
+    def test_mover_caixa_da_doca_e_barrado(self):
+        s = self.caixa_na_doca()
+        r = self.enviar(f"/api/wms/caixas/{s.lower()}/mover", {"destino": POS, "uuid": UUID})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json()["erro"], "Caixa na doca: use Guardar.")
+        self.assertEqual((self.posicao_da_caixa(s), self.saldo("DOC1-P1"), self.saldo(POS)), ("DOC1-P1", 6, 0))
+
+    def test_guardar_caixa_continua(self):
+        s = self.caixa_na_doca()
+        r = self.enviar("/api/wms/guarda/guardar", self.corpo())
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual((r.get_json()["movidas"], self.posicao_da_caixa(s)), ([s], POS))
+
+
 class ConferirRecebimentoNaTela(Base):
     """Marcadores da tela Conferir Recebimento no HTML do /wms (nao ha harness de JS)."""
 
@@ -295,6 +369,12 @@ class GuardarNaTela(ConferirRecebimentoNaTela):
         for m in ("TELAS.guardar", "TELAS.guardarItem", "Guardar só uma parte aqui", "Guardar aqui mesmo",
                   "Posição não combina", "itens na doca sem lugar", "O item conferido vai para a fila Guardar."):
             self.assertIn(m, h)
+
+    def test_mover_nao_oferece_a_doca_como_origem(self):
+        h = self.html()
+        self.assertIn("semDoca(p.saldos || [], b.dataset.mov)", h)
+        self.assertIn("semDoca(p.saldos || [], ctx.tipo)", h)
+        self.assertIn("itens.length && p.codigo !== S.doca ? '' : 'disabled'}>Mover daqui", h)
 
 
 if __name__ == "__main__":

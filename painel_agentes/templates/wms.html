@@ -287,6 +287,8 @@
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   // Posição como o operador lê: a doca de espera aparece como DOCA, o resto é o próprio código.
   function rotuloPos(codigo) { return codigo === S.doca ? 'DOCA' : codigo; }
+  // Mover nunca sai da doca: ela só esvazia pelo Guardar (que leva a reserva), pela separação ou por Saída
+  const semDoca = (lotes, tipo) => tipo === 'TRANSFERENCIA' ? lotes.filter((l) => l.posicao !== S.doca) : lotes;
   const num = (v) => { const n = Number(v); return Number.isInteger(n) ? String(n) : n.toLocaleString('pt-BR', { maximumFractionDigits: 3 }); };
   const dataBr = (iso) => iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : '';
   const horaBr = (ts) => ts ? ts.slice(11, 16) : '';
@@ -518,7 +520,7 @@
     app.querySelectorAll('[data-pos]').forEach((el) => el.addEventListener('click', () => abrirPosicao(el.dataset.pos)));
     app.querySelectorAll('[data-mov]').forEach((b) => b.addEventListener('click', () => ir('mov', {
       tipo: b.dataset.mov, produto: p, unidadeLida: p.lido_como === 'DUN' ? 'CX' : 'UN',
-      lotes: b.dataset.mov === 'ENTRADA' ? [] : (p.saldos || []), loteSel: null,
+      lotes: b.dataset.mov === 'ENTRADA' ? [] : semDoca(p.saldos || [], b.dataset.mov), loteSel: null,
     })));
     document.getElementById('btn-movs').addEventListener('click', () => ir('movimentos', { produto_id: p.id, titulo: p.descricao }));
     const chk = document.getElementById('chk-validade');
@@ -550,7 +552,7 @@
       </div>`).join('')}</div>
     <div class="botoes linha">
       <button class="botao" data-mov="ENTRADA">Entrada aqui</button>
-      <button class="botao secundario" data-mov="TRANSFERENCIA" ${itens.length ? '' : 'disabled'}>Mover daqui</button>
+      <button class="botao secundario" data-mov="TRANSFERENCIA" ${itens.length && p.codigo !== S.doca ? '' : 'disabled'}>Mover daqui</button>
       <button class="botao secundario" data-mov="SAIDA" ${itens.length ? '' : 'disabled'}>Saída daqui</button>
       <a class="botao neutro" href="${BASE_PATH}/wms/etiquetas.pdf?codigos=${encodeURIComponent(p.codigo)}" target="_blank">Etiqueta</a>
     </div>
@@ -2366,7 +2368,7 @@
     const aplicar = (p) => {
       const ctx = S.tela === 'mov' ? S.ctx : (S.pilha.length ? S.pilha.pop().ctx : { tipo: 'ENTRADA' });
       ctx.produto = p; ctx.unidadeLida = p.lido_como === 'DUN' ? 'CX' : 'UN';
-      ctx.lotes = (ctx.tipo !== 'ENTRADA') ? (p.saldos || []) : []; ctx.loteSel = null;
+      ctx.lotes = (ctx.tipo !== 'ENTRADA') ? semDoca(p.saldos || [], ctx.tipo) : []; ctx.loteSel = null;
       if (ctx.origem && ctx.lotes.length) { ctx.lotes = ctx.lotes.filter((l) => l.posicao === ctx.origem); }
       ir('mov', ctx, false); toast(p.descricao);
     };
