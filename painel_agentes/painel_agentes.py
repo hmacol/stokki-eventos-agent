@@ -6291,6 +6291,20 @@ def api_wms_produto_controla_validade(produto_id):
         conn.close()
 
 
+@app.route("/api/wms/produtos/<int:produto_id>/temperatura", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_wms_produto_temperatura(produto_id):
+    body = request.get_json(force=True) or {}
+    conn = wms.conectar()
+    try:
+        return jsonify({"ok": True, "produto": wms.definir_temperatura_produto(conn, produto_id, body.get("temperatura", ""))})
+    except wms.ErroWMS as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
 _UUID_APARELHO = re.compile(r"(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|x[0-9a-f]{8,40})", re.I)
 
 

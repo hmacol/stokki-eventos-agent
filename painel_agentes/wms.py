@@ -180,6 +180,13 @@ def conectar(caminho: Path | None = None) -> sqlite3.Connection:
             # Corrida: outro processo (painel, timer) criou a coluna entre o PRAGMA e o ALTER.
             if "duplicate column" not in str(e).lower():
                 raise
+    # Migração aditiva: temperatura do produto ('' = não informada).
+    if "temperatura" not in cols:
+        try:
+            conn.execute("ALTER TABLE wms_produtos ADD COLUMN temperatura TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).lower():
+                raise
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_wms_produtos_codigo_interno "
                  "ON wms_produtos(codigo_interno) WHERE codigo_interno IS NOT NULL")
     conn.commit()
@@ -539,6 +546,16 @@ def criar_produto_manual(conn, ean: str, descricao: str, embarcador: str = "", u
 def definir_controla_validade(conn, produto_id: int, controla: bool) -> dict:
     conn.execute("UPDATE wms_produtos SET controla_validade = ?, atualizado_em = ? WHERE id = ?",
                  (1 if controla else 0, agora(), produto_id))
+    conn.commit()
+    return obter_produto(conn, produto_id)
+
+
+def definir_temperatura_produto(conn, produto_id: int, temperatura: str) -> dict:
+    temperatura = str(temperatura or "").strip().upper()
+    if temperatura and temperatura not in TEMPERATURAS:
+        raise ErroWMS("Temperatura inválida: use " + ", ".join(TEMPERATURAS) + " ou deixe em branco.")
+    conn.execute("UPDATE wms_produtos SET temperatura = ?, atualizado_em = ? WHERE id = ?",
+                 (temperatura, agora(), produto_id))
     conn.commit()
     return obter_produto(conn, produto_id)
 

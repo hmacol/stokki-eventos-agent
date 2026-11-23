@@ -52,6 +52,28 @@ class TestDoca(unittest.TestCase):
         lotes = wms_pedidos.disponivel_por_lote(self.conn, self.pid)
         self.assertEqual([(l["posicao"], l["disponivel"]) for l in lotes], [("DOC1-P1", 10.0)])
 
+    def test_temperatura_do_cadastro(self):
+        wms.definir_temperatura_produto(self.conn, self.pid, "REFRIGERADO")
+        self.assertEqual(wms_doca.temperatura_do_produto(self.conn, self.pid), "REFRIGERADO")
+
+    def test_temperatura_deduzida_de_onde_esta(self):
+        wms.criar_area(self.conn, "CG1", "CAM_CONGELADA"); wms.criar_posicao(self.conn, "CG1-P1")
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=self.pid, quantidade=5, destino="CG1-P1", validade="2027-01-01")
+        self.assertEqual(wms_doca.temperatura_do_produto(self.conn, self.pid), "CONGELADO")
+
+    def test_temperatura_desconhecida_e_doca_nao_conta(self):
+        wms_doca.garantir_doca(self.conn)
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=self.pid, quantidade=5, destino="DOC1-P1", validade="2027-01-01")
+        self.assertEqual(wms_doca.temperatura_do_produto(self.conn, self.pid), "")
+
+    def test_temperatura_invalida(self):
+        with self.assertRaises(wms.ErroWMS):
+            wms.definir_temperatura_produto(self.conn, self.pid, "MORNO")
+
+    def test_temperatura_vazia_limpa(self):
+        wms.definir_temperatura_produto(self.conn, self.pid, "CONGELADO")
+        self.assertEqual(wms.definir_temperatura_produto(self.conn, self.pid, "")["temperatura"], "")
+
 
 if __name__ == "__main__":
     unittest.main()
