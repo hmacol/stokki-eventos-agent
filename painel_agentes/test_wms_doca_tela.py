@@ -103,6 +103,13 @@ class Temperatura(Base):
         self.entrar("total")
         self.assertEqual(self.post({"temperatura": "MORNO"}).status_code, 400)
 
+    def test_produto_inexistente_404(self):
+        self.entrar("total")
+        for corpo in ({"temperatura": "CONGELADO"}, {"temperatura": "CONGELADO", "temp_min": "-25", "temp_max": "-20"}):
+            r = self.cliente.post("/api/wms/produtos/999/temperatura", json=corpo, headers=ORIGEM)
+            self.assertEqual(r.status_code, 404, corpo)
+            self.assertEqual(r.get_json()["erro"], "Produto não encontrado.")
+
 
 class Rotas(Base):
     def setUp(self):

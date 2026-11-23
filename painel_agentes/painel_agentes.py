@@ -6404,6 +6404,9 @@ def api_wms_produto_temperatura(produto_id):
     body = request.get_json(force=True) or {}
     conn = wms.conectar()
     try:
+        if not wms.obter_produto(conn, produto_id):
+            return _wms_json_erro("Produto não encontrado.", 404)
+
         def _num(v):
             return None if v is None or str(v).strip() == "" else str(v).strip().replace(",", ".")
         if "temp_min" in body or "temp_max" in body:
