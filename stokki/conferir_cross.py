@@ -37,6 +37,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 import yaml  # noqa: E402
 from playwright.sync_api import Error as PlaywrightError  # noqa: E402
+from playwright.sync_api import TimeoutError as PlaywrightTimeout  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 from stokki import avancar_cross as ac  # noqa: E402
@@ -55,6 +56,10 @@ PERFIL: dict = dict(PERFIS["qe"])   # main() troca conforme --cliente
 
 class Parar(Exception):
     pass
+
+
+# texto "Quantidade embalada: k de N" da tela de conferencia ('' quando some)
+_JS_CONTADOR = "() => (document.body.innerText.match(/Quantidade embalada:\\s*\\d+\\s*de\\s*\\d+/) || [''])[0]"
 
 
 def _situacao(page, pid: int) -> str:
@@ -80,35 +85,40 @@ def _abrir_conferencia(page, pid: int) -> None:
         raise Parar("campo de busca da conferencia nao visivel")
     busca.fill(f"#PS-{pid}")
     busca.press("Enter")
-    page.wait_for_timeout(5000)
+    # segue assim que aparece o dialogo "finalizar separacao" ou a tela da conferencia
+    alvo = page.locator("#btn_picking_list:visible").or_(page.get_by_placeholder(re.compile("c.digo do produto", re.I)))
+    try:
+        alvo.first.wait_for(state="visible", timeout=15_000)
+    except PlaywrightTimeout:
+        pass   # os guardas de quem chamou dizem o que faltou
+    page.wait_for_timeout(500)
 
 
 def _checar_sku(page, pid: int) -> None:
     """Antes de iniciar a separacao: o pedido so pode ter o SKU XD do perfil (nenhum outro XD).
-    A quantidade de produtos = 1 e conferida na linha da Selecao (fase 1)."""
-    page.goto(ac.URL_SHOW.format(id=pid), wait_until="domcontentloaded", timeout=45_000)
-    ei._aguardar_pagina_acalmar(page)
+    Le a pagina do pedido que _situacao() acabou de abrir (nao recarrega)."""
     xds = set(re.findall(r"XD[A-Z0-9\-]+", page.inner_text("body").upper()))
     if xds != {PERFIL["sku"]}:
         raise Parar(f"SKU XD na pagina do pedido {sorted(xds)} != {{{PERFIL['sku']}}}")
 
 
 def _fase1_separacao(page, pid: int) -> None:
-    _checar_sku(page, pid)
-    ac.confirmar_global.update(abrir_operador=True, confirmar=True, operador=ac.OPERADOR_PADRAO)
     page.goto(ac.URL_PICKING, wait_until="domcontentloaded", timeout=45_000)
     ei._aguardar_pagina_acalmar(page)
     for seletor in ("#btn_option_order", "#btn_order"):
-        btn = page.locator(seletor)
-        if btn.count() and btn.first.is_visible():
-            btn.first.click()
-            page.wait_for_timeout(2000)
+        btn = page.locator(seletor).first
+        try:
+            btn.wait_for(state="visible", timeout=4000)
+            btn.click()
+        except PlaywrightTimeout:
+            pass
+    page.wait_for_timeout(500)
     campo = page.locator("input:visible:not([type=hidden]):not([type=checkbox])").first
     if not campo.count():
         raise Parar("campo do filtro de pedido unico nao encontrado")
     campo.fill(f"#PS-{pid}")
     campo.press("Enter")
-    page.wait_for_timeout(4000)
+    page.locator("tr", has_text=f"PS-{pid}").first.wait_for(state="visible", timeout=15_000)
     linhas = [tr for tr in page.locator("tr").all() if f"PS-{pid}" in (tr.inner_text() or "")]
     if len(linhas) != 1:
         raise Parar(f"filtro devolveu {len(linhas)} linha(s) para PS-{pid}")
@@ -119,9 +129,20 @@ def _fase1_separacao(page, pid: int) -> None:
     # a coluna "Quantidade de Produtos" e a quantidade do item XD (= volumes da NF), nao o numero de linhas;
     # "um unico item" ja foi garantido por _checar_sku (so o XD do perfil na pagina do pedido)
     page.get_by_text("Selecionar Operador da Tarefa").first.click()
-    page.wait_for_timeout(2500)
-    if ac._iniciar_separacao_por_lista(page, pid) != 0:
-        raise Parar("iniciar separacao por lista nao levou a Em separacao")
+    seletor = page.locator('button[data-id="select_operator"]').first
+    seletor.wait_for(state="visible", timeout=15_000)
+    seletor.click()
+    opcao = page.locator(".dropdown-menu.show").get_by_text(ac.OPERADOR_PADRAO, exact=True)
+    opcao.first.wait_for(state="visible", timeout=5000)
+    if opcao.count() != 1:
+        raise Parar(f"operador '{ac.OPERADOR_PADRAO}' nao achado exatamente 1 vez ({opcao.count()})")
+    opcao.first.click()
+    page.keyboard.press("Escape")
+    page.wait_for_function("() => { const b = document.querySelector('#btn_next_operator'); return b && !b.disabled; }",
+                           timeout=5000)
+    page.locator("#btn_next_operator").first.click()
+    # sinal de sucesso da Stokki; a situacao e conferida em seguida por executar()
+    page.get_by_text("Separação iniciada!").first.wait_for(state="visible", timeout=45_000)
 
 
 def _fase2_finalizar_separacao(page, pid: int) -> None:
@@ -129,8 +150,12 @@ def _fase2_finalizar_separacao(page, pid: int) -> None:
     sim = page.locator("#btn_picking_list:visible")
     if sim.count() != 1:
         raise Parar("dialogo 'finalizar separacao por lista' nao apareceu")
-    sim.click()
-    page.wait_for_timeout(8000)
+    try:   # espera a resposta do envio em vez de 8 s fixos (sair da pagina antes cortaria o envio)
+        with page.expect_response(lambda r: r.request.method == "POST", timeout=20_000):
+            sim.click()
+    except PlaywrightTimeout:
+        pass   # nao vi o POST: ja esperei 20 s; a situacao lida a seguir decide
+    page.wait_for_timeout(1000)
 
 
 def _fase3_conferir(page, pid: int) -> None:
@@ -147,9 +172,15 @@ def _fase3_conferir(page, pid: int) -> None:
     print(f"   item XD: {total} unidade(s) a embalar")
     for _ in range(total):   # cada leitura do SKU embala 1 unidade; ao completar a Stokki abre o dialogo de impressao
         try:
+            antes = page.evaluate(_JS_CONTADOR)
             campo.fill(PERFIL["sku"])
             campo.press("Enter")
-            page.wait_for_timeout(1500)
+            try:   # segue quando o contador muda ou o dialogo de impressao abre
+                page.wait_for_function(
+                    "(a) => document.querySelector('.modal.show') || (" + _JS_CONTADOR + ")() !== a",
+                    arg=antes, timeout=8000)
+            except PlaywrightTimeout:
+                pass
             if page.locator(".modal.show").count():
                 break
         except PlaywrightError as e:
@@ -157,10 +188,10 @@ def _fase3_conferir(page, pid: int) -> None:
                 break
             raise
     clicou_fechar = False
-    for _ in range(16):
-        page.wait_for_timeout(2500)
+    for _ in range(40):
+        page.wait_for_timeout(1000)
         try:
-            pular = page.locator(".modal.show button:visible", has_text="Pular Impressão")
+            pular =page.locator(".modal.show button:visible", has_text="Pular Impressão")
             if page.locator(".modal.show").count():
                 if pular.count():
                     pular.first.click()
@@ -212,6 +243,7 @@ def executar(pids: list[int], confirmar: bool) -> int:
                     continue
                 try:
                     if situacao == "Aberto":
+                        _checar_sku(page, pid)
                         _fase1_separacao(page, pid)
                         situacao = _situacao(page, pid)
                         print(f"   apos fase 1: {situacao}")
@@ -223,8 +255,8 @@ def executar(pids: list[int], confirmar: bool) -> int:
                         _fase3_conferir(page, pid)
                         situacao = _situacao(page, pid)
                         print(f"   apos fase 3: {situacao}")
-                except Parar as e:
-                    print(f"PARADO em PS-{pid}: {e}")
+                except (Parar, PlaywrightTimeout) as e:
+                    print(f"PARADO em PS-{pid}: {str(e)[:300]}")
                     print("print:", ac._print(page, f"{pid}_conferir_parado"))
                     return 1
                 if situacao != FINAL:
