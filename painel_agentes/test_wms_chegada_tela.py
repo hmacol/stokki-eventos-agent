@@ -111,6 +111,16 @@ class Lista(Base):
         rec = self.cliente.get(f"/api/wms/recebimentos/{rid}").get_json()["recebimento"]
         self.assertEqual((rec["usa_etapas"], rec["chegada_estado"], rec["chegada_id"]), (True, "RASCUNHO", cid))
 
+    def test_lista_le_o_config_um_numero_fixo_de_vezes(self):
+        leituras = []
+        for n, novos in ((1, (1,)), (5, (2, 3, 4, 5))):
+            for id_stokki in novos:
+                self.receb(id_stokki=id_stokki)
+            painel_agentes._carregar_config.reset_mock()
+            self.assertEqual(len(self.cliente.get("/api/wms/recebimentos").get_json()["recebimentos"]), n)
+            leituras.append(painel_agentes._carregar_config.call_count)
+        self.assertEqual(leituras[0], leituras[1])
+
 
 class Trava(Base):
     MSG = "Faça o Receber (checklist da chegada) antes de conferir."

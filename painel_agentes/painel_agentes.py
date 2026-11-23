@@ -6138,9 +6138,10 @@ def _wms_ids_etapas() -> set:
 _MSG_TRAVA_CHEGADA = "Faça o Receber (checklist da chegada) antes de conferir."
 
 
-def _wms_recebimento_usa_etapas(conn, recebimento_id) -> bool:
-    """Algum item do recebimento e de produto de embarcador com etapas. Sem etapas nunca ha trava."""
-    etapas = _wms_ids_etapas()
+def _wms_recebimento_usa_etapas(conn, recebimento_id, etapas=None) -> bool:
+    """Algum item do recebimento e de produto de embarcador com etapas. Sem etapas nunca ha trava.
+    `etapas` ja lido evita reler o config (a lista chama uma vez por linha)."""
+    etapas = _wms_ids_etapas() if etapas is None else etapas
     if not etapas:
         return False
     for r in conn.execute(
@@ -6159,9 +6160,14 @@ def _wms_trava_chegada(conn, recebimento_id):
     return None
 
 
-def _wms_marcar_chegada(conn, rec: dict) -> None:
-    """Acrescenta usa_etapas, chegada_estado e chegada_id ao recebimento (dict)."""
-    rec["usa_etapas"] = _wms_recebimento_usa_etapas(conn, rec["id"])
+def _wms_marcar_chegada(conn, rec: dict, etapas=None) -> None:
+    """Acrescenta usa_etapas, chegada_estado e chegada_id ao recebimento (dict).
+    Sem embarcador com etapas nao consulta nada."""
+    etapas = _wms_ids_etapas() if etapas is None else etapas
+    if not etapas:
+        rec.update(usa_etapas=False, chegada_estado="SEM_CHEGADA", chegada_id=None)
+        return
+    rec["usa_etapas"] = _wms_recebimento_usa_etapas(conn, rec["id"], etapas)
     rec["chegada_estado"] = wms_chegada.estado_do_recebimento(conn, rec["id"])
     viva = conn.execute(
         "SELECT c.id FROM wms_chegada_recebimentos cr JOIN wms_chegadas c ON c.id = cr.chegada_id "
@@ -6713,10 +6719,11 @@ def api_wms_recebimentos():
         params.append(request.args.get("limite", 50, type=int))
         rows = conn.execute(sql, params).fetchall()
         wms_chegada.garantir_tabelas(conn)
+        etapas = _wms_ids_etapas()   # uma leitura do config por requisicao, nao por linha
         recebimentos = []
         for r in rows:
             d = dict(r)
-            _wms_marcar_chegada(conn, d)
+            _wms_marcar_chegada(conn, d, etapas)
             recebimentos.append(d)
         return jsonify({"recebimentos": recebimentos})
     finally:
@@ -6742,7 +6749,7 @@ def api_wms_recebimento(recebimento_id):
             it["usa_etapas"] = bool(produto and produto.get("embarcador_id") in com_etapas)
         wms_chegada.garantir_tabelas(conn)
         recebimento = dict(rec)
-        _wms_marcar_chegada(conn, recebimento)
+        _wms_marcar_chegada(conn, recebimento, com_etapas)
         return jsonify({"recebimento": recebimento, "itens": itens})
     finally:
         conn.close()
