@@ -147,7 +147,8 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              GET /api/wms/guarda/item, POST /api/wms/guarda/guardar; ativar caixa
                                              com recebimento vai pra doca se o embarcador tem etapas.
                                              Também POST /api/wms/produtos/<id>/temperatura (coluna
-                                             wms_produtos.temperatura; área tipo DOCA em wms.py); bootstrap do
+                                             wms_produtos.temperatura e faixa própria wms_produtos.temp_min/temp_max,
+                                             nula = faixa padrão da classe; área tipo DOCA em wms.py); bootstrap do
                                              wms traz etapas_ativo, doca, guarda_pendente. Telas no wms.html:
                                              Conferir Recebimento sem posição, TELAS.guardar e TELAS.guardarItem.
                                              Testes: test_wms_doca.py, test_wms_doca_tela.py.
@@ -168,6 +169,11 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              do portal: portal_cliente/link_liberacao.py + templates liberacao.html e
                                              liberacao_erro.html. E-mails pendentes saem no timer wms-recebimentos
                                              (sincronizar_recebimentos_wms.py -> wms_chegada_avisos.enviar_pendentes).
+                                             Regras: movimento ENTRADA na doca só pela conferência de um recebimento
+                                             ESPERADO com o produto e chegada liberada (painel_agentes.py,
+                                             _wms_exige_recebimento_liberado); uma chegada só aceita recebimentos de
+                                             um embarcador. Telas do SPA (wms.html): receberChegada, chegada1, chegada2,
+                                             chegadaAguardando (aba Receber abre receberChegada com etapas).
                                              Testes: test_wms_chegada.py, test_wms_chegada_avisos.py, test_wms_chegada_pdf.py,
                                              test_wms_chegada_tela.py, portal_cliente/test_link_liberacao.py.
  Separação/conferência/volumes do galpão .. painel_agentes/wms_separacao.py (17/11: ondas por embarcador, bipe de
