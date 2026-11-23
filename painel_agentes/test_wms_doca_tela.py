@@ -251,5 +251,15 @@ class ConferirRecebimentoNaTela(Base):
             self.assertIn(m, h)
 
 
+class GuardarNaTela(ConferirRecebimentoNaTela):
+    """Marcadores das telas da fila Guardar no HTML do /wms."""
+
+    def test_marcadores_guardar(self):
+        h = self.html()
+        for m in ("TELAS.guardar", "TELAS.guardarItem", "Guardar só uma parte aqui", "Guardar aqui mesmo",
+                  "Posição não combina", "itens na doca sem lugar", "O item conferido vai para a fila Guardar."):
+            self.assertIn(m, h)
+
+
 if __name__ == "__main__":
     unittest.main()

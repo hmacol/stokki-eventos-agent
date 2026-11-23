@@ -367,8 +367,10 @@
       <button type="button" class="btn-cam" id="btn-cam" title="Ler com a câmera">📷</button>
       <div class="dica">produto (EAN da embalagem ou DUN da caixa) · posição (QR da etiqueta)</div>
     </div>
+    <div id="ini-frio"></div>
     <div class="acoes">
       <button class="primario" data-ir="receber" style="grid-column:1 / -1"><b>${S.etapasAtivo ? 'Conferir Recebimento' : 'Receber'}</b><span id="ini-receber">entradas esperadas da Stokki</span></button>
+      ${S.etapasAtivo || S.guardaPendente > 0 ? `<button class="primario" data-ir="guardar" style="grid-column:1 / -1"><b>Guardar <span class="badge badge-atencao" id="ini-guardar-n">${S.guardaPendente}</span></b><span>itens na doca sem lugar</span></button>` : ''}
       <button class="primario" data-ir="mov" data-tipo="ENTRADA"><b>Entrada</b><span>produto chega na posição</span></button>
       <button data-ir="busca"><b>Consultar</b><span>onde está / o que tem</span></button>
       <button data-ir="mov" data-tipo="TRANSFERENCIA"><b>Mover</b><span>de uma posição a outra</span></button>
@@ -394,6 +396,14 @@
       const el = document.getElementById('ini-receber'); const n = (r.recebimentos || []).length;
       if (el) el.textContent = n ? n + (n === 1 ? ' entrada esperada' : ' entradas esperadas') + ' · encerre ao terminar' : 'nenhuma entrada esperada agora';
     }).catch(() => { /* sem rede: fica o texto padrão */ });
+    if (S.etapasAtivo || S.guardaPendente > 0) {
+      api('/guarda/fila').then((r) => {
+        const fila = r.itens || []; S.guardaPendente = fila.length;
+        const n = document.getElementById('ini-guardar-n'); if (n) n.textContent = fila.length;
+        const frio = fila.filter(ehFrio); const el = document.getElementById('ini-frio');
+        if (el && frio.length) el.innerHTML = '<div class="cartao atencao"><div class="sub">Na doca: <b>' + frio.length + ' refrigerado(s)/congelado(s)</b> há ' + Math.max.apply(null, frio.map((i) => minNaDoca(i.desde))) + ' min. Guarde primeiro.</div></div>';
+      }).catch(() => { /* sem rede: fica o número do bootstrap */ });
+    }
   };
 
   // Operador
@@ -873,6 +883,7 @@
     try { res = await api('/recebimentos/' + r.id + '/encerramento'); }
     catch (e) { el.innerHTML = '<div class="vazio">' + esc(e.message) + '</div>'; return; }
     const dif = (l) => l.diferenca === null ? '—' : (l.diferenca > 0 ? '+' : '') + num(l.diferenca);
+    const nConferidos = res.linhas.filter((l) => l.recebido > 0).length;
     el.innerHTML = `
       <div class="cartao ${res.divergente ? 'atencao' : 'ok'}">
         <div class="rotulo">${res.divergente ? 'Com divergência' : 'Tudo bateu'}</div>
@@ -883,7 +894,7 @@
         </table>
       </div>
       ${res.faltas ? '<div class="cartao erro"><div class="sub">Há falta em ' + res.faltas + ' item(ns): ao confirmar, <b>o cliente recebe o relatório de faltas por e-mail</b>. O que já foi endereçado continua no estoque.</div></div>' : ''}
-      ${S.etapasAtivo ? '<div class="cartao"><div class="sub">Os ' + res.linhas.filter((l) => l.recebido > 0).length + ' itens conferidos vão para a fila Guardar.</div></div>' : ''}
+      ${S.etapasAtivo && nConferidos ? '<div class="cartao"><div class="sub">' + (nConferidos === 1 ? 'O item conferido vai para a fila Guardar.' : 'Os ' + nConferidos + ' itens conferidos vão para a fila Guardar.') + '</div></div>' : ''}
       ${res.sem_cadastro ? '<div class="cartao"><div class="sub">' + res.sem_cadastro + ' linha(s) sem produto no catálogo: não contam como falta, ficam registradas como pendência.</div></div>' : ''}
       <div class="campo"><label>Observação${res.faltas ? ' (vai no e-mail do cliente)' : ''}</label>
         <input type="text" id="enc-obs" maxlength="300" placeholder="${res.divergente ? 'ex.: 2 caixas chegaram avariadas' : 'opcional'}"></div>
@@ -1097,6 +1108,159 @@
       btn.disabled = false;
     }
   }
+
+  // ── Guardar: leva da doca para a posição final (recebimento por etapas) ──
+  function ehFrio(it) { return it.temperatura === 'REFRIGERADO' || it.temperatura === 'CONGELADO'; }
+  function minNaDoca(desde) { const t = Date.parse(String(desde || '').replace(' ', 'T')); return isNaN(t) ? 0 : Math.max(0, Math.round((Date.now() - t) / 60000)); }
+  function seloTemperatura(t) {
+    if (t === 'CONGELADO') return '<span class="badge badge-erro">congelado</span>';
+    if (t === 'REFRIGERADO') return '<span class="badge badge-atencao">refrigerado</span>';
+    if (t === 'AMBIENTE') return '<span class="badge badge-neutro">ambiente</span>';
+    return '<span class="badge badge-neutro">sem temperatura</span>';
+  }
+  const curto = (s) => esc(String(s || '').split(' ').slice(0, 3).join(' '));
+
+  TELAS.guardar = () => `
+    <button class="voltar" id="btn-voltar">‹ Voltar</button>
+    <h1>Guardar<small>o que está na doca esperando lugar · bipe uma caixa para abrir o item</small></h1>
+    <div class="campo"><div class="com-botao"><input type="text" id="gd-cx" class="mono" data-foco inputmode="none" placeholder="bipe uma caixa" autocomplete="off"><button type="button" id="btn-gd-cam">📷</button></div></div>
+    <div id="gd-aviso"></div>
+    <div class="lista" id="gd-lista"><div class="vazio">Carregando…</div></div>`;
+  TELAS_POS.guardar = async (ctx) => {
+    document.getElementById('btn-voltar').addEventListener('click', voltar);
+    const lista = document.getElementById('gd-lista');
+    const ler = async (codigo) => {
+      const serial = serialDe(codigo);
+      if (!serial) return toast('Isso não é etiqueta de caixa.', true);
+      try {
+        const c = (await api('/caixas/' + encodeURIComponent(serial))).caixa;
+        if (c.posicao !== S.doca) return toast('Caixa ' + serial + ' não está na doca' + (c.posicao ? ' (está em ' + c.posicao + ')' : '') + '.', true);
+        const it = (ctx.fila || []).find((x) => x.produto_id === c.produto_id && x.lote === (c.lote || '') && x.validade === (c.validade || ''));
+        if (!it) return toast('Caixa ' + serial + ' não está na fila Guardar.', true);
+        abrirGuardaItem(it);
+      } catch (e) { toast(e.status === 404 ? 'Caixa ' + serial + ' não existe.' : e.message, true); }
+    };
+    ctx.ler = ler;
+    const cx = document.getElementById('gd-cx');
+    cx.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); const v = cx.value.trim(); cx.value = ''; if (v) ler(v); } });
+    document.getElementById('btn-gd-cam').addEventListener('click', () => abrirCamera(ler));
+    try {
+      ctx.fila = (await api('/guarda/fila')).itens || [];
+    } catch (e) { lista.innerHTML = '<div class="vazio">' + esc(e.status ? e.message : 'Sem rede: não consegui carregar a fila Guardar.') + '</div>'; return; }
+    if (S.tela !== 'guardar') return;
+    S.guardaPendente = ctx.fila.length;
+    const frio = ctx.fila.filter(ehFrio);
+    if (frio.length) document.getElementById('gd-aviso').innerHTML = '<div class="cartao atencao"><div class="sub">Na doca: <b>' + frio.length + ' refrigerado(s)/congelado(s)</b> há ' + Math.max.apply(null, frio.map((i) => minNaDoca(i.desde))) + ' min. Guarde primeiro.</div></div>';
+    lista.innerHTML = ctx.fila.map((it, i) => `
+      <div class="item" data-gi="${i}">
+        <div class="cod">${esc(it.descricao)}</div>
+        <div class="qtd">${num(it.quantidade)}<small>${esc(it.unidade || 'UN')}</small></div>
+        <div class="meta">${seloTemperatura(it.temperatura)}<span>${minNaDoca(it.desde)} min na doca</span>${it.lote ? '<span>lote ' + esc(it.lote) + '</span>' : ''}${it.validade ? '<span>val. ' + dataBr(it.validade) + '</span>' : ''}</div>
+        <div class="meta">${(it.recebimentos || []).length ? '<span class="mono">' + esc(it.recebimentos.join(', ')) + '</span>' : ''}<span>${curto(it.embarcador)}</span>${it.caixas ? '<span>' + it.caixas + ' caixa(s)</span>' : ''}</div>
+        <div class="meta">${it.sugestao ? '<span class="mono">' + esc(it.sugestao.posicao) + '</span>' : '<span class="badge badge-neutro">sem sugestão</span>'}${it.pedidos_reservados ? '<span class="badge badge-atencao">reservado para ' + it.pedidos_reservados + ' pedido(s)</span>' : ''}</div>
+      </div>`).join('') || '<div class="vazio">Nada na doca esperando lugar.</div>';
+    lista.querySelectorAll('[data-gi]').forEach((el) => el.addEventListener('click', () => abrirGuardaItem(ctx.fila[Number(el.dataset.gi)])));
+  };
+  async function abrirGuardaItem(it) {
+    const q = '?produto_id=' + it.produto_id + '&lote=' + encodeURIComponent(it.lote || '') + '&validade=' + encodeURIComponent(it.validade || '');
+    let d = null;
+    try { d = await api('/guarda/item' + q); }
+    catch (e) { if (e.status) return toast(e.message, true); /* sem rede: segue com os dados da fila, sem sugestão */ }
+    ir('guardarItem', { item: d ? d.item : it, sugestoes: d ? d.sugestoes : null, caixas: d ? d.caixas : null, destino: '', modo: null, bipadas: [], conflito: null, corpo: null, uuid: uuid() });
+  }
+  async function enviarGuarda(ctx, corpo) {
+    if (!S.operador) { toast('Identifique o operador primeiro', true); return ir('operador'); }
+    try {
+      const r = await api('/guarda/guardar', { method: 'POST', body: corpo });
+      if ((r.nao_movidas || []).length) toast('Não saíram da doca: ' + r.nao_movidas.map((n) => n.serial + ' (' + n.motivo + ')').join('; '), true);
+      else toast('Guardado em ' + rotuloPos(r.destino));
+      voltar();
+    } catch (e) {
+      if (e.status === 409 && e.dados && e.dados.sem_operador) { S.operador = null; toast(e.message, true); return ir('operador'); }
+      if (e.status === 409 && e.dados && e.dados.temperatura) { ctx.conflito = e.dados.temperatura; ctx.corpo = corpo; return render(); }
+      if (!e.status) { enfileirar(Object.assign({ tipo: 'guardar' }, corpo)); toast('Sem rede: guarda guardada na fila e será enviada quando a internet voltar.'); return voltar(); }
+      toast(e.message, true);
+      render();
+    }
+  }
+  TELAS.guardarItem = (ctx) => {
+    const it = ctx.item; const sug = ctx.sugestoes; const nCx = ctx.caixas ? ctx.caixas.length : (it.caixas || 0);
+    const un = esc(it.unidade || 'UN'); const c = ctx.conflito;
+    let acao = '';
+    if (c) {
+      acao = `<div class="cartao erro"><div class="rotulo">Posição não combina</div>
+        <div class="sub">${esc(ctx.destino)} é <b>${esc(String(c.area || '').toLowerCase())}</b> e o produto é <b>${esc(String(c.produto || '').toLowerCase())}</b>.${c.sugerida ? ' Sugerida: <b class="mono">' + esc(c.sugerida) + '</b>.' : ''}</div>
+        <div class="botoes linha"><button class="botao neutro" type="button" id="gi-outra">Bipar outra</button><button class="botao" type="button" id="gi-mesmo">Guardar aqui mesmo</button></div></div>`;
+    } else if (ctx.destino && !nCx) {
+      acao = `<div class="campo"><label>Quantidade (${un})</label><input type="number" id="gi-qtd" inputmode="decimal" min="0" step="any" value="${it.quantidade}"></div>
+        <div class="botoes"><button class="botao" type="button" id="gi-ok">Confirmar guarda</button></div>`;
+    } else if (ctx.destino && ctx.modo !== 'parcial') {
+      acao = `<div class="botoes"><button class="botao" type="button" id="gi-todas">Guardar as ${nCx} caixas aqui</button><button class="botao neutro" type="button" id="gi-parte">Guardar só uma parte aqui</button></div>`;
+    } else if (ctx.destino) {
+      const k = ctx.bipadas.length;
+      acao = `<div class="campo"><label>Bipe das caixas</label><div class="com-botao"><input type="text" id="gi-cx" class="mono" data-foco inputmode="none" placeholder="bipe cada caixa" autocomplete="off"><button type="button" id="btn-gi-camcx">📷</button></div></div>
+        <div class="total"><b>${k} / ${nCx}</b><span>caixas bipadas</span></div>
+        ${ctx.bipadas.map((s) => '<div class="cartao ok" style="margin:0"><div class="sub mono">' + esc(s) + '</div></div>').join('')}
+        <div class="botoes"><button class="botao" type="button" id="gi-ok" ${k ? '' : 'disabled'}>Guardar as ${k} bipadas aqui</button></div>
+        <div class="ajuda">As outras ${nCx - k} caixas continuam na doca e na fila Guardar.</div>`;
+    }
+    return `
+    <button class="voltar" id="btn-voltar">‹ Voltar</button>
+    <h1>${esc(it.descricao)}<small>${num(it.quantidade)} ${un} · ${seloTemperatura(it.temperatura)}${it.lote ? ' · lote ' + esc(it.lote) : ''}${it.validade ? ' · val. ' + dataBr(it.validade) : ''}</small></h1>
+    ${it.pedidos_reservados ? '<div class="cartao atencao"><div class="sub">reservado para ' + it.pedidos_reservados + ' pedido(s): a reserva acompanha o que for guardado.</div></div>' : ''}
+    ${sug && sug.length ? `<div class="cartao ok"><div class="rotulo">Sugestão</div><div class="mono" style="font-size:34px;font-weight:800">${esc(sug[0].posicao)}</div><div class="sub">${esc(sug[0].motivo)}</div>
+        ${sug.slice(1, 3).map((s) => '<div class="sub" style="margin-top:6px">Ou <b class="mono">' + esc(s.posicao) + '</b> · ' + esc(s.motivo) + '</div>').join('')}</div>`
+      : `<div class="cartao"><div class="sub">${sug === null ? 'sem rede: bipe a posição' : '<span class="badge badge-neutro">sem sugestão</span> bipe a posição onde vai guardar'}</div></div>`}
+    ${ctx.destino
+      ? `<div class="cartao"><div class="rotulo">Posição</div><div class="valor mono">${esc(ctx.destino)}</div><button class="voltar" type="button" id="gi-trocar">Trocar posição</button></div>`
+      : `<div class="campo"><label>Posição</label><div class="com-botao"><input type="text" id="gi-pos" class="mono" data-foco inputmode="none" placeholder="bipe a etiqueta da posição" autocomplete="off" style="text-transform:uppercase"><button type="button" id="btn-gi-cam">📷</button></div></div>`}
+    ${acao}`;
+  };
+  TELAS_POS.guardarItem = (ctx) => {
+    const g = (id) => document.getElementById(id);
+    const it = ctx.item; const nCx = ctx.caixas ? ctx.caixas.length : (it.caixas || 0);
+    g('btn-voltar').addEventListener('click', voltar);
+    const base = () => ({ produto_id: it.produto_id, lote: it.lote || '', validade: it.validade || '', destino: ctx.destino, uuid: ctx.uuid });
+    const lerPos = (cod) => {
+      const p = String(cod || '').trim().toUpperCase().replace(/^POS:/, '');
+      if (!p) return;
+      if (p === S.doca || p === 'DOCA') return toast('Bipe a posição de destino, não a doca.', true);
+      ctx.destino = p; ctx.conflito = null; ctx.corpo = null; ctx.modo = null; ctx.bipadas = []; ctx.uuid = uuid();
+      render();
+    };
+    const biparParte = (cod) => {
+      const s = serialDe(cod);
+      if (!s) return toast('Isso não é etiqueta de caixa.', true);
+      if (ctx.caixas && !ctx.caixas.some((x) => x.serial === s)) return toast('Caixa ' + s + ' não está na doca para este item.', true);
+      if (ctx.bipadas.indexOf(s) >= 0) return toast('Caixa ' + s + ' já bipada.');
+      ctx.bipadas.push(s); render();
+    };
+    ctx.ler = (cod) => {
+      if (serialDe(cod)) return ctx.destino && ctx.modo === 'parcial' ? biparParte(cod) : toast('Leia a posição primeiro.', true);
+      lerPos(cod);
+    };
+    const campo = (id, fn) => { const el = g(id); if (el) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); const v = el.value.trim(); el.value = ''; if (v) fn(v); } }); };
+    campo('gi-pos', lerPos); campo('gi-cx', biparParte);
+    const cam = g('btn-gi-cam'); if (cam) cam.addEventListener('click', () => abrirCamera(lerPos));
+    const camCx = g('btn-gi-camcx'); if (camCx) camCx.addEventListener('click', () => abrirCamera(biparParte));
+    const trocar = g('gi-trocar'); if (trocar) trocar.addEventListener('click', () => { ctx.destino = ''; ctx.conflito = null; ctx.corpo = null; ctx.modo = null; ctx.bipadas = []; render(); });
+    const outra = g('gi-outra'); if (outra) outra.addEventListener('click', () => { ctx.destino = ''; ctx.conflito = null; ctx.corpo = null; render(); });
+    const mesmo = g('gi-mesmo'); if (mesmo) mesmo.addEventListener('click', () => { mesmo.disabled = true; const corpo = Object.assign({}, ctx.corpo, { confirmar_temperatura: true }); ctx.conflito = null; enviarGuarda(ctx, corpo); });
+    const parte = g('gi-parte'); if (parte) parte.addEventListener('click', () => { ctx.modo = 'parcial'; render(); });
+    const todas = g('gi-todas'); if (todas) todas.addEventListener('click', () => { todas.disabled = true; enviarGuarda(ctx, base()); });
+    const ok = g('gi-ok');
+    if (ok) ok.addEventListener('click', () => {
+      if (!nCx) {
+        const qtd = Number(String(g('gi-qtd').value).replace(',', '.'));
+        if (!(qtd > 0)) return toast('Informe a quantidade.', true);
+        if (qtd > Number(it.quantidade) + 0.0005) return toast('Só há ' + num(it.quantidade) + ' na doca.', true);
+        ok.disabled = true;
+        return enviarGuarda(ctx, qtd < Number(it.quantidade) - 0.0005 ? Object.assign(base(), { quantidade: qtd }) : base());
+      }
+      ok.disabled = true;
+      enviarGuarda(ctx, Object.assign(base(), { seriais: ctx.bipadas.slice() }));
+    });
+  };
 
   // Inventário por caixa (produto do piloto): posição → etiquetas → bipe de cada caixa.
   // O estado fica fora de S.ctx pra sobreviver à troca de aba no meio da contagem.
@@ -1771,6 +1935,7 @@
     codigo = String(codigo || '').trim(); if (!codigo) return;
     if (S.tela === 'inventario' && BOOT.caixas_ativo) return invLer(codigo);
     if ((S.tela === 'onda' || S.tela === 'conferencia') && S.ctx.bipar) return S.ctx.bipar(codigo);
+    if ((S.tela === 'guardar' || S.tela === 'guardarItem') && S.ctx.ler) return S.ctx.ler(codigo);
     const serialDigitado = serialDe(codigo);
     if (serialDigitado) {
       if (S.tela === 'recebimento') {
@@ -1910,13 +2075,27 @@
         }
         S.fila = S.fila.filter((x) => x !== a); salvarFila();
       }
-      const movs = S.fila.filter((x) => x.tipo !== 'ativar_caixa');
+      // guardas da doca: uma por vez; o mesmo uuid do aparelho torna o reenvio seguro
+      for (const gd of S.fila.filter((x) => x.tipo === 'guardar')) {
+        const corpo = Object.assign({}, gd); delete corpo.tipo;
+        try {
+          await api('/guarda/guardar', { method: 'POST', body: corpo });
+          enviados++;
+        } catch (e) {
+          if (e.status === 409 && e.dados && e.dados.sem_operador) { toast('Identifique o operador pra enviar a fila', true); ir('operador'); return; }
+          if (!e.status || e.status >= 500) { toast('Fila: ' + (e.status ? e.message : 'sem rede'), true); return; }
+          recusados++; ultimoErro = e.message;
+          filaRecusados('Guardar ' + gd.destino, e.message);
+        }
+        S.fila = S.fila.filter((x) => x !== gd); salvarFila();
+      }
+      const movs = S.fila.filter((x) => x.tipo !== 'ativar_caixa' && x.tipo !== 'guardar');
       if (movs.length) {
         const r = await api('/movimentos/lote', { method: 'POST', body: { movimentos: movs } });
         const falhas = r.resultados.filter((x) => !x.ok);
         enviados += movs.length - falhas.length;
         // recusa do servidor sai da fila; só rede fora mantém o item
-        S.fila = S.fila.filter((m) => m.tipo === 'ativar_caixa' ? true : !r.resultados.some((x) => x.uuid === m.uuid));
+        S.fila = S.fila.filter((m) => m.tipo === 'ativar_caixa' || m.tipo === 'guardar' ? true : !r.resultados.some((x) => x.uuid === m.uuid));
         falhas.forEach((f) => { const m = movs.find((x) => x.uuid === f.uuid) || {}; recusados++; ultimoErro = f.erro; filaRecusados((m.tipo || 'Movimento') + ' ' + (m.destino || m.origem || ''), f.erro); });
         salvarFila();
       }
