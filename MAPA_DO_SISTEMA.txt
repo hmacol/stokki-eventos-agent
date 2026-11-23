@@ -151,6 +151,25 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              wms traz etapas_ativo, doca, guarda_pendente. Telas no wms.html:
                                              Conferir Recebimento sem posição, TELAS.guardar e TELAS.guardarItem.
                                              Testes: test_wms_doca.py, test_wms_doca_tela.py.
+ Receber / checklist da chegada (etapas) ... painel_agentes/wms_chegada.py (tabelas wms_chegadas, wms_chegada_recebimentos,
+                                             wms_chegada_fotos, wms_chegada_temperaturas, wms_chegada_envios; faixas de
+                                             temperatura: padrão no código, config wms.temperatura_faixas),
+                                             wms_chegada_avisos.py (e-mails do escritório e do cliente; seção de config
+                                             notificacao_chegada_recebimento; tipo chegada_recebimento na tela Notificações),
+                                             wms_chegada_pdf.py (Relatório de Recebimento). Fotos em dados/chegadas/
+                                             (CHG-<id>-<8 hex>.jpg). Só embarcador com etapas; sem checklist LIBERADO a
+                                             conferência é barrada no servidor (ativar caixa, enderecar item e encerrar
+                                             -> 400). Rotas (galpão): POST /api/wms/chegadas, GET /api/wms/chegadas/<id>,
+                                             POST .../fotos, DELETE .../fotos/<foto_id>, POST .../concluir,
+                                             GET /wms/chegadas/<id>/foto/<foto_id>, GET /wms/chegadas/<id>/relatorio.pdf.
+                                             Escritório (total/operador): POST .../pedir-liberacao (devolve o link),
+                                             .../liberar-por-fora, .../nao-receber. GET /api/wms/recebimentos traz
+                                             usa_etapas, chegada_estado, chegada_id. Página pública /liberacao/<token>
+                                             do portal: portal_cliente/link_liberacao.py + templates liberacao.html e
+                                             liberacao_erro.html. E-mails pendentes saem no timer wms-recebimentos
+                                             (sincronizar_recebimentos_wms.py -> wms_chegada_avisos.enviar_pendentes).
+                                             Testes: test_wms_chegada.py, test_wms_chegada_avisos.py, test_wms_chegada_pdf.py,
+                                             test_wms_chegada_tela.py, portal_cliente/test_link_liberacao.py.
  Separação/conferência/volumes do galpão .. painel_agentes/wms_separacao.py (17/11: ondas por embarcador, bipe de
                                              caixa, distribuição, conferência cega, falta, volumes; tabelas
                                              wms_ondas, wms_onda_pedidos, wms_separacao_itens, wms_conferencias,

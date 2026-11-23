@@ -119,6 +119,9 @@ import wms_lotes_planilha
 import wms_etiqueta_volume
 import wms_fila_impressao
 import wms_faltas_recebimento
+import wms_chegada
+import wms_chegada_avisos
+import wms_chegada_pdf
 import acesso_telas
 import avisos_pendencias
 from galpao3d import banco as galpao3d_banco, estado as galpao3d_estado
@@ -6132,6 +6135,46 @@ def _wms_ids_etapas() -> set:
     return wms_pilotos.ids_com_etapas(_carregar_config() or {})
 
 
+_MSG_TRAVA_CHEGADA = "Faça o Receber (checklist da chegada) antes de conferir."
+
+
+def _wms_recebimento_usa_etapas(conn, recebimento_id) -> bool:
+    """Algum item do recebimento e de produto de embarcador com etapas. Sem etapas nunca ha trava."""
+    etapas = _wms_ids_etapas()
+    if not etapas:
+        return False
+    for r in conn.execute(
+            "SELECT DISTINCT p.embarcador_id FROM wms_recebimento_itens i "
+            "JOIN wms_produtos p ON p.id = i.produto_id WHERE i.recebimento_id = ?", (int(recebimento_id),)):
+        if r["embarcador_id"] in etapas:
+            return True
+    return False
+
+
+def _wms_trava_chegada(conn, recebimento_id):
+    """None se pode conferir; senao a resposta 400 (a conferencia exige o Receber liberado)."""
+    wms_chegada.garantir_tabelas(conn)
+    if _wms_recebimento_usa_etapas(conn, recebimento_id) and not wms_chegada.pode_conferir(conn, recebimento_id):
+        return _wms_json_erro(_MSG_TRAVA_CHEGADA)
+    return None
+
+
+def _wms_marcar_chegada(conn, rec: dict) -> None:
+    """Acrescenta usa_etapas, chegada_estado e chegada_id ao recebimento (dict)."""
+    rec["usa_etapas"] = _wms_recebimento_usa_etapas(conn, rec["id"])
+    rec["chegada_estado"] = wms_chegada.estado_do_recebimento(conn, rec["id"])
+    viva = conn.execute(
+        "SELECT c.id FROM wms_chegada_recebimentos cr JOIN wms_chegadas c ON c.id = cr.chegada_id "
+        "WHERE cr.recebimento_id = ? AND c.estado != 'NAO_RECEBIDA' ORDER BY c.id DESC LIMIT 1",
+        (rec["id"],)).fetchone()
+    rec["chegada_id"] = viva["id"] if viva else None
+
+
+def _wms_pasta_chegadas() -> Path:
+    """Fotos das chegadas ficam ao lado do banco do WMS (dados/chegadas/)."""
+    return Path(wms.DB_PATH).parent / "chegadas"
+
+
 def _wms_guarda_pendente(conn) -> int:
     """Itens na fila Guardar. Sem a área DOCA, zero (nunca cria a área)."""
     if not wms.obter_area(conn, wms_doca.DOCA_AREA):
@@ -6648,7 +6691,13 @@ def api_wms_recebimentos():
         sql += " ORDER BY r.id DESC LIMIT ?"
         params.append(request.args.get("limite", 50, type=int))
         rows = conn.execute(sql, params).fetchall()
-        return jsonify({"recebimentos": [dict(r) for r in rows]})
+        wms_chegada.garantir_tabelas(conn)
+        recebimentos = []
+        for r in rows:
+            d = dict(r)
+            _wms_marcar_chegada(conn, d)
+            recebimentos.append(d)
+        return jsonify({"recebimentos": recebimentos})
     finally:
         conn.close()
 
@@ -6670,7 +6719,213 @@ def api_wms_recebimento(recebimento_id):
             produto = wms.obter_produto(conn, int(it.get("produto_id") or 0))
             it["usa_caixas"] = bool(produto and wms_caixas.produto_usa_caixas(produto, com_caixas))
             it["usa_etapas"] = bool(produto and produto.get("embarcador_id") in com_etapas)
-        return jsonify({"recebimento": dict(rec), "itens": itens})
+        wms_chegada.garantir_tabelas(conn)
+        recebimento = dict(rec)
+        _wms_marcar_chegada(conn, recebimento)
+        return jsonify({"recebimento": recebimento, "itens": itens})
+    finally:
+        conn.close()
+
+
+# ── Receber: checklist da chegada do caminhao ──────────────────────────────
+# Regras em wms_chegada.py; avisos em wms_chegada_avisos.py. Aqui so HTTP.
+
+def _wms_chegada_conn():
+    conn = wms_caixas.conectar()
+    wms_chegada.garantir_tabelas(conn)
+    return conn
+
+
+def _wms_chegada_json(conn, chegada_id) -> dict:
+    c = wms_chegada.detalhe(conn, chegada_id)
+    ids = [r["id"] for r in c["recebimentos"]]
+    config = _carregar_config() or {}
+    classes = wms_chegada.classes_da_carga(conn, ids)
+    return {"chegada": c, "classes": classes,
+            "faixas": {k: list(wms_chegada.faixa_da_carga(conn, ids, k, config)) for k in classes}}
+
+
+def _wms_usuario() -> str:
+    return session.get("usuario") or g.nivel_acesso
+
+
+def _wms_tentar(log_nome: str, fn, *args):
+    """Aviso por e-mail nunca desfaz a decisao ja gravada: falha vira log e None."""
+    try:
+        return fn(*args)
+    except Exception:
+        logging.getLogger(__name__).exception("chegada: aviso %s falhou", log_nome)
+        return None
+
+
+@app.route("/api/wms/chegadas", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_chegada_abrir():
+    op = _wms_exige_operador()
+    body = request.get_json(force=True) or {}
+    conn = _wms_chegada_conn()
+    try:
+        c = wms_chegada.abrir(conn, uuid=str(body.get("uuid") or ""),
+                              recebimento_ids=body.get("recebimento_ids") or [], operador=op)
+        return jsonify(_wms_chegada_json(conn, c["id"]))
+    except (wms_chegada.ErroChegada, ValueError, TypeError) as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/chegadas/<int:chegada_id>")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_chegada(chegada_id):
+    conn = _wms_chegada_conn()
+    try:
+        return jsonify(_wms_chegada_json(conn, chegada_id))
+    except wms_chegada.ErroChegada as e:
+        return _wms_json_erro(e, 404)
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/chegadas/<int:chegada_id>/fotos", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_chegada_foto_enviar(chegada_id):
+    _wms_exige_operador()
+    arquivo = request.files.get("foto")
+    conteudo = arquivo.read(wms_chegada.MAX_FOTO_BYTES + 1) if arquivo else b""
+    conn = _wms_chegada_conn()
+    try:
+        foto = wms_chegada.salvar_foto(conn, chegada_id, request.form.get("tipo", ""), conteudo,
+                                       pasta=_wms_pasta_chegadas())
+        return jsonify({"foto": foto})
+    except wms_chegada.ErroChegada as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/chegadas/<int:chegada_id>/fotos/<int:foto_id>", methods=["DELETE"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_chegada_foto_remover(chegada_id, foto_id):
+    _wms_exige_operador()
+    conn = _wms_chegada_conn()
+    try:
+        wms_chegada.remover_foto(conn, chegada_id, foto_id, pasta=_wms_pasta_chegadas())
+        return jsonify({"ok": True})
+    except wms_chegada.ErroChegada as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
+@app.route("/wms/chegadas/<int:chegada_id>/foto/<int:foto_id>")
+@requer_auth(niveis=_NIVEIS_WMS_CONSULTA)
+def wms_chegada_foto(chegada_id, foto_id):
+    conn = _wms_chegada_conn()
+    try:
+        caminho = wms_chegada.caminho_foto(conn, chegada_id, foto_id, pasta=_wms_pasta_chegadas())
+    except wms_chegada.ErroChegada:
+        abort(404)
+    finally:
+        conn.close()
+    if not caminho.is_file():
+        abort(404)
+    return send_file(caminho, mimetype="image/jpeg", max_age=3600)
+
+
+@app.route("/api/wms/chegadas/<int:chegada_id>/concluir", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_chegada_concluir(chegada_id):
+    op = _wms_exige_operador()
+    dados = request.get_json(force=True) or {}
+    config = _carregar_config() or {}
+    conn = _wms_chegada_conn()
+    try:
+        r = wms_chegada.concluir(conn, chegada_id, dados, config, op)
+        # a conclusao ja esta gravada: falha de e-mail so vira log
+        escritorio = {}
+        if r["fora_da_faixa"]:
+            escritorio["TEMPERATURA"] = _wms_tentar("TEMPERATURA", wms_chegada_avisos.avisar_escritorio,
+                                                    conn, chegada_id, config, "TEMPERATURA")
+        if r["avaria"]:
+            escritorio["AVARIA"] = _wms_tentar("AVARIA", wms_chegada_avisos.avisar_escritorio,
+                                               conn, chegada_id, config, "AVARIA")
+        cliente = None
+        if r["chegada"]["estado"] == "LIBERADA":
+            cliente = _wms_tentar("cliente", wms_chegada_avisos.avisar_cliente_chegada, conn, chegada_id, config)
+        return jsonify({**r, "avisos": {"escritorio": escritorio or None, "cliente": cliente}})
+    except wms_chegada.ErroChegada as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
+@app.route("/wms/chegadas/<int:chegada_id>/relatorio.pdf")
+@requer_auth(niveis=_NIVEIS_WMS_CONSULTA)
+def wms_chegada_relatorio(chegada_id):
+    conn = _wms_chegada_conn()
+    try:
+        pdf = wms_chegada_pdf.do_banco(conn, chegada_id, pasta=_wms_pasta_chegadas())
+    except wms_chegada.ErroChegada:
+        abort(404)
+    finally:
+        conn.close()
+    return Response(pdf, mimetype="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="chegada-{chegada_id}.pdf"'})
+
+
+@app.route("/api/wms/chegadas/<int:chegada_id>/pedir-liberacao", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_wms_chegada_pedir_liberacao(chegada_id):
+    from portal_cliente import chamados, link_liberacao
+    config = _carregar_config() or {}
+    segredo = (config.get("portal_cliente") or {}).get("secret_key")
+    conn = _wms_chegada_conn()
+    try:
+        if wms_chegada.detalhe(conn, chegada_id)["estado"] != "AGUARDANDO_ESCRITORIO":
+            raise wms_chegada.ErroChegada(wms_chegada._MSG_NAO_AGUARDA)
+        if not segredo:
+            return _wms_json_erro("Portal sem secret_key: não dá pra gerar o link de liberação.")
+        link = link_liberacao.url(chegada_id, segredo, chamados.url_base(config))
+        envio = wms_chegada_avisos.pedir_liberacao(conn, chegada_id, config, link)
+        return jsonify({"link": link, "envio": envio})
+    except wms_chegada.ErroChegada as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/chegadas/<int:chegada_id>/liberar-por-fora", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_wms_chegada_liberar_por_fora(chegada_id):
+    body = request.get_json(force=True) or {}
+    config = _carregar_config() or {}
+    conn = _wms_chegada_conn()
+    try:
+        c = wms_chegada.liberar_por_fora(conn, chegada_id, body.get("texto"), _wms_usuario())
+        _wms_tentar("cliente", wms_chegada_avisos.avisar_cliente_chegada, conn, chegada_id, config)
+        return jsonify({"chegada": c})
+    except wms_chegada.ErroChegada as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/chegadas/<int:chegada_id>/nao-receber", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_wms_chegada_nao_receber(chegada_id):
+    body = request.get_json(force=True) or {}
+    conn = _wms_chegada_conn()
+    try:
+        return jsonify({"chegada": wms_chegada.nao_receber(conn, chegada_id, body.get("motivo"), _wms_usuario())})
+    except wms_chegada.ErroChegada as e:
+        return _wms_json_erro(e)
     finally:
         conn.close()
 
@@ -6726,7 +6981,10 @@ def api_wms_caixa_ativar(serial):
         rec_id, item_id = body.get("recebimento_id"), body.get("item_id")
         posicao = body.get("posicao", "")
         if rec_id not in (None, ""):
-            caixa = wms_caixas.obter_caixa(conn, serial)
+            barrado = _wms_trava_chegada(conn, int(rec_id))
+            if barrado:
+                return barrado
+            caixa =wms_caixas.obter_caixa(conn, serial)
             produto = wms.obter_produto(conn, caixa["produto_id"]) if caixa else None
             if produto and produto.get("embarcador_id") in _wms_ids_etapas():
                 posicao = wms_doca.garantir_doca(conn)   # etapas: a conferência lança na doca
@@ -6860,6 +7118,9 @@ def api_wms_recebimento_enderecar_item(recebimento_id, item_id):
     body = request.get_json(force=True) or {}
     conn = wms_pedidos.conectar()
     try:
+        barrado = _wms_trava_chegada(conn, recebimento_id)
+        if barrado:
+            return barrado
         r = wms_pedidos.contabilizar_enderecamento(
             conn, recebimento_id, item_id, body.get("qtd") or 0, body.get("uuid") or "")
     except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
@@ -6915,6 +7176,9 @@ def api_wms_recebimento_encerrar_divergencia(recebimento_id):
     body = request.get_json(force=True) or {}
     conn = wms_pedidos.conectar()
     try:
+        barrado = _wms_trava_chegada(conn, recebimento_id)
+        if barrado:
+            return barrado
         ja_encerrado = False
         try:
             r = wms_pedidos.encerrar_recebimento(

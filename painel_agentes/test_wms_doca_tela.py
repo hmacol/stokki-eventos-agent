@@ -20,6 +20,7 @@ for _p in (_AQUI.parent, _AQUI):
 import acesso_telas  # noqa: E402
 import wms  # noqa: E402
 import wms_caixas  # noqa: E402
+import wms_chegada  # noqa: E402
 import wms_doca  # noqa: E402
 from test_fila_etiquetas_tela import painel_agentes  # noqa: E402
 
@@ -184,6 +185,12 @@ class Rotas(Base):
         self.operador()
         self.etapas()
         self.recebimento_de_uma_caixa()
+        conn = wms_caixas.conectar()   # a conferencia com etapas exige o Receber liberado
+        wms_chegada.garantir_tabelas(conn)
+        conn.execute("INSERT INTO wms_chegadas (id, uuid, estado) VALUES (1, 'u-doca', 'LIBERADA')")
+        conn.execute("INSERT INTO wms_chegada_recebimentos (chegada_id, recebimento_id) VALUES (1, 1)")
+        conn.commit()
+        conn.close()
         s = self.nova_caixa()
         r = self.enviar(f"/api/wms/caixas/{s}/ativar", {"posicao": POS, "recebimento_id": 1, "item_id": 10})
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
