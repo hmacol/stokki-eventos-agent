@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS wms_chegadas (
     motorista             TEXT NOT NULL DEFAULT '',
     placa                 TEXT NOT NULL DEFAULT '',
     transportadora        TEXT NOT NULL DEFAULT '',
-    volumes               INTEGER,
+    volumes               TEXT NOT NULL DEFAULT '',
     lacre                 TEXT NOT NULL DEFAULT '',
     integra               INTEGER,
     observacao            TEXT NOT NULL DEFAULT '',
@@ -355,7 +355,7 @@ def concluir(conn, chegada_id: int, dados: dict, config: dict, operador: dict) -
         fora = not medida_dentro(conn, recebimento_ids, classe, medida, config)
         linhas.append((chegada_id, classe, medida, minimo, maximo, 1 if fora else 0))
     estado = "AGUARDANDO_ESCRITORIO" if any(l[5] for l in linhas) else "LIBERADA"
-    volumes = str(dados.get("volumes") or "").strip()
+    volumes = str(dados.get("volumes") or "").strip()[:60]
 
     conn.execute("BEGIN IMMEDIATE")
     try:
@@ -371,7 +371,7 @@ def concluir(conn, chegada_id: int, dados: dict, config: dict, operador: dict) -
             "lacre = ?, integra = ?, observacao = ?, concluida_em = ?, operador_id = ?, operador_nome = ? "
             "WHERE id = ?",
             (estado, motorista, placa, str(dados.get("transportadora") or "").strip(),
-             int(volumes) if volumes.isdigit() else None, str(dados.get("lacre") or "").strip(),
+             volumes, str(dados.get("lacre") or "").strip(),
              1 if integra else 0, observacao, _agora(), (operador or {}).get("id"),
              (operador or {}).get("nome") or "", chegada_id))
         conn.commit()

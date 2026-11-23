@@ -259,8 +259,6 @@ class TestChegada(_Base):
             wms_chegada.caminho_foto(self.conn, b["id"], f["id"], pasta=self.pasta)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestConcluir(_Base):
@@ -360,7 +358,7 @@ class TestConcluir(_Base):
         self.assertIs(r["fora_da_faixa"], False)
         self.assertIs(r["avaria"], False)
         self.assertEqual((c["motorista"], c["placa"], c["transportadora"], c["volumes"], c["lacre"]),
-                         ("Jose Silva", "ABC1D23", "TransX", 12, "L99"))
+                         ("Jose Silva", "ABC1D23", "TransX", "12", "L99"))
         self.assertEqual((c["operador_id"], c["operador_nome"]), (7, "Ana"))
         self.assertTrue(c["concluida_em"])
         self.assertEqual([(t["classe"], t["medida_c"], t["faixa_min"], t["faixa_max"], t["fora"])
@@ -409,6 +407,15 @@ class TestConcluir(_Base):
         r = self._concluir(cid, self._dados(temperaturas={}))
         self.assertEqual(r["chegada"]["estado"], "LIBERADA")
         self.assertEqual(r["chegada"]["temperaturas"], [])
+
+    def test_volumes_e_texto_livre(self):
+        for i, (digitado, esperado) in enumerate((("4 pallets", "4 pallets"), ("12", "12"), (None, ""),
+                                                  ("x" * 80, "x" * 60))):
+            rec = self._receb(40 + i, [3])
+            self.conn.commit()
+            cid = self._chegada(ids=[rec], uuid="v%d" % i, fotos=("CAMINHAO_ABERTO", "CARGA"))
+            c = self._concluir(cid, self._dados(volumes=digitado, temperaturas={}))["chegada"]
+            self.assertEqual(c["volumes"], esperado)
 
     def test_carga_mista_pede_as_duas(self):
         cid = self._chegada()
@@ -524,3 +531,7 @@ class TestConcluir(_Base):
         self._erro(msg, wms_chegada.liberar_por_fora, cid, "Joao autorizou por telefone", "Ana")
         self._erro(msg, wms_chegada.nao_receber, cid, "Carga quente demais", "Ana")
         self.assertEqual(wms_chegada.detalhe(self.conn, cid)["estado"], "LIBERADA")
+
+
+if __name__ == "__main__":
+    unittest.main()
