@@ -164,6 +164,10 @@
   .modal-caixa .resumo .falha { color: var(--erro); }
   .modal-caixa ul.lista-canhotos { list-style: none; padding: 0; margin: 0; }
   .modal-caixa ul.lista-canhotos li { padding: 4px 0; font-size: 13px; }
+  /* documentos por e-mail: um por linha, com a caixa colada ao nome (no celular a linha quebrava entre a caixa e o nome) */
+  .modal-caixa label.doc-linha { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+  .modal-caixa label.doc-linha input { flex: none; margin: 0; }
+  .modal-caixa label.doc-linha a { overflow-wrap: anywhere; }
   .modal-caixa .acoes { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
   .modal-caixa .acoes button[hidden] { display: none; }
   .modal-caixa .acoes .botao.primario:hover { background: var(--acento); opacity: .88; }
@@ -1180,9 +1184,9 @@
       const forte = document.createElement("strong");
       forte.textContent = `${p.codigo}: `;
       item.appendChild(forte);
-      p.arquivos.forEach((a, i) => {
-        if (i) item.appendChild(document.createTextNode(" · "));
+      p.arquivos.forEach((a) => {
         const rotulo = document.createElement("label");
+        rotulo.className = "doc-linha";
         const marca = document.createElement("input");
         marca.type = "checkbox";
         marca.className = "docs-sel";
