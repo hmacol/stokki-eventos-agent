@@ -274,7 +274,7 @@
     produtosInfo: BOOT.produtos, podeAdministrar: BOOT.pode_administrar,
     tela: 'inicio', pilha: [], ctx: {}, aguardando: null, fila: carregarFila(), recusados: carregarRecusados(),
   };
-  const TIPOS_AREA = { CONTAINER: 'Container', CAM_CONGELADA: 'Câmara congelada', CAM_REFRIGERADA: 'Câmara refrigerada' };
+  const TIPOS_AREA = { CONTAINER: 'Container', SECA: 'Seca', CAM_CONGELADA: 'Câmara congelada', CAM_REFRIGERADA: 'Câmara refrigerada' };
   const TIPOS_MOV = { ENTRADA: 'Entrada', SAIDA: 'Saída', TRANSFERENCIA: 'Transferência', AJUSTE: 'Ajuste', INVENTARIO: 'Inventário' };
 
   // ── util ──────────────────────────────────────────────────────────────
@@ -693,7 +693,7 @@
     <details class="cartao" ${ctx.abrirNova ? 'open' : ''}><summary style="font-weight:700;cursor:pointer">Nova área ou gerar posições em lote</summary>
       <div class="duas">
         <div class="campo"><label>Código da área</label><input type="text" id="a-codigo" placeholder="C7, CG1, CR2" style="text-transform:uppercase" value="${esc(ctx.area || '')}"></div>
-        <div class="campo"><label>Tipo</label><select id="a-tipo"><option value="CONTAINER">Container</option><option value="CAM_CONGELADA">Câmara congelada</option><option value="CAM_REFRIGERADA">Câmara refrigerada</option></select></div>
+        <div class="campo"><label>Tipo</label><select id="a-tipo"><option value="CONTAINER">Container</option><option value="SECA">Seca</option><option value="CAM_CONGELADA">Câmara congelada</option><option value="CAM_REFRIGERADA">Câmara refrigerada</option></select></div>
       </div>
       <div class="grade-num">
         <div class="campo"><label>Estantes</label><input type="number" id="a-estantes" inputmode="numeric" min="0" value="5"></div>
