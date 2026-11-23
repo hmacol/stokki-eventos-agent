@@ -522,5 +522,36 @@ class TestVariosPilotos(unittest.TestCase):
         self.assertIsInstance(codigo, RuntimeError)
         self.assertEqual(len(chamadas), 2)
 
+
+class TestEmailsDaChegada(unittest.TestCase):
+    """O fim da rodada manda os e-mails pendentes da chegada; falha de e-mail nunca derruba a sincronizacao."""
+
+    def _main(self, argv, **pendentes_kw):
+        with mock.patch("stokki.sessao_uso.adquirir", return_value=True), \
+             mock.patch("stokki.sessao_uso.liberar"), \
+             mock.patch("sincronizar_recebimentos_wms._carregar_config", return_value={"wms": {"pilotos": [
+                 {"id": 48, "nome": "Maria Dolores"}]}}), \
+             mock.patch("sincronizar_recebimentos_wms.wms_pedidos.conectar", return_value=mock.Mock()), \
+             mock.patch("sincronizar_recebimentos_wms.StokkiSession"), \
+             mock.patch("sincronizar_recebimentos_wms.rodar", return_value={"lidos": 0}), \
+             mock.patch("sincronizar_recebimentos_wms.wms_chegada_avisos.enviar_pendentes", **pendentes_kw) as env:
+            codigo = mod.main(argv)
+        return codigo, env
+
+    def test_rodada_normal_manda_os_pendentes(self):
+        codigo, env = self._main([], return_value={"chegou": 0, "escritorio": 0})
+        self.assertEqual(codigo, 0)
+        env.assert_called_once()
+
+    def test_excecao_nos_emails_nao_derruba_a_rodada(self):
+        codigo, env = self._main([], side_effect=RuntimeError("smtp caiu"))
+        self.assertEqual(codigo, 0)
+        env.assert_called_once()
+
+    def test_modo_teste_nao_manda_email(self):
+        codigo, env = self._main(["--modo-teste"])
+        self.assertEqual(codigo, 0)
+        env.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()

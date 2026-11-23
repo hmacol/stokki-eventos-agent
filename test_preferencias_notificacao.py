@@ -52,7 +52,7 @@ class TestDefaults(_ComBanco):
         prefs = pn.ler(self.conn, CNPJ_A)
         self.assertEqual(prefs["tipos"], {
             "nfs_em_rota": True, "entrega_concluida": True, "faltas_recebimento": True,
-            "resumo_diario": False,
+            "chegada_recebimento": True, "resumo_diario": False,
             "insucesso": True, "pedidos_em_espera": True, "agendamento": True, "chamado_sem_resposta": True,
         })
 

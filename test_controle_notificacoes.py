@@ -150,8 +150,8 @@ class TestTipos(unittest.TestCase):
             "nfs_em_rota", "entrega_concluida", "resumo_diario", "insucesso", "pedidos_em_espera",
             "agendamento", "fora_dia_fixo", "faltas_recebimento", "whatsapp_sem_resposta", "chamados",
             "area_nao_atendida", "transportadoras", "convite_embarcador", "redespacho",
-            "consulta_transportadora", "rota_cancelada", "ciencia_dedicado"})
-        self.assertEqual(len(cn.TIPOS), 17)
+            "consulta_transportadora", "rota_cancelada", "ciencia_dedicado", "chegada_recebimento"})
+        self.assertEqual(len(cn.TIPOS), 18)
         for t in ("fora_dia_fixo", "convite_embarcador", "consulta_transportadora", "ciencia_dedicado"):
             self.assertEqual(cn.TIPOS[t]["canais"], ("email", "whatsapp"))
         self.assertEqual(cn.TIPOS["redespacho"]["canais"], ("email",))

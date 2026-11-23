@@ -67,6 +67,8 @@ TIPOS = {
                       "canais": ("email", "whatsapp"), "quando": "dentro das sequências"},
     "faltas_recebimento": {"rotulo": "Faltas no recebimento", "destino": "embarcador",
                            "canais": ("email",), "quando": "ao encerrar o recebimento"},
+    "chegada_recebimento": {"rotulo": "Chegada do caminhão no galpão", "destino": "embarcador",
+                            "canais": ("email",), "quando": "ao concluir o checklist da chegada"},
     "whatsapp_sem_resposta": {"rotulo": "Chamado sem resposta (WhatsApp)", "destino": "embarcador",
                               "canais": ("whatsapp",), "quando": "timer de 2 min"},
     "chamados": {"rotulo": "Chamados", "destino": "embarcador",

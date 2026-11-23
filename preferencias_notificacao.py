@@ -55,6 +55,13 @@ TIPOS = {
                      "o que chegou e o que faltou em cada item.",
         "default": True,
     },
+    "chegada_recebimento": {
+        "grupo": "acompanhamento",
+        "rotulo": "Chegada do caminhão no galpão",
+        "descricao": "Quando o caminhão com a sua carga chega ao galpão e é conferido, "
+                     "o relatório de recebimento com fotos e temperatura.",
+        "default": True,
+    },
     "resumo_diario": {
         "grupo": "acompanhamento",
         "rotulo": "Resumo diário",
@@ -93,7 +100,7 @@ TIPOS = {
     },
 }
 TIPOS_OPT_IN_SE_NOTIFICAR_EMAIL_0 = ("nfs_em_rota", "entrega_concluida", "resumo_diario",
-                                     "faltas_recebimento")
+                                     "faltas_recebimento", "chegada_recebimento")
 CHAVES = ("sender_id", "stkkc_id")
 MAX_EMAILS = 5
 

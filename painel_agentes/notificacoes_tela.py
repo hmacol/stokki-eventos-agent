@@ -269,6 +269,7 @@ SEM_DISPARO = {
     "redespacho": "Sai dentro do pipeline (redespacho_confirmacao).",
     "fora_dia_fixo": "Sai dentro das sequências da roteirização (notificar_fora_dia_fixo).",
     "faltas_recebimento": "Sai ao encerrar o recebimento no WMS (wms_faltas_recebimento).",
+    "chegada_recebimento": "Sai ao concluir o checklist da chegada e na varredura da sincronização de recebimentos (wms_chegada_avisos).",
     "chamados": "Sai na hora do evento, dentro dos chamados do portal.",
     "area_nao_atendida": "Sai na hora do envio do XML, dentro do portal do cliente.",
     "convite_embarcador": "Sai dentro do timer de convites das 07h10 (embarcadores_stokki).",

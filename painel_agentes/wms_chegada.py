@@ -440,3 +440,13 @@ def nao_receber(conn, chegada_id: int, motivo: str, usuario: str) -> dict:
         raise ErroChegada("Informe o motivo.")
     return _decidir(conn, chegada_id, {"estado": "NAO_RECEBIDA", "nao_recebida_motivo": motivo,
                                        "nao_recebida_por": usuario})
+
+
+def ja_enviado(conn, chave: str) -> bool:
+    """Idempotencia dos e-mails da chegada (wms_chegada_avisos e portal do cliente)."""
+    return conn.execute("SELECT 1 FROM wms_chegada_envios WHERE chave = ?", (chave,)).fetchone() is not None
+
+
+def registrar_envio(conn, chave: str) -> None:
+    conn.execute("INSERT OR REPLACE INTO wms_chegada_envios (chave, enviado_em) VALUES (?, ?)", (chave, _agora()))
+    conn.commit()

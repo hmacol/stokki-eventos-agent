@@ -57,6 +57,7 @@ if hasattr(sys.stdout, "reconfigure"):
 import yaml
 
 import wms_pedidos
+import wms_chegada_avisos
 import wms_pilotos
 from stokki import recebimentos as stokki_recebimentos
 from stokki import sessao_uso
@@ -253,6 +254,13 @@ def main(argv=None) -> int:
                     erro = erro or e
                     continue
                 logger.info("Piloto %s (#stkkc-%s): %s (%.0fs)", piloto_nome, piloto_id, res, time.time() - t0)
+            # E-mails da chegada do caminhao (sua carga chegou, avisos ao escritorio): e-mail nunca
+            # derruba a sincronizacao.
+            if not args.modo_teste:
+                try:
+                    logger.info("E-mails da chegada: %s", wms_chegada_avisos.enviar_pendentes(conn, config))
+                except Exception:  # noqa: BLE001
+                    logger.exception("E-mails da chegada falharam (a sincronizacao segue)")
         finally:
             conn.close()
     finally:
