@@ -140,10 +140,11 @@ def listar_rotas_motorista(conn: sqlite3.Connection, agent_id: int | None, de: d
 
 def _estado_carregamento(conn: sqlite3.Connection, rota: sqlite3.Row) -> dict:
     """Checklist de carregamento: {exigido, feito}. Import lazy (carregamento importa operacao).
-    A config vem do mesmo config global da ponte (`ponte_vuupt.definir_config`)."""
+    A config vem do mesmo config global da ponte (`ponte_vuupt.definir_config`).
+    `feito` so com checklist do motorista ATUAL da rota: trocou o motorista, o novo faz o dele."""
     from nucleo import carregamento
     return {"exigido": carregamento.exigido(rota, carregamento.config_carregamento()),
-            "feito": carregamento.carregamento_da_rota(conn, rota["id"]) is not None}
+            "feito": carregamento.carregamento_do_motorista_atual(conn, rota) is not None}
 
 
 def montar_rota(conn: sqlite3.Connection, rota: sqlite3.Row) -> dict:
