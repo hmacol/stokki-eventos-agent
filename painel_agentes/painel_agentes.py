@@ -6818,6 +6818,22 @@ def api_wms_chegada(chegada_id):
         conn.close()
 
 
+@app.route("/api/wms/chegadas/<int:chegada_id>", methods=["DELETE"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_chegada_descartar(chegada_id):
+    """Descarta o checklist em rascunho (o recebimento volta para o Receber)."""
+    op = _wms_exige_operador()
+    conn = _wms_chegada_conn()
+    try:
+        wms_chegada.descartar(conn, chegada_id, op, pasta=_wms_pasta_chegadas())
+        return jsonify({"ok": True})
+    except wms_chegada.ErroChegada as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
 @app.route("/api/wms/chegadas/<int:chegada_id>/fotos", methods=["POST"])
 @requer_auth(niveis=_NIVEIS_WMS)
 @exige_mesma_origem

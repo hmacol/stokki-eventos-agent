@@ -308,6 +308,37 @@ class Fluxo(Base):
         self.assertEqual(self.cliente.get(f"/wms/chegadas/{b}/foto/{fid}").status_code, 404)
 
 
+class Descartar(Base):
+    def apagar(self, cid):
+        return self.cliente.delete(f"/api/wms/chegadas/{cid}", headers=ORIGEM)
+
+    def test_descartar_rascunho(self):
+        rid = self.receb()
+        cid = self.abrir(rid)
+        self.assertEqual(self.foto(cid, "CARGA").status_code, 200)
+        r = self.apagar(cid)
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertEqual(self.cliente.get(f"/api/wms/chegadas/{cid}").status_code, 404)
+        self.assertEqual(list(self.pasta.glob("*")), [])
+        rec = self.cliente.get(f"/api/wms/recebimentos/{rid}").get_json()["recebimento"]
+        self.assertEqual((rec["chegada_estado"], rec["chegada_id"]), ("SEM_CHEGADA", None))
+
+    def test_concluida_nao_descarta(self):
+        cid, _ = self.chegada_pronta(self.receb())
+        r = self.apagar(cid)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.get_json()["erro"], "Esse checklist já foi concluído: não dá para descartar.")
+        self.assertEqual(self.cliente.get(f"/api/wms/chegadas/{cid}").status_code, 200)
+
+    def test_exige_operador_e_mesma_origem(self):
+        cid = self.abrir(self.receb())
+        self.assertEqual(self.cliente.delete(f"/api/wms/chegadas/{cid}").status_code, 403)
+        with self.cliente.session_transaction() as s:
+            s.pop("wms_operador")
+        self.assertEqual(self.apagar(cid).status_code, 409)
+        self.assertEqual(self.cliente.get(f"/api/wms/chegadas/{cid}").status_code, 200)
+
+
 class Escritorio(Base):
     def test_galpao_nao_decide(self):
         rid, cid = self.aguardando()
@@ -363,6 +394,14 @@ class TelasNoHtml(Base):
                   "Pedir liberação ao cliente", 'capture="environment"', "Relatório de Recebimento (PDF)",
                   "outro embarcador: faça um Receber separado", "Sem rede: a foto não foi enviada. Tente de novo."):
             self.assertIn(m, h)
+
+    def test_descartar_nas_duas_telas(self):
+        self.entrar("galpao")
+        h = self.cliente.get("/wms").get_data(as_text=True)
+        self.assertIn("Descartar este checklist", h)
+        self.assertEqual(h.count("${BOTAO_DESCARTAR}"), 2)
+        self.assertEqual(h.count("ligarDescartar(ctx);"), 2)
+        self.assertIn("api('/chegadas/' + id, { method: 'DELETE' })", h)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ Etapa Receber do recebimento por etapas: checklist da chegada do caminhao
 este modulo, entao NAO importar wms nem outro modulo do painel.
 """
 import io
+import logging
 import sqlite3
 import uuid as _uuid
 from datetime import datetime
@@ -286,6 +287,32 @@ def remover_foto(conn, chegada_id: int, foto_id: int, pasta: Path | None = None)
     conn.execute("DELETE FROM wms_chegada_fotos WHERE id = ?", (foto_id,))
     conn.commit()
     (Path(pasta) if pasta else PASTA_FOTOS).joinpath(foto["arquivo"]).unlink(missing_ok=True)
+
+
+def descartar(conn, chegada_id: int, operador: dict, pasta: Path | None = None) -> None:
+    """Descarta um checklist em RASCUNHO (aberto por engano ou para o recebimento errado):
+    apaga fotos (linhas e arquivos), temperaturas, o vinculo com os recebimentos e a chegada.
+    Os recebimentos voltam para a lista do Receber. Concluido nao se descarta."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        atual = conn.execute("SELECT estado FROM wms_chegadas WHERE id = ?", (chegada_id,)).fetchone()
+        if not atual:
+            raise ErroChegada("Chegada não encontrada.")
+        if atual["estado"] != "RASCUNHO":
+            raise ErroChegada("Esse checklist já foi concluído: não dá para descartar.")
+        arquivos = [r["arquivo"] for r in conn.execute(
+            "SELECT arquivo FROM wms_chegada_fotos WHERE chegada_id = ?", (chegada_id,))]
+        for tabela in ("wms_chegada_fotos", "wms_chegada_temperaturas", "wms_chegada_recebimentos"):
+            conn.execute(f"DELETE FROM {tabela} WHERE chegada_id = ?", (chegada_id,))
+        conn.execute("DELETE FROM wms_chegadas WHERE id = ?", (chegada_id,))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    pasta = Path(pasta) if pasta else PASTA_FOTOS
+    for nome in arquivos:   # so depois do commit: falha no banco nunca apaga foto de chegada viva
+        pasta.joinpath(nome).unlink(missing_ok=True)
+    logging.getLogger(__name__).info("chegada %s descartada por %s", chegada_id, (operador or {}).get("nome") or "?")
 
 
 def caminho_foto(conn, chegada_id: int, foto_id: int, pasta: Path | None = None) -> Path:

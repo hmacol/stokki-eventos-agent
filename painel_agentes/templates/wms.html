@@ -965,6 +965,25 @@
     ids.forEach((campo) => { const e = document.getElementById('ch-' + campo); if (e) { ctx.dados[campo] = e.value; e.addEventListener('input', () => { ctx.dados[campo] = e.value; guardarRascunho(ctx.chegada.id, { [campo]: e.value }); }); } });
   }
 
+  // Descartar o checklist em rascunho (aberto por engano): confirma na própria tela
+  const BOTAO_DESCARTAR = '<div class="botoes"><button class="botao neutro" type="button" id="btn-descartar">Descartar este checklist</button></div><div id="area-descartar"></div>';
+  function ligarDescartar(ctx) {
+    const id = ctx.chegada.id; const area = document.getElementById('area-descartar');
+    document.getElementById('btn-descartar').addEventListener('click', () => {
+      area.innerHTML = `<div class="cartao erro"><div class="sub">Descartar este checklist? As fotos e os dados somem e a carga volta para a lista do Receber.</div>
+        <div class="botoes linha"><button class="botao neutro" type="button" id="desc-cancelar">Cancelar</button><button class="botao perigo" type="button" id="desc-ok">Descartar</button></div></div>`;
+      document.getElementById('desc-cancelar').addEventListener('click', () => { area.innerHTML = ''; });
+      document.getElementById('desc-ok').addEventListener('click', async (ev) => {
+        ev.target.disabled = true;
+        try {
+          await api('/chegadas/' + id, { method: 'DELETE' });
+          apagarRascunho(id); toast('Checklist descartado.');
+          S.pilha = [{ tela: 'inicio', ctx: {} }]; ir('receberChegada', {}, false);
+        } catch (e) { toast(e.status ? e.message : 'Sem rede: não consegui descartar. Tente de novo.', true); ev.target.disabled = false; }
+      });
+    });
+  }
+
   TELAS.chegada1 = (ctx) => {
     const c = ctx.chegada; const rasc = Object.assign({ motorista: '', placa: '', transportadora: '' }, lerRascunho(c.id), ctx.dados || {});
     return `
@@ -976,12 +995,13 @@
       <div class="campo"><label>Transportadora (opcional)</label><input type="text" id="ch-transportadora" value="${esc(rasc.transportadora)}" autocomplete="off"></div>
     </div>
     ${blocoFoto('CAMINHAO_ABERTO')}${blocoFoto('PLACA', '(opcional)')}${blocoFoto('NOTA_FISCAL', '(opcional)')}
-    <div class="botoes"><button class="botao" type="button" id="btn-continuar">Continuar</button></div>`;
+    <div class="botoes"><button class="botao" type="button" id="btn-continuar">Continuar</button></div>${BOTAO_DESCARTAR}`;
   };
   TELAS_POS.chegada1 = (ctx) => {
     document.getElementById('btn-voltar').addEventListener('click', voltar);
     ['CAMINHAO_ABERTO', 'PLACA', 'NOTA_FISCAL'].forEach((t) => pintarFotos(ctx, t));
     ligarRascunho(ctx, ['motorista', 'placa', 'transportadora']);
+    ligarDescartar(ctx);
     document.getElementById('btn-continuar').addEventListener('click', () => {
       if (document.getElementById('ch-motorista').value.trim().length < 3) return toast('Informe o nome do motorista.', true);
       if (!document.getElementById('ch-placa').value.trim()) return toast('Informe a placa.', true);
@@ -1006,7 +1026,7 @@
     ${blocoFoto('CARGA')}
     <div id="bloco-avaria" hidden>${blocoFoto('AVARIA')}</div>
     <div class="campo"><label>Observação</label><textarea id="ch-observacao" rows="3">${esc(rasc.observacao)}</textarea><div class="ajuda" id="ajuda-obs"></div></div>
-    <div class="botoes"><button class="botao" type="button" id="btn-concluir">Concluir recebimento</button></div>`;
+    <div class="botoes"><button class="botao" type="button" id="btn-concluir">Concluir recebimento</button></div>${BOTAO_DESCARTAR}`;
   };
   TELAS_POS.chegada2 = (ctx) => {
     const id = ctx.chegada.id;
@@ -1021,6 +1041,7 @@
     app.querySelectorAll('[data-integra]').forEach((b) => b.addEventListener('click', () => { integra = b.dataset.integra === '1'; guardarRascunho(id, { integra }); pintarIntegra(); }));
     ['CARGA', 'AVARIA'].concat(ctx.classes.length ? ['TERMOMETRO'] : []).forEach((t) => pintarFotos(ctx, t));
     ligarRascunho(ctx, ['volumes', 'lacre', 'observacao']);
+    ligarDescartar(ctx);
     ctx.classes.forEach((k) => document.getElementById('ch-temp-' + k).addEventListener('input', (e) => { temps[k] = e.target.value; guardarRascunho(id, { temps }); }));
     pintarIntegra();
     const btn = document.getElementById('btn-concluir');

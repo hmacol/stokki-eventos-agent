@@ -295,6 +295,40 @@ class TestChegada(_Base):
         with self.assertRaises(wms_chegada.ErroChegada):
             wms_chegada.caminho_foto(self.conn, b["id"], f["id"], pasta=self.pasta)
 
+    def test_descartar_rascunho_apaga_tudo(self):
+        outra = self._abrir("u2", ids=[self.rec_seco])
+        f_outra = wms_chegada.salvar_foto(self.conn, outra["id"], "CARGA", self._png((100, 100)), pasta=self.pasta)
+        c = self._abrir("u1")
+        for tipo in ("CAMINHAO_ABERTO", "CARGA"):
+            wms_chegada.salvar_foto(self.conn, c["id"], tipo, self._png((100, 100)), pasta=self.pasta)
+        self.conn.execute("INSERT INTO wms_chegada_temperaturas (chegada_id, classe, medida_c, faixa_min, faixa_max) "
+                          "VALUES (?, 'REFRIGERADO', 5, 0, 7)", (c["id"],))
+        self.conn.commit()
+        self.assertIsNone(wms_chegada.descartar(self.conn, c["id"], self.OP, pasta=self.pasta))
+        with self.assertRaises(wms_chegada.ErroChegada):
+            wms_chegada.detalhe(self.conn, c["id"])
+        for tabela, n in (("wms_chegadas", 1), ("wms_chegada_fotos", 1), ("wms_chegada_recebimentos", 1),
+                          ("wms_chegada_temperaturas", 0)):
+            self.assertEqual(self.n(tabela), n, tabela)
+        self.assertEqual([p.name for p in self.pasta.glob("*")], [f_outra["arquivo"]])   # sem orfaos
+        self.assertEqual(wms_chegada.estado_do_recebimento(self.conn, self.rec), "SEM_CHEGADA")
+        self.assertEqual(self._abrir("u3")["estado"], "RASCUNHO")   # o recebimento volta para o Receber
+        self.assertFalse(self.conn.in_transaction)
+
+    def test_descartar_so_rascunho(self):
+        for estado, rec in (("LIBERADA", self.rec), ("AGUARDANDO_ESCRITORIO", self.rec_seco)):
+            c = self._abrir(uuid="u-" + estado, ids=[rec])
+            wms_chegada.salvar_foto(self.conn, c["id"], "CARGA", self._png((100, 100)), pasta=self.pasta)
+            self.conn.execute("UPDATE wms_chegadas SET estado = ? WHERE id = ?", (estado, c["id"]))
+            self.conn.commit()
+            with self.assertRaises(wms_chegada.ErroChegada) as cm:
+                wms_chegada.descartar(self.conn, c["id"], self.OP, pasta=self.pasta)
+            self.assertEqual(str(cm.exception), "Esse checklist já foi concluído: não dá para descartar.")
+        self.assertEqual((self.n("wms_chegadas"), self.n("wms_chegada_fotos")), (2, 2))
+        self.assertEqual(len(list(self.pasta.glob("*"))), 2)
+        with self.assertRaises(wms_chegada.ErroChegada):
+            wms_chegada.descartar(self.conn, 9999, self.OP, pasta=self.pasta)
+
 
 
 
