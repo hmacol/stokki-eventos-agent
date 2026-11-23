@@ -35,6 +35,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 import yaml  # noqa: E402
+from playwright.sync_api import Error as PlaywrightError  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 from stokki import avancar_cross as ac  # noqa: E402
@@ -126,19 +127,24 @@ def _fase3_conferir(page, pid: int) -> None:
     clicou_fechar = False
     for _ in range(16):
         page.wait_for_timeout(2500)
-        pular = page.locator(".modal.show button:visible", has_text="Pular Impressão")
-        if page.locator(".modal.show").count():
-            if pular.count():
-                pular.first.click()
-                continue
-            raise Parar("modal inesperado na conferencia: " + page.locator(".modal.show").first.inner_text()[:200].replace("\n", " "))
-        if not clicou_fechar:
-            fb = page.get_by_role("button", name=re.compile("Fechar e Imprimir")).first
-            if fb.count() and fb.is_enabled():
-                fb.click()
-                clicou_fechar = True
-                continue
-        break
+        try:
+            pular = page.locator(".modal.show button:visible", has_text="Pular Impressão")
+            if page.locator(".modal.show").count():
+                if pular.count():
+                    pular.first.click()
+                    continue
+                raise Parar("modal inesperado na conferencia: " + page.locator(".modal.show").first.inner_text()[:200].replace("\n", " "))
+            if not clicou_fechar:
+                fb = page.get_by_role("button", name=re.compile("Fechar e Imprimir")).first
+                if fb.count() and fb.is_enabled():
+                    fb.click()
+                    clicou_fechar = True
+                    continue
+            break
+        except PlaywrightError as e:
+            if "navigation" in str(e) or "context was destroyed" in str(e):
+                break   # a estacao recarregou: a conferencia fechou (quem confirma e a situacao final)
+            raise
     # Em alguns pedidos o "Pular Impressao" ja fecha a conferencia (sem "Fechar e Imprimir"):
     # quem decide se deu certo e a situacao final conferida por executar().
 
