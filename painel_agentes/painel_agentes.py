@@ -7227,7 +7227,9 @@ def api_wms_recebimento_encerrar_divergencia(recebimento_id):
     conn = wms_pedidos.conectar()
     try:
         barrado = _wms_trava_chegada(conn, recebimento_id)
-        if barrado:
+        # Carga que nao veio ou foi recusada (sem chegada viva): o escritorio encerra; o galpao nao.
+        if barrado and not (g.nivel_acesso in _NIVEIS_WMS_ADMIN
+                            and wms_chegada.estado_do_recebimento(conn, recebimento_id) == "SEM_CHEGADA"):
             return barrado
         ja_encerrado = False
         try:

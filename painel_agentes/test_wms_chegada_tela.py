@@ -134,6 +134,7 @@ class Trava(Base):
 
     def test_conferir_sem_chegada_e_barrado(self):
         rid = self.receb()
+        self.entrar("galpao")   # o escritorio pode encerrar o que nao veio (test_escritorio_encerra_...)
         for r in self.tres_rotas(rid):
             self.assertEqual(r.status_code, 400)
             self.assertEqual(r.get_json()["erro"], self.MSG)
@@ -146,6 +147,45 @@ class Trava(Base):
             self.assertNotEqual((r.get_json() or {}).get("erro"), self.MSG)
         r = self.enviar(f"/api/wms/recebimentos/{rid}/itens/1/enderecar", {"qtd": 1, "uuid": "x1"})
         self.assertEqual(r.status_code, 200, r.get_json())
+
+    def encerrar(self, rid):
+        with mock.patch.object(painel_agentes.wms_faltas_recebimento, "notificar_faltas",
+                               return_value={"enviado": False, "motivo": "teste"}) as m:
+            r = self.enviar(f"/api/wms/recebimentos/{rid}/encerrar", {"observacao": "não veio"})
+        return r, m
+
+    def test_escritorio_encerra_recebimento_sem_chegada(self):
+        rid = self.receb()
+        conn = wms_caixas.conectar()
+        conn.execute("UPDATE wms_recebimento_itens SET qtd_un = 6 WHERE recebimento_id = ?", (rid,))
+        conn.commit()
+        conn.close()
+        r, m = self.encerrar(rid)
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertEqual(r.get_json()["recebimento"]["estado"], "DIVERGENCIA")
+        m.assert_called_once()   # a falta segue o relatorio de sempre
+
+    def test_escritorio_encerra_depois_de_nao_recebida(self):
+        rid, cid = self.aguardando()
+        self.assertEqual(self.enviar(f"/api/wms/chegadas/{cid}/nao-receber", {"motivo": "carga quente"}).status_code, 200)
+        r, _ = self.encerrar(rid)
+        self.assertEqual(r.status_code, 200, r.get_json())
+
+    def test_escritorio_nao_encerra_com_chegada_viva(self):
+        rid, cid = self.aguardando()
+        r, m = self.encerrar(rid)
+        self.assertEqual((r.status_code, r.get_json()["erro"]), (400, self.MSG))
+        m.assert_not_called()
+        self.enviar(f"/api/wms/chegadas/{cid}/nao-receber", {"motivo": "carga quente"})
+        self.abrir(rid, uuid="u-rascunho")   # rascunho tambem e chegada viva
+        self.assertEqual(self.encerrar(rid)[0].status_code, 400)
+
+    def test_galpao_nao_encerra_sem_chegada(self):
+        rid = self.receb()
+        self.entrar("galpao")
+        r, m = self.encerrar(rid)
+        self.assertEqual((r.status_code, r.get_json()["erro"]), (400, self.MSG))
+        m.assert_not_called()
 
     def test_embarcador_sem_etapas_nao_tem_trava(self):
         self.cfg["wms"]["pilotos"] = []
