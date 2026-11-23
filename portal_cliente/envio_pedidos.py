@@ -324,11 +324,23 @@ def _endereco_linha(el) -> str:
     return endereco
 
 
+def _recusar_dtd(conteudo: bytes, nome_arquivo: str = "") -> None:
+    """NF-e não usa DTD nem entidades. Recusar antes de parsear fecha XXE e expansão de entidades
+    (billion laughs) sem depender do expat do sistema nem de defusedxml. UTF-16 (que esconderia o
+    <!DOCTYPE> do teste em bytes) também não é NF-e: recusa."""
+    if conteudo[:2] in (b"\xff\xfe", b"\xfe\xff") or b"\x00" in conteudo[:64]:
+        raise ErroEnvio(f"{nome_arquivo or 'Arquivo'}: codificação de XML não aceita (a NF-e vem em UTF-8).")
+    baixo = conteudo.lower()
+    if b"<!doctype" in baixo or b"<!entity" in baixo:
+        raise ErroEnvio(f"{nome_arquivo or 'Arquivo'}: XML com DTD/entidades não é aceito (a NF-e não usa).")
+
+
 def ler_nfe(conteudo: bytes, nome_arquivo: str = "", permitir_entrada: bool = False) -> dict:
     """Extrai os campos que a máscara mostra/valida. Levanta ErroEnvio com
     mensagem pro usuário quando o arquivo não é uma NF-e (validação 1 do
     item 9). `permitir_entrada` (aba Pedidos de Entrada, 25/09): aceita
     tpNF=0 também -- Envios continua recusando."""
+    _recusar_dtd(conteudo, nome_arquivo)
     try:
         root = ET.fromstring(conteudo)
     except ET.ParseError as e:

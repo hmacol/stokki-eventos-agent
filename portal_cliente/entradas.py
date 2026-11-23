@@ -46,6 +46,8 @@ import envio_pedidos as ep  # noqa: E402
 logger = logging.getLogger(__name__)
 
 DIAS_LISTAGEM = 30
+MAX_ARQUIVOS_UPLOAD = 200                  # arquivos (já abertos os ZIPs) por análise; o confirmar também aceita 200
+MAX_BYTES_UPLOAD = 100 * 1024 * 1024       # soma dos arquivos de uma análise
 ORIGEM_XML = ep.ORIGEM_XML
 ORIGEM_PLANILHA = ep.ORIGEM_PLANILHA
 
@@ -772,7 +774,11 @@ def cancelar_entrada(conn: sqlite3.Connection, entrada: dict, por: str, cliente:
                      (agora, entrada["wms_recebimento_id"]))
     conn.commit()
     chamado_id = None
-    if entrada.get("stokki_status") == STOKKI_CRIADO:
+    # O #PE pode existir na Stokki mesmo sem status CRIADO: resultado indeterminado volta pra NA_FILA/ERRO
+    # com tentativas > 0, e um crash depois do store também (revisão de segurança 23/11, B2).
+    pe_pode_existir = (entrada.get("stokki_status") == STOKKI_CRIADO or int(entrada.get("stokki_tentativas") or 0) > 0
+                       or bool(entrada.get("stokki_id") or entrada.get("stokki_codigo")))
+    if pe_pode_existir:
         chamado_id = _abrir_chamado_cancelamento(entrada, cliente, por, motivo)
         if chamado_id:
             conn.execute("UPDATE portal_entradas SET chamado_id = ? WHERE id = ?", (chamado_id, entrada["id"]))

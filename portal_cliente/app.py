@@ -1775,12 +1775,22 @@ def api_entradas_analisar():
     try:
         _exige_entradas_ativas(conn)
         cnpj = _empresa_envio()["cnpj"]
+        # Abre tudo primeiro e confere o teto ANTES de guardar qualquer temporário (revisão 23/11, B4):
+        # sem isso um ZIP cheio de XMLs enche _temporarios (limpeza só a cada ciclo do worker).
+        expandidos, total_arquivos, total_bytes = [], 0, 0
         for f in arquivos:
             try:
                 partes = envios.expandir_upload(f.filename or "", f.read())
             except envios.ErroEnvio as e:
                 rejeitados.append({"arquivo": f.filename or "arquivo", "erro": str(e)})
                 continue
+            total_arquivos += len(partes)
+            total_bytes += sum(len(c) for _, c in partes)
+            if total_arquivos > entradas_mod.MAX_ARQUIVOS_UPLOAD or total_bytes > entradas_mod.MAX_BYTES_UPLOAD:
+                return jsonify({"erro": f"Muitos arquivos de uma vez (máximo {entradas_mod.MAX_ARQUIVOS_UPLOAD} arquivos "
+                                        f"e {entradas_mod.MAX_BYTES_UPLOAD // (1024 * 1024)} MB). Envie em partes."}), 400
+            expandidos.append(partes)
+        for partes in expandidos:
             for nome, conteudo in partes:
                 if envios.e_planilha(nome, conteudo):
                     try:

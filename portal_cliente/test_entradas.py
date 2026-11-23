@@ -72,6 +72,21 @@ class TestLerNfeEntrada(unittest.TestCase):
             entradas.ler_nfe_entrada(xml_remessa(emitente=CNPJ, chave=chave_alheia), "x.xml")
         self.assertIn("chave de acesso", str(c.exception))
 
+    def test_xml_com_dtd_ou_entidade_e_recusado(self):
+        # revisão de segurança 23/11 (B4): NF-e não usa DTD; recusa billion laughs e XXE antes de parsear
+        base = xml_remessa().decode("utf-8")
+        laughs = ('<?xml version="1.0"?><!DOCTYPE l [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;">]>'
+                  + base.split("?>", 1)[1].replace("<nNF>41221</nNF>", "<nNF>&b;</nNF>"))
+        xxe = ('<?xml version="1.0"?><!DOCTYPE x [<!ENTITY e SYSTEM "file:///etc/passwd">]>'
+               + base.split("?>", 1)[1].replace("<nNF>41221</nNF>", "<nNF>&e;</nNF>"))
+        for nome, conteudo in (("laughs", laughs), ("xxe", xxe), ("minusculo", laughs.replace("DOCTYPE", "doctype").replace("ENTITY", "entity"))):
+            with self.assertRaises(ep.ErroEnvio, msg=nome) as c:
+                entradas.ler_nfe_entrada(conteudo.encode("utf-8"), "x.xml")
+            self.assertIn("DTD", str(c.exception), nome)
+        utf16 = ('<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE l [<!ENTITY a "x">]><r/>').encode("utf-16")
+        with self.assertRaises(ep.ErroEnvio):
+            entradas.ler_nfe_entrada(utf16, "u16.xml")
+
     def test_chave_que_bate_com_o_emitente_passa(self):
         nfe = entradas.ler_nfe_entrada(xml_remessa(), "x.xml")
         self.assertEqual(nfe["chave_nfe"][6:20], CNPJ)
@@ -545,6 +560,34 @@ class TestCancelar(BasePortal):
         self.assertIn("NF 41221", chamado_falso.criar_chamado.call_args.kwargs["assunto"])
         self.assertEqual(entradas.buscar_entrada(self.conn, 1, CNPJ)["status"], "CANCELADO")
 
+    def test_cancelar_com_pe_possivelmente_criado_abre_chamado_mesmo_sem_status_criado(self):
+        # revisão de segurança 23/11 (B2): resultado indeterminado / crash depois do store deixa a
+        # entrada em NA_FILA ou ERRO com tentativas > 0, mas o #PE pode existir na Stokki.
+        for stokki_status, tentativas in (("NA_FILA", 1), ("ERRO", 3)):
+            self.conn.execute("DELETE FROM portal_entradas")
+            self.conn.execute("DELETE FROM portal_entrada_itens")
+            self.conn.commit()
+            _confirmar(self)
+            self.conn.execute("UPDATE portal_entradas SET stokki_status = ?, stokki_tentativas = ?, stokki_id = NULL, stokki_codigo = NULL",
+                              (stokki_status, tentativas))
+            self.conn.commit()
+            chamado_falso = mock.Mock()
+            chamado_falso.criar_chamado.return_value = {"id": 77}
+            chamado_falso.conectar.return_value = mock.MagicMock()
+            with mock.patch.object(entradas, "_chamados", return_value=chamado_falso):
+                e = self.conn.execute("SELECT id FROM portal_entradas").fetchone()[0]
+                r = entradas.cancelar_entrada(self.conn, entradas.buscar_entrada(self.conn, e, CNPJ), "cliente", self._cliente(), {})
+            self.assertEqual(r["chamado_id"], 77, stokki_status)
+            self.assertNotIn("não será criada", r["mensagem"], stokki_status)
+
+    def test_cancelar_na_fila_sem_tentativa_nao_abre_chamado(self):
+        _confirmar(self)   # nasce NA_FILA, tentativas 0: o worker nunca tocou
+        chamado_falso = mock.Mock()
+        with mock.patch.object(entradas, "_chamados", return_value=chamado_falso):
+            r = entradas.cancelar_entrada(self.conn, entradas.buscar_entrada(self.conn, 1, CNPJ), "cliente", self._cliente(), {})
+        chamado_falso.criar_chamado.assert_not_called()
+        self.assertIsNone(r["chamado_id"])
+
     def test_cancelar_recusa_se_mudou_de_estado_entre_ler_e_gravar(self):
         _confirmar(self)
         e = entradas.buscar_entrada(self.conn, 1, CNPJ)
@@ -842,8 +885,7 @@ class TestRotaAnalisar(BasePortal):
         from test_endereco_entrega_api import _importar_app
         cls.app_mod = _importar_app()
 
-    def test_conferencia_trava_so_a_nota_com_produto_fora(self):
-        import io
+    def _cliente_http(self):
         app = self.app_mod
         entradas.definir_entradas_ativo(self.conn, CNPJ, True)
         cliente = {"cnpj": CNPJ, "sender_id": 1, "nome": "CLIENTE TESTE", "cnpj_formatado": "12.345.678/0001-95",
@@ -863,6 +905,22 @@ class TestRotaAnalisar(BasePortal):
         with tc.session_transaction() as s:
             s["cnpj"] = CNPJ
             s["v"] = "x"
+        return tc
+
+    def test_upload_com_arquivos_demais_e_recusado_antes_de_guardar_qualquer_um(self):
+        # revisão de segurança 23/11 (B4): sem teto, um ZIP/upload cheio de XMLs enche _temporarios
+        import io
+        tc = self._cliente_http()
+        n = entradas.MAX_ARQUIVOS_UPLOAD + 1
+        arquivos = [(io.BytesIO(xml_remessa(nf=str(i))), f"n{i}.xml") for i in range(1, n + 1)]
+        r = tc.post("/api/entradas/analisar", data={"arquivos": arquivos}, content_type="multipart/form-data")
+        self.assertEqual(r.status_code, 400, r.get_data(as_text=True)[:200])
+        self.assertIn("arquivos", r.get_json()["erro"])
+        self.assertEqual(list(ep.PASTA_TEMP.glob("*")), [])
+
+    def test_conferencia_trava_so_a_nota_com_produto_fora(self):
+        import io
+        tc = self._cliente_http()
         boa = xml_remessa(nf="100", chave="35260912345678000195550010000001001000000011")
         ruim = xml_remessa(nf="101", chave="35260912345678000195550010000001011000000012",
                            itens=[("NUU001FD", "7891234567890", "MINI", 1, "UN", 1), ("X9", "", "FORA", 1, "UN", 1)])
