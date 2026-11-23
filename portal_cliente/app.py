@@ -180,7 +180,8 @@ def _carregar_cliente():
 
 
 _LIVRES_ANTES_DA_TROCA = {"trocar_pin", "sair", "static", "saude", "regioes", "regioes_logo", "aula", "aula_arquivo",
-                          "ciencia_pagina", "ciencia_ciente", "ciencia_reagendar"}  # link publico da ciencia do dedicado
+                          "ciencia_pagina", "ciencia_ciente", "ciencia_reagendar",  # link publico da ciencia do dedicado
+                          "liberacao_pagina", "liberacao_responder", "liberacao_foto"}  # link publico da liberacao de recebimento
 _LIVRES_ANTES_DO_CADASTRO = _LIVRES_ANTES_DA_TROCA | {"completar_cadastro"}
 
 
@@ -1823,6 +1824,10 @@ link_canhoto.registrar(app, config=_CONFIG, secret=_SECRET)
 # ── Link público da ciência do dedicado fora do dia fixo, 17/11 -- link_ciencia.py ──
 import link_ciencia
 link_ciencia.registrar(app, config=_CONFIG, secret=_SECRET)
+
+# ── Link público da liberação de recebimento fora da faixa -- link_liberacao.py ──
+import link_liberacao
+link_liberacao.registrar(app, config=_CONFIG, secret=_SECRET)
 
 
 @app.errorhandler(404)

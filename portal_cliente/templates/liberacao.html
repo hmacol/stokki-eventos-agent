@@ -1,0 +1,56 @@
+{% extends "base_acesso.html" %}
+{% block titulo %}Liberação de recebimento{% endblock %}
+{% block conteudo %}
+<style>
+  .caixa { max-width: 560px; }
+  .ok { background: #E7F7F1; color: #08734F; font-size: 13.5px; font-weight: 600; padding: 10px 12px; border-radius: 7px; margin-bottom: 16px; }
+  .dados { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0 0 16px; font-size: 13.5px; }
+  .dados dt { color: var(--texto-suave); }
+  .dados dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+  .fora { color: var(--erro); }
+  h2.secao { font-size: 14px; color: var(--primaria); margin: 20px 0 8px; }
+  .fotos { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin: 0 0 16px; }
+  .fotos a { display: block; text-decoration: none; color: var(--texto-suave); font-size: 12px; }
+  .fotos img { width: 100%; height: 100px; object-fit: cover; border-radius: 7px; border: 1px solid var(--borda); display: block; }
+  button.secundario { width: 100%; background: #fff; color: var(--erro); border: 2px solid var(--erro); padding: 12px; border-radius: 7px;
+                      font-size: 15px; font-weight: 700; cursor: pointer; font-family: inherit; margin-top: 10px; }
+  button.principal { padding: 14px; font-size: 15px; }
+</style>
+
+<h1>Recebimento fora da faixa de temperatura</h1>
+<p>A temperatura medida na chegada da carga <b>{{ codigos }}</b> ficou fora da faixa. Veja a medição e as fotos e
+diga se a Fresh Log pode receber a carga.</p>
+
+{% if erro %}<div class="erro" role="alert">{{ erro }}</div>{% endif %}
+
+<dl class="dados">
+  <dt>Carga</dt><dd>{{ codigos }}</dd>
+  <dt>Chegada</dt><dd>{{ chegada_em }}</dd>
+  {% for t in temperaturas %}
+  <dt>{{ t.classe_txt }}</dt>
+  <dd{% if t.fora %} class="fora"{% endif %}>medido {{ t.medida }} (faixa {{ t.faixa }}){% if t.fora %}: fora da faixa{% endif %}</dd>
+  {% endfor %}
+</dl>
+
+{% if fotos %}
+<h2 class="secao">Fotos</h2>
+<div class="fotos">
+  {% for f in fotos %}
+  <a href="{{ f.url }}" target="_blank" rel="noopener"><img src="{{ f.url }}" alt="{{ f.rotulo }}" loading="lazy">{{ f.rotulo }}</a>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if aguardando %}
+<form method="post" action="{{ url_for('liberacao_responder', token=token) }}">
+  <label for="nome">Seu nome</label>
+  <input type="text" id="nome" name="nome" minlength="3" maxlength="80" required autocomplete="name" value="{{ nome }}">
+  <button type="submit" name="resposta" value="autorizo" class="principal">Autorizo o recebimento</button>
+  <button type="submit" name="resposta" value="nao_autorizo" class="secundario">Não autorizo</button>
+</form>
+{% else %}
+{% for frase in registro %}<div class="ok" role="status">{{ frase }}</div>{% endfor %}
+{% endif %}
+
+<p class="suave">Dúvidas: fale com a Fresh Log pelo chat do portal.</p>
+{% endblock %}
