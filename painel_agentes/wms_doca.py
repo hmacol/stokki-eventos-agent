@@ -279,3 +279,47 @@ def guardar(conn, *, produto_id: int, lote: str, validade: str | None, destino: 
     return {"movidas": movidas, "quantidade": round(total, 3),
             "restante_na_doca": round(wms._saldo_atual(conn, DOCA_POSICAO, produto_id, lote, val), 3),
             "nao_movidas": nao_movidas, "reservas_levadas": levadas, "destino": destino}
+
+
+# ---------------------------------------------------------------------------
+# Fila "Guardar": o que esta na doca esperando posicao (so leitura)
+# ---------------------------------------------------------------------------
+
+def fila_guarda(conn) -> list[dict]:
+    """Um item por produto + lote + validade com saldo na doca. Frio (REFRIGERADO,
+    CONGELADO) primeiro; depois o mais antigo. Nao filtra por embarcador."""
+    saldos = conn.execute(
+        "SELECT s.produto_id, s.lote, s.validade, s.quantidade, p.descricao, p.sku, p.embarcador, "
+        "p.embarcador_id, p.unidade, s.atualizado_em FROM wms_saldos s "
+        "JOIN wms_produtos p ON p.id = s.produto_id WHERE s.posicao = ? AND s.quantidade > 0.0004",
+        (DOCA_POSICAO,)).fetchall()
+    fila = []
+    for s in saldos:
+        pid, lote, val = s["produto_id"], s["lote"], s["validade"] or ""
+        chave = (DOCA_POSICAO, pid, lote, val)
+        desde = conn.execute(
+            "SELECT MIN(criado_em) FROM wms_movimentos WHERE tipo = 'ENTRADA' AND posicao_destino = ? "
+            "AND produto_id = ? AND lote = ? AND COALESCE(validade, '') = ?", chave).fetchone()[0]
+        caixas = sum(1 for c in conn.execute(
+            "SELECT serial FROM wms_caixas WHERE posicao = ? AND produto_id = ? AND lote = ? "
+            "AND COALESCE(validade, '') = ? AND situacao IN ('EM_ESTOQUE', 'ABERTA')", chave)
+            if wms_caixas._prometido(conn, c["serial"]) <= 0.0004)
+        recebimentos = [r[0] for r in conn.execute(
+            "SELECT DISTINCT r.codigo FROM wms_recebimento_enderecamentos e "
+            "JOIN wms_recebimentos r ON r.id = e.recebimento_id "
+            "JOIN wms_movimentos m ON m.uuid = e.uuid WHERE m.posicao_destino = ? AND m.produto_id = ? "
+            "AND m.lote = ? AND COALESCE(m.validade, '') = ? ORDER BY r.codigo", chave)]
+        pedidos = conn.execute(
+            "SELECT COUNT(DISTINCT pedido_id) FROM wms_reservas WHERE estado = 'ATIVA' AND posicao = ? "
+            "AND produto_id = ? AND lote = ? AND COALESCE(validade, '') = ?", chave).fetchone()[0]
+        sug = sugerir_posicoes(conn, pid, lote, val, limite=1)
+        temperatura = temperatura_do_produto(conn, pid)
+        fila.append({
+            "produto_id": pid, "descricao": s["descricao"], "sku": s["sku"], "embarcador": s["embarcador"],
+            "embarcador_id": s["embarcador_id"], "lote": lote, "validade": val,
+            "quantidade": round(float(s["quantidade"]), 3), "unidade": s["unidade"], "caixas": caixas,
+            "temperatura": temperatura, "desde": desde or s["atualizado_em"], "recebimentos": recebimentos,
+            "pedidos_reservados": pedidos,
+            "sugestao": {"posicao": sug[0]["posicao"], "motivo": sug[0]["motivo"]} if sug else None})
+    fila.sort(key=lambda i: (i["temperatura"] not in ("REFRIGERADO", "CONGELADO"), i["desde"]))
+    return fila

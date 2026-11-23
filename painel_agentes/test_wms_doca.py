@@ -414,6 +414,123 @@ class TestGuardar(unittest.TestCase):
         self.assertEqual(str(ctx.exception), "Bipe a posição de destino, não a doca.")
         self.assertEqual(self.saldo(DOC), 10)
 
+class TestFilaGuarda(unittest.TestCase):
+    setUp = TestGuardar.setUp
+    entrada = TestGuardar.entrada
+    caixas = TestGuardar.caixas
+    pedido = TestGuardar.pedido
+
+    def produto(self, pid, emb=48, nome="PROD"):
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, embarcador_id, ean, dun, "
+            "qtd_por_caixa, unidade, controla_validade, atualizado_em) VALUES (?, ?, ?, ?, 'EMB', ?, NULL, NULL, "
+            "12, 'UN', 1, '2026-09-21 10:00:00')", (pid, 900 + pid, f"SKU{pid}", nome, emb))
+        self.conn.commit()
+
+    def entrada_em(self, pid, qtd, criado_em, lote="L1", validade=VAL):
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=pid, quantidade=qtd, lote=lote,
+                                validade=validade, destino=DOC, criado_em=criado_em)
+
+    def test_fila_agrupa_por_produto_lote_validade(self):
+        self.entrada(10)
+        self.entrada(5)
+        self.entrada(7, lote="L2")
+        fila = wms_doca.fila_guarda(self.conn)
+        self.assertEqual([(i["lote"], i["quantidade"]) for i in fila], [("L1", 15.0), ("L2", 7.0)])
+        i = fila[0]
+        self.assertEqual((i["produto_id"], i["descricao"], i["sku"], i["embarcador"], i["embarcador_id"],
+                          i["validade"], i["unidade"]),
+                         (1, "COXINHA FESTA", "72400017", "MARIA DOLORES", 48, VAL, "UN"))
+        self.assertEqual(set(i), {"produto_id", "descricao", "sku", "embarcador", "embarcador_id", "lote",
+                                  "validade", "quantidade", "unidade", "caixas", "temperatura", "desde",
+                                  "recebimentos", "pedidos_reservados", "sugestao"})
+
+    def test_fila_frio_primeiro_depois_mais_antigo(self):
+        for pid in (2, 3, 4):
+            self.produto(pid)
+        self.entrada_em(1, 5, "2026-11-20 08:00:00")
+        self.entrada_em(2, 5, "2026-11-20 09:00:00")
+        self.entrada_em(3, 5, "2026-11-20 10:00:00")
+        self.entrada_em(4, 5, "2026-11-20 07:00:00")
+        wms.definir_temperatura_produto(self.conn, 3, "CONGELADO")
+        wms.definir_temperatura_produto(self.conn, 4, "REFRIGERADO")
+        fila = wms_doca.fila_guarda(self.conn)
+        self.assertEqual([i["produto_id"] for i in fila], [4, 3, 1, 2])
+        self.assertEqual(fila[0]["desde"], "2026-11-20 07:00:00")
+        self.assertEqual(fila[1]["temperatura"], "CONGELADO")
+
+    def test_fila_conta_caixas_e_pedidos_reservados(self):
+        self.caixas(3)
+        self.pedido(12)
+        self.pedido(12)
+        i = wms_doca.fila_guarda(self.conn)[0]
+        self.assertEqual((i["caixas"], i["pedidos_reservados"], i["quantidade"]), (3, 2, 36.0))
+
+    def test_fila_caixa_com_unidade_separada_nao_conta(self):
+        s = self.caixas(2)
+        self.conn.execute("UPDATE wms_caixas SET situacao = 'SEPARADA' WHERE serial = ?", (s[0],))
+        self.conn.commit()
+        self.assertEqual(wms_doca.fila_guarda(self.conn)[0]["caixas"], 1)
+
+    def test_fila_sem_caixa_e_zero(self):
+        self.entrada(10)
+        self.assertEqual(wms_doca.fila_guarda(self.conn)[0]["caixas"], 0)
+
+    def test_fila_traz_sugestao_ou_none(self):
+        self.entrada(10)
+        s = wms_doca.fila_guarda(self.conn)[0]["sugestao"]
+        self.assertEqual(s, {"posicao": "C1-E1-N1", "motivo": "Posição vazia na área certa"})
+        self.conn.execute("UPDATE wms_posicoes SET ativo = 0 WHERE codigo <> ?", (DOC,))
+        self.conn.commit()
+        self.assertIsNone(wms_doca.fila_guarda(self.conn)[0]["sugestao"])
+
+    def test_fila_vazia_sem_doca(self):
+        conn = sep.conectar(Path(self._tmp.name) / "outro.db")
+        self.addCleanup(conn.close)
+        self.assertEqual(wms_doca.fila_guarda(conn), [])
+
+    def test_fila_so_saldo_positivo_na_doca(self):
+        self.entrada(10)
+        self.entrada(7, lote="L2")
+        wms.registrar_movimento(self.conn, tipo="TRANSFERENCIA", produto_id=1, quantidade=10, lote="L1",
+                                validade=VAL, origem=DOC, destino=DEST)
+        self.assertEqual([i["lote"] for i in wms_doca.fila_guarda(self.conn)], ["L2"])
+
+    def test_fila_mostra_qualquer_embarcador(self):
+        self.produto(2, emb=77)
+        self.entrada(10)
+        self.entrada_em(2, 4, "2026-11-21 10:00:00")
+        self.assertEqual({i["embarcador_id"] for i in wms_doca.fila_guarda(self.conn)}, {48, 77})
+
+    def test_fila_lote_vazio_validade_nula(self):
+        self.conn.execute("UPDATE wms_produtos SET controla_validade = 0 WHERE id = 1")
+        self.conn.commit()
+        wms.registrar_movimento(self.conn, tipo="ENTRADA", produto_id=1, quantidade=5, lote="", validade=None,
+                                destino=DOC)
+        i = wms_doca.fila_guarda(self.conn)[0]
+        self.assertEqual((i["lote"], i["validade"], i["quantidade"]), ("", "", 5.0))
+
+    def test_fila_recebimentos_pelos_enderecamentos(self):
+        self.entrada(10)
+        self.entrada(1)
+        movs = [r["uuid"] for r in self.conn.execute("SELECT uuid FROM wms_movimentos ORDER BY id")]
+        for rid, cod, mov in ((1, "REC-B", movs[0]), (2, "REC-A", movs[1])):
+            self.conn.execute(
+                "INSERT INTO wms_recebimentos (id, id_stokki, codigo, lido_em, atualizado_em) "
+                "VALUES (?, ?, ?, '2026-11-20', '2026-11-20')", (rid, rid, cod))
+            self.conn.execute(
+                "INSERT INTO wms_recebimento_itens (id, recebimento_id, linha, qtd_embalagem) VALUES (?, ?, 1, 1)",
+                (rid, rid))
+            self.conn.execute(
+                "INSERT INTO wms_recebimento_enderecamentos (uuid, recebimento_id, item_id, quantidade, criado_em) "
+                "VALUES (?, ?, ?, 5, '2026-11-20')", (mov, rid, rid))
+        self.conn.commit()
+        self.assertEqual(wms_doca.fila_guarda(self.conn)[0]["recebimentos"], ["REC-A", "REC-B"])
+
+    def test_fila_sem_vinculo_recebimentos_vazio(self):
+        self.entrada(10)
+        self.assertEqual(wms_doca.fila_guarda(self.conn)[0]["recebimentos"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
