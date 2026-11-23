@@ -541,6 +541,18 @@ class TestFilaGuarda(unittest.TestCase):
         self.conn.commit()   # devolvida tambem e guardada pelo Guardar: o item continua na fila
         self.assertEqual(len(wms_doca.fila_guarda(self.conn)), 1)
 
+    def test_contar_fila_bate_com_a_fila(self):
+        self.assertEqual(wms_doca.contar_fila(self.conn), 0)
+        self.entrada(10)
+        self.entrada(7, lote="L2")
+        s = self.caixas(1, lote="L3")[0]
+        self.assertEqual(wms_doca.contar_fila(self.conn), 3)
+        pid = self.pedido(5)
+        sep.separar_caixa(self.conn, sep.onda_de_um_pedido(self.conn, pid, ANA), s, qtd_un=5,
+                          uuid="sep-uuid-m6", operador=ANA)
+        self.assertEqual(wms_doca.contar_fila(self.conn), 2)   # a caixa separada some
+        self.assertEqual(wms_doca.contar_fila(self.conn), len(wms_doca.fila_guarda(self.conn)))
+
     def test_fila_sem_caixa_e_zero(self):
         self.entrada(10)
         self.assertEqual(wms_doca.fila_guarda(self.conn)[0]["caixas"], 0)

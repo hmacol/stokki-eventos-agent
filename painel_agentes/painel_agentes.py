@@ -6206,7 +6206,7 @@ def _wms_guarda_pendente(conn) -> int:
         return 0
     conn = wms_doca.conectar()   # garante o esquema das caixas, que a fila consulta
     try:
-        return len(wms_doca.fila_guarda(conn))
+        return wms_doca.contar_fila(conn)
     finally:
         conn.close()
 

@@ -322,6 +322,11 @@ def _saldos_para_guardar(conn) -> list[tuple]:
     return resultado
 
 
+def contar_fila(conn) -> int:
+    """Tamanho da fila Guardar sem montar sugestao (contador do Inicio)."""
+    return len(_saldos_para_guardar(conn))
+
+
 def fila_guarda(conn) -> list[dict]:
     """Um item por produto + lote + validade com saldo na doca e algo para guardar. Frio
     (REFRIGERADO, CONGELADO) primeiro; depois o mais antigo. Nao filtra por embarcador."""
