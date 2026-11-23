@@ -139,14 +139,20 @@ def sugerir_posicoes(conn, produto_id: int, lote: str, validade: str | None, lim
 # os dois, repetir com o mesmo uuid acha os movimentos (duplicados) e so
 # completa a reserva.
 
-def _levar_reservas(conn, produto_id: int, lote: str, validade: str, destino: str, teto: float) -> int:
+def _levar_reservas(conn, produto_id: int, lote: str, validade: str, destino: str, teto: float,
+                    marca: str) -> int:
     """Reservas ATIVAS da chave na doca que passam do saldo que sobrou la vao para o
     destino, por id crescente (a ultima e dividida), no maximo `teto` (o que a guarda
-    moveu): reserva a mais que ja havia na doca nao vai junto. Reserva de item separado
-    nunca vai: a caixa dele nao sai da doca e a baixa tira dali. Devolve quantas linhas
-    foram reapontadas ou criadas."""
+    moveu) menos o que esta guarda ja levou: reserva a mais que ja havia na doca nao vai
+    junto, nem num retry. As linhas levadas ficam com movimento_uuid = `marca` (g-<uuid>;
+    a baixa sobrescreve ao consumir). Reserva de item separado nunca vai: a caixa dele nao
+    sai da doca e a baixa tira dali. Devolve quantas linhas foram reapontadas ou criadas."""
     conn.execute("BEGIN IMMEDIATE")
     try:
+        ja_levado = float(conn.execute(
+            "SELECT COALESCE(SUM(quantidade_un), 0) FROM wms_reservas WHERE movimento_uuid = ?",
+            (marca,)).fetchone()[0])
+        teto = teto - ja_levado
         saldo = wms._saldo_atual(conn, DOCA_POSICAO, produto_id, lote, validade)
         reservas = conn.execute(
             "SELECT * FROM wms_reservas WHERE estado = 'ATIVA' AND posicao = ? AND produto_id = ? AND lote = ? "
@@ -166,8 +172,8 @@ def _levar_reservas(conn, produto_id: int, lote: str, validade: str, destino: st
                 continue
             q = round(float(r["quantidade_un"]), 3)
             if q <= excedente + 0.0004:
-                conn.execute("UPDATE wms_reservas SET posicao = ?, atualizado_em = ? WHERE id = ?",
-                             (destino, ts, r["id"]))
+                conn.execute("UPDATE wms_reservas SET posicao = ?, movimento_uuid = ?, atualizado_em = ? WHERE id = ?",
+                             (destino, marca, ts, r["id"]))
                 excedente = round(excedente - q, 3)
             else:
                 conn.execute("UPDATE wms_reservas SET quantidade_un = ?, atualizado_em = ? WHERE id = ?",
@@ -175,9 +181,9 @@ def _levar_reservas(conn, produto_id: int, lote: str, validade: str, destino: st
                 conn.execute(
                     "INSERT INTO wms_reservas (pedido_id, item_id, produto_id, posicao, lote, validade, quantidade_un, "
                     "estado, origem, movimento_uuid, criado_em, atualizado_em) "
-                    "VALUES (?,?,?,?,?,?,?, 'ATIVA', ?, '', ?, ?)",
+                    "VALUES (?,?,?,?,?,?,?, 'ATIVA', ?, ?, ?, ?)",
                     (r["pedido_id"], r["item_id"], r["produto_id"], destino, r["lote"], r["validade"], excedente,
-                     r["origem"], ts, ts))
+                     r["origem"], marca, ts, ts))
                 excedente = 0.0
             n += 1
         conn.commit()
@@ -277,7 +283,7 @@ def guardar(conn, *, produto_id: int, lote: str, validade: str | None, destino: 
         teto = float(conn.execute(
             "SELECT COALESCE(SUM(quantidade), 0) FROM wms_movimentos WHERE uuid = ? OR substr(uuid, 1, ?) = ?",
             (f"g-{uuid}", len(prefixo), prefixo)).fetchone()[0])
-        levadas = _levar_reservas(conn, produto_id, lote, val, destino, teto) if teto > 0.0004 else 0
+        levadas = _levar_reservas(conn, produto_id, lote, val, destino, teto, f"g-{uuid}") if teto > 0.0004 else 0
 
     total = 0.0
     for u in ([f"{prefixo}{s}" for s in movidas] if com_caixa else [f"g-{uuid}"]):

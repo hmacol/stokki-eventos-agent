@@ -447,6 +447,19 @@ class TestGuardar(unittest.TestCase):
         self.assertEqual(r["reservas_levadas"], 1)
         self.assertEqual([x[:2] for x in self.reservas(pid)], [(DEST, 6.0), (DOC, 24.0)])
 
+    def test_retry_depois_do_sucesso_nao_leva_mais_reserva(self):
+        # mesmo caso acima; o aparelho repete o POST (resposta perdida): nada mais e reapontado
+        self.entrada(36)
+        pid = self.pedido(30)
+        wms.registrar_movimento(self.conn, tipo="AJUSTE", produto_id=1, quantidade=20, lote="L1", validade=VAL,
+                                origem=DOC, observacao="avaria")
+        self.guardar(quantidade=6)
+        for _ in range(2):
+            r = self.guardar(quantidade=6)
+            self.assertEqual((r["quantidade"], r["reservas_levadas"]), (6, 0))
+        self.assertEqual([x[:2] for x in self.reservas(pid)], [(DEST, 6.0), (DOC, 24.0)])
+        self.assertEqual((self.saldo(DOC), self.saldo(DEST)), (10, 6))
+
     def test_guarda_que_falha_sem_mover_nao_reaponta(self):
         self.entrada(36)
         pid = self.pedido(30)
