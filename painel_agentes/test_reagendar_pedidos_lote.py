@@ -48,6 +48,10 @@ class ReagendarPedidosLoteTestCase(unittest.TestCase):
         self.mock_vuupt = self.mock_vuupt_cls.return_value
         self.itens = [{"service_id": 111}, {"service_id": 222}, {"service_id": 333}]
 
+        patch_origem = mock.patch.object(planejamento_rotas, "_registrar_agendamento_equipe")
+        patch_origem.start()
+        self.addCleanup(patch_origem.stop)
+
     # -- validação de entrada, sem tocar em rede -------------------------
 
     def test_data_invalida_retorna_erro_sem_tentar(self):

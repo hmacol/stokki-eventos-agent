@@ -308,5 +308,26 @@ class PolimentoTestCase(unittest.TestCase):
                 self.assertFalse(resumo["descartado_por_piora"])
 
 
+class MelhorInsercaoTest(unittest.TestCase):
+    """16/10: _melhor_insercao escolhe a posicao pelo acrescimo (3 pernas)
+    em vez de recalcular o km da rota inteira por posicao -- o km da
+    posicao escolhida tem que ser o minimo da forca bruta."""
+
+    def test_mesmo_km_da_forca_bruta(self):
+        import random
+        rng = random.Random(16)
+        for _ in range(300):
+            sub = [_servico(i, rng.uniform(-0.2, 0.2), rng.uniform(-0.2, 0.2)) for i in range(rng.randint(0, 12))]
+            if sub and rng.random() < 0.2:
+                sub[rng.randrange(len(sub))]["latitude"] = None  # sem coordenada: caminho completo
+            parada = _servico(99, rng.uniform(-0.2, 0.2), rng.uniform(-0.2, 0.2))
+            km, cand = pr._melhor_insercao(parada, sub, BASE, None)
+            forca_bruta = min(rd.calcular_km_estimado(sub[:p] + [parada] + sub[p:], *BASE, None)
+                              for p in range(len(sub) + 1))
+            self.assertAlmostEqual(km, forca_bruta, places=9)
+            self.assertAlmostEqual(km, rd.calcular_km_estimado(cand, *BASE, None), places=12)
+            self.assertEqual(sorted(s["id"] for s in cand), sorted([s["id"] for s in sub] + [99]))
+
+
 if __name__ == "__main__":
     unittest.main()

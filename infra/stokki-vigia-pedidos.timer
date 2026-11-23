@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-vigia-pedidos.service a cada 15 min (5 min depois do espelho do nucleo, que roda :05/:20/:35/:50)
+
+[Timer]
+OnCalendar=*-*-* *:10,25,40,55:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

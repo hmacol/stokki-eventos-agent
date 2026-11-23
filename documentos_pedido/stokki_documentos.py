@@ -164,7 +164,17 @@ def _extrair_id(codigo_ps: str) -> str:
 
 
 def _credenciais_provider(config: dict) -> tuple[str, str]:
-    """Mesmo padrão de expedir_pedidos.py::_credenciais_provider."""
+    """Retorna (usuario, senha) para login na area /provider/ do Stokki.
+    Chamada logo antes de cada login: espera a vez na trava da conta
+    provider: entra na fila e fica com ela até o processo terminar (05/10,
+    stokki/sessao_uso.vez_da_provider_para_login). Sem a vez em 2h,
+    RuntimeError -- desiste em vez de derrubar a expedição."""
+    import sqlite3
+    from stokki import sessao_uso
+    try:
+        sessao_uso.vez_da_provider_para_login()
+    except sqlite3.Error as e:
+        logger.warning(f"Fila da Stokki indisponivel ({e}) -- seguindo com o login.")
     provider = config.get("stokki", {}).get("provider", {})
     usuario = provider.get("usuario") or config.get("stokki", {}).get("usuario", "")
     senha = provider.get("senha") or config.get("stokki", {}).get("senha", "")
@@ -203,6 +213,7 @@ def _preencher_form_login(page, usuario: str, senha: str, tentativas: int = 3, t
     o Stokki às vezes demora mais que o timeout pra renderizar o
     formulário (lento/instável). Cada tentativa recarrega a página antes
     de tentar de novo."""
+    from stokki.auth import aguardar_saida_do_login
     ultimo_erro = None
     for tentativa in range(1, tentativas + 1):
         try:
@@ -210,7 +221,7 @@ def _preencher_form_login(page, usuario: str, senha: str, tentativas: int = 3, t
             page.fill("[name='email']", usuario)
             page.fill("[name='password']", senha)
             page.click("button[type='submit']")
-            page.wait_for_url(lambda u: "login" not in u, timeout=30_000)
+            aguardar_saida_do_login(page)  # 28/10: passa pela tela de sessão ativa
             return
         except Exception as e:
             ultimo_erro = e
@@ -416,6 +427,23 @@ def _gerar_danfe_por_file_url(page, codigo_ps: str, file_url: str, token: str,
     return caminho_local
 
 
+def _nome_unico(nome: str, usados: set[str]) -> str:
+    """Dois anexos com o mesmo rótulo no pedido ("BOLETO" duas vezes,
+    parcelas) viravam o mesmo arquivo em disco e o segundo apagava o
+    primeiro antes de ser processado (achado 05/10). O primeiro mantém
+    o nome de sempre; os seguintes ganham _2, _3..."""
+    if nome not in usados:
+        usados.add(nome)
+        return nome
+    base, ponto, ext = nome.rpartition(".")
+    i = 2
+    while f"{base}_{i}{ponto}{ext}" in usados:
+        i += 1
+    novo = f"{base}_{i}{ponto}{ext}"
+    usados.add(novo)
+    return novo
+
+
 def buscar_documentos_do_pedido(page, config: dict, codigo_ps: str,
                                 buscar_nf: bool = True) -> list[dict]:
     """
@@ -453,11 +481,13 @@ def buscar_documentos_do_pedido(page, config: dict, codigo_ps: str,
         for caminho_danfe in gerar_danfes(page, codigo_ps):
             baixados.append({"caminho_local": caminho_danfe, "nome_arquivo": caminho_danfe.name})
 
+    nomes_usados: set[str] = set()
     for doc in listar_documentos_da_aba(page):
         nome_arquivo = doc["nome_visivel"]
         if not nome_arquivo.lower().endswith(".pdf"):
             nome_arquivo += ".pdf"
         nome_arquivo = f"{codigo_ps}_{nome_arquivo}"
+        nome_arquivo = _nome_unico(nome_arquivo, nomes_usados)
 
         caminho_local = baixar_documento(page, doc["href"], nome_arquivo)
         if caminho_local:

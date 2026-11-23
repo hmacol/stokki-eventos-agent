@@ -2,6 +2,13 @@
 
 Pedido do Hugo, 28/08/2026. Implementado e testado em 28/08 (ainda não deployado).
 
+> **SUBSTITUÍDO em 06/11/2026 (Hugo): retirada no galpão NUNCA sobe pra VUUPT.**
+> O `pipeline.py` só marca `ignorado_retirada` (e cancela pelo `PUT /cancel` a
+> entrega `not_assigned` que virou retirada depois). Nada mais cria serviço
+> `[RETIRADA]`. O `acompanhar_retiradas.py` segue fechando os que já estavam lá;
+> o card "A retirar no galpão", o e-mail de "Retirado" e a consulta da Expedição
+> só mostram esses antigos. O resto deste documento descreve o fluxo antigo.
+
 ## O que muda
 
 Até 28/08 o pipeline **ignorava** todo pedido cuja transportadora resolve pra

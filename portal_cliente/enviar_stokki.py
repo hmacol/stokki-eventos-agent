@@ -40,6 +40,7 @@ COMO RODAR:
     py -3 portal_cliente/enviar_stokki.py --uma-vez --visivel   # navegador na tela
 """
 import argparse
+import html as html_mod
 import json
 import logging
 import re
@@ -47,7 +48,7 @@ import shutil
 import sys
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent
@@ -58,10 +59,17 @@ for _p in (_RAIZ, _AQUI):
 
 import yaml
 
+import anexos_pedido
+import cancelamento as cm
+import endereco_entrega
+import transportadora_envio
 import envio_pedidos as ep
 import pedidos_dedicados
+import retomada as rt
+import trocas_nf as tq
 from email_utils import enviar_email, envelope_html
 from stokki import sessao_uso
+from stokki.auth import StokkiSession
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("portal_envios")
@@ -107,7 +115,15 @@ def carregar_importador(config: dict):
     return wiz, px
 
 
-def transformar_xml(regra: str, origem: Path, destino: Path, px) -> None:
+def transformar_xml(regra: str, origem: Path, destino: Path, px, fluxo: str = "armazenagem", xd: dict | None = None) -> None:
+    """Cross (25/10): um item só, o XD do embarcador (regra "cross" do
+    importador), e a regra própria do embarcador não se aplica. Outros
+    fluxos: a regra do embarcador, como antes."""
+    if fluxo == "cross":
+        if not (xd or {}).get("codigo_xd"):
+            raise ValueError(f"XD não encontrado: {(xd or {}).get('erro_xd') or 'sem produto XD no catálogo'}")
+        px.TRANSFORMACOES["cross"](origem, destino, codigo_xd=xd["codigo_xd"], nome_item=xd["nome_item"])
+        return
     if regra in (None, "", "nenhuma"):
         shutil.copyfile(origem, destino)
         return
@@ -117,12 +133,36 @@ def transformar_xml(regra: str, origem: Path, destino: Path, px) -> None:
     fn(origem, destino)
 
 
+def aplicar_transportadora_no_lote(e: dict, destino: Path) -> None:
+    """Transportadora escolhida pelo embarcador na prévia: troca o <transporta>
+    do XML do lote (cópia), nunca o original do cliente. Sem escolha: nada."""
+    transp = transportadora_envio.da_linha(e)
+    if transp:
+        destino.write_bytes(transportadora_envio.trocar_transporta_xml(destino.read_bytes(), transp["nome"], transp.get("cnpj") or ""))
+
+
+def aplicar_entrega_no_lote(e: dict, destino: Path) -> None:
+    """Endereço de entrega escolhido no envio (27/10): grupo <entrega> no XML
+    do lote (cópia), nunca no original do cliente. Fiscal e nota: nada a fazer
+    (a nota já traz o <entrega> dela)."""
+    if e.get("endereco_entrega_origem") not in ("cliente", "ultima_entrega"):
+        return
+    end = json.loads(e.get("endereco_entrega_json") or "{}")
+    destino.write_bytes(endereco_entrega.inserir_entrega_xml(destino.read_bytes(), end, end.get("documento") or "",
+                                                             end.get("nome") or ""))
+
+
 # ── Wizard da Stokki ───────────────────────────────────────────────────────────
 
 def _credenciais(config: dict) -> tuple[str, str]:
     cfg = _cfg_portal(config).get("stokki") or {}
-    usuario = cfg.get("usuario") or config.get("stokki", {}).get("usuario", "")
-    senha = cfg.get("senha") or config.get("stokki", {}).get("senha", "")
+    if cfg.get("usuario") and cfg.get("senha"):
+        usuario, senha = cfg["usuario"], cfg["senha"]
+    else:
+        # 05/10: conta da trava que o worker pegou (principal ou, com ela
+        # ocupada, a provider -- stokki/contas.py).
+        from stokki.contas import credenciais
+        usuario, senha = credenciais(config, sessao_uso.conta_do_processo() or "principal")
     if not usuario or not senha:
         raise RuntimeError("Credenciais da Stokki ausentes (portal_cliente.stokki ou stokki no config.yaml).")
     return usuario, senha
@@ -136,10 +176,11 @@ def _codigo_da_resposta(resp: dict | None) -> str:
     return f"PS-{m.group(1)}" if m else ""
 
 
-def _buscar_codigos_na_listagem(page, numeros_nf: list[str]) -> dict[str, str]:
+def _buscar_codigos_na_listagem(page, numeros_nf: list[str], client_id: str = "") -> dict[str, str]:
     """Depois de criar, pergunta à listagem de pedidos (outbound/table)
     pelo número da NF pra descobrir o PS-xxxxx -- usa a sessão do próprio
-    navegador (sem novo login). Best-effort."""
+    navegador (sem novo login). Best-effort. Filtra pelo embarcador: o
+    número da NF se repete entre embarcadores."""
     from stokki import pedidos as stokki_pedidos
 
     class _Sessao:
@@ -162,7 +203,8 @@ def _buscar_codigos_na_listagem(page, numeros_nf: list[str]) -> dict[str, str]:
     sessao = _Sessao()
     for nf in numeros_nf:
         try:
-            dados = stokki_pedidos.listar_pedidos(sessao, status="", busca=nf, por_pagina=20, ordenar_coluna="1", ordenar_dir="desc")
+            dados = stokki_pedidos.listar_pedidos(sessao, status="", cliente=str(client_id or ""), busca=nf,
+                                                  por_pagina=20, ordenar_coluna="1", ordenar_dir="desc")
         except Exception as e:
             logger.info(f"   (listagem por NF {nf} falhou: {e})")
             continue
@@ -177,11 +219,13 @@ def _buscar_codigos_na_listagem(page, numeros_nf: list[str]) -> dict[str, str]:
 
 
 def executar_wizard(cfg: dict, usuario: str, senha: str, arquivos: list[Path], pasta_logs: Path, wiz,
-                    headless: bool = True) -> tuple[list[dict], dict, dict[str, str]]:
+                    headless: bool = True, nf_por_chave: dict[str, str] | None = None
+                    ) -> tuple[list[dict], dict, dict[str, str]]:
     """Mesma sequência de importar_stokki.importar_pedidos, mas com os
     parâmetros vindos do banco (por embarcador) em vez do config.yaml do
     importador. Devolve (resultados por XML, respostas HTTP por chave,
-    códigos PS por número de NF)."""
+    códigos PS por número de NF). nf_por_chave: os arquivos do lote se
+    chamam <chave>.xml e a listagem da Stokki só acha pelo número da NF."""
     from playwright.sync_api import sync_playwright, Error as PlaywrightError
 
     pasta_logs.mkdir(parents=True, exist_ok=True)
@@ -218,11 +262,13 @@ def executar_wizard(cfg: dict, usuario: str, senha: str, arquivos: list[Path], p
             page.screenshot(path=str(pasta_logs / f"{ts}_final.png"), full_page=True)
             respostas = wiz.ler_respostas_capturadas(page)
             resultados = wiz.coletar_resultados(page, caminhos, respostas)
-            criados_nf = [Path(r["arquivo"]).stem for r in resultados if r["criado"]]
+            nf_por_chave = nf_por_chave or {}
+            criados_nf = [nf_por_chave[Path(r["arquivo"]).stem] for r in resultados
+                          if r["criado"] and Path(r["arquivo"]).stem in nf_por_chave]
             codigos: dict[str, str] = {}
             if criados_nf:
                 try:
-                    codigos = _buscar_codigos_na_listagem(page, criados_nf)
+                    codigos = _buscar_codigos_na_listagem(page, criados_nf, cfg["client_id"])
                 except Exception as e:
                     logger.info(f"   (não consegui consultar a listagem pra achar os códigos: {e})")
         finally:
@@ -442,7 +488,8 @@ def executar_wizard_excel(cfg: dict, usuario: str, senha: str, envios: list[dict
             criados = [e for e in envios if codigos.get(e["chave_nfe"]) is None and respostas.get(e["chave_nfe"], {}).get("status", 0) in range(200, 300)]
             if criados:
                 try:
-                    achados = _buscar_codigos_na_listagem(page, [x["referencia"] for x in criados if x.get("referencia")])
+                    achados = _buscar_codigos_na_listagem(page, [x["referencia"] for x in criados if x.get("referencia")],
+                                                          cfg["client_id"])
                     for x in criados:
                         if achados.get(x.get("referencia")):
                             codigos[x["chave_nfe"]] = achados[x["referencia"]]
@@ -455,6 +502,24 @@ def executar_wizard_excel(cfg: dict, usuario: str, senha: str, envios: list[dict
 
 
 # ── Processamento de um lote (um embarcador) ───────────────────────────────────
+
+def _id_do_codigo(codigo: str | None) -> int | None:
+    """"PS-42584" -> 42584. Reentrega ("PS-36327-R1") não é o pedido novo."""
+    m = re.fullmatch(r"PS-(\d+)", (codigo or "").strip())
+    return int(m.group(1)) if m else None
+
+
+def _enfileirar_troca(conn, cfg: dict, envio: dict, codigo: str | None) -> None:
+    """Pedido Cross existe na Stokki (criado agora ou duplicado): a NF dele
+    ainda é a do XML convertido -- fila de troca (trocas_nf.py)."""
+    linha_id = tq.enfileirar(conn, cnpj_embarcador=cfg["cnpj"], client_id=cfg["client_id"], numero_nf=envio["numero_nf"],
+                             chave_nfe=envio["chave_nfe"], caminho_xml_original=envio["xml_path"], origem="portal",
+                             envio_id=envio["id"], id_stokki=_id_do_codigo(codigo), codigo_pedido=codigo)
+    # A linha é única por chave: pode já existir (importador por e-mail, outro
+    # envio) e até estar FEITA. O envio mostra o estado real dela.
+    linha = dict(conn.execute("SELECT * FROM trocas_nf_pendentes WHERE id = ?", (linha_id,)).fetchone())
+    tq.espelhar_em_portal_envios(conn, {**linha, "envio_id": envio["id"]})
+
 
 def _e_duplicado(erro: str) -> bool:
     e = (erro or "").lower()
@@ -479,6 +544,11 @@ def _gravar_codigo(conn, envio_id: int, codigo: str | None, **campos) -> None:
         pedidos_dedicados.vincular_codigo(conn, envio_id, codigo)
     except Exception as ex:
         logger.warning(f"nao vinculou dedicado do envio {envio_id}: {ex}")
+    # Documentos anexados no portal passam a valer pro romaneio com o PS (11/11)
+    try:
+        anexos_pedido.registrar_no_romaneio(conn, envio_id)
+    except Exception as ex:
+        logger.warning(f"nao registrou os anexos do envio {envio_id}: {ex}")
 
 
 def _falha_tecnica(conn, envios: list[dict], erro: str) -> list[dict]:
@@ -529,6 +599,10 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
         wiz = px = None
         if not simular:
             wiz, px = carregar_importador(config)
+        xd = None
+        if any(e.get("fluxo") == "cross" for e in envios):
+            from nucleo.fluxo_embarcador import fluxos_do_embarcador
+            xd = fluxos_do_embarcador(conn, cnpj=cnpj)
         for e in envios:
             planilha = (e.get("origem") or ep.ORIGEM_XML) == ep.ORIGEM_PLANILHA
             try:
@@ -545,7 +619,10 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
                     if simular:
                         shutil.copyfile(ep.caminho_xml(e), destino)
                     else:
-                        transformar_xml(cfg["regra_xml"], ep.caminho_xml(e), destino, px)
+                        transformar_xml(cfg["regra_xml"], ep.caminho_xml(e), destino, px,
+                                        fluxo=e.get("fluxo") or "armazenagem", xd=xd)
+                    aplicar_transportadora_no_lote(e, destino)
+                    aplicar_entrega_no_lote(e, destino)
                     arquivos.append(destino)
                     prontos_xml.append(e)
                 prontos.append(e)
@@ -566,8 +643,10 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
             resultados += [{"arquivo": p.name, "criado": True, "erro": ""} for p in arquivos_plan.values()]
             respostas, codigos = {}, {}
         else:
-            espera = int(_cfg_portal(config).get("espera_stokki_minutos") or 45) * 60
-            if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=30 * 60, esperar_segundos=espera):
+            # 05/10 (Hugo): fila da Stokki, até 2h (antes:
+            # portal_cliente.espera_stokki_minutos, 45).
+            espera = sessao_uso.ESPERA_MAXIMA_SEGUNDOS
+            if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=30 * 60, esperar_segundos=espera, alternativa=True):
                 ocupante = sessao_uso.em_uso()
                 logger.warning(f"[{cfg['nome']}] Stokki ocupada por '{ocupante}' há mais de {espera // 60} min -- lote volta pra fila.")
                 conn.execute(f"UPDATE portal_envios SET status = ?, atualizado_em = ? WHERE id IN ({','.join('?' * len(prontos))})",
@@ -580,7 +659,9 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
                 resultados, respostas, codigos = [], {}, {}
                 if arquivos:
                     logger.info(f"[{cfg['nome']}] enviando {len(arquivos)} XML(s) à Stokki (client_id={cfg['client_id']}, regra={cfg['regra_xml']})...")
-                    r1, resp1, cod1 = executar_wizard(cfg, usuario, senha, arquivos, pasta_lote, wiz, headless=headless)
+                    r1, resp1, cod1 = executar_wizard(cfg, usuario, senha, arquivos, pasta_lote, wiz, headless=headless,
+                                                      nf_por_chave={e["chave_nfe"]: str(e["numero_nf"])
+                                                                    for e in prontos_xml if e.get("numero_nf")})
                     resultados += r1
                     respostas.update(resp1)
                     codigos.update(cod1)
@@ -611,10 +692,14 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
                 resumo["criados"] += 1
                 if codigo and e.get("agendamento_data") and not e.get("agendamento_pendente"):
                     ep.registrar_agendamento_pedido(conn, {**e, "codigo_pedido": codigo})
+                if e.get("fluxo") == "cross" and not simular:
+                    _enfileirar_troca(conn, cfg, e, codigo)
             elif _e_duplicado(r["erro"]):
                 _marcar(conn, e["id"], status=ep.STATUS_DUPLICADO, erro=r["erro"][:900], resposta_stokki=resposta_txt,
                         criado_stokki_em=ep._agora())
                 resumo["duplicados"] += 1
+                if e.get("fluxo") == "cross" and not simular:
+                    _enfileirar_troca(conn, cfg, e, None)
             else:
                 _marcar(conn, e["id"], status=ep.STATUS_ERRO, erro=(r["erro"] or "recusado pela Stokki")[:900],
                         resposta_stokki=resposta_txt, tentativas=int(e.get("tentativas") or 0) + 1)
@@ -685,7 +770,7 @@ def _codigo_em_documentos(conn, envio: dict) -> str | None:
     linhas = conn.execute(
         "SELECT DISTINCT codigo_pedido, "
         "REPLACE(REPLACE(REPLACE(COALESCE(cnpj_contraparte,''),'.',''),'/',''),'-','') AS dest "
-        "FROM documentos_processados WHERE tipo = 'Nota Fiscal' AND numero_nf = ? "
+        "FROM documentos_processados WHERE tipo = 'Nota Fiscal' AND status = 'ENVIADO' AND numero_nf = ? "
         "AND COALESCE(codigo_pedido,'') != ''", (envio["numero_nf"],)).fetchall()
     if not linhas:
         return None
@@ -700,21 +785,68 @@ def _codigo_em_documentos(conn, envio: dict) -> str | None:
     return None
 
 
-def reconciliar_codigos(conn) -> int:
-    """Pedidos criados sem código: procura pelo número da NF nas tabelas
-    que o pipeline já alimenta (documentos_processados, pedidos_historico).
-    Com o código em mãos, o agendamento informado no portal entra em
-    agendamentos_pedido."""
+INTERVALO_BUSCA_STOKKI_SEGUNDOS = 10 * 60
+MAX_BUSCAS_STOKKI_POR_CICLO = 10
+DIAS_BUSCA_STOKKI = 7
+_ultima_busca_stokki: dict[int, float] = {}
+
+
+def _codigos_na_stokki(conn, config: dict, envios: list[dict], localizar=None, fabrica_sessao=None,
+                       agora: float | None = None) -> dict[int, str]:
+    """PS direto da listagem da Stokki (NF + embarcador) pros envios que a
+    criação não conseguiu identificar -- antes o código só vinha depois,
+    quando a DANFE do pedido passava pelo fluxo de documentos (Hugo, 29/10).
+    O worker roda a cada 20 s: cada envio é consultado no máximo a cada 10
+    min, até 10 por ciclo, e só com a trava da sessão livre (sem fila).
+    Envio com mais de 7 dias fica fora: o pedido sumiu da listagem
+    (cancelado na Stokki, duplicado de setembro) e nunca vai aparecer."""
+    agora = time.monotonic() if agora is None else agora
+    desde = (datetime.now() - timedelta(days=DIAS_BUSCA_STOKKI)).strftime("%Y-%m-%d %H:%M:%S")
+    vencidos = [e for e in envios if (e.get("criado_em") or "") >= desde
+                and agora - _ultima_busca_stokki.get(e["id"], float("-inf")) >= INTERVALO_BUSCA_STOKKI_SEGUNDOS]
+    vencidos = vencidos[:MAX_BUSCAS_STOKKI_POR_CICLO]
+    if not vencidos or not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=5 * 60, esperar_segundos=0, alternativa=True):
+        return {}
+    if localizar is None:
+        from stokki.trocar_nf import localizar_pedido_por_nf as localizar
+    achados: dict[int, str] = {}
+    try:
+        sessao = (fabrica_sessao or (lambda: StokkiSession(config)))()
+        for e in vencidos:
+            _ultima_busca_stokki[e["id"]] = agora
+            try:
+                client_id = ep.config_stokki_cliente(conn, e["cnpj_embarcador"], config)["client_id"]
+                achado = localizar(sessao, e["numero_nf"], client_id) if client_id else None
+            except Exception as ex:  # noqa: BLE001 -- um envio ruim não para os outros
+                logger.info(f"envio {e['id']}: busca do PS na Stokki falhou ({ex})")
+                continue
+            if achado and achado.get("codigo"):
+                achados[e["id"]] = achado["codigo"]
+    except Exception as ex:  # noqa: BLE001 -- Stokki fora: fica pros documentos e pro próximo ciclo
+        logger.info(f"busca de PS na Stokki indisponível ({ex})")
+    finally:
+        sessao_uso.liberar(DONO_TRAVA)
+    return achados
+
+
+def reconciliar_codigos(conn, config: dict | None = None, localizar=None, fabrica_sessao=None) -> int:
+    """Pedidos criados sem código: pergunta à Stokki pela NF + embarcador
+    (com config); se ela não responder, procura pelo número da NF nas
+    tabelas que o pipeline já alimenta (documentos_processados,
+    pedidos_historico). Com o código em mãos, o agendamento informado no
+    portal entra em agendamentos_pedido."""
     rows = conn.execute("SELECT * FROM portal_envios WHERE status IN ('CRIADO','DUPLICADO') AND codigo_pedido IS NULL "
                         "AND numero_nf IS NOT NULL AND numero_nf != ''").fetchall()
+    na_stokki = _codigos_na_stokki(conn, config, [dict(r) for r in rows], localizar, fabrica_sessao) if config and rows else {}
     achados = 0
     for r in rows:
         e = dict(r)
-        codigo = None
-        try:
-            codigo = _codigo_em_documentos(conn, e)
-        except Exception:
-            pass
+        codigo = na_stokki.get(e["id"])
+        if not codigo:
+            try:
+                codigo = _codigo_em_documentos(conn, e)
+            except Exception:
+                pass
         if not codigo:
             try:
                 emb = re.sub(r"\D", "", e["cnpj_embarcador"])
@@ -734,6 +866,271 @@ def reconciliar_codigos(conn) -> int:
     return achados
 
 
+# ── Cancelamentos pedidos pelo cliente (06/10) ────────────────────────────────
+
+def _avisar_operacao(conn, config: dict, envio: dict, motivo: str, erro: str, acao: str = "cancelamento") -> None:
+    try:
+        envio = {**envio, "nome_embarcador": ep.config_stokki_cliente(conn, envio["cnpj_embarcador"], config)["nome"]}
+    except Exception:  # noqa: BLE001 -- sem nome, o aviso sai com o CNPJ
+        pass
+    cm.avisar_operacao(config, envio, motivo, erro, acao=acao)
+
+
+def resetar_orfaos(conn, avisar=None) -> None:
+    """ENVIANDO órfão (worker caiu no meio) volta pra fila depois de 30 min.
+    CANCELANDO órfão (Stokki ocupada por mais de 30 min ou worker parado)
+    volta pra CRIADO (ou pra EM_ESPERA_CLIENTE, se veio de um Em espera) e
+    AVISA a operação -- a solicitação continua PENDENTE (revisão 07/10: sem
+    aviso o pedido ficava no limbo de novo). RETOMANDO órfão volta pra
+    EM_ESPERA_CLIENTE e avisa: o cliente pode retomar de novo."""
+    conn.execute("UPDATE portal_envios SET status = 'NA_FILA', atualizado_em = datetime('now','localtime') "
+                 "WHERE status = 'ENVIANDO' AND atualizado_em < datetime('now','localtime','-30 minutes')")
+    orfaos = [dict(r) for r in conn.execute(
+        "SELECT * FROM portal_envios WHERE status = ? AND atualizado_em < datetime('now','localtime','-30 minutes')",
+        (ep.STATUS_CANCELANDO,))]
+    for e in orfaos:
+        conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = datetime('now','localtime') "
+                     "WHERE id = ? AND status = ?", (cm.status_ao_devolver(conn, e["id"]), e["id"], ep.STATUS_CANCELANDO))
+    orfaos_retomada = [dict(r) for r in conn.execute(
+        "SELECT * FROM portal_envios WHERE status = ? AND atualizado_em < datetime('now','localtime','-30 minutes')",
+        (ep.STATUS_RETOMANDO,))]
+    for e in orfaos_retomada:
+        conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = datetime('now','localtime') "
+                     "WHERE id = ? AND status = ?", (ep.STATUS_EM_ESPERA_CLIENTE, e["id"], ep.STATUS_RETOMANDO))
+    conn.commit()
+    for e in orfaos:
+        logger.warning(f"{ep.rotulo_envio(e)}: cancelamento não executado em 30 min -- volta pra operação.")
+        if avisar:
+            try:
+                avisar(e, "cancelamento não executado em 30 min (Stokki ocupada ou worker parado)", "")
+            except Exception as ex:  # noqa: BLE001
+                logger.warning(f"aviso do órfão {e['id']} falhou: {ex}")
+    for e in orfaos_retomada:
+        logger.warning(f"{ep.rotulo_envio(e)}: retomada não concluída em 30 min -- volta pra espera.")
+        if avisar:
+            try:
+                avisar(e, "retomada não concluída em 30 min (worker parado)", "", acao="retomada")
+            except Exception as ex:  # noqa: BLE001
+                logger.warning(f"aviso do órfão de retomada {e['id']} falhou: {ex}")
+
+
+def processar_cancelamentos_do_ciclo(conn, config: dict, simular: bool = False) -> dict:
+    """Cancela na Vuupt e na Stokki o que o cliente pediu (status CANCELANDO),
+    dentro da trava da Stokki. Sem CANCELANDO não abre sessão nenhuma; a
+    sessão da Stokki só é aberta no primeiro cancelamento que chega nela."""
+    vazio = {"cancelados": 0, "operacao": 0, "falhas": 0}
+    n = conn.execute("SELECT COUNT(*) FROM portal_envios WHERE status = ?", (ep.STATUS_CANCELANDO,)).fetchone()[0]
+    if not n:
+        return vazio
+    if simular:
+        logger.info(f"SIMULAÇÃO: {n} cancelamento(s) ficam como estão.")
+        return vazio
+    if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=10 * 60, esperar_segundos=60, alternativa=True):
+        logger.info(f"Stokki ocupada por '{sessao_uso.em_uso()}' -- {n} cancelamento(s) esperam o próximo ciclo.")
+        return vazio
+    try:
+        token = (config.get("vuupt_api") or {}).get("token", "")
+        sessao_cache: dict = {}
+
+        def _sessao():
+            if "s" not in sessao_cache:
+                sessao_cache["s"] = StokkiSession(config)
+            return sessao_cache["s"]
+
+        def cancelar_vuupt(service_id):
+            from roteirizacao.cancelar_servico import cancelar_servico_completo
+            return cancelar_servico_completo(token, service_id)
+
+        def cancelar_stokki(id_stokki, motivo):
+            from stokki.cancelar import cancelar_pedido
+            return cancelar_pedido(_sessao(), id_stokki, motivo)
+
+        def buscar_vuupt(codigo):
+            from vuupt_client import VuuptClient
+            return VuuptClient(token).buscar_servico_por_code(codigo)
+
+        def avisar(envio, motivo, erro):
+            _avisar_operacao(conn, config, envio, motivo, erro)
+
+        return cm.processar_cancelamentos(conn, config, cancelar_vuupt, cancelar_stokki, avisar, buscar_vuupt=buscar_vuupt)
+    finally:
+        sessao_uso.liberar(DONO_TRAVA)
+
+
+def processar_cancelamentos_painel_do_ciclo(conn, config: dict, simular: bool = False) -> dict:
+    """Fila do "Cancelar Stokki" da tela /pedidos do painel (stokki/fila_cancelamento.py). Sem nada
+    na fila não abre sessão; Stokki ocupada = espera o próximo ciclo (a fila não tem prazo)."""
+    from stokki import fila_cancelamento as fc
+    vazio = {"ok": 0, "erro": 0, "de_novo": 0}
+    n = fc.pendentes(conn)
+    if not n:
+        return vazio
+    if simular:
+        logger.info(f"SIMULAÇÃO: {n} cancelamento(s) do painel ficam na fila.")
+        return vazio
+    conta = sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=10 * 60, esperar_segundos=60, alternativa=True)
+    if not conta:
+        logger.info(f"Stokki ocupada por '{sessao_uso.em_uso()}' -- {n} cancelamento(s) do painel esperam o próximo ciclo.")
+        return vazio
+    try:
+        import tratativas
+        from stokki import devolucao_estoque
+        from stokki.cancelar import cancelar_pedido
+        return fc.processar(
+            conn, StokkiSession(config, conta=conta), cancelar=cancelar_pedido,
+            registrar_evento=tratativas.registrar_evento,
+            registrar_devolucao=lambda id_stokki, ja_estava: devolucao_estoque.registrar(
+                id_stokki, "pedidos", config, ja_estava=ja_estava))
+    finally:
+        sessao_uso.liberar(DONO_TRAVA)
+
+
+def processar_retomadas_do_ciclo(conn, config: dict, simular: bool = False) -> dict:
+    """Retoma o que o cliente pediu (status RETOMANDO): data na Vuupt e fecha a
+    pausa. NÃO usa a Stokki, então não pega a trava de sessão."""
+    vazio = {"retomados": 0, "falhas": 0}
+    n = conn.execute("SELECT COUNT(*) FROM portal_envios WHERE status = ?", (ep.STATUS_RETOMANDO,)).fetchone()[0]
+    if not n:
+        return vazio
+    if simular:
+        logger.info(f"SIMULAÇÃO: {n} retomada(s) ficam como estão.")
+        return vazio
+    token = (config.get("vuupt_api") or {}).get("token", "")
+
+    def aplicar_data_vuupt(service_id, dia, ini, fim):
+        from solicitacoes_execucao import reagendar_servico_vuupt
+        return reagendar_servico_vuupt(token, service_id, dia, ini, fim)
+
+    def proxima_data(servico):
+        # dia fixo da região a partir de amanhã; sem regra = None (não mexe na Vuupt)
+        from datetime import date
+        from vuupt_client import VuuptClient
+        from roteirizacao.regioes_dia_fixo import proxima_data_valida, regra_dia_fixo_do_servico
+        s = VuuptClient(token).buscar_servico_por_id(servico["vuupt_service_id"])
+        if not s:  # não achou/falhou: NÃO é "sem dia fixo" -- a retomada falha e volta pra espera
+            raise RuntimeError(f"Vuupt não devolveu o serviço {servico['vuupt_service_id']}")
+        regra = regra_dia_fixo_do_servico(s)
+        return proxima_data_valida(regra, date.today()) if regra else None
+
+    def avisar(envio, motivo, erro):
+        _avisar_operacao(conn, config, envio, motivo, erro, acao="retomada")
+
+    return rt.processar_retomadas(conn, config, aplicar_data_vuupt, proxima_data, avisar)
+
+
+def _nome_embarcador_stokki(conn, cliente_id) -> str:
+    """Nome do embarcador pelo id dele na Stokki (interno.stkkc_id). Sem achar (ou com erro): #stkkc-<id>."""
+    try:
+        cid = int(cliente_id or 0)
+    except (TypeError, ValueError):
+        cid = 0
+    if not cid:
+        return "embarcador não identificado"
+    try:
+        row = conn.execute("SELECT apelido, nome_remetente FROM interno WHERE stkkc_id = ? LIMIT 1", (cid,)).fetchone()
+        nome = (row[0] or row[1]) if row else None
+        return str(nome).strip() if nome and str(nome).strip() else f"#stkkc-{cid}"
+    except Exception:  # noqa: BLE001 -- sem nome, o aviso sai com o id
+        return f"#stkkc-{cid}"
+
+
+def _qtd_log(v) -> str:
+    try:
+        return f"{float(v):g}".replace(".", ",")
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def _avisar_devolucao_galpao(conn, config: dict, id_stokki: int, cliente_id, itens: list) -> bool:
+    """Aviso ao grupo PEDIDOS CANCELADOS: onde guardar a caixa devolvida. Sem o grupo no config, ou com o
+    teto/janela do WhatsApp barrando, a devolucao ja aconteceu: o PS e os enderecos vao pro log pra equipe
+    guardar por ele. Levanta so quando o envio falhou de fato (o executor deixa os movimentos sem 'avisado'
+    e a proxima passada avisa de novo); desligado por falta do id do grupo nao levanta (nao ha o que reenviar).
+    Com o id preenchido, "desligado" (WhatsApp desligado no geral) conta como falha."""
+    import notificar_whatsapp
+    embarcador = _nome_embarcador_stokki(conn, cliente_id)
+    situacao = notificar_whatsapp.avisar_devolucao_galpao(id_stokki, embarcador, itens, config)
+    if situacao in ("enviado", "modo_teste"):
+        return True
+    if situacao == "desligado" and ((config or {}).get("whatsapp_notificacoes") or {}).get("grupo_cancelados_id"):
+        situacao = "falhou"   # grupo configurado, mas o WhatsApp está desligado no geral: ninguém avisou o galpão
+    onde = "; ".join(f"{i.get('sku')} {i.get('movido')} -> {i.get('destino')}" for i in itens)
+    logger.warning(f"devolução PS-{id_stokki} ({embarcador}): aviso ao galpão {situacao}; guardar a caixa em: {onde}")
+    if situacao in ("falhou", "nao_enviado"):
+        # devolução FEITA não avisa a operação e o status é final: a equipe recebe a lista pra avisar o galpão
+        trechos = [f"{i.get('sku')} {i.get('nome') or ''}: {_qtd_log(i.get('movido'))} -> {i.get('destino')}" for i in itens]
+        _avisar_devolucao_operacao(config, id_stokki, embarcador,
+                                   " | ".join([f"aviso ao galpao nao saiu ({situacao}): avisar a equipe para guardar"] + trechos))
+        raise RuntimeError(f"aviso ao galpão {situacao}")
+    return True
+
+
+def _avisar_devolucao_operacao(config: dict, id_stokki: int, embarcador: str, motivo: str) -> None:
+    """Devolução de estoque que falhou, ficou parcial ou caiu em dúvida: e-mail ao atendimento + WhatsApp
+    no grupo do atendimento. Best-effort: nunca levanta (a devolução e o ciclo seguem)."""
+    esc = lambda v: html_mod.escape(str(v or ""))  # noqa: E731
+    try:
+        email_cfg = (config or {}).get("email", {}) or {}
+        destino = email_cfg.get("email_atendimento") or email_cfg.get("email_responsavel")
+        if destino:
+            partes = [p.strip() for p in str(motivo or "").split(" | ") if p.strip()]
+            lista = "<ul>" + "".join(f"<li>{esc(p)}</li>" for p in partes) + "</ul>" if len(partes) > 1 else ""
+            html = envelope_html(
+                f"<p>A devolução de estoque do pedido cancelado <b>PS-{esc(id_stokki)}</b> · {esc(embarcador)} "
+                f"não terminou sozinha e <b>precisa de conferência</b>.</p>"
+                + (f"<p>Situação:</p>{lista}" if lista else f"<p>Situação: <b>{esc(motivo)}</b></p>")
+                + "<p>Antes de qualquer nova devolução, confira na Stokki o saldo no endereço Virtual e as "
+                  "movimentações do produto, para não mover o mesmo saldo duas vezes.</p>",
+                rodape="Fresh Log · Stokki · devolução de estoque", cor_acento="#F5A623")
+            enviar_email([destino], f"[Stokki] Devolução de estoque precisa de conferência · PS-{id_stokki}", html, email_cfg)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"e-mail da devolução PS-{id_stokki} falhou: {e}")
+    try:
+        import notificar_whatsapp
+        notificar_whatsapp.avisar_devolucao_pendente(id_stokki, embarcador, motivo, config)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"WhatsApp da devolução PS-{id_stokki} falhou: {e}")
+
+
+def processar_devolucoes_do_ciclo(conn, config: dict, simular: bool = False) -> dict:
+    """Devolve ao estoque o saldo preso no Virtual dos pedidos cancelados (fila stokki_devolucoes).
+    Desligada (stokki.devolucao_cancelamento.ativo) ou sem pendente: não abre sessão nenhuma. A conta admin
+    entra sob a trava do worker só durante a leitura; a provider é pega por pedido, com espera curta."""
+    from contextlib import contextmanager
+    from stokki import devolucao_estoque as dev
+    from stokki import devolucao_executor as exe
+    from stokki import mover_virtual
+    zeros = {"feitas": 0, "parciais": 0, "nada": 0, "falhas": 0, "esperando": 0}
+    if not dev.ligado(config):
+        return zeros
+    fila = dev.pendentes(conn)
+    if not fila:
+        return zeros
+    if simular:
+        logger.info(f"SIMULAÇÃO: {len(fila)} devolução(ões) ficam como estão.")
+        return zeros
+
+    @contextmanager
+    def abrir_admin():
+        conta = sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=10 * 60, esperar_segundos=exe.ESPERA_CONTA_SEGUNDOS,
+                                    alternativa=True)
+        if not conta:
+            raise exe.ContaOcupada(f"Stokki ocupada por '{sessao_uso.em_uso()}'")
+        try:
+            yield StokkiSession(config, conta=conta if isinstance(conta, str) else None)
+        finally:
+            sessao_uso.liberar(DONO_TRAVA)
+
+    def avisar_galpao(id_stokki, cliente_id, itens):
+        return _avisar_devolucao_galpao(conn, config, id_stokki, cliente_id, itens)
+
+    def avisar_operacao(id_stokki, cliente_id, motivo):
+        _avisar_devolucao_operacao(config, id_stokki, _nome_embarcador_stokki(conn, cliente_id), motivo)
+
+    return exe.processar_pendentes(conn, config, simular=simular, abrir_admin=abrir_admin, mover=mover_virtual.mover,
+                                   avisar_galpao=avisar_galpao, avisar_operacao=avisar_operacao)
+
+
 # ── Ciclo ──────────────────────────────────────────────────────────────────────
 
 def ciclo(config: dict, simular: bool = False, headless: bool = True) -> dict:
@@ -741,23 +1138,42 @@ def ciclo(config: dict, simular: bool = False, headless: bool = True) -> dict:
     conn = ep.conectar()
     try:
         lote_max = int(_cfg_portal(config).get("lote_maximo") or 30)
-        # ENVIANDO órfão (worker caiu no meio) volta pra fila depois de 30 min
-        conn.execute("UPDATE portal_envios SET status = 'NA_FILA', atualizado_em = datetime('now','localtime') "
-                     "WHERE status = 'ENVIANDO' AND atualizado_em < datetime('now','localtime','-30 minutes')")
-        conn.commit()
+        resetar_orfaos(conn, avisar=lambda e, m, err, acao="cancelamento": _avisar_operacao(conn, config, e, m, err, acao=acao))
+        total = {"lotes": 0, "criados": 0, "duplicados": 0, "erros": 0, "adiados": 0}
+        try:
+            total["cancelamentos"] = processar_cancelamentos_do_ciclo(conn, config, simular=simular)
+        except Exception as e:  # noqa: BLE001 -- cancelamento não derruba a fila de envios
+            logger.error(f"cancelamentos falharam: {e}\n{traceback.format_exc()}")
+        try:
+            total["cancelamentos_painel"] = processar_cancelamentos_painel_do_ciclo(conn, config, simular=simular)
+        except Exception as e:  # noqa: BLE001 -- a fila do painel não derruba a fila de envios
+            logger.error(f"cancelamentos do painel falharam: {e}\n{traceback.format_exc()}")
+        try:
+            total["retomadas"] = processar_retomadas_do_ciclo(conn, config, simular=simular)
+        except Exception as e:  # noqa: BLE001 -- retomada não derruba a fila de envios
+            logger.error(f"retomadas falharam: {e}\n{traceback.format_exc()}")
+        try:
+            total["devolucoes"] = processar_devolucoes_do_ciclo(conn, config, simular=simular)
+        except Exception as e:  # noqa: BLE001 -- devolução de estoque não derruba a fila de envios
+            logger.error(f"devoluções falharam: {e}\n{traceback.format_exc()}")
         rows = conn.execute("SELECT * FROM portal_envios WHERE status = 'NA_FILA' ORDER BY cnpj_embarcador, criado_em, id").fetchall()
         por_cliente: dict[str, list[dict]] = {}
         for r in rows:
             por_cliente.setdefault(r["cnpj_embarcador"], []).append(dict(r))
-        total = {"lotes": 0, "criados": 0, "duplicados": 0, "erros": 0, "adiados": 0}
         for cnpj, envios in por_cliente.items():
             for i in range(0, len(envios), lote_max):
                 resumo = processar_lote(conn, cnpj, envios[i:i + lote_max], config, simular=simular, headless=headless)
                 total["lotes"] += 1
                 for k in ("criados", "duplicados", "erros", "adiados"):
                     total[k] += resumo.get(k, 0)
+        # Fluxo Cross (25/10): troca da NF dos pedidos criados com o item XD.
+        # Depois dos lotes, pra o pedido criado neste ciclo já entrar.
         try:
-            total["conciliados"] = reconciliar_codigos(conn)
+            total["trocas_nf"] = tq.processar_pendentes(conn, config, simular=simular)
+        except Exception as e:  # noqa: BLE001 -- troca de NF não derruba a fila de envios
+            logger.error(f"trocas de NF falharam: {e}\n{traceback.format_exc()}")
+        try:
+            total["conciliados"] = reconciliar_codigos(conn, None if simular else config)
         except Exception as e:
             logger.warning(f"conciliação de códigos falhou: {e}")
         return total
@@ -781,7 +1197,7 @@ def main(argv=None) -> int:
         while True:
             try:
                 r = ciclo(config, simular=args.simular, headless=not args.visivel)
-                if r["lotes"]:
+                if r["lotes"] or any((r.get("cancelamentos") or {}).values()) or any((r.get("retomadas") or {}).values()) or any((r.get("devolucoes") or {}).values())                         or any(v for k, v in (r.get("trocas_nf") or {}).items() if k != "adiados"):
                     logger.info(f"ciclo: {r}")
             except Exception as e:
                 logger.error(f"ciclo falhou: {e}\n{traceback.format_exc()}")

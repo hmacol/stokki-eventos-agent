@@ -107,6 +107,31 @@ HORAS_ENTREGUES = 24 * 30
 MAX_TENTATIVAS_FALHA = 3
 FUSO_LOCAL   = ZoneInfo("America/Sao_Paulo")
 
+# Reentrega automática (Hugo, 28/09): insucesso sem resposta do
+# embarcador em HORAS_REENTREGA_AUTO vira reentrega sozinho. Revoga em
+# parte a regra de 15/08 ("nada duplica sozinho"): a pergunta continua,
+# e se o embarcador responder DEPOIS, a resposta ainda vale ("não
+# reenviar" cancela a reentrega criada, ver aplicar_resposta_insucesso).
+HORAS_REENTREGA_AUTO = 12
+# Motivos em que reenviar a mesma carga não resolve: avaria, validade,
+# manutenção da loja, não coletado ("duplicar": False no de-para desde
+# 03/08) + cliente não reconheceu o pedido e problema fiscal (precisam de
+# acerto antes). Esses, e motivo que não está no de-para, esperam humano.
+MOTIVOS_SEM_REENTREGA_AUTO = {5744, 5733, 8366, 8353, 5563, 8156}
+# Só insucesso novo: nada concluído antes da regra existir (até 28/09 "nada
+# duplica sozinho" -- havia insucesso resolvido por telefone sem clicar em
+# "Tratar") nem mais velho que HORAS_MAX_REENTREGA_AUTO.
+REENTREGA_AUTO_A_PARTIR_DE = datetime(2026, 9, 29, 3, 0, tzinfo=timezone.utc)  # 29/09 00h local
+HORAS_MAX_REENTREGA_AUTO = 48
+# Teto da cadeia automática: cria até a -R2; a partir daí só humano (evita
+# reentrega infinita de pedido que falha sempre).
+MAX_REENTREGAS_AUTO = 2
+
+# Trava cooperativa da sessão Stokki (stokki/sessao_uso.py) em volta do
+# Playwright da expedição.
+DONO_TRAVA_STOKKI = "expedicao"
+TTL_TRAVA_STOKKI_S = 15 * 60
+
 # O e-mail de "dia sem insucesso" só sai nas execuções finais do dia
 # (a tarefa de 30 em 30 min roda até 19h30) -- antes disso o dia ainda
 # não terminou e um insucesso ainda pode aparecer.
@@ -278,6 +303,25 @@ def baixar_canhoto_pdf(token: str, checklist_id: int, codigo_ps: str) -> Path | 
         return None
 
 
+def pdf_do_canhoto(vuupt_token: str, servico: dict, codigo_ps: str) -> Path | None:
+    """PDF do canhoto pra anexar na Stokki: o do checklist da Vuupt e, se
+    nao houver, o enviado pela tela de baixa de motorista sem app
+    (nucleo/canhotos_manuais.py, Hugo 09/10)."""
+    checklist_id = extrair_checklist_id(servico) if tem_canhoto(servico) else None
+    pdf = baixar_canhoto_pdf(vuupt_token, checklist_id, codigo_ps) if checklist_id else None
+    if pdf:
+        return pdf
+    try:
+        from nucleo.canhotos_manuais import caminho_canhoto_manual
+        manual = caminho_canhoto_manual(codigo_ps)
+    except Exception as e:  # noqa: BLE001 -- sem manual, segue como hoje (sem comprovante)
+        logger.warning(f"  {codigo_ps}: falha ao procurar canhoto manual: {e}")
+        return None
+    if manual:
+        logger.info(f"  {codigo_ps}: usando canhoto enviado pelo painel (baixa sem app).")
+    return manual
+
+
 # ── Notificacao interna ───────────────────────────────────────────────────────
 
 def notificar_pendencias_expedicao(sem_comprovante: list, falhas: dict,
@@ -392,6 +436,19 @@ Freshlog Logistica -- notificacao automatica do agente de expedicao.</p>
 _PADRAO_CODIGO_BASE = re.compile(r"PS-?\d{4,6}", re.IGNORECASE)
 
 
+def _ids_de_skills(skills) -> list[int]:
+    """Skills do serviço como vierem da API ([{"id": 1, ...}], {"data":
+    [...]}, [1, 2]) -> lista de ids. Vazio quando não vieram."""
+    if isinstance(skills, dict):
+        skills = skills.get("data")
+    ids = []
+    for sk in skills or []:
+        sid = sk.get("id") if isinstance(sk, dict) else sk
+        if isinstance(sid, int) or (isinstance(sid, str) and sid.isdigit()):
+            ids.append(int(sid))
+    return ids
+
+
 def duplicar_servico_por_insucesso(vuupt, servico_original: dict) -> dict | None:
     """
     Cria um NOVO serviço a partir de um insucesso de entrega, pra nova
@@ -443,7 +500,18 @@ def duplicar_servico_por_insucesso(vuupt, servico_original: dict) -> dict | None
         "duration_id": servico_original.get("duration_id"),
         "zone_id": servico_original.get("zone_id"),
         "recreated_order_origin_id": servico_original.get("id"),
+        # 28/09: a reentrega nascia SEM caixas (dimension_3) -- entrava na
+        # rota como se não ocupasse espaço e podia cair em veículo pequeno.
+        # Nível e tipo de carga o roteirizador recalcula pelo destinatário
+        # (customer_id) e remetente (sender_id), que já eram copiados.
+        "dimension_1": servico_original.get("dimension_1"),
+        "dimension_2": servico_original.get("dimension_2"),
+        "dimension_3": servico_original.get("dimension_3"),
+        "note": servico_original.get("note"),
     }
+    skills = _ids_de_skills(servico_original.get("skills"))
+    if skills:
+        payload["skills"] = [{"id": sid} for sid in skills]
     payload = {k: v for k, v in payload.items() if v is not None}
 
     try:
@@ -460,6 +528,215 @@ def duplicar_servico_por_insucesso(vuupt, servico_original: dict) -> dict | None
         return None
 
 
+_PADRAO_SUFIXO_REENTREGA = re.compile(r"-R(\d+)$", re.IGNORECASE)
+_PADRAO_BASE_PEDIDO = re.compile(r"^(PS-\d+)", re.IGNORECASE)
+
+
+def _codigo_base(code: str) -> str:
+    """'#PS-1-R1' -> 'PS-1' (chave do retrato da Stokki)."""
+    texto = (code or "").strip().lstrip("#").upper()
+    m = _PADRAO_BASE_PEDIDO.match(texto)
+    return m.group(1) if m else texto
+
+
+def decidir_reentrega_auto(servico: dict, agora: datetime, *, duplicado: bool, agendado: bool,
+                           respondido: bool, tratado_na_torre: bool,
+                           aberto_stokki: bool | None = None,
+                           reentrega_na_vuupt: bool = False) -> tuple[bool, str]:
+    """Regra pura da reentrega automática: (reentregar?, motivo legível).
+    aberto_stokki: o pedido segue aberto na Stokki segundo o retrato do
+    vigia (None = retrato indisponível/velho -> não arrisca).
+    reentrega_na_vuupt: já existe serviço recriado a partir deste (feito à
+    mão na Vuupt, sem passar pelo nosso fingerprint)."""
+    from motivos_falha import MOTIVOS_FALHA
+
+    concluido = _parse_data(servico.get("completed_at"))
+    if concluido is None:
+        return False, "sem data de conclusão"
+    if concluido < REENTREGA_AUTO_A_PARTIR_DE:
+        return False, "insucesso anterior à reentrega automática"
+    if duplicado or reentrega_na_vuupt:
+        return False, "já tem reentrega (ou o embarcador recusou)"
+    if agendado:
+        return False, "reentrega já agendada"
+    if respondido:
+        return False, "embarcador já respondeu"
+    if tratado_na_torre:
+        return False, "tratado na Torre"
+    motivo_id = servico.get("failed_reason_id")
+    if motivo_id in MOTIVOS_SEM_REENTREGA_AUTO or motivo_id not in MOTIVOS_FALHA:
+        return False, f"motivo '{texto_do_motivo(motivo_id)}' não reenvia sozinho"
+    if (servico.get("title") or "").lstrip().upper().startswith("[RETIRADA]"):
+        return False, "retirada no galpão"
+    if "," in (servico.get("code") or ""):
+        # A reentrega copia o code base do 1º pedido -- o 2º ficaria de fora.
+        return False, "serviço com mais de um pedido -- reentrega só por decisão humana"
+    if aberto_stokki is None:
+        return False, "sem retrato recente da Stokki -- não dá pra confirmar que o pedido segue aberto"
+    if not aberto_stokki:
+        return False, "pedido não está mais aberto na Stokki"
+    m = _PADRAO_SUFIXO_REENTREGA.search((servico.get("code") or "").strip())
+    if m and int(m.group(1)) >= MAX_REENTREGAS_AUTO:
+        return False, f"já é a {m.group(0)[1:]} -- próxima reentrega só por decisão humana"
+    horas = (agora - concluido).total_seconds() / 3600
+    if horas < HORAS_REENTREGA_AUTO:
+        return False, f"insucesso há {horas:.1f}h (reentrega automática com {HORAS_REENTREGA_AUTO}h)"
+    if horas > HORAS_MAX_REENTREGA_AUTO:
+        return False, f"insucesso há {horas:.0f}h -- velho demais pra reentrega automática"
+    return True, f"{horas:.0f}h sem resposta"
+
+
+def _fatos_do_banco(service_ids: list[int]) -> tuple[set[str] | None, set[int]]:
+    """(bases abertas na Stokki segundo o retrato do vigia -- None se o
+    retrato está velho/ausente --, service_ids que já têm serviço recriado
+    a partir deles no espelho do núcleo)."""
+    import sqlite3
+    abertos, recriados = None, set()
+    try:
+        conn = sqlite3.connect(_RAIZ / "dados" / "dados.db", timeout=30)
+    except Exception:
+        return None, set()
+    try:
+        try:
+            ultima = conn.execute(
+                "SELECT MAX(concluida_em) FROM vigia_listagens WHERE completa = 1").fetchone()[0]
+            if ultima and datetime.now() - datetime.fromisoformat(ultima) < timedelta(hours=30):
+                abertos = {r[0] for r in conn.execute("SELECT codigo FROM vigia_stokki_abertos")}
+        except sqlite3.OperationalError:
+            pass
+        if service_ids:
+            try:
+                marcas = ",".join("?" * len(service_ids))
+                recriados = {r[0] for r in conn.execute(
+                    f"SELECT reentrega_de_service_id FROM nucleo_pedidos "
+                    f"WHERE reentrega_de_service_id IN ({marcas}) AND status != 'CANCELADO'",
+                    list(service_ids))}
+            except sqlite3.OperationalError:
+                pass
+    finally:
+        conn.close()
+    return abertos, recriados
+
+
+def _ids_tratados_na_torre(codigos: list[str]) -> set[str]:
+    """Códigos (sem '#') que alguém marcou como tratados na Fila de ação da
+    Torre -- decisão humana, a automática não passa por cima."""
+    ids = {f"insucesso:{c}" for c in codigos} | {f"insucesso:#{c}" for c in codigos}
+    if not ids:
+        return set()
+    try:
+        import sqlite3
+        conn = sqlite3.connect(_RAIZ / "dados" / "dados.db")
+        try:
+            marcas = ",".join("?" * len(ids))
+            linhas = conn.execute(f"SELECT id FROM torre_excecoes_tratadas WHERE id IN ({marcas})",
+                                  list(ids)).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return set()  # tabela ainda não existe
+    return {r[0].split(":", 1)[1].lstrip("#") for r in linhas}
+
+
+def reentregar_insucessos_sem_resposta(vuupt_token: str, insucessos: list, modo_teste: bool,
+                                       agora: datetime | None = None) -> dict:
+    """Cria a reentrega dos insucessos parados há HORAS_REENTREGA_AUTO sem
+    decisão (Hugo, 28/09: "reentrega auto"). Usa a mesma trava do clique
+    do embarcador na página de resposta (aplicar_resposta_insucesso) pra
+    não duplicar em corrida com ele."""
+    from fingerprint_aguardando_resposta import ja_respondido
+
+    agora = agora or datetime.now(timezone.utc)
+    codigos = [(s.get("code") or "").lstrip("#") for s in insucessos if s.get("code")]
+    tratados = _ids_tratados_na_torre(codigos)
+    abertos, recriados = _fatos_do_banco([s["id"] for s in insucessos if s.get("id")])
+    resultado = {"criadas": [], "falhas": [], "aguardando_humano": []}
+
+    candidatos = []
+    for s in insucessos:
+        sid, code = s.get("id"), (s.get("code") or "").lstrip("#")
+        if not sid or not code:
+            continue
+        ok, motivo = decidir_reentrega_auto(
+            s, agora,
+            duplicado=fingerprint_duplicacao_insucesso.ja_duplicado(sid),
+            agendado=fingerprint_duplicacao_agendada.ja_agendado(sid),
+            respondido=ja_respondido(sid),
+            tratado_na_torre=code in tratados,
+            aberto_stokki=None if abertos is None else _codigo_base(code) in abertos,
+            reentrega_na_vuupt=sid in recriados,
+        )
+        if ok:
+            candidatos.append((s, motivo))
+        elif "não reenvia sozinho" in motivo or "decisão humana" in motivo:
+            resultado["aguardando_humano"].append(f"{code} ({motivo})")
+    if not candidatos:
+        return resultado
+
+    from aplicar_resposta_insucesso import _adquirir_trava, _liberar_trava
+    vuupt = VuuptClient(vuupt_token)
+    for s, motivo in candidatos:
+        code = (s.get("code") or "").lstrip("#")
+        if modo_teste:
+            logger.info(f"  [TESTE] Reentrega automática de {code} ({motivo}).")
+            resultado["criadas"].append(f"{code} (teste)")
+            continue
+        # Trava POR PEDIDO (a da página de resposta vence em 60s -- segurar
+        # o lote inteiro deixava ela "órfã" no meio e o clique do embarcador
+        # passava na frente).
+        if not _adquirir_trava():
+            logger.info(f"  Reentrega automática de {code} adiada: resposta de embarcador sendo aplicada.")
+            continue
+        try:
+            # confere de novo dentro da trava (o embarcador pode ter clicado)
+            if fingerprint_duplicacao_insucesso.ja_duplicado(s["id"]) or ja_respondido(s["id"]):
+                continue
+            novo = duplicar_servico_por_insucesso(vuupt, s)
+            if not novo:
+                resultado["falhas"].append(code)
+                continue
+            try:
+                fingerprint_duplicacao_insucesso.marcar_duplicado(s["id"], novo.get("code", ""))
+            except Exception as e:
+                # A reentrega JÁ existe na Vuupt; sem o fingerprint a próxima
+                # rodada ainda é barrada pelo espelho do núcleo
+                # (reentrega_de_service_id), mas fica o registro do problema.
+                logger.error(f"  {code}: reentrega {novo.get('code')} criada, mas o fingerprint falhou: {e}")
+            tratativas.registrar_evento(
+                code, "INSUCESSO_ENTREGA", "REENVIO_AUTOMATICO",
+                service_id=s["id"], motivo_id=s.get("failed_reason_id"),
+                motivo_texto=texto_do_motivo(s.get("failed_reason_id")),
+                texto=f"Reentrega automática: {motivo} (novo código: {novo.get('code', '')}).",
+            )
+            resultado["criadas"].append(f"{code} -> {novo.get('code', '')}")
+            logger.info(f"  Reentrega automática: {code} -> {novo.get('code')} ({motivo}).")
+        finally:
+            _liberar_trava()
+    return resultado
+
+
+def _itens_whatsapp_insucesso(insucessos: list, embarcadores: dict) -> list:
+    """Insucessos no formato de notificar_whatsapp.avisar_insucessos."""
+    return [{
+        "codigo": s.get("code") or "",
+        "destinatario": s.get("title") or "",
+        "remetente": (embarcadores.get(s.get("sender_id")) or {}).get("nome", ""),
+        "motivo": s.get("note") or texto_do_motivo(s.get("failed_reason_id")),
+    } for s in insucessos]
+
+
+def avisar_insucessos_whatsapp(novos: list, config: dict, modo_teste: bool):
+    """Aviso curto no grupo interno com os insucessos NOVOS da rodada
+    (pedido do Hugo, 29/09). Falha aqui nunca derruba a expedição."""
+    try:
+        import notificar_whatsapp
+        import preferencias_notificacao
+        embarcadores = preferencias_notificacao.carregar_embarcadores("insucesso")
+        notificar_whatsapp.avisar_insucessos(_itens_whatsapp_insucesso(novos, embarcadores), config, modo_teste)
+    except Exception as e:
+        logger.warning(f"  Falha no aviso de insucesso por WhatsApp (segue a expedição): {e}")
+
+
 def notificar_insucesso_entrega(insucessos: list, config_email: dict, modo_teste: bool):
     """
     Envia e-mail interno listando pedidos com INSUCESSO na entrega
@@ -467,6 +744,9 @@ def notificar_insucesso_entrega(insucessos: list, config_email: dict, modo_teste
     Stokki — só geram este aviso, pra alguém tratar manualmente
     (decisão do Hugo, 29/07). Mesmo padrão visual/estrutural de
     notificar_validacao_pendente, adaptado pro conteúdo de insucesso.
+
+    Devolve os insucessos NOVOS quando o e-mail saiu (pro aviso de
+    WhatsApp); None nos demais casos.
     """
     if not insucessos:
         return
@@ -566,6 +846,7 @@ Freshlog Logistica -- notificacao automatica do agente de expedicao.</p>
         # suprimir o e-mail de produção seguinte).
         if not modo_teste:
             fingerprint_notificacao_interna.marcar_notificados(insucessos)
+        return novos
     except Exception as e:
         logger.warning(f"  Falha ao enviar notificacao de insucesso: {e}")
         for s in insucessos:
@@ -745,6 +1026,7 @@ def _preencher_form_login(page, usuario: str, senha: str, tentativas: int = 3, t
     o Stokki às vezes demora mais que o timeout pra renderizar o
     formulário (lento/instável). Cada tentativa recarrega a página antes
     de tentar de novo."""
+    from stokki.auth import aguardar_saida_do_login
     ultimo_erro = None
     for tentativa in range(1, tentativas + 1):
         try:
@@ -752,7 +1034,7 @@ def _preencher_form_login(page, usuario: str, senha: str, tentativas: int = 3, t
             page.fill("[name='email']", usuario)
             page.fill("[name='password']", senha)
             page.click("button[type='submit']")
-            page.wait_for_url(lambda u: "login" not in u, timeout=30_000)
+            aguardar_saida_do_login(page)  # 28/10: passa pela tela de sessão ativa
             return
         except Exception as e:
             ultimo_erro = e
@@ -958,9 +1240,136 @@ def _bases_do_code(code: str) -> set[str]:
     return bases
 
 
+def _desmembrar_combinados(servicos: list) -> list:
+    """Serviço com mais de um pedido no 'code' ("PS-37189, PS-37176")
+    vira um item por pedido, cada um com seu 'code' -- antes o loop
+    expedia só o 1º id (_extrair_id pega a 1ª sequência de dígitos) e os
+    outros ficavam 'Aguardando Transportador' pra sempre (14/09). O
+    canhoto (mesmo checklist) é anexado em cada um."""
+    saida = []
+    for s in servicos:
+        pedacos = [p.strip().lstrip("#") for p in (s.get("code") or "").split(",") if p.strip()]
+        if len(pedacos) <= 1:
+            saida.append(s)
+        else:
+            saida.extend({**s, "code": p} for p in pedacos)
+    return saida
+
+
+def _falhas_bloqueadas(falhas_persistentes: dict, agora: datetime | None = None) -> dict:
+    """Das falhas persistentes, só as que falharam nas últimas 24h ficam
+    fora da fila. As mais velhas voltam pra uma tentativa por dia: pedido
+    recusado por estar 'Aberto'/'Em Conferência' na Stokki costuma ficar
+    expedível dias depois (17 casos em 14/09) e antes nunca era retentado."""
+    limite = ((agora or datetime.now()) - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+    return {c: f for c, f in falhas_persistentes.items() if (f.get("ultima_em") or "") > limite}
+
+
+# Resultado por pedido do --tela-pedidos (botao "Expedir na Stokki" da tela
+# /pedidos, Hugo 12/11): o painel le o JSON de --resultado-json no fim.
+_RESULTADOS: dict = {}
+
+
+def _anotar(codigo: str, ok: bool, mensagem: str):
+    for base in _bases_do_code(codigo) or {fingerprint_expedicao._normalizar(codigo)}:
+        _RESULTADOS[base] = {"ok": ok, "mensagem": mensagem}
+
+
+def _decidir_retirada(conn, codigo: str, nome: str, catalogo, coleta: int | None) -> tuple[bool, str]:
+    """Pedido sem entrega na VUUPT pode expedir? (sim/nao, motivo da recusa).
+    So retirada/coleta no galpao ("CLIENTE RETIRA" ou tipo RETIRADA no
+    cadastro). Desde a aba Coletas da Expedicao (Hugo, 12/11): retirada so
+    sai por coleta confirmada com foto (--coleta N); sem coleta, so o
+    acumulado que ja estava na Stokki na 1a leitura da aba (carga_inicial).
+    Enquanto a aba nunca leu a Stokki (antes do deploy), vale a regra antiga."""
+    from coletas import regras as coletas_regras
+    from coletas.ler_stokki import eh_retirada, ultima_leitura
+    if not eh_retirada(nome, catalogo):
+        return False, (f"não está entregue na Vuupt e a transportadora na Stokki "
+                       f"({nome or 'não informada'}) não é de retirada/coleta no galpão")
+    base = f"PS-{_extrair_id(codigo)}"
+    if coleta:
+        if coletas_regras.tem_foto(conn, coleta, [base]):
+            return True, ""
+        return False, "coleta sem foto confirmada para este pedido"
+    if not ultima_leitura(conn):
+        return True, ""
+    fila = conn.execute("SELECT carga_inicial FROM expedicao_coletas_fila WHERE codigo = ?", (base,)).fetchone()
+    if fila is None:
+        return False, "retirada ainda não lida pela aba Coletas da Expedição: tente por lá em 10 minutos"
+    if not fila["carga_inicial"]:
+        return False, "retirada sai pela aba Coletas da Expedição (com a folha e a foto)"
+    return True, ""
+
+
+def _retiradas_pela_transportadora(config: dict, codigos: set[str], coleta: int | None = None) -> tuple[dict, dict]:
+    """Codigos sem entrega na VUUPT: le a transportadora do pedido na Stokki
+    (conta admin, so leitura) e pergunta a _decidir_retirada. Desde 06/11
+    retirada nem sobe pra VUUPT. Devolve ({codigo: transportadora} das
+    retiradas que podem sair, {codigo: motivo} dos outros)."""
+    try:
+        from stokki.auth import StokkiSession
+        from stokki import pedidos as stokki_pedidos
+        from regras.transportadoras import CatalogoTransportadoras
+        from coletas import banco as coletas_banco
+        sessao = StokkiSession(config)
+        catalogo = CatalogoTransportadoras.carregar_do_banco(_RAIZ / "dados" / "dados.db")
+        conn_coletas = coletas_banco.conectar(_RAIZ / "dados" / "dados.db")
+    except Exception as e:
+        logger.warning(f"Leitura da transportadora na Stokki indisponivel ({e}).")
+        return {}, {c: "não está entregue na Vuupt e não consegui ler a transportadora na Stokki" for c in codigos}
+    retiradas, recusas = {}, {}
+    for codigo in sorted(codigos):
+        try:
+            detalhe = stokki_pedidos.obter_detalhe(sessao, int(_extrair_id(codigo)))
+            nome = ((detalhe.get("transportadora") or {}).get("nome") or "").strip()
+            pode, motivo = _decidir_retirada(conn_coletas, codigo, nome, catalogo, coleta)
+        except Exception as e:
+            logger.warning(f"  {codigo}: leitura da transportadora na Stokki falhou ({e}).")
+            recusas[codigo] = "não está entregue na Vuupt e não consegui ler a transportadora na Stokki"
+            continue
+        if pode:
+            retiradas[codigo] = nome
+        else:
+            recusas[codigo] = motivo
+    conn_coletas.close()
+    return retiradas, recusas
+
+
+def _soltar_da_oe_e_expedir(page, codigo_ps: str) -> tuple[str, str]:
+    """--tela-pedidos: a Stokki recusou ("situacao invalida") e o pedido esta
+    "Aguardando Transportador" -> solta da Expedicao Programada
+    (stokki/expedicao_programada.py) e expede. Devolve (resultado no formato
+    do expedir_na_stokki, nota pro resultado da tela)."""
+    from stokki import expedicao_programada
+    situacao = _situacao_na_stokki(page, codigo_ps)
+    if not situacao or "aguardando transportador" not in situacao.lower():
+        return "ja_expedido", ""
+    try:
+        r = expedicao_programada.liberar_pedido(page, _extrair_id(codigo_ps), datetime.now().strftime("%H:%M"))
+    except Exception as e:
+        logger.warning(f"  {codigo_ps}: falha ao soltar da Expedicao Programada: {e}")
+        return "ja_expedido", "não consegui ler a Expedição Programada do pedido"
+    if r["acao"] == "sem_oe":
+        return "ja_expedido", "o pedido não está em nenhuma Expedição Programada"
+    if r["acao"] == "falha":
+        return "ja_expedido", f"a OE-{r['oe']} não aceitou: {r['erro']}"
+    if r["acao"] == "removido_da_oe":
+        return expedir_na_stokki(page, codigo_ps), f"tirado da OE-{r['oe']} (ela tinha outros pedidos)"
+    # A Stokki conclui a OE na hora, mas o pedido so vira "Enviado" alguns
+    # segundos depois (1a execucao real, PS-43333 em 12/11: reler em 5 s ainda
+    # dava "Aguardando Transportador"). Espera ate 1 minuto.
+    for _ in range(12):
+        situacao = _situacao_na_stokki(page, codigo_ps)
+        if situacao and "enviado" in situacao.lower():
+            return "expedido", f"OE-{r['oe']} finalizada"
+        time.sleep(5)
+    return "ja_expedido", f"a OE-{r['oe']} foi finalizada, mas o pedido segue '{situacao or 'sem situação lida'}'"
+
+
 def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
          forcar: list = None, horas_entregues: int = HORAS_ENTREGUES,
-         pedidos: list = None):
+         pedidos: list = None, tela_pedidos: bool = False, coleta: int | None = None):
     prefixo = "[MODO TESTE] " if modo_teste else ""
     logger.info(f"{prefixo}Expedicao iniciada (janela entregues: {horas_entregues}h | insucessos: {horas}h)")
 
@@ -1001,7 +1410,7 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
             return
         logger.info(f"MODO SELECIONADO: {len(codigos_alvo)} pedido(s): {sorted(codigos_alvo)}")
 
-        servicos = buscar_servicos_entregues(vuupt_token, horas=horas_entregues)
+        servicos = _desmembrar_combinados(buscar_servicos_entregues(vuupt_token, horas=horas_entregues))
         validados = [s for s in servicos if _bases_do_code(s.get("code")) & codigos_alvo]
         encontrados = {b for s in validados for b in _bases_do_code(s.get("code"))} & codigos_alvo
         faltando = codigos_alvo - encontrados
@@ -1023,10 +1432,23 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
             if achadas:
                 logger.info(f"{len(achadas)} retirada(s) no galpao entre os selecionados: {sorted(achadas)}")
             faltando -= achadas
+        if faltando and tela_pedidos:
+            # Retirada/coleta no galpao sem servico na VUUPT (Hugo, 12/11): quem
+            # diz e a transportadora do pedido na Stokki.
+            pela_transportadora, recusas = _retiradas_pela_transportadora(config, faltando, coleta)
+            for codigo, nome in pela_transportadora.items():
+                logger.info(f"  {codigo}: retirada/coleta no galpao pela transportadora ({nome}) -- expede sem entrega na VUUPT.")
+                validados.append({"code": codigo, "id": None, "_retirada": True, "_sem_vuupt": True,
+                                  "checklistAnswers": {"data": []}})
+            for codigo, motivo in recusas.items():
+                _anotar(codigo, False, motivo)
+            faltando -= set(pela_transportadora)
         if faltando:
             logger.warning(f"{len(faltando)} pedido(s) selecionado(s) NAO estao entre os entregues "
                            f"das ultimas {horas_entregues}h na VUUPT nem entre as retiradas em aberto "
                            f"-- fora desta rodada: {sorted(faltando)}")
+            for codigo in faltando - set(_RESULTADOS):
+                _anotar(codigo, False, "não está entre os entregues dos últimos 30 dias na Vuupt")
         falhas_persistentes = {}
         if not validados:
             logger.info("Nenhum dos pedidos selecionados esta elegivel. Nada a expedir.")
@@ -1034,7 +1456,7 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
     else:
         # 1. Busca entregues (com ou sem canhoto -- 28/08, a foto e a
         # validação deixaram de ser trava; ver docstring do módulo)
-        servicos = buscar_servicos_entregues(vuupt_token, horas=horas_entregues)
+        servicos = _desmembrar_combinados(buscar_servicos_entregues(vuupt_token, horas=horas_entregues))
         if not servicos:
             # Sem return: mesmo sem entrega nova, a parte de INSUCESSO
             # abaixo precisa rodar (notificação, duplicação, aviso de dia
@@ -1060,15 +1482,20 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
         # 2b. Quem já falhou MAX_TENTATIVAS_FALHA vezes seguidas com o
         # mesmo erro sai da fila automática (vai pro e-mail de pendências
         # abaixo) -- antes era retentado a cada 30 min por 7 dias e
-        # depois sumia sem aviso.
+        # depois sumia sem aviso. Fica fora só por 24h desde a última
+        # tentativa: depois volta pra 1 tentativa por dia (_falhas_bloqueadas).
         falhas_persistentes = fingerprint_expedicao.falhas_persistentes(MAX_TENTATIVAS_FALHA)
+        bloqueadas = _falhas_bloqueadas(falhas_persistentes)
         if falhas_persistentes:
             antes = len(validados)
             validados = [s for s in validados
-                         if fingerprint_expedicao._normalizar(s.get("code")) not in falhas_persistentes]
+                         if fingerprint_expedicao._normalizar(s.get("code")) not in bloqueadas]
             if antes - len(validados):
                 logger.info(f"{antes - len(validados)} pedido(s) com falha persistente "
-                            f"(>= {MAX_TENTATIVAS_FALHA} tentativas) -- fora da fila, ver e-mail de pendencias.")
+                            f"(>= {MAX_TENTATIVAS_FALHA} tentativas) nas ultimas 24h -- fora da fila, ver e-mail de pendencias.")
+            retentar = len(falhas_persistentes) - len(bloqueadas)
+            if retentar:
+                logger.info(f"{retentar} falha(s) persistente(s) com mais de 24h -- retentativa diaria.")
 
         # 3. Avisa falhas persistentes (os "sem comprovante" entram no
         # mesmo e-mail depois de expedidos, no fim da execução)
@@ -1121,16 +1548,30 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
             # "no caso do cliente responder, prevalece o que ele
             # solicitar" -- sem resposta, sem ação.
             pendentes_resposta = identificar_aguardando_resposta(insucessos)
-            if pendentes_resposta and notificacoes_automaticas_ativas(config):
+            # A chave-mestra virou fallback: a tela de Notificações (tipo
+            # "insucesso") vale por cima e pode ligar a pergunta mesmo com ela
+            # desligada; sem linha na tela, mestra desligada = não envia
+            # (fica pro disparo manual na Fila de Ação).
+            if pendentes_resposta:
                 resultado_espera = notificar_insucesso_aguardando_resposta(
-                    pendentes_resposta, config_email, config.get("resposta_insucesso", {}), modo_teste
+                    pendentes_resposta, config_email, config.get("resposta_insucesso", {}), modo_teste,
+                    mestra=notificacoes_automaticas_ativas(config)
                 )
                 logger.info(f"Pergunta de reenvio aos remetentes: {resultado_espera}")
-            elif pendentes_resposta:
-                logger.info(f"Notificações automáticas desativadas -- {len(pendentes_resposta)} pedido(s) "
-                           f"aguardando pergunta de reenvio, disponível pra disparo manual na Fila de Ação.")
 
-            notificar_insucesso_entrega(insucessos, config_email, modo_teste)
+            novos_avisados = notificar_insucesso_entrega(insucessos, config_email, modo_teste)
+            if novos_avisados:
+                avisar_insucessos_whatsapp(novos_avisados, config, modo_teste)
+
+            # Reentrega automática depois de HORAS_REENTREGA_AUTO sem
+            # decisão (Hugo, 28/09) -- DEPOIS da pergunta, pra ela sair
+            # antes quando as notificações estiverem ligadas.
+            try:
+                reentregas = reentregar_insucessos_sem_resposta(vuupt_token, insucessos, modo_teste)
+                if reentregas["criadas"] or reentregas["falhas"]:
+                    logger.info(f"Reentrega automática: {reentregas}")
+            except Exception as e:
+                logger.error(f"Reentrega automática falhou (segue a expedição): {e}")
 
         # Dia sem NENHUM insucesso: no fim do dia avisa explicitamente
         # (pedido do Hugo, 13/08) -- a função decide sozinha o horário
@@ -1195,14 +1636,29 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                 f"entregue_em={(s.get('completed_at') or '')[:16]} | "
                 f"checklist_id={cl.get('id') if cl else '?'} | canhoto={situacao}"
             )
+            _anotar(s.get("code"), True, f"[modo teste] seria expedido ({situacao})")
         return
 
     # Cliente VUUPT pra fechar retiradas na hora (check-out) -- só existe
     # quando a seleção tem retirada (ver branch _retirada no loop abaixo).
     vuupt_fechar_retiradas = VuuptClient(vuupt_token) if any(s.get("_retirada") for s in validados) else None
 
-    # 4. Setup Playwright provider (expedicao e anexo)
-    pw, browser, page = _setup_playwright(config)
+    # 4. Setup Playwright provider (expedicao e anexo). Espera a vez na
+    # sessão da Stokki (28/09: com o pipeline de hora em hora, o login da
+    # expedição derrubava a sessão dele e vice-versa) -- se continuar
+    # ocupada, fica pra próxima rodada (30 min).
+    # 05/10 (Hugo): a trava é por conta -- a expedição entra pela conta
+    # provider -- e é uma FILA: espera a vez sem limite, por ordem de
+    # chegada (o systemd não dispara outra rodada enquanto esta espera).
+    from stokki import sessao_uso
+    tem_trava = sessao_uso.adquirir(DONO_TRAVA_STOKKI, ttl_segundos=TTL_TRAVA_STOKKI_S,
+                                    esperar_segundos=None, conta="provider")
+    try:
+        pw, browser, page = _setup_playwright(config)
+    except Exception:
+        if tem_trava:
+            sessao_uso.liberar(DONO_TRAVA_STOKKI)
+        raise
 
     res = {"expedido": 0, "falha": 0, "anexado": 0, "falha_anexo": 0, "sem_pdf": 0}
     sem_comprovante = []
@@ -1211,17 +1667,20 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
     try:
         for i, servico in enumerate(validados, 1):
             codigo_ps    = servico.get("code", "")
-            checklist_id = extrair_checklist_id(servico) if tem_canhoto(servico) else None
             cl           = _extrair_checklist(servico)
             logger.info(
                 f"[{i}/{total}] {codigo_ps} | entregue_em={(servico.get('completed_at') or '')[:16]} | "
                 f"validado_em={(cl or {}).get('validated_at') or '-'}"[:120]
             )
 
-            pdf_path = baixar_canhoto_pdf(vuupt_token, checklist_id, codigo_ps) if checklist_id else None
+            pdf_path = pdf_do_canhoto(vuupt_token, servico, codigo_ps)
 
             resultado_exp = expedir_na_stokki(page, codigo_ps)
             situacao = None
+            nota_oe = ""
+            if resultado_exp == "ja_expedido" and tela_pedidos:
+                resultado_exp, nota_oe = _soltar_da_oe_e_expedir(page, codigo_ps)
+            com_nota = f" ({nota_oe})" if nota_oe else ""
 
             if resultado_exp == "ja_expedido":
                 # 404 "situação inválida" só vale como "já expedido" se a
@@ -1230,6 +1689,7 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                 if situacao and "enviado" not in situacao.lower():
                     res["falha"] += 1
                     motivo = f"situacao_invalida_na_stokki ({situacao})"
+                    _anotar(codigo_ps, False, f"a Stokki recusou: o pedido está '{situacao}' lá{com_nota}")
                     n = fingerprint_expedicao.registrar_falha(codigo_ps, motivo, servico.get("id"))
                     logger.warning(f"  {codigo_ps}: Stokki recusou e o pedido esta '{situacao}', "
                                    f"nao 'Enviado' -- sem fingerprint ({n}/{MAX_TENTATIVAS_FALHA}).")
@@ -1263,17 +1723,21 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                         logger.warning(f"  {codigo_ps}: WMS saldo negativo -- {neg}")
                 except Exception as e:  # noqa: BLE001
                     logger.warning(f"  {codigo_ps}: baixa no WMS falhou ({e}) -- expedicao segue.")
+                feito = ("Expedido na Stokki" if resultado_exp == "expedido" else "Já estava Enviado na Stokki") + com_nota
                 if pdf_path:
                     if _canhoto_ja_anexado(page, codigo_ps):
                         res["anexado"] += 1  # conta como ok -- ja estava la
                         fingerprint_expedicao.marcar_processado(codigo_ps, servico.get("id"))
                         fingerprint_expedicao.limpar_falha(codigo_ps)
+                        _anotar(codigo_ps, True, f"{feito}; o canhoto já estava anexado")
                     elif anexar_canhoto(page, codigo_ps, pdf_path):
                         res["anexado"] += 1
                         fingerprint_expedicao.marcar_processado(codigo_ps, servico.get("id"))
                         fingerprint_expedicao.limpar_falha(codigo_ps)
+                        _anotar(codigo_ps, True, f"{feito}; canhoto anexado")
                     else:
                         res["falha_anexo"] += 1
+                        _anotar(codigo_ps, True, f"{feito}, mas o canhoto NÃO foi anexado")
                         n = fingerprint_expedicao.registrar_falha(codigo_ps, "falha_anexo_canhoto", servico.get("id"))
                         logger.warning(f"  {codigo_ps}: falha ao anexar canhoto ({n}/{MAX_TENTATIVAS_FALHA}).")
                 elif servico.get("_retirada"):
@@ -1284,6 +1748,11 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                     fingerprint_expedicao.marcar_processado(codigo_ps, servico.get("id"), canhoto_anexado=False)
                     fingerprint_expedicao.limpar_falha(codigo_ps)
                     verbo = "expedida" if resultado_exp == "expedido" else "ja constava como Enviado"
+                    _anotar(codigo_ps, True, f"{feito} (retirada/coleta no galpão)")
+                    if servico.get("_sem_vuupt"):
+                        logger.info(f"  {codigo_ps}: retirada no galpao {verbo} -- sem servico na VUUPT pra fechar.")
+                        time.sleep(0.5)
+                        continue
                     # Fecha o serviço na VUUPT NA HORA (check-out) -- antes
                     # só o timer do acompanhar_retiradas fazia isso, até 30
                     # min depois, e a seção "A retirar no galpão" (que lê a
@@ -1307,6 +1776,7 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                     fingerprint_expedicao.marcar_processado(codigo_ps, servico.get("id"), canhoto_anexado=False)
                     fingerprint_expedicao.limpar_falha(codigo_ps)
                     sem_comprovante.append(servico)
+                    _anotar(codigo_ps, True, f"{feito}, sem comprovante (não há foto de canhoto)")
                     logger.warning(f"  {codigo_ps}: expedido sem comprovante (sem foto de canhoto).")
                 elif situacao and "enviado" in situacao.lower():
                     # Stokki confirmou "Enviado" e não há canhoto pra
@@ -1314,6 +1784,7 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                     res["ja_expedido"] = res.get("ja_expedido", 0)
                     fingerprint_expedicao.marcar_processado(codigo_ps, servico.get("id"), canhoto_anexado=False)
                     fingerprint_expedicao.limpar_falha(codigo_ps)
+                    _anotar(codigo_ps, True, f"{feito}, sem canhoto pra anexar")
                     logger.info(f"  {codigo_ps}: ja 'Enviado' na Stokki, sem canhoto -- marcado como processado.")
                 else:
                     # Stokki recusou ("situação inválida"), não deu pra
@@ -1321,17 +1792,23 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                     # que já estava expedido. Conta como falha; depois de
                     # MAX_TENTATIVAS_FALHA vai pro e-mail de pendências.
                     res["falha"] += 1
+                    _anotar(codigo_ps, False, f"a Stokki recusou a expedição e não deu pra ler a situação do pedido{com_nota}")
                     n = fingerprint_expedicao.registrar_falha(codigo_ps, "situacao_invalida_na_stokki", servico.get("id"))
                     logger.warning(f"  {codigo_ps}: Stokki recusou e nao ha canhoto pra confirmar ({n}/{MAX_TENTATIVAS_FALHA}).")
             else:
                 res["falha"] += 1
+                _anotar(codigo_ps, False, f"a Stokki recusou a expedição{com_nota}")
                 n = fingerprint_expedicao.registrar_falha(codigo_ps, "expedicao_recusada", servico.get("id"))
                 logger.warning(f"  {codigo_ps}: falha na expedicao ({n}/{MAX_TENTATIVAS_FALHA}).")
 
             time.sleep(0.5)  # era 1.5s (04/08, mesmo motivo: margem generosa demais herdada)
+            if tem_trava and i % 10 == 0:
+                sessao_uso.renovar(DONO_TRAVA_STOKKI, TTL_TRAVA_STOKKI_S)
     finally:
         browser.close()
         pw.stop()
+        if tem_trava:
+            sessao_uso.liberar(DONO_TRAVA_STOKKI)
 
     logger.info("=" * 60)
     logger.info(
@@ -1360,6 +1837,21 @@ if __name__ == "__main__":
                              "entrega na VUUPT e anexa canhoto); aceita tambem retiradas no "
                              "galpao em aberto (expede sem canhoto); ignora fingerprint/falha "
                              "persistente e nao roda a parte de insucessos")
+    parser.add_argument("--tela-pedidos", action="store_true",
+                        help="com --pedido (botao 'Expedir na Stokki' da tela /pedidos): solta o pedido "
+                             "da Expedicao Programada (OE) que trava a expedicao e aceita retirada/coleta "
+                             "no galpao pela transportadora da Stokki, sem entrega na VUUPT")
+    parser.add_argument("--coleta", type=int, metavar="N",
+                        help="com --pedido --tela-pedidos: os pedidos vem da coleta COL-N da tela "
+                             "/expedicao/coletas, confirmada com foto (retirada nova so expede assim)")
+    parser.add_argument("--resultado-json", metavar="ARQUIVO",
+                        help="grava o resultado por pedido ({PS-N: {ok, mensagem}}) neste arquivo")
     args = parser.parse_args()
-    main(horas=args.horas, modo_teste=args.modo_teste, limite=args.limite,
-         forcar=args.forcar, horas_entregues=args.horas_entregues, pedidos=args.pedido)
+    try:
+        main(horas=args.horas, modo_teste=args.modo_teste, limite=args.limite,
+             forcar=args.forcar, horas_entregues=args.horas_entregues, pedidos=args.pedido,
+             tela_pedidos=args.tela_pedidos, coleta=args.coleta)
+    finally:
+        if args.resultado_json:
+            import json
+            Path(args.resultado_json).write_text(json.dumps(_RESULTADOS, ensure_ascii=False), encoding="utf-8")

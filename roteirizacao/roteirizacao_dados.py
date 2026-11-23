@@ -28,7 +28,7 @@ import math
 import re
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -186,6 +186,25 @@ def elegivel_para_data(servico: dict, data_alvo) -> bool:
     return data_agendada <= data_alvo
 
 
+def ids_servicos_em_rotas(rotas: list[dict]) -> set:
+    """IDs dos serviços que estão nas rotas da Vuupt (vindas com
+    include=services), menos as rotas canceladas -- serviço que sobrou em
+    rota cancelada é órfão, não conta como "já em rota". 'services' vem
+    embrulhado como {"data": [...]} (confirmado 02/08). Usado pelo
+    incremento e pela data automática (revisão final, 02/11)."""
+    ids: set = set()
+    for rota in rotas:
+        if rota.get("status") == "canceled":
+            continue
+        servicos = rota.get("services")
+        if isinstance(servicos, dict):
+            servicos = servicos.get("data") or []
+        for s in servicos if isinstance(servicos, list) else []:
+            if isinstance(s, dict) and s.get("id") is not None:
+                ids.add(s["id"])
+    return ids
+
+
 def extrair_volume_caixas(servico: dict) -> int:
     """
     Quantidade de caixas/volumes do pedido, vinda do campo
@@ -255,12 +274,16 @@ def _chave_nivel4(servico: dict) -> tuple[object, object, object]:
     diferentes sai em rotas independentes, mesmo indo pro mesmo CD;
     até então embarcador não entrava na chave, regra de 17/08, que por
     sua vez substituiu a "mesma rede" por raiz de CNPJ). A data de
-    agendamento só entra na comparação quando AMBOS têm agendamento.
+    agendamento só entra na comparação quando AMBOS têm agendamento;
+    data automática (`_data_automatica`, gerada pelo sistema) não conta
+    como agendamento (pedido do Hugo, 02/11).
     Sem agendamento (`_dia_agendamento` retorna None pros dois) junta
     só por endereço+embarcador; um agendado + um sem agendamento nunca
     junta (chaves com `dia` None x data nunca batem), mesmo endereço
     igual."""
-    return (servico.get("address"), servico.get("sender_id"), _dia_agendamento(servico))
+    # Data automática não é agendamento do cliente: dia None (pedido do Hugo, 02/11).
+    dia = None if servico.get("_data_automatica") else _dia_agendamento(servico)
+    return (servico.get("address"), servico.get("sender_id"), dia)
 
 
 def _dia_agendamento(servico: dict):
@@ -716,6 +739,7 @@ def consolidar_regioes_pequenas(grupos: dict[str, list[dict]], minimo: int = 10,
 # ambos têm agendamento (`scheduled_start`), a data também precisa
 # bater; sem agendamento nos dois, junta só pelo endereço+embarcador;
 # um agendado + um sem agendamento nunca junta -- ver _chave_nivel4.
+# Data automática (`_data_automatica`) não conta como agendamento.
 # Grupo cujo volume SOMADO já cabe num tipo de veículo grande (regras/
 # tipo_veiculo.py) sai como 1 rota só desse tipo, sem teto de 100
 # caixas nem de NIVEL_4_TAMANHO_MAXIMO_ROTA pedidos (pedido do Hugo,
@@ -950,16 +974,58 @@ def start_at_rota(data_alvo) -> str:
     """start_at da rota na Vuupt em UTC ("YYYY-MM-DDTHH:MM:SSZ") pra
     HORA_INICIO_ROTA em Brasília (UTC-3, sem horário de verão desde
     2019): 06:00 BRT -> "T09:00:00Z". `data_alvo` é um date."""
-    horas = _hhmm_para_horas(HORA_INICIO_ROTA) + 3.0
-    total = int(round(horas * 60))
-    return f"{data_alvo.strftime('%Y-%m-%d')}T{total // 60:02d}:{total % 60:02d}:00Z"
+    return start_at_na_hora(data_alvo, _hhmm_para_horas(HORA_INICIO_ROTA))
+
+
+def start_at_na_hora(data_alvo, hora_brt: float) -> str:
+    """start_at em UTC ("YYYY-MM-DDTHH:MM:SSZ") pra `hora_brt` (horas
+    decimais em Brasília, UTC-3): 13.25 -> "T16:15:00Z". Mesma conta de
+    start_at_rota, que chama esta com HORA_INICIO_ROTA."""
+    minutos = int(round((hora_brt + 3.0) * 60))
+    utc = datetime.combine(data_alvo, time()) + timedelta(minutes=minutos)
+    return utc.strftime("%Y-%m-%dT%H:%M:00Z")
+
+
+def hora_saida_de_start_at(start_at: str | None) -> float | None:
+    """Inverso de start_at_na_hora: hora decimal em Brasília de um
+    start_at "...Z" (UTC) ou "...-03:00". Sem fuso é UTC (a Vuupt
+    devolve start_at/created_at em UTC sem offset). None se não parsear."""
+    m = re.match(r"^\d{4}-\d{2}-\d{2}[T ](\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$",
+                 str(start_at or "").strip())
+    if not m:
+        return None
+    if int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        return None
+    hora = int(m.group(1)) + int(m.group(2)) / 60.0
+    fuso = m.group(3)
+    if fuso is None or fuso == "Z":
+        deslocamento_utc = 0.0
+    else:
+        digitos = fuso[1:].replace(":", "")
+        deslocamento_utc = (-1 if fuso[0] == "-" else 1) * (int(digitos[:2]) + int(digitos[2:]) / 60.0)
+    return (hora - deslocamento_utc - 3.0) % 24.0
+
+
 TOLERANCIA_JANELA_HORAS = 0.25
 # Objetivo do 2-opt com janelas, em "km equivalentes": 1h de atraso
 # (chegar depois da janela fechar) custa 60 km; 1h esperando o cliente
-# abrir custa 30 km (~2h de rodagem urbana a 15 km/h -- esperar parado
-# é pior que rodar, mas atraso é o pior de todos).
+# abrir custa 10 km. O peso da espera tem que ficar ABAIXO de
+# VELOCIDADE_MEDIA_KMH: com 30 (maior que a velocidade) o 2-opt rodava
+# km a mais pra "gastar" a espera e a #13 de 23/10 saiu em ziguezague
+# (~71 km); com menos que a velocidade rodar nunca compensa esperar.
+# Atraso continua o pior de todos.
 PESO_ATRASO_JANELA_KM = 60.0
-PESO_ESPERA_JANELA_KM = 30.0
+# Claude, 23/10 (era 30).
+PESO_ESPERA_JANELA_KM = 10.0
+# Janela que ABRE a partir daqui é "tardia": a espera antes dela é a que
+# a rota da tarde evita saindo mais tarde (Hugo, 23/10).
+HORA_CORTE_TARDE = "12:00"
+# Espera total aceita numa rota antes de ela virar candidata a sair mais
+# tarde (Claude, 23/10).
+ESPERA_MAXIMA_ROTA_HORAS = 0.75
+# Chave da trava de espera e da rota da tarde (Hugo/Claude, 23/10). False
+# desliga as duas; o replay usa pra comparar com o comportamento antigo.
+ROTA_TARDE_ATIVA = True
 # Pares (inicio, fim) que NÃO significam "o cliente pediu essa janela":
 # são os padrões que pipeline.py (08:00-16:00), agendamento_confirmacao/
 # atualizar_agendamentos_confirmados (08:00-18:00) e regioes_dia_fixo
@@ -1028,15 +1094,24 @@ def _janela_util(inicio, fim) -> tuple[str, str] | None:
     return ini_txt, fim_txt
 
 
+_FUSO_BRASILIA = timezone(timedelta(hours=-3))
+
+
 def _hora_de_iso(texto) -> str | None:
-    """'2026-09-10T14:00:00-03:00' -> '14:00' (a hora local do próprio
-    campo, sem converter fuso); None se não parsear."""
+    """Hora de Brasília ('HH:MM') de um scheduled_* da Vuupt; None se não
+    parsear. A API devolve UTC SEM fuso ('2026-10-22 11:00:00' = 08:00
+    aqui); com offset ('-03:00', 'Z') o offset é respeitado. Até 23/10
+    lia o valor cru como hora local: o padrão 08-16 virava 11-19, escapava
+    de JANELAS_PADRAO_IGNORADAS e virava janela falsa (~36 pedidos/dia)."""
     if not texto:
         return None
     try:
-        return datetime.fromisoformat(str(texto)).strftime("%H:%M")
+        dt = datetime.fromisoformat(str(texto).replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_FUSO_BRASILIA).strftime("%H:%M")
 
 
 def carregar_janelas_confirmadas(db_path) -> dict[str, tuple[str, str]]:
@@ -1119,6 +1194,12 @@ def extrair_janela(servico: dict) -> tuple[float, float] | None:
     return ini, fim
 
 
+def eh_janela_tardia(servico: dict) -> bool:
+    """True se o pedido tem janela e ela abre a partir de HORA_CORTE_TARDE."""
+    janela = extrair_janela(servico)
+    return janela is not None and janela[0] >= _hhmm_para_horas(HORA_CORTE_TARDE)
+
+
 def tem_janela(sublote: list[dict]) -> bool:
     return any(extrair_janela(s) is not None for s in sublote)
 
@@ -1139,6 +1220,8 @@ def simular_horarios(sublote: list[dict], api_key: str | None = None,
     dela fechar conta ATRASO. Retorna:
       {"chegadas": [hora decimal de chegada por parada, na ordem],
        "atraso_h": soma dos atrasos, "espera_h": soma das esperas,
+       "espera_tardia_h": parte do espera_h só nas paradas de janela
+                          tardia (eh_janela_tardia),
        "fora_janela": [índices das paradas atrasadas],
        "fim_h": hora da última entrega concluída,
        "duracao_h": fim_h - hora de saída}."""
@@ -1149,7 +1232,7 @@ def simular_horarios(sublote: list[dict], api_key: str | None = None,
     anterior = base
     chegadas: list[float] = []
     fora: list[int] = []
-    atraso = espera = 0.0
+    atraso = espera = espera_tardia = 0.0
     for idx, s in enumerate(sublote):
         c = resolver(s)
         if c and anterior:
@@ -1161,45 +1244,60 @@ def simular_horarios(sublote: list[dict], api_key: str | None = None,
         if janela:
             if t < janela[0]:
                 espera += janela[0] - t
+                if eh_janela_tardia(s):
+                    espera_tardia += janela[0] - t
                 t = janela[0]
             elif t > janela[1]:
                 atraso += t - janela[1]
                 fora.append(idx)
         t += TEMPO_NIVEL3_HORAS if extrair_nivel_dificuldade(s) == 3 else TEMPO_PARADA_NORMAL_HORAS
     return {"chegadas": chegadas, "atraso_h": atraso, "espera_h": espera,
-            "fora_janela": fora, "fim_h": t, "duracao_h": t - saida}
+            "espera_tardia_h": espera_tardia, "fora_janela": fora, "fim_h": t, "duracao_h": t - saida}
 
 
-def _atraso_intrinseco(sublote: list[dict], api_key=None, coords_base=None, coords_fn=None) -> float:
+def _atraso_intrinseco(sublote: list[dict], api_key=None, coords_base=None, coords_fn=None,
+                       hora_saida: float | None = None) -> float:
     """Atraso que nenhum agrupamento evita: pedido que, SOZINHO e saindo
     da base direto, já chega depois da própria janela (ex.: janela
     06:00-08:00 com saída às 10h). Paralelo de _orcamento_inviavel_por_
     distancia -- fragmentar não resolve, então não deve bloquear."""
     return sum(
-        simular_horarios([s], api_key, coords_base, coords_fn)["atraso_h"]
+        simular_horarios([s], api_key, coords_base, coords_fn, hora_saida)["atraso_h"]
         for s in sublote if extrair_janela(s) is not None
     )
 
 
 def janela_respeitada(sublote: list[dict], api_key: str | None = None,
-                      coords_base: tuple[float, float] | None = None, coords_fn=None) -> bool:
+                      coords_base: tuple[float, float] | None = None, coords_fn=None,
+                      tempo_maximo_horas: float = ROTA_TEMPO_MAXIMO_HORAS,
+                      hora_saida: float | None = None) -> bool:
     """Trava de janela na ORDEM DADA (ordem final, pós-sequenciamento):
     atraso evitável dentro da tolerância E duração com esperas dentro
     do orçamento de horas (exceto rota já inviável só por distância).
-    Sem janela em nenhum pedido: True sem custo nenhum."""
+    Sem janela em nenhum pedido: True sem custo nenhum.
+    `tempo_maximo_horas`: orçamento do dia (a receptora de rota fraca
+    passa 10h30 via polimento_rotas._rota_valida, Hugo 03/10); a janela
+    do cliente e a tolerância de atraso não mudam."""
     if len(sublote) <= 1 or not tem_janela(sublote):
         return True
-    sim = simular_horarios(sublote, api_key, coords_base, coords_fn)
-    if sim["atraso_h"] - _atraso_intrinseco(sublote, api_key, coords_base, coords_fn) > TOLERANCIA_JANELA_HORAS:
+    sim = simular_horarios(sublote, api_key, coords_base, coords_fn, hora_saida)
+    if sim["atraso_h"] - _atraso_intrinseco(sublote, api_key, coords_base, coords_fn, hora_saida) > TOLERANCIA_JANELA_HORAS:
         return False
-    if (sim["duracao_h"] > ROTA_TEMPO_MAXIMO_HORAS
+    if (sim["duracao_h"] > tempo_maximo_horas
             and not _orcamento_inviavel_por_distancia(sublote, api_key, coords_base)):
+        return False
+    # Espera antes de janela tardia (abre >= HORA_CORTE_TARDE): a rota
+    # deveria sair mais tarde em vez de esperar parada (spec 23/10, 5.3).
+    if (ROTA_TARDE_ATIVA
+            and sim.get("espera_tardia_h", 0.0) > ESPERA_MAXIMA_ROTA_HORAS
+            and exige_orcamento_horas(sublote, api_key, coords_base)):
         return False
     return True
 
 
 def janela_viavel(sublote: list[dict], api_key: str | None = None,
-                  coords_base: tuple[float, float] | None = None, coords_fn=None) -> bool:
+                  coords_base: tuple[float, float] | None = None, coords_fn=None,
+                  hora_saida: float | None = None) -> bool:
     """Trava de janela pra FORMAÇÃO/FUSÃO de sublotes (dividir_em_
     sublotes, _empacotar_ganancioso, _fusao_valida do savings,
     fundir_sublotes_pequenos): existe alguma sequência -- a que
@@ -1209,8 +1307,52 @@ def janela_viavel(sublote: list[dict], api_key: str | None = None,
     if len(sublote) <= 1 or not tem_janela(sublote):
         return True
     base = coords_base or COORDS_BASE
-    ordem = ordenar_com_janelas(sublote, base[0], base[1], api_key, coords_fn) if base else list(sublote)
-    return janela_respeitada(ordem, api_key, base, coords_fn)
+    ordem = (ordenar_com_janelas(sublote, base[0], base[1], api_key, coords_fn, hora_saida)
+             if base else list(sublote))
+    return janela_respeitada(ordem, api_key, base, coords_fn, hora_saida=hora_saida)
+
+
+def _custo_janela_precalculado(servicos: list[dict], base: tuple[float, float], resolver,
+                               hora_saida: float | None = None):
+    """Funcao custo(rota de indices) do sequenciador com janela: km sem
+    volta + PESO_ATRASO x atraso + PESO_ESPERA x espera, com as MESMAS
+    contas e na mesma ordem de simular_horarios (resultado identico, ver
+    test_custo_janela_rapido). Coordenada, janela, tempo de parada e
+    pernas calculados UMA vez por rota (16/10): a busca local chama o
+    custo milhares de vezes e simular_horarios relia a janela por regex
+    e recalculava a distancia em toda chamada (213 de 229s do replay)."""
+    n = len(servicos)
+    coords = [resolver(s) for s in servicos]
+    janelas = [extrair_janela(s) for s in servicos]
+    paradas_h = [TEMPO_NIVEL3_HORAS if extrair_nivel_dificuldade(s) == 3 else TEMPO_PARADA_NORMAL_HORAS
+                 for s in servicos]
+    # km[a][b], com a == n representando a base; None = sem coordenada
+    pontos = coords + [base]
+    km = [[_distancia_km(pa[0], pa[1], pb[0], pb[1]) if (pa and pb) else None for pb in coords]
+          for pa in pontos]
+    perna_h = [[_tempo_perna_horas(d) if d is not None else None for d in linha] for linha in km]
+    saida = HORA_SAIDA_BASE if hora_saida is None else hora_saida
+
+    def custo(rota: list[int]) -> float:
+        t = saida
+        total_km = atraso = espera = 0.0
+        anterior = n
+        for k in rota:
+            if coords[k]:
+                total_km += km[anterior][k]
+                t += perna_h[anterior][k]
+                anterior = k
+            janela = janelas[k]
+            if janela:
+                if t < janela[0]:
+                    espera += janela[0] - t
+                    t = janela[0]
+                elif t > janela[1]:
+                    atraso += t - janela[1]
+            t += paradas_h[k]
+        return total_km + PESO_ATRASO_JANELA_KM * atraso + PESO_ESPERA_JANELA_KM * espera
+
+    return custo
 
 
 MAX_ITERACOES_2OPT = 100
@@ -1235,8 +1377,35 @@ def _ordem_vizinho_mais_proximo(servicos: list[dict], base: tuple[float, float],
     return ordem + sem
 
 
+def _juntar_mesmo_endereco(ordem: list[dict], resolver) -> list[dict]:
+    """
+    Paradas com a MESMA coordenada (lat e lng arredondadas em 5 casas)
+    saem seguidas: vao pra logo depois da primeira ocorrencia, na ordem
+    original entre si (Hugo, 23/10 -- na #13 o PS-42216-R1 e o PS-42216
+    eram o mesmo endereco, separados por 5 paradas). Parada sem
+    coordenada fica no indice em que estava.
+    """
+    def _chave(s):
+        c = resolver(s)
+        return (round(c[0], 5), round(c[1], 5)) if c else None
+
+    grupos: dict = {}
+    sem_coord: list[tuple[int, dict]] = []
+    for i, s in enumerate(ordem):
+        k = _chave(s)
+        if k is None:
+            sem_coord.append((i, s))
+        else:
+            grupos.setdefault(k, []).append(s)
+    juntas = [s for g in grupos.values() for s in g]
+    for i, s in sem_coord:
+        juntas.insert(i, s)
+    return juntas
+
+
 def ordenar_com_janelas(servicos: list[dict], base_lat: float, base_lng: float,
-                        api_key: str | None = None, coords_fn=None) -> list[dict]:
+                        api_key: str | None = None, coords_fn=None,
+                        hora_saida: float | None = None) -> list[dict]:
     """
     Sequenciamento de UMA rota (usado por otimizacao_rotas.ordenar_2opt,
     que so delega pra ca). Desde 18/09 (Hugo -- "sequencia livre",
@@ -1271,7 +1440,7 @@ def ordenar_com_janelas(servicos: list[dict], base_lat: float, base_lng: float,
     n = len(ordem_inicial)
     com_janela = tem_janela(ordem_inicial)
     if n <= 1 or (n <= 2 and not com_janela):
-        return ordem_inicial
+        return _juntar_mesmo_endereco(ordem_inicial, resolver)
 
     coords = [resolver(s) for s in ordem_inicial]
     coords_por_objeto = {id(s): c for s, c in zip(ordem_inicial, coords)}
@@ -1299,21 +1468,7 @@ def ordenar_com_janelas(servicos: list[dict], base_lat: float, base_lng: float,
         return not (any(coords[rota[k]] is None for k in range(i, j + 1))
                     or any(coords[rota[k]] is None for k in vizinhos))
 
-    def _km_total(rota: list[int]) -> float:
-        total = 0.0
-        anterior = base
-        for k in rota:
-            c = coords[k]
-            if c is None:
-                continue
-            total += _distancia_km(anterior[0], anterior[1], c[0], c[1])
-            anterior = c
-        return total
-
-    def _custo(rota: list[int]) -> float:
-        sim = simular_horarios([ordem_inicial[k] for k in rota], api_key, base, coords_fn=resolver_cache)
-        return (_km_total(rota) + PESO_ATRASO_JANELA_KM * sim["atraso_h"]
-                + PESO_ESPERA_JANELA_KM * sim["espera_h"])
+    _custo = _custo_janela_precalculado(ordem_inicial, base, resolver_cache, hora_saida) if com_janela else None
 
     def _2opt_sem_janela(rota: list[int]) -> list[int]:
         melhorou, iteracoes = True, 0
@@ -1358,7 +1513,7 @@ def ordenar_com_janelas(servicos: list[dict], base_lat: float, base_lng: float,
 
     rota = list(range(n))
     rota = _busca_local_com_janela(rota) if com_janela else _2opt_sem_janela(rota)
-    return [ordem_inicial[k] for k in rota]
+    return _juntar_mesmo_endereco([ordem_inicial[k] for k in rota], resolver_cache)
 
 
 def separar_pedidos_exclusivos(servicos: list[dict], volume_maximo: int,
@@ -1659,7 +1814,8 @@ def dividir_em_sublotes(servicos: list[dict], tamanho_minimo: int = 10, tamanho_
     Nível 4 (pedido do Hugo, 10/08 -- ajustado 15/08, 17/08 e 09/09):
     nunca divide rota com pedido de nível 1/2/3. Mas PODE dividir rota
     com OUTRO nível 4 do MESMO endereço de entrega e MESMO embarcador
-    (e mesma data de agendamento, quando ambos têm agendamento); grupo
+    (e mesma data de agendamento, quando ambos têm agendamento; data
+    automática não conta como agendamento); grupo
     que soma volume de veículo grande sai como 1 rota desse tipo -- ver
     _chave_nivel4 e separar_pedidos_exclusivos, chamada abaixo,
     compartilhada por TODOS os esquemas de roteirização (não só este).

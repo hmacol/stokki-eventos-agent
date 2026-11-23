@@ -69,6 +69,7 @@ import yaml
 from vuupt_client import VuuptClient
 from rotas_client import listar_rotas
 from regras.preferencias_motoristas import CatalogoMotoristas
+from regras import feriados
 from mapa_util import extrair_servicos_da_rota
 from executor import buscar_ultima_execucao
 from motivos_falha import texto_do_motivo
@@ -131,6 +132,7 @@ _ARQUIVOS_DA_TELA = [
     Path(__file__),
     Path(__file__).parent / "templates" / "torre_controle.html",
     Path(__file__).parent / "templates" / "torre_mobile.html",
+    Path(__file__).parent / "templates" / "_torre_filtro_embarcador.js.html",
     Path(__file__).parent / "templates" / "base.html",
 ]
 
@@ -182,6 +184,10 @@ _lock_caches = threading.Lock()
 # sozinha) e, quando ninguém está com ela aberta, de uma renovação em
 # segundo plano disparada por contadores_menu.
 _snapshot_fila_acao: dict = {"quando": 0.0, "data_iso": None, "qtd": None, "criticas": 0}
+# Irmão do de cima (30/09): resumo de rotas e pedidos do dia pra página
+# inicial do painel (pagina_inicial.py). Mesma regra: publicado de graça
+# por buscar_dados_torre, lido sem coletar nada.
+_snapshot_resumo_dia: dict = {"data_iso": None, "gerado_em": None, "rotas_resumo": None, "pedidos": None}
 _modulo_expedir_pedidos = None  # cache do import explícito, ver _expedir_pedidos_raiz()
 
 
@@ -238,7 +244,9 @@ def _expedir_pedidos_raiz():
 
 
 def duplicar_pedido_manual(service_id: int, codigo: str,
-                           motorista: str | None = None, rota: str | None = None) -> dict:
+                           motorista: str | None = None, rota: str | None = None, *,
+                           origem: str = "TORRE", texto: str | None = None,
+                           servico_original: dict | None = None, marcar_tratado: bool = True) -> dict:
     """
     Duplica manualmente um pedido com insucesso -- botão 'Duplicar
     pedido' da fila de ação (pedido do Hugo, 17/08: poder disparar a
@@ -248,6 +256,10 @@ def duplicar_pedido_manual(service_id: int, codigo: str,
     grava no MESMO fingerprint (insucessos_duplicados) -- o badge da
     fila passa a mostrar 'Duplicado' também pra essa duplicação manual,
     e o fluxo automático por e-mail não duplica de novo em cima dela.
+
+    Tela /pedidos (10/11) reaproveita: origem="PEDIDOS", servico_original (já lido
+    na Vuupt, não busca por code), texto com o marcador {novo} (vira o novo code)
+    e marcar_tratado=False (só insucesso sai da fila de ação).
     """
     import fingerprint_duplicacao_insucesso  # já no sys.path (insucesso_entrega/)
 
@@ -259,7 +271,8 @@ def duplicar_pedido_manual(service_id: int, codigo: str,
     token = config.get("vuupt_api", {}).get("token", "")
     vuupt = VuuptClient(token)
 
-    servico_original = vuupt.buscar_servico_por_code(codigo)
+    if servico_original is None:
+        servico_original = vuupt.buscar_servico_por_code(codigo)
     if not servico_original:
         return {"ok": False, "erro": f"Pedido {codigo} não encontrado no VUUPT."}
 
@@ -271,10 +284,13 @@ def duplicar_pedido_manual(service_id: int, codigo: str,
     novo_code = novo.get("code", "")
     fingerprint_duplicacao_insucesso.marcar_duplicado(service_id, novo_code)
     tratativas.registrar_evento(
-        codigo, "TORRE", "REENVIO_MANUAL",
+        codigo, origem, "REENVIO_MANUAL",
         service_id=service_id, motorista_nome=motorista, rota_nome=rota,
-        texto=f"Duplicado manualmente pela Torre → {novo_code}",
+        texto=(texto.replace("{novo}", novo_code) if texto
+               else f"Duplicado manualmente pela Torre → {novo_code}"),
     )
+    if not marcar_tratado:
+        return {"ok": True, "novo_code": novo_code}
     # Duplicar É a tratativa (Hugo, 16/09): o insucesso sai da Fila de
     # ação na hora e vai pro histórico de tratadas, sem precisar clicar
     # "Tratar" depois -- e a rota deixa de ficar presa na torre por
@@ -339,6 +355,343 @@ def notificar_ocorrencia_manual(service_id: int, codigo: str) -> dict:
     return {"ok": False, "erro": "Falha ao enviar o e-mail (ver log de expedição)."}
 
 
+# Status da Vuupt em que o servico tem motorista e ainda esta aberto --
+# os unicos que concluir_como_agente consegue levar ate 'done'.
+_STATUS_SERVICO_ABERTO_COM_MOTORISTA = ("assigned", "accepted", "on_route", "arrived")
+
+# Foto em massa (Hugo, 30/10): a mesma foto so vale para pedidos do mesmo
+# embarcador (sender_id) E do mesmo destinatario (customer_id) ou do mesmo
+# local de entrega (lote deixado numa transportadora): endereco igual depois
+# de normalizado ou coordenadas a ate 50 m. Sem foto (so justificativa) o
+# lote segue livre.
+MSG_FOTO_EM_MASSA = ("Foto em massa só para pedidos do mesmo embarcador e do mesmo "
+                     "destinatário ou local de entrega.")
+AVISO_NOTA_SEM_CANHOTO = "A foto da nota de retorno só vai junto da foto do canhoto."
+DISTANCIA_MESMO_LOCAL_M = 50
+LIMITE_ERRO_TELA = 200      # texto de erro da Vuupt mostrado ao usuario (o completo vai pro log)
+LIMITE_OBSERVACAO_SEM_SUCESSO = 200   # observacao opcional do "Sem sucesso" (06/11)
+
+
+def _endereco_normalizado(servico: dict) -> str:
+    import unicodedata
+    texto = unicodedata.normalize("NFKD", str(servico.get("address") or ""))
+    texto = texto.encode("ascii", "ignore").decode().lower()
+    return " ".join(re.findall(r"[a-z0-9]+", texto))
+
+
+def _coordenada(servico: dict) -> tuple[float, float] | None:
+    try:
+        lat, lng = float(servico.get("latitude")), float(servico.get("longitude"))
+    except (TypeError, ValueError):
+        return None
+    return (lat, lng) if (lat, lng) != (0.0, 0.0) else None
+
+
+def _distancia_m(a: tuple[float, float], b: tuple[float, float]) -> float:
+    import math
+    lat1, lng1, lat2, lng2 = map(math.radians, (*a, *b))
+    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lng2 - lng1) / 2) ** 2
+    return 2 * 6_371_000 * math.asin(math.sqrt(h))
+
+
+def mesmo_destino_para_foto(servico_a: dict, servico_b: dict) -> bool:
+    """A mesma foto pode valer para os dois servicos da Vuupt? Mesmo embarcador
+    E (mesmo destinatario OU mesmo endereco normalizado OU ate 50 m)."""
+    sender = servico_a.get("sender_id")
+    if not sender or str(sender) != str(servico_b.get("sender_id") or ""):
+        return False
+    cliente = servico_a.get("customer_id")
+    if cliente and str(cliente) == str(servico_b.get("customer_id") or ""):
+        return True
+    endereco = _endereco_normalizado(servico_a)
+    if endereco and endereco == _endereco_normalizado(servico_b):
+        return True
+    ca, cb = _coordenada(servico_a), _coordenada(servico_b)
+    return bool(ca and cb and _distancia_m(ca, cb) <= DISTANCIA_MESMO_LOCAL_M)
+
+
+def validar_lote_foto(service_ids: list[int]) -> dict:
+    """Le cada servico na Vuupt e compara com o 1o (o mesmo que a API de
+    marcar-entregue confere por lote_referencia). {"ok": True} ou
+    {"ok": False, "erro": MSG_FOTO_EM_MASSA, "fora": [codigos]}."""
+    config = _carregar_config()
+    vuupt = VuuptClient(config.get("vuupt_api", {}).get("token", ""))
+    servicos = [(int(sid), vuupt.buscar_servico_por_id(int(sid))) for sid in service_ids]
+    referencia = servicos[0][1] if servicos else None
+    fora = [(s or {}).get("code") or f"#{sid}" for sid, s in servicos
+            if not s or not referencia or not mesmo_destino_para_foto(referencia, s)]
+    if fora:
+        return {"ok": False, "erro": MSG_FOTO_EM_MASSA, "fora": fora}
+    return {"ok": True}
+
+
+def marcar_entregue_manual(service_id: int, usuario: str, foto_canhoto: bytes | None = None,
+                           foto_nota_retorno: bytes | None = None, justificativa: str | None = None,
+                           texto_outro: str | None = None, lote_referencia: int | None = None) -> dict:
+    """
+    Fecha um pedido como ENTREGUE direto na Vuupt, sem passar pelo app
+    do motorista -- "Marcar como entregue" do menu de contexto da Torre
+    e do Planejamento (Hugo, 08/10): motorista sem bateria, app travado,
+    entrega confirmada por telefone/WhatsApp etc.
+
+    Checklist pelas telas (29/10): com foto do canhoto (e/ou da nota de
+    retorno) o checklist de entrega da Vuupt e preenchido entre o
+    check-in e o check-out (concluir_como_agente); sem foto do canhoto
+    a justificativa da lista fixa e obrigatoria. Falha do checklist =
+    pedido NAO concluido. O canhoto tambem vira copia local (PDF) antes
+    de fechar, pra expedicao anexar na Stokki. Canhoto em PDF so vira
+    copia local: o checklist da Vuupt aceita apenas foto.
+
+    Regras do Hugo (30/10): a nota de retorno so vai junto da FOTO do
+    canhoto (sem canhoto, ou canhoto em PDF, ela e descartada com aviso);
+    em massa, lote_referencia (o 1o pedido do lote) so aceita foto se os
+    dois forem do mesmo embarcador e destino (mesmo_destino_para_foto).
+
+    Travas: so servico com motorista e ainda aberto. 'done' devolve ok
+    sem mexer na Vuupt (ja_estava=True); not_assigned, canceled e failed
+    recusam -- insucesso tem o caminho dele (Duplicar), nao e pra virar
+    done por cima.
+    """
+    from nucleo import banco as nucleo_banco, canhotos_manuais, justificativas_sem_canhoto
+    from vuupt_checklist import CAMPO_CANHOTO, CAMPO_NOTA_RETORNO, ChecklistNaoGravado, para_jpeg
+
+    avisos = []
+    if foto_nota_retorno and (not foto_canhoto or foto_canhoto[:5] == b"%PDF-"):
+        foto_nota_retorno = None      # descartada antes de abrir: nunca vai pro checklist
+        avisos.append(AVISO_NOTA_SEM_CANHOTO)
+
+    just_codigo, just_texto = "", ""
+    if not foto_canhoto:
+        try:
+            just_codigo, just_texto = justificativas_sem_canhoto.validar(justificativa, texto_outro)
+        except ValueError as e:
+            return {"ok": False, "erro": str(e)}
+
+    config = _carregar_config()
+    token = config.get("vuupt_api", {}).get("token", "")
+    vuupt = VuuptClient(token)
+
+    servico = vuupt.buscar_servico_por_id(service_id)
+    if not servico:
+        return {"ok": False, "erro": f"Pedido {service_id} não encontrado na VUUPT."}
+    codigo = servico.get("code") or f"#{service_id}"
+    status = servico.get("status") or ""
+
+    if status == "canceled":
+        return {"ok": False, "erro": f"Pedido {codigo} está cancelado na VUUPT."}
+    if status == "failed":
+        return {"ok": False, "erro": f"Pedido {codigo} já está com insucesso na VUUPT -- "
+                                     "use Duplicar pra reentrega."}
+    if status != "done" and status not in _STATUS_SERVICO_ABERTO_COM_MOTORISTA:
+        return {"ok": False, "erro": f"Pedido {codigo} está sem motorista na VUUPT "
+                                     f"(status '{status}') -- não dá pra fechar sem alguém atribuído."}
+    tem_foto = bool(foto_canhoto or foto_nota_retorno)
+    if tem_foto and servico.get("type") != "delivery":
+        return {"ok": False, "erro": f"Pedido {codigo} não é uma entrega: foto de canhoto/nota só em entrega."}
+    if tem_foto and lote_referencia and int(lote_referencia) != int(service_id):
+        # rede de seguranca do lote do Planejamento: a tela ja validou o lote todo antes
+        referencia = vuupt.buscar_servico_por_id(int(lote_referencia))
+        if not referencia or not mesmo_destino_para_foto(referencia, servico):
+            return {"ok": False, "erro": MSG_FOTO_EM_MASSA}
+
+    # Converte tudo ANTES de gravar ou tocar na Vuupt: arquivo ruim recusa o pedido inteiro.
+    canhoto_pdf = canhoto_jpeg = nota_jpeg = None
+    try:
+        if foto_canhoto:
+            canhoto_pdf = canhotos_manuais.para_pdf(foto_canhoto)
+            if foto_canhoto[:5] != b"%PDF-":
+                canhoto_jpeg = para_jpeg(foto_canhoto)
+    except (canhotos_manuais.CanhotoInvalido, ValueError) as e:
+        return {"ok": False, "erro": f"Canhoto: {e}"}
+    try:
+        if foto_nota_retorno:
+            nota_jpeg = para_jpeg(foto_nota_retorno)
+    except ValueError as e:
+        return {"ok": False, "erro": f"Foto da nota de retorno: {str(e)[:1].lower()}{str(e)[1:]}"}
+
+    if status == "done":
+        # Pedido ja concluido: o canhoto manual existente e o comprovante e NUNCA e
+        # sobrescrito; so entra se ainda nao ha nenhum.
+        resultado = {"ok": True, "ja_estava": True, "codigo": codigo}
+        if not tem_foto:
+            if avisos:
+                resultado["aviso"] = " ".join(avisos)
+            return resultado
+        aviso = "Já estava concluído; a foto não foi para o checklist."
+        if canhoto_pdf:
+            conn = nucleo_banco.conectar()
+            try:
+                if canhotos_manuais.existe(conn, codigo):
+                    aviso += " Já havia canhoto arquivado; o enviado não foi gravado."
+                else:
+                    canhotos_manuais.salvar(conn, codigo, service_id, canhoto_pdf, usuario or "painel", config)
+                    tratativas.registrar_evento(
+                        codigo, "TORRE", "CANHOTO_ANEXADO", service_id=service_id,
+                        texto=f"Canhoto anexado pelo painel em pedido já concluído por {usuario or '?'}")
+            except canhotos_manuais.CanhotoInvalido as e:
+                return {"ok": False, "erro": f"Canhoto: {e}"}
+            finally:
+                conn.close()
+        resultado["aviso"] = " ".join([aviso, *avisos])
+        return resultado
+
+    # Copia local do canhoto antes de qualquer fechamento (a expedicao anexa na Stokki).
+    # Nova tentativa substitui a copia do proprio pedido (spec 4.3).
+    if canhoto_pdf:
+        conn = nucleo_banco.conectar()
+        try:
+            canhotos_manuais.salvar(conn, codigo, service_id, canhoto_pdf, usuario or "painel", config)
+        except canhotos_manuais.CanhotoInvalido as e:
+            return {"ok": False, "erro": f"Canhoto: {e}"}
+        finally:
+            conn.close()
+
+    fotos = {}
+    if canhoto_jpeg:
+        fotos[CAMPO_CANHOTO] = canhoto_jpeg
+    if nota_jpeg:
+        fotos[CAMPO_NOTA_RETORNO] = nota_jpeg
+    try:
+        checklist_id = vuupt.concluir_como_agente(
+            service_id, sucesso=True, status_atual=status,
+            fotos_checklist=fotos or None, servico=servico)
+    except ChecklistNaoGravado as e:
+        logger.warning(f"Marcar entregue {codigo}: checklist nao gravado: {e}")
+        return {"ok": False, "erro": f"Checklist não gravado na VUUPT: {str(e)[:LIMITE_ERRO_TELA]}"}
+    except Exception as e:
+        logger.warning(f"Marcar entregue {codigo}: falha ao fechar na VUUPT: {e}")
+        return {"ok": False, "erro": f"Falha ao fechar na VUUPT: {str(e)[:LIMITE_ERRO_TELA]}"}
+
+    if foto_canhoto:
+        observacao = "com foto do canhoto" if canhoto_jpeg else "com canhoto em PDF (só cópia local)"
+    else:
+        observacao = justificativas_sem_canhoto.rotulo(just_codigo)
+        if just_texto:
+            observacao += f": {just_texto}"
+    _registrar_entrega_manual(service_id, codigo, status, usuario, observacao,
+                              justificativa=just_codigo or None, texto_outro=just_texto or None,
+                              checklist_id=checklist_id, fotos=len(fotos))
+    detalhe = observacao + (" (foto no checklist da VUUPT)" if fotos else "")
+    tratativas.registrar_evento(
+        codigo, "TORRE", "ENTREGUE_MANUAL", service_id=service_id,
+        texto=f"Marcado como entregue pelo painel por {usuario or '?'}: {detalhe}",
+    )
+    resultado = {"ok": True, "codigo": codigo}
+    if checklist_id:
+        resultado["checklist_id"] = checklist_id
+    if foto_canhoto and not canhoto_jpeg:
+        avisos.insert(0, "O canhoto em PDF ficou só como cópia local; no checklist da VUUPT vão apenas fotos.")
+    if avisos:
+        resultado["aviso"] = " ".join(avisos)
+    return resultado
+
+
+def motivos_sem_sucesso() -> list[tuple[int, str]]:
+    """Motivos do "Sem sucesso" (mesma lista da baixa sem app), por texto."""
+    from insucesso_entrega.motivos_falha import MOTIVOS_FALHA
+    return sorted(((k, v["texto"]) for k, v in MOTIVOS_FALHA.items()), key=lambda kv: kv[1])
+
+
+def marcar_sem_sucesso_manual(service_id: int, usuario: str, failed_reason_id,
+                              observacao: str | None = None) -> dict:
+    """
+    Fecha um pedido como INSUCESSO direto na Vuupt -- opcao "Sem sucesso"
+    do mesmo modal do "Marcar como entregue" (Hugo, 06/11). Motivo da lista
+    da Vuupt (motivos_sem_sucesso) obrigatorio, observacao opcional (so
+    auditoria: torre_entregas_manuais + tratativas INSUCESSO_MANUAL). Dai
+    em diante e o fluxo normal de insucesso (expedir_pedidos detecta e
+    pergunta ao embarcador), igual a baixa sem app.
+
+    Travas: so servico com motorista e ainda aberto. 'failed' devolve ok
+    sem mexer (ja_estava=True); done, canceled e not_assigned recusam.
+    """
+    from insucesso_entrega.motivos_falha import MOTIVOS_FALHA
+    try:
+        motivo_id = int(failed_reason_id)
+    except (TypeError, ValueError):
+        motivo_id = None
+    if motivo_id not in MOTIVOS_FALHA:
+        return {"ok": False, "erro": "Escolha o motivo da não entrega."}
+    observacao = (observacao or "").strip()
+    if len(observacao) > LIMITE_OBSERVACAO_SEM_SUCESSO:
+        return {"ok": False, "erro": f"Observação com mais de {LIMITE_OBSERVACAO_SEM_SUCESSO} caracteres."}
+    motivo = MOTIVOS_FALHA[motivo_id]["texto"]
+
+    config = _carregar_config()
+    vuupt = VuuptClient(config.get("vuupt_api", {}).get("token", ""))
+    servico = vuupt.buscar_servico_por_id(service_id)
+    if not servico:
+        return {"ok": False, "erro": f"Pedido {service_id} não encontrado na VUUPT."}
+    codigo = servico.get("code") or f"#{service_id}"
+    status = servico.get("status") or ""
+
+    if status == "failed":
+        return {"ok": True, "ja_estava": True, "codigo": codigo}
+    if status == "canceled":
+        return {"ok": False, "erro": f"Pedido {codigo} está cancelado na VUUPT."}
+    if status == "done":
+        return {"ok": False, "erro": f"Pedido {codigo} já está entregue na VUUPT."}
+    if status not in _STATUS_SERVICO_ABERTO_COM_MOTORISTA:
+        return {"ok": False, "erro": f"Pedido {codigo} está sem motorista na VUUPT "
+                                     f"(status '{status}') -- não dá pra fechar sem alguém atribuído."}
+    try:
+        vuupt.concluir_como_agente(service_id, sucesso=False, failed_reason_id=motivo_id,
+                                   status_atual=status, servico=servico)
+    except Exception as e:
+        logger.warning(f"Sem sucesso {codigo}: falha ao fechar na VUUPT: {e}")
+        return {"ok": False, "erro": f"Falha ao fechar na VUUPT: {str(e)[:LIMITE_ERRO_TELA]}"}
+
+    detalhe = f"Sem sucesso: {motivo}" + (f" ({observacao})" if observacao else "")
+    _registrar_entrega_manual(service_id, codigo, status, usuario, detalhe,
+                              texto_outro=observacao or None, resultado="insucesso",
+                              failed_reason_id=motivo_id)
+    tratativas.registrar_evento(
+        codigo, "TORRE", "INSUCESSO_MANUAL", service_id=service_id,
+        motivo_id=motivo_id, motivo_texto=motivo,
+        texto=f"Marcado sem sucesso pelo painel por {usuario or '?'}: {motivo}"
+              + (f" ({observacao})." if observacao else "."),
+    )
+    return {"ok": True, "codigo": codigo}
+
+
+def _registrar_entrega_manual(service_id: int, codigo: str, status_anterior: str,
+                              usuario: str, observacao: str, justificativa: str | None = None,
+                              texto_outro: str | None = None, checklist_id: int | None = None,
+                              fotos: int = 0, resultado: str = "entregue",
+                              failed_reason_id: int | None = None) -> None:
+    conn = _conectar_tratadas()
+    conn.execute("""
+        INSERT INTO torre_entregas_manuais
+            (service_id, codigo, status_anterior, usuario, observacao, marcado_em,
+             justificativa, texto_outro, checklist_id, fotos, resultado, failed_reason_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (int(service_id), (codigo or "")[:60], (status_anterior or "")[:30], (usuario or "")[:100],
+          observacao[:500], datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+          justificativa, (texto_outro or "")[:200] or None, checklist_id, int(fotos),
+          resultado, failed_reason_id))
+    conn.commit()
+    conn.close()
+
+
+def _buscar_entregas_manuais(service_ids: list[int]) -> dict[int, dict]:
+    """Ultimo registro por service_id (usado nos testes e disponivel pra
+    quem quiser mostrar 'entregue pelo painel' na tela)."""
+    if not service_ids:
+        return {}
+    conn = _conectar_tratadas()
+    marcas = ",".join("?" * len(service_ids))
+    rows = conn.execute(f"""
+        SELECT service_id, codigo, status_anterior, usuario, observacao, marcado_em,
+               justificativa, texto_outro, checklist_id, fotos,
+               resultado, failed_reason_id
+          FROM torre_entregas_manuais
+         WHERE service_id IN ({marcas})
+         ORDER BY marcado_em
+    """, [int(s) for s in service_ids]).fetchall()
+    conn.close()
+    return {int(r["service_id"]): dict(r) for r in rows}
+
+
 # ── Faixa 1: etapas do pipeline ────────────────────────────────────────────────
 
 def montar_etapas_pipeline() -> list[dict]:
@@ -385,6 +738,7 @@ def _resumir_servico(s: dict) -> dict:
         "codigo": s.get("code", ""),
         "titulo": (s.get("title") or "")[:90],
         "completed_at": s.get("completed_at"),
+        "sender_id": s.get("sender_id"),
     }
 
 
@@ -444,6 +798,18 @@ def _badges_insucessos(insucessos: list[dict]) -> None:
         except (ValueError, TypeError):
             return iso or ""
 
+    # Retorno já conferido no galpão (tela /retornos, 23/10).
+    no_galpao = {}
+    try:
+        import retornos
+        conn_r = retornos.conectar()
+        try:
+            no_galpao = retornos.status_por_service_ids(conn_r, ids)
+        finally:
+            conn_r.close()
+    except Exception as e:
+        logger.warning(f"[torre] Falha ao ler retornos recebidos: {e}")
+
     for i in insucessos:
         sid = i.get("service_id")
         dup, ag, ar = duplicados.get(sid), agendadas.get(sid), aguardando.get(sid)
@@ -473,6 +839,15 @@ def _badges_insucessos(insucessos: list[dict]) -> None:
             badges.append({"tipo": "aguardando", "texto": "Aguardando resposta do remetente"})
         elif ar and ar["status"] == "RESPONDIDO" and not badges:
             badges.append({"tipo": "respondido", "texto": "Respondido por e-mail"})
+
+        rec = no_galpao.get(sid)
+        if rec:
+            try:
+                quando = " " + datetime.strptime(rec["recebido_em"], "%Y-%m-%d %H:%M:%S").strftime("%d/%m %H:%M")
+            except (TypeError, ValueError):
+                quando = ""
+            texto = f"No galpão{quando}" + (" · divergência" if rec["divergente"] else "")
+            badges.append({"tipo": "falha" if rec["divergente"] else "respondido", "texto": texto})
 
         i["badges"] = badges
 
@@ -558,9 +933,15 @@ def _montar_pedidos_dia(agregado: dict, backlog: dict) -> dict:
         "falha": agregado["insucessos"],
         "nao_atribuidos": backlog["atrasados"][:30],
         "qtd_nao_atribuidos": qtd_atrasados,
+        # Filtro por embarcador da tela (05/10): "sem rota" por remetente,
+        # já que a lista acima é cortada em 30.
+        "atrasados_por_sender": dict(Counter(str(p["sender_id"]) for p in backlog["atrasados"]
+                                             if p.get("sender_id"))),
         "backlog_pool": backlog["pool"],
         "backlog_futuros": backlog["futuros"],
-        "insucessos": agregado["insucessos_lista"][:30],
+        # Sem corte: o [:30] antigo (na ordem da API, não por idade)
+        # fazia insucesso não tratado sumir da Fila de ação (28/09).
+        "insucessos": agregado["insucessos_lista"],
     }
 
 
@@ -768,6 +1149,7 @@ def _montar_card_rota(rota: dict, data_rota: date, nomes_motoristas: dict[int, s
             "titulo": (s.get("title") or "")[:70],
             "situacao": situacao,
             "service_id": s.get("id"),
+            "sender_id": s.get("sender_id"),
         })
 
         # Parada georreferenciada pro mini mapa -- serviço sem
@@ -780,6 +1162,7 @@ def _montar_card_rota(rota: dict, data_rota: date, nomes_motoristas: dict[int, s
                     "codigo": s.get("code", ""),
                     "titulo": (s.get("title") or "")[:70],
                     "situacao": situacao,
+                    "sender_id": s.get("sender_id"),
                 })
         except (TypeError, ValueError):
             pass
@@ -898,6 +1281,13 @@ def _coletar_rotas_abertas(token: str, hoje: date, nomes_motoristas: dict[int, s
     for card, contrib in candidatas:
         veredito = classificar_rota_torre(card, hoje, ids_tratadas, ids_encerradas)
         if not veredito["fica"]:
+            # "Encerrar" tira a ROTA da tela, não o insucesso ainda não
+            # tratado dela: antes ele sumia da Fila de ação junto (28/09)
+            # e o pedido ficava sem reentrega nem alerta.
+            agregado["insucessos_lista"].extend(
+                i for i in contrib["insucessos_lista"]
+                if f"insucesso:{i.get('codigo')}" not in ids_tratadas
+            )
             continue
         card["atrasada"] = veredito["atrasada"]
         card["pendencias"] = veredito["pendencias"]
@@ -930,7 +1320,7 @@ def _coletar_rotas_abertas(token: str, hoje: date, nomes_motoristas: dict[int, s
 # ── Tendência (7 dias úteis, com cache) ───────────────────────────────────────
 
 def _eh_fim_de_semana(dia: date) -> bool:
-    return dia.weekday() >= 5
+    return not feriados.eh_dia_util(dia)   # sabado, domingo ou feriado
 
 
 def _coletar_tendencia(vuupt: VuuptClient, ultimo_dia: date, dias: int = 7) -> list[dict]:
@@ -1203,6 +1593,33 @@ def _conectar_tratadas():
             encerrada_em TEXT NOT NULL
         )
     """)
+    # Pedido fechado como entregue pelo painel (Hugo, 08/10) -- ver
+    # marcar_entregue_manual. Auditoria de quem marcou e como confirmou.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS torre_entregas_manuais (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            service_id      INTEGER NOT NULL,
+            codigo          TEXT,
+            status_anterior TEXT,
+            usuario         TEXT,
+            observacao      TEXT,
+            marcado_em      TEXT NOT NULL
+        )
+    """)
+    # Checklist pelas telas (29/10): justificativa da lista, id do checklist
+    # da Vuupt e quantas fotos foram. "Sem sucesso" (06/11): resultado
+    # ('entregue'/'insucesso'; NULL = entregue, registro antigo) e o motivo.
+    # ALTER idempotente (banco ja existente).
+    colunas = {r[1] for r in conn.execute("PRAGMA table_info(torre_entregas_manuais)")}
+    for nome, tipo in (("justificativa", "TEXT"), ("texto_outro", "TEXT"),
+                       ("checklist_id", "INTEGER"), ("fotos", "INTEGER"),
+                       ("resultado", "TEXT"), ("failed_reason_id", "INTEGER")):
+        if nome not in colunas:
+            try:
+                conn.execute(f"ALTER TABLE torre_entregas_manuais ADD COLUMN {nome} {tipo}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():   # outro processo criou antes
+                    raise
     conn.commit()
     return conn
 
@@ -1243,10 +1660,12 @@ def _pedido_code_da_excecao(excecao_id: str) -> str | None:
 def marcar_excecao_tratada(excecao_id: str, data_alvo: str, tipo: str,
                            descricao: str, motivo: str,
                            motorista_nome: str | None = None, rota_nome: str | None = None,
-                           registrar_tratativa: bool = True):
+                           registrar_tratativa: bool = True, por: str | None = None):
     """`registrar_tratativa=False` só grava a tabela da torre, sem o
     evento EXCECAO_TRATADA no log de tratativas -- pra quem já registrou
-    a ação de outro jeito (duplicar_pedido_manual → REENVIO_MANUAL)."""
+    a ação de outro jeito (duplicar_pedido_manual → REENVIO_MANUAL).
+    Item do batimento também grava a tratativa em batimento_pedidos
+    (`por` = quem tratou)."""
     conn = _conectar_tratadas()
     conn.execute("""
         INSERT INTO torre_excecoes_tratadas (id, data_alvo, tipo, descricao, motivo, tratado_em)
@@ -1264,6 +1683,43 @@ def marcar_excecao_tratada(excecao_id: str, data_alvo: str, tipo: str,
             motorista_nome=motorista_nome, rota_nome=rota_nome, texto=motivo,
         )
 
+    codigo = _pedido_do_batimento(excecao_id)
+    if codigo:
+        motivo = (motivo or "").strip()
+        try:
+            from batimento import consulta as batimento_consulta
+            batimento_consulta.tratar(codigo, por or "torre", f"[Torre] {motivo}" if motivo else "Tratado na Torre")
+        except Exception as e:
+            logger.warning(f"[torre] Tratativa do batimento não gravada para {codigo}: {e}")
+
+
+def _pedido_do_batimento(excecao_id: str) -> str | None:
+    """'batimento:PS-1:MOTIVO' -> 'PS-1'. Os itens 'batimento:nao-fecha:...'
+    e 'batimento:sem-rodada:...' não têm pedido."""
+    partes = (excecao_id or "").split(":")
+    if len(partes) >= 3 and partes[0] == "batimento" and partes[1].startswith("PS-"):
+        return partes[1]
+    return None
+
+
+def marcar_excecoes_tratadas(itens: list[dict], data_alvo: str, motivo: str, por: str | None = None) -> int:
+    """Tratar por lote (Hugo, 30/09): a Fila de acao deixa selecionar
+    varios itens e marcar todos com o mesmo motivo. Cada item e um dict
+    no formato que a tela ja manda pro tratar unitario (id, tipo,
+    descricao, motorista, rota). Devolve quantos foram marcados; item
+    sem id e ignorado."""
+    marcados = 0
+    for item in itens:
+        excecao_id = (item.get("id") or "").strip()
+        if not excecao_id:
+            continue
+        marcar_excecao_tratada(
+            excecao_id, data_alvo, item.get("tipo", ""), item.get("descricao", ""), motivo,
+            motorista_nome=item.get("motorista"), rota_nome=item.get("rota"), por=por,
+        )
+        marcados += 1
+    return marcados
+
 
 def desfazer_excecao_tratada(excecao_id: str) -> bool:
     """Desfaz um 'tratado' (clique errado) -- a linha some do histórico
@@ -1277,6 +1733,18 @@ def desfazer_excecao_tratada(excecao_id: str) -> bool:
     pedido_code = _pedido_code_da_excecao(excecao_id)
     if pedido_code:
         tratativas.registrar_evento(pedido_code, "TORRE", "EXCECAO_DESTRATADA", texto="(desfeito)")
+
+    codigo = _pedido_do_batimento(excecao_id)
+    if codigo:
+        try:
+            from batimento import banco as batimento_banco
+            conn_b = batimento_banco.conectar()
+            try:
+                batimento_banco.desmarcar_tratado(conn_b, codigo)
+            finally:
+                conn_b.close()
+        except Exception as e:
+            logger.warning(f"[torre] Tratativa do batimento não desfeita para {codigo}: {e}")
 
     return cur.rowcount > 0
 
@@ -1371,6 +1839,7 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
             "rota": i.get("rota"),
             "badges": badges,
             "service_id": i.get("service_id"),
+            "sender_id": i.get("sender_id"),
             "codigo": i.get("codigo"),
             "pode_notificar_ocorrencia": pode_notificar_ocorrencia,
             # Botão 'Duplicar pedido' (pedido do Hugo, 17/08): some
@@ -1399,6 +1868,7 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
     for r in sem_motorista:
         excecoes.append({
             "id": f"semmotorista:{r['id']}",
+            "rota_id": r["id"],
             "severidade": "atencao",
             "tipo": "Sem motorista",
             "descricao": f"Rota '{r['nome']}' ({r['total']} parada(s)) sem motorista atribuído.",
@@ -1417,6 +1887,35 @@ def _montar_excecoes(pedidos: dict, rotas: list[dict], etapas: list[dict],
             "acao": {"tipo": "link", "url": f"/planejamento?data={amanha['data_iso']}", "rotulo": "Revisar"},
             "_epoch": 0.0,
         })
+
+    # Vigia de pedidos abertos (28/09): um item por estado com prazo
+    # vencido (pool parado, rota de ontem, insucesso sem reentrega...).
+    # Só lê vigia_pedidos -- quem calcula é o timer do vigia.
+    try:
+        from vigia.consulta import excecoes_torre
+        for x in excecoes_torre(data_iso):
+            excecoes.append({**x, "_epoch": 0.0})
+    except Exception as e:
+        logger.warning(f"[torre] Vigia indisponível: {e}")
+
+    # Batimento (05/10): divergencia REAL parada ha mais de 1 dia util, um
+    # item por pedido, e um critico se a ultima rodada nao fechou. Só lê
+    # batimento_* -- quem calcula é o timer das 07h25.
+    try:
+        from batimento.consulta import excecoes_torre as batimento_excecoes
+        for x in batimento_excecoes(data_iso):
+            excecoes.append({**x, "_epoch": 0.0})
+    except Exception as e:
+        logger.warning(f"[torre] Batimento indisponível: {e}")
+
+    # Motorista sem app (iPhone, 08/10): rota de dia anterior com pedido
+    # pendente aguardando baixa. Só lê o núcleo.
+    try:
+        from nucleo.baixa_sem_app import excecoes_torre as sem_app_excecoes
+        for x in sem_app_excecoes(data_iso):
+            excecoes.append({**x, "_epoch": 0.0})
+    except Exception as e:
+        logger.warning(f"[torre] Baixa sem app indisponível: {e}")
 
     tratadas_por_id = _buscar_tratadas([x["id"] for x in excecoes])
     ativas, tratadas = [], []
@@ -1480,7 +1979,8 @@ def _resumo_amanha(data_alvo: date, token: str) -> dict:
         "data_rotulo": dia_seguinte.strftime("%d/%m"),
         "qtd_rotas": len(rascunhos),
         "qtd_paradas": sum(len(r["paradas"]) for r in rascunhos),
-        "sem_motorista": sum(1 for r in rascunhos if not r.get("agent_id")),
+        # rota da tarde nasce sem motorista de propósito (spec 23/10): não conta
+        "sem_motorista": sum(1 for r in rascunhos if not r.get("agent_id") and r.get("turno") != "TARDE"),
         "qtd_travas": qtd_travas,
         "rotas_vuupt": rotas_vuupt,
     }
@@ -1543,6 +2043,46 @@ def buscar_funil_stokki(forcar: bool = False) -> dict:
 
 # ── Visão completa ────────────────────────────────────────────────────────────
 
+def montar_opcoes_embarcador(linhas: list[tuple]) -> list[dict]:
+    """Opções do filtro por embarcador da tela (Hugo, 05/10: "ver somente
+    os pedidos da MARCHEF"). `linhas` = (sender_id, nome_remetente) do
+    `interno`. Remetentes "GRUPO - FILIAL" (MARCHEF - JEE, MARCHEF -
+    ALMAZ...) ganham também uma opção do grupo inteiro, com todos os
+    sender_id dele; cada remetente continua escolhível sozinho."""
+    por_grupo: dict[str, list[tuple[int, str]]] = {}
+    for sender_id, nome in linhas:
+        if not sender_id or not nome:
+            continue
+        nome = nome.strip()
+        por_grupo.setdefault(nome.split(" - ")[0].strip().upper(), []).append((int(sender_id), nome))
+
+    opcoes = []
+    for grupo in sorted(por_grupo):
+        membros = sorted(por_grupo[grupo], key=lambda m: m[1].upper())
+        if len(membros) > 1:
+            opcoes.append({"chave": f"g:{grupo}", "rotulo": f"{grupo} (grupo, {len(membros)})",
+                           "sender_ids": [m[0] for m in membros], "grupo": True})
+        for sender_id, nome in membros:
+            opcoes.append({"chave": f"s:{sender_id}", "rotulo": nome,
+                           "sender_ids": [sender_id], "grupo": False})
+    return opcoes
+
+
+def _opcoes_embarcador() -> list[dict]:
+    db = _RAIZ / "dados" / "dados.db"
+    try:
+        conn = sqlite3.connect(db)
+        try:
+            linhas = conn.execute(
+                "SELECT sender_id, nome_remetente FROM interno WHERE sender_id IS NOT NULL").fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        logger.warning(f"[torre] Falha ao ler embarcadores pro filtro: {e}")
+        return []
+    return montar_opcoes_embarcador(linhas)
+
+
 def buscar_dados_torre(data_alvo: date | None = None) -> dict:
     """Tudo que a torre mostra, menos o funil Stokki (endpoint próprio,
     com cache e trava de sessão) -- 1 fetch de serviços + 1 de rotas +
@@ -1603,19 +2143,23 @@ def buscar_dados_torre(data_alvo: date | None = None) -> dict:
             "qtd": len(excecoes), "criticas": qtd_criticos,
         })
 
+    gerado_em = datetime.now().strftime("%H:%M:%S")
+    rotas_resumo = {
+        "concluidas": rotas_por_estado.get("concluida", 0),
+        "em_andamento": rotas_por_estado.get("em_andamento", 0),
+        "nao_iniciadas": rotas_por_estado.get("nao_iniciada", 0),
+        "atrasadas": sum(1 for r in rotas if r.get("atrasada")),
+    }
+    _publicar_resumo_dia(data_alvo, gerado_em, rotas_resumo, pedidos)
+
     return {
         "data_alvo": data_alvo.strftime("%d/%m/%Y"),
         "data_alvo_iso": data_alvo.isoformat(),
-        "gerado_em": datetime.now().strftime("%H:%M:%S"),
+        "gerado_em": gerado_em,
         "semaforo": semaforo,
         "pedidos": pedidos,
         "rotas": rotas,
-        "rotas_resumo": {
-            "concluidas": rotas_por_estado.get("concluida", 0),
-            "em_andamento": rotas_por_estado.get("em_andamento", 0),
-            "nao_iniciadas": rotas_por_estado.get("nao_iniciada", 0),
-            "atrasadas": sum(1 for r in rotas if r.get("atrasada")),
-        },
+        "rotas_resumo": rotas_resumo,
         "janela_dias": DIAS_JANELA_TORRE,
         "etapas": etapas,
         "amanha": amanha,
@@ -1626,6 +2170,7 @@ def buscar_dados_torre(data_alvo: date | None = None) -> dict:
         "respostas_tratativa": RESPOSTAS_TRATATIVA,
         "versao_tela": VERSAO_TELA,
         "base": base,
+        "embarcadores": _opcoes_embarcador(),
     }
 
 
@@ -1642,3 +2187,34 @@ def snapshot_fila_acao(data_alvo: date) -> dict | None:
         return None
     return {"qtd": snap["qtd"], "criticas": snap["criticas"],
             "idade_seg": time.monotonic() - snap["quando"]}
+
+
+def _publicar_resumo_dia(data_alvo: date, gerado_em: str, rotas_resumo: dict, pedidos: dict) -> None:
+    """Grava o resumo do dia pra página inicial. `pedidos` é o dicionário
+    de _montar_pedidos_dia; só os quatro números que a tela usa ficam."""
+    with _lock_caches:
+        _snapshot_resumo_dia.update({
+            "data_iso": data_alvo.isoformat(),
+            "gerado_em": gerado_em,
+            "rotas_resumo": dict(rotas_resumo),
+            "pedidos": {
+                "total": pedidos["total"],
+                "entregues": pedidos["sucesso"],
+                "insucessos": pedidos["falha"],
+                "sem_rota": pedidos["qtd_nao_atribuidos"],
+            },
+        })
+
+
+def snapshot_resumo_dia(data_alvo: date) -> dict | None:
+    """Último resumo do dia conhecido, sem disparar coleta. None se ainda
+    não há leitura ou se a última é de outro dia.
+
+    {"gerado_em": "HH:MM:SS", "rotas_resumo": {...}, "pedidos": {...}}
+    """
+    with _lock_caches:
+        snap = dict(_snapshot_resumo_dia)
+    if snap.get("data_iso") is None or snap["data_iso"] != data_alvo.isoformat():
+        return None
+    return {"gerado_em": snap["gerado_em"], "rotas_resumo": dict(snap["rotas_resumo"]),
+            "pedidos": dict(snap["pedidos"])}

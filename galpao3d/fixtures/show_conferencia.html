@@ -1,0 +1,1842 @@
+<!DOCTYPE html>
+<html lang="pt-br" style="background:#eef0f4">
+  	<head>
+    	<meta charset="utf-8">
+		<meta http-equiv="X-UA-Compatible" content="IE=edge">
+		<meta name="csrf-token" content="XXX">
+    	<title>Stokki - Logística digital, acessível e descomplicada</title>
+    	<link rel="icon" href="https://freshlog.stokki.com.br/img/logo_novo.png">
+    	<meta name="viewport" content="width=device-width, initial-scale=1">
+    	<link rel="stylesheet" href="https://freshlog.stokki.com.br/plugins/fontawesome-free/css/all.min.css">
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/vendor/ionicons/2.0.1/css/ionicons.min.css">
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/vendor/flag-icon-css/3.4.6/css/flag-icon.min.css">
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/plugins/toastr/toastr.min.css">
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/css/adminlte.min.css">
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/css/stokki.css?v=1792701829">
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/plugins/overlayScrollbars/css/OverlayScrollbars.min.css">
+		<link href="https://freshlog.stokki.com.br/vendor/google-fonts/gf5/index.css" rel="stylesheet">
+		<link href="https://freshlog.stokki.com.br/vendor/google-fonts/source-sans-pro/semibold.css" rel="stylesheet">
+		<link href="https://freshlog.stokki.com.br/vendor/google-fonts/montserrat/index.css" rel="stylesheet">
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/css/bootstrap-largegrid.min.css">
+	 	 <link rel="stylesheet" href="/css/app.css">
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/css/layout-surface.css?v=1792701829">
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/css/layout-navbar.css?v=1792701829">
+		<link rel="stylesheet" href="https://freshlog.stokki.com.br/css/usermenu.css?v=1792701829">
+  <link rel="stylesheet" href="https://freshlog.stokki.com.br/plugins/select2/css/select2.min.css">
+  <link rel="stylesheet" href="https://freshlog.stokki.com.br/plugins/select2-bootstrap4-theme/select2-bootstrap4.min.css">
+  <link rel="stylesheet" href="https://freshlog.stokki.com.br/vendor/print-js/1.6.0/print.min.css">
+  	</head>
+      <body class="hold-transition sidebar-collapse layout-top-nav text-sm" style="font-size: 0.73rem !important;">
+		<div class="wrapper" >
+			<nav class="main-header navbar navbar-expand-md navbar-white navbar-light" >
+				        <ul class="navbar-nav display_mobile" id="btn_menu_mobile">
+          <li class="nav-item">
+            <a class="nav-link" id="btn_pushmenu_mobile" data-widget="pushmenu" href="#">
+                <i class="fas fa-bars" ></i>
+            </a>
+          </li>
+        </ul>
+		<div class="input-group" id="div_input_search_menu" style="display: none">
+			<input type="text" class="form-control" aria-describedby="basic-addon2" id="input_search_menu" placeholder="Procure pedidos pelo número do #PS-123, da NF-e, nome do destinatário, CPF ou CNPJ do destinatário e a chave eletrônica da NF-e.">
+			<div class="input-group-append">
+				<span class="input-group-text bg-stokki" id="basic-addon2" style="color: white"><i class="fas fa-search fa-lg"></i></span>
+				<span class="input-group-text bg-danger" id="btn_close_search_menu" style="color: white; cursor: pointer;" ><i class="fas fa-times fa-lg"></i></span>
+			</div>
+		</div>
+		<div class="div_header_menu">
+		<div class="collapse navbar-collapse order-3 display_desktop" id="btn_menu">
+			<ul class="navbar-nav"  id="navbarCollapse2">
+								<li class="nav-item">
+					<a class="nav-link" id="btn_pushmenu" data-widget="pushmenu" href="#">
+						<i class="fas fa-bars" ></i>
+					</a>
+					</li>
+    <li class="nav-item">
+      <a href="https://freshlog.stokki.com.br/pt-br/administrator" class="nav-link">Painel</a>
+    </li>
+    <li class="nav-item">
+      <a href="https://freshlog.stokki.com.br/pt-br/administrator/message" class="nav-link">Mensagens</a>
+    </li>
+    <li class="nav-item">
+      <a href="https://freshlog.stokki.com.br/pt-br/administrator/client" class="nav-link">Clientes</a>
+    </li>
+    <li class="nav-item">
+      <a href="https://freshlog.stokki.com.br/pt-br/administrator/provider" class="nav-link">Armazéns</a>
+    </li>
+    <li class="nav-item dropdown text-left">
+      <a id="dropdownSubMenu1" href="#" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" class="nav-link dropdown-toggle">Armazenamento</a>
+      <ul aria-labelledby="dropdownSubMenu1" class="dropdown-menu border-0 shadow">
+        <li><a href="https://freshlog.stokki.com.br/pt-br/administrator/client/product" class="dropdown-item">Produtos</a></li>
+        <li><a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory" class="dropdown-item">Inventário</a></li>
+        <li><a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory/incoming" class="dropdown-item">Pedidos de Entrada</a></li>
+        <li><a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory/outbound" class="dropdown-item">Pedidos de Saída</a></li>
+        <li><a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory/devolution" class="dropdown-item">Retornos e Devoluções</a></li>
+      </ul>
+    </li>
+								   <li class="nav-item">
+  <span class="stk-warehouse-chip" title="Torre de Controle">
+    <i class="fas fa-broadcast-tower"></i>Torre de Controle
+  </span>
+</li>
+			</ul>
+		</div>
+		</div>
+		<div class="div_header_menu ml-auto">
+					<ul class="order-1 order-md-3 navbar-nav navbar-no-expand ml-auto">
+						<li class="dropdown">
+							  <div id="messages-notifications-box"
+  uid="63"
+  utype=3
+  mode="1"
+  token="" style="display:none">
+</div>
+  						</li>
+						<li class="nav-item">
+													</li>
+						<li class="dropdown">
+							  <a class="nav-link stk-nav-icon" data-widget="navbar-search" href="#" role="button" id="btn_search_menu">
+     <svg class="stk-ico stk-ico--search" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="10.5" cy="10.5" r="7.5"/><line x1="16" y1="16" x2="20.5" y2="20.5"/></svg>
+  </a>
+						</li>
+						<li class="dropdown">
+													</li>
+						<li class="dropdown">
+							<div id="div_post_update">
+								  <a href="#"  class="nav-link stk-nav-icon disabled" data-toggle="dropdown" id="btn_post_menu">
+   <svg class="stk-ico" id="fa_post" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5z"/></svg>
+  <span class="badge badge-danger navbar-badge post-counter count_message" id="count_message">
+     <svg class="stk-ico stk-ico--spin" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+  </span>
+</a>
+<ul class="dropdown-menu ul-notification" aria-labelledby="dropdownMenuButtonTeste" id="dropdown_post">
+  <div id="div_post_menu">
+    <div class="row justify-content-center"> 
+      <img class="mb-3 mt-5 mb-5" src="https://freshlog.stokki.com.br/img/loading/loading.gif" alt="" width="150">
+    </div>
+  </div>
+</ul>  							</div>
+						</li>
+						<li class="nav-item dropdown">
+							<div id="div_notification_update">
+								  <a href="#"  class="nav-link stk-nav-icon disabled" data-toggle="dropdown" id="btn_notification_menu">
+   <svg class="stk-ico" id="fa_notification" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+  <span class="badge badge-warning navbar-badge notification-counter" id="count_notification">
+     <svg class="stk-ico stk-ico--spin" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+  </span>
+</a>
+<ul class="dropdown-menu ul-notification" aria-labelledby="dropdownMenuButtonTeste" id="dropdown_notification">
+  <div id="div_notification_menu">
+    <div class="row justify-content-center"> 
+      <img class="mb-3 mt-5 mb-5" src="https://freshlog.stokki.com.br/img/loading/loading.gif" alt="" width="150">
+    </div>
+  </div>
+</ul>  							</div>
+						</li>
+                          <li class="nav-item">
+                <a class="nav-link stk-nav-icon" data-widget="fullscreen" href="#" role="button" id="btn_fullscreen">
+                 <svg class="stk-ico" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+                </a>
+              </li>
+						<div id="chat-provider">
+													</div>
+						<li class="nav-item dropdown user-menu">
+ <div class="dropdown stk-usermenu">
+  <a href="#" class="nav-link stk-nav-labeled stk-usermenu__toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+     <span class="stokki-avatar stokki-avatar--32" role="img" aria-label="Hugo Maçol" title="Hugo Maçol">HM</span>
+    <span class="d-none d-md-inline stk-usermenu__name">
+      Hugo Maçol
+          </span>
+     <svg class="stk-ico stk-usermenu__chevron" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="6 9 12 15 18 9"/></svg>
+  </a>
+  <div class="dropdown-menu dropdown-menu-right stk-usermenu__menu">
+    <div class="stk-usermenu__identity">
+      <strong class="stk-usermenu__account">Hugo Maçol</strong>
+      <span class="stk-usermenu__email">XXX</span>
+    </div>
+    <div class="dropdown-divider"></div>
+    <h6 class="dropdown-header">Links Rápidos</h6>
+     <a href="https://freshlog.stokki.com.br/pt-br/administrator/message" class="dropdown-item stk-usermenu__item">
+   <svg class="stk-ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/></svg>
+  <span>Mensagens</span>
+</a>
+     <a href="https://adm.stokki.com.br/pt-br/public/support-center" class="dropdown-item stk-usermenu__item" target="_blank" rel="noopener noreferrer">
+   <svg class="stk-ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><line x1="4.93" y1="4.93" x2="9.17" y2="9.17"/><line x1="14.83" y1="14.83" x2="19.07" y2="19.07"/><line x1="14.83" y1="9.17" x2="19.07" y2="4.93"/><line x1="4.93" y1="19.07" x2="9.17" y2="14.83"/></svg>
+  <span>Central de Suporte</span>
+</a>
+    <div class="dropdown-divider"></div>
+     <a href="https://freshlog.stokki.com.br/pt-br/logout" class="dropdown-item stk-usermenu__item">
+   <svg class="stk-ico" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+  <span>Sair</span>
+</a>
+  </div>
+</div>
+						</li>
+					</ul>
+		</div>
+      </nav>
+<aside class="main-sidebar sidebar-dark-primary elevation-4">
+  <a href="#" class="brand-link d-flex align-items-center" style=" background:#fff">
+    <img src="https://freshlog.stokki.com.br/img/logo.svg" alt="AdminLTE Logo" class="brand-image" style=" background:#fff">
+		<span class="brand-text font-weight-light d-flex align-items-center"><img
+				src="https://freshlog.stokki.com.br/img/logo-name.svg" height="24" ></span>
+  </a>
+  <div class="sidebar">
+    <nav class="mt-2 color-stokki">
+      <ul class="nav nav-pills nav-sidebar flex-column nav-compact nav-flat" data-widget="treeview" role="menu" data-accordion="false">
+          <li class="nav-item has-treeview">
+            <a href="https://freshlog.stokki.com.br/pt-br/administrator" class="nav-link" id="menu-dashboard">
+              <i class="nav-icon fas fa-tachometer-alt"></i>
+              <p>Painel de Controle</p>
+            </a>
+          </li>
+          <li class="nav-item">
+            <a href="https://freshlog.stokki.com.br/pt-br/administrator/message" class="nav-link" id="menu-message">
+              <i class="nav-icon fas fa-comments"></i>
+              <p>Central de Mensagens</p>
+              <span class="badge badge-danger right count_message"><i class="fa fa-spinner fa-spin"></i></span>
+            </a>
+          </li>
+          <li class="nav-item">
+            <a href="https://freshlog.stokki.com.br/pt-br/administrator/client" class="nav-link" id="menu-client">
+              <i class="nav-icon fas fa-user-tag"></i>
+              <p>Área de Clientes</p>
+            </a>
+          </li>
+                  <li class="nav-item">
+            <a href="https://freshlog.stokki.com.br/pt-br/administrator/provider" class="nav-link" id="menu_provider_area">
+              <i class="nav-icon fas fa-user-tag"></i>
+              <p>Área de Armazém</p>
+            </a>
+          </li>
+        <li class="nav-item has-treeview" id="menu_storage_li">
+          <a href="#" class="nav-link" id="menu_storage">
+            <i class="nav-icon fas fa-warehouse"></i>
+            <p>
+              Armazenamento              <i class="fas fa-angle-left right"></i>
+            </p>
+          </a>
+          <ul class="nav nav-treeview color-stokki-sub">
+                          <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/client/product" class="nav-link" id="menu_storage_product">
+                  <i class="fas fa-box nav-icon ml-3"></i>
+                  <p >Produtos</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory" class="nav-link" id="menu_storage_inventory">
+                  <i class="fas fa-boxes nav-icon ml-3"></i>
+                  <p>Inventário</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory/incoming" class="nav-link" id="menu_storage_incoming">
+                  <i class="fas fa-sign-in-alt nav-icon ml-3"></i>
+                  <p>Pedidos de Entrada</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory/outbound" class="nav-link" id="menu_storage_outbound">
+                  <i class="fas fa-sign-out-alt nav-icon ml-3"></i>
+                  <p>Pedidos de Saída</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory/devolution" class="nav-link" id="menu_storage_devolution">
+                  <i class="fas fa-undo nav-icon ml-3"></i>
+                  <p>Retornos e Devoluções</p>
+                </a>
+              </li>
+                      </ul>
+        </li>
+          <li class="nav-item has-treeview" id="menu_operation_inventory_li">
+            <a href="#" class="nav-link" id="menu_operation_inventory">
+              <i class="nav-icon fas fa-boxes"></i>
+              <p >
+                Operações de Inventário                <i class="fas fa-angle-left right"></i>
+              </p>
+            </a>
+            <ul class="nav nav-treeview color-stokki-sub">
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/operation/inventory/dashboard/v2" class="nav-link" id="menu_operation_inventory_dashboard_index">
+                  <i class="fas fa-tachometer-alt nav-icon ml-3"></i>
+                  <p>Gestão à Vista</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/operation/inventory/danfe" class="nav-link" id="menu_operation_inventory_danfe_index">
+                  <i class="fas fa-file nav-icon ml-3"></i>
+                  <p>Gerar DANFE</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/operation/inventory/serialnumber" class="nav-link" id="menu_operation_inventory_serial_number_index">
+                  <i class="fas fa-box-open nav-icon ml-3"></i>
+                  <p>Gerenciar Número de Série</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/operation/inventory/lot" class="nav-link" id="menu_operation_inventory_lot_index">
+                  <i class="fas fa-box-open nav-icon ml-3"></i>
+                  <p>Gerenciar Lotes e Validades</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/operation/inventory/value" class="nav-link" id="menu_operation_inventory_value_index">
+                  <i class="fas fa-boxes nav-icon ml-3"></i>
+                  <p>Consultar Valor de Estoque</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/operation/inventory/cancel" class="nav-link" id="menu_operation_inventory_cancel_index">
+                  <i class="fas fa-times-circle nav-icon ml-3"></i>
+                  <p>Consultar Pedidos Cancelados</p>
+                </a>
+              </li>
+              <li class="nav-item mt-1">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory/order" class="nav-link" id="menu_operation_inventory_search_index">
+                  <i class="fas fa-search nav-icon ml-3"></i>
+                  <p>Procurar Pedido</p>
+                </a>
+              </li>
+            </ul>
+          </li>
+            <li class="nav-item has-treeview" id="menu_transport_li">
+              <a href="#" class="nav-link" id="menu_transport">
+                <i class="nav-icon fas fa-truck"></i>
+                <p>
+                  Transporte                  <i class="fas fa-angle-left right"></i>
+                </p>
+              </a>
+              <ul class="nav nav-treeview color-stokki-sub">
+                <li class="nav-item">
+                  <a href="https://freshlog.stokki.com.br/pt-br/administrator/carrier" class="nav-link" id="menu_transport_carrier">
+                    <i class="fas fa-truck-moving nav-icon ml-3"></i>
+                    <p>Transportadoras</p>
+                  </a>
+                </li>
+                <li class="nav-item">
+                  <a href="https://freshlog.stokki.com.br/pt-br/administrator/client/transport/address" class="nav-link" id="menu_transport_address">
+                    <i class="fas fa-map-marked-alt nav-icon ml-3"></i>
+                    <p>Lista de Endereços</p>
+                  </a>
+                </li>
+              </ul>
+            </li>
+        <li class="nav-item has-treeview" id="menu_crossdocking_li">
+          <a href="#" class="nav-link" id="menu_crossdocking">
+            <i class="nav-icon fas fa-dolly-flatbed"></i>
+            <p>
+              Cross Docking              <i class="fas fa-angle-left right"></i>
+            </p>
+          </a>
+          <ul class="nav nav-treeview color-stokki-sub">
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/crossdocking/incoming" class="nav-link" id="menu_crossdocking_incoming">
+                <i class="fas fa-sign-in-alt nav-icon ml-3"></i>
+                <p>Pedidos de Entrada</p>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/crossdocking/outbound" class="nav-link" id="menu_crossdocking_outbound">
+                <i class="fas fa-sign-out-alt nav-icon ml-3"></i>
+                <p>Pedidos de Saída</p>
+              </a>
+            </li>
+          </ul>
+        </li>
+        <li class="nav-item has-treeview" id="menu_integration_li">
+          <a href="#" class="nav-link" id="menu_integration">
+            <div id="div_icon_integration" class="ml-2"><img id="icon_integration" src="" alt=""></div>
+            <p class="ml-2">
+              Integrações              <i class="fas fa-angle-left right"></i>
+            </p>
+          </a>
+          <ul class="nav nav-treeview color-stokki-sub">
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/inventory/incoming/integration" class="nav-link" id="menu_integration_incoming">
+                <i class="fas fa-sign-in-alt nav-icon ml-3"></i>
+                <p>Pedidos de Entrada</p>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/integration/sale" class="nav-link" id="menu_integration_sale">
+                <i class="fas fa-sign-out-alt nav-icon ml-3"></i>
+                <p>Pedidos de Saída</p>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/integration/setting" class="nav-link" id="menu_integration_setting">
+                <i class="fas fa-cog nav-icon ml-3"></i>
+                <p>Configurações</p>
+              </a>
+            </li>
+          </ul>
+        </li>
+          <li class="nav-item">
+            <a href="https://freshlog.stokki.com.br/pt-br/administrator/bill" class="nav-link" id="menu_bill">
+              <i class="nav-icon fa fa-file-invoice-dollar"></i>
+              <p>Notas Fiscais</p>
+            </a>
+          </li>
+          <li class="nav-item has-treeview" id="menu_report_li">
+            <a href="#" class="nav-link" id="menu_report">
+              <i class="nav-icon fa fa-file"></i>
+              <p >
+              Relatórios              <i class="fas fa-angle-left right"></i>
+              </p>
+            </a>
+            <ul class="nav nav-treeview color-stokki-sub">
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/report/incoming" class="nav-link" id="menu_report_incoming">
+                  <i class="fas fa-list nav-icon"></i>
+                  <p >Pedidos de Entrada</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/report/outbound" class="nav-link" id="menu_report_outbound">
+                  <i class="fas fa-list nav-icon"></i>
+                  <p >Pedidos de Saída</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/report/inventory" class="nav-link" id="menu_report_inventory">
+                  <i class="fas fa-list nav-icon"></i>
+                  <p >Inventário</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/report/crm" class="nav-link" id="menu_report_crm">
+                  <i class="fas fa-list nav-icon"></i>
+                  <p >CRM</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/report/extra" class="nav-link" id="menu_report_extra">
+                  <i class="fas fa-list nav-icon"></i>
+                  <p >Extras</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/crossdocking/report" class="nav-link" id="menu_report_crossdocking">
+                  <i class="fas fa-list nav-icon"></i>
+                  <p>Cross Docking</p>
+                </a>
+              </li>
+              <li class="nav-item">
+                <a href="https://freshlog.stokki.com.br/pt-br/administrator/report/export" class="nav-link" id="menu_report_export">
+                  <i class="fas fa-file-excel nav-icon"></i>
+                  <p>Lista de Exportações</p>
+                </a>
+              </li>
+            </ul>
+          </li>
+        <li class="nav-item has-treeview" id="menu_billing_li">
+          <a href="#" class="nav-link" id="menu_billing">
+            <i class="nav-icon fas fa-file-invoice-dollar"></i>
+            <p >
+            Faturas            <i class="fas fa-angle-left right"></i>
+            </p>
+          </a>
+          <ul class="nav nav-treeview color-stokki-sub">
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/billing/dashboard" class="nav-link" id="menu_billing_dashboard">
+                <i class="fas fa-tachometer-alt nav-icon ml-3"></i>
+                <p >Visão Geral</p>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/billing/charge" class="nav-link" id="menu_billing_charge">
+                <i class="fas fa-list nav-icon ml-3"></i>
+                <p >Lista de Cobranças</p>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/billing" class="nav-link" id="menu_billing_index">
+                <i class="fas fa-list nav-icon ml-3"></i>
+                <p>Lista de Faturamento</p>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/billing/tariff" class="nav-link" id="menu_billing_tariff">
+                <i class="fas fa-list nav-icon ml-3"></i>
+                <p>Tabelas de Tarifário</p>
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="https://freshlog.stokki.com.br/pt-br/administrator/billing/setting" class="nav-link" id="menu_billing_setting">
+                <i class="fas fa-cog nav-icon ml-3"></i>
+                <p>Configurações</p>
+              </a>
+            </li>
+          </ul>
+        </li>
+        <div class="user-panel mb-2 mt-2"></div>
+          <li class="nav-item">
+            <a href="https://freshlog.stokki.com.br/pt-br/administrator/user" class="nav-link" id="menu_user">
+              <i class="nav-icon fas fa-users"></i>
+              <p>Usuários</p>
+            </a>
+          </li>
+        <li class="nav-item">
+          <a target="_blank" rel="noopener noreferrer" href="https://adm.stokki.com.br/pt-br/public/support-center" class="nav-link" id="menu-config">
+            <i class="nav-icon fas fa-question-circle"></i>
+            <p>Central de Suporte</p>
+          </a>
+        </li>
+        <li class="nav-item">
+          <a href="https://freshlog.stokki.com.br/pt-br/logout" class="nav-link" id="menu-config">
+            <i class="nav-icon fas fa-sign-out-alt"></i>
+            <p>Sair</p>
+          </a>
+        </li>
+      </ul>
+    </nav>
+  </div>
+</aside>
+  <div class="content-wrapper">
+    <div class="content-header">
+      <div class="container-fluid">
+        <div class="row mb-0">
+          <div class="col-sm-6">
+            <h1 class="m-0 text-dark" id="page-title">
+              Pedido de Saída            </h1>
+          </div>
+          <div class="col d-flex align-items-end">
+            <a class="btn button-back ml-auto" href="" onClick="window.location=document.referrer; return false;" data-toggle="tooltip" data-placement="bottom" title='Voltar'>
+              <i class="fas fa-arrow-left"></i>
+            </a>
+            <a class="btn button-refresh ml-2" href="" onClick="window.location.reload();" data-toggle="tooltip" data-placement="bottom" title='Atualizar'>
+              <i class="fas fa-sync-alt"></i>
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+    <section class="content">
+      <div class="container-fluid">
+        <div class="row">
+          <div class="col-12">
+            <div class="card card-default p-3 mb-3">
+              <div class="row mb-3">
+                <div class="col-12 d-flex justify-content-end">
+                                      <div class="btn-group">
+                                                                                                    <button type="button" class="btn btn-sm button-stokki dropdown-toggle" data-toggle="dropdown" data-display="static" data-flip="false">
+                              Opções                            </button>
+                                                                                              <div class="dropdown-menu dropdown-menu-right dropdown-menu-table" style="width: 240px">
+                                                <a class="dropdown-item link-expense-tab" href="#" data-toggle="modal" data-target="#modal_expense" id="btn_modal_expense">
+                          Adicionar Despesas Extras
+                          <i class="fas fa-file-import mt-1" style="float: right"></i>
+                        </a>
+                                                                                                                              <div class="dropdown-divider"></div>
+                                                    <a class="dropdown-item btn_correction_letter" href="#" data-toggle="modal" data-target="#modal_correction_letter" data-id="42319">
+                            Solicitar Carta de Correção                            <i class="fas fa-hand-paper mt-1" style="float: right"></i>
+                          </a>
+                                                                                                                                                  <div class="dropdown-divider"></div>
+                          <a class="dropdown-item link-document-tab d-flex justify-content-between align-items-center" href="#" data-toggle="modal" data-target="#modal_document">
+                            Anexar Documentos Extras                            <i class="fas fa-file-import ml-2"></i>
+                          </a>
+                                              </div>
+                    </div>
+                                      <a class="btn btn-outline-success ml-2" href="https://freshlog.stokki.com.br/pt-br/administrator/inventory/outbound/waybill/42319">Romaneio</a>
+                                      <div class="btn-group">
+                      <a type="button" href="https://freshlog.stokki.com.br/pt-br/administrator/inventory/outbound/tracking/42319" class="btn btn-outline-success ml-2">Rastreamento</a>
+                      <button type="button" class="btn btn-outline-success dropdown-toggle dropdown-icon" data-toggle="dropdown" data-display="static" data-flip="false">
+                        <div class="dropdown-menu dropdown-menu-right dropdown-menu-table mt-auto" role="menu" style="max-width: 270px">
+                          <a class="dropdown-item btn_event" href="#" data-toggle="modal" data-target="#modal_event_outbound">
+                            Adicionar Evento                            <i class="fas fa-sync-alt mt-1" style="float: right"></i>
+                          </a>
+                          <div class="dropdown-divider"></div>
+                          <a class="dropdown-item" href="#" onclick="copyLinkOutbound()">
+                            Copiar Link Público                            <i class="fas fa-copy mt-1" style="float: right"></i>
+                          </a>
+                        </div>
+                      </button>
+                    </div>
+                </div>
+              </div>
+              <div class="row invoice-info">
+                <div class="col-sm-6 invoice-col">
+                  <div class="table-responsive">
+                    <table class="table table-borderless table_morecondensed">
+                      <tr>
+                        <th style="width:150px">ID do Pedido:</th>
+                        <td>#PS-42319</td>
+                      </tr>
+                      <tr>
+                        <th>Ref. do Pedido:</th>
+                        <td>DESCARTE7</td>
+                      </tr>
+                                            <tr>
+                        <th>Canal de Venda:</th>
+                        <td></td>
+                      </tr>
+                      <tr>
+                        <th>Tipo:</th>
+                        <td><span class="badge badge-danger">Saída</span></td>
+                      </tr>
+                      <tr>
+                        <th>Movimento:</th>
+                        <td><span class="badge badge-primary">Venda</span></td>
+                      </tr>
+                      <tr>
+                        <th>Cliente:</th>
+                        <td>XXX</td>
+                      </tr>
+                      <tr>
+                        <th class="text-capitalize">unidade:</th>
+                        <td>Freshlog - São Paulo, SP</td>
+                      </tr>
+                                          </table>
+                  </div>
+                </div>
+                <div class="col-sm-6 invoice-col">
+                  <div class="table-responsive">
+                    <table class="table table-borderless table_morecondensed">
+                      <tr>
+                        <th style="width:280px">Situação:</th>
+                        <td>
+                          <span class="badge badge-orange badge-status mt-1"><i class="fa fa-box-open mr-2"></i>Em Conferência</span>
+                                                                                                                                                                                                                                            <span class="badge badge-danger badge-status mt-1"><i class="fa fa-volume-up mr-2"></i>Instruções de Expedição</span>
+                                                                                                                                                                                                                                                                                                                                                </td>
+                      </tr>
+                      <tr>
+                        <th>Data do Pedido:</th>
+                        <td></td>
+                      </tr>
+                      <tr>
+                        <th>Data de saída:</th>
+                        <td>22/10/2026</td>
+                      </tr>
+                      <tr>
+                        <th>Tipo de Acondicionamento:</th>
+                        <td> Carga Solta (Caixas)</td>
+                      </tr>
+                                              <tr>
+                          <th>
+                            Número de paletes                            <i class="fa fa-question-circle text-stokki ml-1" data-toggle="tooltip" data-placement="bottom" title='Número estimado de paletes.'></i>
+                          </th>
+                          <td>1</td>
+                        </tr>
+                                            <tr>
+                        <th>
+                          Número de caixas                          <i class="fa fa-question-circle text-stokki ml-1" data-toggle="tooltip" data-placement="bottom" title='Número estimado de caixas.'></i>
+                        </th>
+                        <td>90</td>
+                      </tr>
+                      <tr>
+                        <th>Tipo de Transporte:</th>
+                        <td>Lotação (FTL)</td>
+                      </tr>
+                      <tr>
+                        <th>NF-e:</th>
+                        <td>
+                                                      Não informado                                                  </td>
+                      </tr>
+                                                                    <tr>
+                          <th>CT-e:</th>
+                          <td>
+                                                          Não informado                                                      </td>
+                        </tr>
+                    </table>
+                  </div>
+                </div>
+              </div>
+              <div class="card-header p-2">
+                <ul class="nav nav-pills nav-stokki-show">
+                  <li class="nav-item nav-link-stokki-show"><a id="item-tab" class="nav-link active" href="#item" data-toggle="tab">Itens do pedido</a></li>
+                                                        <li class="nav-item nav-link-stokki-show"><a id="serialnumber-tab" class="nav-link" href="#serialnumber " data-toggle="tab">Detalhes de itens</a></li>
+                                                      <li class="nav-item nav-link-stokki-show"><a id="document-tab" class="nav-link" href="#document " data-toggle="tab">Documentos</a></li>
+                  <li class="nav-item nav-link-stokki-show"><a id="messages-tab" class="nav-link" href="#messages " data-toggle="tab">Mensagens</a></li>
+                  <li class="nav-item nav-link-stokki-show"><a id="transport-tab" class="nav-link" href="#transport " data-toggle="tab">Detalhes do transporte</a></li>
+                  <li class="nav-item nav-link-stokki-show"><a id="referenced-tab" class="nav-link" href="#referenced " data-toggle="tab">Documento referenciado e complementar</a></li>
+                                                            <li class="nav-item nav-link-stokki-show"><a id="operation-tab" class="nav-link" href="#operation " data-toggle="tab">Detalhes da operação</a></li>
+                                                        <li class="nav-item nav-link-stokki-show"><a id="expense-tab" class="nav-link" href="#expense " data-toggle="tab">Despesas extras</a></li>
+                  <li class="nav-item nav-link-stokki-show"><a id="history-tab" class="nav-link" href="#history " data-toggle="tab">Histórico do pedido</a></li>
+                  <li class="nav-item nav-link-stokki-show"><a id="annotation-tab" class="nav-link" href="#annotation " data-toggle="tab">Anotações</a></li>
+                </ul>
+              </div>
+              <div class="card-body">
+                <div class="tab-content">
+                  <div class="active tab-pane" id="item">
+                                          <h5>Itens solicitados:</h5>
+                      <table id="example1" class="table table-hover table-responsive-sm table-center">
+                        <thead>
+                          <tr >
+                            <th>NR.</th>
+                            <th>ID</th>
+                            <th>SKU</th>
+                            <th>Nome</th>
+                            <th>Quantidade</th>
+                                                        <th class="text-capitalize">unidade</th>
+                            <th>Valor Unitário</th>
+                            <th>Quantidade confirmada</th>
+                            <th>Peso informado</th>
+                            <th>Obs</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                                                                                <tr >
+                              <td>1</td> 
+                              <td>#ITM-2181</td>
+                              <td>759652</td>
+                              <td>EMPANADAS DE CARNE COM PUPUNHA CX 24UN</td>
+                              <td><h6><span class="badge badge-secondary">1</span></h6></td>
+                                                            <td>CX</td>
+                              <td>R$ 119,7900</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">1</span></h6>
+                                                                                                </td>
+                              <td>-</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">Confirmado</span></h6>
+                                                                                                </td>
+                            </tr>
+                                                                                  <tr >
+                              <td>2</td> 
+                              <td>#ITM-2180</td>
+                              <td>759653</td>
+                              <td>EMPANADAS DE QUEIJO COM CEBOLA E JAMBU CX 24UN</td>
+                              <td><h6><span class="badge badge-secondary">1</span></h6></td>
+                                                            <td>CX</td>
+                              <td>R$ 119,7900</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">1</span></h6>
+                                                                                                </td>
+                              <td>-</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">Confirmado</span></h6>
+                                                                                                </td>
+                            </tr>
+                                                                                  <tr >
+                              <td>3</td> 
+                              <td>#ITM-1669</td>
+                              <td>760355</td>
+                              <td>MOLHO BASE CIB REF 15X1,2KG - 18KG                          </td>
+                              <td><h6><span class="badge badge-secondary">22</span></h6></td>
+                                                            <td>cx</td>
+                              <td>R$ 183,6400</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">22</span></h6>
+                                                                                                </td>
+                              <td>-</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">Confirmado</span></h6>
+                                                                                                </td>
+                            </tr>
+                                                                                  <tr >
+                              <td>4</td> 
+                              <td>#ITM-2186</td>
+                              <td>760121</td>
+                              <td>MOLHO DE QUEIJO CX 15 X 1,2 KG / 18KG</td>
+                              <td><h6><span class="badge badge-secondary">2</span></h6></td>
+                                                            <td>CX</td>
+                              <td>R$ 30,6100</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-danger">2</span></h6>
+                                                                                                </td>
+                              <td>-</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-danger">Falta</span></h6>
+                                                                                                </td>
+                            </tr>
+                                                                                  <tr >
+                              <td>5</td> 
+                              <td>#ITM-2116</td>
+                              <td>760412</td>
+                              <td>MOLHO FUNDO YAKIMESHI REFR CX 12 X 250G / 3KG</td>
+                              <td><h6><span class="badge badge-secondary">2</span></h6></td>
+                                                            <td>CX</td>
+                              <td>R$ 30,6100</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">2</span></h6>
+                                                                                                </td>
+                              <td>-</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">Confirmado</span></h6>
+                                                                                                </td>
+                            </tr>
+                                                                                  <tr >
+                              <td>6</td> 
+                              <td>#ITM-2185</td>
+                              <td>760119</td>
+                              <td>MOLHO NOVO BRANCO CX 15 X 1,2 KG / 18KG</td>
+                              <td><h6><span class="badge badge-secondary">15</span></h6></td>
+                                                            <td>CX</td>
+                              <td>R$ 30,6100</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">15</span></h6>
+                                                                                                </td>
+                              <td>-</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">Confirmado</span></h6>
+                                                                                                </td>
+                            </tr>
+                                                                                  <tr >
+                              <td>7</td> 
+                              <td>#ITM-2184</td>
+                              <td>760112</td>
+                              <td>MOLHO NOVO GIANNI CX 15 X 1,2KG / 18KG</td>
+                              <td><h6><span class="badge badge-secondary">9</span></h6></td>
+                                                            <td>CX</td>
+                              <td>R$ 30,6100</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-danger">7</span></h6>
+                                                                                                </td>
+                              <td>-</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-danger">Falta</span></h6>
+                                                                                                </td>
+                            </tr>
+                                                                                  <tr >
+                              <td>8</td> 
+                              <td>#ITM-2115</td>
+                              <td>760450</td>
+                              <td>MOLHO ORIENTAL SUAVE CX 6 X 600G / 3,6KG</td>
+                              <td><h6><span class="badge badge-secondary">8</span></h6></td>
+                                                            <td>CX</td>
+                              <td>R$ 40,6800</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">8</span></h6>
+                                                                                                </td>
+                              <td>-</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">Confirmado</span></h6>
+                                                                                                </td>
+                            </tr>
+                                                                                  <tr >
+                              <td>9</td> 
+                              <td>#ITM-1675</td>
+                              <td>760346</td>
+                              <td>MOLHO YAKISOBA CIB REFR 15X1,2KG - 18KG                     </td>
+                              <td><h6><span class="badge badge-secondary">13</span></h6></td>
+                                                            <td>cx</td>
+                              <td>R$ 194,8700</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">13</span></h6>
+                                                                                                </td>
+                              <td>-</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">Confirmado</span></h6>
+                                                                                                </td>
+                            </tr>
+                                                                                  <tr >
+                              <td>10</td> 
+                              <td>#ITM-1677</td>
+                              <td>760381</td>
+                              <td>PIZZA BALCAO 24 CM MUCARELA CONG 10X0,360KG -3,600 KG</td>
+                              <td><h6><span class="badge badge-secondary">9</span></h6></td>
+                                                            <td>cx</td>
+                              <td>R$ 107,6100</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">9</span></h6>
+                                                                                                </td>
+                              <td>-</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">Confirmado</span></h6>
+                                                                                                </td>
+                            </tr>
+                                                                                  <tr >
+                              <td>11</td> 
+                              <td>#ITM-1826</td>
+                              <td>760453</td>
+                              <td>PIZZA BASE ALFREDO CONG CX 10 X 380G / 3,8KG</td>
+                              <td><h6><span class="badge badge-secondary">6</span></h6></td>
+                                                            <td>cx</td>
+                              <td>R$ 42,9600</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">6</span></h6>
+                                                                                                </td>
+                              <td>-</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">Confirmado</span></h6>
+                                                                                                </td>
+                            </tr>
+                                                                                  <tr >
+                              <td>12</td> 
+                              <td>#ITM-2114</td>
+                              <td>760419</td>
+                              <td>RECHEIO ROLINHO VEGETARIANO CIB CONG CX 6X0,600KG / 3,6KG</td>
+                              <td><h6><span class="badge badge-secondary">2</span></h6></td>
+                                                            <td>CX</td>
+                              <td>R$ 40,8100</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">2</span></h6>
+                                                                                                </td>
+                              <td>-</td>
+                              <td>
+                                                                                                      <h6><span class="badge badge-success">Confirmado</span></h6>
+                                                                                                </td>
+                            </tr>
+                                                                              </tbody>
+                      </table>
+                                          <div class="form-group">
+                        <label for="receiving_instruction">
+                          Instruções de expedição                          <i class="fa fa-question-circle text-stokki ml-1" data-toggle="tooltip" data-placement="bottom" title='Informe ao armazém de origem a sua instrução de expedição'></i>
+                        </label>
+                        <textarea class="form-control bg-white" rows="3" disabled>XXX</textarea>
+                      </div>
+                  </div>
+                  <div class="tab-pane" id="weight">
+                    <h5>Pesos informados:</h5>
+                    <table id="example1" class="table table-hover table-responsive-sm table-center">
+                      <thead>
+                        <tr>
+                          <th></th>
+                          <th>NR.</th>
+                          <th>SKU</th>
+                          <th>Nome</th>
+                          <th>Peso</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                                              </tbody>
+                    </table>
+                  </div>
+                  <div class="tab-pane" id="serialnumber">
+                                                                                  <h5>EANS lidos na separação:</h5>
+                      <table id="example1" class="table table-hover table-responsive-sm table-center">
+                        <thead>
+                          <tr>
+                            <th>Produto</th>
+                            <th>EAN</th>
+                            <th>Quantidade</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                                                      <tr>
+                              <td>759652 - EMPANADAS DE CARNE COM PUPUNHA CX 24UN</td>
+                              <td>759652</td>
+                              <td><h6><span class="badge badge-secondary">1</span></h6></td>
+                            </tr>
+                                                      <tr>
+                              <td>759653 - EMPANADAS DE QUEIJO COM CEBOLA E JAMBU CX 24UN</td>
+                              <td>759653</td>
+                              <td><h6><span class="badge badge-secondary">1</span></h6></td>
+                            </tr>
+                                                      <tr>
+                              <td>760355 - MOLHO BASE CIB REF 15X1,2KG - 18KG                          </td>
+                              <td>760355</td>
+                              <td><h6><span class="badge badge-secondary">22</span></h6></td>
+                            </tr>
+                                                      <tr>
+                              <td>760412 - MOLHO FUNDO YAKIMESHI REFR CX 12 X 250G / 3KG</td>
+                              <td>760412</td>
+                              <td><h6><span class="badge badge-secondary">2</span></h6></td>
+                            </tr>
+                                                      <tr>
+                              <td>760119 - MOLHO NOVO BRANCO CX 15 X 1,2 KG / 18KG</td>
+                              <td>760119</td>
+                              <td><h6><span class="badge badge-secondary">15</span></h6></td>
+                            </tr>
+                                                      <tr>
+                              <td>760112 - MOLHO NOVO GIANNI CX 15 X 1,2KG / 18KG</td>
+                              <td>760112</td>
+                              <td><h6><span class="badge badge-secondary">7</span></h6></td>
+                            </tr>
+                                                      <tr>
+                              <td>760450 - MOLHO ORIENTAL SUAVE CX 6 X 600G / 3,6KG</td>
+                              <td>760450</td>
+                              <td><h6><span class="badge badge-secondary">8</span></h6></td>
+                            </tr>
+                                                      <tr>
+                              <td>760346 - MOLHO YAKISOBA CIB REFR 15X1,2KG - 18KG                     </td>
+                              <td>760346</td>
+                              <td><h6><span class="badge badge-secondary">13</span></h6></td>
+                            </tr>
+                                                      <tr>
+                              <td>760381 - PIZZA BALCAO 24 CM MUCARELA CONG 10X0,360KG -3,600 KG</td>
+                              <td>760381</td>
+                              <td><h6><span class="badge badge-secondary">9</span></h6></td>
+                            </tr>
+                                                      <tr>
+                              <td>760453 - PIZZA BASE ALFREDO CONG CX 10 X 380G / 3,8KG</td>
+                              <td>760453</td>
+                              <td><h6><span class="badge badge-secondary">6</span></h6></td>
+                            </tr>
+                                                      <tr>
+                              <td>760419 - RECHEIO ROLINHO VEGETARIANO CIB CONG CX 6X0,600KG / 3,6KG</td>
+                              <td>760419</td>
+                              <td><h6><span class="badge badge-secondary">2</span></h6></td>
+                            </tr>
+                                                  </tbody>
+                      </table>
+                                                          </div>
+                  <div class="tab-pane" id="incoming">
+                    <h5>Referência Pedido de Entrada:</h5>
+                    <table id="example1" class="table table-hover table-responsive-sm table-center">
+                      <thead>
+                        <tr>
+                          <th>ID do Pedido</th>
+                          <th>SKU</th>
+                          <th>Quantidade</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                                              </tbody>
+                    </table>
+                  </div>
+                  <div class="tab-pane" id="document">
+                                          <div class="row m-0 p-0 d-flex justify-content-end mb-2">
+                        <div class="btn-group">
+                          <a href="#" type="button" class="btn button-stokki btn_document text-nowrap" data-toggle="modal" data-target="#modal_document"><i class="fas fa-plus mr-2"></i>Anexar Documentos Extras</a>
+                        </div>
+                      </div>
+                    <div id="div_document">
+                        <div class="row d-flex justify-content-center mt-4" id="div_no_documents">
+                          <p>Nenhum documento</p>
+                        </div>
+                    </div>
+                  </div>
+                  <div class="tab-pane" id="messages">
+                    <h5>Mensagens:</h5>
+<hr>
+<div id="div_no_message">
+      <p class="text-center mt-5 mb-5">
+      Nenhuma mensagem    </p>
+  </div>
+<div id="div_posts" style="max-height: 400px; overflow: auto; overflow-x: hidden;">XXX</div>
+  <form id="form_post" method="post" enctype="multipart/form-data" class="mt-5">
+    <input type="hidden" name="_token" value="XXX">
+    <input type="text" name="owner_type" value="Sale" hidden>
+    <input type="text" name="owner_id" value="40672" hidden>
+    <input type="text" name="central_id" value="" hidden>
+     <span class="stokki-avatar stokki-avatar--32 float-left" role="img" aria-label="Hugo Maçol" title="Hugo Maçol">HM</span>
+    <div class="img-push">
+      <div class="row">
+        <div class="col">
+          <input id="text_post" type="text" name="text" class="form-control" placeholder="Mensagem ...">
+        </div>
+        <div class="col-1 d-flex justify-content-end" style="min-width:280px">
+          <button id="btn_send_post" type="submit" class="btn button-stokki" style="width:140px" disabled>
+            Enviar          </button>
+          <a id="btn_file_post" class="btn btn-success ml-2" href="#" style="width:140px">
+            Anexar arquivo          </a>
+          <input type="file" name="file_document" id="file_post" hidden>
+        </div>
+      </div>
+    </div>
+  </form>
+                  </div>
+                  <div class="tab-pane" id="transport">
+                      <h5>Detalhes do transporte:</h5>
+                      <hr>
+                      <div class="row">
+                        <div class="col-3">
+                                                                                    <strong>Tipo de Transporte: </strong>Lotação (FTL)<br>
+                              <strong>Tipo de Acondicionamento: </strong> Carga Solta (Caixas)<br>
+                              <strong>Transportadora: </strong> FRESHLOG <br>
+                              <strong>Data de saída: </strong>22/10/2026<br>
+                              <strong>Data de emissão: </strong>21/10/2026 20:04:41<br>
+                              <strong>CT-e: </strong>
+                                                              Não informado<br>
+                                                                                                              <strong>Rastreamento: </strong> Não informado <br>
+                          <strong>URL de Rastreamento: </strong>
+                                                      Não informado                                                    <br>
+                          <strong>Prazo de Entrega: </strong> Não informado <br>
+                          <strong>Valor da Nota Fiscal: </strong>  Não informado <br>
+                          <strong>Valor Frete: </strong>  Não informado <br>
+                          <strong>Quantidade de volumes mencionado na NF-e: </strong>  Não informado <br>
+                          <strong>Quantidade de volumes informado na conferência: </strong>  Não informado <br>
+                          <strong>Peso total verificado (kg): </strong> 0,000<br>
+                        </div>
+                        <div class="col">
+                          <div class="row invoice-info">
+                            <div class="col invoice-col">
+                              Cliente:
+                              <address>XXX</address>
+                            </div>
+                            <div class="col invoice-col">
+                              Transportadora:
+                              <address>XXX</address>
+                            </div>
+                            <div class="col invoice-col">
+                              Local de Entrega:
+                                                              <address>XXX</address>
+                                                          </div>
+                          </div>
+                          <div class="row invoice-info">
+                            <div class="col-4 invoice-col">
+                              Origem:
+                                                              <address>XXX</address>
+                                                          </div>
+                            <div class="col-4 invoice-col">
+                              Destino:
+                                                                                                <address>XXX</address>
+                                                                                          </div>
+                          </div>
+                        </div>
+                      </div>
+                  </div>
+                  <div class="tab-pane" id="referenced">
+                    <h5>Documento referenciado:</h5>
+                    <hr>
+                    <div class="row">
+                      <div class="col">
+                        <strong>Chave da NF-e: </strong><br>
+                        <strong>Código numérico: </strong><br>
+                        <strong>Número da NF-e: </strong><br>
+                        <strong>Série da NF-e: </strong><br>
+                        <strong>NF-e (XML): </strong><br>
+                        <strong>Valor da Nota Fiscal: </strong><br>
+                        <strong>Data de Saída/Entrada: </strong><span id="text_hour"></span> <br>
+                        <strong>Peso Líquido: </strong><br>
+                        <strong>Peso Bruto: </strong>                      </div>
+                    </div>
+                    <br><br>
+                    <div class="row mb-0">
+                      <div class="col mb-0">
+                        <h5>NF-e Complementar:</h5>
+                      </div>
+                      <div class="col d-flex align-items-end">
+                        <button type="button" class="btn btn-sm btn-success ml-auto" id="btn_supplementary_invoice">
+                          Adicionar NF-e Complementar
+                        </button>
+                      </div>
+                    </div>
+                    <hr class="mt-2">
+                  </div>
+                  <div class="tab-pane" id="operation">
+                    <div class="row">
+                      <div class="col">
+                        <strong>Tarefa da Operação: </strong>#TO-23674<br>
+                        <strong>Operador da Tarefa: </strong>  Werlly Oliveira <br>
+                        <strong>Código de separação: </strong> Q000000697 <br>
+                        <strong>Estação de conferência: </strong>
+                                                   Estação de Conferência 1
+                                                                          <br>
+                        <strong>Usuário da Estação da Conferência: </strong>  Caio <br>
+                        <strong>Inicio da Conferência: </strong>  22/10/2026 17:05 <br>
+                        <strong>Finalização da Conferência: </strong>  Não informado <br>
+                        <strong>Tempo de Conclusão da Conferência: </strong>  Não informado <br>
+                                                                        <strong>Problema Reportado: </strong>  Não <br>
+                        <strong>Expedição: </strong> <br>
+                        <strong>Usuário da Expedição: </strong> <br>
+                        <strong>Conferente da Expedição: </strong> <br>
+                        <strong>Data da Conferência: </strong> <br>
+                                              </div>
+                                          </div>
+                  </div>
+                  <div class="tab-pane" id="expense">
+                    <h5>Despesas extras do pedido:</h5>
+                    <table id="table_expense" class="table table-hover table-responsive-sm table-nowrap table-center-vertically w-100 table-center" >
+                      <thead class=" w-100">
+                        <tr>
+                          <th data-orderable="false">ID</th>
+                          <th data-orderable="false">Descrição</th>
+                          <th data-orderable="false">Valor</th>
+                          <th data-orderable="false">Quantidade</th>
+                          <th data-orderable="false">Total</th>
+                          <th data-orderable="false">Opções</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                                              </tbody>
+                    </table>
+                  </div>
+                  <div class="tab-pane" id="history">
+                    <h5>
+                      Histórico do pedido                      <span data-toggle="tooltip" data-placement="bottom" title='Clique para obter mais informações.'><i class="fa fa-question-circle text-stokki ml-1" data-toggle="modal" data-target="#modal_outbound_situation"></i></span>
+                    </h5>
+                    <hr>
+                    <div class="row">
+                      <div class="col-md-12">
+                        <div class="timeline">
+                              <div class="time-label">
+                                <span class="bg-red">22/10/2026</span>
+                              </div>
+                            <div>
+                              <i class="fas fa-box-open bg-orange"></i>
+                              <div class="timeline-item">
+                                <span class="time"><i class="fas fa-clock"></i> 11:06</span>
+                                                                  <span class="time"><i class="fas fa-user"></i> Werlly Oliveira</span>
+                                                                <h3 class="timeline-header">Em Conferência</h3>
+                                                                                              </div>
+                            </div>
+                            <div>
+                              <i class="fas fa-cog bg-orange"></i>
+                              <div class="timeline-item">
+                                <span class="time"><i class="fas fa-clock"></i> 10:08</span>
+                                                                  <span class="time"><i class="fas fa-user"></i> Werlly Oliveira</span>
+                                                                <h3 class="timeline-header">Em separação</h3>
+                                                                                              </div>
+                            </div>
+                                <div class="time-label">
+                                  <span class="bg-red">21/10/2026</span>
+                                </div>
+                            <div>
+                              <i class="fas fa-truck bg-secondary"></i>
+                              <div class="timeline-item">
+                                <span class="time"><i class="fas fa-clock"></i> 20:04</span>
+                                                                  <span class="time"><i class="fas fa-user"></i> Cliente</span>
+                                                                <h3 class="timeline-header">Aberto</h3>
+                                                                                              </div>
+                            </div>
+                            <div>
+                              <i class="fas fa-file-excel bg-secondary"></i>
+                              <div class="timeline-item">
+                                <span class="time"><i class="fas fa-clock"></i> 20:02</span>
+                                                                <h3 class="timeline-header">Importação</h3>
+                                                                                              </div>
+                            </div>
+                            <div>
+                              <i class="fas fa-clock bg-secondary"></i>
+                              <div class="timeline-item">
+                                <span class="time"><i class="fas fa-clock"></i> 20:02</span>
+                                                                <h3 class="timeline-header">Data do Pedido</h3>
+                                                                                              </div>
+                            </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="tab-pane" id="annotation">
+                    <h5>Anotações:</h5>
+                    <form id="form_annotation" method="post" enctype="multipart/form-data">
+                      <input type="hidden" name="_token" value="XXX">
+                      <input type="number" name="provider_outbound_id" value="42319" hidden>
+                      <div class="form-group">
+                        <label for="annotation">
+                          Suas anotações do pedido                          <i class="fa fa-question-circle text-stokki ml-1" data-toggle="tooltip" data-placement="bottom" title='Estas anotações serão privadas e o armazém não poderá acessar.'></i>
+                        </label>
+                        <textarea id="text_annotation" name="annotation" class="form-control bg-white" rows="3" disabled>XXX</textarea>
+            <div class="d-flex justify-content-center mt-2">
+              <button type="submit" class="btn btn-success btn-lg btn-block w-100 btn_submit" id="btn_submit_correction_letter" data-text="Confirmar" disabled>Confirmar</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+   <div class="modal fade" data-keyboard="false" data-backdrop="static" id="modal_inform_correction_letter" tabindex="-1" role="dialog" aria-labelledby="text_inform_correction_letter" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-600" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title" id="text_inform_correction_letter"><i class="fas fa-file-invoice-dollar"></i> Informar Carta de Correção</h3>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Fechar">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="form_inform_correction_letter" method="post" enctype="multipart/form-data" class="w-100 cl-cc-form" data-store-url="#" data-reload="table_outbound" data-reload-mode="page">
+                    <input type="hidden" name="_token" value="XXX">                    <input type="number" name="order_id" id="order_id_inform_correction_letter" value="42319" hidden>
+                    <input type="hidden" name="page" value="show">
+                    <div id="validation_errors_inform_correction_letter" class="cl-cc-errors"></div>
+                    <div class="mb-4 p-3" style="background-color: #F5B5AD; border: none; box-shadow: none; border-radius: 4px;">
+                        <div class="row align-items-center justify-content-center">
+                            <div class="col">
+                                <div class="d-flex align-items-center gap-2">
+                                    <i class="fas fa-info-circle fa-2x mr-2" style="color: #6F2623;"></i>
+                                    <h6 class="m-0 p-0" style="font-weight: 500; color: #6F2623;">Informações</h6>
+                                </div>
+                            </div>
+                            <div class="col">
+                                <div class="d-flex flex-column align-items-center justify-content-center">
+                                    <p class="mb-0" style="color: #6F2623;"><b>Referência:</b></p>
+                                    <span id="info_inform_correction_reference" style="font-size: 1.2rem; font-weight: 500; color: #6F2623;">#PS-42319</span>
+                                </div>
+                            </div>
+                            <div class="col">
+                                <div class="d-flex flex-column align-items-center justify-content-center">
+                                    <p class="mb-0" style="color: #6F2623;"><b>Volumes:</b></p>
+                                    <span id="info_inform_correction_volumes" style="font-size: 1.2rem; font-weight: 500; color: #6F2623;">---</span>
+                                </div>
+                            </div>
+                            <div class="col">
+                                <div class="d-flex flex-column align-items-center justify-content-center">
+                                    <p class="mb-0" style="color: #6F2623;"><b>Peso bruto:</b></p>
+                                    <span id="info_inform_correction_weight" style="font-size: 1.2rem; font-weight: 500; color: #6F2623;">---</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                                        <div class="form-group">
+                        <label class="m-0" for="reason_inform_correction_letter"><b>Informações que necessitam de correção:</b></label>
+                        <textarea class="form-control bg-white" name="reason" id="reason_inform_correction_letter" rows="3" disabled>XXX</textarea>
+              </div>
+              <div class="callout callout-stokki mt-3">
+                <div class="row ml-1">
+                  <div class="col-1 align-self-center">
+                    <h1 class="imgupload" id="image_file"><i class="far fa-file-pdf"></i></h1>
+                    <h1 class="imgupload ok" id="image_file_ok"><i class="fas fa-check"></i></h1>
+                    <h1 class="imgupload stop" id="image_file_stop"><i class="fas fa-times"></i></h1>
+                  </div>
+                  <div class="col align-self-center ml-5">
+                    <div class="row ml-2">
+                      <button type="button" id="btn_image" class="btn btn-primary btnfileup btnup">
+                        Escolher arquivo</button>
+                      <input type="file" value="" name="image" class="fileup" id="image_input" hidden>
+                    </div>
+                  </div>
+                </div>
+                * Tipo de arquivo aceito (.PNG)              </div>
+              <div class="d-flex justify-content-center">
+                <button type="submit" class="btn btn-success btn-lg btn-block w-100">Adicionar Evento</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="modal fade" data-keyboard="false" data-backdrop="static" id="modal_event_outbound" tabindex="-1" role="dialog" aria-labelledby="modal_title" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-600" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 class="modal-title"><i class="fas fa-sync-alt"></i> Adicionar Evento</h3>
+          <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+          </button>
+        </div>
+        <div class="modal-body ">
+          <div class="d-flex justify-content-center">
+            <form id="form_event_outbound" method="post" enctype="multipart/form-data" class="w-75">
+              <div class="form-group" id="validation_errors_event_outbound"></div>
+              <input type="hidden" name="_token" value="XXX">
+              <input type="number" name="transport_id" value="42319" hidden>
+              <input type="text" name="page" value="show" hidden>
+              <div class="form-group">
+                <label for="description_event">
+                  Descrição                </label>
+                <textarea class="form-control" id="description_event_outbound" rows="2" name="description"></textarea>
+              </div>
+              <div class="callout callout-stokki mt-3">
+                <div class="row ml-1">
+                  <div class="col-1 align-self-center">
+                    <h1 class="imgupload" id="image_file_outbound"><i class="far fa-file-pdf"></i></h1>
+                    <h1 class="imgupload ok" id="image_file_ok_outbound"><i class="fas fa-check"></i></h1>
+                    <h1 class="imgupload stop" id="image_file_stop_outbound"><i class="fas fa-times"></i></h1>
+                  </div>
+                  <div class="col align-self-center ml-5">
+                    <div class="row ml-2">
+                      <button type="button" id="btn_image_outbound" class="btn btn-primary btnfileup btnup">
+                        Escolher arquivo</button>
+                      <input type="file" value="" name="image" class="fileup" id="image_input_outbound" hidden>
+                    </div>
+                  </div>
+                </div>
+                * Tipo de arquivo aceito (.PNG)              </div>
+              <div class="d-flex justify-content-center">
+                <button type="submit" class="btn btn-success btn-lg btn-block w-100">Adicionar Evento</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+	<div class="modal fade" data-keyboard="false" data-backdrop="static" id="modal_request_invoice_provider" tabindex="-1" role="dialog" aria-labelledby="modal_title" aria-hidden="true">
+    <div id="class_modal" class="modal-dialog modal-dialog-centered modal-600" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+            <h3 class="modal-title"><i class="fas fa-hand-paper"></i> Solicitar NF de Retorno</h3>
+            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+              <span aria-hidden="true">&times;</span>
+            </button>
+        </div>
+        <div class="modal-body">
+          <form id="form_request_invoice_provider" method="post" enctype="multipart/form-data" class="w-100">
+            <div class="form-group" id="validation_errors_request_invoice_provider"></div>
+            <input type="hidden" name="_token" value="XXX">
+            <input type="number" id="id_request_invoice_provider" name="provider_outbound_id" value="42319" hidden>
+            <input type="text" name="page" value="show" hidden>
+            <div class="d-flex justify-content-center mt-2">
+              <button type="submit" class="btn btn-success btn-lg btn-block w-100 btn_submit" id="btn_submit_request_invoice_provider" data-text="Confirmar">Confirmar</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+	<div class="modal fade" data-keyboard="false" data-backdrop="static" id="modal_log" tabindex="-1" role="dialog" aria-labelledby="modal_title" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-600" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+            <h3 class="modal-title" id="modal_title"><i class="fas fa-eye"></i> Log</h3>
+            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+              <span aria-hidden="true">&times;</span>
+            </button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <pre>
+            </pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+   <div class="modal fade" data-keyboard="false" data-backdrop="static" id="modal_log_unavailable" tabindex="-1" role="dialog" aria-labelledby="modal_log_unavailable_title" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-600" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title" id="modal_log_unavailable_title">
+                    <i class="fas fa-exclamation-triangle text-warning"></i> Log de integração indisponível                </h3>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Fechar">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p>Período de retenção do log de integração: <strong>30 dias</strong>.</p>
+                <div class="bg-light border rounded p-3 mb-3">
+                    <p class="m-0">
+                        Para garantir o desempenho e a estabilidade da plataforma, os logs de integração dos pedidos importados do ERP são mantidos por até 30 dias após a importação. Como este pedido foi importado há mais de 30 dias, o log detalhado desta integração não está mais disponível para consulta.                    </p>
+                </div>
+                <p class="m-0">Os dados do pedido permanecem disponíveis normalmente — apenas o log técnico da integração expira após esse período.</p>
+            </div>
+            <div class="modal-footer justify-content-center">
+                <button type="button" class="btn btn-success" data-dismiss="modal">Entendi!</button>
+            </div>
+        </div>
+    </div>
+</div>
+  <form id="form_view_correction_letter" method="post" enctype="multipart/form-data">
+    <input type="hidden" name="_token" value="XXX">
+    <input name="provider_outbound_id" id="id_view_correction_letter" value="42319" hidden>
+    <input type="text" name="page" value="index" hidden>
+  </form>
+	<div class="modal fade" data-keyboard="false" data-backdrop="static" id="modal_expense" tabindex="-1" role="dialog" aria-labelledby="modal_title" aria-hidden="true">
+    <div id="class_modal" class="modal-dialog modal-dialog-centered modal-600" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+            <h3 class="modal-title">Adicionar Despesas Extras</h3>
+            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+              <span aria-hidden="true">&times;</span>
+            </button>
+        </div>
+        <div class="modal-body">
+          <form id="form_expense" method="post" enctype="multipart/form-data" class="w-100">
+            <div class="form-group" id="validation_errors_expense"></div>
+            <input type="hidden" name="_token" value="XXX">
+            <input type="number" name="provider_outbound_id" value="42319" hidden>
+            <div class="d-flex justify-content-center">
+              <div class="form-group w-75">
+                <label>Selecione a despesa:</label>
+                <div class="row">
+                  <div class="col-11">
+                    <select class="form-control select2 expense_id" id="expense_id_1" name="warehouse_expense_id_1" data-placeholder="Selecione">
+                      <option value="">Selecione</option>
+                                          </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="d-flex justify-content-center">
+              <div class="form-group w-75">
+                <label>Quantidade utilizada:</label>
+                <div class="row">
+                  <div class="col-11">
+                    <input type="number" name="quantity_1" id="expense_quantity_1" class="form-control expense_quantity">
+                  </div>
+                  <div class="col-1">
+                    <button type="button" class="btn btn-success h-100 btn_add_expense" data-toggle="tooltip" data-placement="bottom" title='Adicionar' data-id="2"><i class="fas fa-plus"></i></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="d-flex justify-content-center div_input_expense div_input_expense_2" style="display: none !important">
+              <div class="form-group w-75 div_input_expense div_input_expense_2">
+                <label>Selecione a despesa:</label>
+                <div class="row">
+                  <div class="col-11">
+                    <select class="form-control select2 expense_id" id="expense_id_2" name="warehouse_expense_id_2" data-placeholder="Selecione">
+                      <option value="">Selecione</option>
+                                          </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="d-flex justify-content-center div_input_expense div_input_expense_2" style="display: none !important">
+              <div class="form-group w-75 div_input_expense div_input_expense_2">
+                <label>Quantidade utilizada:</label>
+                <div class="row">
+                  <div class="col-11">
+                    <input type="number" name="quantity_2" id="expense_quantity_2" class="form-control expense_quantity">
+                  </div>
+                  <div class="col-1">
+                    <button type="button" class="btn btn-success h-100 btn_add_expense" data-toggle="tooltip" data-placement="bottom" title='Adicionar' data-id="3"><i class="fas fa-plus"></i></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="d-flex justify-content-center div_input_expense div_input_expense_3" style="display: none !important">
+              <div class="form-group w-75 div_input_expense div_input_expense_3">
+                <label>Selecione a despesa:</label>
+                <div class="row">
+                  <div class="col-11">
+                    <select class="form-control select2 expense_id" id="expense_id_3" name="warehouse_expense_id_3" data-placeholder="Selecione">
+                      <option value="">Selecione</option>
+                                          </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="d-flex justify-content-center div_input_expense div_input_expense_3" style="display: none !important">
+              <div class="form-group w-75 div_input_expense div_input_expense_3">
+                <label>Quantidade utilizada:</label>
+                <div class="row">
+                  <div class="col-11">
+                    <input type="number" name="quantity_3" id="expense_quantity_3" class="form-control expense_quantity">
+                  </div>
+                  <div class="col-1">
+                    <button type="button" class="btn btn-success h-100 btn_add_expense" data-toggle="tooltip" data-placement="bottom" title='Adicionar' data-id="4"><i class="fas fa-plus"></i></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="d-flex justify-content-center div_input_expense div_input_expense_4" style="display: none !important">
+              <div class="form-group w-75 div_input_expense div_input_expense_4">
+                <label>Selecione a despesa:</label>
+                <div class="row">
+                  <div class="col-11">
+                    <select class="form-control select2 expense_id" id="expense_id_4" name="warehouse_expense_id_4" data-placeholder="Selecione">
+                      <option value="">Selecione</option>
+                                          </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="d-flex justify-content-center div_input_expense div_input_expense_4" style="display: none !important">
+              <div class="form-group w-75 div_input_expense div_input_expense_4">
+                <label>Quantidade utilizada:</label>
+                <div class="row">
+                  <div class="col-11">
+                    <input type="number" name="quantity_4" id="expense_quantity_4" class="form-control expense_quantity">
+                  </div>
+                  <div class="col-1">
+                    <button type="button" class="btn btn-success h-100 btn_add_expense" data-toggle="tooltip" data-placement="bottom" title='Adicionar' data-id="5"><i class="fas fa-plus"></i></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="d-flex justify-content-center div_input_expense div_input_expense_5" style="display: none !important">
+              <div class="form-group w-75 div_input_expense div_input_expense_5">
+                <label>Selecione a despesa:</label>
+                <div class="row">
+                  <div class="col-11">
+                    <select class="form-control select2 expense_id" id="expense_id_5" name="warehouse_expense_id_5" data-placeholder="Selecione">
+                      <option value="">Selecione</option>
+                                          </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="d-flex justify-content-center div_input_expense div_input_expense_5" style="display: none !important">
+              <div class="form-group w-75 div_input_expense div_input_expense_5">
+                <label>Quantidade utilizada:</label>
+                <div class="row">
+                  <div class="col-11">
+                    <input type="number" name="quantity_5" id="expense_quantity_5" class="form-control expense_quantity">
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="d-flex justify-content-center">
+              <div class="form-group w-75">
+                <div class="row">
+                  <div class="col-11">
+                    <button type="submit" class="btn btn-success btn-lg w-100" id="btn_expense">Confirmar</button>
+                  </div>
+                </div>  
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+	<div class="modal fade" data-keyboard="false" data-backdrop="static" id="modal_edit_expense" tabindex="-1" role="dialog" aria-labelledby="modal_title" aria-hidden="true">
+    <div id="class_modal" class="modal-dialog modal-dialog-centered modal-600" role="document">
+      <div class="modal-content">
+        <div class="modal-body">
+          <div class="row d-flex justify-content-center mt-3">
+            <h4 class="text-center col-12">Editar</h4>
+          </div>
+          <form id="form_edit_expense" method="post" enctype="multipart/form-data">
+            <input type="hidden" name="_token" value="XXX">  
+            <div class="d-flex justify-content-center">
+              <div class="form-group w-75" id="validation_errors_edit_expense"></div>
+            </div>
+            <input type="text" class="form-control" name="provider_outbound_id" value="42319" hidden>
+            <input type="text" class="form-control" name="expense_id" id="input_edit_expense_id" hidden>
+            <div class="d-flex justify-content-center">
+              <div class="form-group w-75">
+                <label>Despesa</label>
+                <input type="text" class="form-control" id="input_edit_expense" disabled>
+              </div>
+            </div>
+            <div class="d-flex justify-content-center">
+              <div class="form-group w-75">
+                <label>Quantidade *</label>
+                <input type="number" class="form-control" placeholder="0" id="input_edit_expense_quantity" name="quantity">
+              </div>
+            </div>
+            <div class="d-flex justify-content-center mt-3">
+              <div class="align-self-center text-muted" style="cursor:pointer" data-dismiss="modal" aria-label="Close">
+                Fechar              </div>
+              <button type="submit" class="btn btn-success btn-lg ml-2" id="btn_submit_edit_item">
+                Editar              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+	<div class="modal fade" data-keyboard="false" data-backdrop="static" id="modal_delete_expense" tabindex="-1" role="dialog" aria-labelledby="modal_title" aria-hidden="true">
+    <div id="class_modal" class="modal-dialog modal-dialog-centered modal-600" role="document">
+      <div class="modal-content">
+        <div class="modal-body">
+          <div class="row d-flex justify-content-center mt-3">
+            <h4 class="text-center col-12">Excluir</h4>
+          </div>
+          <form id="form_delete_expense" method="post" enctype="multipart/form-data">
+            <input type="hidden" name="_token" value="XXX">  
+            <div class="d-flex justify-content-center">
+              <div class="form-group w-75" id="validation_errors_delete_expense"></div>
+            </div>
+            <input type="text" class="form-control" name="provider_outbound_id" value="42319" hidden>
+            <input type="text" class="form-control" name="expense_id" id="input_delete_expense_id" hidden>
+            <div class="d-flex justify-content-center mt-3">
+              <div class="align-self-center text-muted" style="cursor:pointer" data-dismiss="modal" aria-label="Close">
+                Fechar              </div>
+              <button type="submit" class="btn btn-danger btn-lg ml-2" id="btn_submit_delete_expense">
+                Excluir              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+	<div class="modal fade" data-keyboard="false" data-backdrop="static" id="modal_hour" tabindex="-1" role="dialog" aria-labelledby="modal_title" aria-hidden="true">
+    <div id="class_modal" class="modal-dialog modal-dialog-centered" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 class="modal-title" id="modal_title_multiple"><i class="fas fa-clock"></i> Hora de Saída/Entrada</h3>
+          <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+          </button>
+        </div>
+        <div class="modal-body">
+          <form id="form_hour" method="post" enctype="multipart/form-data" class="w-100">
+            <input type="hidden" name="_token" value="XXX">
+            <input name="id" value="42319" hidden>
+                          <div class="d-flex justify-content-center text-left" >
+                <div class="form-group w-75">
+                  <label for="hour">Hora *</label>
+                  <input type="text" class="form-control hour" placeholder="00:00" name="hour" >
+                </div>
+              </div>
+            <div class="d-flex justify-content-center">
+              <button class="btn btn-success btn-lg w-75" id="btn_hour">Salvar</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+	<div class="modal fade" data-keyboard="false" data-backdrop="static" id="modal_error" tabindex="-1" role="dialog" aria-labelledby="modal_title" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-600" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+            <h3 class="modal-title" id="modal_title"><i class="fas fa-exclamation-triangle"></i> Erro de Emissão</h3>
+            <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+              <span aria-hidden="true">&times;</span>
+            </button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="receiving_instruction">
+              Erro de Emissão
+            </label>
+            <textarea class="form-control bg-white" rows="3" disabled id="text_error"></textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="modal fade" data-keyboard="false" data-backdrop="static" id="modal_supplementary_invoice" tabindex="-1" role="dialog" aria-labelledby="modal_title" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-700" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 class="modal-title" id="modal_title"><i class="fas fa-file-invoice-dollar"></i> Informar NF-e Complementar</h3>
+          <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="d-flex justify-content-center">
+            <form id="form_supplementary_invoice" method="post" enctype="multipart/form-data" class="w-100 ml-5 mr-5">
+              <div class="form-group" id="validation_errors_supplementary_invoice"></div>
+              <input type="hidden" name="_token" value="XXX">
+              <input type="number" name="provider_outbound_id" value="42319" hidden>
+              <input type="number" name="user_id" value="63" hidden>
+              <label>
+                Nota Fiscal Eletrônica (NF-e)                <i class="fa fa-question-circle text-stokki ml-1" data-toggle="tooltip" data-placement="bottom" title='Envie o arquivo XML da NF-e para preencher automaticamente e anexar ao pedido.'></i>
+              </label>
+              <div class="input-group mb-3">
+                  <button type="button" href="#" id="btn_file_supplementary_invoice" class="btn button-outline-stokki btn-block">Enviar XML da NF-e Complementar</button>
+              </div>
+              <input type="file" value="" name="file_supplementary_invoice" id="file_supplementary_invoice" hidden>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="modal fade" data-keyboard="false" data-backdrop="static" id="modal_delete_supplementary_invoice" tabindex="-1" role="dialog" aria-labelledby="modal_title" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered" role="document">
+      <div class="modal-content">
+        <div class="modal-body">
+          <div id="validation_errors_supplementary_invoice"></div>
+          <div class="row d-flex justify-content-center">
+            <h4>Aviso Importante!</h4>
+          </div>
+          <div class="row d-flex justify-content-center">
+            <p class="p-stokki">A exclusão é irreversível. Deseja prosseguir?</p>
+          </div>
+          <form id="form_delete_supplementary_invoice" method="post" enctype="multipart/form-data">
+            <input type="hidden" name="_token" value="XXX">            <input type="number" name="supplementary_invoice_id" id="input_delete_supplementary_invoice_id" hidden>
+          </form>
+          <div class="d-flex justify-content-center mt-3">
+            <div class="align-self-center text-muted" style="cursor:pointer" data-dismiss="modal" aria-label="Close">
+              Fechar            </div>
+            <button class="btn btn-danger ml-3" id="btn_delete_supplementary_invoice">
+              Excluir            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <form target="_blank" rel="noopener noreferrer" id="form_danfe" action="https://freshlog.stokki.com.br/pt-br/document/danfe" name="one" enctype="multipart/form-data" method="post">
+    <input type="hidden" name="_token" value="XXX">    <input name="file_url" id="danfe_file_url" style="display:none">
+  </form>
+      <input id="link_public_outbound" type="text" value="#" style="display: none">
+	<div class="modal fade" data-keyboard="false" data-backdrop="static" id="modal_danfe" tabindex="-1" role="dialog" aria-labelledby="modal_title" aria-hidden="true">
+    <div id="class_modal" class="modal-dialog modal-dialog-centered modal-600" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 class="modal-title" id="modal_title_multiple"><i class="fas fa-print"></i> Imprimir DANFE Simplificada</h3>
+        </div>
+        <div class="modal-body">
+          <div class="d-flex justify-content-center text-left">
+            <div class="form-group w-75">
+              <div class="progress mb-3 ml-2 mr-2">
+                  <div id="progress_danfe" class="progress-bar progress-bar-striped bg-stokki" role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+                </div>
+              <h6 id="modal_text_multiple" class="ml-2">Imprimindo Danfe Simplificada (<span id="count_volume">1</span> de 0) <i class="fa fa-spinner fa-spin"></i></h6>
+            </div>
+          </div>
+          <div class="d-flex justify-content-center">
+            <div class="row w-75">
+              <div class="col">
+                <button class="btn btn-secondary btn-block btn-lg btn_modal" id="btn_no_danfe_hide">
+                  Parar Impressão
+                </button>
+              </div>
+              <div class="col" style="display: none">
+                <button class="btn btn-success btn-block btn-lg btn_modal" id="btn_yes_danfe_hide" data-text="Sim">Sim</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+	<div class="modal fade" data-keyboard="false" data-backdrop="static" id="modal_volume_control" tabindex="-1" role="dialog" aria-labelledby="modal_title" aria-hidden="true">
+    <div id="class_modal" class="modal-dialog modal-dialog-centered modal-600" role="document">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 class="modal-title" id="modal_title_multiple"><i class="fas fa-print"></i> Imprimir Controle de Volume</h3>
+        </div>
+        <div class="modal-body">
+          <div class="d-flex justify-content-center text-left">
+            <div class="form-group w-75">
+              <div class="progress mb-3 ml-2 mr-2">
+                  <div id="progress_volume_control" class="progress-bar progress-bar-striped bg-stokki" role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+                </div>
+              <h6 id="modal_text_multiple" class="ml-2">Imprimindo Controle de Volume (<span id="count_volume_control">1</span> de 0) <i class="fa fa-spinner fa-spin"></i></h6>
+            </div>
+          </div>
+          <div class="d-flex justify-content-center">
+            <div class="row w-75">
+              <div class="col">
+                <button class="btn btn-secondary btn-block btn-lg btn_modal" id="btn_no_volume_control_hide">
+                  Parar Impressão
+                </button>
+              </div>
+              <div class="col" style="display: none">
+                <button class="btn btn-success btn-block btn-lg btn_modal" id="btn_yes_volume_control_hide" data-text="Sim">Sim</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="div_sleep"></div>
+			<div class="modal fade" data-keyboard="false" data-backdrop="static" id="modal_contact" tabindex="-999" role="dialog" aria-labelledby="modal_title" aria-hidden="true">
+				<div id="class_modal" class="modal-dialog modal-dialog-centered modal-800" role="document">
+					<div class="modal-content">
+						<div class="modal-header">
+							<h3 class="modal-title w-100 text-center">Fale Conosco</h3>
+							<button type="button" class="close" data-dismiss="modal" aria-label="Close">
+								<span aria-hidden="true">&times;</span>
+							</button>
+						</div>
+						<div class="modal-body">
+							<div class="row d-flex align-items-center">
+								<div class="col d-flex justify-content-center">
+									<p>
+										<span style="font-size: 20px">Entre em contato com a Stokki:</span><br><br>
+										<span class="text-muted">
+											<i class="fab fa-whatsapp mr-2"></i>
+											<a target="_blank" rel="noopener noreferrer" href="https://web.whatsapp.com/send?phone=+554130529595">
+												 (41) 3052-9595
+											</a> 
+											<br>
+											<i class="fa fa-envelope mr-2 mt-1"></i> 
+											<a target="_blank" rel="noopener noreferrer" href="mailto:XXX">
+												XXX
+											</a>
+										</span>
+									</p>
+								</div>
+								<div class="vertical-line" style="height: 180px;"></div>
+								<div class="col d-flex justify-content-center">
+									<p>
+										<span style="font-size: 20px">Suporte:</span><br>
+										<span class="text-muted">
+											Horário de Atendimento<br>
+											Segunda à Sexta-feira, das 08:30hrs até 17:30hrs
+										</span><br><br>
+										<span style="font-size: 20px">Ouvidoria:</span><br>
+										<span class="text-muted">
+											<i class="fa fa-envelope mr-2"></i>
+											<a target="_blank" rel="noopener noreferrer" href="mailto:XXX"> 
+												XXX
+											</a>
+										</span>
+									</p>
+								</div>
+							</div>
+						</div>
+						<div class="modal-footer">
+						<div class="row">
+							<div class="col d-flex align-items-end align-items-center">
+								<a class="btn btn-success ml-auto" href="#" data-dismiss="modal">
+									Fechar								</a>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+			<footer class="main-footer">
+				<strong >Stokki - Logística digital, acessível e descomplicada</strong>
+				<div class="float-right d-none d-sm-inline-block">
+					<b>Versão</b> 1.0
+				</div>
+			</footer>
+			<aside class="control-sidebar control-sidebar-dark">
+			</aside>
+		</div>
+	</body>
+</html>

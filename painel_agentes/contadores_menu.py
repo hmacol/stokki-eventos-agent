@@ -58,11 +58,15 @@ TTL_POR_CONTADOR = {"torre": 300}
 # correspondente em painel_agentes.py. Contador de tela que o usuário não
 # pode abrir não é calculado (nem vaza pra ele).
 NIVEIS_POR_CONTADOR = {
-    "torre": ("total", "operador", "leitura"),
-    "pedidos_parados": ("total", "operador", "leitura"),
-    "pedagios": ("total", "operador", "leitura"),
-    "canhotos": ("total", "operador", "leitura"),
-    "atendimento": ("total", "operador", "atendimento"),
+    "torre": ("total", "operador", "logistica", "leitura", "atendimento"),
+    "pedidos_parados": ("total", "operador", "logistica", "leitura", "atendimento", "galpao", "expedicao"),
+    "pedagios": ("total", "operador", "logistica", "leitura"),
+    "canhotos": ("total", "operador", "logistica", "leitura", "atendimento"),
+    "atendimento": ("total", "operador", "logistica", "atendimento"),
+    "motoristas": ("total",),   # auto-cadastros do app esperando aprovação (08/10)
+    "transportadoras": ("total", "operador", "logistica"),   # cadastros PENDENTE esperando resposta (23/10)
+    # Demandas abertas minhas e das minhas equipes (25/10): por usuario, nao por nivel.
+    "demandas": ("total", "operador", "leitura", "expedicao", "galpao", "atendimento", "logistica"),
 }
 
 _snapshots: dict[str, dict] = {}   # chave -> {"quando": monotonic, "valor": dict|None}
@@ -181,22 +185,58 @@ def _contar_atendimento() -> dict:
     return {"qtd": c["fila"], "criticas": 0}
 
 
+def _contar_cadastros_motoristas() -> dict:
+    """Motoristas novos que pediram cadastro pelo app e já mandaram CNH e
+    CRLV (nucleo/cadastro_motorista.py). Barato: COUNT no SQLite do núcleo."""
+    from nucleo import banco as nucleo_banco, cadastro_motorista as cad
+    conn = nucleo_banco.conectar()
+    try:
+        qtd = cad.contar_pendentes(conn)
+    finally:
+        conn.close()
+    return {"qtd": qtd, "criticas": 0}
+
+
+def _contar_transportadoras() -> dict:
+    """Transportadoras PENDENTE (desconhecidas) esperando resposta.
+    Barato: COUNT no SQLite. Sem "crítico"."""
+    import transportadoras_tela
+    return {"qtd": transportadoras_tela.contar_pendentes(), "criticas": 0}
+
+
+def _contar_demandas(identidade: dict) -> dict:
+    """Demandas abertas/em andamento comigo ou com as minhas equipes;
+    criticas = urgente ou com prazo vencido. Barato: COUNT no SQLite."""
+    import demandas
+    conn = demandas.conectar()
+    try:
+        return demandas.contar_badge(conn, identidade)
+    finally:
+        conn.close()
+
+
 # ── Entrada ───────────────────────────────────────────────────────────────────
 
-def contadores(nivel_acesso: str) -> dict:
+def contadores(nivel_acesso: str, niveis_por_contador: dict | None = None, identidade: dict | None = None) -> dict:
     """{"torre": {"qtd": 3, "criticas": 1}, ...} só com o que esse nível
-    pode abrir. Contador que falhou ou que ainda não tem leitura fica
-    de fora -- o menu simplesmente não desenha o badge."""
+    pode abrir (niveis_por_contador troca a tabela padrão: acesso
+    personalizado). Contador que falhou ou que ainda não tem leitura fica
+    de fora -- o menu simplesmente não desenha o badge. `identidade`
+    (demandas.identidade) liga o contador por usuario das Demandas."""
     fontes = {
         "torre": lambda: _caro("torre", _contar_torre, ja_fresco=_torre_ja_coletada),
         "pedidos_parados": lambda: _caro("pedidos_parados", _contar_pedidos_parados),
         "pedagios": _contar_pedagios,
         "canhotos": _contar_canhotos,
         "atendimento": _contar_atendimento,
+        "motoristas": _contar_cadastros_motoristas,
+        "transportadoras": _contar_transportadoras,
     }
+    if identidade is not None:
+        fontes["demandas"] = lambda: _contar_demandas(identidade)
     resultado = {}
     for chave, fonte in fontes.items():
-        if nivel_acesso not in NIVEIS_POR_CONTADOR[chave]:
+        if nivel_acesso not in (niveis_por_contador or NIVEIS_POR_CONTADOR).get(chave, ()):
             continue
         try:
             valor = fonte()

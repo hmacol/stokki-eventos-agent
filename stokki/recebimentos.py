@@ -198,7 +198,7 @@ def extrair_cabecalho_da_linha(linha) -> dict:
 
 # ── Detalhe de um recebimento ──────────────────────────────────────────────────
 
-def extrair_itens_do_recebimento(html: str) -> list[dict]:
+def extrair_itens_do_recebimento(html: str, usar_esperada: bool = False) -> list[dict]:
     """
     Itens do detalhe de um recebimento, sempre da tabela "NR | ID | SKU |
     Nome | Localizacao | Quantidade | unidade | Valor Unitario |
@@ -220,13 +220,19 @@ def extrair_itens_do_recebimento(html: str) -> list[dict]:
     itens legiveis -- vira erro pra quem chama).
 
     Nao ha coluna EAN nessa tabela -- ean_linha sempre vazio.
+
+    usar_esperada (22/11/2026, pedido do Hugo: o recebimento e executado no
+    NOSSO app, nao na Stokki): linha com "Quantidade total recebida" vazia
+    entra com a "Quantidade" esperada e `esperada=True`. Quem decide quando
+    isso vale e quem chama (sincronizar_recebimentos_wms: so "Aguardando
+    recebimento", a mercadoria ja chegou e a Stokki ainda nao conferiu).
     """
     soup = BeautifulSoup(html, "html.parser")
 
     tabela = _achar_tabela_por_cabecalho(soup, {"SKU", "QUANTIDADE TOTAL RECEBIDA"})
     if tabela is None:
         return []
-    return _itens_da_tabela_de_itens(tabela)
+    return _itens_da_tabela_de_itens(tabela, usar_esperada)
 
 
 def _achar_tabela_por_cabecalho(soup: BeautifulSoup, cabecalhos_obrigatorios: set):
@@ -239,7 +245,7 @@ def _achar_tabela_por_cabecalho(soup: BeautifulSoup, cabecalhos_obrigatorios: se
     return None
 
 
-def _itens_da_tabela_de_itens(tabela) -> list[dict]:
+def _itens_da_tabela_de_itens(tabela, usar_esperada: bool = False) -> list[dict]:
     """
     NR | ID | SKU | Nome | Localizacao | Quantidade | unidade | Valor
     Unitario | Quantidade total recebida | Obs. Le por indice de
@@ -254,13 +260,20 @@ def _itens_da_tabela_de_itens(tabela) -> list[dict]:
     indice = {}
     for i, th in enumerate(tabela.find_all("th")):
         nome = th.get_text(strip=True).upper()
-        if nome in ("SKU", "NOME", "QUANTIDADE TOTAL RECEBIDA") and nome not in indice:
+        if nome in ("SKU", "NOME", "QUANTIDADE", "UNIDADE", "QUANTIDADE TOTAL RECEBIDA") and nome not in indice:
             indice[nome] = i
     if "SKU" not in indice or "QUANTIDADE TOTAL RECEBIDA" not in indice:
         return []
 
     itens = []
     posicao = 0  # posicao real na tabela -- pular uma linha nao renumera as outras
+    def _numero(celula) -> float | None:
+        bruta = celula.get_text(" ", strip=True).replace(".", "").replace(",", ".")
+        try:
+            return float(bruta)
+        except ValueError:
+            return None
+
     for tr in tabela.find_all("tr"):
         celulas = tr.find_all("td")
         if len(celulas) <= max(indice.values()):
@@ -270,24 +283,31 @@ def _itens_da_tabela_de_itens(tabela) -> list[dict]:
         if not sku:
             continue  # linha de total ou celula vazia
         descricao = celulas[indice["NOME"]].get_text(" ", strip=True) if "NOME" in indice else ""
-        bruta = celulas[indice["QUANTIDADE TOTAL RECEBIDA"]].get_text(" ", strip=True).replace(".", "").replace(",", ".")
-        try:
-            quantidade = float(bruta)
-        except ValueError:
+        quantidade = _numero(celulas[indice["QUANTIDADE TOTAL RECEBIDA"]])
+        esperada = False
+        if quantidade is None and usar_esperada and "QUANTIDADE" in indice:
+            quantidade = _numero(celulas[indice["QUANTIDADE"]])
+            esperada = True
+        if quantidade is None or (esperada and quantidade <= 0):
             continue
-        itens.append({
+        item = {
             "linha": posicao,
             "sku": sku,
             "ean_linha": "",
             "descricao": descricao,
             "qtd_embalagem": quantidade,
-        })
+        }
+        if esperada:
+            item["esperada"] = True
+        if "UNIDADE" in indice:      # a Stokki diz em que unidade a quantidade esta ("UN", "CX"...)
+            item["unidade"] = celulas[indice["UNIDADE"]].get_text(" ", strip=True)
+        itens.append(item)
     return itens
 
 
-def ler_itens(sessao: StokkiSession, id_recebimento: int) -> list[dict]:
+def ler_itens(sessao: StokkiSession, id_recebimento: int, usar_esperada: bool = False) -> list[dict]:
     """GET no detalhe (via ler_detalhe) + extrai apenas os itens."""
-    return ler_detalhe(sessao, id_recebimento)["itens"]
+    return ler_detalhe(sessao, id_recebimento, usar_esperada)["itens"]
 
 
 # ── Cabecalho do detalhe (chave NF-e e Ref. do Pedido) ────────────────────────
@@ -335,12 +355,12 @@ def extrair_ref_da_linha(linha) -> str:
     return m.group(0) if m else ""
 
 
-def ler_detalhe(sessao: StokkiSession, id_recebimento: int) -> dict:
+def ler_detalhe(sessao: StokkiSession, id_recebimento: int, usar_esperada: bool = False) -> dict:
     """GET no detalhe UMA vez e devolve itens + chave NF-e + Ref. do Pedido
     (o timer do WMS e o worker do portal precisam dos tres do mesmo HTML)."""
     resp = sessao.get(f"{BASE_URL}/pt-br/administrator/inventory/incoming/show/{id_recebimento}")
     resp.raise_for_status()
     html = resp.text
-    return {"itens": extrair_itens_do_recebimento(html),
+    return {"itens": extrair_itens_do_recebimento(html, usar_esperada),
             "chave_nfe": extrair_chave_nfe(html),
             "ref_pedido": extrair_ref_pedido(html)}

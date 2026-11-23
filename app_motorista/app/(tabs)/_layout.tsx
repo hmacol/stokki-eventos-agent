@@ -5,7 +5,7 @@ import { Tabs, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as api from '../../src/api';
 import { useSessao } from '../../src/sessao';
-import { cores } from '../../src/tema';
+import { cores, FINANCEIRO_OCULTO } from '../../src/tema';
 
 type Icone = React.ComponentProps<typeof Ionicons>['name'];
 const icone = (nome: Icone) => ({ color, size }: { color: ColorValue; size: number }) => <Ionicons name={nome} color={color} size={size} />;
@@ -58,7 +58,12 @@ export default function Abas() {
     >
       <Tabs.Screen name="rotas" options={{ title: 'Rotas', tabBarIcon: icone('map') }} />
       <Tabs.Screen name="ofertas" options={{ title: 'Ofertas', tabBarIcon: icone('hand-right') }} />
-      <Tabs.Screen name="financeiro" options={{ title: 'Financeiro', tabBarIcon: icone('cash') }} />
+      {/* Quem dirige carro de outro não vê extrato (Hugo, 08/10): a aba vira "Despesas", só pedágio. */}
+      <Tabs.Screen name="financeiro" options={FINANCEIRO_OCULTO
+        ? { title: 'Despesas', href: null }
+        : motorista?.ve_financeiro === false
+        ? { title: 'Despesas', tabBarIcon: icone('receipt') }
+        : { title: 'Financeiro', tabBarIcon: icone('cash') }} />
       <Tabs.Screen name="disponibilidade" options={{ title: 'Agenda', tabBarIcon: icone('calendar') }} />
       {/* Ajuda (Hugo, 12/09): chat com o assistente e com a logística.
           O badge mostra o que a equipe respondeu e o motorista ainda não viu. */}

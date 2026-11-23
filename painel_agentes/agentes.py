@@ -67,6 +67,18 @@ AGENTES = [
         "categoria": "Pipeline principal",
     },
     {
+        "id": "atualizar_status_stokki",
+        "nome": "Atualizar Status Stokki",
+        "descricao": "Relê na Stokki a situação dos pedidos abertos (em aberto, separação, conferência, espera) "
+                     "e atualiza o retrato que o planejamento usa. Não importa nada pra VUUPT.",
+        "script": "pipeline.py",
+        "cwd": ".",
+        "suporta_teste": True,
+        "flag_teste": "--modo-teste",
+        "args_fixos": ["--so-status"],
+        "categoria": "Pipeline principal",
+    },
+    {
         "id": "somente_expedicao",
         "nome": "Somente Expedição",
         "descricao": "Só a etapa de expedição: entregues com canhoto validado expedem na Stokki, insucessos são tratados à parte.",
@@ -150,8 +162,9 @@ AGENTES = [
     {
         "id": "incrementar_rotas",
         "nome": "Incrementar Rotas",
-        "descricao": "Complementa as rotas já confirmadas da data alvo com os pedidos novos que chegaram "
-                    "até as 19h do dia útil anterior, sem teto de pedidos por rota (só caixas).",
+        "descricao": "Complementa as rotas já confirmadas e os rascunhos abertos da data alvo com os pedidos "
+                    "novos que chegaram até as 22h do dia útil anterior, até 15 pedidos por rota comum e o teto de caixas. "
+                    "Roda sozinho às 18h e às 22h.",
         "script": "roteirizacao/incrementar_rotas.py",
         "cwd": "roteirizacao",
         "suporta_teste": True,

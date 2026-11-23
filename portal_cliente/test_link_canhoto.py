@@ -61,14 +61,27 @@ class TestRota(unittest.TestCase):
         self.pdf = Path(self._tmp.name) / "canhoto.pdf"
         self.pdf.write_bytes(b"%PDF-1.4 teste")
 
-    def _abrir(self, token, servico, checklist_id=9, pdf="padrao"):
+    def _abrir(self, token, servico, checklist_id=9, pdf="padrao", proprio=None):
         dados = self.portal.dados
         with patch.object(dados, "buscar_servico", return_value=servico) as buscar, \
              patch.object(dados, "checklist_id_do_servico", return_value=checklist_id), \
-             patch.object(dados, "baixar_canhoto_pdf", return_value=self.pdf if pdf == "padrao" else pdf):
+             patch.object(dados, "comprovante_proprio", return_value=proprio), \
+             patch.object(dados, "baixar_canhoto_pdf", return_value=self.pdf if pdf == "padrao" else pdf) as self.vuupt:
             resposta = self.tc.get(f"/c/{token}")
             resposta.get_data()   # fecha o arquivo antes de apagar o tmp
         return resposta, buscar
+
+    def test_comprovante_proprio_vale_no_lugar_do_pdf_da_vuupt(self):
+        proprio = Path(self._tmp.name) / "comprovante.pdf"
+        proprio.write_bytes(b"%PDF-1.4 proprio")
+        r, _ = self._abrir(self.token, {"id": 555, "sender_id": 101, "code": "#PS-1"}, proprio=proprio)
+        self.assertEqual((r.status_code, r.get_data()), (200, b"%PDF-1.4 proprio"))
+        self.vuupt.assert_not_called()
+
+    def test_sem_comprovante_proprio_cai_no_pdf_da_vuupt(self):
+        r, _ = self._abrir(self.token, {"id": 555, "sender_id": 101, "code": "#PS-1"})
+        self.assertEqual((r.status_code, r.get_data()), (200, b"%PDF-1.4 teste"))
+        self.vuupt.assert_called_once()
 
     def test_token_valido_serve_o_pdf_sem_login(self):
         r, buscar = self._abrir(self.token, {"id": 555, "sender_id": 101, "code": "#PS-1"})

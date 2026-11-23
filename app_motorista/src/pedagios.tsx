@@ -13,6 +13,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as api from './api';
 import * as fila from './fila';
 import { Botao, Cartao } from './componentes';
+import { conferirPermissao } from './permissoes';
 import { cores, formatarData, formatarReal } from './tema';
 import { nomeExibicao } from './textos';
 import type { Parada, Rota, TipoDespesa } from './tipos';
@@ -132,8 +133,7 @@ export function LancarPedagio({ rotas, rotaInicial, aoMudar }: { rotas: Rota[]; 
 
   const fotografar = async () => {
     if (!rota) return;
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) return Alert.alert('Câmera', 'Permita o uso da câmera pra fotografar o recibo.');
+    if (!conferirPermissao(await ImagePicker.requestCameraPermissionsAsync(), 'Câmera', 'Permita o uso da câmera pra fotografar o recibo.')) return;
     const r = await ImagePicker.launchCameraAsync({ quality: 0.6, allowsEditing: false, exif: false });
     if (r.canceled || !r.assets[0]) return;
     const uri = r.assets[0].uri;

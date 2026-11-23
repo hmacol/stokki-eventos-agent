@@ -1,0 +1,9 @@
+[Unit]
+Description=Stokki Eventos - Finalizar na Vuupt rotas iniciadas com tudo entregue (finalizar_rotas_entregues.py)
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos/roteirizacao
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/roteirizacao/finalizar_rotas_entregues.py

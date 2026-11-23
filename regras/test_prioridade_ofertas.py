@@ -23,11 +23,12 @@ from regras.preferencias_motoristas import MotoristaPreferencias
 from regras.prioridade_ofertas import contar_rotas_recentes, priorizar, resumo_ondas, formatar_utc
 
 
-def _motorista(agent_id, placa=None, max_rotas_dia=1):
+def _motorista(agent_id, placa=None, max_rotas_dia=1, posicao="ESPORADICO"):
     return MotoristaPreferencias(
         agent_id=agent_id, vehicle_id=None, nome=f"M{agent_id}", aceita_viagens=True,
         dias_disponiveis=[0, 1, 2, 3, 4], max_rotas_dia=max_rotas_dia, ativo=True,
         zonas_preferidas=["ZONA SUL"], telefone=f"1199999{agent_id:04d}", placa=placa,
+        posicao=posicao,
     )
 
 
@@ -50,6 +51,17 @@ class TestPriorizar(unittest.TestCase):
         self.assertEqual(saida[0].visivel_a_partir_de, formatar_utc(AGORA))
         self.assertEqual(saida[2].visivel_a_partir_de, formatar_utc(AGORA + timedelta(minutes=15)))
         self.assertEqual(resumo_ondas(saida), {0: 2, 1: 2})
+
+    def test_fixo_ve_antes_do_esporadico(self):
+        # Hugo, 02/11: fixo na frente também no marketplace, mesmo com mais
+        # rotas na semana e mesmo contra esporádico com prioridade de rodízio
+        elegiveis = [_motorista(101), _motorista(105, placa="ABC1D25"),
+                     _motorista(201, posicao="FIXO"), _motorista(202, posicao="FIXO")]
+        curta = {101: 0, 105: 0, 201: 9, 202: 4}
+        saida = priorizar(elegiveis, QUARTA, rota_em_area_rodizio=False, contagem_alocacoes_dia={},
+                          config=CFG, agora=AGORA, contagem_curta=curta, contagem_longa={})
+        self.assertEqual([p.motorista.agent_id for p in saida], [202, 201, 105, 101])
+        self.assertEqual([p.onda for p in saida], [0, 0, 1, 1])
 
     def test_rota_dentro_do_centro_nao_da_prioridade_por_rodizio(self):
         # dentro do centro o restrito nem seria elegível; se chegou aqui (placa

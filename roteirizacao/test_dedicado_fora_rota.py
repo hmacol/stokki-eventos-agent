@@ -55,6 +55,19 @@ class DedicadosPorServico(unittest.TestCase):
             m = dedicados.dedicados_por_servico([{"id": 10, "code": "#PS-1"}, {"id": 11, "code": "#PS-5"}])
         self.assertEqual(m, {10: {"valor": 33.34, "valor_total": 100.0, "n_grupo": 3}})
 
+    def test_motivo_so_na_marcacao_fora_do_dia_fixo(self):
+        ativos = {"PS-1": {"valor": 784.09, "valor_total_grupo": 784.09, "grupo_id": "a",
+                           "marcado_por": "automatico: fora do dia fixo"},
+                  "PS-2": {"valor": 0.0, "valor_total_grupo": 0.0, "grupo_id": "b",
+                           "marcado_por": "automatico: fora do dia fixo (valor pendente)"},
+                  "PS-3": {"valor": 10.0, "valor_total_grupo": 10.0, "grupo_id": "c", "marcado_por": "hugo"}}
+        with mock.patch.object(dedicados, "carregar_dedicados", return_value=ativos):
+            m = dedicados.dedicados_por_servico([{"id": 1, "code": "PS-1"}, {"id": 2, "code": "PS-2"},
+                                                 {"id": 3, "code": "PS-3"}])
+        self.assertEqual(m[1]["motivo"], "fora do dia fixo")
+        self.assertEqual(m[2]["motivo"], "fora do dia fixo")
+        self.assertNotIn("motivo", m[3])
+
 
 if __name__ == "__main__":
     unittest.main()

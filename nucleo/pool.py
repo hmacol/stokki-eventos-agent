@@ -16,18 +16,33 @@ leram. Horários voltam como a Vuupt devolve (UTC sem fuso, ver
 normalizacao.local_para_vuupt): esta entrega NÃO muda o que as telas mostram.
 
 A fonte é escolhida por `planejamento.fonte_pool` no config.yaml
-('vuupt' | 'nucleo'; ausente = vuupt). Voltar atrás é trocar a chave.
+('vuupt' | 'nucleo' | 'freshhub'; ausente = vuupt). Voltar atrás é trocar a chave.
+'freshhub' (plano 1.2 do sistema novo) lê GET /api/pool pelo nucleo/freshhub_client, no
+MESMO formato; se a API cair, a rodada não para: cai pra Vuupt, loga
+`pool.freshhub_indisponivel` e avisa por e-mail (1 por hora).
 
 Este módulo NÃO importa vuupt_client de propósito (nucleo/test_acoplamento_vuupt):
 quem precisa da Vuupt passa a instância pronta.
 """
+import html
+import logging
 import sqlite3
+import time
 
-from nucleo import banco
+from nucleo import banco, freshhub_client
 from nucleo.normalizacao import local_para_vuupt
+
+logger = logging.getLogger("nucleo.pool")
 
 FONTE_VUUPT = "vuupt"
 FONTE_NUCLEO = "nucleo"
+FONTE_FRESHHUB = "freshhub"
+# e-mail da queda pra Vuupt no maximo 1x/hora por processo (a tela recarrega o pool a toda hora)
+INTERVALO_ALERTA_S = 3600
+# o freshhub copia o legado a :10/:40 e carrega a :25/:55 a tarde: alteracao do portal pode levar
+# ~45 min pra aparecer la. Dentro dessa janela a rodada le a Vuupt (so com fonte freshhub).
+JANELA_ALTERACAO_PORTAL_MIN = 60
+_ULTIMO_ALERTA: dict[str, float] = {}
 
 _SQL_BASE = """SELECT * FROM nucleo_pedidos
                WHERE status = ? AND COALESCE(fluxo, ?) = ? AND excluido_em IS NULL"""
@@ -102,7 +117,69 @@ def listar_pool_not_assigned(config: dict | None, vuupt) -> list[dict]:
     """A troca de fonte, num lugar só. `vuupt` é um VuuptClient já criado
     por quem chama (só é usado com fonte 'vuupt'). A chamada à Vuupt é
     EXATAMENTE a que os consumidores faziam antes desta função existir."""
-    if fonte_pool(config) == FONTE_NUCLEO:
+    fonte = fonte_pool(config)
+    if fonte == FONTE_NUCLEO:
         return listar_pool()
+    if fonte == FONTE_FRESHHUB:
+        # Cliente alterou entrega no portal ha pouco: o freshhub pode ainda nao ter o dado
+        # (copia o legado a :10/:40), entao esta rodada le a Vuupt, que ja tem a alteracao.
+        if _houve_alteracao_portal_recente():
+            logger.info("pool.freshhub_alteracao_portal: alteracao do cliente no portal nos ultimos "
+                        "%d min; rodada le a Vuupt em vez do freshhub", JANELA_ALTERACAO_PORTAL_MIN)
+        else:
+            itens = _listar_pool_freshhub(config)
+            if itens is not None:
+                return itens
+            # API nova fora: a rodada nao para (plano 1.2, Focus 5) -- segue pela Vuupt
     filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"}]
     return vuupt.listar_servicos(filtro, per_page=100, include=["customer"])
+
+
+def _listar_pool_freshhub(config: dict | None) -> list[dict] | None:
+    """Pool pela API nova; None quando ela nao responde (ja logado e avisado)."""
+    cliente = freshhub_client.de_config(config)
+    try:
+        if cliente is None:
+            raise freshhub_client.ErroFreshhub("freshhub_api.url/token ausentes no config.yaml")
+        return cliente.listar_pool()
+    except Exception as e:  # noqa: BLE001 - qualquer falha da API nova cai pra Vuupt
+        logger.error("pool.freshhub_indisponivel: caindo pra Vuupt nesta rodada (%s)", e)
+        _alertar_freshhub_indisponivel(config, str(e))
+        return None
+
+
+def _houve_alteracao_portal_recente() -> bool:
+    """Cliente alterou entrega/horario pelo portal na janela (APLICADA, ou FALHOU depois de tirar da rota).
+    Erro ao ler -> False."""
+    try:
+        from regras import alteracoes_entrega  # import tardio: este modulo fica leve
+        conn = alteracoes_entrega.conectar()
+        try:
+            return alteracoes_entrega.houve_alteracao_desde(conn, JANELA_ALTERACAO_PORTAL_MIN)
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 - falha ao ler a tabela nao pode parar a rodada
+        logger.warning("pool.alteracao_portal_indisponivel: nao consegui ler alteracoes do portal; "
+                       "segue pelo freshhub", exc_info=True)
+        return False
+
+
+def _alertar_freshhub_indisponivel(config: dict | None, erro: str) -> bool:
+    """E-mail pro destino dos alertas de execucao (notificacao_execucao.destinatario), 1x/hora."""
+    agora = time.monotonic()
+    if agora - _ULTIMO_ALERTA.get("freshhub", -INTERVALO_ALERTA_S) < INTERVALO_ALERTA_S:
+        return False
+    _ULTIMO_ALERTA["freshhub"] = agora
+    try:
+        from email_utils import COR_ERRO, envelope_html, enviar_email
+        cfg = config or {}
+        destino = (cfg.get("notificacao_execucao") or {}).get("destinatario") or "hugo@freshlogbr.com"
+        corpo = ("<h2 style='margin:0 0 12px'>Pool: API do freshhub indisponível</h2>"
+                 "<p>O planejamento caiu pra Vuupt nesta rodada (planejamento.fonte_pool = freshhub). "
+                 f"Erro: <code>{html.escape(erro)}</code></p>"
+                 "<p>Se persistir, confira freshhub-api@prod na VPS ou volte a chave pra vuupt.</p>")
+        return bool(enviar_email([destino], "Pool: API do freshhub indisponível (caiu pra Vuupt)",
+                                 envelope_html(corpo, cor_acento=COR_ERRO), cfg.get("email", {})))
+    except Exception:  # noqa: BLE001 - o alerta nunca derruba a rodada
+        logger.exception("pool.freshhub_indisponivel: nao consegui mandar o alerta")
+        return False

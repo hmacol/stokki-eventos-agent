@@ -8,7 +8,7 @@ valor, vencimento, CNPJ do pagador, linha digitável. Esses metadados
 alimentam o casamento boleto->pedido via índice de DANFEs (ver
 matcher.py::IndexadorNF).
 
-Regexes calibradas contra os 3 formatos REAIS já vistos em produção
+Regexes calibradas contra os formatos REAIS já vistos em produção
 (não só os teóricos da spec):
 
   1. Dourado / Santander (033-7): "Número do Documento" = o número da
@@ -19,6 +19,11 @@ Regexes calibradas contra os 3 formatos REAIS já vistos em produção
      prefixo NÃO é a NF pura, por isso o Histórico tem prioridade).
   3. Itaueira / Itaú (341-7): "Número do Documento" = "8482-1/1"
      (NF-parcela/total).
+  4. De Tommaso / CIAO / Itaú (341-7): "documento 035880 DM N ..."
+     (sem data na frente).
+  5. Dourado (desde 09/2026): "151359P01" -- NF + "P" + parcela, sem DM.
+  6. Vida Veg / Bradesco (237-2): "000288185-001" -- parcela com 3 dígitos.
+  7. Laticínio Costa Nilo / Itaú: "000063849A" -- letra depois da NF.
 
 ARMADILHA REAL (lição de 10/08): nos boletos do ERP Olist, o primeiro
 CNPJ depois da palavra "Pagador" é o do BENEFICIÁRIO (o cabeçalho
@@ -40,13 +45,16 @@ PADRAO_CNPJ = re.compile(r"(?<!\d)\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}(?!\d)")
 # "Ref. a NF nº 40162" (ERP Olist) -- fonte explícita, prioridade máxima
 PADRAO_NF_HISTORICO = re.compile(r"Ref\.?\s*a\s*NF\s*n?[ºo°.]*\s*(\d{1,9})", re.IGNORECASE)
 
-# Linha de valores da tabela do boleto: "27/07/2026 8482-1/1 DM NÃO ..."
-# ou "06/08/2026 149636 DM N ..." ou "31/07/2026 1040162/01 DM N ..."
-# -- data do documento, número do documento (com sufixo opcional de
-# parcela), espécie DM/DS. O sufixo aparece como "-1/1" (nf-parcela/
-# total) ou "/01" (doc/parcela, sem total).
+# Linha de valores da tabela do boleto -- data do documento, número do
+# documento e espécie. Layouts reais:
+#   "27/07/2026 8482-1/1 DM NÃO"    Itaueira (NF-parcela/total)
+#   "06/08/2026 149636 DM N"        Dourado antigo (Santander)
+#   "31/07/2026 1040162/01 DM N"    Olist (doc/parcela)
+#   "17/09/2026 151359P01 N"        Dourado desde 09/2026: NF + "P" + parcela, sem espécie (05/10)
+#   "10/08/2026 000288185-001 DM N" Vida Veg/Bradesco: parcela com 3 dígitos (05/10)
+#   "02/10/2026 000063849A DM N"    Costa Nilo/Itaú: letra colada na NF (05/10)
 PADRAO_DOC_LINHA = re.compile(
-    r"\b\d{2}/\d{2}/\d{4}\s+(\d{3,9})(?:[-/](\d{1,2})(?:/(\d{1,2}))?)?\s+D[MS]\b"
+    r"\b\d{2}/\d{2}/\d{4}\s+(\d{3,9})[A-Z]?(?:(?:[-/]|P)(\d{1,3})(?:/(\d{1,2}))?)?\s+(?:D[MS]|N)\b"
 )
 
 # 4º formato real (De Tommaso/CIAO, Itaú 341-7, visto em 11/08): o

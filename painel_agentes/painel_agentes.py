@@ -15,10 +15,14 @@ COMO USAR (produção):
     py -3.11 -m waitress --host=0.0.0.0 --port=8070 painel_agentes:app
 """
 import hmac
+import io
 import json
 import logging
+import math
 import re
 import sys
+import threading
+import uuid
 from datetime import date, datetime, timedelta
 from functools import wraps
 from pathlib import Path
@@ -26,6 +30,11 @@ from pathlib import Path
 _RAIZ = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ))
 sys.path.insert(0, str(Path(__file__).parent))
+
+from homologacao import ambiente as _ambiente
+_ambiente.exigir_coerencia(_RAIZ)
+from homologacao.guarda import EnvioBloqueadoHomolog as _EnvioBloqueadoHomolog
+from homologacao.ambiente import DesligadoNaHomologacao as _DesligadoNaHomologacao, homolog_ativo as _homolog_ativo
 
 (Path(__file__).parent / "dados").mkdir(parents=True, exist_ok=True)
 
@@ -43,46 +52,78 @@ logging.basicConfig(
     ],
 )
 
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import yaml
 from flask import (
     Flask, Response, abort, g, redirect, render_template, request, url_for,
-    jsonify, send_file, session,
+    jsonify, send_file, send_from_directory, session,
 )
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.routing import BuildError
 
 from agentes import AGENTES, buscar_agente, categorias_ordenadas, montar_args_parametros
+from executor import LOGS_DIR as _LOGS_EXECUCOES
 from executor import (
     iniciar_execucao, iniciar_execucao_com_fila, iniciar_sequencia, buscar_execucao, buscar_ultima_execucao,
     listar_execucoes_recentes, ha_execucao_rodando, ha_execucao_pendente, ler_log, limpar_execucoes_travadas,
     encerrar_todas_execucoes, progresso_execucao,
 )
 from mapa_rotas import buscar_rotas_para_mapa
+import acompanhamento_rotas
+import cancelar_finalizacao
 from laboratorio_rotas import buscar_dados_laboratorio
 from planejamento_rotas import (
     buscar_dados_planejamento, buscar_pool_e_agendados, sincronizar_pool_agora, gerar_romaneio_pdf,
     carregar_documentos_do_rascunho, roteirizar_selecionados, incrementar_rascunhos_com_selecionados,
     alocar_motoristas_rascunhos, desalocar_motoristas_rascunhos, cancelar_pedido, reagendar_pedido,
-    reagendar_pedidos, editar_endereco_pedido, editar_endereco_pedidos,
+    reagendar_pedidos, checar_reagendamento_dia_fixo, editar_endereco_pedido, editar_endereco_pedidos,
     editar_nivel_horario_pedido, editar_transportadora_pedidos, listar_transportadoras_terceiros,
     marcar_dedicados, remover_dedicados,
     salvar_disponibilidade_dia, marcar_disponibilidade_periodo, limpar_disponibilidade_dia,
     publicar_oferta_rascunho, publicar_ofertas_em_lote, despublicar_oferta_rascunho, despublicar_ofertas_em_lote,
-    ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento,
+    ETAPAS_AGENTES_PLANEJAMENTO, montar_etapas_agentes_planejamento, SITUACAO_STOKKI_NAO_PRONTA,
+    placas_veiculos_vuupt, seletor_veiculos, confirmar_envio_rascunhos,
 )
+from regras import veiculos as veiculos_regras
 from avisar_motoristas_rotas import notificar_oferta_motoristas, push_ofertas_vps
-from motoristas import dados_pagina_motoristas, listar_agentes_vuupt_nao_cadastrados, cadastrar_motorista
+from motoristas import dados_pagina_motoristas, url_app_motorista, listar_agentes_vuupt_nao_cadastrados, cadastrar_motorista, editar_motorista, MotoristaNaoEncontrado
 from expedicao import listar_rotas_do_dia, gerar_romaneio_rota, excluir_pedido_da_rota, MOTIVOS_EXCLUSAO
+# Página pública do portal com regiões, dias de visita e calendário (Hugo, 14/10:
+# botão na Torre pra consulta interna). Mesma constante que a página usa.
+from portal_cliente.regioes_atendimento import URL_PUBLICA as URL_PAGINA_REGIOES
+from portal_cliente import aula as aula_videos
+# Calculadora de frete dedicado do portal (Hugo, 14/10: botão na Torre). Oculta
+# dos clientes; a Torre entra como equipe pelo passe assinado (/torre/cotacao, 16/11).
+from portal_cliente import entrada_equipe
 import rascunhos_rota
 import torre_controle
+from nucleo import justificativas_sem_canhoto
 import tratativas
 import pedidos_parados_triagem
+import consulta_expedicao
+from coletas import banco as coletas_banco, folha_pdf as coletas_folha_pdf, ler_stokki as coletas_ler_stokki, \
+    regras as coletas_regras, exemplo_homolog as coletas_exemplo_homolog
+import acoes_pedidos
+import documentos_email
 import contadores_menu
+import pagina_inicial
 import wms
 import wms_pedidos
 import wms_etiqueta_produto
+import wms_caixas
+import wms_pilotos
+import wms_separacao
+import wms_lotes_planilha
+import wms_etiqueta_volume
+import wms_fila_impressao
 import wms_faltas_recebimento
+import acesso_telas
+import avisos_pendencias
+from galpao3d import banco as galpao3d_banco, estado as galpao3d_estado
+import retornos
+import pagamentos_pontuais
+import compras
 
 def _carregar_config() -> dict:
     with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
@@ -116,6 +157,13 @@ app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=14)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SECURE"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
+
+@app.context_processor
+def _telas_liberadas_no_template():
+    """Lista de telas do acesso personalizado (None = segue o nivel), pro
+    menu lateral e os links entre telas."""
+    return {"telas_liberadas": g.get("telas_liberadas")}
 
 # Roda uma vez, assim que o painel sobe -- destrava qualquer execução
 # que ficou presa em RODANDO por causa de um encerramento à força do
@@ -157,12 +205,69 @@ def _nivel_das_credenciais(usuario: str, senha: str, cfg_painel: dict):
         return "galpao"
     # Nível "atendimento" (09/09, Hugo): só a tela /atendimento (chat e
     # chamados do portal do cliente). Total e operador também a acessam.
+    # Ampliado 28/09 (Hugo): também Torre, Pedidos Parados, Tratativas,
+    # Consulta e Expedição -- vê tudo e trata ocorrência, mas não roda
+    # agente, não encerra rota nem exclui pedido de rota.
     usuario_atendimento = cfg_painel.get("usuario_atendimento")
     senha_atendimento = cfg_painel.get("senha_atendimento")
     if usuario_atendimento and senha_atendimento and hmac.compare_digest(usuario, usuario_atendimento) \
             and hmac.compare_digest(senha, senha_atendimento):
         return "atendimento"
+    # Logins nominais (02/10, Hugo): pra pessoa ter login proprio em vez de
+    # dividir o par do nivel -- a acao fica registrada no nome dela. Desde
+    # 23/10 moram no banco (acesso_telas.painel_usuarios), editados na /acessos.
+    conta = acesso_telas.conferir_senha(usuario, senha)
+    if conta and conta["nivel"] in acesso_telas.NIVEIS:
+        return conta["nivel"]
     return None
+
+
+def _logins_fixos(cfg_painel: dict) -> set:
+    chaves = ("usuario", "usuario_operador", "usuario_leitura", "usuario_expedicao", "usuario_galpao",
+              "usuario_atendimento")
+    return {cfg_painel.get(c) for c in chaves if cfg_painel.get(c)}
+
+
+# Limite de tentativas no /login (23/10: 5 senhas erradas travavam 15 min)
+# SAIU em 29/10 a pedido do Hugo: senha errada nao trava mais o login do painel.
+
+
+# Deslogar por inatividade (24/10, Hugo; 27/10 subiu de 30 min pra 6 h): 6 h
+# sem a pessoa mexer na tela derruba a sessao. Conta como uso: abrir/navegar pra uma pagina e o aviso
+# que o _sessao_inativa_script.html manda ao clicar, digitar, tocar ou rolar.
+# As consultas automaticas das telas (Torre, contadores do menu, status da
+# execucao a cada 2 s) NAO contam, senao ninguem cairia nunca. Galpao e
+# expedicao (logins fixos de aparelho compartilhado) ficam de fora.
+_INATIVIDADE_MAX = timedelta(hours=6)
+_NIVEIS_SEM_EXPIRAR = ("galpao", "expedicao")
+
+
+def _uso_de_verdade() -> bool:
+    if request.endpoint == "api_sessao_atividade":
+        return True
+    # Sec-Fetch-Mode=navigate so vem quando a pessoa abre a pagina; fetch()
+    # manda "cors"/"same-origin". Navegador antigo sem o cabecalho: GET de
+    # pagina conta como uso.
+    return request.method == "GET" and not request.path.startswith(f"{request.script_root}/api/") \
+        and request.headers.get("Sec-Fetch-Mode", "navigate") == "navigate"
+
+
+def _sessao_na_versao(conta: dict) -> bool:
+    """Senha redefinida ou trocada sobe a versao_senha da conta: sessao
+    aberta com a senha anterior deixa de valer (sem isso, uma sessao velha
+    escolheria a senha nova em /trocar-senha). Sessao de antes da coluna
+    existir conta como versao 0."""
+    return session.get("versao_senha", 0) == conta["versao_senha"]
+
+
+def _pagina_inicial(nivel: str, telas) -> str:
+    # Página inicial (/inicio, 29/09) pra quem usa o painel inteiro.
+    # Expedição e galpão têm uma tela só e nem acesso ao /inicio --
+    # cair nele levaria direto a um 403 pós-login.
+    paginas = [t for t in telas or [] if t in acesso_telas.PAGINAS]
+    if paginas:
+        return url_for(paginas[0])
+    return {"expedicao": url_for("expedicao"), "galpao": url_for("wms")}.get(nivel) or url_for("inicio")
 
 
 def requer_auth(f=None, *, niveis=("total",)):
@@ -202,13 +307,63 @@ def requer_auth(f=None, *, niveis=("total",)):
             if nivel is None:
                 if request.path.startswith(f"{request.script_root}/api/"):
                     return jsonify({"erro": "Sessão expirada -- faça login de novo."}), 401
-                return redirect(url_for("login", proximo=request.script_root + request.full_path))
-            if nivel not in niveis:
+                return redirect(url_for("login"))
+            # "Derrubar todas as sessoes" (24/10, /acessos): sessao de rodada
+            # anterior cai, de qualquer login.
+            if session.get("rodada_sessoes", 0) != acesso_telas.rodada_sessoes()["rodada"]:
+                session.clear()
+                if request.path.startswith(f"{request.script_root}/api/"):
+                    return jsonify({"erro": "Sessão encerrada -- faça login de novo."}), 401
+                return redirect(url_for("login"))
+            # Login nominal (23/10): nivel e nome vem do banco a cada request,
+            # entao mudanca feita na /acessos vale sem novo login. Senha
+            # provisoria trava tudo ate a pessoa trocar.
+            conta = acesso_telas.conta(session.get("usuario"))
+            if conta:
+                if not conta["ativo"] or not _sessao_na_versao(conta):
+                    session.clear()
+                    if request.path.startswith(f"{request.script_root}/api/"):
+                        return jsonify({"erro": "Seu acesso mudou -- faça login de novo."}), 401
+                    return redirect(url_for("login"))
+                if conta["trocar_senha"]:
+                    if request.path.startswith(f"{request.script_root}/api/"):
+                        return jsonify({"erro": "Troque a senha provisória antes de continuar."}), 403
+                    return redirect(url_for("trocar_senha"))
+                if conta["nivel"] != nivel:
+                    session["nivel_acesso"] = nivel = conta["nivel"]
+            g.nome_usuario = (conta or {}).get("nome") or ""
+            # Sessao parada (24/10, Hugo): 30 min sem uso de verdade -> login.
+            if nivel not in _NIVEIS_SEM_EXPIRAR:
+                agora = datetime.now().timestamp()
+                ultimo = session.get("ultimo_uso")
+                if ultimo and agora - ultimo > _INATIVIDADE_MAX.total_seconds():
+                    session.clear()
+                    if request.path.startswith(f"{request.script_root}/api/"):
+                        return jsonify({"erro": "Sessão encerrada por 30 min sem uso -- faça login de novo."}), 401
+                    return redirect(url_for("login"))
+                if ultimo is None or _uso_de_verdade():
+                    session["ultimo_uso"] = agora
+            # Acesso personalizado (21/10, acesso_telas.py): vale a lista de
+            # telas, com poder de total dentro delas, no lugar do nivel.
+            telas = conta["telas"] if conta else None
+            if telas is not None:
+                if not acesso_telas.caminho_liberado(request.path, telas):
+                    abort(403, "Essa tela não está liberada pro seu usuário.")
+                nivel = "total"
+            elif nivel not in niveis:
                 abort(403, "Seu usuário não tem permissão pra essa ação.")
             g.nivel_acesso = nivel
+            g.telas_liberadas = telas
             return func(*args, **kwargs)
         return decorado
     return decorator
+
+
+# Homologacao (FRESH_AMBIENTE=homolog): faixa, erros amigaveis, saude e tela de envios.
+# Sem a variavel nada disso age.
+if _ambiente.homolog_ativo():
+    from homologacao import flask_homolog
+    flask_homolog.instalar(app, servico="painel", requer_auth=requer_auth)
 
 
 def exige_mesma_origem(f):
@@ -359,25 +514,91 @@ def login():
         usuario = request.form.get("usuario", "")
         senha = request.form.get("senha", "")
         nivel = _nivel_das_credenciais(usuario, senha, cfg_painel)
+        conta = acesso_telas.conta(usuario) if nivel else None
+        telas = conta["telas"] if conta else None
+        paginas = [t for t in telas or [] if t in acesso_telas.PAGINAS]
         if nivel is None:
             erro = "Usuário ou senha incorretos."
+        elif telas is not None and not paginas:
+            erro = "Seu usuário não tem nenhuma tela liberada. Fale com o Hugo."
         else:
             session.clear()
             session.permanent = True
             session["nivel_acesso"] = nivel
             session["usuario"] = usuario
-            # Nível "expedicao" não tem acesso à Torre (18/08) -- cair
-            # nela por padrão levaria direto a um 403 pós-login.
-            pagina_padrao = {"expedicao": url_for("expedicao"), "galpao": url_for("wms"),
-                             "atendimento": url_for("atendimento")}.get(nivel) or url_for("torre")
-            proximo = request.form.get("proximo") or pagina_padrao
-            # Só aceita redirecionar pra caminho relativo deste próprio
-            # painel -- nunca pra outro domínio (open redirect).
-            raiz = request.script_root or ""
-            if not (proximo == raiz or proximo.startswith(raiz + "/")):
-                proximo = pagina_padrao
-            return redirect(proximo)
-    return render_template("login.html", erro=erro, proximo=request.args.get("proximo", ""))
+            session["ultimo_uso"] = datetime.now().timestamp()
+            session["rodada_sessoes"] = acesso_telas.rodada_sessoes()["rodada"]
+            if conta:
+                session["versao_senha"] = conta["versao_senha"]
+            if conta and conta["trocar_senha"]:
+                return redirect(url_for("trocar_senha"))
+            # Exceção: o link da aula (WhatsApp da equipe) volta pros vídeos.
+            if request.args.get("proximo") == "aula":
+                return redirect(url_for("aula_equipe"))
+            # Todo acesso cai no Inicio (24/10, Hugo), nao na tela que a pessoa
+            # tentava abrir. Galpao, expedicao e personalizado sem o Inicio
+            # vao pra tela deles (_pagina_inicial).
+            return redirect(_pagina_inicial(nivel, telas))
+    return render_template("login.html", erro=erro)
+
+
+@app.route("/trocar-senha", methods=["GET", "POST"])
+def trocar_senha():
+    """Troca obrigatoria da senha provisoria do login nominal (23/10): a
+    /acessos cadastra ou redefine com senha provisoria e requer_auth manda
+    pra ca ate a pessoa escolher a dela."""
+    conta = acesso_telas.conta(session.get("usuario")) if session.get("nivel_acesso") else None
+    if not conta or not conta["ativo"] or not _sessao_na_versao(conta) \
+            or session.get("rodada_sessoes", 0) != acesso_telas.rodada_sessoes()["rodada"]:
+        session.clear()
+        return redirect(url_for("login"))
+    if not conta["trocar_senha"]:
+        return redirect(_pagina_inicial(conta["nivel"], conta["telas"]))
+    erro = None
+    if request.method == "POST":
+        origem = request.headers.get("Origin") or request.headers.get("Referer")
+        if not origem or urlparse(origem).netloc != request.host:
+            abort(403, "Origem da requisição não confere (proteção CSRF).")
+        nova = request.form.get("nova", "")
+        if nova != request.form.get("repetir", ""):
+            erro = "As duas senhas não conferem."
+        else:
+            conn = acesso_telas.conectar()
+            try:
+                versao = acesso_telas.trocar_senha(conn, conta["usuario"], nova, session.get("versao_senha", 0))
+                if versao is None:
+                    session.clear()
+                    return redirect(url_for("login"))
+                session["versao_senha"] = versao
+                return redirect(_pagina_inicial(conta["nivel"], conta["telas"]))
+            except ValueError as e:
+                erro = str(e)
+            finally:
+                conn.close()
+    return render_template("login.html", erro=erro, trocar=True, usuario=conta["usuario"])
+
+
+def _segundos_restantes():
+    """Quanto falta pra sessao cair por inatividade; None pra quem nao expira."""
+    if g.nivel_acesso in _NIVEIS_SEM_EXPIRAR or session.get("nivel_acesso") in _NIVEIS_SEM_EXPIRAR:
+        return None
+    restante = _INATIVIDADE_MAX.total_seconds() - (datetime.now().timestamp() - session.get("ultimo_uso", 0))
+    return max(0, int(restante))
+
+
+@app.route("/api/sessao/atividade", methods=["POST"])
+@requer_auth(niveis=acesso_telas.NIVEIS)
+@exige_mesma_origem
+def api_sessao_atividade():
+    """A pessoa mexeu na tela (_sessao_inativa_script.html): requer_auth ja renovou o ultimo_uso."""
+    return jsonify({"restante": _segundos_restantes()})
+
+
+@app.route("/api/sessao/estado")
+@requer_auth(niveis=acesso_telas.NIVEIS)
+def api_sessao_estado():
+    """Consulta sem renovar: 401 se a sessao ja caiu, senao quanto falta."""
+    return jsonify({"restante": _segundos_restantes()})
 
 
 @app.route("/logout", methods=["POST"])
@@ -490,13 +711,231 @@ def historico():
 
 
 @app.route("/api/sidebar/contadores")
-@requer_auth(niveis=("total", "operador", "leitura", "expedicao", "galpao", "atendimento"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "expedicao", "galpao", "atendimento"))
 def api_sidebar_contadores():
     """Números dos badges do menu lateral (base.html). Chamado pelo JS
     depois do load de qualquer página e a cada poucos minutos -- nunca
     na renderização. Toda a lógica (o que é barato, o que é caro, o que
     cada nível pode ver) está em contadores_menu.py."""
-    return jsonify({"contadores": contadores_menu.contadores(g.nivel_acesso)})
+    contadores = contadores_menu.contadores(g.nivel_acesso, _niveis_por_contador(), _identidade_demandas())
+    resp = jsonify({"contadores": contadores, "avisos": _avisos_da_pessoa(contadores)})
+    return _com_cookie_aparelho(resp)
+
+
+def _identidade_demandas():
+    """Quem esta logado, pro badge das Demandas (por usuario). Falha aqui
+    so tira o badge, nunca derruba os outros contadores."""
+    try:
+        conn = demandas.conectar()
+        try:
+            return demandas.identidade(conn, session.get("usuario") or g.nivel_acesso, session.get("nivel_acesso"),
+                                       g.get("telas_liberadas"),
+                                       session.get("demandas_nome") or session.get("atendente_nome"))
+        finally:
+            conn.close()
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"[contadores] Identidade das demandas falhou: {e}")
+        return None
+
+
+# Aviso de pendencias (spec 2026-10-24-aviso-pendencias-painel): a faixa no
+# topo das telas vem junto do poll do menu; "ignorar" e por pessoa.
+_NIVEIS_AVISO = ("total", "operador", "logistica", "leitura", "expedicao", "galpao", "atendimento")
+_COOKIE_APARELHO = "aviso_aparelho"
+
+
+def _pessoa_do_aviso() -> str:
+    """Login nominal -> 'login:<usuario>'. Login de nivel (compartilhado) ->
+    'aparelho:<uuid>' do cookie aviso_aparelho; sem cookie valido, gera um
+    (o cookie vai na resposta, ver _com_cookie_aparelho)."""
+    if acesso_telas.conta(session.get("usuario")):
+        return f"login:{session.get('usuario')}"
+    try:
+        uid = str(uuid.UUID(request.cookies.get(_COOKIE_APARELHO, "")))
+    except ValueError:
+        uid = str(uuid.uuid4())
+        g.aviso_aparelho_novo = uid
+    return f"aparelho:{uid}"
+
+
+def _com_cookie_aparelho(resp):
+    uid = g.get("aviso_aparelho_novo")
+    if uid:
+        resp.set_cookie(_COOKIE_APARELHO, uid, max_age=365 * 24 * 3600, httponly=True, samesite="Lax",
+                        secure=app.config["SESSION_COOKIE_SECURE"])
+    return resp
+
+
+def _avisos_da_pessoa(contadores: dict) -> list:
+    """Avisos do perfil, sem os ignorados, com `destino` ja resolvido pelo
+    url_for (prefixo do Caddy). Nunca derruba o poll do menu."""
+    if not avisos_pendencias.ATIVO:
+        return []
+    try:
+        pessoa = _pessoa_do_aviso()
+        telas = g.get("telas_liberadas")
+        brutos = avisos_pendencias.montar(
+            g.nivel_acesso, contadores, None if telas is None else set(telas),
+            telas is not None and "aprovar_embarcadores" in telas)
+        conn = avisos_pendencias.conectar()
+        try:
+            brutos = avisos_pendencias.filtrar_ignorados(conn, pessoa, brutos, datetime.now())
+        finally:
+            conn.close()
+        itens = {i["chave"]: i for i in avisos_pendencias.CATALOGO}
+        avisos = []
+        for a in brutos:
+            item = itens[a["chave"]]
+            try:
+                destino = url_for(item["endpoint_destino"])
+            except BuildError:
+                logging.getLogger(__name__).debug(f"[avisos] Tela '{item['endpoint_destino']}' ainda nao existe; aviso '{a['chave']}' omitido")
+                continue
+            if "?" in item["destino"]:
+                destino += "?" + item["destino"].split("?", 1)[1]
+            avisos.append({"chave": a["chave"], "texto": a["texto"], "qtd": a["qtd"],
+                           "destino": destino, "vermelho": a["vermelho"]})
+        return avisos
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"[avisos] Falha ao montar os avisos: {e}")
+        return []
+
+
+@app.route("/api/avisos/ignorar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_AVISO)
+@exige_mesma_origem
+def api_avisos_ignorar():
+    """Esconde um aviso pra essa pessoa por IGNORAR_MINUTOS."""
+    corpo = request.get_json(silent=True) or {}
+    chave, qtd = corpo.get("chave"), corpo.get("qtd")
+    if chave not in {i["chave"] for i in avisos_pendencias.CATALOGO}:
+        return jsonify({"erro": "Aviso desconhecido."}), 400
+    if not isinstance(qtd, int) or isinstance(qtd, bool) or qtd < 0:
+        return jsonify({"erro": "qtd precisa ser um inteiro >= 0."}), 400
+    agora = datetime.now()
+    conn = avisos_pendencias.conectar()
+    try:
+        avisos_pendencias.ignorar(conn, _pessoa_do_aviso(), chave, qtd, agora)
+    finally:
+        conn.close()
+    ate = agora + timedelta(minutes=avisos_pendencias.IGNORAR_MINUTOS)
+    return _com_cookie_aparelho(jsonify({"ok": True, "ate": ate.isoformat(timespec="seconds")}))
+
+
+# ── Pedidos do portal: executar ou recusar a solicitação do cliente ──────────
+
+_NIVEIS_SOLICITACAO = ("total", "operador", "logistica")
+
+
+def _criado_em_curto(valor) -> str:
+    """'2026-10-24T09:05:00' -> '24/10 09:05' (devolve o texto cru se não casar)."""
+    v = str(valor or "").replace("T", " ")
+    if len(v) >= 16 and v[4] == "-" and v[7] == "-":
+        return f"{v[8:10]}/{v[5:7]} {v[11:16]}"
+    return v
+
+
+@app.route("/solicitacoes-portal")
+@requer_auth(niveis=_NIVEIS_SOLICITACAO)
+def solicitacoes_portal():
+    return render_template("solicitacoes_portal.html")
+
+
+@app.route("/api/solicitacoes-portal")
+@requer_auth(niveis=_NIVEIS_SOLICITACAO)
+def api_solicitacoes_portal():
+    from portal_cliente import envio_pedidos
+    conn = envio_pedidos.conectar()
+    try:
+        linhas = envio_pedidos.listar_solicitacoes_pendentes(conn)
+    finally:
+        conn.close()
+    # envio em CANCELANDO ainda esta na fila do worker (nao e acionavel aqui)
+    linhas = [s for s in linhas if s.get("status_envio") != "CANCELANDO"]
+    itens = [{
+        "id": s["id"],
+        "tipo": s["tipo"],
+        "rotulo": envio_pedidos.ROTULOS_SOLICITACAO.get(s["tipo"], s["tipo"]),
+        "embarcador": s.get("cnpj_embarcador") or "",
+        "codigo_pedido": s.get("codigo_pedido") or "",
+        "numero_nf": s.get("numero_nf") or "",
+        "destinatario": s.get("destinatario_nome") or "",
+        "criado_em": _criado_em_curto(s.get("criado_em")),
+        "detalhe": s.get("detalhes") or "",
+    } for s in linhas]
+    return jsonify({"solicitacoes": itens})
+
+
+@app.route("/api/solicitacoes-portal/<int:solicitacao_id>/executar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_SOLICITACAO)
+@exige_mesma_origem
+def api_solicitacoes_portal_executar(solicitacao_id):
+    """Síncrono (ação pontual de um operador; a trava da Stokki espera até 60 s)."""
+    from portal_cliente import envio_pedidos, solicitacoes_execucao
+    try:
+        deps = solicitacoes_execucao.dependencias_reais(_carregar_config(), usuario=session.get("usuario") or "")
+        conn = envio_pedidos.conectar()
+        try:
+            resultado = solicitacoes_execucao.executar(conn, solicitacao_id, deps)
+        finally:
+            conn.close()
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 503 amigavel
+    except Exception:
+        logging.getLogger(__name__).exception(f"[solicitacoes-portal] Falha ao executar {solicitacao_id}")
+        return jsonify({"ok": False, "mensagem": "Erro inesperado ao executar. Veja o log do painel."}), 500
+    return jsonify(resultado)
+
+
+@app.route("/api/solicitacoes-portal/<int:solicitacao_id>/recusar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_SOLICITACAO)
+@exige_mesma_origem
+def api_solicitacoes_portal_recusar(solicitacao_id):
+    from portal_cliente import envio_pedidos, solicitacoes_execucao
+    corpo = request.get_json(silent=True) or {}
+    resposta = corpo.get("resposta")
+    resposta = resposta.strip() if isinstance(resposta, str) else ""
+    if not resposta or len(resposta) > 500:
+        return jsonify({"ok": False, "mensagem": "Informe a resposta ao cliente (até 500 caracteres)."}), 400
+    conn = envio_pedidos.conectar()
+    try:
+        solicitacoes_execucao.recusar(conn, solicitacao_id, resposta)
+    except ValueError as e:
+        return jsonify({"ok": False, "mensagem": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "mensagem": "Solicitação recusada."})
+
+
+def _niveis_por_contador() -> dict:
+    """Acesso personalizado: so os contadores das telas liberadas."""
+    telas = g.get("telas_liberadas")
+    if telas is None:
+        return contadores_menu.NIVEIS_POR_CONTADOR
+    return {c: (g.nivel_acesso,) if c in telas else () for c in contadores_menu.NIVEIS_POR_CONTADOR}
+
+
+@app.route("/inicio")
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
+def inicio():
+    """Página inicial do painel (29/09): o que espera ação de quem logou,
+    números do dia e, só pro total, as rotinas. O HTML sobe sem número
+    nenhum; o JS busca /api/inicio/dados depois do load (mesma regra dos
+    badges do menu: nunca esperar fonte cara na renderização)."""
+    return render_template("inicio.html", mostra_rotinas=g.nivel_acesso == "total")
+
+
+@app.route("/api/inicio/dados")
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
+def api_inicio_dados():
+    niveis = _niveis_por_contador()
+    dados = pagina_inicial.montar_dados(
+        g.nivel_acesso, url_for, niveis_por_contador=niveis,
+        contadores=lambda nivel: contadores_menu.contadores(nivel, niveis))
+    telas = g.get("telas_liberadas")
+    if telas is not None and "aprovar_embarcadores" not in telas:
+        dados.pop("cadastros_embarcador", None)
+    return jsonify(dados)
 
 
 @app.route("/mapa-rotas")
@@ -525,7 +964,7 @@ def mapa_rotas():
 
 
 @app.route("/expedicao")
-@requer_auth(niveis=("total", "operador", "leitura", "expedicao"))
+@requer_auth(niveis=("total", "operador", "leitura", "expedicao", "atendimento"))
 def expedicao():
     """Tela de impressão pro time de expedição (Hugo, 18/08): nome da
     rota, motorista e um botão por rota pra imprimir a papelada (NFs +
@@ -547,12 +986,13 @@ def expedicao():
         # não tem botão de ação nenhum, por definição (ver docstring de
         # requer_auth). Esconde a opção em vez de deixar o usuário
         # tentar e levar 401/erro do servidor.
-        pode_excluir=data_alvo >= date.today() and session.get("nivel_acesso") != "leitura",
+        # Nível "atendimento" (28/09) também só consulta e imprime aqui.
+        pode_excluir=data_alvo >= date.today() and g.nivel_acesso not in ("leitura", "atendimento"),
     )
 
 
 @app.route("/api/expedicao/romaneio/<int:rota_id>")
-@requer_auth(niveis=("total", "operador", "leitura", "expedicao"))
+@requer_auth(niveis=("total", "operador", "leitura", "expedicao", "atendimento"))
 def api_expedicao_romaneio(rota_id):
     """Gera (sempre fresco) e serve o PDF de romaneio de uma rota já
     criada na VUUPT -- mesmo padrão do botão 'Imprimir rota' do
@@ -595,6 +1035,303 @@ def api_expedicao_excluir_pedido():
     return jsonify(resultado)
 
 
+# Consulta de pedido (Hugo, 02/10): na separação da rota o operador não
+# acha um pedido e quer saber se ele deveria estar no galpão. Só leitura;
+# o galpão também consulta. Os mesmos níveis estão no item do menu
+# (_menu_lateral_nav.html) -- mexer nos dois lugares.
+NIVEIS_CONSULTA_PEDIDO = ("total", "operador", "expedicao", "galpao")
+
+
+@app.route("/expedicao/consulta")
+@requer_auth(niveis=NIVEIS_CONSULTA_PEDIDO)
+def expedicao_consulta():
+    return render_template("consulta_pedido_expedicao.html")
+
+
+@app.route("/api/expedicao/consulta")
+@requer_auth(niveis=NIVEIS_CONSULTA_PEDIDO)
+def api_expedicao_consulta():
+    """Veredito de UM pedido cruzando Vuupt e Stokki ao vivo -- ver
+    consulta_expedicao.py. 400 código inválido, 503 Vuupt fora."""
+    try:
+        return jsonify(consulta_expedicao.consultar(request.args.get("codigo", "")))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    except consulta_expedicao.ConsultaIndisponivel as e:
+        return jsonify({"erro": str(e)}), 503
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha na consulta de pedido da expedição")
+        return jsonify({"erro": f"Falha na consulta: {e}"}), 500
+
+
+# ── Coletas da Expedicao (Hugo, 12/11) ───────────────────────────────────────
+# Pedido de retirada sai por aqui: folha impressa (COL-n), o motorista preenche,
+# e nome, placa e a FOTO da folha sao obrigatorios pra confirmar. A lista vem
+# de coletas/ler_stokki.py (timer de 10 min); quem expede e o robo
+# (expedir_pedidos.py --coleta N), que confere a foto de novo.
+NIVEIS_COLETA_VER = ("total", "operador", "leitura", "atendimento", "logistica", "expedicao", "galpao")
+NIVEIS_COLETA_AGIR = ("total", "operador", "expedicao", "galpao")
+_COLETA_FOTO_MAX = 12 * 1024 * 1024
+_COLETA_LEITURA_ATRASADA_MIN = 30
+
+
+def _coletas_pasta_fotos() -> Path:
+    return coletas_banco.DB_PATH.parent / "coletas"
+
+
+def _coletas_erro(e):
+    return jsonify({"erro": str(e)}), (404 if "não encontrada" in str(e) else 400)
+
+
+def _coletas_despachar(conn, coleta_id: int, codigos: list) -> dict:
+    """Poe o robo na fila de execucoes. Homologacao: nada vai a Stokki, a coleta conclui simulada."""
+    agente = buscar_agente(acoes_pedidos.AGENTE_EXPEDICAO)
+
+    def iniciar(args_extra):
+        return iniciar_execucao_com_fila(agente, modo_teste=False, ids_do_grupo=AGENTES_PLANEJAMENTO_IDS,
+                                         args_extra=args_extra)
+    try:
+        r = acoes_pedidos.expedir_stokki(codigos, _autor_acao_pedidos(), iniciar=iniciar, pasta=_LOGS_EXECUCOES,
+                                         coleta=coleta_id)
+    except (_EnvioBloqueadoHomolog, _DesligadoNaHomologacao):   # a fila de agentes e desligada na bancada
+        coletas_regras.aplicar_resultados(
+            conn, coleta_id, {c: {"ok": True, "mensagem": "homologação: registrado, nada foi à Stokki"} for c in codigos},
+            simulada=True)
+        return {"ok": True, "simulada": True}
+    except Exception:
+        logging.getLogger(__name__).exception("coleta %s: falha ao por a expedicao na fila", coleta_id)
+        r = {"ok": False, "erro": "não consegui pôr a expedição na fila"}
+    if not r.get("ok"):   # a coleta fica confirmada (a foto vale); os pedidos ficam em "falhou" pra tentar de novo
+        coletas_regras.aplicar_resultados(conn, coleta_id, {c: {"ok": False, "mensagem": r.get("erro")} for c in codigos})
+        return {"ok": True, "aviso": r.get("erro")}
+    coletas_regras.registrar_execucao(conn, coleta_id, r["execucao_id"], r["token"])
+    return {"ok": True, "execucao_id": r["execucao_id"], "na_fila": r["na_fila"]}
+
+
+@app.route("/expedicao/coletas")
+@requer_auth(niveis=NIVEIS_COLETA_VER)
+def expedicao_coletas():
+    conn = coletas_banco.conectar()
+    try:
+        exemplo = _homolog_ativo()
+        if exemplo:   # a bancada nunca le a Stokki: lista de exemplo com a copia dos dados
+            coletas_exemplo_homolog.preencher(conn, forcar=True)   # a rota ja conferiu o ambiente
+        lista = coletas_regras.a_coletar(conn)
+        folhas = [coletas_regras.coleta(conn, c["id"]) for c in coletas_regras.abertas(conn)]
+        historico = coletas_regras.historico(conn)
+        ultima = coletas_ler_stokki.ultima_leitura(conn)
+        assinatura = coletas_regras.assinatura(conn)
+    finally:
+        conn.close()
+    atrasada = not exemplo
+    if ultima and not exemplo:
+        atrasada = (datetime.now() - datetime.strptime(ultima, coletas_banco.FMT)).total_seconds() > 60 * _COLETA_LEITURA_ATRASADA_MIN
+    return render_template("coletas_expedicao.html", grupos=lista["grupos"], sem_cadastro=lista["sem_cadastro"],
+                           folhas=folhas, historico=historico, ultima_leitura=ultima, leitura_atrasada=atrasada,
+                           pode_agir=g.nivel_acesso in NIVEIS_COLETA_AGIR, max_pedidos=coletas_regras.MAX_PEDIDOS,
+                           exemplo=exemplo, foco=None, assinatura=assinatura)
+
+
+@app.route("/expedicao/coletas/<int:coleta_id>")
+@requer_auth(niveis=NIVEIS_COLETA_VER)
+def expedicao_coleta_tela(coleta_id: int):
+    """Uma coleta so: e onde o QR code da folha impressa cai. O celular da doca
+    tira a foto, digita nome e placa e confirma daqui (Hugo, 13/11)."""
+    conn = coletas_banco.conectar()
+    try:
+        c = coletas_regras.coleta(conn, coleta_id)
+    except coletas_regras.ErroColeta:
+        abort(404)
+    finally:
+        conn.close()
+    return render_template("coletas_expedicao.html", foco=c, folhas=[c], grupos=[], sem_cadastro=[], historico=[],
+                           ultima_leitura=None, leitura_atrasada=False, exemplo=_homolog_ativo(),
+                           pode_agir=g.nivel_acesso in NIVEIS_COLETA_AGIR, max_pedidos=coletas_regras.MAX_PEDIDOS)
+
+
+@app.route("/api/expedicao/coletas/estado")
+@requer_auth(niveis=NIVEIS_COLETA_VER)
+def api_expedicao_coletas_estado():
+    conn = coletas_banco.conectar()
+    try:
+        return jsonify({"assinatura": coletas_regras.assinatura(conn)})
+    finally:
+        conn.close()
+
+
+@app.route("/api/expedicao/coletas/folha", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COLETA_AGIR)
+@exige_mesma_origem
+def api_expedicao_coletas_folha():
+    """Gera a folha de coleta: JSON {ids: [id_stokki]} -> {coleta_id, numero}."""
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    conn = coletas_banco.conectar()
+    try:
+        ids = body.get("ids")
+        if not isinstance(ids, list) or not all(isinstance(i, int) for i in ids):
+            return jsonify({"erro": "ids inválidos."}), 400
+        coleta_id = coletas_regras.gerar_folha(conn, ids, _autor_acao_pedidos())
+    except coletas_regras.ErroColeta as e:
+        return _coletas_erro(e)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "coleta_id": coleta_id, "numero": coletas_banco.numero(coleta_id)})
+
+
+@app.route("/expedicao/coletas/<int:coleta_id>/folha.pdf")
+@requer_auth(niveis=NIVEIS_COLETA_VER)
+def expedicao_coleta_folha(coleta_id: int):
+    conn = coletas_banco.conectar()
+    try:
+        c = coletas_regras.coleta(conn, coleta_id)
+    except coletas_regras.ErroColeta:
+        abort(404)
+    finally:
+        conn.close()
+    # o QR da folha abre esta coleta no celular da doca (endereco publico, via ProxyFix)
+    url = url_for("expedicao_coleta_tela", coleta_id=coleta_id, _external=True)
+    return Response(coletas_folha_pdf.gerar(c, url=url), mimetype="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{c["numero"]}.pdf"'})
+
+
+@app.route("/expedicao/coletas/<int:coleta_id>/foto")
+@requer_auth(niveis=NIVEIS_COLETA_VER)
+def expedicao_coleta_foto(coleta_id: int):
+    conn = coletas_banco.conectar()
+    try:
+        c = coletas_regras.coleta(conn, coleta_id)
+    except coletas_regras.ErroColeta:
+        abort(404)
+    finally:
+        conn.close()
+    nome = c.get("foto_arquivo") or ""
+    caminho = _coletas_pasta_fotos() / nome
+    if not re.fullmatch(r"COL-\d+-[0-9a-f]{8}\.jpg", nome) or not caminho.is_file():
+        abort(404)
+    return send_file(caminho, max_age=3600)
+
+
+def _coletas_salvar_foto(coleta_id: int, arquivo) -> str:
+    """Valida (imagem de verdade, ate 12 MB) e regrava como JPEG. Devolve o nome do arquivo."""
+    from PIL import Image, ImageOps
+    dados = arquivo.read(_COLETA_FOTO_MAX + 1) if arquivo else b""
+    if not dados:
+        raise coletas_regras.ErroColeta("A foto da folha preenchida é obrigatória.")
+    if len(dados) > _COLETA_FOTO_MAX:
+        raise coletas_regras.ErroColeta("Foto grande demais (máximo 12 MB).")
+    try:
+        img = ImageOps.exif_transpose(Image.open(io.BytesIO(dados)))
+        img.thumbnail((2200, 2200))
+        img = img.convert("RGB")
+    except Exception:
+        raise coletas_regras.ErroColeta("O arquivo enviado não é uma foto.")
+    pasta = _coletas_pasta_fotos()
+    pasta.mkdir(parents=True, exist_ok=True)
+    nome = f"COL-{coleta_id}-{uuid.uuid4().hex[:8]}.jpg"
+    img.save(pasta / nome, format="JPEG", quality=85)
+    return nome
+
+
+@app.route("/api/expedicao/coletas/<int:coleta_id>/confirmar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COLETA_AGIR)
+@exige_mesma_origem
+def api_expedicao_coleta_confirmar(coleta_id: int):
+    """multipart: ids (id_stokki dos que sairam, separados por virgula), motorista_nome, placa, foto.
+    Nenhum id = cancela a folha. Foto, nome e placa obrigatorios (Hugo, 12/11)."""
+    ids = [int(i) for i in re.findall(r"\d+", request.form.get("ids", ""))]
+    nome_motorista, placa = request.form.get("motorista_nome", ""), request.form.get("placa", "")
+    usuario = _autor_acao_pedidos()
+    conn = coletas_banco.conectar()
+    foto = ""
+    try:
+        c = coletas_regras.coleta(conn, coleta_id)
+        if not ids or c["status"] != "ABERTA":   # cancelar, ou recusar sem gravar foto
+            codigos = coletas_regras.confirmar(conn, coleta_id, ids, nome_motorista, placa, "", usuario)
+            return jsonify({"ok": True, "cancelada": True})
+        if not nome_motorista.strip() or not placa.strip():
+            coletas_regras.confirmar(conn, coleta_id, ids, nome_motorista, placa, "x", usuario)   # levanta o erro certo
+        foto = _coletas_salvar_foto(coleta_id, request.files.get("foto"))
+        codigos = coletas_regras.confirmar(conn, coleta_id, ids, nome_motorista, placa, foto, usuario)
+        foto = ""   # daqui pra frente a foto pertence a coleta
+        return jsonify(_coletas_despachar(conn, coleta_id, codigos))
+    except coletas_regras.ErroColeta as e:
+        return _coletas_erro(e)
+    finally:
+        if foto:
+            (_coletas_pasta_fotos() / foto).unlink(missing_ok=True)
+        conn.close()
+
+
+@app.route("/api/expedicao/coletas/<int:coleta_id>/cancelar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COLETA_AGIR)
+@exige_mesma_origem
+def api_expedicao_coleta_cancelar(coleta_id: int):
+    conn = coletas_banco.conectar()
+    try:
+        coletas_regras.cancelar_folha(conn, coleta_id, _autor_acao_pedidos())
+    except coletas_regras.ErroColeta as e:
+        return _coletas_erro(e)
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/expedicao/coletas/<int:coleta_id>/tentar-de-novo", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COLETA_AGIR)
+@exige_mesma_origem
+def api_expedicao_coleta_tentar(coleta_id: int):
+    conn = coletas_banco.conectar()
+    try:
+        return jsonify(_coletas_despachar(conn, coleta_id, coletas_regras.tentar_de_novo(conn, coleta_id)))
+    except coletas_regras.ErroColeta as e:
+        return _coletas_erro(e)
+    finally:
+        conn.close()
+
+
+@app.route("/api/expedicao/coletas/<int:coleta_id>/retirar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COLETA_AGIR)
+@exige_mesma_origem
+def api_expedicao_coleta_retirar(coleta_id: int):
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    conn = coletas_banco.conectar()
+    try:
+        coletas_regras.retirar_pedido(conn, coleta_id, int(body.get("id_stokki") or 0), _autor_acao_pedidos())
+    except coletas_regras.ErroColeta as e:
+        return _coletas_erro(e)
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/expedicao/coletas/<int:coleta_id>/andamento")
+@requer_auth(niveis=NIVEIS_COLETA_VER)
+def api_expedicao_coleta_andamento(coleta_id: int):
+    """Estado da coleta. Quando o robo termina, grava o resultado por pedido (uma vez)."""
+    conn = coletas_banco.conectar()
+    try:
+        c = coletas_regras.coleta(conn, coleta_id)
+        rodando = any(p["estado"] == "EXPEDINDO" for p in c["pedidos"])
+        if rodando and c["status"] == "CONFIRMADA":
+            execucao = buscar_execucao(c["execucao_id"]) if c["execucao_id"] else None
+            r = acoes_pedidos.andamento_expedicao(execucao, c["token"] or "", _LOGS_EXECUCOES)
+            if not r.get("ok") or r.get("estado") == "fim":
+                coletas_regras.aplicar_resultados(conn, coleta_id, r.get("resultados") or {})
+                c = coletas_regras.coleta(conn, coleta_id)
+                rodando = False
+    except coletas_regras.ErroColeta as e:
+        return _coletas_erro(e)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "status": c["status"], "rodando": rodando,
+                    "pedidos": [{"codigo": p["codigo"], "estado": p["estado"], "mensagem": p["mensagem"]}
+                                for p in c["pedidos"]]})
+
+
 def _parse_data_param(padrao_amanha: bool = False) -> date:
     data_param = request.args.get("data")
     padrao = date.today() + timedelta(days=1) if padrao_amanha else date.today()
@@ -607,7 +1344,7 @@ def _parse_data_param(padrao_amanha: bool = False) -> date:
 
 
 @app.route("/planejamento")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def planejamento():
     data_alvo = _parse_data_param()
     try:
@@ -625,12 +1362,18 @@ def planejamento():
         # some com toda a barra de ação/edição, independente do nível
         # de acesso (ver bloqueia_planejamento_passado pro reforço
         # equivalente no backend das rotas de mutação).
-        pode_editar=g.nivel_acesso in ("total", "operador") and data_alvo >= date.today(),
+        pode_editar=g.nivel_acesso in ("total", "operador", "logistica") and data_alvo >= date.today(),
+        justificativas=justificativas_sem_canhoto.JUSTIFICATIVAS,
+        motivos_sem_sucesso=torre_controle.motivos_sem_sucesso(),
+        # "Tirar da rota" no card da rota enviada (10/11): mesma lista da Torre
+        motivos_exclusao=MOTIVOS_EXCLUSAO,
+        # selo "sem carro" recalculado no card depois de trocar motorista/carro
+        agentes_sem_carro=sorted(veiculos_regras.AGENTES_SEM_CARRO),
     )
 
 
 @app.route("/planejamento/mobile")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def planejamento_mobile():
     """Antiga versão mobile "lite" de /planejamento (17/08, só leitura +
     ações básicas, sem mapa). Desde 04/09 a própria tela /planejamento
@@ -657,7 +1400,7 @@ AGENTES_PLANEJAMENTO_EXECUTAR_TUDO_IDS = tuple(
 
 
 @app.route("/api/planejamento/agentes/etapas")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_planejamento_agentes_etapas():
     """Estado da barra de agentes do planejamento (leitura barata no
     SQLite) -- mesmo padrão de /api/torre/etapas, só que restrito aos
@@ -666,7 +1409,7 @@ def api_planejamento_agentes_etapas():
 
 
 @app.route("/api/planejamento/agentes/rodar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_planejamento_agentes_rodar():
     """Dispara um agente da barra do planejamento. Importação aceita
@@ -727,7 +1470,7 @@ def api_planejamento_agentes_rodar():
 
 
 @app.route("/api/planejamento/agentes/rodar-tudo", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_planejamento_agentes_rodar_tudo():
     """Botão "Executar tudo" da barra do planejamento: os agentes em
@@ -766,7 +1509,7 @@ def laboratorio_rotas():
 
 
 @app.route("/historico-tratativas")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def historico_tratativas():
     """Histórico de tratativas pesquisável por NF, PS, embarcador, cliente,
     motorista ou motivo -- pedido do Hugo, 14/08. 100% leitura (ver
@@ -801,20 +1544,1258 @@ def historico_tratativas():
     )
 
 
+NIVEIS_DECIDIR_VIGIA = ("total", "operador", "logistica", "atendimento")
+
+
+@app.route("/vigia")
+@requer_auth(niveis=("total", "operador", "leitura", "logistica", "atendimento"))
+def vigia_pedidos():
+    """Vigia de pedidos abertos (Hugo, 28/09): cada pedido aberto com o
+    estado, há quanto tempo e se o prazo venceu. Quem calcula é
+    vigia/vigiar.py (timer de 15 min). Aba "acao" (21/11, a padrão): o que
+    deixamos de entregar, agrupado pelo que fazer, com dono e "Tratar".
+    Aba "abertos": a lista completa de antes. Aba "fechamento" (05/10):
+    resultado do batimento (batimento/bater.py, 07h25)."""
+    pedida = (request.args.get("aba") or "").lower()
+    if pedida == "fechamento":
+        aba = "fechamento"
+    elif pedida == "abertos" or request.args.get("estado") or request.args.get("vencidos"):
+        aba = "abertos"
+    else:
+        aba = "acao"
+    if aba == "fechamento":
+        from batimento import consulta as batimento_consulta
+        from batimento.regras import ROTULOS_DIVERGENCIA
+        filtros = {
+            "motivo": request.args.get("motivo", ""),
+            "reais": request.args.get("reais", "") == "1",
+            "tratadas": request.args.get("tratadas", "") == "1",
+            "busca": request.args.get("busca", ""),
+        }
+        try:
+            dados = batimento_consulta.fechamento(filtros["motivo"], filtros["reais"], filtros["tratadas"],
+                                                  filtros["busca"])
+            erro = None
+        except Exception as e:
+            logging.getLogger(__name__).exception("Falha ao ler o batimento")
+            dados = {"linhas": [], "por_motivo": [], "total_abertas": 0, "ultima": None, "rodadas": [],
+                     "atrasada": False}
+            erro = str(e)
+        return render_template("vigia_pedidos.html", aba=aba, dados=dados, filtros=filtros, erro=erro,
+                               motivos=list(ROTULOS_DIVERGENCIA.items()),
+                               pode_tratar=g.nivel_acesso in ("total", "operador"))
+
+    from vigia import consulta as vigia_consulta
+    if aba == "acao":
+        from vigia import banco as vigia_banco
+        equipe = request.args.get("equipe")
+        if equipe is None:  # sem escolha: abre na equipe de quem entrou (logística / atendimento)
+            equipe = vigia_consulta.equipe_do_nivel(g.nivel_acesso)
+        if equipe not in vigia_consulta.EQUIPES:
+            equipe = ""
+        filtros = {"equipe": equipe, "busca": request.args.get("busca", "")}
+        try:
+            dados = vigia_consulta.lista_acao(equipe, filtros["busca"])
+            erro = None
+        except Exception as e:
+            logging.getLogger(__name__).exception("Falha ao ler a lista de ação do vigia")
+            dados = {"grupos": [], "com_decisao": [], "equipes": [], "total_acao": 0, "decisoes_vencidas": 0,
+                     "placar": None, "ultima_rodada": None, "ultima_listagem_stokki": None}
+            erro = str(e)
+        return render_template("vigia_pedidos.html", aba=aba, dados=dados, filtros=filtros, erro=erro,
+                               equipes=vigia_consulta.EQUIPES,
+                               pode_tratar=g.nivel_acesso in NIVEIS_DECIDIR_VIGIA,
+                               opcoes_decisao=list(vigia_banco.OPCOES_DECISAO.items()),
+                               data_padrao=vigia_consulta.data_padrao_retorno().isoformat(),
+                               hoje=datetime.now().date().isoformat())
+
+    filtros = {
+        "estado": request.args.get("estado", ""),
+        "vencidos": request.args.get("vencidos", "") == "1",
+        "busca": request.args.get("busca", ""),
+    }
+    try:
+        dados = vigia_consulta.listar(filtros["estado"], filtros["vencidos"], filtros["busca"])
+        erro = None
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao ler o vigia")
+        dados = {"linhas": [], "resumo": [], "total": 0, "vencidos": 0,
+                 "ultima_rodada": None, "ultima_listagem_stokki": None}
+        erro = str(e)
+    from vigia.regras import ORDEM, ROTULOS
+    return render_template("vigia_pedidos.html", aba=aba, dados=dados, filtros=filtros, erro=erro,
+                           estados=[(e, ROTULOS[e]) for e in ORDEM])
+
+
+def _usuario_da_sessao() -> str:
+    return session.get("usuario") or g.nivel_acesso
+
+
+@app.route("/api/vigia/decisao", methods=["POST"])
+@requer_auth(niveis=NIVEIS_DECIDIR_VIGIA)
+@exige_mesma_origem
+def api_vigia_decisao():
+    """"Tratar" da aba Não entregues (Hugo, 21/11): o que a equipe decidiu pro
+    pedido e até quando. Some da fila até a data e volta como decisão vencida."""
+    import tratativas
+    from vigia import banco as vigia_banco, consulta as vigia_consulta
+    body = request.get_json(force=True) or {}
+    codigo, decisao = str(body.get("codigo") or ""), str(body.get("decisao") or "")
+    ate, obs = str(body.get("ate") or ""), str(body.get("obs") or "")
+    try:
+        vigia_consulta.decidir(codigo, str(body.get("estado") or ""), decisao, ate, obs, _usuario_da_sessao())
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    tratativas.registrar_evento(codigo, "painel", "VIGIA_DECISAO",
+                                decisao=vigia_banco.OPCOES_DECISAO.get(decisao, decisao),
+                                texto=f"até {ate}" + (f" · {obs.strip()}" if obs.strip() else "")
+                                      + f" · por {_usuario_da_sessao()}")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/vigia/decisao/desfazer", methods=["POST"])
+@requer_auth(niveis=NIVEIS_DECIDIR_VIGIA)
+@exige_mesma_origem
+def api_vigia_decisao_desfazer():
+    import tratativas
+    from vigia import consulta as vigia_consulta
+    codigo = str((request.get_json(force=True) or {}).get("codigo") or "")
+    if not vigia_consulta.desfazer(codigo):
+        return jsonify({"erro": "Esse pedido não tem decisão."}), 400
+    tratativas.registrar_evento(codigo, "painel", "VIGIA_DECISAO_DESFEITA",
+                                texto=f"desfeita por {_usuario_da_sessao()}")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/batimento/tratar", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_batimento_tratar():
+    """Marca uma divergência do batimento como tratada (aba Fechamento)."""
+    from batimento import consulta as batimento_consulta
+    body = request.get_json(force=True) or {}
+    try:
+        batimento_consulta.tratar(str(body.get("codigo") or ""), session.get("usuario") or g.nivel_acesso,
+                                  str(body.get("obs") or ""))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True})
+
+
+LIMITE_REQUISICAO_BAIXA = 60 * 1024 * 1024  # baixa sem app com canhotos (09/10)
+
+
+def _rota_sem_app(route_id: int) -> tuple[dict | None, str | None]:
+    """Rota da Vuupt + checagem de motorista SEM_APP. (rota, erro)."""
+    import rotas_client
+    from nucleo.sincronizar_vuupt import _rota_do_corpo
+    from regras import preferencias_motoristas
+    token = (_carregar_config().get("vuupt_api") or {}).get("token", "")
+    # GET /routes/{id} vem embrulhado em {"route": {...}} (visto na prova de 09/10)
+    rota = _rota_do_corpo(rotas_client.buscar_rota(token, route_id, include=["services"]))
+    if not rota:
+        return None, "Rota não encontrada na Vuupt."
+    if rota.get("agent_id") not in preferencias_motoristas.agent_ids_sem_app():
+        return rota, "Essa rota não é de motorista marcado SEM_APP: a baixa é pelo app do motorista."
+    return rota, None
+
+
+@app.route("/baixa-sem-app")
+@requer_auth(niveis=("total", "operador"))
+def baixa_sem_app():
+    """Baixa de rota de motorista sem app (iPhone, Hugo 08/10): marca o que
+    voltou e conclui na Vuupt (nucleo/baixa_sem_app.py)."""
+    from mapa_util import extrair_servicos_da_rota
+    from insucesso_entrega.motivos_falha import MOTIVOS_FALHA
+    route_id = request.args.get("rota", type=int)
+    rota, erro = _rota_sem_app(route_id) if route_id else (None, "Rota não informada.")
+    servicos = []
+    for s in (extrair_servicos_da_rota(rota) if rota else []):
+        servicos.append({"id": s.get("id"), "codigo": (s.get("code") or "").lstrip("#"),
+                         "titulo": s.get("title") or "", "endereco": s.get("address") or "",
+                         "status": s.get("status") or "",
+                         "fechado": (s.get("status") or "") in ("done", "canceled", "cancelled")})
+    motivos = sorted(((k, v["texto"]) for k, v in MOTIVOS_FALHA.items()), key=lambda kv: kv[1])
+    from nucleo.justificativas_sem_canhoto import JUSTIFICATIVAS
+    return render_template("baixa_sem_app.html", rota=rota, erro=erro, servicos=servicos, motivos=motivos,
+                           justificativas=JUSTIFICATIVAS, limite_bytes=LIMITE_REQUISICAO_BAIXA)
+
+
+@app.route("/api/baixa-sem-app", methods=["POST"])
+@requer_auth(niveis=("total", "operador"))
+@exige_mesma_origem
+def api_baixa_sem_app():
+    import threading
+    from mapa_util import extrair_servicos_da_rota
+    from nucleo import baixa_sem_app as bsa, banco as nucleo_banco
+    from vuupt_client import VuuptClient
+    from insucesso_entrega.motivos_falha import MOTIVOS_FALHA
+    # Recusa antes de ler: canhotos de 15 MB cada, nunca uma rota inteira de fotos gigantes.
+    if (request.content_length or 0) > LIMITE_REQUISICAO_BAIXA:
+        return jsonify({"erro": "Envio grande demais (mais de 60 MB no total): tire as fotos em resolução menor ou dê a baixa em duas etapas."}), 413
+    # multipart quando vem canhoto (09/10): o JSON de antes vai no campo "dados"
+    if (request.content_type or "").startswith("multipart/form-data"):
+        try:
+            body = json.loads(request.form.get("dados") or "{}")
+        except ValueError:
+            return jsonify({"erro": "dados inválidos"}), 400
+    else:
+        body = request.get_json(force=True) or {}
+    try:
+        route_id = int(body.get("rota"))
+    except (TypeError, ValueError):
+        return jsonify({"erro": "rota inválida"}), 400
+    itens = body.get("itens")
+    if not isinstance(itens, list) or not itens:
+        return jsonify({"erro": "nenhum pedido"}), 400
+    for i in itens:
+        if not i.get("entregue") and int(i.get("failed_reason_id") or 0) not in MOTIVOS_FALHA:
+            return jsonify({"erro": f"{i.get('codigo')}: escolha o motivo de quem voltou"}), 400
+    rota, erro = _rota_sem_app(route_id)
+    if erro:
+        return jsonify({"erro": erro}), 400
+    # O código do pedido vem da ROTA, nunca do navegador: vira nome de
+    # arquivo do canhoto e entra na tratativa.
+    codigo_por_id = {s.get("id"): (s.get("code") or "").lstrip("#") for s in extrair_servicos_da_rota(rota)}
+    if any(int(i.get("service_id") or 0) not in codigo_por_id for i in itens):
+        return jsonify({"erro": "pedido que não é dessa rota"}), 400
+    for i in itens:
+        i["codigo"] = codigo_por_id[int(i["service_id"])]
+        i.pop("aviso", None)                     # o aviso e do servidor, nunca do navegador
+        if not i.get("entregue"):
+            i.pop("justificativa", None), i.pop("texto_outro", None)
+    conn = nucleo_banco.conectar()
+    try:
+        if bsa.lote_em_andamento(conn, route_id):
+            return jsonify({"erro": "Já tem uma baixa dessa rota em andamento. Aguarde terminar e recarregue."}), 409
+        # Canhoto ANTES do lote: a expedicao roda a cada 30 min e a Stokki
+        # nao aceita anexo em pedido ja expedido. Valida e converte tudo (em
+        # memoria) antes de gravar qualquer coisa.
+        from nucleo import canhotos_manuais, justificativas_sem_canhoto
+        from vuupt_checklist import CAMPO_CANHOTO, CAMPO_NOTA_RETORNO, para_jpeg
+        canhotos, fotos_por_servico = [], {}
+        for i in itens:
+            if not i.get("entregue"):
+                continue
+            sid = int(i.get("service_id") or 0)
+            conteudos = {}
+            for chave in ("canhoto", "nota"):
+                arq = request.files.get(f"{chave}_{sid}")
+                conteudo = arq.read(canhotos_manuais.LIMITE_BYTES + 1) if arq else b""
+                if len(conteudo) > canhotos_manuais.LIMITE_BYTES:
+                    return jsonify({"erro": f"{i.get('codigo')}: arquivo maior que 15 MB."}), 413
+                conteudos[chave] = conteudo or None
+            fotos, avisos = {}, []
+            try:
+                if conteudos["canhoto"]:
+                    canhotos.append((i, canhotos_manuais.para_pdf(conteudos["canhoto"])))
+                    if conteudos["canhoto"][:5] == b"%PDF-":
+                        avisos.append("Canhoto em PDF: ficou só como cópia local; no checklist da VUUPT vão apenas fotos.")
+                    else:
+                        fotos[CAMPO_CANHOTO] = para_jpeg(conteudos["canhoto"])
+            except (canhotos_manuais.CanhotoInvalido, ValueError) as e:
+                return jsonify({"erro": f"{i.get('codigo')}: Canhoto: {e}"}), 400
+            # Hugo, 30/10: a nota de retorno so vai junto da FOTO do canhoto (nunca sozinha nem com PDF)
+            if conteudos["nota"] and CAMPO_CANHOTO not in fotos:
+                conteudos["nota"] = None
+                avisos.append(torre_controle.AVISO_NOTA_SEM_CANHOTO)
+            if avisos:
+                i["aviso"] = " ".join(avisos)
+            try:
+                if conteudos["nota"]:
+                    fotos[CAMPO_NOTA_RETORNO] = para_jpeg(conteudos["nota"])
+            except ValueError as e:
+                msg = str(e)
+                return jsonify({"erro": f"{i.get('codigo')}: Foto da nota de retorno: {msg[:1].lower()}{msg[1:]}"}), 400
+            if conteudos["canhoto"]:
+                i.pop("justificativa", None), i.pop("texto_outro", None)   # com canhoto a justificativa e ignorada
+            else:
+                try:
+                    i["justificativa"], i["texto_outro"] = justificativas_sem_canhoto.validar(
+                        i.get("justificativa"), i.get("texto_outro"))
+                except ValueError as e:
+                    return jsonify({"erro": f"{i.get('codigo')}: {e}"}), 400
+            if fotos:
+                fotos_por_servico[sid] = fotos
+        por = session.get("usuario") or g.nivel_acesso
+        for i, pdf in canhotos:
+            canhotos_manuais.salvar(conn, i.get("codigo") or "", int(i["service_id"]), pdf, por, _carregar_config())
+        lote = bsa.criar_lote(conn, route_id, rota.get("agent_id"), por, itens)
+        try:
+            bsa.gravar_fotos(conn, lote, fotos_por_servico)
+        except Exception:  # noqa: BLE001 -- gravar_fotos ja marcou o lote como erro e logou o motivo
+            return jsonify({"erro": "Não consegui guardar as fotos do checklist no servidor. Tente de novo."}), 500
+    finally:
+        conn.close()
+    token = (_carregar_config().get("vuupt_api") or {}).get("token", "")
+    threading.Thread(target=bsa.executar_lote, args=(lote, VuuptClient(token)), daemon=True).start()
+    return jsonify({"lote": lote})
+
+
+@app.route("/api/baixa-sem-app/<int:lote>")
+@requer_auth(niveis=("total", "operador"))
+def api_baixa_sem_app_status(lote: int):
+    from nucleo import baixa_sem_app as bsa, banco as nucleo_banco
+    conn = nucleo_banco.conectar()
+    try:
+        d = bsa.ler_lote(conn, lote)
+    finally:
+        conn.close()
+    return (jsonify(d), 200) if d else (jsonify({"erro": "lote não encontrado"}), 404)
+
+
+# Recebimento de retornos (Hugo, 23/10): insucessos e parciais que voltam
+# ao galpão, conferidos pelo celular (retornos.py). Confirmar é de quem está
+# no galpão ou opera; Atendimento e leitura só acompanham.
+NIVEIS_RETORNOS_CONFIRMAR = ("total", "operador", "logistica", "galpao", "expedicao")
+NIVEIS_RETORNOS_VER = NIVEIS_RETORNOS_CONFIRMAR + ("atendimento", "leitura")
+
+
+@app.route("/retornos")
+@requer_auth(niveis=NIVEIS_RETORNOS_VER)
+def retornos_tela():
+    # Tela única (mobile first, serve no desktop também): o "versão completa"
+    # do base_mobile aponta pra ela mesma.
+    return render_template("retornos.html", pode_confirmar=g.nivel_acesso in NIVEIS_RETORNOS_CONFIRMAR,
+                           endpoint_desktop="retornos_tela")
+
+
+@app.route("/api/retornos")
+@requer_auth(niveis=NIVEIS_RETORNOS_VER)
+def api_retornos():
+    conn = retornos.conectar()
+    try:
+        motoristas = retornos.listar_pendentes(
+            conn, date.today(), agent_ids_excluir=retornos.agent_ids_lalamove(_carregar_config()))
+    finally:
+        conn.close()
+    return jsonify({"motoristas": motoristas, "motivos": retornos.motivos_validos()})
+
+
+@app.route("/api/retornos/descarga", methods=["POST"])
+@requer_auth(niveis=NIVEIS_RETORNOS_CONFIRMAR)
+@exige_mesma_origem
+def api_retornos_descarga():
+    """Confirma uma descarga: fotos e assinatura vão pra
+    dados/retornos/<id>/ antes de gravar; erro desfaz tudo (linha e pasta)."""
+    try:
+        dados = json.loads(request.form.get("dados") or "{}")
+        itens = list(dados.get("itens") or [])
+    except (ValueError, TypeError, AttributeError):
+        return jsonify({"erro": "Dados da descarga inválidos."}), 400
+    conn = retornos.conectar()
+    descarga_id = retornos.reservar_descarga(conn)
+    try:
+        fotos_carga = [retornos.salvar_arquivo(descarga_id, "carga", f.read())
+                       for f in request.files.getlist("foto_carga")]
+        assinatura = request.files.get("assinatura")
+        nome_assinatura = retornos.salvar_arquivo(descarga_id, "assinatura", assinatura.read()) if assinatura else ""
+        for item in itens:
+            # chave da tela: parada_id, ou "r<retornando_id>" pro Retornando sem parada no núcleo
+            pid = item.get("parada_id")
+            chave = str(int(pid)) if pid not in (None, "") else f"r{int(item.get('retornando_id'))}"
+            item["fotos_avaria"] = [retornos.salvar_arquivo(descarga_id, f"avaria_{chave}", f.read())
+                                    for f in request.files.getlist(f"foto_avaria_{chave}")]
+        resultado = retornos.registrar_descarga(
+            conn, descarga_id=descarga_id, itens=itens, recebedor=dados.get("recebedor") or "",
+            usuario=session.get("usuario") or g.nivel_acesso, fotos_carga=fotos_carga, assinatura=nome_assinatura)
+    except (retornos.ErroRetorno, ValueError, TypeError) as e:
+        retornos.descartar_descarga(conn, descarga_id)
+        conn.close()
+        msg = str(e) if isinstance(e, retornos.ErroRetorno) else "Dados da descarga inválidos."
+        return jsonify({"erro": msg}), 400
+    conn.close()
+
+    # Cópia no GCS fora do request: no 4G do galpão, sete uploads em série
+    # (ou o GCS fora do ar) deixavam o celular em "Enviando…" e geravam toque
+    # repetido. O disco da VPS já tem tudo; o GCS é só cópia.
+    threading.Thread(target=retornos.enviar_gcs, args=(_carregar_config(), descarga_id), daemon=True).start()
+    texto = retornos.texto_alerta_descarga(resultado, " ".join((dados.get("recebedor") or "").split()))
+    if texto:
+        try:
+            import grupos_equipe
+            cg = grupos_equipe.conectar()
+            try:
+                retornos.postar_alerta(cg, texto)
+            finally:
+                cg.close()
+        except Exception:
+            logging.getLogger(__name__).exception("Retornos: descarga %s gravada, mas o alerta falhou", descarga_id)
+    return jsonify({"ok": True, "descarga_id": descarga_id, "divergencias": len(resultado["divergentes"])})
+
+
+@app.route("/api/retornos/descargas")
+@requer_auth(niveis=NIVEIS_RETORNOS_VER)
+def api_retornos_descargas():
+    conn = retornos.conectar()
+    try:
+        return jsonify({"descargas": retornos.listar_descargas(conn)})
+    finally:
+        conn.close()
+
+
+@app.route("/retornos/descarga/<int:descarga_id>")
+@requer_auth(niveis=NIVEIS_RETORNOS_VER)
+def retornos_descarga(descarga_id: int):
+    conn = retornos.conectar()
+    try:
+        d = retornos.detalhar_descarga(conn, descarga_id)
+    finally:
+        conn.close()
+    return jsonify(d) if d else (jsonify({"erro": "descarga não encontrada"}), 404)
+
+
+@app.route("/retornos/arquivo/<int:descarga_id>/<nome>")
+@requer_auth(niveis=NIVEIS_RETORNOS_VER)
+def retornos_arquivo(descarga_id: int, nome: str):
+    caminho = retornos.caminho_arquivo(descarga_id, nome)
+    if not caminho:
+        abort(404)
+    return send_file(caminho, max_age=3600)
+
+
+# ── Aula da equipe: vídeos curtos das telas (Hugo, 13/11) ──────────────────────
+# Gerados por aula_equipe/gravar.py e copiados pra dados/aula_equipe/ no deploy.
+# Só com login (Hugo, 13/11), qualquer nível: o link vai no WhatsApp da equipe.
+PASTA_AULA_EQUIPE = _RAIZ / "dados" / "aula_equipe"
+
+
+@app.route("/aula")
+def aula_equipe():
+    # Quem abre o link sem estar logado entra e volta direto pros vídeos.
+    if session.get("nivel_acesso") is None:
+        return redirect(url_for("login", proximo="aula"))
+    return _aula_equipe_tela()
+
+
+@requer_auth(niveis=acesso_telas.NIVEIS)
+def _aula_equipe_tela():
+    return render_template("aula_equipe.html", videos=aula_videos.carregar_manifesto(PASTA_AULA_EQUIPE),
+                           voltar=_pagina_inicial(session.get("nivel_acesso"), g.telas_liberadas))
+
+
+@app.route("/aula/arquivo/<nome>")
+@requer_auth(niveis=acesso_telas.NIVEIS)
+def aula_equipe_arquivo(nome: str):
+    # Só o que está no manifesto; conditional=True responde Range com 206 (o Safari do iPhone exige).
+    if not aula_videos.arquivo_permitido(nome, aula_videos.carregar_manifesto(PASTA_AULA_EQUIPE)):
+        abort(404)
+    resp = send_from_directory(PASTA_AULA_EQUIPE, nome, conditional=True, max_age=3600)
+    resp.headers["Cache-Control"] = "private, max-age=3600"
+    return resp
+
+
+@app.route("/canhotos-pendentes")
+@requer_auth(niveis=("total", "operador", "logistica"))
+def canhotos_pendentes():
+    """Pedidos entregues sem nenhum comprovante (Hugo, 09/10): sobe o
+    canhoto e fica guardado conosco (servidor + bucket) e no batimento.
+    Não vai pra Stokki: pedido já expedido não aceita anexo."""
+    from datetime import date, timedelta
+    from nucleo import banco as nucleo_banco, canhotos_manuais
+    filtros = {
+        "desde": request.args.get("desde") or (date.today() - timedelta(days=60)).isoformat(),
+        "embarcador": request.args.get("embarcador", ""),
+        "motorista": request.args.get("motorista", ""),
+        "busca": request.args.get("busca", ""),
+    }
+    pagina = request.args.get("pagina", 1, type=int)
+    conn = nucleo_banco.conectar()
+    try:
+        dados = canhotos_manuais.pendentes(conn, filtros["desde"], filtros["embarcador"], filtros["motorista"],
+                                           filtros["busca"], pagina=pagina)
+    finally:
+        conn.close()
+    return render_template("canhotos_pendentes.html", dados=dados, filtros=filtros)
+
+
+@app.route("/ciencias-dedicado")
+@requer_auth(niveis=("total", "operador", "logistica"))
+def ciencias_dedicado():
+    """Ciencia do dedicado fora do dia fixo (spec 17/11, secao 6): quem esta
+    aguardando, quem respondeu, avisos por canal e link da pagina do embarcador."""
+    import ciencia_dedicado as cd
+    import ciencias_dedicado as tela
+    from portal_cliente import chamados, link_ciencia
+    filtros = {"situacao": request.args.get("situacao", ""), "embarcador": request.args.get("embarcador", "")}
+    config = _carregar_config()
+    segredo = (config.get("portal_cliente") or {}).get("secret_key")
+    base = chamados.url_base(config)
+    conn = cd.conectar(cd.DB_PATH)
+    try:
+        linhas = tela.montar(conn, tela.nomes_embarcadores(cd.DB_PATH), filtros["situacao"], filtros["embarcador"])
+    finally:
+        conn.close()
+    # link so daquele pedido e marcado com quem copiou: a resposta por ele nao se passa por do cliente
+    origem = f"painel:{session.get('usuario') or 'equipe'}"
+    for l in linhas:
+        l["link"] = (link_ciencia.url(l["sender_id"], segredo, base, [l["id"]], origem)
+                     if segredo and l["sender_id"] else "")
+    return render_template("ciencias_dedicado.html", linhas=linhas, filtros=filtros, rotulos=tela.ROTULOS)
+
+
+@app.route("/api/ciencias-dedicado/<int:ciencia_id>")
+@requer_auth(niveis=("total", "operador", "logistica"))
+def api_ciencia_dedicado(ciencia_id):
+    import ciencia_dedicado as cd
+    import ciencias_dedicado as tela
+    conn = cd.conectar(cd.DB_PATH)
+    try:
+        linha = cd.buscar(conn, ciencia_id)
+        if not linha:
+            return jsonify({"erro": "Ciência não encontrada."}), 404
+        envios = [{k: e[k] for k in ("canal", "enviado_em", "destino", "resultado", "motivo", "rodada")}
+                  for e in cd.envios(conn, ciencia_id)]
+    finally:
+        conn.close()
+    # Prova da resposta (quem, quando, IP) so existe pra CIENTE/REAGENDADO; ENCERRADO e o sistema fechando.
+    resposta = encerramento = None
+    if linha["situacao"] in (cd.CIENTE, cd.REAGENDADO):
+        resposta = {"por": linha["respondido_por"], "em": linha["respondido_em"],
+                    "ip": linha["respondido_ip"], "data_nova": linha["data_nova"],
+                    "origem": tela.rotulo_origem(linha["respondido_origem"]),
+                    "navegador": linha["respondido_navegador"] or ""}
+    elif linha["situacao"] == cd.ENCERRADO:
+        encerramento = {"motivo": linha["motivo_encerramento"], "em": linha["respondido_em"]}
+    return jsonify({"ciencia": {"codigo": linha["codigo"], "situacao": linha["situacao"]},
+                    "resposta": resposta, "encerramento": encerramento, "envios": envios})
+
+
+@app.route("/api/canhotos-pendentes", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+def api_canhotos_pendentes():
+    from nucleo import banco as nucleo_banco, canhotos_manuais
+    if (request.content_length or 0) > LIMITE_REQUISICAO_BAIXA:
+        return jsonify({"erro": "Arquivo grande demais."}), 413
+    arq = request.files.get("arquivo")
+    if not arq:
+        return jsonify({"erro": "Escolha o arquivo do canhoto."}), 400
+    try:
+        codigo = canhotos_manuais.codigos_validos(request.form.get("codigo") or "")[0]
+        pdf = canhotos_manuais.para_pdf(arq.read())
+    except canhotos_manuais.CanhotoInvalido as e:
+        return jsonify({"erro": str(e)}), 400
+    conn = nucleo_banco.conectar()
+    try:
+        # só pedido que está mesmo pendente (entregue, sem nenhum comprovante)
+        achados = canhotos_manuais.pendentes(conn, "2000-01-01", busca=codigo, por_pagina=20)["linhas"]
+        linha = next((l for l in achados if l["codigo"] == codigo), None)
+        if not linha:
+            return jsonify({"erro": f"{codigo} não está entre os entregues sem comprovante."}), 400
+        canhotos_manuais.salvar(conn, codigo, linha["service_id"], pdf,
+                                session.get("usuario") or g.nivel_acesso, _carregar_config())
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "codigo": codigo})
+
+
+@app.route("/clientes-agenda")
+@requer_auth(niveis=("total", "logistica", "atendimento"))
+def clientes_agenda():
+    """Fila de destinatários com data de agendamento informada esperando
+    o Hugo autorizar a marcação AGENDA na BD_CLIENTES (30/09). Quem
+    alimenta é marcar_clientes_agenda.py (sequências 18h/22h); o link
+    chega pelo WhatsApp. Só nível total: a decisão grava na planilha
+    (sem cópia por clique: o backup é o diário das 03h pro GCS)."""
+    import marcar_clientes_agenda
+    try:
+        linhas = marcar_clientes_agenda.listar()
+        erro = None
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao listar clientes com agendamento")
+        linhas, erro = [], str(e)
+    pendentes = [l for l in linhas if l["situacao"] == marcar_clientes_agenda.PENDENTE]
+    decididos = [l for l in linhas if l["situacao"] != marcar_clientes_agenda.PENDENTE][:50]
+    # Atendimento (21/10, Hugo) so ve a fila: decidir continua total/logistica.
+    return render_template("clientes_agenda.html", pendentes=pendentes, decididos=decididos, erro=erro,
+                           pode_decidir=g.nivel_acesso in ("total", "logistica"))
+
+
+@app.route("/adesao-portal")
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
+def adesao_portal():
+    """Quem já entrou no portal do cliente e quem importa pedidos por lá
+    (21/10). Lê o banco a cada abertura; a página se recarrega a cada 2h."""
+    import adesao_portal as _adesao
+    linhas = _adesao.listar()
+    return render_template("adesao_portal.html", linhas=linhas, resumo=_adesao.resumo(linhas),
+                           dias_ativo=_adesao.DIAS_ATIVO, gerado_em=datetime.now().strftime("%d/%m %H:%M"))
+
+
+_NIVEIS_EDITA_TRANSPORTADORAS = ("total", "operador", "logistica")
+
+
+@app.route("/transportadoras")
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
+def transportadoras():
+    """Cadastro de transportadoras (23/10): aba Pendentes (desconhecidas que
+    seguraram pedidos, a equipe responde pelo cliente) e aba Todas. Quem
+    grava e valida e transportadoras_cadastro; aqui so se mostra."""
+    import transportadoras_tela as tt
+    aba = "todas" if request.args.get("aba") == "todas" else "pendentes"
+    conn = tt.conectar()
+    try:
+        linhas = tt.montar_lista(conn, aba, request.args.get("busca", ""), request.args.get("tipo", ""),
+                                 request.args.get("situacao", ""))
+    finally:
+        conn.close()
+    n_pendentes = tt.contar_pendentes()
+    return render_template("transportadoras.html", linhas=linhas, aba=aba, n_pendentes=n_pendentes,
+                           busca=request.args.get("busca", ""), tipo=request.args.get("tipo", ""),
+                           situacao=request.args.get("situacao", ""), respostas=tt.RESPOSTAS,
+                           pode_editar=g.nivel_acesso in _NIVEIS_EDITA_TRANSPORTADORAS)
+
+
+def _corpo_dict() -> dict:
+    corpo = request.get_json(force=True, silent=True)
+    if not isinstance(corpo, dict):
+        abort(Response(json.dumps({"erro": "Corpo da requisição inválido."}), 400, mimetype="application/json"))
+    return corpo
+
+
+def _autor_transportadoras() -> str:
+    return session.get("usuario") or g.nivel_acesso
+
+
+def _liberar_bloqueados_transportadora(transp: dict) -> dict:
+    """Hugo 29/10: classificar como retirada/redespacho solta as NFs do portal
+    presas no bloqueio de area por essa transportadora (bloqueio_area)."""
+    from portal_cliente import bloqueio_area
+    bloqueio_area.liberar_por_transportadora(transp, _autor_transportadoras())
+    return transp
+
+
+@app.route("/api/transportadoras/<int:tid>")
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
+def api_transportadora_ficha(tid):
+    import transportadoras_tela as tt
+    conn = tt.conectar()
+    try:
+        f = tt.ficha(conn, tid)
+    finally:
+        conn.close()
+    if f is None:
+        return jsonify({"erro": "Transportadora não encontrada."}), 404
+    return jsonify(f)
+
+
+@app.route("/api/transportadoras/cep/<cep>")
+@requer_auth(niveis=_NIVEIS_EDITA_TRANSPORTADORAS)
+def api_transportadoras_cep(cep):
+    from portal_cliente import cotacao
+    achado = cotacao.consultar_cep(cep)
+    if not achado:
+        return jsonify({"erro": "CEP não encontrado."}), 404
+    return jsonify(achado)
+
+
+@app.route("/api/transportadoras", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_EDITA_TRANSPORTADORAS)
+@exige_mesma_origem
+def api_transportadora_criar():
+    import transportadoras_cadastro as tc
+    import transportadoras_tela as tt
+    conn = tt.conectar()
+    try:
+        return jsonify(_liberar_bloqueados_transportadora(tc.criar(conn, tt.so_campos(_corpo_dict()), "TELA",
+                                                                   _autor_transportadoras())))
+    except tc.ErroCadastro as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/transportadoras/<int:tid>", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_EDITA_TRANSPORTADORAS)
+@exige_mesma_origem
+def api_transportadora_atualizar(tid):
+    """Edicao pela ficha. Tirar de PENDENTE (ATIVA/INATIVA) por aqui tambem
+    fecha a consulta e libera os parados (canal 'tela')."""
+    import consulta_transportadora as ct
+    import transportadoras_cadastro as tc
+    import transportadoras_tela as tt
+    conn = tt.conectar()
+    try:
+        return jsonify(_liberar_bloqueados_transportadora(ct.atualizar_cadastro(conn, tid, tt.so_campos(_corpo_dict()),
+                                                                                _autor_transportadoras(), "tela")))
+    except tc.ErroCadastro as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/transportadoras/<int:tid>/responder", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_EDITA_TRANSPORTADORAS)
+@exige_mesma_origem
+def api_transportadora_responder(tid):
+    """A equipe responde pelo embarcador (canal 'tela'): vira ATIVA e libera
+    os pedidos parados dela."""
+    import consulta_transportadora as ct
+    import transportadoras_cadastro as tc
+    import transportadoras_tela as tt
+    body = _corpo_dict()
+    endereco = body.get("endereco")
+    conn = tt.conectar()
+    try:
+        return jsonify(_liberar_bloqueados_transportadora(
+            ct.responder(conn, tid, str(body.get("tipo") or ""), endereco if isinstance(endereco, dict) else {},
+                         str(body.get("email") or "").strip(), _autor_transportadoras(), "tela")))
+    except tc.ErroCadastro as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/clientes-agenda/decidir", methods=["POST"])
+@requer_auth(niveis=("total", "logistica"))
+@exige_mesma_origem
+def api_clientes_agenda_decidir():
+    import marcar_clientes_agenda
+    body = request.get_json(force=True) or {}
+    acao = body.get("acao")
+    if acao not in ("autorizar", "nao_marcar"):
+        return jsonify({"erro": "ação inválida"}), 400
+    caminho = _carregar_config().get("clientes_agendamento", {}).get("planilha", "")
+    try:
+        resultado = marcar_clientes_agenda.decidir(body.get("documento", ""), acao == "autorizar", caminho)
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao decidir cliente com agendamento")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify({"ok": True, "situacao": resultado["situacao"]})
+
+
+@app.route("/galpao-3d")
+@requer_auth
+def galpao_3d():
+    """Galpao 3D (so nivel total, fora do catalogo de acesso_telas): casca
+    da pagina; o JS estatico desenha o galpao com o JSON da API abaixo."""
+    return render_template("galpao_3d.html")
+
+
+@app.route("/api/galpao-3d/estado")
+@requer_auth
+def api_galpao_3d_estado():
+    conn = galpao3d_banco.conectar()
+    try:
+        return jsonify(galpao3d_estado.montar_estado(conn, _carregar_config()))
+    finally:
+        conn.close()
+
+
+@app.route("/acessos")
+@requer_auth
+def acessos():
+    """Acesso personalizado por usuario (21/10, acesso_telas.py): o total
+    escolhe as telas de cada login nominal. So nivel total de verdade --
+    a tela nao esta no catalogo, entao nenhum personalizado chega aqui."""
+    conn = acesso_telas.conectar()
+    try:
+        usuarios = acesso_telas.listar(conn)
+        rodada = acesso_telas.rodada_sessoes(conn)
+    finally:
+        conn.close()
+    grupos = {}
+    for chave, rotulo, grupo, _ in acesso_telas.TELAS + acesso_telas.PERMISSOES:
+        grupos.setdefault(grupo or "Início", []).append({"chave": chave, "rotulo": rotulo})
+    return render_template("acessos.html", usuarios=usuarios, grupos=list(grupos.items()),
+                           niveis=acesso_telas.NIVEIS, equipes=acesso_telas.EQUIPES,
+                           senha_minima=acesso_telas.SENHA_MINIMA,
+                           eu=session.get("usuario", ""), rodada=rodada)
+
+
+@app.route("/api/acessos", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_acessos():
+    """Salva um login nominal: telas e, quando vierem, nome e nivel (23/10)."""
+    body = request.get_json(force=True, silent=True) or {}
+    telas = body.get("telas")
+    if telas is not None and not isinstance(telas, list):
+        return jsonify({"erro": "telas inválidas"}), 400
+    if "nivel" in body and body.get("nivel") not in acesso_telas.NIVEIS:
+        return jsonify({"erro": "nível inválido"}), 400
+    usuario = str(body.get("usuario") or "")
+    por = session.get("usuario", "")
+    conn = acesso_telas.conectar()
+    try:
+        acesso_telas.salvar(conn, usuario, telas, por)
+        if "nivel" in body:
+            acesso_telas.editar(conn, usuario, str(body.get("nome") or ""), body["nivel"], por,
+                                str(body.get("equipe") or ""))
+        if "portal_equipe" in body:
+            acesso_telas.mudar_portal(conn, usuario, bool(body["portal_equipe"]), por)
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/acessos/novo", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_acessos_novo():
+    """Cadastra login nominal com senha provisoria (troca no 1o acesso)."""
+    body = request.get_json(force=True, silent=True) or {}
+    cfg_painel = _carregar_config().get("painel_agentes", {})
+    conn = acesso_telas.conectar()
+    try:
+        usuario = acesso_telas.criar(conn, str(body.get("usuario") or ""), str(body.get("nome") or ""),
+                                     str(body.get("nivel") or ""), str(body.get("senha") or ""),
+                                     session.get("usuario", ""), _logins_fixos(cfg_painel),
+                                     str(body.get("equipe") or ""))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "usuario": usuario})
+
+
+@app.route("/api/acessos/derrubar-sessoes", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_acessos_derrubar_sessoes():
+    """Derruba todas as sessoes abertas do painel, inclusive a de quem clicou."""
+    conn = acesso_telas.conectar()
+    try:
+        acesso_telas.derrubar_sessoes(conn, session.get("usuario", ""))
+    finally:
+        conn.close()
+    session.clear()
+    return jsonify({"ok": True, "login": url_for("login")})
+
+
+@app.route("/api/acessos/ativo", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_acessos_ativo():
+    """Desativa (nao entra, sessao aberta cai) ou reativa um login nominal."""
+    body = request.get_json(force=True, silent=True) or {}
+    conn = acesso_telas.conectar()
+    try:
+        acesso_telas.mudar_ativo(conn, str(body.get("usuario") or ""), bool(body.get("ativo")),
+                                 session.get("usuario", ""))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/acessos/senha", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_acessos_senha():
+    """Redefine a senha de outro login nominal (provisoria, troca no proximo acesso)."""
+    body = request.get_json(force=True, silent=True) or {}
+    conn = acesso_telas.conectar()
+    try:
+        acesso_telas.redefinir_senha(conn, str(body.get("usuario") or ""), str(body.get("senha") or ""),
+                                     session.get("usuario", ""))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+# --- Embarcadores (16/11): contas do portal do cliente pela tela, no lugar do
+# gerenciar_clientes.py na VPS. So nivel total (sem niveis=) e fora do catalogo
+# de acesso_telas. Mexe so em clientes_portal: `interno` nao e tocada. Criar e
+# resetar mostram o PIN provisorio na tela E mandam o link de definir PIN pros
+# e-mails do cadastro (envio real ao cliente).
+
+@app.route("/embarcadores")
+@requer_auth
+def embarcadores_portal():
+    from portal_cliente import auth_cliente as contas
+    conn = contas.conectar()
+    try:
+        linhas = contas.listar_embarcadores(conn)
+    finally:
+        conn.close()
+    for e in linhas:
+        e["cnpj_formatado"] = contas.formatar_cnpj(e["cnpj"])
+        e["estado"] = "sem_conta" if e["ativo"] is None else ("ativa" if e["ativo"] else "inativa")
+    return render_template("embarcadores_portal.html", linhas=linhas,
+                           com_conta=sum(1 for e in linhas if e["ativo"] is not None))
+
+
+@app.route("/api/embarcadores/conta", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_embarcadores_conta():
+    """acao = criar | resetar | ativar | desativar | excluir, sobre a conta do
+    portal de um CNPJ. criar e resetar devolvem o PIN provisorio (6 digitos,
+    sorteado aqui, troca obrigatoria no proximo acesso) e `email_para` (pra
+    quem o link de definir PIN foi; vazio = sem e-mail no cadastro ou falhou)."""
+    import secrets
+    from portal_cliente import auth_cliente as contas
+    body = request.get_json(force=True, silent=True) or {}
+    acao = str(body.get("acao") or "")
+    if acao not in ("criar", "resetar", "ativar", "desativar", "excluir"):
+        return jsonify({"erro": "ação inválida"}), 400
+    conn = contas.conectar()
+    try:
+        emb = contas.buscar_embarcador(conn, body.get("cnpj"))
+        if not emb:
+            return jsonify({"erro": "CNPJ não está cadastrado como embarcador."}), 400
+        conta = contas.buscar_conta(conn, emb["cnpj"])
+        tem_conta = conta is not None
+        if acao == "criar" and tem_conta:
+            return jsonify({"erro": "Esse embarcador já tem conta no portal."}), 400
+        if acao != "criar" and not tem_conta:
+            return jsonify({"erro": "Esse embarcador ainda não tem conta no portal."}), 400
+        resposta = {"ok": True, "nome": emb["nome"]}
+        if acao in ("criar", "resetar"):
+            pin = f"{secrets.randbelow(10 ** 6):06d}"
+            contas.definir_pin(conn, emb["cnpj"], pin, trocar_pin=True)
+            resposta["pin"] = pin
+            # E-mail com o link de definir PIN pros e-mails do cadastro (16/11, Hugo:
+            # "enviamos por e-mail e mostramos na tela tambem"). Falha no envio nao
+            # desfaz o PIN: a tela mostra e a equipe repassa.
+            # Conta inativa nao recebe e-mail: o link diria "acesso liberado" e o
+            # login continuaria barrado.
+            resposta["email_para"] = []
+            if emb["emails"] and (conta is None or conta["ativo"]):
+                try:
+                    from portal_cliente.gerenciar_clientes import enviar_convite
+                    ok, destinos = enviar_convite(conn, _carregar_config(), emb)
+                    resposta["email_para"] = destinos if ok else []
+                except (Exception, SystemExit):
+                    logging.getLogger(__name__).exception("embarcadores.conta: falha no e-mail do PIN (%s)", emb["cnpj"])
+        elif acao == "excluir":
+            contas.excluir_conta(conn, emb["cnpj"])
+        else:
+            contas.definir_ativo(conn, emb["cnpj"], acao == "ativar")
+    finally:
+        conn.close()
+    logging.getLogger(__name__).info("embarcadores.conta acao=%s cnpj=%s por=%s",
+                                     acao, emb["cnpj"], session.get("usuario", ""))
+    return jsonify(resposta)
+
+
+# --- Notificacoes (24/10): geral, tipo, excecao, piloto e e-mails do embarcador.
+# So nivel total (sem niveis=) e fora do catalogo de acesso_telas. Quem decide e
+# grava e controle_notificacoes; a tela e o que o Hugo usa no lugar do config.
+
+def _autor_notificacoes() -> str:
+    return session.get("usuario") or g.nivel_acesso
+
+
+@app.route("/notificacoes")
+@requer_auth
+def notificacoes():
+    import controle_notificacoes as cn
+    import notificacoes_tela as nt
+    conn = cn.conectar()
+    try:
+        return render_template("notificacoes.html", geral=cn.estado_geral(conn), lista=nt.montar_lista(conn),
+                               piloto=cn.piloto(conn), historico=nt.historico_legivel(conn),
+                               embarcadores=nt.lista_embarcadores(conn),
+                               disparaveis={t: list(i["alvos"]) for t, i in nt.DISPARAVEIS.items()},
+                               sem_disparo=nt.SEM_DISPARO,
+                               so_pelo_timer=nt.SO_PELO_TIMER,
+                               nota_teste=nt.NOTA_TESTE,
+                               tipos={t: {"rotulo": i["rotulo"], "destino": i["destino"], "canais": list(i["canais"]),
+                                          "quando": i["quando"]} for t, i in cn.TIPOS.items()})
+    finally:
+        conn.close()
+
+
+@app.route("/api/notificacoes/tipo/<tipo>")
+@requer_auth
+def api_notificacoes_tipo(tipo):
+    import controle_notificacoes as cn
+    import notificacoes_tela as nt
+    if tipo not in cn.TIPOS:
+        return jsonify({"erro": "Tipo de notificação desconhecido."}), 404
+    conn = cn.conectar()
+    try:
+        return jsonify(nt.detalhe_tipo(conn, tipo))
+    finally:
+        conn.close()
+
+
+@app.route("/api/notificacoes/historico")
+@requer_auth
+def api_notificacoes_historico():
+    import controle_notificacoes as cn
+    import notificacoes_tela as nt
+    conn = cn.conectar()
+    try:
+        return jsonify(nt.historico_legivel(conn))
+    finally:
+        conn.close()
+
+
+@app.route("/api/notificacoes/geral", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_notificacoes_geral():
+    """Desligar vale na hora; ligar o geral pede confirmacao (409 sem `confirmado`)."""
+    import controle_notificacoes as cn
+    corpo = _corpo_dict()
+    ligado = corpo.get("ligado") is True
+    conn = cn.conectar()
+    try:
+        if ligado and corpo.get("confirmado") is not True and cn.estado_geral(conn) != "LIGADO":
+            ligados = sum(1 for t in cn.TIPOS if cn.estado_tipo(conn, t) == "LIGADO")
+            return jsonify({"erro": "Confirme para ligar o geral.", "confirmar": True, "geral": True,
+                            "tipos_ligados": ligados}), 409
+        cn.definir_geral(conn, ligado, _autor_notificacoes())
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/notificacoes/estado", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_notificacoes_estado():
+    """Troca o estado de um tipo. LIGADO (cliente recebe de verdade) responde
+    409 com a contagem de destinatarios ate vir `confirmado: true`."""
+    import controle_notificacoes as cn
+    import notificacoes_tela as nt
+    corpo = _corpo_dict()
+    tipo, estado = str(corpo.get("tipo") or ""), str(corpo.get("estado") or "")
+    if tipo not in cn.TIPOS or estado not in cn.ESTADOS:
+        return jsonify({"erro": "Tipo ou estado inválido."}), 400
+    conn = cn.conectar()
+    try:
+        if estado == "LIGADO" and corpo.get("confirmado") is not True and cn.estado_tipo(conn, tipo) != "LIGADO":
+            return jsonify({"erro": "Confirme para ligar.", "confirmar": True, "tipo": tipo,
+                            "destinatarios": nt.contar_destinatarios(conn, tipo)}), 409
+        cn.definir_estado(conn, tipo, estado, _autor_notificacoes())
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/notificacoes/excecao", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_notificacoes_excecao():
+    import controle_notificacoes as cn
+    corpo = _corpo_dict()
+    conn = cn.conectar()
+    try:
+        cn.definir_excecao(conn, str(corpo.get("tipo") or ""), str(corpo.get("destino") or ""),
+                           corpo.get("regra"), _autor_notificacoes())
+    except (ValueError, KeyError) as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/notificacoes/piloto", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_notificacoes_piloto():
+    import controle_notificacoes as cn
+    corpo = _corpo_dict()
+    conn = cn.conectar()
+    try:
+        cn.definir_piloto(conn, str(corpo.get("email") or ""), str(corpo.get("whatsapp") or ""),
+                          _autor_notificacoes())
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/notificacoes/desfazer", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_notificacoes_desfazer():
+    """Volta ao valor anterior. Se isso religa um tipo (ou o geral), pede a mesma
+    confirmacao de ligar (409 com a contagem ate vir `confirmado: true`)."""
+    import controle_notificacoes as cn
+    import notificacoes_tela as nt
+    corpo = _corpo_dict()
+    conn = cn.conectar()
+    try:
+        hid = int(corpo.get("id"))
+        pendente = nt.confirmacao_do_desfazer(conn, hid)   # tambem recusa item sem desfazer
+        if pendente and corpo.get("confirmado") is not True:
+            return jsonify(dict(pendente, erro="Confirme para ligar.", confirmar=True)), 409
+        cn.desfazer(conn, hid, _autor_notificacoes())
+    except (ValueError, TypeError) as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/notificacoes/embarcador/<cnpj>")
+@requer_auth
+def api_notificacoes_embarcador(cnpj):
+    """E-mails e WhatsApp do embarcador: a mesma lista que ele edita no portal
+    (preferencias_notificacao)."""
+    import notificacoes_tela as nt
+    import preferencias_notificacao as pn
+    conn = nt.conectar_preferencias()
+    try:
+        return jsonify(pn.ler(conn, cnpj))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/notificacoes/embarcador/<cnpj>", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_notificacoes_embarcador_salvar(cnpj):
+    """Grava e-mails e/ou WhatsApp (chave ausente = nao mexe) como `painel:<usuario>`
+    e registra no historico do controle (so registro, sem desfazer)."""
+    import notificacoes_tela as nt
+    corpo = _corpo_dict()
+    try:
+        return jsonify(nt.salvar_contato(cnpj, corpo, "painel:" + _autor_notificacoes()))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+
+
+@app.route("/api/notificacoes/embarcador/<cnpj>/situacao")
+@requer_auth
+def api_notificacoes_embarcador_situacao(cnpj):
+    """Detalhe do embarcador: estado de cada tipo, a excecao dele e a preferencia no portal (so leitura)."""
+    import controle_notificacoes as cn
+    import notificacoes_tela as nt
+    conn = cn.conectar()
+    try:
+        return jsonify(nt.situacao_embarcador(conn, cnpj))
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 404
+    finally:
+        conn.close()
+
+
+@app.route("/api/notificacoes/disparo/<tipo>")
+@requer_auth
+def api_notificacoes_disparo_dados(tipo):
+    """Dados da janela Disparar agora: alvos do tipo, quem ja recebeu hoje
+    (so notas em rota e resumo), lista pro alvo "um" e os ultimos disparos."""
+    import controle_notificacoes as cn
+    import notificacoes_tela as nt
+    if tipo not in nt.DISPARAVEIS:
+        return jsonify({"erro": "Este tipo não tem disparo manual."}), 404
+    alvos = nt.DISPARAVEIS[tipo]["alvos"]
+    conn = cn.conectar()
+    try:
+        return jsonify({"alvos": list(alvos), "ja_recebeu_hoje": nt.ja_recebeu_hoje(conn, tipo),
+                        "embarcadores": nt.embarcadores_disparo(conn) if "um" in alvos else [],
+                        "ultimos": nt.ultimos_disparos(conn, tipo)})
+    finally:
+        conn.close()
+
+
+@app.route("/api/notificacoes/disparo", methods=["POST"])
+@requer_auth
+@exige_mesma_origem
+def api_notificacoes_disparo():
+    """Roda a rotina do tipo em segundo plano (teste, todos ou um embarcador).
+    409 se ja ha disparo do mesmo tipo rodando."""
+    import controle_notificacoes as cn
+    import notificacoes_tela as nt
+    corpo = _corpo_dict()
+    sender = corpo.get("sender_id")
+    try:
+        sender = int(sender) if sender not in (None, "") else None
+    except (TypeError, ValueError):
+        return jsonify({"erro": "Embarcador inválido."}), 400
+    conn = cn.conectar()
+    try:
+        disparo_id = nt.iniciar_disparo(conn, str(corpo.get("tipo") or ""), str(corpo.get("alvo") or ""), sender,
+                                        corpo.get("reenviar") is True, _autor_notificacoes())
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    except RuntimeError as e:
+        return jsonify({"erro": str(e)}), 409
+    finally:
+        conn.close()
+    return jsonify({"id": disparo_id})
+
+
+# Pedidos parados (24/10): galpao e expedicao entram pra REGISTRAR (aba
+# Registrar, no lugar do Fresh Hub do Lovable) e veem a triagem so leitura.
+NIVEIS_PP_VER = ("total", "operador", "logistica", "leitura", "atendimento", "galpao", "expedicao")
+NIVEIS_PP_REGISTRAR = ("total", "operador", "logistica", "galpao", "expedicao")
+
+
 @app.route("/pedidos-parados")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=NIVEIS_PP_VER)
 def pedidos_parados():
-    """Triagem dos pedidos parados do Fresh Hub -- pedido do Hugo,
-    24/08. Página sobe só com a casca; os dados chegam por
-    /api/pedidos-parados/dados via JS (login no Fresh Hub + Vuupt pode
-    levar alguns segundos, não deve travar o load -- mesmo padrão da
-    Torre)."""
-    return render_template("pedidos_parados_triagem.html",
-                           pode_editar=g.nivel_acesso in ("total", "operador"))
+    """Pedidos parados -- pedido do Hugo, 24/08. Aba Registrar (24/10:
+    o galpao registra aqui, tabela pedidos_parados_registros) e aba
+    Triagem. Página sobe só com a casca; os dados chegam por
+    /api/pedidos-parados/* via JS (a Vuupt pode levar alguns segundos,
+    não deve travar o load -- mesmo padrão da Torre)."""
+    return render_template(
+        "pedidos_parados_triagem.html",
+        pode_editar=g.nivel_acesso in ("total", "operador", "logistica", "atendimento"),
+        pode_registrar=g.nivel_acesso in NIVEIS_PP_REGISTRAR,
+        aba_inicial="registrar" if g.nivel_acesso in ("galpao", "expedicao") else "triagem",
+        encaminhamento_ativo=pedidos_parados_triagem.ENCAMINHAMENTO_DEMANDAS_ATIVO,
+    )
+
+
+@app.route("/api/pedidos-parados/registros-hoje")
+@requer_auth(niveis=NIVEIS_PP_VER)
+def api_pedidos_parados_registros_hoje():
+    return jsonify(pedidos_parados_triagem.registros_hoje(session.get("usuario") or g.nivel_acesso))
+
+
+@app.route("/api/pedidos-parados/registrar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_PP_REGISTRAR)
+@exige_mesma_origem
+def api_pedidos_parados_registrar():
+    """Registra um pedido parado (multipart: order_number, volumes, foto
+    opcional). Registrar de novo o mesmo pedido no dia e permitido (e o
+    fluxo normal enquanto continua parado); a tela so avisa."""
+    foto = request.files.get("foto")
+    try:
+        resultado = pedidos_parados_triagem.registrar(
+            request.form.get("order_number", ""), request.form.get("volumes", ""),
+            session.get("usuario") or g.nivel_acesso, foto.read() if foto else None,
+        )
+    except pedidos_parados_triagem.ErroRegistro as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify(resultado)
+
+
+@app.route("/api/pedidos-parados/registro/apagar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_PP_REGISTRAR)
+@exige_mesma_origem
+def api_pedidos_parados_registro_apagar():
+    """So quem registrou, ate 15 min depois (erro de digitacao)."""
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        pedidos_parados_triagem.apagar_registro(int(body.get("id") or 0), session.get("usuario") or g.nivel_acesso)
+    except pedidos_parados_triagem.ErroRegistro as e:
+        return jsonify({"erro": str(e)}), (404 if "não encontrado" in str(e) else 403)
+    return jsonify({"ok": True})
+
+
+@app.route("/pedidos-parados/foto/<int:registro_id>")
+@requer_auth(niveis=NIVEIS_PP_VER)
+def pedidos_parados_foto(registro_id: int):
+    caminho = pedidos_parados_triagem.caminho_foto(registro_id)
+    if not caminho:
+        abort(404)
+    return send_file(caminho, max_age=3600)
 
 
 @app.route("/api/pedidos-parados/dados")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=NIVEIS_PP_VER)
 def api_pedidos_parados_dados():
     try:
         return jsonify({"pedidos": pedidos_parados_triagem.listar_com_classificacao()})
@@ -824,7 +2805,7 @@ def api_pedidos_parados_dados():
 
 
 @app.route("/api/pedidos-parados/classificar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_pedidos_parados_classificar():
     body = request.get_json(force=True)
@@ -844,7 +2825,7 @@ def api_pedidos_parados_classificar():
 
 
 @app.route("/api/pedidos-parados/buscar-vuupt")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=NIVEIS_PP_VER)
 def api_pedidos_parados_buscar_vuupt():
     order_number = request.args.get("order_number", "")
     if not order_number:
@@ -858,7 +2839,7 @@ def api_pedidos_parados_buscar_vuupt():
 
 
 @app.route("/api/pedidos-parados/duplicar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_pedidos_parados_duplicar():
     body = request.get_json(force=True)
@@ -876,14 +2857,30 @@ def api_pedidos_parados_duplicar():
     return jsonify(resultado)
 
 
+@app.route("/api/pedidos-parados/equipes-demanda")
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
+def api_pedidos_parados_equipes_demanda():
+    """Equipes ativas das Demandas pro botao Encaminhar escolher (26/10), com
+    a equipe ja sugerida por classificacao (Verificar com Cliente -> Atendimento)."""
+    conn = demandas.conectar()
+    try:
+        equipes = demandas.equipes_ativas(conn)
+    finally:
+        conn.close()
+    return jsonify({"equipes": equipes, "padrao": pedidos_parados_triagem.EQUIPE_PADRAO_POR_CLASSIFICACAO})
+
+
 @app.route("/api/pedidos-parados/encaminhar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_pedidos_parados_encaminhar():
+    if not pedidos_parados_triagem.ENCAMINHAMENTO_DEMANDAS_ATIVO:
+        return jsonify({"erro": "Encaminhamento às Demandas pausado (Hugo, 24/10)."}), 409
     body = request.get_json(force=True)
     try:
         resultado = pedidos_parados_triagem.encaminhar_operacao(
             body["order_number"], body["classificacao"], session.get("usuario", "desconhecido"),
+            equipe_id=body.get("equipe_id"), autor=g.get("nome_usuario") or session.get("atendente_nome"),
         )
     except KeyError as e:
         return jsonify({"erro": f"campo obrigatório ausente: {e}"}), 400
@@ -896,7 +2893,7 @@ def api_pedidos_parados_encaminhar():
 
 
 @app.route("/api/pedidos-parados/notificar-cliente-retira", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_pedidos_parados_notificar_cliente_retira():
     body = request.get_json(force=True)
@@ -915,7 +2912,7 @@ def api_pedidos_parados_notificar_cliente_retira():
 
 
 @app.route("/api/pedidos-parados/verificar-stokki", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_pedidos_parados_verificar_stokki():
     """Consulta status/transportadora de todos os pedidos em tela na
@@ -931,6 +2928,8 @@ def api_pedidos_parados_verificar_stokki():
         )
     except RuntimeError as e:
         return jsonify({"erro": str(e)}), 409
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 503 amigavel
     except Exception as e:
         logging.getLogger(__name__).exception("Falha ao verificar pedidos parados na Stokki")
         return jsonify({"erro": str(e)}), 500
@@ -938,7 +2937,7 @@ def api_pedidos_parados_verificar_stokki():
 
 
 @app.route("/api/pedidos-parados/verificar-vuupt", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_pedidos_parados_verificar_vuupt():
     """Consulta status/agendamento de todos os pedidos em tela na Vuupt
@@ -960,7 +2959,7 @@ def api_pedidos_parados_verificar_vuupt():
 
 
 @app.route("/torre")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def torre():
     """Torre de Controle (cockpit) -- pedido do Hugo, 12/08. A página
     sobe só com a casca; os dados chegam por /api/torre/* via JS (a
@@ -970,38 +2969,60 @@ def torre():
     abertas de qualquer dia (torre_controle._coletar_rotas_abertas);
     consulta de dia passado é o Histórico (/consulta)."""
     gmaps_key = _carregar_config().get("google_maps", {}).get("api_key", "")
-    pode_editar = g.nivel_acesso in ("total", "operador")
+    pode_editar = g.nivel_acesso in ("total", "operador", "logistica")
     return render_template(
         "torre_controle.html", hoje_iso=date.today().isoformat(),
         google_maps_key=gmaps_key, pode_editar=pode_editar,
+        url_regioes=URL_PAGINA_REGIOES,   # consulta interna dos dias de atendimento (Hugo, 14/10)
+        # Nível "atendimento" (Hugo, 28/09): trata ocorrência (tratar,
+        # desfazer, duplicar, notificar), mas não roda agente, não
+        # encerra rota nem exclui pedido -- isso segue em pode_editar.
+        pode_tratar=pode_editar or g.nivel_acesso == "atendimento",
         motivos_exclusao=MOTIVOS_EXCLUSAO,
         # "Excluir da Rota" do chip (25/08, mesmo botão da Expedição):
         # sem data na torre, toda rota mostrada é "de hoje em diante"
         # do ponto de vista da operação (ainda aberta).
         pode_excluir_pedido=pode_editar,
+        justificativas=justificativas_sem_canhoto.JUSTIFICATIVAS,
+        motivos_sem_sucesso=torre_controle.motivos_sem_sucesso(),
     )
 
 
+@app.route("/torre/cotacao")
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
+def torre_cotacao():
+    """Botão "Cotação" da Torre (Hugo, 16/11): abre a calculadora do portal
+    já como equipe, sem cair no login do cliente (CNPJ + PIN). O passe só
+    prova quem está logado aqui; quem pode entrar é regra do portal
+    (portal_cliente/app.py: equipe_entrar)."""
+    cfg_portal = _carregar_config().get("portal_cliente", {}) or {}
+    base = (cfg_portal.get("url_base") or "https://app.freshhub.com.br/cliente").rstrip("/")
+    passe = entrada_equipe.gerar(cfg_portal.get("secret_key") or "", session.get("usuario") or "",
+                                 session.get("nivel_acesso") or "")
+    return redirect(f"{base}/equipe/entrar?" + urlencode({"t": passe, "proximo": "/cotacao"}))
+
+
 @app.route("/torre/mobile")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def torre_mobile():
     """Versão mobile da Torre de Controle (Hugo, 17/08) -- mesmo template
     "casca vazia + JS" do desktop, só que consumindo os mesmos
     /api/torre/* endpoints com uma renderização em cards (em vez de
     tabela/grid) pensada pra tela estreita. Nenhum endpoint novo."""
     gmaps_key = _carregar_config().get("google_maps", {}).get("api_key", "")
-    pode_editar = g.nivel_acesso in ("total", "operador")
+    pode_editar = g.nivel_acesso in ("total", "operador", "logistica")
     return render_template(
         "torre_mobile.html", hoje_iso=date.today().isoformat(),
         google_maps_key=gmaps_key, pode_editar=pode_editar,
-        endpoint_desktop="torre",
+        pode_tratar=pode_editar or g.nivel_acesso == "atendimento",
+        endpoint_desktop="torre", url_regioes=URL_PAGINA_REGIOES,
         motivos_exclusao=MOTIVOS_EXCLUSAO,
         pode_excluir_pedido=pode_editar,
     )
 
 
 @app.route("/api/torre/dados")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_torre_dados():
     try:
         return jsonify(torre_controle.buscar_dados_torre())
@@ -1011,7 +3032,7 @@ def api_torre_dados():
 
 
 @app.route("/api/torre/stokki")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_torre_stokki():
     """Funil outbound da Stokki -- endpoint separado do resto porque tem
     cache próprio (TTL 5 min) e trava de sessão (não consulta ao vivo
@@ -1020,7 +3041,7 @@ def api_torre_stokki():
 
 
 @app.route("/api/torre/excluir-pedido", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_torre_excluir_pedido():
     """Tira 1 pedido de uma rota já criada na VUUPT -- "Excluir da Rota"
@@ -1051,8 +3072,90 @@ def api_torre_excluir_pedido():
     return jsonify(resultado)
 
 
+LIMITE_REQUISICAO_ENTREGUE = 32 * 1024 * 1024  # canhoto + nota de retorno, 15 MB cada (29/10)
+
+
+@app.route("/api/torre/marcar-entregue", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+def api_torre_marcar_entregue():
+    """"Marcar como entregue" do menu de contexto do chip da Torre (detalhes em _marcar_entregue_pelo_form)."""
+    return _marcar_entregue_pelo_form()
+
+
+def _marcar_entregue_pelo_form():
+    """"Marcar como entregue" do menu de contexto do chip da Torre e da
+    parada do Planejamento (Hugo, 08/10): fecha o servico na VUUPT na
+    hora, por API, sem passar pelo app do motorista (ver
+    torre_controle.marcar_entregue_manual). Mesmo nivel do "Excluir da
+    rota" -- muda o pedido na VUUPT. Multipart: service_id, foto_canhoto
+    e foto_nota_retorno (opcionais), justificativa e texto_outro.
+    "Sem sucesso" (Hugo, 06/11): resultado=sem_sucesso, failed_reason_id e
+    observacao (opcional) -> torre_controle.marcar_sem_sucesso_manual."""
+    from nucleo import canhotos_manuais
+    # Recusa antes de ler: duas fotos de 15 MB no maximo (mesmo teto da baixa sem app).
+    if (request.content_length or 0) > LIMITE_REQUISICAO_ENTREGUE:
+        return jsonify({"erro": "Envio grande demais: mande fotos menores (até 15 MB cada)."}), 413
+    try:
+        service_id = int(request.form["service_id"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"erro": "service_id ausente ou inválido."}), 400
+    if request.form.get("resultado") == "sem_sucesso":
+        resultado = torre_controle.marcar_sem_sucesso_manual(
+            service_id, session.get("usuario", ""), request.form.get("failed_reason_id"),
+            request.form.get("observacao") or None)
+        if not resultado.get("ok"):
+            return jsonify({"erro": resultado.get("erro", "Falha ao marcar sem sucesso.")}), 400
+        return jsonify(resultado)
+    # lote do Planejamento com foto: os itens 2..N mandam o 1o como referencia (Hugo, 30/10)
+    try:
+        lote_referencia = int(request.form["lote_referencia"]) if request.form.get("lote_referencia") else None
+    except (TypeError, ValueError):
+        return jsonify({"erro": "lote_referencia inválido."}), 400
+    arquivos = {}
+    for campo in ("foto_canhoto", "foto_nota_retorno"):
+        arq = request.files.get(campo)
+        conteudo = arq.read(canhotos_manuais.LIMITE_BYTES + 1) if arq else b""
+        if len(conteudo) > canhotos_manuais.LIMITE_BYTES:
+            return jsonify({"erro": "Arquivo maior que 15 MB."}), 413
+        arquivos[campo] = conteudo or None
+    resultado = torre_controle.marcar_entregue_manual(
+        service_id, session.get("usuario", ""), arquivos["foto_canhoto"], arquivos["foto_nota_retorno"],
+        request.form.get("justificativa") or None, request.form.get("texto_outro") or None,
+        lote_referencia=lote_referencia)
+    if not resultado.get("ok"):
+        return jsonify({"erro": resultado.get("erro", "Falha ao marcar como entregue.")}), 400
+    return jsonify(resultado)
+
+
+def _validar_lote_foto_do_json():
+    """Corpo da rota de foto em massa (Torre e tela /pedidos): JSON {service_ids}."""
+    ids = (request.get_json(silent=True) or {}).get("service_ids")
+    try:
+        if not isinstance(ids, list) or not ids:
+            raise ValueError
+        ids = [int(i) for i in ids]
+    except (TypeError, ValueError):
+        return jsonify({"erro": "service_ids ausente ou inválido."}), 400
+    resultado = torre_controle.validar_lote_foto(ids)
+    if not resultado.get("ok"):
+        return jsonify({"erro": resultado["erro"], "fora": resultado.get("fora", [])}), 400
+    return jsonify({"ok": True})
+
+
+@app.route("/api/torre/validar-lote-foto", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+def api_torre_validar_lote_foto():
+    """Foto em massa no Planejamento (Hugo, 30/10): so para pedidos do mesmo
+    embarcador e do mesmo destinatario ou local de entrega
+    (torre_controle.mesmo_destino_para_foto). A tela chama uma vez antes do
+    laco de marcar-entregue; sem foto o lote segue livre. JSON {service_ids}."""
+    return _validar_lote_foto_do_json()
+
+
 @app.route("/api/torre/encerrar-rota", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_torre_encerrar_rota():
     """Botão "Encerrar" de uma rota atrasada na torre acumulada (Hugo,
@@ -1071,7 +3174,7 @@ def api_torre_encerrar_rota():
 
 
 @app.route("/api/torre/etapas")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_torre_etapas():
     """Só o estado das etapas do stepper (leitura barata no SQLite) --
     o front consulta com frequência maior pra dar feedback rápido
@@ -1080,7 +3183,7 @@ def api_torre_etapas():
 
 
 @app.route("/api/torre/rodar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_torre_rodar():
     """Versão JSON do /rodar/<agente_id> pros botões da torre -- mesma
@@ -1093,12 +3196,19 @@ def api_torre_rodar():
         return jsonify({"erro": "Agente não encontrado."}), 404
     if ha_execucao_rodando(agente_id):
         return jsonify({"erro": "Esse agente já está rodando -- espera terminar antes de rodar de novo."}), 409
-    execucao_id = iniciar_execucao(agente, modo_teste=False)
+    # Campos declarados em agentes.py["parametros"] (hoje: "data" do
+    # Gerar Romaneios -> --data) -- pedido do Hugo, 07/10: o Reexecutar
+    # da torre gerava sempre os PDFs de hoje, sem perguntar a data.
+    try:
+        args_extra = montar_args_parametros(agente, body) or None
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    execucao_id = iniciar_execucao(agente, modo_teste=False, args_extra=args_extra)
     return jsonify({"ok": True, "execucao_id": execucao_id})
 
 
 @app.route("/api/torre/tratar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_torre_tratar():
     """Marca uma exceção da fila como tratada (com motivo) -- ela sai
@@ -1109,14 +3219,33 @@ def api_torre_tratar():
             body["id"], body.get("data_alvo", ""), body.get("tipo", ""),
             body.get("descricao", ""), body.get("motivo", ""),
             motorista_nome=body.get("motorista"), rota_nome=body.get("rota"),
+            por=session.get("usuario") or g.nivel_acesso,
         )
     except KeyError as e:
         return jsonify({"erro": f"campo obrigatório ausente: {e}"}), 400
     return jsonify({"ok": True})
 
 
+@app.route("/api/torre/tratar-lote", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
+@exige_mesma_origem
+def api_torre_tratar_lote():
+    """Tratar por lote (30/09): varios itens da fila selecionados na
+    tela, um motivo so pra todos. Mesmo efeito do tratar unitario."""
+    body = request.get_json(force=True) or {}
+    itens = body.get("itens")
+    motivo = (body.get("motivo") or "").strip()
+    if not isinstance(itens, list) or not itens:
+        return jsonify({"erro": "nenhum item selecionado"}), 400
+    if not motivo:
+        return jsonify({"erro": "motivo obrigatório"}), 400
+    qtd = torre_controle.marcar_excecoes_tratadas(itens, body.get("data_alvo", ""), motivo,
+                                                  por=session.get("usuario") or g.nivel_acesso)
+    return jsonify({"ok": True, "tratadas": qtd})
+
+
 @app.route("/api/torre/destratar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_torre_destratar():
     body = request.get_json(force=True)
@@ -1128,7 +3257,7 @@ def api_torre_destratar():
 
 
 @app.route("/api/torre/duplicar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_torre_duplicar():
     """Botão 'Duplicar pedido' da fila de ação -- cria a reentrega no
@@ -1146,8 +3275,435 @@ def api_torre_duplicar():
     return jsonify(resultado)
 
 
+# Rotas /api/pedidos/acao/*: o detalhe da excecao fica so no log (revisao final, 10/11).
+_FALHA_ACAO_PEDIDOS = "Falha inesperada; o erro ficou no log do painel."
+
+
+def _autor_acao_pedidos() -> str:
+    """Quem assina a tratativa: login nominal, senao o nivel (nunca vazio, senao o texto comeca com ': ')."""
+    return session.get("usuario") or getattr(g, "nivel_acesso", "")
+
+
+@app.route("/api/pedidos/acao/reenvio", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_acao_reenvio():
+    """Ação Reenvio da tela /pedidos: novo serviço #PS-N-R<k> na Vuupt, com motivo."""
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    service_id, erro = _service_id_do_corpo(body)
+    if erro:
+        return erro
+    try:
+        r = acoes_pedidos.reenviar(service_id, str(body.get("motivo") or ""), _autor_acao_pedidos())
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 409 amigavel
+    except Exception:
+        logging.getLogger(__name__).exception("reenvio pela tela Pedidos falhou")
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+    if not r.get("ok"):
+        return jsonify({"erro": r.get("erro") or "Falha ao reenviar."}), 400
+    return jsonify(r)
+
+
+def _corpo_json():
+    """(body, erro): corpo JSON das rotas /api/pedidos/acao/*; erro e uma resposta 400 se nao for um objeto."""
+    body = request.get_json(silent=True)
+    if body is None:
+        body = {}
+    if not isinstance(body, dict):
+        return None, (jsonify({"erro": "Corpo da requisição inválido (esperado um objeto JSON)."}), 400)
+    return body, None
+
+
+def _service_id_do_corpo(body):
+    try:
+        return int(body["service_id"]), None
+    except (KeyError, TypeError, ValueError):
+        return None, (jsonify({"erro": "service_id ausente ou inválido."}), 400)
+
+
+@app.route("/api/pedidos/acao/cancelar-vuupt", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_acao_cancelar_vuupt():
+    """Ação Cancelar Vuupt da tela /pedidos (só a Vuupt; a Stokki é outra ação)."""
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    service_id, erro = _service_id_do_corpo(body)
+    if erro:
+        return erro
+    try:
+        cfg = _carregar_config()
+        r = acoes_pedidos.cancelar_vuupt(
+            service_id, _autor_acao_pedidos(),
+            token=(cfg.get("vuupt_api") or {}).get("token", ""),
+            agent_lalamove=int((cfg.get("lalamove") or {}).get("agent_id_vuupt") or 0))
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 409 amigavel
+    except Exception:
+        logging.getLogger(__name__).exception("cancelar Vuupt pela tela Pedidos falhou")
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+    if not r.get("ok"):
+        return jsonify({"erro": r.get("erro") or "Falha ao cancelar."}), 400
+    return jsonify(r)
+
+
+@app.route("/api/pedidos/acao/cancelar-stokki", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_acao_cancelar_stokki():
+    """Ação Cancelar Stokki da tela /pedidos (só a Stokki; a Vuupt é outra ação). Só põe na fila
+    (stokki/fila_cancelamento.py); o worker do portal executa e a tela acompanha pelo andamento."""
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    codigo = str(body.get("codigo") or "").strip()
+    if not codigo:
+        return jsonify({"erro": "codigo ausente."}), 400
+    try:
+        r = acoes_pedidos.cancelar_stokki(codigo, str(body.get("motivo") or ""), _autor_acao_pedidos())
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 409 amigavel
+    except Exception:
+        logging.getLogger(__name__).exception("cancelar Stokki pela tela Pedidos falhou")
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+    if not r.get("ok"):
+        return jsonify({"erro": r.get("erro") or "Falha ao pôr o cancelamento na fila."}), 400
+    return jsonify(r)
+
+
+@app.route("/api/pedidos/acao/cancelar-stokki/andamento", methods=["GET"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+def api_pedidos_acao_cancelar_stokki_andamento():
+    """Andamento do Cancelar Stokki: ?ids=1,2 (fila_id devolvidos pelo POST)."""
+    try:
+        ids = [int(x) for x in request.args.get("ids", "").split(",") if x.strip()][:50]
+    except ValueError:
+        return jsonify({"erro": "ids inválidos."}), 400
+    return jsonify({"ok": True, "itens": acoes_pedidos.andamento_cancelamento(ids)})
+
+
+@app.route("/api/pedidos/acao/endereco", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_acao_endereco():
+    """Ação Alterar endereço da tela /pedidos (edita direto na Vuupt)."""
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    service_id, erro = _service_id_do_corpo(body)
+    if erro:
+        return erro
+    try:
+        r = acoes_pedidos.alterar_endereco(service_id, str(body.get("endereco") or ""), _autor_acao_pedidos())
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 409 amigavel
+    except Exception:
+        logging.getLogger(__name__).exception("alterar endereço pela tela Pedidos falhou")
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+    if not r.get("ok"):
+        return jsonify({"erro": r.get("erro") or "Falha ao alterar o endereço."}), 400
+    return jsonify(r)
+
+
+@app.route("/api/pedidos/acao/agendar", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_acao_agendar():
+    """Ação Agendar da tela /pedidos (nova data e janela na Vuupt)."""
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    service_id, erro = _service_id_do_corpo(body)
+    if erro:
+        return erro
+    try:
+        r = acoes_pedidos.agendar(service_id, str(body.get("data") or ""), str(body.get("hora_inicio") or ""),
+                                  str(body.get("hora_fim") or ""), _autor_acao_pedidos())
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 409 amigavel
+    except Exception:
+        logging.getLogger(__name__).exception("agendar pela tela Pedidos falhou")
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+    if not r.get("ok"):
+        return jsonify({"erro": r.get("erro") or "Falha ao agendar."}), 400
+    return jsonify(r)
+
+
+@app.route("/api/pedidos/acao/marcar-entregue", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_acao_marcar_entregue():
+    """Dar baixa com canhoto pela tela /pedidos: mesmo corpo (multipart) da Torre, nivel das acoes de pedido.
+    Sem sucesso fica so na Torre (o nivel atendimento entra aqui e nao la)."""
+    if request.form.get("resultado") == "sem_sucesso":
+        return jsonify({"erro": "Sem sucesso não é feito pela tela Pedidos."}), 400
+    try:
+        return _marcar_entregue_pelo_form()
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 409 amigavel
+    except Exception:
+        logging.getLogger(__name__).exception("marcar entregue pela tela Pedidos falhou")
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+
+
+@app.route("/api/pedidos/acao/expedir-stokki", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_acao_expedir_stokki():
+    """Expedir na Stokki pela tela /pedidos (Hugo, 12/11): JSON {codigos}. Entra na fila de execucoes
+    da barra do Planejamento (nunca junto com outra rotina da Stokki); a tela acompanha pelo andamento."""
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    agente = buscar_agente(acoes_pedidos.AGENTE_EXPEDICAO)
+    # Retirada nova so sai pela aba Coletas da Expedicao, com foto (Hugo, 12/11). O robo recusa de
+    # qualquer jeito (expedir_pedidos._decidir_retirada); aqui a resposta vem na hora, sem fila.
+    try:
+        from nucleo import banco as nucleo_banco
+        conn = coletas_banco.conectar(nucleo_banco.DB_PATH)
+        try:
+            novas = coletas_regras.retiradas_novas(
+                conn, [m.upper() for c in (body.get("codigos") or []) for m in re.findall(r"PS-\d+", str(c), re.I)])
+        finally:
+            conn.close()
+    except Exception:
+        logging.getLogger(__name__).exception("conferencia de retirada nova indisponivel")
+        novas = []
+    if novas:
+        return jsonify({"erro": f"{', '.join(novas)}: pedido de retirada sai pela tela Coletas (Expedição), "
+                                "com a folha e a foto."}), 400
+
+    def iniciar(args_extra):
+        return iniciar_execucao_com_fila(agente, modo_teste=False, ids_do_grupo=AGENTES_PLANEJAMENTO_IDS,
+                                         args_extra=args_extra)
+    try:
+        r = acoes_pedidos.expedir_stokki(body.get("codigos"), _autor_acao_pedidos(), iniciar=iniciar,
+                                         pasta=_LOGS_EXECUCOES)
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 409 amigavel
+    except Exception:
+        logging.getLogger(__name__).exception("expedir na Stokki pela tela Pedidos falhou")
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+    if not r.get("ok"):
+        return jsonify({"erro": r.get("erro") or "Falha ao pedir a expedição."}), 400
+    return jsonify(r)
+
+
+@app.route("/api/pedidos/acao/expedir-stokki/andamento", methods=["GET"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+def api_pedidos_acao_expedir_stokki_andamento():
+    """Andamento do Expedir na Stokki: ?execucao_id=&token= (os dois vem da resposta do POST)."""
+    try:
+        execucao = buscar_execucao(int(request.args.get("execucao_id", "")))
+    except ValueError:
+        execucao = None
+    r = acoes_pedidos.andamento_expedicao(execucao, request.args.get("token", ""), _LOGS_EXECUCOES)
+    return jsonify(r), (200 if r.get("ok") else 404)
+
+
+@app.route("/api/pedidos/acao/validar-lote-foto", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_acao_validar_lote_foto():
+    """Foto em massa na tela /pedidos: mesma validacao da Torre."""
+    try:
+        return _validar_lote_foto_do_json()
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 409 amigavel
+    except Exception:
+        logging.getLogger(__name__).exception("validar lote de foto pela tela Pedidos falhou")
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+
+
+_NIVEIS_LEITURA_CANHOTO = acoes_pedidos.NIVEIS_ACAO + ("leitura",)
+_RE_CODIGO_CANHOTO = re.compile(r"PS-\d+(-[RC]\d+)?")  # sempre com fullmatch ($ aceita "\n" no fim)
+
+
+@app.route("/api/pedidos/acao/comprovantes", methods=["GET"])
+@requer_auth(niveis=_NIVEIS_LEITURA_CANHOTO)
+def api_pedidos_acao_comprovantes():
+    """Canhotos de um pedido (Vuupt, manual, app), so leitura."""
+    codigo = (request.args.get("codigo") or "").strip().lstrip("#").upper()
+    if not _RE_CODIGO_CANHOTO.fullmatch(codigo):
+        return jsonify({"erro": "codigo ausente ou inválido."}), 400
+    from nucleo import banco as nucleo_banco
+    try:
+        conn = nucleo_banco.conectar()
+        try:
+            itens = acoes_pedidos.comprovantes(
+                codigo, token=_carregar_config().get("vuupt_api", {}).get("token", ""), conn=conn)
+        finally:
+            conn.close()
+    except Exception:
+        logging.getLogger(__name__).exception("comprovantes pela tela Pedidos falhou")
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+    return jsonify({"ok": True, "comprovantes": itens})
+
+
+# Documentos fiscais do pedido (XML, DANFE, boleto): conferir, baixar e mandar por e-mail (Hugo, 13/11).
+def _itens_documentos(body):
+    """(itens, erro): [{"codigo", "destinatario"}] do corpo, so com codigo no formato da tela."""
+    bruto = body.get("itens")
+    if not isinstance(bruto, list) or not bruto:
+        return None, (jsonify({"erro": "Nenhum pedido selecionado."}), 400)
+    if len(bruto) > documentos_email.MAX_PEDIDOS:
+        return None, (jsonify({"erro": f"No máximo {documentos_email.MAX_PEDIDOS} pedidos por envio."}), 400)
+    itens = []
+    for it in bruto:
+        codigo = str((it or {}).get("codigo") or "").strip().lstrip("#").upper() if isinstance(it, dict) else ""
+        if not _RE_CODIGO_CANHOTO.fullmatch(codigo):
+            return None, (jsonify({"erro": "codigo ausente ou inválido."}), 400)
+        itens.append({"codigo": codigo, "destinatario": str(it.get("destinatario") or "")[:200]})
+    return itens, None
+
+
+@app.route("/api/pedidos/documentos/conferir", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_documentos_conferir():
+    """O que ha guardado de cada pedido (com link pra baixar), o que falta e o e-mail usado da ultima vez."""
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    itens, erro = _itens_documentos(body)
+    if erro:
+        return erro
+    from nucleo import banco as nucleo_banco
+    try:
+        conn = nucleo_banco.conectar()
+        try:
+            documentos_email.garantir_tabelas(conn)
+            r = documentos_email.resumo(documentos_email.levantar(conn, [it["codigo"] for it in itens]))
+            r["emails_lembrados"] = documentos_email.lembrados(conn, itens)
+        finally:
+            conn.close()
+    except Exception:
+        logging.getLogger(__name__).exception("conferencia de documentos pela tela Pedidos falhou")
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+    for p in r["pedidos"]:
+        for a in p["arquivos"]:
+            a["url"] = url_for("api_pedidos_documentos_arquivo", codigo=p["codigo"], ref=a["ref"])
+    return jsonify({"ok": True, **r})
+
+
+@app.route("/api/pedidos/documentos/arquivo", methods=["GET"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+def api_pedidos_documentos_arquivo():
+    """Download de um documento do pedido, ja com o nome XML_NF/DANFE_NF/BOLETO_NF."""
+    codigo = (request.args.get("codigo") or "").strip().lstrip("#").upper()
+    ref = (request.args.get("ref") or "").strip()
+    if not _RE_CODIGO_CANHOTO.fullmatch(codigo) or not ref or len(ref) > 100:
+        abort(404)
+    from nucleo import banco as nucleo_banco
+    conn = nucleo_banco.conectar()
+    try:
+        achado = documentos_email.arquivo(conn, codigo, ref)
+    finally:
+        conn.close()
+    if achado is None:
+        abort(404)
+    caminho, nome = achado
+    return send_file(caminho, as_attachment=True, download_name=nome)
+
+
+@app.route("/api/pedidos/documentos/enviar", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_documentos_enviar():
+    """Manda os documentos guardados dos pedidos pro e-mail informado (envio real)."""
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    itens, erro = _itens_documentos(body)
+    if erro:
+        return erro
+    refs = body.get("refs")
+    if refs is not None and (not isinstance(refs, list) or len(refs) > 500
+                             or not all(isinstance(r, str) and len(r) <= 100 for r in refs)):
+        return jsonify({"erro": "Seleção de documentos inválida."}), 400
+    from nucleo import banco as nucleo_banco
+    try:
+        conn = nucleo_banco.conectar()
+        try:
+            r = documentos_email.enviar(conn, itens, body.get("emails"), _autor_acao_pedidos(),
+                                        _carregar_config().get("email") or {}, refs=refs)
+        finally:
+            conn.close()
+    except documentos_email.ErroDocumentos as e:
+        return jsonify({"erro": str(e)}), 400
+    except _EnvioBloqueadoHomolog:
+        raise
+    except Exception:
+        logging.getLogger(__name__).exception("envio de documentos pela tela Pedidos falhou")
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+    return jsonify(r)
+
+
+@app.route("/pedidos/canhoto/vuupt/<int:checklist_id>.pdf")
+@requer_auth(niveis=_NIVEIS_LEITURA_CANHOTO)
+def pedidos_canhoto_vuupt(checklist_id):
+    """PDF do checklist da Vuupt. O checklist precisa pertencer a um servico done do codigo (senao 404) e o
+    cache e por checklist (canhoto_<codigo>_<id>.pdf): nunca grava no canhoto_<codigo>.pdf que o portal,
+    o e-mail de entrega e a expedicao leem."""
+    codigo = (request.args.get("codigo") or "").strip().lstrip("#").upper()
+    if not _RE_CODIGO_CANHOTO.fullmatch(codigo):
+        abort(404)
+    from notificacao_entregas import vuupt_entregas
+    token = _carregar_config().get("vuupt_api", {}).get("token", "")
+    try:
+        servicos = vuupt_entregas.buscar_por_codigo(token, codigo)
+    except Exception:
+        logging.getLogger(__name__).exception("canhoto Vuupt: busca de %s falhou", codigo)
+        abort(404)
+    if checklist_id not in {acoes_pedidos._checklist_id(s) for s in servicos}:
+        abort(404)
+    caminho = vuupt_entregas.baixar_canhoto_pdf(token, checklist_id, f"{codigo}_{checklist_id}")
+    if not caminho:
+        abort(404)
+    return send_file(caminho, mimetype="application/pdf")
+
+
+@app.route("/pedidos/canhoto/manual/<codigo>.pdf")
+@requer_auth(niveis=_NIVEIS_LEITURA_CANHOTO)
+def pedidos_canhoto_manual(codigo):
+    """PDF do canhoto manual. Codigo validado ANTES de montar caminho (vem da URL)."""
+    if not _RE_CODIGO_CANHOTO.fullmatch(codigo):
+        abort(404)
+    from nucleo import canhotos_manuais
+    caminho = canhotos_manuais.caminho_canhoto_manual(codigo)
+    if not caminho:
+        abort(404)
+    return send_file(caminho, mimetype="application/pdf")
+
+
+@app.route("/api/pedidos/acao/checar-dia-fixo", methods=["POST"])
+@requer_auth(niveis=acoes_pedidos.NIVEIS_ACAO)
+@exige_mesma_origem
+def api_pedidos_acao_checar_dia_fixo():
+    """Antes de Agendar na tela /pedidos: quais pedidos ficam fora do dia fixo da região. Só lê."""
+    body, erro = _corpo_json()
+    if erro:
+        return erro
+    try:
+        service_ids = [int(s) for s in body.get("service_ids") or []]
+    except (TypeError, ValueError):
+        return jsonify({"erro": "service_ids inválidos."}), 400
+    try:
+        resultado = checar_reagendamento_dia_fixo(service_ids, str(body.get("data") or ""))
+    except Exception:
+        logging.getLogger(__name__).exception("checar dia fixo pela tela Pedidos falhou")
+        return jsonify({"erro": _FALHA_ACAO_PEDIDOS}), 500
+    if not resultado["ok"]:
+        return jsonify({"erro": resultado["erro"]}), 400
+    return jsonify(resultado)
+
+
 @app.route("/api/torre/notificar-ocorrencia", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica", "atendimento"))
 @exige_mesma_origem
 def api_torre_notificar_ocorrencia():
     """Botão 'Notificar' da fila de ação -- dispara na hora a pergunta
@@ -1167,7 +3723,7 @@ def api_torre_notificar_ocorrencia():
 
 
 @app.route("/api/planejamento/pool")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_pool():
     """Busca ao vivo na VUUPT o pool de não alocados + resumo dos
     pedidos agendados (botão 'Atualizar' da tela) -- não mexe nos
@@ -1192,26 +3748,34 @@ def api_pool():
     return jsonify({
         "pool": resultado["pool"],
         "pool_retiradas": resultado.get("pool_retiradas", []),
+        "retrato_stokki_em": resultado.get("retrato_stokki_em"),
+        # {codigo base: "Em separação"...} pras paradas já em rota (o selo da rota, Hugo 09/11): o
+        # pool já volta anotado, as rotas da tela são atualizadas pelo front com isto.
+        "situacoes_stokki": {c: SITUACAO_STOKKI_NAO_PRONTA[st]
+                             for c, st in (resultado.get("retrato_stokki") or {}).items()
+                             if st in SITUACAO_STOKKI_NAO_PRONTA},
         "resumo_html": render_template("_resumo_agendados.html", resumo_agendados=resultado["resumo_agendados"]),
         "aviso": aviso,
     })
 
 
 @app.route("/api/planejamento/sem-rota-hoje")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_planejamento_sem_rota_hoje():
     """Número "Sem rota" de HOJE (mesmo cálculo da torre) pro chip do
     planejamento -- carregado async pelo template pra não segurar o
     load da página numa consulta ao vivo à VUUPT."""
     try:
         return jsonify(torre_controle.contar_sem_rota(date.today()))
+    except _EnvioBloqueadoHomolog:
+        raise  # homologacao: o handler do flask_homolog responde 503 amigavel
     except Exception as e:
         logging.getLogger(__name__).exception("Falha ao contar sem rota de hoje")
         return jsonify({"erro": str(e)}), 500
 
 
 @app.route("/api/planejamento/romaneio/<int:rascunho_id>")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def api_romaneio(rascunho_id):
     """Gera (sempre fresco, reflete o estado atual do rascunho) e serve
     o PDF de romaneio -- botão 'Imprimir rota', mesmo motor de
@@ -1238,7 +3802,7 @@ def api_romaneio(rascunho_id):
 
 
 @app.route("/api/planejamento/carregar-documentos", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_carregar_documentos():
     """Busca NF/boleto na hora (e-mail + Stokki) pros pedidos do
@@ -1266,7 +3830,7 @@ def _rascunho_ou_404(rascunho_id):
 
 
 @app.route("/api/planejamento/mover-parada", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_mover_parada():
@@ -1286,7 +3850,7 @@ def api_mover_parada():
 
 
 @app.route("/api/planejamento/reordenar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_reordenar():
@@ -1299,7 +3863,7 @@ def api_reordenar():
 
 
 @app.route("/api/planejamento/inverter-rota", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_inverter_rota():
@@ -1314,7 +3878,7 @@ def api_inverter_rota():
 
 
 @app.route("/api/planejamento/mover-paradas", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_mover_paradas():
@@ -1341,7 +3905,7 @@ def api_mover_paradas():
 
 
 @app.route("/api/planejamento/fundir-rotas", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_fundir_rotas():
@@ -1357,52 +3921,83 @@ def api_fundir_rotas():
 
 
 @app.route("/api/planejamento/remover-parada", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_remover_parada():
+    """Rota ENVIADA (editar rota enviada, 10/11): exige `motivo` (expedicao.MOTIVOS_EXCLUSAO),
+    tira o pedido na Vuupt pela regra de status ao vivo e, com a rota iniciada, marca
+    Retornando (ver rascunhos_rota.remover_de_rota_enviada)."""
     body = request.get_json(force=True)
     try:
-        parada_removida = rascunhos_rota.remover_parada(body["rascunho_id"], body["service_id"])
-    except (KeyError, ValueError) as e:
+        rascunho_id = int(body["rascunho_id"])
+        service_id = int(body["service_id"])
+        rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
+        if rascunho and rascunho["status"] == rascunhos_rota.STATUS_ENVIADO:
+            resultado = rascunhos_rota.remover_de_rota_enviada(
+                rascunho_id, service_id, body.get("motivo"), (body.get("observacao") or "").strip(),
+                _carregar_config().get("vuupt_api", {}).get("token", ""), session.get("usuario", ""))
+        else:
+            resultado = {"parada_removida": rascunhos_rota.remover_parada(rascunho_id, service_id)}
+    except (KeyError, ValueError, TypeError) as e:
         return jsonify({"erro": str(e)}), 400
-    return jsonify({
-        "ok": True,
-        "rascunho": _rascunho_ou_404(body["rascunho_id"]),
-        "parada_removida": parada_removida,
-    })
+    return jsonify({**resultado, "ok": True, "rascunho": _rascunho_ou_404(rascunho_id)})
 
 
 @app.route("/api/planejamento/adicionar-parada", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_adicionar_parada():
+    """Rota ENVIADA (10/11): inclui o pedido na Vuupt antes de gravar
+    (rascunhos_rota.adicionar_em_rota_enviada)."""
     body = request.get_json(force=True)
     try:
-        rascunhos_rota.adicionar_parada(body["rascunho_id"], body["parada"], body.get("ordem"))
-    except (KeyError, ValueError) as e:
+        rascunho_id = int(body["rascunho_id"])
+        parada = {**body["parada"], "service_id": int(body["parada"]["service_id"])}
+        rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
+        if rascunho and rascunho["status"] == rascunhos_rota.STATUS_ENVIADO:
+            rascunhos_rota.adicionar_em_rota_enviada(
+                rascunho_id, parada, _carregar_config().get("vuupt_api", {}).get("token", ""),
+                session.get("usuario", ""))
+        else:
+            rascunhos_rota.adicionar_parada(rascunho_id, parada, body.get("ordem"))
+    except (KeyError, ValueError, TypeError) as e:
         return jsonify({"erro": str(e)}), 400
-    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
+    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(rascunho_id)})
 
 
 @app.route("/api/planejamento/trocar-motorista", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_trocar_motorista():
+    """Rota ENVIADA (10/11): a troca vai pra Vuupt antes de gravar; rota iniciada só troca
+    o carro. Ids viram int (edicao_rota compara agent_id com ==)."""
     body = request.get_json(force=True)
     try:
-        rascunhos_rota.trocar_motorista(
-            body["rascunho_id"], body.get("agent_id"), body.get("vehicle_id"), body.get("motorista_nome"),
-        )
-    except (KeyError, ValueError) as e:
+        rascunho_id = int(body["rascunho_id"])
+        agent_id = int(body["agent_id"]) if body.get("agent_id") not in (None, "") else None
+        vehicle_id = int(body["vehicle_id"]) if body.get("vehicle_id") not in (None, "") else None
+        rascunho = rascunhos_rota.buscar_rascunho(rascunho_id)
+        enviado = bool(rascunho and rascunho["status"] == rascunhos_rota.STATUS_ENVIADO)
+        config = _carregar_config() if enviado else {}
+        # ENVIADO: motorista de verdade sem carro recusa (planejamento.trava_sem_carro) ou só avisa
+        resultado = rascunhos_rota.trocar_motorista(
+            rascunho_id, agent_id, vehicle_id, body.get("motorista_nome"),
+            token=config.get("vuupt_api", {}).get("token", "") if enviado else None,
+            placas=placas_veiculos_vuupt(config) if enviado else None,
+            trava_sem_carro=veiculos_regras.trava_sem_carro_ligada(config))
+    except (KeyError, ValueError, TypeError) as e:
         return jsonify({"erro": str(e)}), 400
-    return jsonify({"ok": True, "rascunho": _rascunho_ou_404(body["rascunho_id"])})
+    resposta = {"ok": True, "rascunho": _rascunho_ou_404(rascunho_id)}
+    if resultado.get("aviso"):
+        resposta["aviso"] = resultado["aviso"]
+    return jsonify(resposta)
 
 
 @app.route("/api/planejamento/lalamove-veiculo", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_lalamove_veiculo():
@@ -1418,7 +4013,7 @@ def api_lalamove_veiculo():
 
 
 @app.route("/api/planejamento/lalamove-horario", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_lalamove_horario():
@@ -1435,7 +4030,7 @@ def api_lalamove_horario():
 
 
 @app.route("/api/planejamento/lalamove-lancar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_lalamove_lancar():
@@ -1455,7 +4050,7 @@ def api_lalamove_lancar():
 
 
 @app.route("/api/planejamento/renomear-rota", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_renomear_rota():
@@ -1468,7 +4063,7 @@ def api_renomear_rota():
 
 
 @app.route("/api/planejamento/alocar-motoristas", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_alocar_motoristas():
@@ -1489,7 +4084,7 @@ def api_alocar_motoristas():
 
 
 @app.route("/api/planejamento/desalocar-motoristas", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_desalocar_motoristas():
@@ -1509,7 +4104,7 @@ def api_desalocar_motoristas():
 
 
 @app.route("/api/planejamento/publicar-oferta", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_publicar_oferta():
@@ -1541,7 +4136,7 @@ def api_publicar_oferta():
 
 
 @app.route("/api/planejamento/publicar-ofertas-lote", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_publicar_ofertas_lote():
@@ -1574,7 +4169,7 @@ def api_publicar_ofertas_lote():
 
 
 @app.route("/api/planejamento/despublicar-oferta", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_despublicar_oferta():
@@ -1593,7 +4188,7 @@ def api_despublicar_oferta():
 
 
 @app.route("/api/planejamento/despublicar-ofertas-lote", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_despublicar_ofertas_lote():
@@ -1611,7 +4206,7 @@ def api_despublicar_ofertas_lote():
 
 
 @app.route("/api/planejamento/disponibilidade-motoristas", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_salvar_disponibilidade_motoristas():
     """Tela "Disponibilidade de motoristas" (Hugo, 16/08): grava o
@@ -1630,7 +4225,7 @@ def api_salvar_disponibilidade_motoristas():
 
 
 @app.route("/api/planejamento/disponibilidade-motoristas/periodo", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_marcar_disponibilidade_periodo():
     """Mini-formulário "Marcar período" da tela de disponibilidade --
@@ -1652,7 +4247,7 @@ def api_marcar_disponibilidade_periodo():
 
 
 @app.route("/api/planejamento/disponibilidade-motoristas/limpar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_limpar_disponibilidade_motoristas():
     """Botão "Redefinir" de uma linha da tela de disponibilidade --
@@ -1671,7 +4266,7 @@ def api_limpar_disponibilidade_motoristas():
 
 
 @app.route("/motoristas")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
 def motoristas():
     """Tela "Motoristas" (Hugo, 16/08): lista quem está em
     BD_MOTORISTAS.xlsx e, pra quem tem login total, o cadastro de
@@ -1683,7 +4278,198 @@ def motoristas():
         logging.getLogger(__name__).exception("Falha ao montar dados da tela de motoristas")
         dados = None
         erro = str(e)
-    return render_template("motoristas.html", dados=dados, erro=erro, pode_editar=g.nivel_acesso in ("total", "operador"))
+    return render_template("motoristas.html", dados=dados, erro=erro, pode_editar=g.nivel_acesso in ("total", "operador", "logistica"),
+                           pode_aprovar=g.nivel_acesso == "total")
+
+
+# ── Auto-cadastro pelo app (Hugo, 08/10): aprovação só do nível total ────────
+def _cadastro_conn():
+    from nucleo import banco as nucleo_banco
+    return nucleo_banco.conectar()
+
+
+@app.route("/api/motoristas/cadastros/<int:cadastro_id>/documento/<tipo>")
+@requer_auth(niveis=("total",))
+def api_cadastro_documento(cadastro_id, tipo):
+    from nucleo import cadastro_motorista as cad
+    conn = _cadastro_conn()
+    try:
+        p = cad.caminho_documento(conn, cadastro_id, tipo)
+    finally:
+        conn.close()
+    if not p:
+        abort(404)
+    return send_file(p, max_age=0)
+
+
+@app.route("/api/motoristas/cadastros/<int:cadastro_id>/aprovar", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_cadastro_aprovar(cadastro_id):
+    """Linha na BD_MOTORISTAS (precisa do agente Vuupt criado à mão) +
+    login no app com PIN provisório. Devolve o PIN pra mandar ao motorista."""
+    from nucleo import cadastro_motorista as cad
+    body = request.get_json(force=True) or {}
+    conn = _cadastro_conn()
+    try:
+        r = cad.aprovar(conn, cadastro_id, _carregar_config(), agent_id=body.get("agent_id"),
+                        zonas=body.get("zonas"), dias=body.get("dias"), tipo_veiculo=body.get("tipo_veiculo"),
+                        aceita_viagens=bool(body.get("aceita_viagens")), revisado_por=session.get("usuario") or g.nivel_acesso,
+                        dono_veiculo=body.get("dono_veiculo"))
+    except cad.CadastroInvalido as e:
+        return jsonify({"erro": e.mensagem}), e.codigo
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    except PermissionError as e:
+        return jsonify({"erro": str(e)}), 409
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao aprovar cadastro de motorista")
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        conn.close()
+    return jsonify({"ok": True, **r})
+
+
+def _executar_cadastro_link(cadastro_id, acao, exige_ativo=False):
+    """Roda `acao(conn, config)` (resolver/tentar/desfazer do cadastro pelo link) e devolve o JSON.
+    `exige_ativo`: o que pode criar agente na Vuupt para com cadastro_motorista_link.ativo desligado."""
+    from nucleo import cadastro_motorista as cad, cadastro_motorista_link as link
+    conn = _cadastro_conn()
+    try:
+        c = cad.buscar_cadastro(conn, cadastro_id)
+        if not c or c.get("origem") != cad.ORIGEM_LINK:
+            return jsonify({"erro": "Cadastro não encontrado."}), 404
+        config = _carregar_config()
+        if exige_ativo and not link.link_ativo(config):
+            return jsonify({"erro": "Cadastro pelo link desligado no config."}), 409
+        return jsonify({"ok": True, "resultado": acao(conn, config)})
+    except cad.CadastroInvalido as e:
+        return jsonify({"erro": e.mensagem}), e.codigo
+    except Exception:
+        logging.getLogger(__name__).exception("Falha no cadastro de motorista pelo link #%s", cadastro_id)
+        return jsonify({"erro": "Erro interno."}), 500
+    finally:
+        conn.close()
+
+
+@app.route("/api/motoristas/cadastros-link/<int:cadastro_id>/resolver", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_cadastro_link_resolver(cadastro_id):
+    """Telefone/placa/e-mail que já é de um agente da Vuupt: usar esse agente
+    ({"usar_agent_id": N}) ou criar um novo ({"usar_agent_id": null})."""
+    from nucleo import cadastro_motorista_link as link
+    body = request.get_json(force=True, silent=True) or {}
+    usar = body.get("usar_agent_id")
+    if usar is not None:
+        try:
+            usar = int(usar)
+        except (TypeError, ValueError):
+            return jsonify({"erro": "usar_agent_id inválido."}), 400
+    usuario = session.get("usuario") or g.nivel_acesso
+    return _executar_cadastro_link(
+        cadastro_id, lambda conn, config: link.resolver_conflito(conn, config, cadastro_id, usar, usuario),
+        exige_ativo=True)
+
+
+@app.route("/api/motoristas/cadastros-link/<int:cadastro_id>/tentar", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_cadastro_link_tentar(cadastro_id):
+    from nucleo import cadastro_motorista_link as link
+    # forcar: o botão destrava cadastro com as tentativas esgotadas
+    return _executar_cadastro_link(cadastro_id, lambda conn, config: link.processar(conn, config, cadastro_id, forcar=True),
+                                   exige_ativo=True)
+
+
+@app.route("/api/motoristas/cadastros-link/<int:cadastro_id>/agente/<int:agent_id>")
+@requer_auth(niveis=("total",))
+def api_cadastro_link_agente(cadastro_id, agent_id):
+    """Nome e telefone do agente da Vuupt pra confirmar o "usar este agente"."""
+    from nucleo import cadastro_motorista as cad, cadastro_motorista_link as link
+    conn = _cadastro_conn()
+    try:
+        c = cad.buscar_cadastro(conn, cadastro_id)
+    finally:
+        conn.close()
+    if not c or c.get("origem") != cad.ORIGEM_LINK:
+        return jsonify({"erro": "Cadastro não encontrado."}), 404
+    try:
+        a = link.agente_da_vuupt(_carregar_config(), agent_id)
+    except Exception:
+        logging.getLogger(__name__).exception("Falha ao consultar o agente %s na Vuupt", agent_id)
+        return jsonify({"erro": "Erro interno."}), 500
+    if not a:
+        return jsonify({"erro": f"Agente {agent_id} não existe na Vuupt (ou foi apagado)."}), 404
+    return jsonify({"nome": a["nome"], "telefone": a["telefone"]})
+
+
+@app.route("/api/motoristas/cadastros-link/<int:cadastro_id>/desfazer", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_cadastro_link_desfazer(cadastro_id):
+    """Cadastro falso ou de teste: inativa a linha na tabela, libera o CPF e, com
+    {"apagar_na_vuupt": true}, apaga o agente e o veículo que este cadastro criou."""
+    from nucleo import cadastro_motorista_link as link
+    body = request.get_json(force=True, silent=True) or {}
+    apagar = bool(body.get("apagar_na_vuupt"))
+    usuario = session.get("usuario") or g.nivel_acesso
+    return _executar_cadastro_link(cadastro_id, lambda conn, config: link.desfazer_cadastro_link(
+        conn, config, cadastro_id, usuario, apagar_na_vuupt=apagar))
+
+
+@app.route("/api/motoristas/<cpf>/ve-financeiro", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_motorista_ve_financeiro(cpf):
+    """Chave "Vê financeiro" da tabela (Hugo, 08/10): quem dirige carro de
+    outro não vê o extrato no app. Pedágio continua."""
+    from nucleo import cadastro_motorista as cad
+    body = request.get_json(force=True) or {}
+    conn = _cadastro_conn()
+    try:
+        m = cad.definir_ve_financeiro(conn, cpf, bool(body.get("ve")))
+    except cad.CadastroInvalido as e:
+        return jsonify({"erro": e.mensagem}), e.codigo
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "cpf": m["cpf"], "ve_financeiro": bool(m["ve_financeiro"])})
+
+
+@app.route("/api/motoristas/cadastros/<int:cadastro_id>/recusar", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_cadastro_recusar(cadastro_id):
+    from nucleo import cadastro_motorista as cad
+    body = request.get_json(force=True) or {}
+    conn = _cadastro_conn()
+    try:
+        c = cad.recusar(conn, cadastro_id, body.get("motivo") or "", session.get("usuario") or g.nivel_acesso)
+    except cad.CadastroInvalido as e:
+        return jsonify({"erro": e.mensagem}), e.codigo
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "cadastro": c})
+
+
+# ── Pre-cadastro de embarcador da Stokki (10/10): aprovação só do nível total ──
+@app.route("/api/cadastro-embarcador/<cnpj>/aprovar", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_cadastro_embarcador_aprovar(cnpj):
+    """Grava em interno.habilidade o tipo de carga que o cliente informou no
+    portal, ou o do corpo ({"habilidade": ...}) se a equipe corrigir."""
+    import cadastro_embarcador as cad_emb
+    from nucleo import banco as nucleo_banco
+    body = request.get_json(silent=True) or {}
+    conn = nucleo_banco.conectar()
+    try:
+        c = cad_emb.aprovar(conn, cnpj, session.get("usuario") or g.nivel_acesso, habilidade=body.get("habilidade"))
+    except cad_emb.CadastroInvalido as e:
+        return jsonify({"erro": e.mensagem}), e.codigo
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "cadastro": c})
 
 
 # ── Pedágios dos motoristas (app de motoristas; Hugo, 11/09) ─────────────────
@@ -1692,8 +4478,125 @@ def motoristas():
 # APROVADO entra no extrato (nucleo/financeiro.py). Lógica em
 # nucleo/operacao.py; aqui só HTTP.
 
+# Acompanhamento detalhado das rotas (21/11): tela so de leitura da logistica.
+_NIVEIS_ACOMPANHAMENTO = ("total", "operador", "logistica", "leitura", "atendimento")   # os da Torre
+
+
+def _acompanhamento_ve_despesas() -> bool:
+    """Despesas so pra quem abre /financeiro/pedagios: pelo nivel, ou pela
+    lista de telas de quem tem acesso personalizado."""
+    telas = getattr(g, "telas_liberadas", None)
+    if telas is None:
+        return g.nivel_acesso in ("total", "operador", "logistica", "leitura")   # niveis de pedagios()
+    return acesso_telas.caminho_liberado("/financeiro/pedagios", telas)
+
+
+def _acompanhamento_data(bruto) -> str:
+    try:
+        return datetime.strptime(bruto or "", "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        return date.today().strftime("%Y-%m-%d")
+
+
+@app.route("/acompanhamento")
+@requer_auth(niveis=_NIVEIS_ACOMPANHAMENTO)
+def acompanhamento():
+    try:
+        chave_mapa = (_carregar_config().get("google_maps") or {}).get("api_key", "")
+    except Exception:
+        chave_mapa = ""
+    # "Documentos por e-mail" usa as rotas da tela Pedidos: so pra quem pode chama-las.
+    telas = getattr(g, "telas_liberadas", None)
+    pode_documentos = (g.nivel_acesso in acoes_pedidos.NIVEIS_ACAO if telas is None
+                       else acesso_telas.caminho_liberado("/api/pedidos/documentos/enviar", telas))
+    return render_template("acompanhamento_rotas.html", google_maps_key=chave_mapa, pode_documentos=pode_documentos,
+                           data_inicial=_acompanhamento_data(request.args.get("data")))
+
+
+@app.route("/api/acompanhamento/rotas")
+@requer_auth(niveis=_NIVEIS_ACOMPANHAMENTO)
+def api_acompanhamento_rotas():
+    from nucleo import banco as nucleo_banco
+    data_rota = _acompanhamento_data(request.args.get("data"))
+    conn = nucleo_banco.conectar()
+    try:
+        rotas = acompanhamento_rotas.listar_rotas(conn, data_rota)
+    finally:
+        conn.close()
+    return jsonify({"data": data_rota, "atualizado_em": datetime.now().strftime("%H:%M"), "rotas": rotas})
+
+
+@app.route("/api/acompanhamento/rota/<int:rota_id>")
+@requer_auth(niveis=_NIVEIS_ACOMPANHAMENTO)
+def api_acompanhamento_rota(rota_id):
+    from nucleo import banco as nucleo_banco
+    conn = nucleo_banco.conectar()
+    try:
+        detalhe = acompanhamento_rotas.detalhe_rota(conn, rota_id, com_despesas=_acompanhamento_ve_despesas())
+    finally:
+        conn.close()
+    if detalhe is None:
+        return jsonify({"erro": "Rota não encontrada."}), 404
+    detalhe["rota"]["pode_cancelar_finalizacao"] = _acompanhamento_pode_cancelar(rota_id, detalhe["rota"]["status"])
+    return jsonify(detalhe)
+
+
+def _acompanhamento_pode_cancelar(rota_id: int, status: str) -> bool:
+    """Botao so pra quem pode, com a rota em andamento e operada pelo nosso app."""
+    from nucleo import banco as nucleo_banco, ponte_vuupt
+    if g.nivel_acesso not in cancelar_finalizacao.NIVEIS or status != nucleo_banco.ROTA_EM_ROTA:
+        return False
+    conn = nucleo_banco.conectar()
+    try:
+        rota = conn.execute("SELECT * FROM nucleo_rotas WHERE id = ?", (rota_id,)).fetchone()
+    finally:
+        conn.close()
+    return bool(rota and ponte_vuupt.rota_operavel(rota))
+
+
+@app.route("/api/acompanhamento/parada/<int:parada_id>/cancelar-finalizacao", methods=["POST"])
+@requer_auth(niveis=cancelar_finalizacao.NIVEIS)
+@exige_mesma_origem
+def api_acompanhamento_cancelar_finalizacao(parada_id):
+    """Duplica o servico na Vuupt, poe na mesma rota e cria a parada nova pro motorista refazer a baixa."""
+    body = request.get_json(silent=True) or {}
+    from nucleo import banco as nucleo_banco, ponte_vuupt
+    import edicao_rota
+    import fingerprint_duplicacao_insucesso as fp
+    usuario = session.get("usuario") or g.nivel_acesso
+    try:
+        token = (_carregar_config().get("vuupt_api") or {}).get("token", "")
+        conn = nucleo_banco.conectar()
+        try:
+            r = cancelar_finalizacao.cancelar_finalizacao(
+                conn, parada_id, usuario, str(body.get("motivo") or ""),
+                vuupt=torre_controle.VuuptClient(token),
+                duplicar=torre_controle._expedir_pedidos_raiz().duplicar_servico_por_insucesso,
+                adicionar=lambda route_id, ids: edicao_rota.adicionar_pedidos(token, route_id, ids, position="end"),
+                rota_operavel=ponte_vuupt.rota_operavel,
+                ja_duplicado=lambda sid: (fp.buscar_novo_code(sid) or "outro serviço") if fp.ja_duplicado(sid) else None,
+                marcar_duplicado=fp.marcar_duplicado)
+            codigo = conn.execute("SELECT codigo FROM nucleo_paradas WHERE id = ?", (parada_id,)).fetchone()["codigo"]
+        finally:
+            conn.close()
+    except cancelar_finalizacao.Recusado as e:
+        return jsonify({"erro": str(e)}), 400
+    except _EnvioBloqueadoHomolog:
+        raise
+    except Exception:
+        logging.getLogger(__name__).exception("cancelar finalizacao pela tela Acompanhamento falhou")
+        return jsonify({"erro": "Falha inesperada; o erro ficou no log do painel."}), 500
+    try:   # historico do pedido (best-effort: a parada nova ja existe)
+        tratativas.registrar_evento(
+            codigo, "ACOMPANHAMENTO", "REENVIO_MANUAL",
+            texto=f"Finalização cancelada por {usuario}: {str(body.get('motivo') or '').strip()} → {r['novo_codigo']}")
+    except Exception:
+        logging.getLogger(__name__).exception("tratativa do cancelamento de finalizacao nao gravou")
+    return jsonify(r)
+
+
 @app.route("/financeiro/pedagios")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
 def pedagios():
     from nucleo import banco as nucleo_banco, operacao as nucleo_operacao
     status = (request.args.get("status") or "PENDENTE").upper()
@@ -1736,11 +4639,11 @@ def pedagios():
         "aprovado": sum(float(p["valor_aprovado"] or 0) for p in itens if p["status"] == nucleo_banco.PEDAGIO_APROVADO),
     }
     return render_template("pedagios.html", itens=itens, status=status, contagem=contagem, motoristas=motoristas,
-                           filtros=filtros, resumo=resumo, pode_editar=g.nivel_acesso in ("total", "operador"))
+                           filtros=filtros, resumo=resumo, pode_editar=g.nivel_acesso in ("total", "operador", "logistica"))
 
 
 @app.route("/financeiro/pedagios/<int:pedagio_id>/foto")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def pedagio_foto(pedagio_id):
     from nucleo import banco as nucleo_banco
     conn = nucleo_banco.conectar()
@@ -1759,7 +4662,7 @@ def pedagio_foto(pedagio_id):
 
 
 @app.route("/api/financeiro/pedagios/<int:pedagio_id>/revisar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 def revisar_pedagio(pedagio_id):
     from nucleo import banco as nucleo_banco, operacao as nucleo_operacao
     from nucleo.operacao import OperacaoInvalida
@@ -1785,6 +4688,254 @@ def revisar_pedagio(pedagio_id):
     return jsonify({"ok": True, "pedagio": resultado})
 
 
+# ── Pagamentos pontuais: Adiantamento, Descarga e Frete avulso (Hugo, 18/11) ──
+# A logística lança, o pedido vai pro grupo FINANCEIRO + LOGÍSTICA, o
+# financeiro paga e manda o comprovante, a logística confirma anexando o
+# comprovante; Descarga ainda pede o documento. Lógica e trava do envio em
+# pagamentos_pontuais.py; aqui só HTTP.
+
+NIVEIS_PAGAMENTOS = ("total", "atendimento", "logistica")
+
+
+def _usuario_pagamento() -> str:
+    return getattr(g, "nome_usuario", "") or session.get("usuario") or g.nivel_acesso
+
+
+@app.route("/financeiro/pagamentos")
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+def pagamentos():
+    pp = pagamentos_pontuais
+    situacao = (request.args.get("situacao") or pp.AGUARDANDO_PAGAMENTO).upper()
+    if situacao != "TODOS" and situacao not in pp.SITUACOES:
+        situacao = pp.AGUARDANDO_PAGAMENTO
+    config = _carregar_config()
+    conn = pp.conectar()
+    try:
+        itens = pp.listar(conn, None if situacao == "TODOS" else situacao)
+        contagem = pp.contagem(conn)
+        motoristas = pp.listar_motoristas(conn)
+    finally:
+        conn.close()
+    for p in itens:
+        p["pode_reenviar"] = pp.pode_reenviar(p)
+    return render_template("pagamentos_pontuais.html", itens=itens, situacao=situacao, contagem=contagem,
+                           motoristas=motoristas, pp=pp, envio_ligado=pp.config_pagamentos(config)["ativo"])
+
+
+def _resposta_pagamento(conn, pagamento_id: int, evento: str | None):
+    aviso = pagamentos_pontuais.disparar_aviso(conn, pagamento_id, evento, _carregar_config()) if evento else None
+    return jsonify({"ok": True, "id": pagamento_id, "pagamento": pagamentos_pontuais.obter(conn, pagamento_id),
+                    "aviso": aviso})
+
+
+@app.route("/api/financeiro/pagamentos", methods=["POST"])
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+@exige_mesma_origem
+def api_lancar_pagamento():
+    # JSON ou formulário (o Frete avulso pode vir com anexo)
+    dados = request.form.to_dict() if request.form or request.files else (request.get_json(silent=True) or {})
+    arquivo = request.files.get("anexo")
+    anexo = arquivo.read(pagamentos_pontuais.MAX_ARQUIVO_BYTES + 1) if arquivo else b""
+    conn = pagamentos_pontuais.conectar()
+    try:
+        novo_id = pagamentos_pontuais.lancar(conn, dados, _usuario_pagamento(), anexo)
+        return _resposta_pagamento(conn, novo_id, "lancamento")
+    except pagamentos_pontuais.ErroPagamento as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/financeiro/pagamentos/<int:pagamento_id>/confirmar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+@exige_mesma_origem
+def api_confirmar_pagamento(pagamento_id):
+    arquivo = request.files.get("comprovante")
+    conn = pagamentos_pontuais.conectar()
+    try:
+        pagamentos_pontuais.confirmar(conn, pagamento_id, arquivo.read(pagamentos_pontuais.MAX_ARQUIVO_BYTES + 1) if arquivo else b"", _usuario_pagamento())
+        return _resposta_pagamento(conn, pagamento_id, None)
+    except pagamentos_pontuais.ErroPagamento as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/financeiro/pagamentos/<int:pagamento_id>/documento", methods=["POST"])
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+@exige_mesma_origem
+def api_documento_pagamento(pagamento_id):
+    arquivo = request.files.get("documento")
+    conn = pagamentos_pontuais.conectar()
+    try:
+        pagamentos_pontuais.incluir_documento(conn, pagamento_id, arquivo.read(pagamentos_pontuais.MAX_ARQUIVO_BYTES + 1) if arquivo else b"",
+                                              _usuario_pagamento())
+        return _resposta_pagamento(conn, pagamento_id, "documento")
+    except pagamentos_pontuais.ErroPagamento as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/financeiro/pagamentos/<int:pagamento_id>/cancelar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+@exige_mesma_origem
+def api_cancelar_pagamento(pagamento_id):
+    conn = pagamentos_pontuais.conectar()
+    try:
+        pagamentos_pontuais.cancelar(conn, pagamento_id, (request.get_json(silent=True) or {}).get("motivo"),
+                                     _usuario_pagamento())
+        return _resposta_pagamento(conn, pagamento_id, "cancelamento")
+    except pagamentos_pontuais.ErroPagamento as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/financeiro/pagamentos/<int:pagamento_id>/reenviar-aviso", methods=["POST"])
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+@exige_mesma_origem
+def api_reenviar_aviso_pagamento(pagamento_id):
+    conn = pagamentos_pontuais.conectar()
+    try:
+        p = pagamentos_pontuais.obter(conn, pagamento_id)
+        if not p:
+            return jsonify({"erro": "Lançamento não encontrado."}), 404
+        if not pagamentos_pontuais.pode_reenviar(p):
+            return jsonify({"erro": "Esse aviso não está pendente de reenvio."}), 400
+        return _resposta_pagamento(conn, pagamento_id, p["aviso_evento"])
+    finally:
+        conn.close()
+
+
+@app.route("/financeiro/pagamentos/<int:pagamento_id>/arquivo/<nome>")
+@requer_auth(niveis=NIVEIS_PAGAMENTOS)
+def pagamento_arquivo(pagamento_id, nome):
+    caminho = pagamentos_pontuais.caminho_arquivo(pagamento_id, nome)
+    if caminho is None:
+        abort(404)
+    return send_file(caminho)
+
+
+# ── Demandas de compra (Hugo, 19/11) ──────────────────────────────────────────
+# A equipe registra o que precisa comprar, a Vivian marca como comprada. Lógica,
+# aprovação (desligada por padrão) e trava do WhatsApp em compras.py; aqui só HTTP.
+# Quem vê a tela é definido em /acessos (tela "Compras"); aprovar/recusar é só do nível total.
+
+NIVEIS_COMPRAS = ("total",)
+
+
+def _usuario_compras() -> str:
+    return getattr(g, "nome_usuario", "") or session.get("usuario") or g.nivel_acesso
+
+
+def _pode_aprovar_compras() -> bool:
+    return g.nivel_acesso == "total"
+
+
+@app.route("/compras")
+@requer_auth(niveis=NIVEIS_COMPRAS)
+def compras_tela():
+    situacao = (request.args.get("situacao") or compras.PENDENTE).upper()
+    if situacao != "TODAS" and situacao not in compras.SITUACOES:
+        situacao = compras.PENDENTE
+    config = _carregar_config()
+    conn = compras.conectar()
+    try:
+        itens = compras.listar(conn, None if situacao == "TODAS" else situacao)
+        contagem = compras.contagem(conn)
+    finally:
+        conn.close()
+    for d in itens:
+        d["pode_reenviar"] = compras.pode_reenviar(d)
+    cfg = compras.config_compras(config)
+    return render_template("compras.html", itens=itens, situacao=situacao, contagem=contagem, c=compras,
+                           envio_ligado=cfg["ativo"], aprovacao_ligada=cfg["aprovacao_ativa"],
+                           pode_aprovar=_pode_aprovar_compras(), hoje=date.today().isoformat())
+
+
+def _resposta_compra(conn, demanda_id: int, evento: str | None):
+    aviso = compras.disparar_aviso(conn, demanda_id, evento, _carregar_config()) if evento else None
+    return jsonify({"ok": True, "id": demanda_id, "demanda": compras.obter(conn, demanda_id), "aviso": aviso})
+
+
+def _acao_compra(demanda_id, evento, func, exige_aprovador=False):
+    if exige_aprovador and not _pode_aprovar_compras():
+        return jsonify({"erro": "Só o nível total aprova ou recusa compras."}), 403
+    conn = compras.conectar()
+    try:
+        func(conn)
+        return _resposta_compra(conn, demanda_id, evento)
+    except compras.ErroCompra as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/compras", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COMPRAS)
+@exige_mesma_origem
+def api_compras_criar():
+    dados = request.get_json(silent=True) or {}
+    conn = compras.conectar()
+    try:
+        novo_id = compras.criar(conn, dados, _usuario_compras(), _carregar_config())
+        return _resposta_compra(conn, novo_id, "criacao")
+    except compras.ErroCompra as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/compras/<int:demanda_id>/aprovar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COMPRAS)
+@exige_mesma_origem
+def api_compras_aprovar(demanda_id):
+    return _acao_compra(demanda_id, "aprovacao", lambda conn: compras.aprovar(conn, demanda_id, _usuario_compras()),
+                        exige_aprovador=True)
+
+
+@app.route("/api/compras/<int:demanda_id>/recusar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COMPRAS)
+@exige_mesma_origem
+def api_compras_recusar(demanda_id):
+    motivo = (request.get_json(silent=True) or {}).get("motivo")
+    return _acao_compra(demanda_id, "recusa", lambda conn: compras.recusar(conn, demanda_id, motivo, _usuario_compras()),
+                        exige_aprovador=True)
+
+
+@app.route("/api/compras/<int:demanda_id>/comprar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COMPRAS)
+@exige_mesma_origem
+def api_compras_comprar(demanda_id):
+    dados = request.get_json(silent=True) or {}
+    return _acao_compra(demanda_id, "compra", lambda conn: compras.marcar_comprada(conn, demanda_id, dados, _usuario_compras()))
+
+
+@app.route("/api/compras/<int:demanda_id>/cancelar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COMPRAS)
+@exige_mesma_origem
+def api_compras_cancelar(demanda_id):
+    motivo = (request.get_json(silent=True) or {}).get("motivo")
+    return _acao_compra(demanda_id, "cancelamento", lambda conn: compras.cancelar(conn, demanda_id, motivo, _usuario_compras()))
+
+
+@app.route("/api/compras/<int:demanda_id>/reenviar-aviso", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COMPRAS)
+@exige_mesma_origem
+def api_compras_reenviar_aviso(demanda_id):
+    conn = compras.conectar()
+    try:
+        d = compras.obter(conn, demanda_id)
+        if not d:
+            return jsonify({"erro": "Demanda não encontrada."}), 404
+        if not compras.pode_reenviar(d):
+            return jsonify({"erro": "Esse aviso não está pendente de reenvio."}), 400
+        return _resposta_compra(conn, demanda_id, d["aviso_evento"])
+    finally:
+        conn.close()
+
+
 # ── Canhotos: conferência das fotos do app (Hugo, 12/09) ─────────────────────
 # A validação automática (nucleo/validacao_fotos.py) marca cada foto de
 # canhoto APROVADO/REPROVADO. Aqui o Hugo vê as reprovadas (e as que
@@ -1792,7 +4943,7 @@ def revisar_pedagio(pedagio_id):
 # estiver desligada no config, a aba "Sem conferência" tem tudo.
 
 @app.route("/canhotos")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def canhotos():
     from nucleo import banco as nucleo_banco, operacao as nucleo_operacao
     filtro = (request.args.get("resultado") or "REPROVADO").upper()
@@ -1810,11 +4961,11 @@ def canhotos():
     finally:
         conn.close()
     return render_template("canhotos.html", itens=itens, resultado=filtro, contagem=contagem,
-                           pode_editar=g.nivel_acesso in ("total", "operador"))
+                           pode_editar=g.nivel_acesso in ("total", "operador", "logistica"))
 
 
 @app.route("/canhotos/<int:comprovante_id>/foto")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def canhoto_foto(comprovante_id):
     from nucleo import banco as nucleo_banco
     conn = nucleo_banco.conectar()
@@ -1833,7 +4984,7 @@ def canhoto_foto(comprovante_id):
 
 
 @app.route("/api/canhotos/<int:comprovante_id>/revisar", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 def revisar_canhoto(comprovante_id):
     from nucleo import banco as nucleo_banco, operacao as nucleo_operacao
     from nucleo.operacao import OperacaoInvalida
@@ -1872,7 +5023,7 @@ def _arg_data(chave: str) -> str | None:
 
 
 @app.route("/consulta")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def consulta():
     from nucleo import banco as nucleo_banco, consulta as nucleo_consulta
     termo = (request.args.get("q") or "").strip()
@@ -1909,7 +5060,7 @@ def consulta():
 
 
 @app.route("/consulta/rota/<int:rota_id>")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def consulta_rota(rota_id):
     from nucleo import consulta as nucleo_consulta
     rota = nucleo_consulta.detalhar_rota(rota_id)
@@ -1919,17 +5070,174 @@ def consulta_rota(rota_id):
 
 
 @app.route("/consulta/pedido/<codigo>")
-@requer_auth(niveis=("total", "operador", "leitura"))
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
 def consulta_pedido(codigo):
     from nucleo import consulta as nucleo_consulta
     detalhe = nucleo_consulta.detalhar_pedido(codigo)
     if not detalhe:
         abort(404)
-    return render_template("consulta_pedido.html", d=detalhe)
+    # Retorno conferido no galpão (tela /retornos); leitura nunca derruba a consulta.
+    try:
+        conn_r = retornos.conectar()
+        try:
+            no_galpao = retornos.status_por_codigo(conn_r, detalhe["codigo"])
+        finally:
+            conn_r.close()
+    except Exception:
+        logging.getLogger(__name__).exception("Consulta: falha ao ler retornos de %s", codigo)
+        no_galpao = []
+    return render_template("consulta_pedido.html", d=detalhe, no_galpao=no_galpao)
+
+
+# ── Pedidos: tabela de todos, estilo Serviços da Vuupt (Hugo, 09/11) ─────────
+# A /consulta procura UM pedido; aqui é a lista inteira com filtro em
+# qualquer coluna e CSV. Toda a regra está em nucleo/tabela_pedidos.py.
+
+def _filtros_tabela_pedidos() -> dict:
+    from nucleo import tabela_pedidos
+    return {
+        "de": _arg_data("de"), "ate": _arg_data("ate"),
+        "data_tipo": request.args.get("data_tipo") or "referencia",
+        "status": (request.args.get("status") or "").strip().upper(),
+        "fluxo": (request.args.get("fluxo") or "").strip().upper(),
+        "sender_id": request.args.get("embarcador") or "",
+        "agent_id": request.args.get("motorista") or "",
+        "zona": (request.args.get("zona") or "").strip(),
+        "canhoto": (request.args.get("canhoto") or "").strip().lower(),
+        "documentos": (request.args.get("documentos") or "").strip().lower(),
+        "q": (request.args.get("q") or "").strip(),
+        "colunas": {c.chave: request.args.get(f"f_{c.chave}", "").strip()
+                    for c in tabela_pedidos.COLUNAS if request.args.get(f"f_{c.chave}", "").strip()},
+    }
+
+
+def _pedido_celular(l: dict, formatar) -> dict:
+    """Tela do pedido no celular (Hugo, 11/11): o que ela mostra, já
+    formatado. Vai pra página como JSON e a tela monta com textContent."""
+    def hora(v):
+        return (v or "")[11:16]
+    return {
+        "chave": f"{l.get('sender_id')}|{l.get('pedido_base')}",
+        "codigo": l.get("codigo") or "", "servico": l.get("codigo_servico") or "",
+        "status": l.get("status") or "", "status_txt": formatar("status", l.get("status")),
+        "stokki": l.get("situacao_stokki") or "",   # só no Importado/cancelado antes da Vuupt (12/11)
+        "destinatario": l.get("destinatario") or "", "embarcador": l.get("embarcador") or "",
+        "endereco": l.get("endereco") or "", "complemento": l.get("complemento") or "",
+        "telefone": l.get("telefone") or "", "zona": l.get("zona") or "",
+        "caixas": formatar("caixas", l.get("caixas")), "janela": l.get("janela") or "",
+        "data": formatar("data", l.get("data")), "agendamento": formatar("agendamento", l.get("agendamento")),
+        "rota": l.get("rota") or "", "motorista": l.get("motorista") or "",
+        "conclusao": formatar("conclusao", l.get("conclusao")), "motivo": l.get("motivo") or "",
+        # painel do pedido (11/11): mesmo criterio da coluna e do filtro de canhoto
+        "canhoto": l.get("canhoto") or "",
+        "pendentes": (url_for("canhotos_pendentes", busca=l.get("codigo_servico") or l.get("codigo"))
+                      if l.get("status") == "ENTREGUE" and l.get("canhoto") == "Não" else ""),
+        "consulta": url_for("consulta_pedido", codigo=l.get("codigo")) if l.get("codigo") else "",
+        "historico": [{"data": formatar("data", t.get("data"))[:5], "codigo": t.get("codigo") or "",
+                       "situacao": t.get("situacao") or "", "situacao_txt": formatar("status", t.get("situacao")),
+                       "motivo": t.get("motivo") or "", "rota": t.get("rota") or "",
+                       "motorista": t.get("motorista") or "", "hora": hora(t.get("conclusao"))}
+                      for t in l.get("historico") or []],
+    }
+
+
+def _pedidos_celular(linhas: list, formatar) -> list:
+    """O link pra /canhotos-pendentes só vai pra quem entra lá (total,
+    operador, logística; acesso personalizado chega aqui como total)."""
+    pode = getattr(g, "nivel_acesso", None) in ("total", "operador", "logistica")
+    saida = [_pedido_celular(l, formatar) for l in linhas]
+    # quem saiu por coleta da Expedicao (12/11): numero, quem levou e a foto da folha
+    try:
+        from nucleo import banco as nucleo_banco
+        conn = coletas_banco.conectar(nucleo_banco.DB_PATH)   # mesmo dados.db da tela
+        try:
+            coletas = coletas_regras.coletas_dos_pedidos(conn, [p["codigo"].lstrip("#") for p in saida])
+        finally:
+            conn.close()
+    except Exception:
+        logging.getLogger(__name__).exception("coletas dos pedidos indisponivel")
+        coletas = {}
+    for p in saida:
+        c = coletas.get(p["codigo"].lstrip("#"))
+        if c:
+            quando = c["confirmada_em"] or ""
+            p["coleta"] = (f"{c['numero']} · {c['motorista_nome']} · placa {c['placa']} · "
+                           f"{quando[8:10]}/{quando[5:7]} {quando[11:16]}")
+            p["coleta_foto"] = url_for("expedicao_coleta_foto", coleta_id=c["id"]) if c["foto_arquivo"] else ""
+    if not pode:
+        for p in saida:
+            p["pendentes"] = ""
+    return saida
+
+
+@app.route("/pedidos")
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
+def pedidos_tabela():
+    from nucleo import banco as nucleo_banco, tabela_pedidos
+    filtros = _filtros_tabela_pedidos()
+    ordem, direcao = request.args.get("ordem") or "data", request.args.get("direcao") or "desc"
+    try:
+        pagina = int(request.args.get("pagina") or 1)
+    except ValueError:
+        pagina = 1
+    conn = nucleo_banco.conectar()
+    try:
+        r = tabela_pedidos.listar(filtros, pagina=pagina, ordem=ordem, direcao=direcao, conn=conn)
+        opcoes = tabela_pedidos.opcoes(conn=conn)
+    finally:
+        conn.close()
+
+    def url_com(**mudancas):
+        # Mantém tudo que está no query string e troca só o que mudou
+        # (ordenar e paginar não podem perder os filtros).
+        args = {k: v for k, v in request.args.items() if v != ""}
+        args.update({k: v for k, v in mudancas.items()})
+        return url_for("pedidos_tabela", **{k: v for k, v in args.items() if v not in ("", None)})
+
+    return render_template("pedidos_tabela.html", r=r, filtros=filtros, opcoes=opcoes,
+                           ordem=ordem, direcao=direcao, url_com=url_com,
+                           hoje=date.today().isoformat(), ontem=(date.today() - timedelta(days=1)).isoformat(),
+                           pedidos_celular=_pedidos_celular(r["linhas"], tabela_pedidos.formatar),
+                           colunas=tabela_pedidos.COLUNAS, datas=tabela_pedidos.DATAS,
+                           status=tabela_pedidos.STATUS, fluxos=tabela_pedidos.FLUXOS,
+                           formatar=tabela_pedidos.formatar,
+                           pode_agir=getattr(g, "nivel_acesso", session.get("nivel_acesso")) in acoes_pedidos.NIVEIS_ACAO,
+                           justificativas=justificativas_sem_canhoto.JUSTIFICATIVAS)
+
+
+@app.route("/pedidos/exportar.csv")
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
+def pedidos_tabela_csv():
+    from nucleo import tabela_pedidos
+    chaves = [c for c in (request.args.get("colunas") or "").split(",") if c]
+    texto = tabela_pedidos.exportar_csv(_filtros_tabela_pedidos(), chaves,
+                                        ordem=request.args.get("ordem"), direcao=request.args.get("direcao"))
+    nome = f"pedidos_{date.today().strftime('%Y%m%d')}.csv"
+    return Response(texto, mimetype="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{nome}"'})
+
+
+@app.route("/api/pedidos/contagem")
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
+def api_pedidos_contagem():
+    """Abas por status da /pedidos no celular (Hugo, 11/11): só o modo
+    celular chama, pra tabela do computador não pagar a consulta a mais."""
+    from nucleo import tabela_pedidos
+    return jsonify(tabela_pedidos.contar_por_status(_filtros_tabela_pedidos()))
+
+
+@app.route("/api/pedidos/filas")
+@requer_auth(niveis=("total", "operador", "logistica", "leitura", "atendimento"))
+def api_pedidos_filas():
+    """Filas do topo da /pedidos no computador (Hugo, 11/11): contagem por
+    status + sem canhoto, sem os filtros de status e canhoto. A tela chama
+    depois de abrir, pra lista não esperar por ela."""
+    from nucleo import tabela_pedidos
+    return jsonify(tabela_pedidos.contar_filas(_filtros_tabela_pedidos()))
 
 
 @app.route("/api/motoristas/vuupt-disponiveis")
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 def api_motoristas_vuupt_disponiveis():
     """Dropdown "Motorista (VUUPT)" do formulário de cadastro -- agentes
     do VUUPT que ainda não têm linha na planilha."""
@@ -1942,7 +5250,7 @@ def api_motoristas_vuupt_disponiveis():
 
 
 @app.route("/api/motoristas", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_cadastrar_motorista():
     body = request.get_json(force=True)
@@ -1958,8 +5266,320 @@ def api_cadastrar_motorista():
     return jsonify({"ok": True, **resultado})
 
 
+@app.route("/api/motoristas/<int:motorista_id>", methods=["PUT"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+def api_editar_motorista(motorista_id):
+    """Edita uma linha da bd_motoristas (botão Editar da tela /motoristas);
+    chave ausente = não mexe, "" = limpa. Histórico e repasse ao login do app em regras/cadastro_motoristas.py."""
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"erro": "Corpo da requisição inválido: esperado um objeto JSON."}), 400
+    try:
+        resultado = editar_motorista(_carregar_config(), motorista_id, body, session.get("usuario") or g.nivel_acesso)
+    except MotoristaNaoEncontrado as e:
+        return jsonify({"erro": str(e)}), 404
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao editar motorista")
+        return jsonify({"erro": str(e)}), 500
+    return jsonify({"ok": True, "mudancas": resultado["mudancas"], "motorista": resultado["motorista"]})
+
+
+def _acao_motorista(funcao, *args):
+    """Roda uma ação de nucleo/acoes_motorista.py com a conexão do banco e traduz os erros."""
+    from nucleo import acoes_motorista
+    conn = _cadastro_conn()
+    try:
+        return jsonify(getattr(acoes_motorista, funcao)(conn, *args))
+    except MotoristaNaoEncontrado as e:
+        return jsonify({"erro": str(e)}), 404
+    except acoes_motorista.AcaoRecusada as e:
+        return jsonify({"erro": e.mensagem}), e.codigo
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha na ação %s do motorista", funcao)
+        return jsonify({"erro": str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route("/api/motoristas/<int:motorista_id>/ativo", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+def api_motorista_ativo(motorista_id):
+    """Inativa/reativa a linha ({"ativo": bool}); ao inativar a última linha ativa da pessoa, cancela o link dela."""
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get("ativo"), bool):
+        return jsonify({"erro": "Corpo inválido: esperado {\"ativo\": true|false}."}), 400
+    usuario = session.get("usuario") or g.nivel_acesso
+    return _acao_motorista("definir_ativo", _carregar_config(), motorista_id, body["ativo"], usuario)
+
+
+@app.route("/api/motoristas/<int:motorista_id>/resetar-pin", methods=["POST"])
+@requer_auth(niveis=("total",))   # o PIN provisório aparece na tela: quem vê entra no app como o motorista
+@exige_mesma_origem
+def api_motorista_resetar_pin(motorista_id):
+    """Sorteia um PIN provisório (aparece uma vez só na resposta) e derruba as sessões do app."""
+    return _acao_motorista("resetar_pin", motorista_id, session.get("usuario") or g.nivel_acesso)
+
+
+@app.route("/api/motoristas/<int:motorista_id>", methods=["DELETE"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_excluir_motorista(motorista_id):
+    """Exclui a linha (e o login/fichas se era a última da pessoa). Recusa com 409 se há rotas no histórico."""
+    return _acao_motorista("excluir", _carregar_config(), motorista_id, session.get("usuario") or g.nivel_acesso)
+
+
+# ── Padrão único de cadastro (16/11): ficha, link de atualização e grupos do WhatsApp ──
+_MSG_PAGINA_ATUALIZACAO_OFF = ("A página de atualização está desligada (atualizacao_motoristas.ativo). "
+                               "Ligue antes de enviar links.")
+
+
+def _cfg_atualizacao(config):
+    return (config or {}).get("atualizacao_motoristas") or {}
+
+
+def _pagina_atualizacao_ligada(config) -> bool:
+    from regras.preferencias_motoristas import _parse_bool
+    return _parse_bool(_cfg_atualizacao(config).get("ativo"))
+
+
+def _validade_link_dias(config) -> int:
+    """atualizacao_motoristas.validade_dias; ausente, zero ou malformado = 15."""
+    try:
+        dias = int(_cfg_atualizacao(config).get("validade_dias") or 0)
+    except (TypeError, ValueError):
+        dias = 0
+    return dias if dias > 0 else 15
+
+
+# Campos da ficha que o modal "Ver ficha" mostra (lista fechada: coluna nova não vaza sozinha).
+_CAMPOS_FICHA_TELA = ("id", "origem", "nome", "cpf", "telefone", "email", "placa", "tipo_veiculo", "veiculo_modelo",
+                      "veiculo_ano", "refrigerado", "emite_nf", "dono_veiculo", "criado_em", "revisado_em",
+                      "concluido_em", "tem_cnh", "tem_crlv", "tem_selfie", "tem_antt", "tem_residencia")
+_CAMPOS_FICHA_SO_TOTAL = ("chave_pix", "data_nascimento")
+
+
+def _pessoa_da_linha(conn, motorista_id):
+    from nucleo import atualizacao_motorista as atu
+    return next((p for p in atu.pessoas(conn) if motorista_id in p["ids"]), None)
+
+
+def _ids_do_corpo(chave):
+    """Lista de inteiros em body[chave] ou None se o corpo não serve."""
+    body = request.get_json(force=True, silent=True)
+    ids = body.get(chave) if isinstance(body, dict) else None
+    if not isinstance(ids, list) or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+        return None
+    return ids
+
+
+@app.route("/api/motoristas/<int:motorista_id>/ficha")
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+def api_motorista_ficha(motorista_id):
+    """Botão "Ver ficha": ficha vigente (cadastro APROVADO mais recente) da pessoa + pendências.
+    Só os campos que o modal mostra; PIX, nascimento e os documentos (rota só do nível total)
+    ficam pro nível total, como nos cartões de cadastro pelo link."""
+    from nucleo import atualizacao_motorista as atu
+    conn = _cadastro_conn()
+    try:
+        pessoa = _pessoa_da_linha(conn, motorista_id)
+        if not pessoa:
+            return jsonify({"erro": "Motorista não encontrado."}), 404
+        ficha = atu.ficha_vigente(conn, pessoa["principal_id"])
+        pend = atu.pendencias(conn, pessoa)
+        pix = atu.pix_vigente(conn, pessoa, ficha)
+        pedido_pix = atu.pix_pendente(conn, pessoa)
+    finally:
+        conn.close()
+    total = g.nivel_acesso == "total"
+    if ficha:
+        campos = _CAMPOS_FICHA_TELA + (_CAMPOS_FICHA_SO_TOTAL if total else ())
+        # PIX vigente = o do login do app (trocado em "Meus dados"); o da ficha é o reserva
+        ficha = {c: (pix if c == "chave_pix" else ficha.get(c)) for c in campos}
+    return jsonify({"nome": pessoa["nome"], "ficha": ficha, "pendencias": pend, "documentos_visiveis": total,
+                    "pix_pendente": ({"novo": pedido_pix["novo"], "atual": pix, "pedido_em": pedido_pix["pedido_em"]}
+                                     if total and pedido_pix else None)})
+
+
+@app.route("/api/motoristas/<int:motorista_id>/pix-pendente", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_motorista_pix_pendente(motorista_id):
+    """Aprova ou recusa ({"aprovar": bool}) a troca de PIX que o motorista pediu pelo link."""
+    from nucleo import atualizacao_motorista as atu
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get("aprovar"), bool):
+        return jsonify({"erro": "Corpo inválido: esperado {\"aprovar\": true|false}."}), 400
+    conn = _cadastro_conn()
+    try:
+        return jsonify(atu.decidir_pix(conn, motorista_id, body["aprovar"], session.get("usuario") or g.nivel_acesso))
+    except atu.LinkInvalido as exc:
+        return jsonify({"erro": str(exc)}), 404
+    finally:
+        conn.close()
+
+
+@app.route("/api/motoristas/<int:motorista_id>/link-atualizacao", methods=["POST"])
+@requer_auth(niveis=("total",))   # quem tem o link e sabe o CPF preenche no lugar do motorista
+@exige_mesma_origem
+def api_motorista_link_atualizacao(motorista_id):
+    """Botão "Copiar link": link novo da pessoa (cancela os anteriores). O link só sai nesta
+    resposta; com a página desligada ele é gerado mesmo assim e `pagina_ligada` vem false."""
+    from nucleo import atualizacao_motorista as atu
+    config = _carregar_config()
+    conn = _cadastro_conn()
+    try:
+        pessoa = _pessoa_da_linha(conn, motorista_id)
+        if not pessoa:
+            return jsonify({"erro": "Motorista não encontrado."}), 404
+        if not pessoa["ativo"]:
+            return jsonify({"erro": "Motorista inativo: reative antes de gerar o link."}), 409
+        link = atu.gerar_link(conn, pessoa["principal_id"], session.get("usuario") or g.nivel_acesso,
+                              validade_dias=_validade_link_dias(config))
+    finally:
+        conn.close()
+    return jsonify({"url": f"{url_app_motorista(config)}/atualizar/{link['token']}", "expira_em": link["expira_em"],
+                    "pagina_ligada": _pagina_atualizacao_ligada(config)})
+
+
+@app.route("/api/motoristas/grupos/sugestoes")
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_motoristas_grupos_sugestoes():
+    """"Identificar grupos": lê os grupos do gateway e sugere um por motorista. Não grava."""
+    from nucleo import grupos_motoristas as grupos
+    config = _carregar_config()
+    conn = _cadastro_conn()
+    try:
+        return jsonify(grupos.sugerir(conn, config.get("whatsapp_notificacoes") or {}))
+    finally:
+        conn.close()
+
+
+@app.route("/api/motoristas/grupos/confirmar", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_motoristas_grupos_confirmar():
+    """Grava o grupo escolhido por motorista ({"itens": [{principal_id, grupo_id, grupo_nome, como}]});
+    grupo_id vazio desfaz o vínculo."""
+    from nucleo import grupos_motoristas as grupos
+    body = request.get_json(force=True, silent=True)
+    itens = body.get("itens") if isinstance(body, dict) else None
+    if not isinstance(itens, list) or not all(
+            isinstance(i, dict) and isinstance(i.get("principal_id"), int) and isinstance(i.get("grupo_id"), str)
+            for i in itens):
+        return jsonify({"erro": "Corpo inválido: esperado {\"itens\": [{principal_id, grupo_id, grupo_nome, como}]}."}), 400
+    usuario = session.get("usuario") or g.nivel_acesso
+    conn = _cadastro_conn()
+    try:
+        from nucleo import atualizacao_motorista as atu
+        principais = {p["principal_id"] for p in atu.pessoas(conn)}
+        for i in itens:   # confere tudo antes de gravar qualquer um
+            if i["principal_id"] not in principais:
+                return jsonify({"erro": f"Item inválido: {i['principal_id']} não é o id principal de um motorista. "
+                                        "Nada foi gravado."}), 400
+            if i["grupo_id"] and i.get("como") not in ("telefone", "nome", "manual"):
+                return jsonify({"erro": f"Item inválido: 'como' de {i['principal_id']} deve ser telefone, nome ou "
+                                        "manual. Nada foi gravado."}), 400
+        for i in itens:
+            grupos.confirmar(conn, i["principal_id"], i["grupo_id"], str(i.get("grupo_nome") or ""),
+                             str(i.get("como") or "manual"), usuario)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "gravados": len(itens)})
+
+
+@app.route("/api/motoristas/grupos/previa-renomear")
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_motoristas_grupos_previa_renomear():
+    """Nome atual -> novo de cada grupo confirmado; `ligado` = atualizacao_motoristas.renomear_grupos;
+    `modo` = desligado | piloto (só a prévia) | real (o botão de aplicar só habilita em real)."""
+    from nucleo import grupos_motoristas as grupos
+    from regras.preferencias_motoristas import _parse_bool
+    config = _carregar_config()
+    conn = _cadastro_conn()
+    try:
+        previa = grupos.previa_renomear(conn, config.get("whatsapp_notificacoes") or {})
+    finally:
+        conn.close()
+    return jsonify({"ligado": _parse_bool(_cfg_atualizacao(config).get("renomear_grupos")),
+                    "modo": grupos.modo_renomear(config), "previa": previa})
+
+
+@app.route("/api/motoristas/grupos/renomear", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_motoristas_grupos_renomear():
+    """Renomeia os grupos dos motoristas pedidos ({"principal_ids": [...]}); fora do modo real
+    devolve 'desligado' ou 'piloto' pra todos sem chamar o gateway."""
+    from nucleo import grupos_motoristas as grupos
+    ids = _ids_do_corpo("principal_ids")
+    if ids is None:
+        return jsonify({"erro": "Corpo inválido: esperado {\"principal_ids\": [...]}."}), 400
+    conn = _cadastro_conn()
+    try:
+        return jsonify({"resultado": grupos.renomear(conn, _carregar_config(), session.get("usuario") or g.nivel_acesso,
+                                                     ids)})
+    finally:
+        conn.close()
+
+
+@app.route("/api/motoristas/envio-links/candidatos")
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_motoristas_envio_links_candidatos():
+    """Quem pode receber o link no grupo (mais rotas primeiro) e o modo do envio: desligado (página
+    ou WhatsApp desligado, ou forcar_destino_whatsapp ausente), piloto (número de teste) ou real."""
+    import notificar_whatsapp
+    from nucleo import grupos_motoristas as grupos
+    config = _carregar_config()
+    destino = notificar_whatsapp.destino_link_atualizacao(config)
+    if destino is None or not _pagina_atualizacao_ligada(config) or not notificar_whatsapp.gateway_clientes_ok(config):
+        modo = "desligado"
+    else:
+        modo = "piloto" if destino else "real"
+    conn = _cadastro_conn()
+    try:
+        candidatos = grupos.candidatos_envio(conn)
+    finally:
+        conn.close()
+    return jsonify({"modo": modo, "candidatos": candidatos})
+
+
+@app.route("/api/motoristas/envio-links", methods=["POST"])
+@requer_auth(niveis=("total",))
+@exige_mesma_origem
+def api_motoristas_envio_links():
+    """Gera e manda o link de cada motorista pedido ({"principal_ids": [...]}) no grupo dele.
+    Recusa com a página de atualização desligada (o link cairia num 503)."""
+    from nucleo import grupos_motoristas as grupos
+    config = _carregar_config()
+    if not _pagina_atualizacao_ligada(config):
+        return jsonify({"erro": _MSG_PAGINA_ATUALIZACAO_OFF}), 409
+    ids = _ids_do_corpo("principal_ids")
+    if ids is None:
+        return jsonify({"erro": "Corpo inválido: esperado {\"principal_ids\": [...]}."}), 400
+    conn = _cadastro_conn()
+    try:
+        # validade já conferida aqui: valor malformado no config vira 15 em vez de quebrar o lote
+        config_envio = {**config, "atualizacao_motoristas": {**_cfg_atualizacao(config),
+                                                             "validade_dias": _validade_link_dias(config)}}
+        resultado = grupos.enviar_lote(conn, config_envio, ids, session.get("usuario") or g.nivel_acesso,
+                                       url_app_motorista(config))
+    finally:
+        conn.close()
+    return jsonify({"resultado": resultado})
+
+
 @app.route("/api/planejamento/nova-rota", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_nova_rota():
@@ -1979,7 +5599,7 @@ def api_nova_rota():
 
 
 @app.route("/api/planejamento/criar-rota-com-paradas", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_criar_rota_com_paradas():
@@ -2006,7 +5626,7 @@ def api_criar_rota_com_paradas():
 
 
 @app.route("/api/planejamento/roteirizar-selecionados", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_roteirizar_selecionados():
@@ -2043,14 +5663,14 @@ def api_roteirizar_selecionados():
 
 
 @app.route("/api/planejamento/incrementar-selecionados", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_incrementar_selecionados():
     """Botão "Incrementar" da seleção do pool (Hugo, 10/09): põe cada
     pedido selecionado no rascunho (status RASCUNHO, nunca rota já
     enviada à VUUPT) mais próximo que o comporte, com as travas do
-    incremento automático e sem teto de pedidos por rota. Recebe os
+    incremento automático (até 15 pedidos por rota comum). Recebe os
     itens do pool como a tela já os tem (mesmo contrato de
     /adicionar-parada)."""
     body = request.get_json(force=True)
@@ -2069,7 +5689,7 @@ def api_incrementar_selecionados():
 
 
 @app.route("/api/planejamento/otimizar-sequencia", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_otimizar_sequencia():
@@ -2082,7 +5702,7 @@ def api_otimizar_sequencia():
 
 
 @app.route("/api/planejamento/duplicar-rota", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_duplicar_rota():
@@ -2098,7 +5718,7 @@ def api_duplicar_rota():
 
 
 @app.route("/api/planejamento/descartar-rota", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_descartar_rota():
@@ -2119,7 +5739,7 @@ def api_descartar_rota():
 
 
 @app.route("/api/planejamento/confirmar-envio", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_confirmar_envio():
@@ -2133,13 +5753,27 @@ def api_confirmar_envio():
     except KeyError as e:
         return jsonify({"erro": str(e)}), 400
 
-    token = _carregar_config().get("vuupt_api", {}).get("token", "")
-    resultados = [rascunhos_rota.enviar_rascunho(rid, token) for rid in rascunho_ids]
-    return jsonify({"ok": True, "resultados": resultados})
+    return jsonify({"ok": True, "resultados": confirmar_envio_rascunhos(rascunho_ids, _carregar_config())})
+
+
+@app.route("/api/planejamento/veiculos")
+@requer_auth(niveis=("total", "operador", "logistica"))
+def api_planejamento_veiculos():
+    """Carros pro seletor do card (sem generico/excluido, dono primeiro, com
+    rodizio_no_dia). Lista da Vuupt com cache de 10 min."""
+    try:
+        data_alvo = date.fromisoformat(request.args.get("data") or date.today().isoformat())
+    except ValueError:
+        return jsonify({"erro": "data invalida (use AAAA-MM-DD)"}), 400
+    try:
+        return jsonify({"veiculos": seletor_veiculos(_carregar_config(), data_alvo)})
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao listar veiculos da Vuupt")
+        return jsonify({"erro": str(e)}), 502
 
 
 @app.route("/api/planejamento/cancelar-rota", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_cancelar_rota():
@@ -2161,12 +5795,40 @@ def api_cancelar_rota():
     return jsonify({"ok": True, "resultados": resultados})
 
 
+@app.route("/api/planejamento/cancelar-e-notificar", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_cancelar_e_notificar():
+    """Botão "Cancelar e notificar" do card (Hugo, 27/10): cancela igual ao
+    "Cancelar rota" e, só se cancelou, avisa o grupo "Rotas canceladas" do
+    /atendimento e os embarcadores pelo chat do portal (aviso_rota_cancelada)."""
+    import aviso_rota_cancelada
+    body = request.get_json(force=True)
+    motivo = " ".join(str(body.get("motivo") or "").split())[:300]
+    try:
+        rascunho = rascunhos_rota.buscar_rascunho(int(body["rascunho_id"]))
+    except (KeyError, TypeError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    if not motivo:
+        return jsonify({"erro": "Informe o motivo do cancelamento."}), 400
+    if not rascunho:
+        return jsonify({"erro": "Rota não encontrada."}), 404
+
+    config = _carregar_config()
+    resultado = rascunhos_rota.cancelar_rota_enviada(rascunho["id"], config.get("vuupt_api", {}).get("token", ""))
+    if not resultado["ok"]:
+        return jsonify({"ok": False, "erro": resultado["erro"]})
+    aviso = aviso_rota_cancelada.avisar(rascunho, motivo, session.get("usuario") or g.nivel_acesso, config)
+    return jsonify({"ok": True, "aviso": aviso})
+
+
 @app.route("/api/planejamento/cancelar-pedido", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_cancelar_pedido():
-    """Cancela DE VERDADE um pedido na VUUPT (DELETE /services/{id}) --
+    """Cancela DE VERDADE um pedido na VUUPT (PUT /services/{id}/cancel) --
     botão "Cancelar pedido" da tela, em qualquer lugar onde ele esteja
     (pool, rascunho ainda não enviado, ou rota já enviada -- ver
     planejamento_rotas.cancelar_pedido)."""
@@ -2178,14 +5840,14 @@ def api_cancelar_pedido():
     rascunho_id = body.get("rascunho_id")
     rascunho_id = int(rascunho_id) if rascunho_id is not None else None
 
-    resultado = cancelar_pedido(service_id, rascunho_id)
+    resultado = cancelar_pedido(service_id, rascunho_id, usuario=session.get("usuario") or g.nivel_acesso)
     if not resultado["ok"]:
-        return jsonify({"erro": resultado["erro"]}), 400
+        return jsonify({k: v for k, v in resultado.items() if k in ("erro", "aviso")}), 400
     return jsonify({"ok": True})
 
 
 @app.route("/api/planejamento/reagendar-pedido", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_reagendar_pedido():
@@ -2208,7 +5870,7 @@ def api_reagendar_pedido():
 
 
 @app.route("/api/planejamento/reagendar-pedidos", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_reagendar_pedidos():
@@ -2240,8 +5902,30 @@ def api_reagendar_pedidos():
     return jsonify({"ok": True, "falhas": resultado["falhas"]})
 
 
+@app.route("/api/planejamento/checar-dia-fixo", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+def api_checar_dia_fixo():
+    """Antes de reagendar (um ou lote): quais pedidos ficam fora do dia de
+    visita da região, com o valor da calculadora de frete dedicado (Hugo,
+    03/10 -- spec dias fixos v2, 5.4). Mesma permissão do reagendar. Só lê."""
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        service_ids = [int(s) for s in body.get("service_ids") or []]
+    except (TypeError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    try:
+        resultado = checar_reagendamento_dia_fixo(service_ids, str(body.get("data") or ""))
+    except Exception as e:
+        logging.getLogger(__name__).exception("Falha ao checar dia fixo do reagendamento")
+        return jsonify({"erro": str(e)}), 500
+    if not resultado["ok"]:
+        return jsonify({"erro": resultado["erro"]}), 400
+    return jsonify(resultado)
+
+
 @app.route("/api/planejamento/editar-endereco", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_editar_endereco():
@@ -2264,7 +5948,7 @@ def api_editar_endereco():
 
 
 @app.route("/api/planejamento/editar-nivel-horario", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_editar_nivel_horario():
@@ -2290,7 +5974,7 @@ def api_editar_nivel_horario():
 
 
 @app.route("/api/planejamento/editar-endereco-lote", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_editar_endereco_lote():
@@ -2325,16 +6009,16 @@ def api_editar_endereco_lote():
 
 
 @app.route("/api/planejamento/transportadoras-terceiros")
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 def api_transportadoras_terceiros():
     """Opções do modal "Transportadora (redespacho)" da tela de
-    planejamento: TERCEIROS da BD_TRANSPORTADORAS com endereço de galpão
+    planejamento: TERCEIROS do cadastro de transportadoras com endereço de galpão
     (ver planejamento_rotas.listar_transportadoras_terceiros)."""
     return jsonify({"transportadoras": listar_transportadoras_terceiros()})
 
 
 @app.route("/api/planejamento/editar-transportadora", methods=["POST"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_editar_transportadora():
@@ -2365,7 +6049,7 @@ def api_editar_transportadora():
 
 
 @app.route("/api/planejamento/dedicado", methods=["POST", "DELETE"])
-@requer_auth(niveis=("total", "operador"))
+@requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
 def api_planejamento_dedicado():
     """Marca (POST {itens, valor}) ou desmarca (DELETE {codigos}) pedidos
@@ -2433,8 +6117,18 @@ def _wms_json_erro(e, status=400):
     return jsonify({"erro": str(e)}), status
 
 
+def _wms_ids_caixas() -> set:
+    """Embarcadores que controlam estoque por caixa (config wms.pilotos com caixas: true;
+    sem a lista, wms.embarcador_piloto_id + wms.caixas_ativo). Pra eles valem a trava do
+    movimento avulso, o usa_caixas do Receber, o criar caixa e a aba Inventário. Ler,
+    ativar, mover e cancelar caixa funcionam pra qualquer um (preparar o zerar e o mutirão)."""
+    return wms_pilotos.ids_com_caixas(_carregar_config() or {})
+
+
 def _wms_bootstrap(conn) -> dict:
     return {
+        "caixas_embarcadores": sorted(_wms_ids_caixas()),
+        "caixas_ativo": bool(_wms_ids_caixas()),
         "operador": _wms_operador_atual(),
         "operadores": wms.listar_operadores(conn),
         "areas": wms.listar_areas(conn),
@@ -2597,7 +6291,24 @@ def api_wms_produto_controla_validade(produto_id):
         conn.close()
 
 
+_UUID_APARELHO = re.compile(r"(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|x[0-9a-f]{8,40})", re.I)
+
+
+def _wms_exige_uuid_do_aparelho(uuid):
+    """uuid vindo do cliente só no formato que o aparelho gera (randomUUID ou 'x'+hex).
+    cx-/zerar-/ps-...-reserva- são do sistema (idempotência) e não podem ser forjados."""
+    if uuid in (None, ""):
+        return
+    if not isinstance(uuid, str) or not _UUID_APARELHO.fullmatch(uuid):
+        raise wms.ErroWMS("Identificador reservado pelo sistema.")
+
+
 def _wms_registrar(conn, item: dict, op: dict) -> dict:
+    _wms_exige_uuid_do_aparelho(item.get("uuid"))
+    # Trava: produto de embarcador que opera por caixa só muda de saldo por caixa (Inventário, Receber, Mover).
+    produto = wms.obter_produto(conn, int(item.get("produto_id") or 0))
+    if produto and wms_caixas.produto_usa_caixas(produto, _wms_ids_caixas()):
+        raise wms.ErroWMS("Produto controlado por caixa: use Inventario, Receber ou Mover caixa.")
     return wms.registrar_movimento(
         conn, tipo=item.get("tipo", ""), produto_id=int(item.get("produto_id") or 0),
         quantidade=item.get("quantidade"), lote=item.get("lote", ""), validade=item.get("validade"),
@@ -2627,7 +6338,7 @@ def api_wms_registrar_movimento():
     conn = wms.conectar()
     try:
         m = _wms_registrar(conn, body, op)
-    except (wms.ErroWMS, ValueError) as e:
+    except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
         return _wms_json_erro(e)
     finally:
         conn.close()
@@ -2650,7 +6361,7 @@ def api_wms_movimentos_lote():
             try:
                 m = _wms_registrar(conn, item, op_item)
                 resultados.append({"uuid": item.get("uuid"), "ok": True, "movimento": m})
-            except (wms.ErroWMS, ValueError) as e:
+            except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
                 resultados.append({"uuid": item.get("uuid"), "ok": False, "erro": str(e)})
     finally:
         conn.close()
@@ -2905,8 +6616,109 @@ def api_wms_recebimento(recebimento_id):
             return _wms_json_erro("Recebimento não encontrado.", 404)
         # A unidade vem do produto do catálogo (wms_recebimento_itens não tem
         # essa coluna -- a tela mostrava "undefined" no rótulo da quantidade).
-        return jsonify({"recebimento": dict(rec),
-                        "itens": wms_pedidos.itens_do_recebimento(conn, recebimento_id)})
+        itens = wms_pedidos.itens_do_recebimento(conn, recebimento_id)
+        com_caixas = _wms_ids_caixas()
+        for it in itens:
+            produto = wms.obter_produto(conn, int(it.get("produto_id") or 0))
+            it["usa_caixas"] = bool(produto and wms_caixas.produto_usa_caixas(produto, com_caixas))
+        return jsonify({"recebimento": dict(rec), "itens": itens})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/caixas", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_caixas_criar():
+    com_caixas = _wms_ids_caixas()
+    if not com_caixas:
+        return _wms_json_erro("Caixas desligadas (wms.caixas_ativo).")
+    op = _wms_exige_operador()
+    body = request.get_json(force=True) or {}
+    conn = wms_caixas.conectar()
+    try:
+        qtd_un = body.get("qtd_un")
+        produto_id = int(body.get("produto_id") or 0)
+        produto = wms.obter_produto(conn, produto_id)
+        if produto and not wms_caixas.produto_usa_caixas(produto, com_caixas):
+            return _wms_json_erro("Produto fora do piloto: use Movimentos.")
+        r = wms_caixas.criar_caixas(
+            conn, produto_id=produto_id, lote=body.get("lote", ""),
+            validade=body.get("validade"), qtd_un=float(qtd_un) if qtd_un not in (None, "") else None,
+            quantidade=body.get("quantidade"), operador=op)
+        return jsonify(r)
+    except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/caixas/<serial>")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_caixa(serial):
+    conn = wms_caixas.conectar()
+    try:
+        caixa = wms_caixas.obter_caixa(conn, serial)
+        if not caixa:
+            return _wms_json_erro("Caixa nao encontrada.", 404)
+        return jsonify({"caixa": caixa})
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/caixas/<serial>/ativar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_caixa_ativar(serial):
+    op = _wms_exige_operador()
+    body = request.get_json(force=True) or {}
+    conn = wms_caixas.conectar()
+    try:
+        rec_id, item_id = body.get("recebimento_id"), body.get("item_id")
+        r = wms_caixas.ativar_caixa(
+            conn, serial, body.get("posicao", ""), operador=op,
+            recebimento_id=int(rec_id) if rec_id not in (None, "") else None,
+            item_id=int(item_id) if item_id not in (None, "") else None,
+            dispositivo=(request.user_agent.string or "")[:80], criado_em=body.get("criado_em"),
+            confirmar_sobra=body.get("confirmar_sobra") is True)
+        return jsonify({"caixa": r["caixa"], "duplicado": r["duplicado"]})
+    except wms_caixas.SobraRecebimento as e:
+        return jsonify({"erro": str(e), "sobra": e.dados}), 409
+    except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/caixas/<serial>/mover", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_caixa_mover(serial):
+    op = _wms_exige_operador()
+    body = request.get_json(force=True) or {}
+    conn = wms_caixas.conectar()
+    try:
+        _wms_exige_uuid_do_aparelho(body.get("uuid"))
+        r = wms_caixas.mover_caixa(conn, serial, body.get("destino", ""), uuid=body.get("uuid") or "", operador=op)
+        return jsonify({"ok": True, "caixa": r["caixa"], "duplicado": r["duplicado"]})
+    except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/caixas/<serial>/cancelar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_caixa_cancelar(serial):
+    op = _wms_exige_operador()
+    body = request.get_json(force=True) or {}
+    conn = wms_caixas.conectar()
+    try:
+        r = wms_caixas.cancelar_caixa(conn, serial, body.get("motivo", ""), operador=op)
+        return jsonify({"ok": True, "caixa": r["caixa"], "duplicado": r["duplicado"]})
+    except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
+        return _wms_json_erro(e)
     finally:
         conn.close()
 
@@ -2918,11 +6730,8 @@ def api_wms_recebimento_enderecar_item(recebimento_id, item_id):
     """
     Chamada depois que a ENTRADA em si ja foi aceita por /api/wms/movimentos
     (esta rota nao move estoque, so contabiliza o quanto desta linha do
-    recebimento ja foi endereçado). Soma ao qtd_enderecada da linha e fecha
-    o recebimento (estado=ENDERECADO) quando toda linha RESOLVIDA (produto
-    identificado) bateu a quantidade do pedido -- linha que ficou pendencia
-    (produto nao encontrado no catalogo) nunca entra nessa conta: ela so
-    aparece na tela como aviso, nunca trava o fechamento do recebimento.
+    recebimento ja foi endereçado). Soma ao qtd_enderecada da linha; não
+    fecha o recebimento (desde 02/11 só o botão Encerrar recebimento fecha).
 
     Idempotente pelo `uuid` do movimento de ENTRADA que o aparelho já
     mandou: resposta perdida + nova tentativa não conta duas vezes (a
@@ -2937,7 +6746,7 @@ def api_wms_recebimento_enderecar_item(recebimento_id, item_id):
     try:
         r = wms_pedidos.contabilizar_enderecamento(
             conn, recebimento_id, item_id, body.get("qtd") or 0, body.get("uuid") or "")
-    except (wms.ErroWMS, ValueError) as e:
+    except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
         return _wms_json_erro(e)
     finally:
         conn.close()
@@ -2945,18 +6754,28 @@ def api_wms_recebimento_enderecar_item(recebimento_id, item_id):
                     "duplicado": r["duplicado"]})
 
 
+@app.route("/api/wms/recebimentos/<int:recebimento_id>/encerramento")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_recebimento_encerramento(recebimento_id):
+    """Tabela da tela de encerramento: anunciado x recebido por linha."""
+    conn = wms_pedidos.conectar()
+    try:
+        return jsonify(wms_pedidos.resumo_encerramento(conn, recebimento_id))
+    except wms.ErroWMS as e:
+        return _wms_json_erro(e, 404)
+    finally:
+        conn.close()
+
+
+@app.route("/api/wms/recebimentos/<int:recebimento_id>/encerrar", methods=["POST"])
 @app.route("/api/wms/recebimentos/<int:recebimento_id>/encerrar-divergencia", methods=["POST"])
 @requer_auth(niveis=_NIVEIS_WMS)
 @exige_mesma_origem
 def api_wms_recebimento_encerrar_divergencia(recebimento_id):
     """
-    O operador terminou a descarga e faltou mercadoria: encerra o
-    recebimento assumindo a falta e manda o relatório pro cliente.
-
-    Sem isto, recebimento que chegou parcial nunca alcança o esperado,
-    nunca fecha sozinho e fica pra sempre na lista do galpão. O
-    fechamento automático do caso normal continua onde estava
-    (contabilizar_enderecamento) -- este botão é só pro caso em que falta.
+    Botão "Encerrar recebimento" (desde 02/11 o único jeito de fechar: o
+    recebimento não fecha mais sozinho). Sem falta vira ENDERECADO; com
+    falta encerra assumindo a falta e manda o relatório pro cliente.
 
     NÃO mexe em estoque: o que chegou já entrou pelas ENTRADAs do
     endereçamento e o que faltou nunca existiu.
@@ -2982,24 +6801,26 @@ def api_wms_recebimento_encerrar_divergencia(recebimento_id):
     try:
         ja_encerrado = False
         try:
-            r = wms_pedidos.encerrar_com_divergencia(
+            r = wms_pedidos.encerrar_recebimento(
                 conn, recebimento_id, body.get("observacao") or "", operador=op)
         except (wms.ErroWMS, ValueError) as e:
             rec = conn.execute("SELECT * FROM wms_recebimentos WHERE id = ?", (recebimento_id,)).fetchone()
-            if not (rec and rec["estado"] == "DIVERGENCIA"):
+            if not (rec and rec["estado"] in ("DIVERGENCIA", "ENDERECADO")):
                 return _wms_json_erro(e)
             ja_encerrado = True
             r = {"recebimento": dict(rec),
                  "faltas": wms_pedidos.faltas_congeladas(conn, recebimento_id)}
-        try:
-            envio = wms_faltas_recebimento.notificar_faltas(conn, recebimento_id, _carregar_config())
-        except Exception as e:  # noqa: BLE001 -- e-mail nunca derruba o encerramento
-            logging.getLogger(__name__).exception("Falha no relatório de faltas do recebimento %s", recebimento_id)
-            envio = {"enviado": False, "motivo": "erro_inesperado", "detalhe": str(e)}
+        envio = {"enviado": False, "motivo": "sem_falta"}
+        if r["recebimento"]["estado"] == "DIVERGENCIA":
+            try:
+                envio = wms_faltas_recebimento.notificar_faltas(conn, recebimento_id, _carregar_config())
+            except Exception as e:  # noqa: BLE001 -- e-mail nunca derruba o encerramento
+                logging.getLogger(__name__).exception("Falha no relatório de faltas do recebimento %s", recebimento_id)
+                envio = {"enviado": False, "motivo": "erro_inesperado", "detalhe": str(e)}
         try:
             sys.path.insert(0, str(_RAIZ / "portal_cliente")) if str(_RAIZ / "portal_cliente") not in sys.path else None
             import entradas as portal_entradas
-            portal_entradas.sincronizar_status(conn)
+            portal_entradas.sincronizar_status(conn)   # nos dois desfechos (ENDERECADO e DIVERGENCIA)
         except Exception:  # noqa: BLE001 -- o portal nunca derruba o encerramento
             logging.getLogger(__name__).exception("sincronizar_status do portal falhou no recebimento %s", recebimento_id)
     finally:
@@ -3040,6 +6861,401 @@ def wms_etiqueta_produto_pdf():
         conn.close()
     return Response(pdf, mimetype="application/pdf",
                     headers={"Content-Disposition": "inline; filename=etiqueta-produto.pdf"})
+
+
+# Fila de impressão das etiquetas de caixa (computador da equipe): o celular
+# do galpão pede as etiquetas (wms_caixas.criar_caixas enfileira) e quem está
+# no computador com a térmica abre o PDF e marca como impresso.
+# ── Galpão: separação em onda, conferência cega e volumes (17/11) ─────────────
+# Regras em wms_separacao.py (sem Flask). No app do galpão (/wms) o operador é o do
+# PIN; as telas do escritório ficam em /ondas, FORA de /wms, pra o login do galpão
+# não enxergar (a regex da tela "wms" em acesso_telas pega tudo sob /api/wms/).
+
+def _sep_chamar(funcao):
+    """Abre a conexão, chama funcao(conn) e devolve JSON; erro de regra vira 400."""
+    import sqlite3
+    try:
+        conn = wms_separacao.conectar()
+    except sqlite3.Error:
+        return _wms_json_erro("Sistema ocupado agora. Tente de novo em alguns segundos.", 503)
+    try:
+        return jsonify(funcao(conn))
+    except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
+        return _wms_json_erro(e)
+    except sqlite3.Error as e:
+        # banco compartilhado ocupado ("database is locked") ou dois bipes iguais ao mesmo tempo:
+        # o operador ve um aviso e repete, em vez de um "Erro 500"
+        app.logger.warning("separacao: banco recusou a operacao: %s", e)
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
+        return _wms_json_erro("Sistema ocupado agora. Tente de novo em alguns segundos.", 503)
+    finally:
+        conn.close()
+
+
+def _sep_corpo() -> dict:
+    corpo = request.get_json(silent=True)
+    return corpo if isinstance(corpo, dict) else {}
+
+
+@app.route("/api/wms/separacao/painel")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_separacao_painel():
+    """O que o app do galpão mostra nas abas Separar, Conferir e Volumes."""
+    com_caixas = _wms_ids_caixas()
+
+    def _f(conn):
+        soltos = []
+        for emb in sorted(com_caixas):
+            soltos += wms_separacao.pedidos_para_onda(conn, emb)
+        return {"ondas": wms_separacao.ondas_vivas(conn, com_caixas), "pedidos_soltos": soltos,
+                "conferir": wms_separacao.pedidos_para_conferir(conn, com_caixas),
+                "volumes": wms_separacao.pedidos_para_volumes(conn, com_caixas)}
+    return _sep_chamar(_f)
+
+
+@app.route("/api/wms/separacao/ondas/pedido/<int:pedido_id>", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_onda_de_um_pedido(pedido_id):
+    op = _wms_exige_operador()
+    return _sep_chamar(lambda conn: {"onda_id": wms_separacao.onda_de_um_pedido(conn, pedido_id, op)})
+
+
+@app.route("/api/wms/separacao/ondas/<int:onda_id>")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_separacao_onda(onda_id):
+    return _sep_chamar(lambda conn: wms_separacao.detalhe_onda(conn, onda_id))
+
+
+@app.route("/api/wms/separacao/ondas/<int:onda_id>/iniciar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_onda_iniciar(onda_id):
+    op = _wms_exige_operador()
+
+    def _f(conn):
+        wms_separacao.iniciar_onda(conn, onda_id, op)
+        return wms_separacao.detalhe_onda(conn, onda_id)
+    return _sep_chamar(_f)
+
+
+@app.route("/api/wms/separacao/ondas/<int:onda_id>/separar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_separar(onda_id):
+    op = _wms_exige_operador()
+    corpo = _sep_corpo()
+
+    def _f(conn):
+        _wms_exige_uuid_do_aparelho(corpo.get("uuid"))
+        return wms_separacao.separar_caixa(conn, onda_id, corpo.get("serial", ""), qtd_un=corpo.get("qtd_un"),
+                                           uuid=corpo.get("uuid") or "", operador=op)
+    return _sep_chamar(_f)
+
+
+@app.route("/api/wms/separacao/ondas/<int:onda_id>/distribuir", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_distribuir(onda_id):
+    op = _wms_exige_operador()
+    corpo = _sep_corpo()
+
+    def _f(conn):
+        _wms_exige_uuid_do_aparelho(corpo.get("uuid"))
+        return wms_separacao.distribuir_caixa(conn, onda_id, corpo.get("codigo", ""), qtd_un=corpo.get("qtd_un"),
+                                              uuid=corpo.get("uuid") or "", operador=op)
+    return _sep_chamar(_f)
+
+
+@app.route("/api/wms/separacao/ondas/<int:onda_id>/fechar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_fechar(onda_id):
+    op = _wms_exige_operador()
+    mesmo_faltando = bool(_sep_corpo().get("mesmo_faltando"))
+    return _sep_chamar(lambda conn: wms_separacao.fechar_separacao(conn, onda_id, op, mesmo_faltando=mesmo_faltando))
+
+
+@app.route("/api/wms/separacao/itens/<int:item_id>/devolver", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_devolver(item_id):
+    op = _wms_exige_operador()
+    motivo = str(_sep_corpo().get("motivo") or "")
+    return _sep_chamar(lambda conn: wms_separacao.devolver_item(conn, item_id, operador=op, motivo=motivo))
+
+
+@app.route("/api/wms/separacao/conferir/<int:pedido_id>/iniciar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_conferir_iniciar(pedido_id):
+    op = _wms_exige_operador()
+    return _sep_chamar(lambda conn: wms_separacao.iniciar_conferencia(conn, pedido_id, op))
+
+
+@app.route("/api/wms/separacao/conferencias/<int:conferencia_id>/bipe", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_conferir_bipe(conferencia_id):
+    op = _wms_exige_operador()
+    corpo = _sep_corpo()
+
+    def _f(conn):
+        _wms_exige_uuid_do_aparelho(corpo.get("uuid"))
+        return wms_separacao.conferir_bipe(conn, conferencia_id, corpo.get("codigo", ""),
+                                           qtd_un=corpo.get("qtd_un"), uuid=corpo.get("uuid") or "", operador=op)
+    return _sep_chamar(_f)
+
+
+@app.route("/api/wms/separacao/conferencias/<int:conferencia_id>/fechar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_conferir_fechar(conferencia_id):
+    op = _wms_exige_operador()
+    return _sep_chamar(lambda conn: wms_separacao.fechar_conferencia(conn, conferencia_id, op))
+
+
+@app.route("/api/wms/separacao/conferencias/<int:conferencia_id>/abandonar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_conferir_abandonar(conferencia_id):
+    op = _wms_exige_operador()
+    return _sep_chamar(lambda conn: wms_separacao.abandonar_conferencia(conn, conferencia_id, op))
+
+
+@app.route("/api/wms/separacao/pedidos/<int:pedido_id>/volumes", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_volumes(pedido_id):
+    op = _wms_exige_operador()
+    total = _sep_corpo().get("total")
+    return _sep_chamar(lambda conn: wms_separacao.fechar_volumes(conn, pedido_id, total, op))
+
+
+@app.route("/api/wms/separacao/pedidos/<int:pedido_id>/volumes/<int:numero>/reimprimir", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_separacao_volume_reimprimir(pedido_id, numero):
+    op = _wms_exige_operador()
+    return _sep_chamar(lambda conn: wms_separacao.reimprimir_volume(conn, pedido_id, numero, op.get("nome", "")))
+
+
+# Escritório: montar onda, decidir falta e acompanhar (níveis total e operador).
+
+def _ondas_embarcadores() -> list:
+    """Embarcadores que operam por caixa (wms.pilotos): só eles têm onda."""
+    return [{"id": p["id"], "nome": p["nome"]} for p in wms_pilotos.pilotos(_carregar_config() or {}) if p["caixas"]]
+
+
+@app.route("/ondas")
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+def ondas():
+    pilotos = [{"id": p["id"], "nome": p["nome"]} for p in wms_pilotos.pilotos(_carregar_config() or {})]
+    return render_template("ondas.html", embarcadores=_ondas_embarcadores(), pilotos=pilotos)
+
+
+@app.route("/api/ondas/pedidos")
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+def api_ondas_pedidos():
+    embarcador_id = request.args.get("embarcador_id", type=int)
+    data = (request.args.get("data_entrega") or "").strip() or None
+    if not embarcador_id or embarcador_id not in {e["id"] for e in _ondas_embarcadores()}:
+        return _wms_json_erro("Escolha um embarcador que opera por caixa.")
+
+    def _f(conn):
+        return {"datas": wms_separacao.datas_para_onda(conn, embarcador_id),
+                "pedidos": wms_separacao.pedidos_para_onda(conn, embarcador_id, data),
+                "ondas": wms_separacao.ondas_vivas(conn, {embarcador_id})}
+    return _sep_chamar(_f)
+
+
+@app.route("/api/ondas/pedidos/<int:pedido_id>/lotes")
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+def api_ondas_pedido_lotes(pedido_id):
+    """Lote indicado pelo cliente e os lotes disponíveis (sem indicação a separação segue FEFO)."""
+    return _sep_chamar(lambda conn: wms_separacao.opcoes_de_lote(conn, pedido_id))
+
+
+@app.route("/api/ondas/pedidos/<int:pedido_id>/lotes", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_ondas_pedido_lotes_indicar(pedido_id):
+    corpo = _sep_corpo()
+    por = session.get("usuario") or ""
+    return _sep_chamar(lambda conn: wms_separacao.indicar_lote(
+        conn, pedido_id, int(corpo.get("produto_id") or 0), corpo.get("lote") or "", por))
+
+
+@app.route("/api/ondas/lotes/planilha", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_ondas_lotes_planilha():
+    """Planilha de lotes do cliente (por nota fiscal e produto): o escritório envia o arquivo que
+    o cliente mandou. Sem lote indicado, vale o que vence primeiro."""
+    # qualquer piloto, mesmo o que ainda nao opera por caixa: a indicacao fica guardada e
+    # passa a valer quando ele entrar na separacao
+    embarcador_id = request.form.get("embarcador_id", type=int)
+    if embarcador_id not in {p["id"] for p in wms_pilotos.pilotos(_carregar_config() or {})}:
+        return _wms_json_erro("Escolha o embarcador da planilha.")
+    arquivo = request.files.get("arquivo")
+    if not arquivo or not arquivo.filename:
+        return _wms_json_erro("Escolha o arquivo da planilha de lotes.")
+    conteudo = arquivo.read(wms_lotes_planilha.MAX_BYTES + 1)
+    nome = Path(arquivo.filename).name[:120]
+    por = session.get("usuario") or ""
+
+    def _f(conn):
+        lido = wms_lotes_planilha.ler_lotes(conteudo, nome)
+        return wms_separacao.importar_lotes_cliente(conn, embarcador_id, lido, nome, por)
+    return _sep_chamar(_f)
+
+
+@app.route("/api/ondas", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_ondas_montar():
+    corpo = _sep_corpo()
+    embarcador_id = corpo.get("embarcador_id")
+    if type(embarcador_id) is not int or embarcador_id not in {e["id"] for e in _ondas_embarcadores()}:
+        return _wms_json_erro("Escolha um embarcador que opera por caixa.")
+    por = session.get("usuario") or ""
+    return _sep_chamar(lambda conn: {"onda_id": wms_separacao.montar_onda(
+        conn, embarcador_id, corpo.get("pedido_ids") or [], por)})
+
+
+@app.route("/api/ondas/<int:onda_id>/cancelar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_ondas_cancelar(onda_id):
+    por = session.get("usuario") or ""
+
+    def _f(conn):
+        wms_separacao.cancelar_onda(conn, onda_id, por)
+        return {"ok": True}
+    return _sep_chamar(_f)
+
+
+@app.route("/api/ondas/andamento")
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+def api_ondas_andamento():
+    embarcador_id = request.args.get("embarcador_id", type=int)
+    return _sep_chamar(lambda conn: {"pedidos": wms_separacao.andamento(conn, embarcador_id)})
+
+
+@app.route("/api/ondas/conferencias/<int:pedido_id>/liberar", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_ondas_conferencia_liberar(pedido_id):
+    """Conferência esquecida aberta (o conferente foi embora): o escritório libera o pedido."""
+    por = session.get("usuario") or ""
+
+    def _f(conn):
+        conferencia_id = wms_separacao.conferencia_aberta_do_pedido(conn, pedido_id)
+        if not conferencia_id:
+            raise wms.ErroWMS("Este pedido não tem conferência aberta.")
+        return wms_separacao.abandonar_conferencia(conn, conferencia_id, None, por=por)
+    return _sep_chamar(_f)
+
+
+@app.route("/api/ondas/faltas")
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+def api_ondas_faltas():
+    return _sep_chamar(lambda conn: {"faltas": wms_separacao.faltas_pendentes(conn)})
+
+
+@app.route("/api/ondas/faltas/<int:pedido_id>/decidir", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS_ADMIN)
+@exige_mesma_origem
+def api_ondas_faltas_decidir(pedido_id):
+    corpo = _sep_corpo()
+    por = session.get("usuario") or ""
+    return _sep_chamar(lambda conn: wms_separacao.decidir_falta(
+        conn, pedido_id, corpo.get("decisao"), corpo.get("motivo"), por))
+
+
+_NIVEIS_FILA_ETIQUETAS = ("total", "operador", "expedicao")
+
+
+@app.route("/etiquetas/fila")
+@requer_auth(niveis=_NIVEIS_FILA_ETIQUETAS)
+def fila_etiquetas():
+    return render_template("fila_etiquetas.html")
+
+
+@app.route("/api/etiquetas/fila")
+@requer_auth(niveis=_NIVEIS_FILA_ETIQUETAS)
+def api_fila_etiquetas():
+    situacao = request.args.get("situacao") or "PENDENTE"
+    if situacao not in wms_fila_impressao.SITUACOES:
+        return jsonify({"erro": f"Situação inválida: {situacao}."}), 400
+    conn = wms_caixas.conectar()
+    try:
+        trabalhos = wms_fila_impressao.listar(conn, situacao)
+    finally:
+        conn.close()
+    return jsonify({"trabalhos": trabalhos})
+
+
+@app.route("/etiquetas/fila/<int:impressao_id>.pdf")
+@requer_auth(niveis=_NIVEIS_FILA_ETIQUETAS)
+def fila_etiquetas_pdf(impressao_id):
+    """PDF do trabalho da fila, com a mesma calibração da etiqueta de
+    mercadoria (config.yaml wms.etiqueta_*, sobrescrevível por ?orientacao,
+    ?margem, ?dx, ?dy)."""
+    cfg_wms = _carregar_config().get("wms", {}) or {}
+    orientacao = request.args.get("orientacao") or cfg_wms.get("etiqueta_orientacao") or "paisagem"
+    padrao = {"margem": cfg_wms.get("etiqueta_margem_mm", 0), "dx": cfg_wms.get("etiqueta_dx_mm", 0),
+              "dy": cfg_wms.get("etiqueta_dy_mm", 0)}
+
+    def _mm(nome):
+        bruto = request.args.get(nome)
+        if bruto in (None, ""):
+            bruto = padrao[nome]
+        try:
+            valor = float(str(bruto).replace(",", "."))
+        except ValueError:
+            abort(400, f"Parâmetro {nome} inválido.")
+        if not math.isfinite(valor):
+            abort(400, f"Parâmetro {nome} inválido.")
+        return valor
+    margem, dx, dy = _mm("margem"), _mm("dx"), _mm("dy")
+    conn = wms_caixas.conectar()
+    try:
+        trabalho = wms_fila_impressao.obter(conn, impressao_id)
+        if trabalho is None:
+            abort(404, "Pedido de impressão não encontrado.")
+        try:
+            if trabalho["tipo"] == "VOLUME":
+                # etiqueta 10x15 do pedido (17/11): outra impressora, sem a calibracao da 10x5
+                pdf = wms_etiqueta_volume.gerar_pdf_volumes(conn, trabalho["itens"])
+            else:
+                pdf = wms_etiqueta_produto.gerar_pdf_caixas(
+                    conn, trabalho["itens"], orientacao=orientacao, margem_mm=margem,
+                    desloc_x_mm=dx, desloc_y_mm=dy)
+        except wms.ErroWMS as e:
+            abort(400, str(e))
+    finally:
+        conn.close()
+    return Response(pdf, mimetype="application/pdf",
+                    headers={"Content-Disposition": f"inline; filename=etiquetas-{impressao_id}.pdf"})
+
+
+@app.route("/api/etiquetas/fila/<int:impressao_id>/impresso", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_FILA_ETIQUETAS)
+@exige_mesma_origem
+def api_fila_etiquetas_impresso(impressao_id):
+    conn = wms_caixas.conectar()
+    try:
+        trabalho = wms_fila_impressao.marcar_impresso(
+            conn, impressao_id, session.get("usuario") or g.nivel_acesso)
+    except wms.ErroWMS as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    return jsonify({"trabalho": trabalho})
 
 
 @app.route("/wms/estoque")
@@ -3099,6 +7315,11 @@ def wms_etiquetas_pdf():
 # pacote atendimento/ da raiz, o WhatsApp+e-mail).
 import atendimento_chamados as _atendimento_web
 _atendimento_web.registrar(app, requer_auth=requer_auth, exige_mesma_origem=exige_mesma_origem, carregar_config=_carregar_config)
+
+# ── Demandas (tarefas pro time, por equipe e pessoa), 25/10 ───────────────────
+import demandas
+demandas.registrar(app, requer_auth=requer_auth, exige_mesma_origem=exige_mesma_origem,
+                   carregar_config=_carregar_config)
 
 
 if __name__ == "__main__":

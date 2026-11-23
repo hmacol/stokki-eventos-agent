@@ -18,27 +18,37 @@ Estrutura do PDF (ajuste do Hugo, 11/08: sem páginas separadoras entre
 os documentos):
   1. CAPA com logo Freshlog, em PAISAGEM (pedido do Hugo, 13/08):
      tabela com 1 linha por pedido na ordem de visita (pedido + nº da
-     NF, embarcador, cliente, endereço de entrega, volumes, peso e
-     status NF/BOL com check/x). Volumes e peso bruto vêm da DANFE
-     local do pedido; sem DANFE, os volumes caem pro dimension_3 do
-     VUUPT dividido pelo fator_ponderado do embarcador (o dimension_3
-     é o volume PONDERADO, não a contagem real) e o peso fica "—".
-  2. Documentos emendados direto: NFs e depois boletos, pedido a pedido.
+     NF, embarcador, cliente, endereço de entrega, caixas, peso e
+     status NF/BOL com check/x). CAIXAS é o que o galpão CONFERIU na
+     Stokki (tabela volumes_conferidos, lida às 03h50 por
+     atualizar_volumes_conferidos.py -- Hugo, 16/11); pedido ainda não
+     lido cai na DANFE e, sem ela, no dimension_3 do VUUPT dividido
+     pelo fator_ponderado (o dimension_3 é a caixa NORMALIZADA, não a
+     contagem real), marcado com * (não conferido). O cabeçalho mostra
+     o total real de caixas. A lotação (soma do dimension_3 ÷
+     capacidade do tipo de veículo do motorista, regras/tipo_veiculo)
+     é interna: sai só no log, aviso acima de 100%. Peso bruto vem da
+     DANFE.
+  2. Documentos emendados direto: NFs e depois boletos, pedido a pedido;
+     por último os outros documentos que o cliente anexou ao pedido no
+     portal (11/11, portal_cliente/anexos_pedido.py).
   3. CANHOTEIRA (só se a rota tiver entrega de Padrão Puro, Quatro
      Estrelas ou Pedramoura): tabela na ordem da rota com campos de
      recebedor/data/assinatura, identificando motorista, rota e dia.
   4. CANHOTEIRA DE TRANSPORTADORA (pedido do Hugo, 10/09): 1 folha por
-     transportadora de redespacho presente na rota, listando só os
-     pedidos que o motorista entrega naquele galpão (pedido, NF,
-     embarcador, destinatário final, volumes) com bloco de recebimento
-     (nome, documento, data/hora, assinatura e carimbo). O pedido é
+     transportadora de redespacho presente na rota e, dentro dela, por
+     EMBARCADOR (12/11): todos os pedidos e NFs que o motorista entrega
+     naquele galpão (pedido, NF, destinatário final, volumes) e o bloco
+     de recebimento (nome, documento, data/hora, assinatura e carimbo)
+     na MESMA folha (a linha encolhe ou a lista vira 2 colunas). O pedido é
      "via transportadora" quando o ENDEREÇO do serviço na VUUPT bate
-     com um ponto de redespacho TERCEIROS da BD_TRANSPORTADORAS
+     com um ponto de redespacho TERCEIROS do cadastro de transportadoras
      (regras/transportadoras.py::resolver_por_endereco -- o mesmo
      critério da notificação de transportadoras).
 
 Pendências (sem NF, sem boleto, arquivo ilegível) aparecem como X
-vermelho na capa e listadas no _resumo.txt + notificação.
+vermelho na capa e listadas no _resumo.txt + notificação. "Sem boleto"
+só quando o boleto é esperado (regras_documentos.boleto_esperado).
 
 Idempotente: regerar a mesma data sobrescreve tudo daquela pasta.
 
@@ -94,15 +104,16 @@ from avisar_motoristas_rotas import (
     buscar_rotas_do_dia,
 )
 from localizar_arquivos import resolver_arquivo_local
+from regras_documentos import boleto_esperado as _boleto_esperado
 from notificar_execucao_agente import notificar_execucao
 from regras.preferencias_motoristas import CatalogoMotoristas
 from regras.transportadoras import CatalogoTransportadoras, PontoRedespacho
+from regras.tipo_veiculo import tipo_por_codigo
+import atualizar_volumes_conferidos as volumes_conferidos
 
 PASTA_ROMANEIOS = _RAIZ_LOCAL / "dados" / "romaneios"
 DB_PATH = _RAIZ_PROJETO / "dados" / "dados.db"
 LOGO_PATH = _RAIZ_PROJETO / "assets" / "logo_freshlog.png"
-# Mesma planilha do pipeline e da notificação de transportadoras.
-TRANSPORTADORAS_PATH = _RAIZ_PROJETO / "dados" / "BD_TRANSPORTADORAS.xlsx"
 
 # Embarcadores cujas entregas geram folha de CANHOTEIRA no fim do
 # romaneio (pedido do Hugo, 11/08). sender_id do VUUPT (tabela interno).
@@ -220,8 +231,8 @@ def carregar_documentos_por_pedido(codigos: set[str]) -> tuple[dict[str, list[di
             marcadores = ",".join("?" * len(lote))
             for row in con.execute(
                 f"SELECT * FROM documentos_processados "
-                f"WHERE status='ENVIADO' AND tipo IN ('Nota Fiscal','Boleto','Pedido de Venda') "
-                f"AND codigo_pedido IN ({marcadores})", lote):
+                f"WHERE status='ENVIADO' AND (tipo IN ('Nota Fiscal','Boleto','Pedido de Venda') "
+                f"OR origem='portal') AND codigo_pedido IN ({marcadores})", lote):
                 docs_por_pedido.setdefault(row["codigo_pedido"], []).append(dict(row))
             em_revisao += con.execute(
                 f"SELECT COUNT(*) FROM documentos_processados "
@@ -260,14 +271,14 @@ def carregar_embarcadores() -> tuple[dict[int, str], dict[int, float]]:
 
 
 def carregar_catalogo_transportadoras() -> CatalogoTransportadoras | None:
-    """Catálogo da BD_TRANSPORTADORAS pra identificar pedido "via
+    """Catálogo de transportadoras (tabela do dados.db) pra identificar pedido "via
     transportadora" pelo endereço (canhoteira de transportadora). None
-    quando a planilha não existe/não abre -- o romaneio sai sem essa
+    quando o cadastro não existe/não abre -- o romaneio sai sem essa
     folha, nunca deixa de sair por causa dela."""
     try:
-        return CatalogoTransportadoras.carregar(TRANSPORTADORAS_PATH)
+        return CatalogoTransportadoras.carregar_do_banco(DB_PATH)
     except Exception as e:
-        logger.warning(f"BD_TRANSPORTADORAS indisponível ({e}) -- romaneio sai sem canhoteira "
+        logger.warning(f"Cadastro de transportadoras indisponível ({e}) -- romaneio sai sem canhoteira "
                        f"de transportadora.")
         return None
 
@@ -352,6 +363,20 @@ def selecionar_boletos(docs: list[dict]) -> list[dict]:
                                 d.get("numero_parcela") or 0,
                                 d.get("processado_em") or ""))
     return boletos
+
+
+def selecionar_anexos_portal(docs: list[dict], ja_usados: set[str]) -> list[dict]:
+    """Documentos que o cliente anexou ao pedido no portal (origem
+    'portal', ver portal_cliente/anexos_pedido.py -- Hugo, 11/11) e que
+    não são NF nem boleto: saem depois dos boletos do pedido, na ordem
+    em que foram anexados. NF e boleto do portal já entram pelas réguas
+    de cima; ja_usados (hashes) evita imprimir duas vezes o 'Pedido de
+    Venda' que entrou no lugar da NF."""
+    anexos = [d for d in docs if d.get("origem") == "portal"
+              and d.get("tipo") not in ("Nota Fiscal", "Boleto")
+              and d["hash_conteudo"] not in ja_usados]
+    anexos.sort(key=lambda d: d.get("processado_em") or "")
+    return anexos
 
 
 def selecionar_pedidos_de_venda(docs: list[dict]) -> list[dict]:
@@ -510,6 +535,46 @@ def _volumes_fallback(servico: dict, fator: float) -> int | None:
     return max(1, round(vol / (fator or 1.0)))
 
 
+def _volumes_do_pedido(codigo: str, conferidos: dict) -> tuple[bool, int | None, bool]:
+    """(tem leitura, volumes, conferido) a partir da tabela
+    volumes_conferidos (rotina das 03h50). Servico com varios pedidos no
+    mesmo code soma; so vale se TODOS foram lidos. 'conferido' = todos
+    vieram da conferencia do galpao (senao e o numero da NF-e)."""
+    ids = volumes_conferidos.ids_do_codigo(codigo)
+    if not ids or any(i not in conferidos for i in ids):
+        return False, None, False
+    lidos = [conferidos[i] for i in ids]
+    if any(v is None for v, _f in lidos):
+        return True, None, False
+    return True, sum(v for v, _f in lidos), all(f == "conferencia" for _v, f in lidos)
+
+
+def _caixas_normalizadas(servico: dict) -> int:
+    """dimension_3 da Vuupt: a caixa normalizada que a roteirizacao usa
+    (mesma leitura de roteirizacao_dados.extrair_volume_caixas)."""
+    try:
+        return max(1, int(float(servico.get("dimension_3"))))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _tipo_veiculo_da_rota(rota: dict):
+    """TipoVeiculo do motorista da rota (cadastro de motoristas), ou None
+    sem motorista / sem cadastro -- a capa sai sem o percentual."""
+    agent_id = rota.get("agent_id")
+    if not agent_id:
+        return None
+    try:
+        cfg = _carregar_config().get("motoristas", {})
+        catalogo = CatalogoMotoristas.carregar(cfg.get("planilha", ""), cfg.get("json_fallback", ""))
+        for m in catalogo.motoristas:
+            if m.agent_id == agent_id:
+                return tipo_por_codigo(m.tipo_veiculo)
+    except Exception as e:
+        logger.warning(f"Falha ao achar o veiculo do motorista {agent_id}: {e}")
+    return None
+
+
 def _endereco_entrega(servico: dict) -> str:
     """Endereço do serviço VUUPT sem o rabo ', CEP, Brasil' -- na capa
     o que importa é rua/número/bairro/cidade, e a coluna é disputada."""
@@ -650,7 +715,7 @@ def _tabela_header_capa(draw: ImageDraw.ImageDraw, y: int) -> int:
     draw.text((_COL_EMB, meio), "EMBARCADOR", font=f, fill="white", anchor="lm")
     draw.text((_COL_CLI, meio), "CLIENTE", font=f, fill="white", anchor="lm")
     draw.text((_COL_END, meio), "ENDEREÇO DE ENTREGA", font=f, fill="white", anchor="lm")
-    draw.text((_COL_VOL_CX, meio), "VOL", font=f, fill="white", anchor="mm")
+    draw.text((_COL_VOL_CX, meio), "CAIXAS", font=f, fill="white", anchor="mm")
     draw.text((_COL_PESO_CX, meio), "PESO (KG)", font=f, fill="white", anchor="mm")
     draw.text((_COL_NF_CX, meio), "NF", font=f, fill="white", anchor="mm")
     draw.text((_COL_BOL_CX, meio), "BOL", font=f, fill="white", anchor="mm")
@@ -662,7 +727,7 @@ def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
                transportadoras: list[str] | None = None) -> list[Image.Image]:
     """Capa em PAISAGEM: identidade Freshlog + resumo da rota + tabela
     com 1 linha por pedido (ordem de visita) mostrando embarcador,
-    cliente, endereço de entrega, volumes, peso e status de NF/boleto."""
+    cliente, endereço de entrega, caixas, peso e status de NF/boleto."""
     data_br = data_alvo.strftime("%d/%m/%Y")
     dia_semana = DIAS_SEMANA_PT[data_alvo.weekday()]
     nome_rota = rota.get("name") or f"Rota {rota.get('id')}"
@@ -675,7 +740,12 @@ def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
         draw.text((x, y + 18), rotulo, font=_fonte(20), fill=CINZA_TXT, anchor=anchor)
         draw.text((x, y + 56), valor, font=_fonte(30, True), fill=NAVY, anchor=anchor)
     _info(MARGEM, "DATA", f"{dia_semana}, {data_br}")
-    _info(760, "MOTORISTA", _truncar(draw, nome_motorista, _fonte(30, True), 540))
+    _info(540, "MOTORISTA", _truncar(draw, nome_motorista, _fonte(30, True), 340))
+    # Total REAL de caixas (o que sobe no carro). A lotação do carro NÃO
+    # aparece aqui: é informação interna (Hugo, 16/11), vai só pro log.
+    total_caixas = _somar_volumes(itens)
+    _info(910, "CAIXAS", total_caixas.replace(" (parcial)", "") + " caixas"
+          + (" (parcial)" if "(parcial)" in total_caixas else ""))
     _info(A4_PAISAGEM[0] - MARGEM, "PEDIDOS", str(len(itens)), anchor="rs")
     avisos = []
     if tem_canhoteira:
@@ -723,16 +793,28 @@ def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
                   font=fonte_txt, fill=NAVY, anchor="lm")
         draw.text((_COL_END, meio), _truncar(draw, item["endereco"], fonte_end, _LARG_END),
                   font=fonte_end, fill=NAVY, anchor="lm")
-        draw.text((_COL_VOL_CX, meio), str(item["volumes"]) if item["volumes"] else "—",
-                  font=fonte_txt, fill=NAVY, anchor="mm")
+        texto_vol = "—"
+        if item["volumes"]:
+            texto_vol = str(item["volumes"]) + ("" if item.get("volumes_conferidos", True) else "*")
+        draw.text((_COL_VOL_CX, meio), texto_vol, font=fonte_txt, fill=NAVY, anchor="mm")
         draw.text((_COL_PESO_CX, meio), _fmt_peso(item["peso"]),
                   font=fonte_txt, fill=NAVY, anchor="mm")
         if item.get("nf_dispensada"):
             draw.text((_COL_NF_CX, meio), "—", font=fonte_txt, fill=CINZA_TXT, anchor="mm")
         else:
             _marca(draw, _COL_NF_CX, meio, item["tem_nf"])
-        _marca(draw, _COL_BOL_CX, meio, item["tem_boleto"])
+        if item.get("boleto_dispensado"):
+            draw.text((_COL_BOL_CX, meio), "—", font=fonte_txt, fill=CINZA_TXT, anchor="mm")
+        else:
+            _marca(draw, _COL_BOL_CX, meio, item["tem_boleto"])
         y += altura_linha
+
+    # Avisos da contagem de caixas, no pé da última página da capa.
+    notas = ["Alguns clientes são faturados por peso: para eles a contagem de caixas não é base de cobrança."]
+    if any(i["volumes"] and not i.get("volumes_conferidos", True) for i in itens):
+        notas.insert(0, "* quantidade ainda não conferida pelo galpão (número da nota fiscal ou estimativa).")
+    for n, nota in enumerate(reversed(notas)):
+        draw.text((MARGEM, A4_PAISAGEM[1] - 88 - 24 * n), nota, font=_fonte(18), fill=CINZA_TXT, anchor="lm")
 
     _rodape(img, draw)
     return paginas
@@ -805,11 +887,16 @@ def gerar_canhoteira(rota: dict, entregas: list[dict], nome_motorista: str,
     return paginas
 
 
-# Colunas da canhoteira de transportadora (retrato, página de 1240).
-_CT_COL_N, _CT_COL_PED, _CT_COL_EMB, _CT_COL_DEST = 118, 170, 470, 690
-_CT_COL_VOL_CX, _CT_COL_OK_CX = 1010, 1100
-_CT_LARG_PED, _CT_LARG_EMB, _CT_LARG_DEST = 285, 205, 280
-_CT_ALTURA_LINHA = 72
+# Canhoteira de transportadora (retrato, página de 1240). A linha encolhe
+# pra caber tudo numa folha; passou do que cabe em 1 coluna, vira 2 colunas
+# (sem destinatário). Cada coluna: (x de #, PEDIDO, NF, DESTINATÁRIO, centro
+# de VOL, centro de OK, largura de PEDIDO, de NF, de DESTINATÁRIO).
+_CT_COLS_1 = [(118, 170, 370, 640, 1010, 1100, 190, 260, 320)]
+_CT_COLS_2 = [(108, 150, 315, None, 520, 585, 160, 170, 0),
+              (638, 680, 845, None, 1050, 1115, 160, 170, 0)]
+_CT_ALTURA_LINHA = 72          # folga máxima (poucos pedidos)
+_CT_ALTURA_MIN_1COL = 30
+_CT_ALTURA_MIN_2COL = 28
 _CT_ALTURA_RECEBIMENTO = 300
 
 
@@ -823,118 +910,149 @@ def _somar_volumes(entregas: list[dict]) -> str:
     return total if len(conhecidos) == len(entregas) else f"{total} (parcial)"
 
 
+def _agrupar_por_embarcador(entregas: list[dict]) -> list[list[dict]]:
+    """Entregas de um galpão separadas por embarcador, na ordem em que
+    cada embarcador aparece na rota."""
+    grupos: dict = {}
+    for e in entregas:
+        grupos.setdefault(e.get("sender_id") or e.get("embarcador") or "", []).append(e)
+    return list(grupos.values())
+
+
 def gerar_canhoteira_transportadora(rota: dict, ponto: PontoRedespacho, entregas: list[dict],
                                     nome_motorista: str, data_alvo: date) -> list[Image.Image]:
-    """Folha(s) de canhoteira de UMA transportadora de redespacho: só os
-    pedidos da rota que o motorista entrega naquele galpão, na ordem da
-    rota, com pedido/NF, embarcador, destinatário final e volumes, e um
-    bloco de recebimento (nome, documento, data/hora, assinatura e
-    carimbo) no fim -- a transportadora assina o lote inteiro, e a
-    coluna OK serve pra ela conferir pedido a pedido (pedido do Hugo,
-    10/09: 1 canhoteira por transportadora)."""
+    """Canhoteira de UMA transportadora de redespacho: 1 folha POR
+    EMBARCADOR, e na mesma folha TODOS os pedidos e NFs daquele embarcador
+    naquele galpão mais o bloco de recebimento (nome, documento, data/hora,
+    assinatura e carimbo) -- a foto de uma folha comprova a entrega de
+    tudo que está nela (pedido do Hugo, 12/11; antes era 1 lista por
+    transportadora que quebrava em várias folhas e só a última tinha
+    assinatura). A linha encolhe conforme a quantidade e, se preciso, a
+    lista vira 2 colunas; só acima disso (dezenas de pedidos do mesmo
+    embarcador) abre outra folha, também com assinatura."""
+    paginas: list[Image.Image] = []
+    for do_embarcador in _agrupar_por_embarcador(entregas):
+        paginas.extend(_folhas_canhoteira_transportadora(rota, ponto, do_embarcador,
+                                                         nome_motorista, data_alvo))
+    return paginas
+
+
+def _folhas_canhoteira_transportadora(rota: dict, ponto: PontoRedespacho, entregas: list[dict],
+                                      nome_motorista: str, data_alvo: date) -> list[Image.Image]:
     data_br = data_alvo.strftime("%d/%m/%Y")
     nome_rota = rota.get("name") or f"Rota {rota.get('id')}"
     nome_transp = (ponto.nome or "").strip().upper() or "TRANSPORTADORA"
     endereco_galpao = str(ponto.endereco)
-    total_volumes = _somar_volumes(entregas)
+    embarcador = (entregas[0].get("embarcador") or "").strip() or "—"
+    limite_y = A4_RETRATO[1] - 130
+    x_dir = A4_RETRATO[0] - MARGEM
+    largura = A4_RETRATO[0] - 2 * MARGEM
 
-    def _nova_pagina(continuacao: bool = False):
-        img, draw = _pagina_branca()
-        titulo = "CANHOTEIRA · TRANSPORTADORA" + (" (cont.)" if continuacao else "")
-        y = _cabecalho(img, draw, titulo, nome_rota)
-        largura = A4_RETRATO[0] - 2 * MARGEM
+    def _topo(draw, y: int, parte: list[dict], continuacao: bool) -> int:
         draw.text((MARGEM, y + 24), _truncar(draw, nome_transp, _fonte(36, True), largura),
                   font=_fonte(36, True), fill=NAVY, anchor="ls")
         draw.text((MARGEM, y + 60), _truncar(draw, endereco_galpao, _fonte(21), largura),
                   font=_fonte(21), fill=CINZA_TXT, anchor="ls")
+        draw.text((MARGEM, y + 106),
+                  _truncar(draw, f"Embarcador: {embarcador}" + (" (cont.)" if continuacao else ""),
+                           _fonte(30, True), largura),
+                  font=_fonte(30, True), fill=NAVY, anchor="ls")
         # a rota já está no subtítulo do cabeçalho -- aqui só motorista e dia
-        draw.text((MARGEM, y + 104),
+        draw.text((MARGEM, y + 144),
                   _truncar(draw, f"Motorista: {nome_motorista}   ·   {data_br}",
                            _fonte(24, True), largura),
                   font=_fonte(24, True), fill=NAVY, anchor="ls")
-        draw.text((MARGEM, y + 140),
+        draw.text((MARGEM, y + 178),
                   f"Conferir e assinar o recebimento dos pedidos abaixo — "
-                  f"{len(entregas)} pedido(s), {total_volumes} volume(s)",
+                  f"{len(parte)} pedido(s), {_somar_volumes(parte)} volume(s)",
                   font=_fonte(21), fill=CINZA_TXT, anchor="ls")
-        y += 170
-        draw.rectangle([(MARGEM, y), (A4_RETRATO[0] - MARGEM, y + 48)], fill=NAVY)
+        return y + 206
+
+    def _recebimento(draw, y: int, parte: list[dict]) -> None:
+        y += 40
+        fonte_rotulo = _fonte(20)
+        draw.text((MARGEM, y), "RECEBIMENTO PELA TRANSPORTADORA", font=_fonte(22, True),
+                  fill=NAVY, anchor="ls")
+        draw.text((x_dir, y), f"Total: {len(parte)} pedido(s) · {_somar_volumes(parte)} volume(s)",
+                  font=_fonte(20, True), fill=NAVY, anchor="rs")
+        draw.line([(MARGEM, y + 12), (x_dir, y + 12)], fill=TEAL, width=3)
+        y += 70
+        draw.text((MARGEM, y), "Recebido por (nome legível):", font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
+        draw.line([(MARGEM + 270, y + 4), (MARGEM + 620, y + 4)], fill=CINZA_LINHA, width=2)
+        draw.text((MARGEM + 650, y), "Documento:", font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
+        draw.line([(MARGEM + 760, y + 4), (x_dir, y + 4)], fill=CINZA_LINHA, width=2)
+        y += 70
+        draw.text((MARGEM, y), "Data:  ____ / ____ / ________      Hora:  ____ : ____",
+                  font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
+        draw.text((MARGEM + 650, y), "Assinatura e carimbo:", font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
+        draw.rectangle([(MARGEM + 650, y + 20), (x_dir, y + 130)], outline=CINZA_LINHA, width=2)
+        y += 70
+        draw.text((MARGEM, y), "Ocorrências (avaria, falta, recusa):", font=fonte_rotulo,
+                  fill=CINZA_TXT, anchor="ls")
+        draw.line([(MARGEM, y + 44), (MARGEM + 600, y + 44)], fill=CINZA_LINHA, width=2)
+        draw.line([(MARGEM, y + 84), (MARGEM + 600, y + 84)], fill=CINZA_LINHA, width=2)
+
+    def _folha(parte: list[dict], continuacao: bool, max_1col: int, altura_util: int) -> Image.Image:
+        img, draw = _pagina_branca()
+        y = _cabecalho(img, draw, "CANHOTEIRA · TRANSPORTADORA", nome_rota)
+        y = _topo(draw, y, parte, continuacao)
+        colunas = _CT_COLS_1 if len(parte) <= max_1col else _CT_COLS_2
+        linhas = -(-len(parte) // len(colunas))
+        altura = min(_CT_ALTURA_LINHA, altura_util // linhas)
+        fonte_ped = _fonte(min(23, altura - 6), True)
+        fonte_txt = _fonte(min(21, altura - 8))
+
+        draw.rectangle([(MARGEM, y), (x_dir, y + 48)], fill=NAVY)
         f = _fonte(22, True)
-        meio = y + 24
-        draw.text((_CT_COL_N, meio), "#", font=f, fill="white", anchor="lm")
-        draw.text((_CT_COL_PED, meio), "PEDIDO / NF", font=f, fill="white", anchor="lm")
-        draw.text((_CT_COL_EMB, meio), "EMBARCADOR", font=f, fill="white", anchor="lm")
-        draw.text((_CT_COL_DEST, meio), "DESTINATÁRIO", font=f, fill="white", anchor="lm")
-        draw.text((_CT_COL_VOL_CX, meio), "VOL", font=f, fill="white", anchor="mm")
-        draw.text((_CT_COL_OK_CX, meio), "OK", font=f, fill="white", anchor="mm")
-        return img, draw, y + 48
+        for x_n, x_ped, x_nf, x_dest, x_vol, x_ok, *_l in colunas:
+            draw.text((x_n, y + 24), "#", font=f, fill="white", anchor="lm")
+            draw.text((x_ped, y + 24), "PEDIDO", font=f, fill="white", anchor="lm")
+            draw.text((x_nf, y + 24), "NF", font=f, fill="white", anchor="lm")
+            if x_dest:
+                draw.text((x_dest, y + 24), "DESTINATÁRIO", font=f, fill="white", anchor="lm")
+            draw.text((x_vol, y + 24), "VOL", font=f, fill="white", anchor="mm")
+            draw.text((x_ok, y + 24), "OK", font=f, fill="white", anchor="mm")
+        y += 48
 
-    paginas = []
-    img, draw, y = _nova_pagina()
-    paginas.append(img)
-    limite_y = A4_RETRATO[1] - 130
-    fonte_ped, fonte_nf, fonte_txt = _fonte(23, True), _fonte(19), _fonte(21)
-
-    for n, entrega in enumerate(entregas):
-        if y + _CT_ALTURA_LINHA > limite_y:
-            _rodape(img, draw)
-            img, draw, y = _nova_pagina(continuacao=True)
-            paginas.append(img)
-        if n % 2 == 0:
-            draw.rectangle([(MARGEM, y), (A4_RETRATO[0] - MARGEM, y + _CT_ALTURA_LINHA)],
-                           fill=CINZA_ZEBRA)
-        meio = y + _CT_ALTURA_LINHA // 2
-        draw.text((_CT_COL_N, meio), str(entrega["posicao"]), font=fonte_txt,
-                  fill=CINZA_TXT, anchor="lm")
-        draw.text((_CT_COL_PED, y + 30), _truncar(draw, entrega["codigo"], fonte_ped, _CT_LARG_PED),
-                  font=fonte_ped, fill=NAVY, anchor="ls")
-        rotulo_nf = "PV" if entrega.get("veio_de_pedido_venda") else "NF"
-        draw.text((_CT_COL_PED, y + 56),
-                  _truncar(draw, f"{rotulo_nf} {entrega['nfs']}" if entrega["nfs"] else "sem NF",
-                           fonte_nf, _CT_LARG_PED),
-                  font=fonte_nf, fill=CINZA_TXT, anchor="ls")
-        draw.text((_CT_COL_EMB, meio), _truncar(draw, entrega["embarcador"], fonte_txt, _CT_LARG_EMB),
-                  font=fonte_txt, fill=NAVY, anchor="lm")
-        draw.text((_CT_COL_DEST, meio), _truncar(draw, entrega["cliente"], fonte_txt, _CT_LARG_DEST),
-                  font=fonte_txt, fill=NAVY, anchor="lm")
-        draw.text((_CT_COL_VOL_CX, meio), str(entrega["volumes"]) if entrega["volumes"] else "—",
-                  font=fonte_txt, fill=NAVY, anchor="mm")
-        draw.rectangle([(_CT_COL_OK_CX - 15, meio - 15), (_CT_COL_OK_CX + 15, meio + 15)],
-                       outline=CINZA_TXT, width=2)
-        draw.line([(MARGEM, y + _CT_ALTURA_LINHA), (A4_RETRATO[0] - MARGEM, y + _CT_ALTURA_LINHA)],
-                  fill=CINZA_LINHA, width=1)
-        y += _CT_ALTURA_LINHA
-
-    # Bloco de recebimento -- sempre na última folha, inteiro.
-    if y + _CT_ALTURA_RECEBIMENTO > limite_y:
+        for linha in range(linhas):
+            topo = y + linha * altura
+            if linha % 2 == 0:
+                draw.rectangle([(MARGEM, topo), (x_dir, topo + altura)], fill=CINZA_ZEBRA)
+            draw.line([(MARGEM, topo + altura), (x_dir, topo + altura)], fill=CINZA_LINHA, width=1)
+        if len(colunas) > 1:
+            draw.line([(A4_RETRATO[0] // 2, y), (A4_RETRATO[0] // 2, y + linhas * altura)],
+                      fill=CINZA_LINHA, width=2)
+        caixa = min(15, altura // 2 - 3)
+        for n, entrega in enumerate(parte):          # preenche coluna a coluna
+            x_n, x_ped, x_nf, x_dest, x_vol, x_ok, l_ped, l_nf, l_dest = colunas[n // linhas]
+            meio = y + (n % linhas) * altura + altura // 2
+            draw.text((x_n, meio), str(entrega["posicao"]), font=fonte_txt, fill=CINZA_TXT, anchor="lm")
+            draw.text((x_ped, meio), _truncar(draw, entrega["codigo"], fonte_ped, l_ped),
+                      font=fonte_ped, fill=NAVY, anchor="lm")
+            rotulo_nf = "PV " if entrega.get("veio_de_pedido_venda") else ""
+            draw.text((x_nf, meio),
+                      _truncar(draw, f"{rotulo_nf}{entrega['nfs']}" if entrega["nfs"] else "sem NF",
+                               fonte_ped, l_nf),
+                      font=fonte_ped, fill=NAVY if entrega["nfs"] else CINZA_TXT, anchor="lm")
+            if x_dest:
+                draw.text((x_dest, meio), _truncar(draw, entrega["cliente"], fonte_txt, l_dest),
+                          font=fonte_txt, fill=NAVY, anchor="lm")
+            draw.text((x_vol, meio), str(entrega["volumes"]) if entrega["volumes"] else "—",
+                      font=fonte_txt, fill=NAVY, anchor="mm")
+            draw.rectangle([(x_ok - caixa, meio - caixa), (x_ok + caixa, meio + caixa)],
+                           outline=CINZA_TXT, width=2)
+        _recebimento(draw, y + linhas * altura, parte)
         _rodape(img, draw)
-        img, draw, y = _nova_pagina(continuacao=True)
-        paginas.append(img)
-    y += 40
-    fonte_rotulo = _fonte(20)
-    x_dir = A4_RETRATO[0] - MARGEM
-    draw.text((MARGEM, y), "RECEBIMENTO PELA TRANSPORTADORA", font=_fonte(22, True),
-              fill=NAVY, anchor="ls")
-    draw.text((x_dir, y), f"Total: {len(entregas)} pedido(s) · {total_volumes} volume(s)",
-              font=_fonte(20, True), fill=NAVY, anchor="rs")
-    draw.line([(MARGEM, y + 12), (x_dir, y + 12)], fill=TEAL, width=3)
-    y += 70
-    draw.text((MARGEM, y), "Recebido por (nome legível):", font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
-    draw.line([(MARGEM + 270, y + 4), (MARGEM + 620, y + 4)], fill=CINZA_LINHA, width=2)
-    draw.text((MARGEM + 650, y), "Documento:", font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
-    draw.line([(MARGEM + 760, y + 4), (x_dir, y + 4)], fill=CINZA_LINHA, width=2)
-    y += 70
-    draw.text((MARGEM, y), "Data:  ____ / ____ / ________      Hora:  ____ : ____",
-              font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
-    draw.text((MARGEM + 650, y), "Assinatura e carimbo:", font=fonte_rotulo, fill=CINZA_TXT, anchor="ls")
-    draw.rectangle([(MARGEM + 650, y + 20), (x_dir, y + 130)], outline=CINZA_LINHA, width=2)
-    y += 70
-    draw.text((MARGEM, y), "Ocorrências (avaria, falta, recusa):", font=fonte_rotulo,
-              fill=CINZA_TXT, anchor="ls")
-    draw.line([(MARGEM, y + 44), (MARGEM + 600, y + 44)], fill=CINZA_LINHA, width=2)
-    draw.line([(MARGEM, y + 84), (MARGEM + 600, y + 84)], fill=CINZA_LINHA, width=2)
+        return img
 
-    _rodape(img, draw)
-    return paginas
+    # Altura útil pra lista = da 1ª linha até onde o bloco de recebimento ainda cabe.
+    img, draw = _pagina_branca()
+    y_lista = _topo(draw, _cabecalho(img, draw, "", nome_rota), entregas, False) + 48
+    altura_util = limite_y - _CT_ALTURA_RECEBIMENTO - y_lista
+    max_1col = altura_util // _CT_ALTURA_MIN_1COL
+    por_folha = 2 * (altura_util // _CT_ALTURA_MIN_2COL)
+    return [_folha(entregas[i:i + por_folha], i > 0, max_1col, altura_util)
+            for i in range(0, len(entregas), por_folha)]
 
 
 def _paginas_pillow(imagens: list[Image.Image], buffers_vivos: list) -> list:
@@ -978,11 +1096,39 @@ def _abrir_documentos(rows: list[dict]) -> tuple[list[tuple[dict, PdfReader]], l
     return abertos, problemas
 
 
+def avaliar_documentos_pedido(codigo: str, sender_id: int | None, docs_por_pedido: dict) -> dict:
+    """NF/boletos utilizáveis do pedido e o que falta -- a mesma régua da
+    capa do romaneio, reaproveitada pelo vigia de documentos (05/10).
+    "sem boleto" só quando o boleto é esperado (regras_documentos)."""
+    docs = [d for sub in _codigos_base_lista(codigo) for d in docs_por_pedido.get(sub, [])]
+    nf_dispensada = sender_id in SENDERS_SEM_NF
+    if nf_dispensada:
+        nfs, problemas_nf = [], []
+    else:
+        nfs, problemas_nf = _abrir_documentos(selecionar_nfs(docs))
+        if not nfs and sender_id in SENDERS_PEDIDO_VENDA_SUBSTITUI_NF:
+            nfs, problemas_nf = _abrir_documentos(selecionar_pedidos_de_venda(docs))
+    boletos, problemas_bol = _abrir_documentos(selecionar_boletos(docs))
+    anexos, problemas_anexo = _abrir_documentos(selecionar_anexos_portal(
+        docs, {row["hash_conteudo"] for row, _r in nfs}))
+    esperado = _boleto_esperado(sender_id, [row.get("cobranca") for row, _r in nfs
+                                            if row.get("tipo") == "Nota Fiscal"])
+
+    faltas = []
+    if not nfs and not nf_dispensada:
+        faltas.append("sem nota fiscal")
+    if not boletos and esperado:
+        faltas.append("sem boleto")
+    faltas.extend(problemas_nf + problemas_bol + problemas_anexo)
+    return {"nfs": nfs, "boletos": boletos, "anexos": anexos, "nf_dispensada": nf_dispensada,
+            "boleto_esperado": esperado, "faltas": faltas}
+
+
 def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
                     embarcadores: dict[int, str], fatores: dict[int, float],
                     nome_motorista: str, data_alvo: date, caminho_saida: Path,
                     catalogo_transportadoras: CatalogoTransportadoras | None = None) -> dict:
-    """catalogo_transportadoras: BD_TRANSPORTADORAS já carregada (job das
+    """catalogo_transportadoras: cadastro já carregado (job das
     04h carrega uma vez pra todas as rotas). Omitido -> carrega aqui
     (botão "Imprimir rota", expedição, documentação automática)."""
     if catalogo_transportadoras is None:
@@ -991,55 +1137,41 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
     buffers_vivos: list = []        # BytesIO das páginas Pillow -- vivos até o write()
     readers_vivos: list = []        # PdfReaders dos arquivos -- idem
     pendencias: list[str] = []
-    total_nfs = total_boletos = 0
+    total_nfs = total_boletos = total_anexos = 0
 
     # Passada 1: resolve e valida os documentos de todos os pedidos --
     # a capa precisa do status de tudo antes de qualquer página.
     itens: list[dict] = []
     total = len(servicos)
+    conferidos = volumes_conferidos.carregar(
+        {i for s in servicos for i in volumes_conferidos.ids_do_codigo(s.get("code") or "")}, DB_PATH)
     for posicao, s in enumerate(servicos, start=1):
         codigo = (s.get("code") or "").lstrip("#")
         titulo_limpo = _limpar_titulo(codigo, s.get("title"))
         sender_id = s.get("sender_id")
         embarcador = embarcadores.get(sender_id) or SENDERS_CANHOTEIRA.get(sender_id) or ""
-        docs = [d for sub in _codigos_base_lista(codigo) for d in docs_por_pedido.get(sub, [])]
-
-        nf_dispensada = sender_id in SENDERS_SEM_NF
-        if nf_dispensada:
-            # Esses embarcadores são controlados pela CANHOTEIRA, não
-            # pela NF -- mesmo que uma NF antiga esteja no banco
-            # (achado real, 20/08: NF de Padrão Puro indo emendada no
-            # romaneio de entrega), ela nunca é aberta, emendada ou
-            # contada pra eles.
-            nfs, problemas_nf = [], []
-        else:
-            nfs, problemas_nf = _abrir_documentos(selecionar_nfs(docs))
-            # Sem NF, mas De Tommaso costuma mandar um "Pedido de Venda"
-            # padronizado no lugar dela (pedido do Hugo, 20/08) -- conta
-            # como se fosse a própria NF daqui pra baixo (capa, volumes/
-            # peso, páginas emendadas), só o número exibido leva "PV ".
-            if not nfs and sender_id in SENDERS_PEDIDO_VENDA_SUBSTITUI_NF:
-                nfs, problemas_nf = _abrir_documentos(selecionar_pedidos_de_venda(docs))
-        boletos, problemas_bol = _abrir_documentos(selecionar_boletos(docs))
-
-        faltas = []
-        if not nfs and not nf_dispensada:
-            faltas.append("sem nota fiscal")
-        if not boletos:
-            faltas.append("sem boleto")
-        faltas.extend(problemas_nf + problemas_bol)
-        pendencias.extend(f"{codigo}: {f}" for f in faltas)
+        # nf_dispensada: embarcadores da CANHOTEIRA -- NF nunca aberta,
+        # emendada ou contada (achado 20/08). Régua completa em
+        # avaliar_documentos_pedido().
+        av = avaliar_documentos_pedido(codigo, sender_id, docs_por_pedido)
+        nfs, boletos, nf_dispensada = av["nfs"], av["boletos"], av["nf_dispensada"]
+        pendencias.extend(f"{codigo}: {f}" for f in av["faltas"])
 
         numeros_nf = [_nf_norm(row.get("numero_nf")) for row, _r in nfs]
         veio_de_pedido_venda = bool(nfs) and all(
             row.get("tipo") == "Pedido de Venda" for row, _r in nfs)
 
-        # Volumes e peso bruto: DANFE primeiro (contagem real); sem NF
-        # legível, volumes caem pro dimension_3 despoderado e o peso
-        # fica sem valor ("—" na capa).
-        volumes, peso = _qtd_peso_do_pedido(nfs)
-        if volumes is None:
-            volumes = _volumes_fallback(s, fatores.get(sender_id, 1.0))
+        # Caixas: o que o galpão CONFERIU na Stokki (tabela
+        # volumes_conferidos, rotina das 03h50 -- Hugo, 16/11). Pedido que
+        # a rotina ainda não leu cai no que valia antes (DANFE; sem NF
+        # legível, dimension_3 despoderado) e sai marcado como não
+        # conferido. Peso bruto continua vindo da DANFE.
+        volumes_nf, peso = _qtd_peso_do_pedido(nfs)
+        lido, volumes, conferido = _volumes_do_pedido(codigo, conferidos)
+        if not lido:
+            volumes = volumes_nf
+            if volumes is None:
+                volumes = _volumes_fallback(s, fatores.get(sender_id, 1.0))
 
         itens.append({
             "posicao": posicao, "codigo": codigo,
@@ -1049,13 +1181,17 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
             # bruto (com CEP): é o que o batimento de transportadora usa
             "endereco_vuupt": str(s.get("address") or ""),
             "volumes": volumes, "peso": peso,
+            "volumes_conferidos": conferido,
             "nfs": ", ".join(n for n in numeros_nf if n),
             "veio_de_pedido_venda": veio_de_pedido_venda,
             "tem_nf": bool(nfs), "tem_boleto": bool(boletos),
             # NF dispensada -> capa mostra "—" no lugar da marca (nfs
             # já vem sempre vazio pra esses embarcadores, ver acima).
             "nf_dispensada": nf_dispensada,
-            "_abertos_nf": nfs, "_abertos_bol": boletos,
+            # boleto não esperado (NF à vista / embarcador fora da lista)
+            # -> capa mostra "—" em vez do X vermelho (05/10)
+            "boleto_dispensado": not boletos and not av["boleto_esperado"],
+            "_abertos_nf": nfs, "_abertos_bol": boletos, "_abertos_anexo": av["anexos"],
         })
 
     entregas_canhoteira = [i for i in itens if i["sender_id"] in SENDERS_CANHOTEIRA]
@@ -1068,6 +1204,17 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
     # si leva o nome completo da planilha. Mesma chave do fingerprint da
     # notificação de transportadoras.
     nomes_transportadoras = [nome_curto_transportadora(p) for p, _e in grupos_transportadora]
+
+    # Lotação do carro (caixa normalizada ÷ capacidade do tipo de veículo):
+    # uso interno, só no log -- o motorista não vê (Hugo, 16/11).
+    tipo_veiculo = _tipo_veiculo_da_rota(rota)
+    if tipo_veiculo and tipo_veiculo.volume_maximo_cx:
+        normalizadas = sum(_caixas_normalizadas(s) for s in servicos)
+        pct = round(100 * normalizadas / tipo_veiculo.volume_maximo_cx)
+        (logger.warning if normalizadas > tipo_veiculo.volume_maximo_cx else logger.info)(
+            f"  lotacao {rota.get('name') or rota.get('id')}: {normalizadas} caixas normalizadas / "
+            f"{tipo_veiculo.volume_maximo_cx} ({tipo_veiculo.codigo}) = {pct}%"
+            + (" -- ACIMA DA CAPACIDADE" if normalizadas > tipo_veiculo.volume_maximo_cx else ""))
 
     # Capa
     for pagina in _paginas_pillow(
@@ -1089,6 +1236,19 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
             for pagina in reader.pages:
                 writer.add_page(pagina)
             total_boletos += 1
+        # anexos do portal que não são NF nem boleto (11/11)
+        for _row, reader in item["_abertos_anexo"]:
+            readers_vivos.append(reader)
+            # PDF vindo do cliente: se nao emendar, fica de fora sem derrubar
+            # o romaneio da rota (12/11)
+            try:
+                paginas_anexo = list(reader.pages)
+            except Exception as e:
+                logger.warning(f"anexo do portal {_row.get('nome_arquivo')} nao emendado: {type(e).__name__}: {e}")
+                continue
+            for pagina in paginas_anexo:
+                writer.add_page(pagina)
+            total_anexos += 1
 
     # Canhoteira (só quando a rota tem entrega dos embarcadores monitorados)
     if entregas_canhoteira:
@@ -1109,7 +1269,7 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
         writer.write(f)
 
     return {"pedidos": total, "paginas": len(writer.pages),
-            "nfs": total_nfs, "boletos": total_boletos,
+            "nfs": total_nfs, "boletos": total_boletos, "anexos": total_anexos,
             "canhoteira": len(entregas_canhoteira), "pendencias": pendencias,
             # [(nome da transportadora, nº de pedidos)] na ordem da rota
             "canhoteira_transportadoras": [(nome, len(e)) for nome, (_p, e)

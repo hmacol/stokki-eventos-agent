@@ -68,10 +68,15 @@ def _rota_valida(sublote: list[dict], api_key: str | None, tamanho_maximo: int, 
                  distancia_maxima_km: float | None, distancia_maxima_viagem_km: float | None,
                  eh_viagem_fn, base: tuple[float, float] | None = None,
                  km_acumulado_maximo: float | None = None,
-                 km_acumulado_maximo_viagem: float | None = None) -> bool:
+                 km_acumulado_maximo_viagem: float | None = None,
+                 tempo_maximo_horas: float = ROTA_TEMPO_MAXIMO_HORAS) -> bool:
     """Travas de producao na ORDEM DADA: tamanho, caixas, distancia
     par-a-par, km acumulado, orcamento de horas, janela. Rota vazia e
     valida (vai sumir).
+
+    `tempo_maximo_horas` (Hugo, 03/10): so a juncao das rotas fracas
+    passa um teto maior (10h30 na rota que recebe, ver rotas_fracas.py);
+    o polimento usa o padrao de 9h.
 
     `base` passada explicitamente pras chamadas de orcamento de horas e
     janela (fix final, 20/09): antes elas nao recebiam `base` e liam a
@@ -107,10 +112,10 @@ def _rota_valida(sublote: list[dict], api_key: str | None, tamanho_maximo: int, 
     limite_acumulado = limite_distancia(sublote, km_acumulado_maximo, km_acumulado_maximo_viagem, eh_viagem_fn)
     if limite_acumulado is not None and _km_acumulado_sequencial(sublote, api_key) > limite_acumulado:
         return False
-    if len(sublote) > 1 and not (estimar_tempo_rota(sublote, api_key, base) <= ROTA_TEMPO_MAXIMO_HORAS
+    if len(sublote) > 1 and not (estimar_tempo_rota(sublote, api_key, base) <= tempo_maximo_horas
                                  or _orcamento_inviavel_por_distancia(sublote, api_key, base)):
         return False
-    return janela_respeitada(sublote, api_key, base)
+    return janela_respeitada(sublote, api_key, base, tempo_maximo_horas=tempo_maximo_horas)
 
 
 def _km(sublote: list[dict], base: tuple[float, float], api_key: str | None) -> float:
@@ -126,7 +131,26 @@ def _centroide(sublote: list[dict], api_key: str | None) -> tuple[float, float] 
 
 def _melhor_insercao(parada: dict, sublote: list[dict], base: tuple[float, float],
                      api_key: str | None) -> tuple[float, list[dict]]:
-    """(km, sublote_novo) inserindo `parada` na posicao de menor km."""
+    """(km, sublote_novo) inserindo `parada` na posicao de menor km.
+    Com todas as coordenadas, a posicao sai do ACRESCIMO de cada uma (3
+    pernas) em vez do km da rota inteira por posicao (16/10: era 85% do
+    tempo do polimento, que batia o teto de 15s sem chegar no
+    esvaziamento); sem alguma coordenada, o calculo completo de antes."""
+    c = obter_coordenadas(parada, api_key)
+    coords = [obter_coordenadas(s, api_key) for s in sublote]
+    if c and all(coords):
+        pontos = [base] + coords
+        melhor_pos, melhor_delta = 0, None
+        for pos in range(len(sublote) + 1):
+            anterior = pontos[pos]
+            delta = _distancia_km(*anterior, *c)
+            if pos < len(sublote):
+                seguinte = pontos[pos + 1]
+                delta += _distancia_km(*c, *seguinte) - _distancia_km(*anterior, *seguinte)
+            if melhor_delta is None or delta < melhor_delta:
+                melhor_pos, melhor_delta = pos, delta
+        candidato = sublote[:melhor_pos] + [parada] + sublote[melhor_pos:]
+        return _km(candidato, base, api_key), candidato
     melhor: tuple[float, list[dict]] | None = None
     for pos in range(len(sublote) + 1):
         candidato = sublote[:pos] + [parada] + sublote[pos:]

@@ -9,10 +9,13 @@ local -- mesmo dados.db):
     py -3 portal_cliente/gerenciar_clientes.py checar maiz            # antes do convite: conta, grupo, insucessos, envio (CNPJ ou nome)
     py -3 portal_cliente/gerenciar_clientes.py enviar-link 29909190000146
     py -3 portal_cliente/gerenciar_clientes.py enviar-link 29909190000146 --para hugo@freshlogbr.com   # convite vai pra quem repassa, não pro cliente
+    py -3 portal_cliente/gerenciar_clientes.py enviar-link 29909190000146 --cc hugo@freshlogbr.com     # e-mails do cadastro, com cópia
     py -3 portal_cliente/gerenciar_clientes.py definir-pin 29909190000146 123456
     py -3 portal_cliente/gerenciar_clientes.py desativar 29909190000146
     py -3 portal_cliente/gerenciar_clientes.py ativar 29909190000146
     py -3 portal_cliente/gerenciar_clientes.py link 29909190000146   # só imprime o link, sem e-mail
+    py -3 portal_cliente/gerenciar_clientes.py criar-pin-padrao 123456              # só mostra quem ganharia conta
+    py -3 portal_cliente/gerenciar_clientes.py criar-pin-padrao 123456 --confirmar  # cria; troca obrigatória no 1º acesso
 
 Grupo econômico (17/09) -- um login enxerga os pedidos de várias empresas:
     py -3 portal_cliente/gerenciar_clientes.py grupos                                   # lista os grupos
@@ -29,6 +32,15 @@ Máscara de envio de pedidos (08/09):
     py -3 portal_cliente/gerenciar_clientes.py concluir 12 "cancelado na Stokki"         # marca a solicitação 12 como atendida
     py -3 portal_cliente/gerenciar_clientes.py fila                                       # o que está NA_FILA/ENVIANDO/ERRO
 
+Pré-cadastro automático da Stokki (10/10) -- embarcadores_stokki.py:
+    py -3 portal_cliente/gerenciar_clientes.py cadastro                                  # o que não está APROVADO
+    py -3 portal_cliente/gerenciar_clientes.py cadastro aprovar 49874051000131           # grava o tipo que o cliente informou
+    py -3 portal_cliente/gerenciar_clientes.py cadastro habilidade 49874051000131 Seco   # aprova com outro tipo
+
+Fluxo operacional por embarcador (25/10) -- nucleo/fluxo_embarcador.py:
+    py -3 portal_cliente/gerenciar_clientes.py fluxos                                    # quem não é só armazenagem (com o XD achado)
+    py -3 portal_cliente/gerenciar_clientes.py fluxos --cnpj 66259821000155 --definir cross
+    py -3 portal_cliente/gerenciar_clientes.py fluxos --carga fluxos.json                # JSON da página "Fluxo por embarcador"
 Pedidos de Entrada (25/09, só o piloto do WMS):
     py -3 portal_cliente/gerenciar_clientes.py entradas 22135070000190              # mostra se a aba está ligada
     py -3 portal_cliente/gerenciar_clientes.py entradas 22135070000190 --ativar     # liga a aba pro embarcador
@@ -146,6 +158,36 @@ def _link(conn, cfg, cnpj) -> str:
     return f"{url_base}/definir-pin/{auth.gerar_token_definir_pin(secret, conn, cnpj)}"
 
 
+def enviar_convite(conn, cfg, emb: dict, para: str = "", cc: list | None = None) -> tuple[bool, list[str]]:
+    """Manda o e-mail com o link de definir PIN. Sem `para` vai pros e-mails do
+    cadastro (cliente de verdade); com `para` vira "convite pra repassar".
+    Usado pelo CLI (enviar-link) e pela tela /embarcadores do painel (16/11).
+    Devolve (enviou, destinos)."""
+    from email_utils import enviar_email, envelope_html
+    link = _link(conn, cfg, emb["cnpj"])
+    destinos = [para] if para else emb["emails"]
+    # Convite pra repassar (17/09, Hugo: "mandar pra mim os convites"): o
+    # topo diz de quem é e pra quem vai; o resto é o e-mail que o cliente receberia.
+    aviso = (f"<p style='background:#FEF3C7;border:1px solid #FCD34D;border-radius:7px;padding:10px 12px;font-size:13px'>"
+             f"<b>Convite pra repassar.</b> Acesso de <b>{emb['nome']}</b> (CNPJ {auth.formatar_cnpj(emb['cnpj'])}). "
+             f"E-mail do cadastro: {', '.join(emb['emails']) or '(nenhum)'}. "
+             f"O link abaixo vale 24 horas e só funciona uma vez -- quem abrir primeiro define o PIN.</p>") if para else ""
+    corpo = envelope_html(
+        aviso +
+        f"<p>Olá, <strong>{emb['nome']}</strong>.</p>"
+        f"<p>A Fresh Log liberou o acesso ao portal de acompanhamento de entregas "
+        f"(CNPJ {auth.formatar_cnpj(emb['cnpj'])}). Defina seu PIN pelo botão abaixo:</p>"
+        f"<p style='margin:24px 0'><a href='{link}' style='background:#0EA575;color:#fff;padding:12px 22px;"
+        f"border-radius:7px;text-decoration:none;font-weight:700'>Definir meu PIN</a></p>"
+        f"<p style='color:#6B7280;font-size:13px'>O link vale por 24 horas. Depois é só entrar com CNPJ + PIN em "
+        f"{cfg.get('portal_cliente', {}).get('url_base', 'https://app.freshhub.com.br/cliente')}.</p>",
+        rodape="Fresh Log · Portal de acompanhamento de entregas")
+    assunto = (f"[Convite pra repassar] {emb['nome']} · acesso ao portal de entregas" if para
+               else "Fresh Log · Seu acesso ao portal de entregas")
+    ok = enviar_email(destinos, assunto, corpo, cfg.get("email", {}), cc=cc or None)
+    return ok, destinos
+
+
 def _sem_acento(texto: str) -> str:
     return unicodedata.normalize("NFKD", texto or "").encode("ascii", "ignore").decode().lower()
 
@@ -233,6 +275,90 @@ def _imprimir_grupo(empresas: list[dict]) -> None:
         print(f"  {auth.formatar_cnpj(e['cnpj']):<20} sender {e['sender_id']:<9} {e['nome']}")
 
 
+def _linha_fluxo(conn, cnpj: str) -> str:
+    from nucleo import fluxo_embarcador as fe
+    f = fe.fluxos_do_embarcador(conn, cnpj=cnpj)
+    rotulos = ", ".join(fe.ROTULOS[x] for x in f["fluxos"])
+    xd = ""
+    if "cross" in f["fluxos"]:
+        xd = f"  XD {f['codigo_xd']}" if f["codigo_xd"] else f"  XD NÃO ENCONTRADO ({f['erro_xd']})"
+    return f"{auth.formatar_cnpj(f['cnpj'])}  [{f['stkkc'] or '-'}]  {f['apelido']}: {rotulos}{xd}"
+
+
+def _comando_fluxos(conn, args) -> int:
+    import json
+    from nucleo import fluxo_embarcador as fe
+    fe.garantir_coluna(conn)
+    if args.carga:
+        docs = json.loads(Path(args.carga).read_text(encoding="utf-8"))
+        if isinstance(docs, dict):  # aceita {"documents": [...]} ou {"docs": [...]}
+            docs = docs.get("documents") or docs.get("docs") or []
+        docs = [d.get("data", d) for d in docs]  # linha da página vem como {"id", "data": {...}}
+        mapa = fe.carga_de_marcacoes(docs)
+        faltando = []
+        for cnpj, fluxos in sorted(mapa.items()):
+            try:
+                fe.definir_fluxos(conn, cnpj, fluxos)
+            except ValueError as e:
+                faltando.append(f"{cnpj}: {e}")
+                continue
+            print(_linha_fluxo(conn, cnpj))
+        print(f"{len(mapa) - len(faltando)} embarcador(es) gravado(s).")
+        for f in faltando:
+            print(f"  NÃO gravado -- {f}")
+        return 1 if faltando else 0
+    if args.definir is not None:
+        if not args.cnpj:
+            print("--definir exige --cnpj.")
+            return 2
+        try:
+            fe.definir_fluxos(conn, args.cnpj, [x.strip() for x in args.definir.split(",") if x.strip()])
+        except ValueError as e:
+            print(f"Nada gravado: {e}")
+            return 2
+        print(_linha_fluxo(conn, args.cnpj))
+        return 0
+    if args.cnpj:
+        print(_linha_fluxo(conn, args.cnpj))
+        return 0
+    n = 0
+    for (cnpj,) in conn.execute("SELECT cnpj_embarcador FROM interno WHERE COALESCE(fluxos, '') NOT IN ('', 'armazenagem') "
+                                "ORDER BY stkkc_id"):
+        print(_linha_fluxo(conn, cnpj))
+        n += 1
+    print(f"{n} embarcador(es) com fluxo além de Armazenagem.")
+    return 0
+
+
+def _comando_cadastro(conn, args) -> int:
+    import cadastro_embarcador as cad_emb
+    if not args.acao:
+        linhas = cad_emb.listar_abertos(conn)
+        if not linhas:
+            print("Nenhum pré-cadastro aberto.")
+        for l in linhas:
+            quando = (l["reenvio_em"] or l["convite_enviado_em"] or "")[:16]
+            print(f"{auth.formatar_cnpj(l['cnpj_embarcador'])}  {l['situacao']:<11} {l['nome'][:30]:<30} "
+                  f"tipo informado: {l['habilidade_informada'] or '-':<11} convite: {l['canal_convite'] or '-'} {quando}")
+        return 0
+    if not args.cnpj:
+        print("Informe o CNPJ.")
+        return 2
+    if args.acao == "habilidade" and not args.tipo:
+        print("Informe o tipo: Seco, Refrigerado ou Congelado.")
+        return 2
+    if args.acao == "aprovar" and args.tipo:
+        print("Use `cadastro habilidade <cnpj> <tipo>` pra aprovar com outro tipo.")
+        return 2
+    try:
+        c = cad_emb.aprovar(conn, args.cnpj, "cli", habilidade=args.tipo if args.acao == "habilidade" else None)
+    except cad_emb.CadastroInvalido as e:
+        print(f"Nada gravado: {e.mensagem}")
+        return 2
+    print(f"Aprovado: {auth.formatar_cnpj(c['cnpj_embarcador'])} com tipo de carga {c['habilidade_informada']}.")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Contas do portal do cliente")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -244,6 +370,7 @@ def main(argv=None) -> int:
         sp.add_argument("cnpj")
         if nome == "enviar-link":
             sp.add_argument("--para", help="manda o convite SÓ pra este e-mail (quem repassa ao cliente), não pros do cadastro")
+            sp.add_argument("--cc", action="append", default=[], help="e-mail em cópia (pode repetir)")
     sub.add_parser("grupos")
     gp = sub.add_parser("grupo", help="empresas que o login enxerga (grupo econômico)")
     gp.add_argument("cnpj", help="CNPJ que faz o login")
@@ -252,6 +379,10 @@ def main(argv=None) -> int:
     dp = sub.add_parser("definir-pin")
     dp.add_argument("cnpj")
     dp.add_argument("pin")
+    cp = sub.add_parser("criar-pin-padrao", help="cria conta com o mesmo PIN pra todo embarcador sem conta "
+                                                 "(menos cancelados e membros de grupo); troca obrigatória no 1º acesso")
+    cp.add_argument("pin")
+    cp.add_argument("--confirmar", action="store_true", help="sem isto só lista quem seria criado")
     ev = sub.add_parser("envio", help="parâmetros da máscara de envio (Stokki) por embarcador")
     ev.add_argument("cnpj")
     ev.add_argument("--regra", choices=sorted(envios.REGRAS_XML))
@@ -269,6 +400,14 @@ def main(argv=None) -> int:
     cc.add_argument("id", type=int)
     cc.add_argument("resposta", nargs="?", default="")
     cc.add_argument("--recusar", action="store_true")
+    ce = sub.add_parser("cadastro", help="pré-cadastros automáticos da Stokki: lista, aprova ou corrige o tipo de carga")
+    ce.add_argument("acao", nargs="?", choices=["aprovar", "habilidade"])
+    ce.add_argument("cnpj", nargs="?")
+    ce.add_argument("tipo", nargs="?", help="Seco | Refrigerado | Congelado (só com 'habilidade')")
+    fl = sub.add_parser("fluxos", help="fluxo operacional por embarcador: armazenagem, full_cross, cross")
+    fl.add_argument("--cnpj")
+    fl.add_argument("--definir", help='ex.: "cross,armazenagem" (exige --cnpj)')
+    fl.add_argument("--carga", help="JSON exportado da página Fluxo por embarcador")
     en = sub.add_parser("entradas", help="aba Pedidos de Entrada (só o piloto do WMS)")
     en.add_argument("cnpj")
     ge = en.add_mutually_exclusive_group()
@@ -281,6 +420,10 @@ def main(argv=None) -> int:
         return _comandos_envio(args, cfg)
     conn = auth.conectar()
     try:
+        if args.cmd == "cadastro":
+            return _comando_cadastro(conn, args)
+        if args.cmd == "fluxos":
+            return _comando_fluxos(conn, args)
         if args.cmd == "listar":
             for e in auth.listar_embarcadores(conn):
                 estado = "sem conta" if e["ativo"] is None else ("ATIVA" if e["ativo"] else "desativada")
@@ -299,6 +442,18 @@ def main(argv=None) -> int:
                     print(f"  {auth.formatar_cnpj(e['cnpj'])}  {e['nome']}")
                 return 2
             _imprimir_checagem(checar(conn, achados[0]["cnpj"]))
+            return 0
+
+        if args.cmd == "criar-pin-padrao":
+            try:
+                auth.validar_pin_formato(args.pin)
+            except ValueError as e:
+                print(f"Nada gravado: {e}")
+                return 2
+            lista = auth.criar_contas_pin_padrao(conn, args.pin) if args.confirmar else auth.candidatos_pin_padrao(conn)
+            for e in lista:
+                print(f"  {auth.formatar_cnpj(e['cnpj']):<20} sender {e['sender_id']:<9} {e['nome']}")
+            print(f"{len(lista)} conta(s) {'criada(s), com troca de PIN no 1º acesso' if args.confirmar else 'seriam criadas (rode com --confirmar)'}.")
             return 0
 
         if args.cmd == "grupos":
@@ -334,32 +489,17 @@ def main(argv=None) -> int:
             if para and not re.fullmatch(r"[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+", para):
                 print(f"--para {para!r} não é um e-mail válido. Nada enviado.")
                 return 2
+            cc = [c.strip() for c in args.cc if c.strip()]
+            for c in cc:
+                if not re.fullmatch(r"[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+", c):
+                    print(f"--cc {c!r} não é um e-mail válido. Nada enviado.")
+                    return 2
             if not para and not emb["emails"]:
                 print("Embarcador sem e-mail em `interno`.")
                 return 2
-            from email_utils import enviar_email, envelope_html
-            link = _link(conn, cfg, emb["cnpj"])
-            destinos = [para] if para else emb["emails"]
-            # Convite pra repassar (17/09, Hugo: "mandar pra mim os convites"): o
-            # topo diz de quem é e pra quem vai; o resto é o e-mail que o cliente receberia.
-            aviso = (f"<p style='background:#FEF3C7;border:1px solid #FCD34D;border-radius:7px;padding:10px 12px;font-size:13px'>"
-                     f"<b>Convite pra repassar.</b> Acesso de <b>{emb['nome']}</b> (CNPJ {auth.formatar_cnpj(emb['cnpj'])}). "
-                     f"E-mail do cadastro: {', '.join(emb['emails']) or '(nenhum)'}. "
-                     f"O link abaixo vale 24 horas e só funciona uma vez -- quem abrir primeiro define o PIN.</p>") if para else ""
-            corpo = envelope_html(
-                aviso +
-                f"<p>Olá, <strong>{emb['nome']}</strong>.</p>"
-                f"<p>A Fresh Log liberou o acesso ao portal de acompanhamento de entregas "
-                f"(CNPJ {auth.formatar_cnpj(emb['cnpj'])}). Defina seu PIN pelo botão abaixo:</p>"
-                f"<p style='margin:24px 0'><a href='{link}' style='background:#0EA575;color:#fff;padding:12px 22px;"
-                f"border-radius:7px;text-decoration:none;font-weight:700'>Definir meu PIN</a></p>"
-                f"<p style='color:#6B7280;font-size:13px'>O link vale por 24 horas. Depois é só entrar com CNPJ + PIN em "
-                f"{cfg.get('portal_cliente', {}).get('url_base', 'https://app.freshhub.com.br/cliente')}.</p>",
-                rodape="Fresh Log · Portal de acompanhamento de entregas")
-            assunto = (f"[Convite pra repassar] {emb['nome']} · acesso ao portal de entregas" if para
-                       else "Fresh Log · Seu acesso ao portal de entregas")
-            ok = enviar_email(destinos, assunto, corpo, cfg.get("email", {}))
-            print(("Enviado pra " if ok else "FALHOU ao enviar pra ") + ", ".join(destinos))
+            ok, destinos = enviar_convite(conn, cfg, emb, para, cc)
+            print(("Enviado pra " if ok else "FALHOU ao enviar pra ") + ", ".join(destinos)
+                  + (f" (cc: {', '.join(cc)})" if cc else ""))
             return 0 if ok else 1
         elif args.cmd in ("desativar", "ativar"):
             if auth.definir_ativo(conn, emb["cnpj"], args.cmd == "ativar"):

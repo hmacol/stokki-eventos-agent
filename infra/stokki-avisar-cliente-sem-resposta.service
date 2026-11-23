@@ -1,0 +1,9 @@
+[Unit]
+Description=Stokki Eventos - WhatsApp pro embarcador que ficou 10 min sem responder a equipe num chamado do portal
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/avisar_cliente_sem_resposta.py

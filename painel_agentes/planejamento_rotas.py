@@ -40,11 +40,12 @@ from roteirizacao_dados import (
     extrair_volume_caixas, _distancia_km, estimar_tempo_rota, definir_coords_base,
     ROTA_TEMPO_MAXIMO_HORAS, TEMPO_NIVEL3_HORAS, TEMPO_PARADA_NORMAL_HORAS,
     resolver_janela, carregar_janelas_confirmadas, simular_horarios, tem_janela, _horas_para_hhmm,
-    macro_regiao_do_servico, obter_coordenadas, janela_viavel,
+    macro_regiao_do_servico, obter_coordenadas, janela_viavel, hora_saida_de_start_at,
 )
 from alocacao_motoristas import classificar_rota_viagem
 from zonas_sp import classificar_zona
-from regioes_dia_fixo import DIAS_NOMES, extrair_cidade, nomes_dias, regiao_da_cidade, regra_dia_fixo_do_servico
+from regioes_dia_fixo import (DIAS_NOMES, data_valida_na_regiao, descricao_dias, extrair_cidade,
+                              regiao_da_cidade, regra_dia_fixo_do_servico)
 from regras.complexidade_entrega import (
     carregar_niveis, carregar_horarios, carregar_ajustes_manuais,
     definir_ajuste_manual, nivel_efetivo, horario_efetivo, NIVEIS_VALIDOS,
@@ -60,6 +61,8 @@ from regras.tipo_carga_embarcador import (
 )
 from regras.tipo_veiculo import tipo_por_codigo, TIPOS_VEICULO
 from regras.prioridade_ofertas import carregar_historico_justica
+from regras import feriados
+from regras import veiculos as veiculos_regras
 from retiradas.regras_retirada import (PREFIXO_TITULO, STATUSES_ABERTOS, config_retiradas,
                                        data_prevista_do_servico, eh_servico_retirada)
 # regras.ofertas_rota / regras.resumo_oferta (marketplace de rotas, Hugo
@@ -73,6 +76,7 @@ from retiradas.regras_retirada import (PREFIXO_TITULO, STATUSES_ABERTOS, config_
 # demanda dentro de publicar_oferta_rascunho -- mesmo motivo do
 # ofertas_rota/resumo_oferta acima, ainda não deployado.
 from alocacao_motoristas import selecionar_motorista_equitativo
+from otimizacao_rotas import pedido_cabe_no_trajeto
 from mapa_util import carregar_remetentes_por_sender_id
 from executor import buscar_ultima_execucao, progresso_execucao
 
@@ -109,6 +113,11 @@ ETAPAS_AGENTES_PLANEJAMENTO = [
      "detalhe": "Em espera → Aguardando Transportador (Stokki)"},
     {"agente_id": "somente_importacao",            "titulo": "Importação",
      "detalhe": "Stokki → VUUPT (todos, ou filtrado por pedido/embarcador)"},
+    # Hugo, 09/11: relê só a situação na Stokki (pool, selo da rota, envio do rascunho) sem esperar a
+    # importação; fora do "Executar tudo" porque a Importação já regrava o mesmo retrato.
+    {"agente_id": "atualizar_status_stokki",       "titulo": "Status Stokki",
+     "detalhe": "relê na Stokki quem está em aberto/separação/conferência/espera (não importa nada)",
+     "incluir_executar_tudo": False},
     {"agente_id": "criar_rotas_diarias_rascunho",  "titulo": "Criar Rotas Diárias (Rascunho)",
      "detalhe": "gera rascunhos locais pra revisão nessa tela"},
     {"agente_id": "incrementar_rotas",             "titulo": "Incrementar Rotas",
@@ -177,10 +186,25 @@ def _codigos_base_lista(codigo: str) -> list[str]:
     return [_codigo_base(c.strip()) for c in (codigo or "").split(",") if c.strip()]
 
 
-TAMANHO_MAXIMO_ROTA = 16  # Voltou de 14 para 16 (pedido do Hugo, 22/08) -- mesmo teto de criar_rotas_diarias.py (constantes separadas, sem import entre os dois módulos)
+TAMANHO_MAXIMO_ROTA = 15  # 07/10 (Hugo): 15 pedidos por rota (antes 16, desde 22/08) -- mesmo teto de criar_rotas_diarias.py (constantes separadas, sem import entre os dois módulos)
 NIVEL_3_TAMANHO_MAXIMO_ROTA = 3  # referência/exibição -- valor típico de uma rota cheia dentro do orçamento de horas (ver ROTA_TEMPO_MAXIMO_HORAS); a trava real virou dinâmica, ver roteirizacao_dados.estimar_tempo_rota
 VOLUME_MAXIMO_ROTA = 100
 DISTANCIA_MAXIMA_ROTA_KM = 15  # Hugo, 20/09: calibrado pelo replay de 31 dias -- acompanha criar_rotas_diarias.py (constantes separadas de propósito, sem import entre os dois módulos)
+KM_ACUMULADO_MAXIMO_ROTA_KM = 60     # acompanha criar_rotas_diarias.py (mesmo motivo acima) -- trava de trajeto do Incrementar, 16/10
+KM_ACUMULADO_MAXIMO_VIAGEM_KM = 300
+# Rota fraca (Hugo, 29/09): mesmo corte de roteirizacao/rotas_fracas.py
+# (constantes separadas de propósito, sem import entre os dois módulos).
+PARADAS_ROTA_FRACA = 7
+CAIXAS_ROTA_FRACA = 40
+HORAS_ROTA_FRACA = 5.0  # fraca só com MENOS de 5h estimadas (Hugo, 03/10)
+# Folga que a junção dá SÓ à rota que recebe pedido de rota fraca (mesmos
+# valores de rotas_fracas.FOLGA_PARADAS_EXTRA, FOLGA_DISTANCIA_KM,
+# FOLGA_CAIXAS_EXTRA e FOLGA_TEMPO_MAXIMO_HORAS): o aviso de limite usa
+# esse teto no rascunho com recebeu_rota_fraca.
+FOLGA_PARADAS_ROTA_FRACA = 2
+FOLGA_DISTANCIA_ROTA_FRACA_KM = 20
+FOLGA_CAIXAS_ROTA_FRACA = 10          # 100 + 10 = 110, continua Fiorino (Hugo, 03/10)
+FOLGA_TEMPO_ROTA_FRACA_HORAS = 10.5   # teto de tempo da receptora (normal: ROTA_TEMPO_MAXIMO_HORAS)
 # Orçamento de horas por rota: TEMPO_NIVEL3_HORAS, TEMPO_PARADA_NORMAL_
 # HORAS e ROTA_TEMPO_MAXIMO_HORAS vêm IMPORTADOS de roteirizacao_dados
 # (25/08 -- antes eram cópias locais, e o estimador do badge era uma
@@ -252,6 +276,53 @@ def _carregar_config() -> dict:
         return yaml.safe_load(f) or {}
 
 
+def listar_veiculos_vuupt(config: dict) -> list[dict]:
+    """Veiculos da Vuupt com cache de 10 min (regras.veiculos). Levanta se a
+    Vuupt falhar; quem so precisa da placa usa placas_veiculos_vuupt."""
+    from nucleo.vuupt_agentes import VuuptAgentes
+    return veiculos_regras.listar_veiculos_cacheado(
+        lambda: VuuptAgentes(config.get("vuupt_api", {}).get("token", "")).listar_veiculos())
+
+
+def placas_veiculos_vuupt(config: dict) -> dict | None:
+    """{vehicle_id: placa}, ou None se a lista nao carregou (so vehicle_id vazio
+    conta como 'sem carro' nesse caso). Usado pela tela e pelo envio manual."""
+    try:
+        return veiculos_regras.placas_por_id(listar_veiculos_vuupt(config))
+    except Exception as e:
+        logger.warning(f"Lista de veiculos da Vuupt indisponivel, checando so o vehicle_id: {e}")
+        return None
+
+
+def confirmar_envio_rascunhos(rascunho_ids: list, config: dict) -> list[dict]:
+    """Envio manual (botão Confirmar envio): motorista de verdade sai com carro. Com
+    planejamento.trava_sem_carro ligada, rascunho sem carro é barrado (os outros seguem);
+    desligada (padrão), sai mesmo assim e o resultado leva "aviso". Um resultado por id."""
+    token = config.get("vuupt_api", {}).get("token", "")
+    placas = placas_veiculos_vuupt(config)
+    trava = veiculos_regras.trava_sem_carro_ligada(config)
+    resultados = []
+    for rid in rascunho_ids:
+        erro_carro = veiculos_regras.verificar_carro(rascunhos_rota.buscar_rascunho(rid) or {}, placas)
+        if erro_carro and trava:
+            resultados.append({"ok": False, "rascunho_id": rid, "erro": erro_carro})
+            continue
+        resultado = rascunhos_rota.enviar_rascunho(rid, token)
+        if erro_carro:
+            resultado = {**resultado, "aviso": erro_carro}
+        resultados.append(resultado)
+    return resultados
+
+
+def seletor_veiculos(config: dict, data_alvo: date) -> list[dict]:
+    """Carros do seletor do card: sem generico/excluido, dono primeiro, com
+    rodizio_no_dia. Levanta se a Vuupt falhar."""
+    cfg = config.get("motoristas", {})
+    catalogo = CatalogoMotoristas.carregar(cfg.get("planilha", ""), cfg.get("json_fallback", ""))
+    motoristas = [{"vehicle_id": m.vehicle_id, "nome": m.nome} for m in catalogo.motoristas]
+    return veiculos_regras.listar_para_seletor(listar_veiculos_vuupt(config), motoristas, data_alvo)
+
+
 def _ressincronizar(vuupt: VuuptClient, service_ids: list[int]) -> None:
     """Depois de uma escrita na Vuupt feita por esta tela, traz o serviço pro
     espelho (Hugo, 24/09: pool lido do núcleo, ver nucleo/pool.py). Roda em
@@ -283,8 +354,10 @@ def sincronizar_pool_agora(config: dict | None = None) -> dict:
     faz nada; se já há uma rodada em andamento, não espera. Exceção da
     Vuupt sobe pra quem chama."""
     config = config or _carregar_config()
-    if fonte_pool(config) != "nucleo":
-        return {"pulado": True}
+    fonte = fonte_pool(config)
+    if fonte != "nucleo":
+        # fonte freshhub (plano 1.2 do sistema novo): o pool vem da API nova, nao ha nucleo a ressincronizar
+        return {"pulado": True, "motivo": "fonte freshhub"} if fonte == "freshhub" else {"pulado": True}
     if not _TRAVA_SINCRONIZACAO.acquire(blocking=False):
         return {"pulado": "em_andamento"}
     try:
@@ -300,11 +373,20 @@ def sincronizar_pool_agora(config: dict | None = None) -> dict:
         _TRAVA_SINCRONIZACAO.release()
 
 
-def _simular_rascunho(paradas: list[dict]) -> dict | None:
+def anotar_nao_carregados(pool: list[dict], conn) -> None:
+    """p["nao_carregado"] = {motivo, observacao, criado_em} | None. Tabela ausente -> tudo None."""
+    from nucleo import carregamento
+    achados = carregamento.nao_carregados_recentes(conn, [p.get("service_id") for p in pool])
+    for p in pool:
+        p["nao_carregado"] = achados.get(p.get("service_id"))
+
+
+def _simular_rascunho(paradas: list[dict], hora_saida: float | None = None) -> dict | None:
     """Linha do tempo (roteirizacao_dados.simular_horarios) das paradas
     de um rascunho, na ordem em que estão. None quando nenhuma parada
     tem janela (não há o que avisar nem prever) ou quando a simulação
-    falhar (a tela nunca cai por causa disso)."""
+    falhar (a tela nunca cai por causa disso). `hora_saida` (decimal, BRT) é
+    a saída da própria rota (rota da tarde sai ~13h, não às 06h)."""
     if not paradas:
         return None
     pseudo = [
@@ -319,10 +401,50 @@ def _simular_rascunho(paradas: list[dict]) -> dict | None:
         return simular_horarios(
             pseudo, coords_base=_garantir_coords_base(),
             coords_fn=lambda s: (s["latitude"], s["longitude"]) if s["latitude"] and s["longitude"] else None,
+            hora_saida=hora_saida,
         )
     except Exception as e:
         logger.warning(f"Falha ao simular horários do rascunho (tela segue sem previsão): {e}")
         return None
+
+
+def _travas_card() -> dict:
+    """Limites pra barra de ocupação do card (redesenho 13/08)."""
+    return {
+        "max_paradas": TAMANHO_MAXIMO_ROTA, "max_caixas": VOLUME_MAXIMO_ROTA,
+        # receptora de rota fraca (recebeu_rota_fraca): teto com folga (Hugo, 03/10)
+        "max_paradas_receptora": TAMANHO_MAXIMO_ROTA + FOLGA_PARADAS_ROTA_FRACA,
+        "max_caixas_receptora": VOLUME_MAXIMO_ROTA + FOLGA_CAIXAS_ROTA_FRACA,
+        # Limites por tipo de veículo grande (ver regras/tipo_veiculo.py)
+        # -- o card de uma rota classificada troca a barra de
+        # paradas/caixas genérica pela capacidade do PRÓPRIO tipo.
+        "tipos_veiculo": {
+            t.codigo: {"nome": t.nome, "volume_maximo_cx": t.volume_maximo_cx,
+                      "max_enderecos_distintos": t.max_enderecos_distintos}
+            for t in TIPOS_VEICULO
+        },
+    }
+
+
+def _horas_para_hhmm_teto(horas: float) -> str:
+    """Teto de horas do aviso: '9h' (como sempre foi) ou '10h30'."""
+    inteiras, minutos = int(horas), round((horas - int(horas)) * 60)
+    return f"{inteiras}h{minutos:02d}" if minutos else f"{inteiras}h"
+
+
+def _hora_saida_tarde(rascunho: dict) -> float | None:
+    """Saída (decimal, BRT) do rascunho da tarde (rascunhos_rota.turno,
+    Hugo 23/10), lida do start_at; None pra rota normal (sai às 06h)."""
+    if rascunho.get("turno") != "TARDE":
+        return None
+    return hora_saida_de_start_at(rascunho.get("start_at"))
+
+
+def _selo_tarde(rascunho: dict) -> str | None:
+    """Selo "Tarde · sai HH:MM" do card. Não é aviso de trava: fica fora
+    de _badges_trava pra não contar em "Com aviso ativo" nem na Torre."""
+    hora_saida = _hora_saida_tarde(rascunho)
+    return f"Tarde · sai {_horas_para_hhmm(hora_saida)}" if hora_saida is not None else None
 
 
 def _badges_trava(rascunho: dict) -> list[str]:
@@ -349,13 +471,33 @@ def _badges_trava(rascunho: dict) -> list[str]:
     paradas = rascunho["paradas"]
     badges = []
     caixas = sum(p["volume_caixas"] or 1 for p in paradas)
+    # Rota da tarde (rascunhos_rota.turno, Hugo 23/10): sai perto da janela
+    # tardia, não às 06h -- a linha do tempo parte da saída da própria rota.
+    # O selo "Tarde · sai HH:MM" é _selo_tarde (não é trava).
+    tarde = rascunho.get("turno") == "TARDE"
+    hora_saida = _hora_saida_tarde(rascunho)
+
+    def _tempo_estimado() -> float:
+        # MESMO estimador que formou a rota (roteirizacao_dados.
+        # estimar_tempo_rota: paradas calibradas + perna da base +
+        # fator estrada + velocidade urbana/rodovia), na ordem em que
+        # as paradas estão no rascunho. As paradas já carregam
+        # lat/lng -- coords_fn evita re-geocodificar o endereço.
+        pseudo_servicos = [
+            {"_nivel_dificuldade": p["nivel_dificuldade"] or 1, "latitude": p["latitude"], "longitude": p["longitude"]}
+            for p in paradas
+        ]
+        return estimar_tempo_rota(
+            pseudo_servicos, coords_base=_garantir_coords_base(),
+            coords_fn=lambda s: (s["latitude"], s["longitude"]) if s["latitude"] and s["longitude"] else None,
+        )
 
     # Janela de horário do cliente (Hugo, 09/09): na ordem atual do
     # rascunho, alguma parada chega depois da janela fechar? Mesmo
     # simulador que sequencia/forma as rotas (roteirizacao_dados.
     # simular_horarios); atraso intrínseco (janela que já fechou antes
     # da saída da base) também aparece -- aqui é aviso, não trava.
-    sim = _simular_rascunho(paradas)
+    sim = _simular_rascunho(paradas, hora_saida=hora_saida)
     if sim and sim["fora_janela"]:
         fora = ", ".join(
             f"{paradas[i]['codigo']} chega ~{_horas_para_hhmm(sim['chegadas'][i])} "
@@ -368,6 +510,21 @@ def _badges_trava(rascunho: dict) -> list[str]:
         badges.append(f"motorista espera ~{sim['espera_h']:.1f}h por cliente abrir (ordem atual)")
     tipo_veiculo = tipo_por_codigo(rascunho.get("tipo_veiculo"))
 
+    # Rota que recebeu pedido de rota fraca foi formada com teto de
+    # paradas, distância, caixas (110) e tempo (10h30) maiores
+    # (roteirizacao/rotas_fracas.py, Hugo 03/10) -- aviso só quando
+    # estoura esse teto. Janela não muda. Até 110 caixas ela continua
+    # Fiorino (o rascunho já grava tipo_veiculo None).
+    if rascunho.get("recebeu_rota_fraca"):
+        max_paradas = TAMANHO_MAXIMO_ROTA + FOLGA_PARADAS_ROTA_FRACA
+        max_distancia_km = max(DISTANCIA_MAXIMA_ROTA_KM, FOLGA_DISTANCIA_ROTA_FRACA_KM)
+        max_caixas = VOLUME_MAXIMO_ROTA + FOLGA_CAIXAS_ROTA_FRACA
+        max_horas = FOLGA_TEMPO_ROTA_FRACA_HORAS
+        nota_folga = ", com folga de rota fraca"
+    else:
+        max_paradas, max_distancia_km, nota_folga = TAMANHO_MAXIMO_ROTA, DISTANCIA_MAXIMA_ROTA_KM, ""
+        max_caixas, max_horas = VOLUME_MAXIMO_ROTA, ROTA_TEMPO_MAXIMO_HORAS
+
     if tipo_veiculo:
         enderecos_distintos = {p["endereco"] for p in paradas}
         if caixas > tipo_veiculo.volume_maximo_cx:
@@ -378,10 +535,10 @@ def _badges_trava(rascunho: dict) -> list[str]:
                 f"(máx {tipo_veiculo.max_enderecos_distintos} p/ {tipo_veiculo.nome})"
             )
     else:
-        if len(paradas) > TAMANHO_MAXIMO_ROTA:
-            badges.append(f"{len(paradas)} paradas (máx {TAMANHO_MAXIMO_ROTA})")
-        if caixas > VOLUME_MAXIMO_ROTA:
-            badges.append(f"{caixas} caixa(s) (máx {VOLUME_MAXIMO_ROTA})")
+        if len(paradas) > max_paradas:
+            badges.append(f"{len(paradas)} paradas (máx {max_paradas}{nota_folga})")
+        if caixas > max_caixas:
+            badges.append(f"{caixas} caixa(s) (máx {max_caixas}{nota_folga})")
 
         niveis = [p["nivel_dificuldade"] or 1 for p in paradas]
         # Nível 4 só pode dividir rota com outro nível 4 do MESMO
@@ -394,24 +551,12 @@ def _badges_trava(rascunho: dict) -> list[str]:
         if len(paradas) > 1 and any(n >= 4 for n in niveis) and not grupo_nivel4_legitimo:
             badges.append("entrega nível 4 dividindo rota com outras")
         else:
-            # MESMO estimador que formou a rota (roteirizacao_dados.
-            # estimar_tempo_rota: paradas calibradas + perna da base +
-            # fator estrada + velocidade urbana/rodovia), na ordem em que
-            # as paradas estão no rascunho. As paradas já carregam
-            # lat/lng -- coords_fn evita re-geocodificar o endereço.
-            pseudo_servicos = [
-                {"_nivel_dificuldade": n, "latitude": p["latitude"], "longitude": p["longitude"]}
-                for n, p in zip(niveis, paradas)
-            ]
-            tempo_estimado = estimar_tempo_rota(
-                pseudo_servicos, coords_base=_garantir_coords_base(),
-                coords_fn=lambda s: (s["latitude"], s["longitude"]) if s["latitude"] and s["longitude"] else None,
-            )
-            if tempo_estimado > ROTA_TEMPO_MAXIMO_HORAS:
+            tempo_estimado = _tempo_estimado()
+            if tempo_estimado > max_horas:
                 tempo_paradas = sum(TEMPO_NIVEL3_HORAS if n == 3 else TEMPO_PARADA_NORMAL_HORAS for n in niveis)
                 qtd_nivel3 = sum(1 for n in niveis if n == 3)
                 badges.append(
-                    f"tempo estimado {tempo_estimado:.1f}h (máx {ROTA_TEMPO_MAXIMO_HORAS:.0f}h, "
+                    f"tempo estimado {tempo_estimado:.1f}h (máx {_horas_para_hhmm_teto(max_horas)}{nota_folga}, "
                     f"{qtd_nivel3} nível 3, +{tempo_estimado - tempo_paradas:.1f}h deslocamento)"
                 )
 
@@ -420,12 +565,21 @@ def _badges_trava(rascunho: dict) -> list[str]:
         for i in range(len(coords)):
             for j in range(i + 1, len(coords)):
                 dist = _distancia_km(*coords[i], *coords[j])
-                if dist > DISTANCIA_MAXIMA_ROTA_KM:
-                    badges.append(f"paradas a {dist:.0f}km entre si (máx {DISTANCIA_MAXIMA_ROTA_KM}km)")
+                if dist > max_distancia_km:
+                    badges.append(f"paradas a {dist:.0f}km entre si (máx {max_distancia_km}km{nota_folga})")
                     break
             else:
                 continue
             break
+
+    # Rota fraca (Hugo, 29/09): o motivo vem da roteirização (não coube
+    # em vizinha nem pôde ser segurada). Se a rota foi editada e passou
+    # de um dos três cortes (pedidos, caixas, menos de 5h -- 03/10), o
+    # aviso some sozinho.
+    motivo_fraca = rascunho.get("rota_fraca_motivo")
+    if (motivo_fraca and not tarde and len(paradas) <= PARADAS_ROTA_FRACA and caixas <= CAIXAS_ROTA_FRACA
+            and _tempo_estimado() < HORAS_ROTA_FRACA):
+        badges.append(f"rota fraca: {len(paradas)} pedido(s), {caixas} caixa(s). {motivo_fraca}")
 
     return badges
 
@@ -630,18 +784,50 @@ def _regiao_do_servico(servico: dict) -> str:
     return "Sem região identificada"
 
 
-def _aviso_dia_fixo(servico: dict, data_alvo: date) -> str | None:
+def _datas_agendadas_confirmadas() -> dict[str, date]:
+    """{codigo_pedido: data} dos agendamentos RESPONDIDOS em
+    agendamentos_pedido (portal, planilha, resposta de e-mail). Falha de
+    banco/tabela: {} (a tela segue avisando como antes)."""
+    import sqlite3
+    try:
+        conn = sqlite3.connect(str(rascunhos_rota.DB_PATH))
+        rows = conn.execute(
+            "SELECT pedido, data_agendada FROM agendamentos_pedido "
+            "WHERE status = 'RESPONDIDO' AND data_agendada IS NOT NULL"
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        logger.warning(f"Não consegui carregar as datas de agendamento confirmadas: {e}")
+        return {}
+    datas = {}
+    for pedido, data_br in rows:
+        try:
+            datas[str(pedido).lstrip("#").strip()] = datetime.strptime(data_br, "%d/%m/%Y").date()
+        except (ValueError, TypeError):
+            continue
+    return datas
+
+
+def _aviso_dia_fixo(servico: dict, data_alvo: date, data_agendada: date | None = None) -> str | None:
     """
     "Americana: só Quartas" quando o pedido é de região/galpão com dia
     fixo e `data_alvo` não é um desses dias; None caso contrário. Só
     rotula -- o botão "Roteirizar" pede confirmação com a lista desses
     pedidos (Hugo, 23/09, caso PS-39752: recriado à mão na VUUPT pra uma
     quinta e roteirizado pela tela, sendo que Americana só recebe quarta).
+
+    `data_agendada` (Hugo, 28/09, caso PS-40316): data de agendamento
+    INFORMADA vence o dia fixo -- se é a do planejamento, não avisa.
+
+    03/10 (dias fixos v2): respeita a frequência -- Sorocaba quinzenal
+    avisa na semana sem visita ("Sorocaba: só Terças (quinzenal)").
     """
-    regra = regra_dia_fixo_do_servico(servico)
-    if not regra or data_alvo.weekday() in regra["dias"]:
+    if data_agendada and data_agendada == data_alvo:
         return None
-    return f"{regra['nome']}: só {nomes_dias(regra['dias'])}"
+    regra = regra_dia_fixo_do_servico(servico)
+    if not regra or data_valida_na_regiao(regra, data_alvo):
+        return None
+    return f"{regra['nome']}: só {descricao_dias(regra)}"
 
 
 def _resumo_pedidos_agendados(servicos: list[dict]) -> list[dict]:
@@ -694,6 +880,31 @@ def _resumo_pedidos_agendados(servicos: list[dict]) -> list[dict]:
             "regioes": regioes,
         })
     return resumo
+
+
+# Situação na Stokki que ainda NÃO é "Aguardando Transportador" (Hugo,
+# 19/10): o pedido já existe na Vuupt (embarcador prioritário entra em
+# qualquer status; "Em espera" vem da Estação de Impressão), mas o galpão
+# ainda não terminou -- a tela separa num bloco próprio do pool. Chave =
+# status_stokki como o pipeline grava em vigia_stokki_abertos (código da
+# URL da Stokki; "Em espera" é literal da fonte estacao_impressao).
+# Desde o plano 1.2 do sistema novo a regra vive em nucleo/prontidao_stokki.py, porque o envio do rascunho
+# e o incremento das 22h passaram a usar a mesma prontidao; os nomes continuam exportados daqui pra tela.
+from nucleo.prontidao_stokki import (  # noqa: E402
+    SITUACAO_STOKKI_NAO_PRONTA,
+    anotar_situacao_stokki,
+    carregar_retrato_stokki,
+)
+
+
+def marcar_pausados_cliente(pool: list[dict], servicos_brutos: list[dict]) -> None:
+    """Em espera a pedido do cliente (27/10): só rotula o card (o pedido
+    continua na tela); quem tira da rota é a roteirização e o "Roteirizar
+    selecionados". Falha de leitura = ninguém marcado (log no módulo)."""
+    import pedidos_pausados_cliente
+    ids = pedidos_pausados_cliente.pausados_por_servico(servicos_brutos)
+    for p in pool:
+        p["pausado_cliente"] = p["service_id"] in ids
 
 
 def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict:
@@ -798,11 +1009,31 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     except Exception as e:
         logger.warning(f"Falha ao marcar dedicados pro pool (tela segue sem essa marcação): {e}")
 
+    # Segurado (Hugo, 29/09): pedido de rota fraca adiado pra consolidar.
+    # Só rotula o card; continua selecionável pra rota manual.
+    segurados_por_id: dict[int, dict] = {}
+    try:
+        from pedidos_segurados import segurados_por_servico
+        segurados_por_id = segurados_por_servico(servicos_brutos, data_alvo)
+    except Exception as e:
+        logger.warning(f"Falha ao marcar segurados pro pool (tela segue sem essa marcação): {e}")
+
+    # Retornando (editar rota enviada, 10/11): pedido tirado de rota iniciada,
+    # no carro do motorista. Continua no pool com selo; o front bloqueia o arraste.
+    retornando_por_id: dict[int, dict] = {}
+    try:
+        import pedidos_retornando
+        retornando_por_id = pedidos_retornando.retornando_por_servico(servicos_brutos)
+    except Exception as e:
+        logger.warning(f"Falha ao marcar retornando pro pool (tela segue sem essa marcação): {e}")
+
     # Dia fixo fora do dia (Hugo, 23/09): só rotula; o aviso é do botão
     # "Roteirizar" no front. Vale pro pool e pras paradas já em rascunho.
     fora_dia_fixo: dict[int, str] = {}
+    datas_agendadas = _datas_agendadas_confirmadas()
     for s in servicos_brutos:
-        aviso = _aviso_dia_fixo(s, data_alvo)
+        aviso = _aviso_dia_fixo(s, data_alvo,
+                                datas_agendadas.get(str(s.get("code") or "").lstrip("#").strip()))
         if aviso:
             fora_dia_fixo[s["id"]] = aviso
 
@@ -824,7 +1055,25 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         ]
         for p in pool:
             p["fora_dia_fixo"] = fora_dia_fixo.get(p["service_id"])
+            p["segurado"] = segurados_por_id.get(p["service_id"])
+            r = retornando_por_id.get(p["service_id"])
+            p["retornando"] = ({"motorista_nome": r.get("motorista_nome"), "motivo": r.get("motivo"),
+                                "criado_em": r.get("criado_em")} if r else None)
+        marcar_pausados_cliente(pool, servicos_brutos)
         pool.sort(key=lambda p: p["codigo"])
+        # Nao carregado (checklist de carregamento): so rotula, nao bloqueia roterizacao
+        try:
+            from nucleo import banco as _banco_nucleo
+            _conn_nc = _banco_nucleo.conectar()
+            try:
+                anotar_nao_carregados(pool, _conn_nc)
+            finally:
+                _conn_nc.close()
+        except Exception as e:
+            logger.warning(f"Falha ao marcar nao carregado pro pool (tela segue sem o selo): {e}")
+    # Situação na Stokki (Hugo, 19/10): bloco "Em separação na Stokki" do pool
+    retrato_stokki, retrato_stokki_em = carregar_retrato_stokki()
+    anotar_situacao_stokki(pool, retrato_stokki)
 
     agendamentos_por_service_id = {}
     for s in servicos_brutos:
@@ -868,12 +1117,40 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
     return {
         "pool": pool,
         "pool_retiradas": pool_retiradas,
+        "retrato_stokki_em": retrato_stokki_em,
+        "retrato_stokki": retrato_stokki,
         "resumo_agendados": _resumo_pedidos_agendados(servicos_resumo),
         "agendamentos_por_service_id": agendamentos_por_service_id,
         "tipos_area_por_service_id": tipos_area,
         "dedicados_por_service_id": dedicados_por_id,
         "fora_dia_fixo_por_service_id": fora_dia_fixo,
     }
+
+
+def _anotar_rota_enviada(rascunho: dict) -> None:
+    """Card da rota ENVIADA (editar rota enviada, 10/11): `status_vuupt` por parada e
+    `rota_iniciada`, lidos do espelho do nucleo (ate 15 min atrasado, so pra exibir --
+    a acao de tirar/trocar confere ao vivo na Vuupt)."""
+    import edicao_rota
+    espelho = rascunhos_rota.espelho_rota_enviada(rascunho["vuupt_route_id"])
+    for p in rascunho["paradas"]:
+        p["status_vuupt"] = espelho["paradas"].get(p["service_id"])
+    rascunho["rota_iniciada"] = edicao_rota.rota_iniciada({
+        "status": espelho["status_rota"],
+        "servicos": [{"status": p["status_vuupt"]} for p in rascunho["paradas"]],
+    })
+
+
+def _anotar_centro_expandido(rascunhos: list[dict]) -> None:
+    """Aviso de rodizio na troca de carro pelo card (editar rota enviada, 10/11):
+    `tem_centro_expandido` = alguma parada com coordenada dentro do Centro Expandido
+    (mesmo poligono da alocacao, roteirizacao/rodizio_sp). Parada sem coordenada nao conta."""
+    from rodizio_sp import em_area_rodizio
+    for r in rascunhos:
+        r["tem_centro_expandido"] = any(
+            p.get("latitude") is not None and p.get("longitude") is not None
+            and em_area_rodizio(float(p["latitude"]), float(p["longitude"]))
+            for p in r["paradas"])
 
 
 def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
@@ -899,6 +1176,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     confirmacoes_dia = listar_confirmacoes_do_dia(data_alvo)
     for r in rascunhos:
         r["badges"] = _badges_trava(r)
+        r["selo_tarde"] = _selo_tarde(r)
         # confirmação do motorista (página pública na VPS, ver
         # confirmacao_motoristas/) só existe pra rota já enviada à
         # VUUPT -- rascunho ainda pode trocar de motorista até lá.
@@ -952,7 +1230,9 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     for r in rascunhos:
         # previsão de chegada por parada na ordem atual (Hugo, 09/09) --
         # só pra rota com alguma janela (é quando a hora importa)
-        sim = _simular_rascunho(r["paradas"])
+        sim = _simular_rascunho(
+            r["paradas"],
+            hora_saida=_hora_saida_tarde(r))
         for i, p in enumerate(r["paradas"]):
             p["agendado_para"] = agendamentos.get(p["service_id"])
             p["tipo_area"] = tipos_area.get(p["service_id"])
@@ -963,6 +1243,20 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
             )))
             p["chegada_prevista"] = _horas_para_hhmm(sim["chegadas"][i]) if sim else None
             p["fora_janela"] = bool(sim and i in sim["fora_janela"])
+        # selo "Em separação" etc. também na parada da rota (Hugo, 09/11), não só no pool
+        anotar_situacao_stokki(r["paradas"], pool_e_agendados["retrato_stokki"])
+        if r["status"] == rascunhos_rota.STATUS_ENVIADO and r["vuupt_route_id"]:
+            try:
+                _anotar_rota_enviada(r)
+            except Exception as e:  # noqa: BLE001 -- enfeite do card: a tela carrega sem ele
+                logger.warning(f"Card da rota {r['vuupt_route_id']} sem status da Vuupt: {e}")
+
+    # motorista de verdade sai sempre com carro (spec 4): a tela mostra o aviso
+    veiculos_regras.anotar_falta_carro(rascunhos, placas_veiculos_vuupt(config))
+    try:
+        _anotar_centro_expandido(rascunhos)
+    except Exception as e:  # noqa: BLE001 -- so o aviso de rodizio na troca de carro
+        logger.warning(f"Aviso de Centro Expandido nao calculado: {e}")
 
     cfg_motoristas = config.get("motoristas", {})
     catalogo = CatalogoMotoristas.carregar(cfg_motoristas.get("planilha", ""), cfg_motoristas.get("json_fallback", ""))
@@ -993,6 +1287,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
         "rascunhos": rascunhos,
         "pool": pool_e_agendados["pool"],
         "pool_retiradas": pool_e_agendados["pool_retiradas"],
+        "retrato_stokki_em": pool_e_agendados["retrato_stokki_em"],
         "resumo_agendados": pool_e_agendados["resumo_agendados"],
         "base": {"lat": coords_base[0], "lng": coords_base[1]} if coords_base else None,
         "google_maps_key": gmaps_key,
@@ -1007,17 +1302,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
         # barra ANTES de estourar (redesenho 13/08) -- os badges de
         # trava continuam sendo a palavra final (nível/distância não
         # viram barra).
-        "travas": {
-            "max_paradas": TAMANHO_MAXIMO_ROTA, "max_caixas": VOLUME_MAXIMO_ROTA,
-            # Limites por tipo de veículo grande (ver regras/tipo_veiculo.py)
-            # -- o card de uma rota classificada troca a barra de
-            # paradas/caixas genérica pela capacidade do PRÓPRIO tipo.
-            "tipos_veiculo": {
-                t.codigo: {"nome": t.nome, "volume_maximo_cx": t.volume_maximo_cx,
-                          "max_enderecos_distintos": t.max_enderecos_distintos}
-                for t in TIPOS_VEICULO
-            },
-        },
+        "travas": _travas_card(),
         # {sender_id: "Seco"|"Refrigerado"|"Congelado"} pro chip do modo "só
         # número" mostrar a faixa de carga (Hugo, 14/08) -- sender_id sem
         # entrada aqui é tratado como Seco no cliente (mesmo padrão de
@@ -1076,6 +1361,22 @@ def roteirizar_selecionados(data_alvo: date, service_ids: list[int],
 
     selecionados = [por_id[sid] for sid in service_ids if sid in por_id and sid not in ids_em_rascunho]
     indisponiveis = len(service_ids) - len(selecionados)
+    # Em espera a pedido do cliente (27/10): pausado selecionado à mão também
+    # fica de fora (a tela só marca o card); conta à parte de "indisponíveis".
+    import pedidos_pausados_cliente
+    selecionados, pausados = pedidos_pausados_cliente.separar_pausados(selecionados)
+    # Data automática não é agendamento do cliente (marca; não anda a data aqui).
+    from datas_automaticas import marcar_datas_automaticas
+    marcar_datas_automaticas(selecionados)
+    # Retornando (editar rota enviada, 10/11): no carro do motorista, so entra em rota depois do /retornos.
+    import pedidos_retornando
+    selecionados, retornando = pedidos_retornando.separar_retornando(selecionados)
+    if retornando and not selecionados and not pausados:
+        raise ValueError("Os pedidos selecionados estão retornando ao galpão e só entram em rota "
+                         "depois do recebimento em /retornos.")
+    if pausados and not selecionados:
+        raise ValueError("Os pedidos selecionados estão em espera a pedido do cliente "
+                         "e não entram em rota. Retome a espera antes de roteirizar.")
     if not selecionados:
         raise ValueError("Nenhum dos pedidos selecionados está disponível pra roteirizar "
                          "(já em rascunho ou não estão mais 'not_assigned' na VUUPT). "
@@ -1113,6 +1414,8 @@ def roteirizar_selecionados(data_alvo: date, service_ids: list[int],
         "rotas_criadas": len(rascunhos_novos),
         "pedidos_roteirizados": sum(len(r["sublote"]) for r in rascunhos_novos),
         "pedidos_indisponiveis": indisponiveis,
+        "pedidos_pausados": len(pausados),
+        "pedidos_retornando": len(retornando),
     }
 
 
@@ -1154,18 +1457,18 @@ def _carga_compativel(classes_rota: set[str], classe_pedido: str) -> bool:
 
 
 def _cabe_no_rascunho(info: dict, cx_pedido: int, endereco_pedido: str | None) -> bool:
-    """Mesma regra de incrementar_rotas._cabe_na_rota (10/09, sem teto
-    de pedidos): rota comum só respeita o teto de caixas; rota
-    classificada como veículo grande respeita caixas + endereços
-    distintos do PRÓPRIO tipo."""
+    """Mesma regra de incrementar_rotas._cabe_na_rota: rota comum
+    respeita o teto de caixas e, desde 07/10 (Hugo), o de pedidos
+    (TAMANHO_MAXIMO_ROTA, 15); rota classificada como veículo grande
+    respeita caixas + endereços distintos do PRÓPRIO tipo."""
     tipo = info["tipo_veiculo"]
     if tipo is not None:
         return (info["caixas"] + cx_pedido <= tipo.volume_maximo_cx
                 and len(info["enderecos"] | {endereco_pedido}) <= tipo.max_enderecos_distintos)
-    return info["caixas"] + cx_pedido <= VOLUME_MAXIMO_ROTA
+    return info["qtd"] + 1 <= TAMANHO_MAXIMO_ROTA and info["caixas"] + cx_pedido <= VOLUME_MAXIMO_ROTA
 
 
-def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict]) -> dict:
+def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict], modo_teste: bool = False) -> dict:
     """
     Botão "Incrementar" da barra de seleção do pool (Hugo, 10/09):
     complementa as rotas EM RASCUNHO do lote ativo da data com os
@@ -1176,8 +1479,8 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict])
 
     Cada pedido vai pro rascunho mais próximo (centroide das paradas
     dentro de DISTANCIA_MAXIMA_ROTA_KM) que ainda o comporte, com as
-    MESMAS travas do incremento automático, sem teto de pedidos por
-    rota: caixas (VOLUME_MAXIMO_ROTA ou o do tipo de veículo grande do
+    MESMAS travas do incremento automático: até TAMANHO_MAXIMO_ROTA (15)
+    pedidos por rota comum (07/10), caixas (VOLUME_MAXIMO_ROTA ou o do tipo de veículo grande do
     rascunho), macro-região, classe de carga (seco x frio, pelo conteúdo
     da rota), janela de horário, e viagem/zona contra o motorista já
     escolhido no rascunho (rascunho sem motorista não restringe).
@@ -1192,6 +1495,9 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict])
     não bate na VUUPT. Rascunhos que ganharam pedido são reordenados com
     o 2-opt (rascunhos_rota.otimizar_sequencia), como o incremento
     automático faz na VUUPT.
+
+    modo_teste=True (incrementar_rotas.py --modo-teste) decide igual mas
+    não grava nem reordena nada.
 
     Retorna {"alocados": [{codigo, rascunho_id, rascunho_nome}],
     "orfaos": [codigos], "pedidos_indisponiveis": N, "rotas_afetadas": N}.
@@ -1210,6 +1516,18 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict])
     ids_em_rascunho = {p["service_id"] for r in rascunhos for p in r["paradas"]}
     novos = [p for p in paradas if p.get("service_id") not in ids_em_rascunho]
     indisponiveis = len(paradas) - len(novos)
+    # Retornando (editar rota enviada, 10/11): volta como nao colocado, com o motivo.
+    import pedidos_retornando
+    retornando_ids = pedidos_retornando.retornando_por_servico([{"id": p.get("service_id")} for p in novos])
+    retornando_info = []
+    if retornando_ids:
+        retornando_info = [{"codigo": p.get("codigo", ""),
+                            "motivo": f"Retornando — no carro de {retornando_ids[p['service_id']].get('motorista_nome') or '?'}"}
+                           for p in novos if p.get("service_id") in retornando_ids]
+        novos = [p for p in novos if p.get("service_id") not in retornando_ids]
+    if not novos and retornando_info:
+        return {"alocados": [], "orfaos": [r["codigo"] for r in retornando_info], "retornando": retornando_info,
+                "pedidos_indisponiveis": indisponiveis, "rotas_afetadas": 0}
     if not novos:
         raise ValueError("Todos os pedidos selecionados já estão em algum rascunho. Atualize a página.")
 
@@ -1219,6 +1537,7 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict])
     mapa_tipos_carga = carregar_tipos_carga_por_sender(rascunhos_rota.DB_PATH)
 
     from geocodificacao import geocodificar
+    coords_base = None
     try:
         coords_base = geocodificar(ENDERECO_BASE, gmaps_key)
         if coords_base:
@@ -1243,6 +1562,8 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict])
             "macro": Counter(macros).most_common(1)[0][0] if macros else None,
             "agent_id": r.get("agent_id"),
             "servicos": servicos_rota,
+            # Rascunho da tarde: janela julgada a partir da saída dele
+            "hora_saida": _hora_saida_tarde(r),
         })
 
     def _cabe_na_janela(info: dict, servico: dict) -> bool:
@@ -1250,7 +1571,7 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict])
         if not tem_janela(candidato):
             return True
         try:
-            return janela_viavel(candidato, gmaps_key)
+            return janela_viavel(candidato, gmaps_key, hora_saida=info["hora_saida"])
         except Exception as e:
             logger.warning(f"  Falha ao checar janela no rascunho '{info['nome']}' (não bloqueia): {e}")
             return True
@@ -1295,8 +1616,17 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict])
         ]
         escolhida = None
         if coords_pedido:
+            # 16/10: rascunho comum também passa pelas travas de trajeto
+            # da montagem das 16h (distância até cada parada, km acumulado, 9h)
             no_raio = [info for info in candidatas if info["centroide"]
-                       and _distancia_km(*coords_pedido, *info["centroide"]) <= DISTANCIA_MAXIMA_ROTA_KM]
+                       and _distancia_km(*coords_pedido, *info["centroide"]) <= DISTANCIA_MAXIMA_ROTA_KM
+                       and (info["tipo_veiculo"] is not None or pedido_cabe_no_trajeto(
+                           servico, info["servicos"], gmaps_key,
+                           distancia_maxima_km=DISTANCIA_MAXIMA_ROTA_KM,
+                           km_acumulado_maximo=KM_ACUMULADO_MAXIMO_ROTA_KM,
+                           km_acumulado_maximo_viagem=KM_ACUMULADO_MAXIMO_VIAGEM_KM,
+                           eh_viagem_fn=lambda sub: classificar_rota_viagem(sub, gmaps_key),
+                           base=coords_base))]
             if no_raio:
                 escolhida = min(no_raio, key=lambda info: _distancia_km(*coords_pedido, *info["centroide"]))
         elif not eh_viagem and candidatas:
@@ -1306,7 +1636,8 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict])
             orfaos.append(parada.get("codigo", ""))
             continue
 
-        rascunhos_rota.adicionar_parada(escolhida["id"], parada, None)
+        if not modo_teste:
+            rascunhos_rota.adicionar_parada(escolhida["id"], parada, None)
         escolhida["qtd"] += 1
         escolhida["caixas"] += cx_pedido
         escolhida["enderecos"].add(parada.get("endereco"))
@@ -1324,7 +1655,7 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict])
         logger.info(f"  Incrementar rascunhos: {parada.get('codigo')} -> '{escolhida['nome']}' "
                     f"({escolhida['qtd']} pedido(s), {escolhida['caixas']} cx)")
 
-    for rascunho_id in sorted(rotas_afetadas):
+    for rascunho_id in sorted(rotas_afetadas) if not modo_teste else []:
         try:
             rascunhos_rota.otimizar_sequencia(rascunho_id)
         except Exception as e:
@@ -1332,9 +1663,11 @@ def incrementar_rascunhos_com_selecionados(data_alvo: date, paradas: list[dict])
 
     if orfaos:
         logger.info(f"Incrementar rascunhos: {len(orfaos)} pedido(s) sem rascunho compatível: {orfaos}")
+    orfaos = orfaos + [r["codigo"] for r in retornando_info]
     return {
         "alocados": alocados,
         "orfaos": orfaos,
+        "retornando": retornando_info,
         "pedidos_indisponiveis": indisponiveis,
         "rotas_afetadas": len(rotas_afetadas),
     }
@@ -1405,6 +1738,7 @@ def alocar_motoristas_rascunhos(data_alvo: date) -> dict:
         motorista = selecionar_motorista_equitativo(
             sublote, data_alvo, catalogo.motoristas, contagem_alocacoes_dia, gmaps_key,
             ajustes_disponibilidade=ajustes_disponibilidade,
+            folga_fiorino_cx=_folga_fiorino_rascunho(r),
             **historico.parametros_alocacao(horas_rota),
         )
         if not motorista:
@@ -1445,6 +1779,12 @@ def desalocar_motoristas_rascunhos(data_alvo: date) -> dict:
         desalocados.append({"rascunho_id": r["id"], "nome": r["nome"]})
 
     return {"desalocados": desalocados, "sem_motorista": sem_motorista}
+
+
+def _folga_fiorino_rascunho(rascunho: dict) -> int:
+    """Receptora de rota fraca vai até 110 caixas e continua Fiorino
+    (Hugo, 03/10 -- mesma regra do criar_rotas_diarias._folga_fiorino)."""
+    return FOLGA_CAIXAS_ROTA_FRACA if rascunho.get("recebeu_rota_fraca") else 0
 
 
 def _sublote_para_elegibilidade(paradas: list[dict], mapa_tipos_carga: dict | None = None) -> list[dict]:
@@ -1521,6 +1861,7 @@ def publicar_oferta_rascunho(rascunho_id: int) -> dict:
     elegiveis = listar_motoristas_elegiveis(
         sublote, data_alvo, catalogo.motoristas, contagem_alocacoes_dia, gmaps_key,
         ajustes_disponibilidade=ajustes_disponibilidade,
+        folga_fiorino_cx=_folga_fiorino_rascunho(rascunho),
     )
     if not elegiveis:
         return {"ok": False, "erro": "Nenhum motorista elegível pra essa rota -- ninguém veria a oferta."}
@@ -1530,7 +1871,7 @@ def publicar_oferta_rascunho(rascunho_id: int) -> dict:
     # Mesmo critério de área de _elegibilidade_sublote (só dia útil tem
     # rodízio); geocodificação vem do cache, já aquecida pela chamada de
     # listar_motoristas_elegiveis logo acima.
-    rota_em_area_rodizio = data_alvo.weekday() in (0, 1, 2, 3, 4) and sublote_em_area_rodizio(sublote, gmaps_key)
+    rota_em_area_rodizio = feriados.eh_dia_util(data_alvo) and sublote_em_area_rodizio(sublote, gmaps_key)
     priorizados = priorizar(elegiveis, data_alvo, rota_em_area_rodizio, contagem_alocacoes_dia, config)
 
     ofertas_rota.criar_ou_atualizar_oferta(
@@ -1655,11 +1996,14 @@ def limpar_disponibilidade_dia(agent_id: int, data_alvo: date) -> dict:
     return {"removido": removido}
 
 
-def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:
+def cancelar_pedido(service_id: int, rascunho_id: int | None = None, usuario: str = "") -> dict:
     """
-    Cancela DE VERDADE um pedido na VUUPT (DELETE /services/{id} --
-    VuuptClient.cancelar_servico) direto da tela de planejamento --
-    botão "Cancelar pedido" (Hugo, 15/08). Cobre os 3 lugares onde um
+    Cancela DE VERDADE um pedido na VUUPT (PUT /services/{id}/cancel --
+    VuuptClient.cancelar_servico_oficial) direto da tela de planejamento --
+    botão "Cancelar pedido" (Hugo, 15/08). Até 05/10 era DELETE: o serviço
+    sumia e o pipeline, sem achar nada com aquele código, recriava o
+    pedido ainda aberto na Stokki (PS-38284, PS-39959). Com status
+    'canceled' ele cai em pulado_cancelado_vuupt. Cobre os 3 lugares onde um
     pedido pode estar quando o usuário clica:
 
       - No pool (not_assigned, fora de rascunho): cancela direto.
@@ -1668,9 +2012,12 @@ def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:
       - Numa rota já enviada (rascunho ENVIADO, rota de verdade na
         VUUPT): rascunhos_rota.preparar_cancelamento_de_parada tira o
         serviço da rota de verdade primeiro (ou cancela a rota inteira,
-        se for a última parada) -- só quando ela ainda não iniciou
-        deslocamento (checado ao vivo); só então o serviço é cancelado
-        de fato.
+        se for a última parada e nada começou) -- só se o PEDIDO ainda
+        não começou (checado ao vivo; desde 10/11 vale com a rota já
+        rodando); só então o serviço é cancelado de fato. Não vira
+        Retornando -- exceto se o pedido já saiu de rota INICIADA e o
+        cancelamento falhar: aí ele segue vivo no carro e vira Retornando
+        (retornando_se_cancelamento_falhou), com o aviso junto do erro.
 
     NÃO mexe em nada na Stokki -- só cancela na VUUPT (roteirização).
     Cancelar o pedido na Stokki de verdade continua manual, fora dessa
@@ -1685,6 +2032,7 @@ def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:
     if rascunho_id and not rascunho:
         return {"ok": False, "erro": f"Rascunho {rascunho_id} não encontrado."}
 
+    preparo = {}
     if rascunho and rascunho["status"] == rascunhos_rota.STATUS_ENVIADO:
         preparo = rascunhos_rota.preparar_cancelamento_de_parada(rascunho_id, service_id, token)
         if not preparo["ok"]:
@@ -1692,8 +2040,12 @@ def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:
 
     vuupt = VuuptClient(token)
     try:
-        vuupt.cancelar_servico(service_id)
+        vuupt.cancelar_servico_oficial(service_id)
     except VuuptAPIError as e:
+        # pedido ja saiu de rota iniciada mas nao cancelou: esta no carro -> Retornando
+        aviso = rascunhos_rota.retornando_se_cancelamento_falhou(preparo, service_id, str(e), usuario)
+        if aviso:
+            return {"ok": False, "erro": f"{e} — {aviso}", "aviso": aviso}
         return {"ok": False, "erro": str(e)}
     _ressincronizar(vuupt, [service_id])
 
@@ -1701,6 +2053,22 @@ def cancelar_pedido(service_id: int, rascunho_id: int | None = None) -> dict:
         rascunhos_rota.remover_parada(rascunho_id, service_id)
 
     return {"ok": True}
+
+
+def _registrar_agendamento_equipe(service_ids: list[int], scheduled_start: str) -> None:
+    """Data agendada pela equipe não é data do cliente (Hugo, 03/10 -- dias
+    fixos v2): grava a origem EQUIPE em agendamentos_origem, pra regra de
+    data fora do dia fixo (roteirizacao/fora_dia_fixo.py) não transformar o
+    pedido em dedicado. Nunca levanta: o reagendamento na Vuupt já foi feito."""
+    if not service_ids:
+        return
+    try:
+        import registro_dia_fixo
+        data = date.fromisoformat(str(scheduled_start)[:10])
+        registro_dia_fixo.registrar_origens([{"servico": {"id": sid}, "data": data} for sid in service_ids],
+                                            registro_dia_fixo.ORIGEM_EQUIPE, registro_dia_fixo.DB_PATH)
+    except Exception as e:
+        logger.warning(f"Não registrou a origem EQUIPE do reagendamento {service_ids}: {e}")
 
 
 def reagendar_pedido(service_id: int, data: str, hora_inicio: str, hora_fim: str) -> dict:
@@ -1719,7 +2087,8 @@ def reagendar_pedido(service_id: int, data: str, hora_inicio: str, hora_fim: str
     NÃO mexe em nada na Stokki, só no agendamento da VUUPT -- e não
     reaplica as regras de dia fixo por região (essas são só pro
     reagendamento automático via e-mail); aqui é uma escolha manual do
-    usuário, vai pra VUUPT como digitada.
+    usuário, vai pra VUUPT como digitada. 03/10: a data fica registrada
+    como EQUIPE (não vira dedicado por data fora do dia fixo).
 
     Retorna {"ok": True} ou {"ok": False, "erro": "..."}.
     """
@@ -1738,6 +2107,7 @@ def reagendar_pedido(service_id: int, data: str, hora_inicio: str, hora_fim: str
     except VuuptAPIError as e:
         return {"ok": False, "erro": str(e)}
     _ressincronizar(vuupt, [service_id])
+    _registrar_agendamento_equipe([service_id], scheduled_start)
 
     return {"ok": True}
 
@@ -1805,7 +2175,55 @@ def reagendar_pedidos(itens: list[dict], data: str, hora_inicio: str, hora_fim: 
 
     if ok_ids:
         _ressincronizar(vuupt, ok_ids)
+        _registrar_agendamento_equipe(ok_ids, scheduled_start)
     return {"ok": True, "falhas": falhas}
+
+
+def checar_reagendamento_dia_fixo(service_ids: list[int], data: str) -> dict:
+    """
+    Reagendamento pela equipe fora do dia de visita (Hugo, 03/10 -- spec
+    dias fixos v2, 5.4): antes de salvar, a tela pergunta se o pedido vira
+    dedicado. Devolve {"ok": True, "fora_do_dia": [{service_id, codigo,
+    regiao, dias, valor}]} só com os pedidos de região de dia fixo em que
+    `data` (AAAA-MM-DD) não é dia de visita. `valor` vem da calculadora de
+    frete dedicado (roteirizacao/fora_dia_fixo.calcular_valor, km em linha
+    reta) ou é None quando não dá pra calcular -- o modal de dedicado abre
+    vazio pra digitar. Pedido que não carrega da Vuupt fica de fora (nunca
+    trava o reagendamento). Só lê: nada é gravado aqui.
+    """
+    try:
+        alvo = date.fromisoformat(str(data))
+    except ValueError:
+        return {"ok": False, "erro": f"Data inválida: {data}"}
+    if not service_ids:
+        return {"ok": True, "fora_do_dia": []}
+    import fora_dia_fixo
+    import pedidos_dedicados
+    config = _carregar_config()
+    vuupt = VuuptClient(config.get("vuupt_api", {}).get("token", ""))
+    tipos = fora_dia_fixo.carregar_tipos_carga(rascunhos_rota.DB_PATH)
+    fora = []
+    for sid in service_ids:
+        try:
+            servico = vuupt.buscar_servico_por_id(int(sid))
+        except Exception as e:
+            logger.warning(f"Checagem de dia fixo: serviço {sid} não carregou ({e}); segue sem a pergunta.")
+            continue
+        if not servico:
+            continue
+        regra = regra_dia_fixo_do_servico(servico)
+        if not regra or data_valida_na_regiao(regra, alvo):
+            continue
+        try:
+            valor = fora_dia_fixo.calcular_valor(servico, config, tipos)
+        except Exception as e:
+            logger.warning(f"Checagem de dia fixo: calculadora falhou no serviço {sid} ({e}).")
+            valor = None
+        codigos = pedidos_dedicados.codigos_do_servico(servico)
+        fora.append({"service_id": int(sid), "codigo": codigos[0] if codigos else "",
+                     "regiao": regra.get("regiao") or regra["nome"], "dias": descricao_dias(regra),
+                     "valor": valor})
+    return {"ok": True, "fora_do_dia": fora}
 
 
 def _gravar_endereco_pedido(vuupt: VuuptClient, service_id: int, endereco: str,
@@ -2045,22 +2463,20 @@ def editar_endereco_pedidos(itens: list[dict], endereco: str) -> dict:
 # existe campo de transportadora no serviço da VUUPT nem em
 # nucleo_pedidos: o que identifica o redespacho no resto do sistema
 # (canhoteira do romaneio, notificação de XML pra transportadora) é o
-# ENDEREÇO do serviço batendo com o galpão da planilha
+# ENDEREÇO do serviço batendo com o galpão do cadastro
 # (regras.transportadoras.resolver_por_endereco). Então "trocar a
 # transportadora" = trocar o endereço do pedido pelo endereço do galpão
 # da TERCEIROS escolhida, pelo mesmo caminho do "Editar endereço".
 
-CAMINHO_BD_TRANSPORTADORAS = _RAIZ / "dados" / "BD_TRANSPORTADORAS.xlsx"
-
 
 def _catalogo_transportadoras():
-    """Catálogo da BD_TRANSPORTADORAS (mesmo do pipeline) -- None se a
-    planilha não abrir. Recarrega a cada chamada de propósito: o Hugo
-    edita a planilha na mão e a tela tem que ver a linha nova sem
-    reiniciar o painel."""
+    """Catálogo de transportadoras (mesmo do pipeline, tabela do dados.db) --
+    None se o cadastro não abrir. Recarrega a cada chamada de propósito: a
+    tela /transportadoras edita o cadastro e esta tela tem que ver a linha
+    nova sem reiniciar o painel."""
     try:
         from regras.transportadoras import CatalogoTransportadoras
-        return CatalogoTransportadoras.carregar(CAMINHO_BD_TRANSPORTADORAS)
+        return CatalogoTransportadoras.carregar_do_banco(_DB_PATH)
     except Exception as e:
         logger.warning(f"[planejamento] Sem catálogo de transportadoras ({e}).")
         return None
@@ -2069,7 +2485,7 @@ def _catalogo_transportadoras():
 def listar_transportadoras_terceiros() -> list[dict]:
     """Opções do select "Transportadora (redespacho)": só as TERCEIROS
     com endereço de galpão, [{"nome", "endereco"}] em ordem alfabética.
-    Lista vazia se a planilha não abrir (a tela avisa)."""
+    Lista vazia se o cadastro não abrir (a tela avisa)."""
     catalogo = _catalogo_transportadoras()
     return catalogo.listar_terceiros() if catalogo else []
 
@@ -2079,7 +2495,7 @@ def editar_transportadora_pedidos(itens: list[dict], transportadora: str) -> dic
     Troca o endereço dos pedidos de `itens` ({"service_id", "rascunho_id"})
     pelo endereço de redespacho da transportadora TERCEIROS escolhida --
     menu de contexto (1 pedido) e barras de seleção (lote) da tela de
-    planejamento. Só vale pra TERCEIROS da BD_TRANSPORTADORAS: ENTREGA,
+    planejamento. Só vale pra TERCEIROS do cadastro de transportadoras: ENTREGA,
     RETIRADA ou nome desconhecido são recusados antes de tocar na VUUPT.
 
     A gravação em si é a de editar_endereco_pedidos (VUUPT no nível raiz
@@ -2096,14 +2512,14 @@ def editar_transportadora_pedidos(itens: list[dict], transportadora: str) -> dic
 
     catalogo = _catalogo_transportadoras()
     if catalogo is None:
-        return {"ok": False, "erro": "Não foi possível abrir a planilha BD_TRANSPORTADORAS.xlsx."}
+        return {"ok": False, "erro": "Não foi possível abrir o cadastro de transportadoras."}
 
     endereco = catalogo.endereco_terceiros(transportadora)
     if endereco is None:
         return {
             "ok": False,
             "erro": (f"Transportadora {transportadora!r} não é TERCEIROS com endereço "
-                     f"de redespacho na BD_TRANSPORTADORAS.xlsx."),
+                     f"de redespacho no cadastro de transportadoras."),
         }
 
     texto = str(endereco)

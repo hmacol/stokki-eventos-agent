@@ -1,0 +1,455 @@
+# -*- coding: utf-8 -*-
+"""
+Aprovação e recusa de auto-cadastro de motorista pelo painel (/motoristas,
+08/10/2026): só o nível total vê e age; aprovar grava na planilha (duplo)
+e cria o login; documento é servido só pra quem pode aprovar.
+
+    cd painel_agentes && py -3.11 -m unittest test_cadastros_motoristas
+"""
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+_AQUI = Path(__file__).parent
+_RAIZ = _AQUI.parent
+for _p in (_RAIZ, _AQUI):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+import importlib.util  # noqa: E402
+_spec = importlib.util.spec_from_file_location("painel_agentes_app", _AQUI / "painel_agentes.py")
+painel_agentes = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = painel_agentes
+_spec.loader.exec_module(painel_agentes)
+
+from nucleo import banco, cadastro_motorista as cad, auth_motorista as auth  # noqa: E402
+
+CONFIG_PAINEL = {"usuario": "u_total", "senha": "s_total", "usuario_operador": "u_op", "senha_operador": "s_op",
+                 "usuario_leitura": "u_le", "senha_leitura": "s_le"}
+
+CADASTRO = {"cpf": "98765432100", "nome": "Maria da Silva", "telefone": "11998765432", "chave_pix": "maria@x.com",
+            "placa": "ABC1D23", "tipo_veiculo": "FIORINO", "zonas": ["ZONA SUL"], "dias": ["SEGUNDA"], "aceita_viagens": True}
+
+
+class TestCadastrosMotoristas(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        raiz = Path(self._tmp.name)
+        self._patch_db = mock.patch.object(banco, "DB_PATH", raiz / "t.db")
+        self._patch_db.start()
+        config = {**painel_agentes._carregar_config(), "painel_agentes": CONFIG_PAINEL,
+                  "motoristas": {"planilha": str(raiz / "BD.xlsx")}}
+        p = mock.patch.object(painel_agentes, "_carregar_config", return_value=config)
+        p.start()
+        self.addCleanup(p.stop)
+        self.planilha = []
+        p2 = mock.patch("regras.cadastro_motoristas.cadastrar_motorista", side_effect=lambda cfg, d: self.planilha.append(d))
+        p2.start()
+        self.addCleanup(p2.stop)
+        painel_agentes.app.config["TESTING"] = True
+        self.cliente = painel_agentes.app.test_client()
+
+        conn = banco.conectar()
+        self.cid = cad.criar_cadastro(conn, CADASTRO)["id"]
+        chave = conn.execute("SELECT chave_envio FROM motoristas_cadastros WHERE id = ?", (self.cid,)).fetchone()[0]
+        cad.guardar_documento(conn, self.cid, chave, "cnh", "cnh.jpg", b"\xff\xd8" * 20)
+        cad.guardar_documento(conn, self.cid, chave, "crlv", "crlv.jpg", b"\xff\xd8" * 20)
+        conn.close()
+
+    def tearDown(self):
+        self._patch_db.stop()
+        self._tmp.cleanup()
+
+    def _logar(self, nivel):
+        with self.cliente.session_transaction() as sess:
+            sess["nivel_acesso"] = nivel
+            sess["usuario"] = "hugo"
+
+    def _post(self, url, body):
+        return self.cliente.post(url, json=body, headers={"Origin": "http://localhost", "Referer": "http://localhost/"})
+
+    def test_tela_mostra_pendentes_so_pro_total(self):
+        self._logar("total")
+        html = self.cliente.get("/motoristas").get_data(as_text=True)
+        self.assertIn('id="titulo-pendentes"', html)
+        self.assertIn("esperando aprovação (1)", html)
+        self.assertIn("Maria da Silva", html)
+        self._logar("operador")
+        html = self.cliente.get("/motoristas").get_data(as_text=True)
+        self.assertNotIn('id="titulo-pendentes"', html)
+        self.assertNotIn("Maria da Silva", html)
+
+    def test_documento_so_pro_total(self):
+        url = f"/api/motoristas/cadastros/{self.cid}/documento/cnh"
+        self._logar("operador")
+        self.assertIn(self.cliente.get(url).status_code, (302, 403))
+        self._logar("total")
+        r = self.cliente.get(url)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.cliente.get(f"/api/motoristas/cadastros/{self.cid}/documento/rg").status_code, 404)
+
+    def test_aprovar_e_recusar(self):
+        self._logar("operador")
+        self.assertIn(self._post(f"/api/motoristas/cadastros/{self.cid}/aprovar", {"agent_id": 77}).status_code, (302, 403))
+
+        self._logar("total")
+        r = self._post(f"/api/motoristas/cadastros/{self.cid}/aprovar", {"agent_id": None})
+        self.assertEqual(r.status_code, 400)
+        r = self._post(f"/api/motoristas/cadastros/{self.cid}/aprovar",
+                       {"agent_id": 77, "zonas": ["ZONA SUL", "CENTRO"], "dias": ["SEGUNDA", "SEXTA"], "tipo_veiculo": "VAN_HR", "aceita_viagens": False})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        d = r.get_json()
+        self.assertRegex(d["pin"], r"^\d{6}$")
+        self.assertEqual(d["cadastro"]["revisado_por"], "hugo")
+        self.assertEqual(self.planilha[0]["agent_id"], 77)
+        self.assertEqual(self.planilha[0]["tipo_veiculo"], "VAN_HR")
+        conn = banco.conectar()
+        m = auth.buscar_motorista(conn, "98765432100")
+        self.assertEqual((m["agent_id"], m["tipo_veiculo"], m["trocar_pin"], m["placa"]), (77, "VAN_HR", 1, "ABC1D23"))
+        self.assertEqual(cad.contar_pendentes(conn), 0)
+        # segundo cadastro: recusa
+        cid2 = cad.criar_cadastro(conn, {**CADASTRO, "cpf": "11122233344"})["id"]
+        conn.close()
+        r = self._post(f"/api/motoristas/cadastros/{cid2}/recusar", {"motivo": "CNH vencida"})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertEqual(r.get_json()["cadastro"]["status"], "RECUSADO")
+        self.assertEqual(self._post(f"/api/motoristas/cadastros/{cid2}/recusar", {"motivo": "x"}).status_code, 409)
+
+    def test_chave_ve_financeiro(self):
+        self._logar("total")
+        self._post(f"/api/motoristas/cadastros/{self.cid}/aprovar", {"agent_id": 77})
+        r = self._post("/api/motoristas/98765432100/ve-financeiro", {"ve": False})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertFalse(r.get_json()["ve_financeiro"])
+        self.assertEqual(self._post("/api/motoristas/00000000000/ve-financeiro", {"ve": True}).status_code, 404)
+        self._logar("operador")
+        self.assertIn(self._post("/api/motoristas/98765432100/ve-financeiro", {"ve": True}).status_code, (302, 403))
+
+
+class TestCadastrosPeloLink(unittest.TestCase):
+    """Seção "Cadastros pelo link" da tela /motoristas e as rotas resolver/tentar."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self._patch_db = mock.patch.object(banco, "DB_PATH", Path(self._tmp.name) / "t.db")
+        self._patch_db.start()
+        self.config = config = {**painel_agentes._carregar_config(), "painel_agentes": CONFIG_PAINEL,
+                                "cadastro_motorista_link": {"ativo": True}}
+        p = mock.patch.object(painel_agentes, "_carregar_config", return_value=config)
+        p.start()
+        self.addCleanup(p.stop)
+        painel_agentes.app.config["TESTING"] = True
+        self.cliente = painel_agentes.app.test_client()
+        conn = banco.conectar()
+        r = cad.criar_cadastro_link(conn, {
+            "nome": "Carlos Link Souza", "cpf": "98765432100", "data_nascimento": "1990-05-17", "telefone": "11998765432",
+            "chave_pix": "pix-do-carlos", "emite_nf": False, "dias": ["SEGUNDA"], "zonas": ["ZONA SUL"], "posicao": "FIXO",
+            "celular": "ANDROID", "tipo_veiculo": "fiorino", "placa": "ABC1D23", "veiculo_modelo": "Fiorino",
+            "veiculo_ano": 2020, "refrigerado": False, "dono_veiculo": True})
+        self.cid = r["id"]
+        for t in cad.DOCUMENTOS:
+            cad.guardar_documento(conn, self.cid, r["chave_envio"], t, f"{t}.jpg", b"\xff\xd8" * 20)
+        cad.marcar_enviado(conn, self.cid, r["chave_envio"])
+        conn.execute("UPDATE motoristas_cadastros SET conflito_agent_id = 321, conflito_resolvido = 0 WHERE id = ?", (self.cid,))
+        conn.commit()
+        conn.close()
+
+    def tearDown(self):
+        self._patch_db.stop()
+        self._tmp.cleanup()
+
+    def _logar(self, nivel):
+        with self.cliente.session_transaction() as sess:
+            sess["nivel_acesso"] = nivel
+            sess["usuario"] = "hugo"
+
+    def _post(self, url, body):
+        return self.cliente.post(url, json=body, headers={"Origin": "http://localhost", "Referer": "http://localhost/"})
+
+    def test_tela_mostra_ficha_e_botoes_so_pro_total(self):
+        conn = banco.conectar()
+        conn.execute("UPDATE motoristas_cadastros SET vuupt_email = 'carlos@freshhub.com.br', ultimo_erro = 'erro-secreto-vuupt' WHERE id = ?", (self.cid,))
+        conn.commit()
+        conn.close()
+        self._logar("total")
+        html = self.cliente.get("/motoristas").get_data(as_text=True)
+        self.assertIn("Carlos Link Souza", html)
+        self.assertIn("Telefone já é do agente 321 na Vuupt", html)
+        self.assertIn("É o mesmo: usar agente 321", html)
+        self.assertIn("É outra pessoa: criar agente novo", html)
+        self.assertIn("pix-do-carlos", html)
+        self.assertIn("1990-05-17", html)
+        self.assertIn("carlos@freshhub.com.br", html)
+        self.assertIn(f"/api/motoristas/cadastros/{self.cid}/documento/selfie", html)
+        self._logar("operador")
+        html = self.cliente.get("/motoristas").get_data(as_text=True)
+        self.assertIn("Carlos Link Souza", html)
+        for escondido in ("É o mesmo", "Tentar de novo", "pix-do-carlos", "98765432100", "/documento/selfie",
+                          "1990-05-17", "carlos@freshhub.com.br", "erro-secreto-vuupt"):
+            self.assertNotIn(escondido, html)
+
+    def test_pendente_sem_conflito_mostra_tentar_de_novo(self):
+        conn = banco.conectar()
+        conn.execute("UPDATE motoristas_cadastros SET conflito_agent_id = NULL, ultimo_erro = 'agente: HTTP 500' WHERE id = ?", (self.cid,))
+        conn.commit()
+        conn.close()
+        self._logar("total")
+        html = self.cliente.get("/motoristas").get_data(as_text=True)
+        self.assertIn("Tentar de novo", html)
+        self.assertIn("agente: HTTP 500", html)
+        self.assertIn("Usar este agente", html)
+
+    def test_cartao_do_link_nao_casa_com_seletor_do_fluxo_do_app(self):
+        """Regressão: o JS do app faz querySelectorAll('.cartao-cadastro') e exige
+        .botao-aprovar em cada um; o cartão do link não pode cair nesse seletor."""
+        from html.parser import HTMLParser
+        conn = banco.conectar()
+        app_id = cad.criar_cadastro(conn, CADASTRO)["id"]
+        chave = conn.execute("SELECT chave_envio FROM motoristas_cadastros WHERE id = ?", (app_id,)).fetchone()[0]
+        cad.guardar_documento(conn, app_id, chave, "cnh", "cnh.jpg", b"\xff\xd8" * 20)
+        cad.guardar_documento(conn, app_id, chave, "crlv", "crlv.jpg", b"\xff\xd8" * 20)
+        conn.close()
+
+        class Coletor(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.pilha, self.cartoes, self.links = [], [], []
+
+            def handle_starttag(self, tag, attrs):
+                a = dict(attrs)
+                classes = (a.get("class") or "").split()
+                if tag == "article":
+                    atual = {"classes": classes, "aprovar": False}
+                    (self.cartoes if "cartao-cadastro" in classes else self.links).append(atual)
+                    self.pilha.append(atual)
+                elif "botao-aprovar" in classes and self.pilha:
+                    self.pilha[-1]["aprovar"] = True
+
+            def handle_endtag(self, tag):
+                if tag == "article" and self.pilha:
+                    self.pilha.pop()
+
+        self._logar("total")
+        c = Coletor()
+        c.feed(self.cliente.get("/motoristas").get_data(as_text=True))
+        self.assertEqual(len(c.cartoes), 1)
+        self.assertEqual(len(c.links), 1)
+        self.assertTrue(all(x["aprovar"] for x in c.cartoes))
+        self.assertNotIn("cartao-cadastro", c.links[0]["classes"])
+
+    def test_sem_cadastro_de_link_nao_ha_secao(self):
+        conn = banco.conectar()
+        conn.execute("DELETE FROM motoristas_cadastros")
+        conn.commit()
+        conn.close()
+        self._logar("total")
+        self.assertNotIn('id="titulo-link"', self.cliente.get("/motoristas").get_data(as_text=True))
+
+    def test_resolver_e_tentar_so_pro_total(self):
+        self._logar("operador")
+        r = self._post(f"/api/motoristas/cadastros-link/{self.cid}/resolver", {"usar_agent_id": 321})
+        self.assertIn(r.status_code, (302, 403))
+        r = self._post(f"/api/motoristas/cadastros-link/{self.cid}/tentar", {})
+        self.assertIn(r.status_code, (302, 403))
+
+    def test_resolver_e_tentar_chamam_o_processador(self):
+        from nucleo import cadastro_motorista_link as proc
+        self._logar("total")
+        ok = {"situacao": "concluido", "erro": None}
+        with mock.patch.object(proc, "resolver_conflito", return_value=ok) as res:
+            r = self._post(f"/api/motoristas/cadastros-link/{self.cid}/resolver", {"usar_agent_id": 321})
+        self.assertEqual((r.status_code, r.get_json()), (200, {"ok": True, "resultado": ok}))
+        self.assertEqual(res.call_args.args[2:5], (self.cid, 321, "hugo"))
+        with mock.patch.object(proc, "resolver_conflito", return_value=ok) as res:
+            self._post(f"/api/motoristas/cadastros-link/{self.cid}/resolver", {"usar_agent_id": None})
+        self.assertIsNone(res.call_args.args[3])
+        with mock.patch.object(proc, "processar", return_value={"situacao": "pendente", "erro": "x"}) as pr:
+            r = self._post(f"/api/motoristas/cadastros-link/{self.cid}/tentar", {})
+        self.assertEqual(r.get_json()["resultado"]["situacao"], "pendente")
+        self.assertEqual(pr.call_args.args[2], self.cid)
+        self.assertTrue(pr.call_args.kwargs["forcar"])   # destrava tentativas esgotadas
+        with mock.patch.object(proc, "processar", side_effect=RuntimeError("boom https://api.vuupt.com/x")):
+            r = self._post(f"/api/motoristas/cadastros-link/{self.cid}/tentar", {})
+        self.assertEqual((r.status_code, r.get_json()), (500, {"erro": "Erro interno."}))
+        self.assertEqual(self._post(f"/api/motoristas/cadastros-link/{self.cid}/resolver", {"usar_agent_id": "abc"}).status_code, 400)
+        self.assertEqual(self._post("/api/motoristas/cadastros-link/9999/tentar", {}).status_code, 404)
+
+    def test_link_desligado_tentar_e_resolver_409_desfazer_segue(self):
+        from nucleo import cadastro_motorista_link as proc
+        self.config["cadastro_motorista_link"] = {"ativo": False}
+        self._logar("total")
+        with mock.patch.object(proc, "processar") as pr, mock.patch.object(proc, "resolver_conflito") as res:
+            for url, body in (("tentar", {}), ("resolver", {"usar_agent_id": 321}), ("resolver", {"usar_agent_id": None})):
+                r = self._post(f"/api/motoristas/cadastros-link/{self.cid}/{url}", body)
+                self.assertEqual((r.status_code, r.get_json()), (409, {"erro": "Cadastro pelo link desligado no config."}))
+        pr.assert_not_called()
+        res.assert_not_called()
+        ok = {"situacao": "desfeito", "erro": None, "apagados": []}
+        with mock.patch.object(proc, "desfazer_cadastro_link", return_value=ok):
+            r = self._post(f"/api/motoristas/cadastros-link/{self.cid}/desfazer", {})
+        self.assertEqual(r.status_code, 200)
+
+    def test_agente_da_vuupt_pra_confirmar(self):
+        from nucleo import cadastro_motorista_link as proc
+        url = f"/api/motoristas/cadastros-link/{self.cid}/agente/321"
+        self._logar("operador")
+        with mock.patch.object(proc, "agente_da_vuupt") as ag:
+            self.assertEqual(self.cliente.get(url).status_code, 403)
+        ag.assert_not_called()
+        self._logar("total")
+        with mock.patch.object(proc, "agente_da_vuupt",
+                               return_value={"id": 321, "nome": "Fulano", "telefone": "+5511998765432"}) as ag:
+            r = self.cliente.get(url)
+        self.assertEqual((r.status_code, r.get_json()), (200, {"nome": "Fulano", "telefone": "+5511998765432"}))
+        self.assertEqual(ag.call_args.args[1], 321)
+        with mock.patch.object(proc, "agente_da_vuupt", return_value=None):
+            self.assertEqual(self.cliente.get(url).status_code, 404)
+        with mock.patch.object(proc, "agente_da_vuupt", side_effect=RuntimeError("GET /agents: HTTP 500 token")):
+            r = self.cliente.get(url)
+        self.assertEqual((r.status_code, r.get_json()), (500, {"erro": "Erro interno."}))
+        self.assertEqual(self.cliente.get("/api/motoristas/cadastros-link/9999/agente/321").status_code, 404)
+
+    def test_desfazer_so_pro_total(self):
+        from nucleo import cadastro_motorista_link as proc
+        url = f"/api/motoristas/cadastros-link/{self.cid}/desfazer"
+        self._logar("operador")
+        with mock.patch.object(proc, "desfazer_cadastro_link") as d:
+            self.assertEqual(self._post(url, {"apagar_na_vuupt": True}).status_code, 403)
+        d.assert_not_called()
+        self._logar("total")
+        ok = {"situacao": "desfeito", "erro": None, "apagados": []}
+        with mock.patch.object(proc, "desfazer_cadastro_link", return_value=ok) as d:
+            r = self._post(url, {"apagar_na_vuupt": True})
+        self.assertEqual((r.status_code, r.get_json()), (200, {"ok": True, "resultado": ok}))
+        self.assertEqual(d.call_args.args[2:4], (self.cid, "hugo"))
+        self.assertTrue(d.call_args.kwargs["apagar_na_vuupt"])
+        # de verdade (sem linha na tabela, sem Vuupt): o cadastro fica RECUSADO e sai da fila
+        r = self._post(url, {})
+        self.assertEqual(r.get_json()["resultado"]["situacao"], "desfeito")
+        conn = banco.conectar()
+        try:
+            row = conn.execute("SELECT status, motivo, concluido_em FROM motoristas_cadastros WHERE id = ?", (self.cid,)).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual((row["status"], row["motivo"]), ("RECUSADO", "desfeito no painel"))
+        self.assertIsNotNone(row["concluido_em"])
+        html = self.cliente.get("/motoristas").get_data(as_text=True)
+        self.assertIn("Desfeito por hugo", html)
+        self.assertNotIn("Desfazer (é falso/teste)", html)
+
+    def test_cartao_conflito_de_placa_sem_agente_e_pediu_fixo(self):
+        conn = banco.conectar()
+        conn.execute("UPDATE motoristas_cadastros SET conflito_tipo = 'placa' WHERE id = ?", (self.cid,))
+        conn.commit()
+        conn.close()
+        self._logar("total")
+        html = self.cliente.get("/motoristas").get_data(as_text=True)
+        self.assertIn("Placa ABC1D23 já é do veículo do agente 321 na Vuupt", html)
+        self.assertIn("É o mesmo motorista: usar agente 321", html)
+        self.assertIn("É outra pessoa: criar agente novo e reaproveitar o veículo", html)
+        self.assertNotIn("Telefone já é do agente", html)
+        self.assertIn("Pediu: Fixo", html)
+        self.assertIn("Desfazer (é falso/teste)", html)
+        self.assertIn("/agente/${usar}", html)
+
+
+class TestEditarMotorista(unittest.TestCase):
+    """PUT /api/motoristas/<id> e o botao Editar da tela (banco temporario)."""
+
+    def setUp(self):
+        from regras import motoristas_banco as mb
+        self.mb = mb
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.dir = Path(self._tmp.name)
+        self._patch_db = mock.patch.object(banco, "DB_PATH", self.dir / "t.db")
+        self._patch_db.start()
+        config = {**painel_agentes._carregar_config(), "painel_agentes": CONFIG_PAINEL}
+        p = mock.patch.object(painel_agentes, "_carregar_config", return_value=config)
+        p.start()
+        self.addCleanup(p.stop)
+        painel_agentes.app.config["TESTING"] = True
+        self.cliente = painel_agentes.app.test_client()
+        conn = banco.conectar()
+        linha = {c: None for c in mb.COLUNAS}
+        linha.update(AGENT_ID_VUUPT=5, NOME_MOTORISTA="Ana Teste", ATIVO="SIM", ACEITA_VIAGENS="SIM",
+                     ZONAS_PREFERIDAS="ZONA SUL", DIAS_DISPONIVEIS="SEGUNDA", MAX_ROTAS_DIA=1)
+        self.mid = mb.inserir(conn, linha, "teste")
+        conn.close()
+
+    def tearDown(self):
+        self._patch_db.stop()
+        self._tmp.cleanup()
+
+    def _logar(self, nivel):
+        with self.cliente.session_transaction() as sess:
+            sess["nivel_acesso"] = nivel
+            sess["usuario"] = "hugo"
+
+    def _put(self, corpo, mid=None):
+        return self.cliente.put(f"/api/motoristas/{mid or self.mid}", json=corpo,
+                                headers={"Origin": "http://localhost", "Referer": "http://localhost/"})
+
+    def test_put_editar_niveis(self):
+        self._logar("leitura")
+        self.assertIn(self._put({"nome": "X"}).status_code, (302, 401, 403))
+        self._logar("operador")
+        r = self._put({"nome": "Ana Editada"})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertEqual(r.get_json()["mudancas"][0]["campo"], "NOME_MOTORISTA")
+
+    def test_put_editar_agent_id_400(self):
+        self._logar("total")
+        r = self._put({"agent_id": 99})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("AGENT_ID", r.get_json()["erro"])
+
+    def test_put_id_inexistente_404_e_corpo_nao_objeto_400(self):
+        self._logar("total")
+        r = self._put({"nome": "X"}, mid=99999)
+        self.assertEqual(r.status_code, 404)
+        self.assertIn("nao existe", r.get_json()["erro"])
+        for corpo in ([1, 2], "texto", None):
+            r = self._put(corpo)
+            self.assertEqual(r.status_code, 400, corpo)
+            self.assertIn("objeto JSON", r.get_json()["erro"])
+
+    def test_botao_editar_so_para_quem_pode(self):
+        self._logar("operador")
+        html = self.cliente.get("/motoristas").get_data(as_text=True)
+        self.assertIn("Ana Teste", html)
+        self.assertIn(f'data-id="{self.mid}"', html)
+        self.assertIn("botao-editar-motorista", html)
+        self._logar("leitura")
+        html = self.cliente.get("/motoristas").get_data(as_text=True)
+        self.assertIn("Ana Teste", html)
+        self.assertNotIn("botao-editar-motorista", html)
+
+    def test_form_usa_valores_crus_cpf_invalido_e_tipo_apelido(self):
+        conn = banco.conectar()
+        conn.execute("UPDATE bd_motoristas SET CPF_MOTORISTA = '1234567890', TIPO_VEICULO = '3/4', PLACA = 'abc-1d23' WHERE id = ?", (self.mid,))
+        conn.commit()
+        conn.close()
+        import json
+        import motoristas as mot
+        with mock.patch.object(mot, "_carregar_config", return_value={}):
+            dados = mot.dados_pagina_motoristas()
+        form = next(m for m in dados["motoristas"] if m["id"] == self.mid)["form"]
+        self.assertEqual((form["cpf"], form["tipo_veiculo"], form["placa"]), ("1234567890", "TRES_QUARTOS", "abc-1d23"))
+        json.dumps(form)
+
+    def test_editar_zona_aparece_na_tabela_e_no_espelho(self):
+        self._logar("operador")
+        r = self._put({"zonas_preferidas": ["ZONA LESTE", "CENTRO"]})
+        self.assertEqual(r.status_code, 200, r.get_json())
+        html = self.cliente.get("/motoristas").get_data(as_text=True)
+        self.assertIn('<span class="zona-chip">ZONA LESTE</span>', html)
+        self.assertNotIn('<span class="zona-chip">ZONA SUL</span>', html)
+        import pandas as pd
+        df = pd.read_excel(self.dir / "BD_MOTORISTAS.xlsx", dtype=str)
+        self.assertEqual(df.loc[0, "ZONAS_PREFERIDAS"], "ZONA LESTE,CENTRO")
+
+
+if __name__ == "__main__":
+    unittest.main()

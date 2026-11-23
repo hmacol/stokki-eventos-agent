@@ -3,16 +3,11 @@
 selecionar_pedidos.py
 
 Decide quais pedidos (PS-XXXXX) o agente de documentos vai buscar na
-Stokki -- pedido do Hugo, 10/08: "seguir a mesma lógica da subida pro
-vuupt": Padrão Puro, Jersey Vale e Dourado entram em QUALQUER etapa
-aberta da Stokki; todo o resto só quando estiver "Aguardando
-Transportador".
-
-Mesma regra (e mesmos IDs) de EMBARCADORES_IMPORTAR_ABERTOS em
-pipeline.py -- duplicada aqui (em vez de importada) pra não arrastar
-os imports pesados do pipeline inteiro (geocodificação, VUUPT, etc)
-só pra pegar 2 constantes. Se a lista de embarcadores prioritários
-mudar lá, precisa mudar aqui também.
+Stokki. Padrão Puro, Dourado e Quatro Estrelas entram em QUALQUER etapa
+aberta da Stokki (decisão do Hugo, 05/10/2026); o resto entra em
+"Aguardando Transportador"; e os "Sent" mais recentes de TODOS os
+embarcadores que ainda não têm NF no banco entram também (a NF costuma
+ser anexada depois da expedição -- 25 pedidos sem NF em 14 dias, até 05/10).
 """
 import logging
 import re
@@ -32,12 +27,13 @@ STATUSES_EM_ABERTO = [
     "On hold",
 ]
 
-# {id_stokki: nome_legivel} -- mesmos 3 embarcadores de
-# pipeline.py::EMBARCADORES_IMPORTAR_ABERTOS.
+# {id_stokki: nome_legivel} -- decisão do Hugo, 05/10/2026 (era Padrão
+# Puro, Dourado e Jersey; o pipeline.py tinha Quatro Estrelas no lugar
+# de Padrão Puro). Mesmos IDs de pipeline.py::EMBARCADORES_IMPORTAR_ABERTOS.
 EMBARCADORES_QUALQUER_STATUS: dict[str, str] = {
     "23": "PADRAO PURO LTDA",
     "18": "LATICINIOS DOURADO - INDUSTRIA E COMERCIO LTDA",
-    "79": "JERSEY VALE AGROINDUSTRIAL LTDA",
+    "98": "COMERCIO DE CEREAIS QUATRO ESTRELAS LTDA",
 }
 
 # A listagem de pedidos da Stokki devolve o nome do cliente TRUNCADO
@@ -127,18 +123,6 @@ def _pedido_danfe_bloqueada(linha) -> bool:
     return bool(nome) and any(n in nome for n in EMBARCADORES_DANFE_SOMENTE_EMAIL)
 
 
-# Embarcadores que mandam boleto por E-MAIL (ver email_documentos.py::
-# REMETENTES_EMBARCADORES). O boleto chega junto/DEPOIS da expedição,
-# quando o pedido já saiu dos status em aberto (vira "Sent") -- então a
-# DANFE dele nunca entraria no índice NF->pedido só com a seleção de
-# abertos, e o boleto ficava preso em revisão manual (falha vista na
-# rodada real de 11/08). Pra fechar esse buraco, a seleção também
-# inclui os pedidos "Sent" mais recentes desses embarcadores.
-EMBARCADORES_BOLETO_EMAIL: dict[str, str] = {
-    "18": "LATICINIOS DOURADO - INDUSTRIA E COMERCIO LTDA",
-    "48": "MARIA DOLORES INDUSTRIA E COMERCIO DE ALIMENTOS LTDA",
-    "79": "JERSEY VALE AGROINDUSTRIAL LTDA",  # pedido do Hugo, 20/08 -- boleto sempre por e-mail
-}
 STATUS_EXPEDIDO = "Sent"
 
 
@@ -152,7 +136,7 @@ def descobrir_pedidos(config: dict) -> tuple[list[str], set[str], set[str]]:
     Retorna (codigos, codigos_sem_nf, codigos_danfe_somente_email):
       - codigos: lista de códigos PS-XXXXX a processar nesta execução --
         todos os pedidos em aberto dos embarcadores prioritários +
-        todos os pedidos "Aguardando Transportador" do resto;
+        "Aguardando Transportador" do resto + "Sent" recentes ainda sem NF;
       - codigos_sem_nf: subconjunto cujos embarcadores não precisam de
         Nota Fiscal (EMBARCADORES_SEM_NF) -- pra etapa da Stokki pular
         a geração do DANFE desses pedidos;
@@ -202,39 +186,45 @@ def descobrir_pedidos(config: dict) -> tuple[list[str], set[str], set[str]]:
             codigos.append(codigo)
         if danfe_bloqueada:
             codigos_danfe_somente_email.add(codigo)
-    logger.info(f"Expedidos recentes (embarcadores de boleto por e-mail): "
+    logger.info(f"Expedidos recentes ainda sem NF (todos os embarcadores): "
                f"{len(codigos) - n_antes} pedido(s) adicionados.")
 
     return codigos, codigos_sem_nf, codigos_danfe_somente_email
 
 
-def descobrir_expedidos_recentes(sessao: StokkiSession, limite_por_embarcador: int = 60) -> list[tuple[str, bool]]:
+def descobrir_expedidos_recentes(sessao: StokkiSession, limite: int = 300) -> list[tuple[str, bool]]:
     """
-    Os N pedidos "Sent" mais recentes de cada embarcador que manda
-    boleto por e-mail (ver EMBARCADORES_BOLETO_EMAIL). Quem já tem a
-    Nota Fiscal enviada/indexada é filtrado FORA aqui mesmo -- assim,
-    em regime, só os expedidos novos do dia geram visita de página
-    (os antigos não custam nada).
+    Os `limite` pedidos "Sent" mais recentes de TODOS os embarcadores
+    que ainda não têm Nota Fiscal/Pedido de Venda ENVIADO no banco.
+    Até 05/10 isso valia só pra 3 embarcadores de boleto por e-mail; a
+    medição de 05/10 achou 25 pedidos de 9 embarcadores com a DANFE na
+    Stokki e nunca buscada, porque a NF foi anexada depois do "Sent".
 
-    Retorna [(codigo, danfe_bloqueada)] -- danfe_bloqueada indica se o
-    pedido é de um embarcador de EMBARCADORES_DANFE_SOMENTE_EMAIL (a
-    Dourado passa por aqui, não só pelo loop de EMBARCADORES_QUALQUER_
-    STATUS, então essa checagem precisa ser feita de novo aqui).
+    Embarcador sem NF (Padrão Puro, Pedramoura) fica fora. Retorna
+    [(codigo, danfe_bloqueada)] -- danfe_bloqueada: Dourado/Muai, só
+    a aba Documentos é olhada (ver EMBARCADORES_DANFE_SOMENTE_EMAIL).
+    Páginas de 100 (o DataTables da Stokki não é testado com mais).
     """
-    from fingerprint_documentos import ja_enviado_para_pedido
+    from fingerprint_documentos import pedidos_com_documento_enviado
 
+    com_nf = pedidos_com_documento_enviado()
     codigos: list[tuple[str, bool]] = []
-    for id_emb, nome_emb in EMBARCADORES_BOLETO_EMAIL.items():
-        try:
-            pagina = stokki_pedidos.listar_pedidos(
-                sessao, status=STATUS_EXPEDIDO, cliente=id_emb,
-                pagina=0, por_pagina=limite_por_embarcador,
+    vistos: set[str] = set()
+    try:
+        for pagina in range(0, (limite + 99) // 100):
+            resposta = stokki_pedidos.listar_pedidos(
+                sessao, status=STATUS_EXPEDIDO, pagina=pagina, por_pagina=100,
                 ordenar_coluna="1", ordenar_dir="desc",
             )
-            for linha in pagina.get("aaData", []):
+            linhas = resposta.get("aaData", [])
+            if not linhas:
+                break
+            for linha in linhas:
                 codigo = _codigo_da_linha(linha)
-                if codigo and not ja_enviado_para_pedido(codigo, "Nota Fiscal"):
-                    codigos.append((codigo, _pedido_danfe_bloqueada(linha)))
-        except Exception as e:
-            logger.warning(f"Erro ao buscar expedidos recentes de {nome_emb!r}: {e}")
+                if not codigo or codigo in vistos or codigo in com_nf or _pedido_sem_nf(linha):
+                    continue
+                vistos.add(codigo)
+                codigos.append((codigo, _pedido_danfe_bloqueada(linha)))
+    except Exception as e:
+        logger.warning(f"Erro ao buscar expedidos recentes: {e}")
     return codigos

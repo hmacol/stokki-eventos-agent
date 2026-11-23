@@ -103,7 +103,7 @@ por destinatário, o horário de recebimento (vai também pra
 destinatário só recebe com agendamento, a data (ou "pendente") →
 `confirmar` grava o XML em `dados/portal_envios/<cnpj>/<chave>.xml` e a
 linha `NA_FILA` → worker: transforma o XML pela regra do cliente
-(`emporio_quatro_estrelas` consolida itens, `muai` kg→caixas, `nenhuma`),
+(`emporio_quatro_estrelas` consolida itens, `muai` kg→caixas, `maiz` tira `/` do código, `nenhuma`),
 espera a Stokki desocupar (trava), roda o wizard, marca `CRIADO` /
 `DUPLICADO` / `ERRO` (erro = tela + e-mail pro cliente com cópia pra
 `email.email_atendimento`), tenta descobrir o `PS-xxxxx` (listagem da

@@ -1,0 +1,2 @@
+# Homologacao: guarda de rede em todo processo do venv (ver homologacao/pth_guarda.py). Do root, 644. Falha fechada.
+import os, sys; exec("try:\n    sys.path.insert(0, '/opt/stokki-homolog')\n    from homologacao.pth_guarda import ativar\nexcept BaseException as e:\n    sys.stderr.write('Homologacao: guarda de rede nao carregou (%s: %s), abortando.\\n' % (type(e).__name__, e))\n    sys.stderr.flush()\n    os._exit(1)\nativar('/opt/stokki-homolog')")

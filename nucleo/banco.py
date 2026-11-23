@@ -79,6 +79,11 @@ TIPOS_DESPESA = {DESPESA_PEDAGIO: "Pedágio", DESPESA_ESTACIONAMENTO: "Estaciona
                  DESPESA_DESCARGA: "Descarga", DESPESA_OUTROS: "Outros"}
 DESPESAS_COM_PEDIDO = {DESPESA_ESTACIONAMENTO, DESPESA_DESCARGA}
 
+# nucleo_ponte_vuupt.status
+PONTE_PENDENTE = "PENDENTE"
+PONTE_FEITO = "FEITO"
+PONTE_DESISTIU = "DESISTIU"
+
 # nucleo_eventos.origem
 ORIGEM_APP = "APP"
 ORIGEM_VUUPT_SYNC = "VUUPT_SYNC"
@@ -113,6 +118,28 @@ CREATE TABLE IF NOT EXISTS nucleo_pedidos (
 );
 CREATE INDEX IF NOT EXISTS idx_nucleo_pedidos_service ON nucleo_pedidos(vuupt_service_id);
 CREATE INDEX IF NOT EXISTS idx_nucleo_pedidos_status ON nucleo_pedidos(status);
+
+-- Um serviço da VUUPT por linha (18/11). nucleo_pedidos é o estado ATUAL por
+-- código; quando a VUUPT recria o serviço com o MESMO código (reentrega sem
+-- -R), a linha de lá passa pro serviço novo e a tentativa que falhou sumia.
+-- Aqui ela fica: é a base pra contar serviços por dia de rota como a VUUPT.
+CREATE TABLE IF NOT EXISTS nucleo_servicos (
+    vuupt_service_id        INTEGER PRIMARY KEY,
+    codigo                  TEXT NOT NULL,                  -- normalizado (sem '#'), igual nucleo_pedidos.codigo
+    status                  TEXT NOT NULL DEFAULT 'ABERTO', -- mesmo vocabulário de nucleo_pedidos.status
+    status_provedor         TEXT,
+    status_done_provedor    TEXT,
+    vuupt_route_id          INTEGER,                        -- rota em que o serviço está/terminou
+    driver_id               INTEGER,
+    reentrega_de_service_id INTEGER,                        -- recreated_order_origin_id
+    criado_em_provedor      TEXT,                           -- hora local
+    concluido_em            TEXT,                           -- completed_at, hora local
+    excluido_em             TEXT,
+    criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    atualizado_em           TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_nucleo_servicos_codigo ON nucleo_servicos(codigo);
+CREATE INDEX IF NOT EXISTS idx_nucleo_servicos_rota ON nucleo_servicos(vuupt_route_id);
 
 CREATE TABLE IF NOT EXISTS nucleo_rotas (
     id                      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -252,6 +279,91 @@ CREATE TABLE IF NOT EXISTS nucleo_pedagios (
 CREATE INDEX IF NOT EXISTS idx_nucleo_pedagios_rota ON nucleo_pedagios(rota_id);
 CREATE INDEX IF NOT EXISTS idx_nucleo_pedagios_status ON nucleo_pedagios(status, enviado_em);
 
+-- Trajeto da rota pro mapa do app (18/11): desenho do Google Routes guardado
+-- por rota; a assinatura e dos pontos (CD + paradas validas em ordem + CD).
+CREATE TABLE IF NOT EXISTS nucleo_rotas_trajeto (
+    rota_id                 INTEGER PRIMARY KEY,
+    assinatura              TEXT NOT NULL,
+    pontos_json             TEXT NOT NULL,
+    fonte                   TEXT NOT NULL,
+    criado_em               TEXT NOT NULL
+);
+
+-- Ponte nucleo -> Vuupt (12/11): o que o motorista faz no nosso app numa rota
+-- da Vuupt e repetido la por nucleo/ponte_vuupt.py. Uma linha por acao.
+CREATE TABLE IF NOT EXISTS nucleo_ponte_vuupt (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    rota_id                 INTEGER NOT NULL,
+    parada_id               INTEGER,
+    service_id              INTEGER,
+    acao                    TEXT NOT NULL,                  -- ACEITAR | DESLOCAMENTO | CHEGADA | CONCLUIR
+    dados_json              TEXT,
+    status                  TEXT NOT NULL DEFAULT 'PENDENTE',   -- PENDENTE | FEITO | DESISTIU
+    tentativas              INTEGER NOT NULL DEFAULT 0,
+    proxima_em              TEXT,                           -- nao tenta antes disso (espera de foto / recuo apos erro)
+    ultimo_erro             TEXT,
+    resultado               TEXT,
+    criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    feito_em                TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_nucleo_ponte_status ON nucleo_ponte_vuupt(status, id);
+CREATE INDEX IF NOT EXISTS idx_nucleo_ponte_rota ON nucleo_ponte_vuupt(rota_id, status);
+
+-- Rota enviada que o motorista recusou ou nao aceitou ate o prazo (17/11):
+-- fica aberta pros outros escolherem no app (nucleo/ofertas_rota_enviada.py).
+-- Uma linha por rota, pra sempre: rota que ja foi ofertada nao e ofertada de novo.
+CREATE TABLE IF NOT EXISTS nucleo_ofertas_rota (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    rota_id                 INTEGER NOT NULL UNIQUE,
+    data_rota               TEXT NOT NULL,
+    agent_original          INTEGER,
+    motivo                  TEXT NOT NULL,                  -- RECUSA | PRAZO
+    status                  TEXT NOT NULL DEFAULT 'ABERTA', -- ABERTA | ESCOLHIDA | APLICADA | RETIRADA
+    elegiveis_json          TEXT,                           -- [agent_id, ...] que podem ver/escolher
+    resumo_json             TEXT,
+    escolhido_por           INTEGER,
+    escolhido_em            TEXT,
+    aviso_grupo_em          TEXT,                           -- aviso de rota disponivel ja tentado
+    aviso_escolha_em        TEXT,                           -- aviso a equipe de que alguem escolheu
+    motivo_retirada         TEXT,
+    criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    atualizado_em           TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_nucleo_ofertas_rota_status ON nucleo_ofertas_rota(status, data_rota);
+
+-- Checklist de carregamento (nucleo/carregamento.py): uma linha por rota, com a
+-- foto do bau carregado; itens = paradas que o motorista desmarcou (nao carregou).
+-- carregamento_id e NULL ate o carregamento ser gravado: o item e achado por (rota_id, service_id).
+CREATE TABLE IF NOT EXISTS nucleo_carregamentos (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    rota_id                 INTEGER NOT NULL UNIQUE,
+    agent_id                INTEGER,
+    uuid                    TEXT NOT NULL UNIQUE,
+    placa                   TEXT,
+    tipo_veiculo            TEXT,
+    carregador              TEXT,
+    foto_caminho            TEXT,
+    foto_sha256             TEXT,
+    resultado_foto          TEXT,
+    ocupacao_pct            REAL,
+    revisao_humana          INTEGER NOT NULL DEFAULT 0,
+    qtd_carregados          INTEGER NOT NULL DEFAULT 0,
+    qtd_desmarcados         INTEGER NOT NULL DEFAULT 0,
+    criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE TABLE IF NOT EXISTS nucleo_carregamento_itens (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    carregamento_id         INTEGER REFERENCES nucleo_carregamentos(id),
+    rota_id                 INTEGER NOT NULL,
+    service_id              INTEGER,
+    codigo                  TEXT,
+    motivo                  TEXT,
+    observacao              TEXT,
+    removido_em             TEXT,                           -- NULL = ainda nao saiu da Vuupt
+    criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_nucleo_carreg_itens_rota ON nucleo_carregamento_itens(rota_id, service_id);
+
 CREATE TABLE IF NOT EXISTS tarifas_motorista (
     tipo_veiculo            TEXT PRIMARY KEY,               -- FIORINO | VAN_HR | VUC | TRES_QUARTOS | TRUCK
     nome                    TEXT,
@@ -287,6 +399,87 @@ _COLUNAS_MOTORISTAS_NOVAS = [
     ("tentativas_pin", "INTEGER NOT NULL DEFAULT 0"),
     ("bloqueado_ate", "TEXT"),
     ("perfil", "TEXT NOT NULL DEFAULT 'MOTORISTA'"),  # MOTORISTA | TESTE (usuário do Hugo no piloto)
+    ("trocar_pin", "INTEGER NOT NULL DEFAULT 0"),      # 1 = PIN inicial/resetado: o app obriga a troca no próximo login
+    ("chave_pix", "TEXT"),            # 08/10: o motorista edita no app (nucleo/cadastro_motorista.py)
+    ("placa", "TEXT"),                # idem; espelhada na BD_MOTORISTAS.xlsx
+    ("plataforma", "TEXT"),           # 22/11: web | android | ios, informado pelo app (header X-App-Plataforma); web = PWA no iPhone, avisa por WhatsApp
+    ("app_versao", "TEXT"),           # 22/11: versao do APK que o app informa (header X-App-Versao); NULL = nunca informou (APK antigo)
+    ("ve_financeiro", "INTEGER NOT NULL DEFAULT 1"),   # 0 = não é dono do carro: sem extrato no app (Hugo, 08/10)
+]
+
+# Cadastro pelo app (08/10): histórico das edições e fila de auto-cadastro.
+_DDL_CADASTRO = """
+CREATE TABLE IF NOT EXISTS motoristas_alteracoes (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    cpf           TEXT NOT NULL,
+    campo         TEXT NOT NULL,
+    valor_antigo  TEXT,
+    valor_novo    TEXT,
+    alterado_em   TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS motoristas_cadastros (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    cpf             TEXT NOT NULL,
+    nome            TEXT NOT NULL,
+    telefone        TEXT,
+    email           TEXT,
+    chave_pix       TEXT,
+    placa           TEXT,
+    tipo_veiculo    TEXT,
+    zonas           TEXT,                 -- csv, mesmos valores da planilha
+    dias            TEXT,                 -- csv SEGUNDA..DOMINGO
+    aceita_viagens  INTEGER NOT NULL DEFAULT 0,
+    dono_veiculo    INTEGER NOT NULL DEFAULT 1,   -- 0 = dirige carro de outro: sem extrato no app
+    chave_envio     TEXT NOT NULL,        -- autoriza o envio dos documentos
+    cnh_arquivo     TEXT,
+    crlv_arquivo    TEXT,
+    status          TEXT NOT NULL DEFAULT 'PENDENTE',   -- PENDENTE | APROVADO | RECUSADO
+    motivo          TEXT,
+    agent_id        INTEGER,
+    criado_em       TEXT NOT NULL,
+    revisado_em     TEXT,
+    revisado_por    TEXT,
+    avisado_em      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_motoristas_cadastros_status ON motoristas_cadastros(status);
+"""
+
+
+# Colunas do cadastro pelo link (02/11): dados extras, 3 documentos a mais e o
+# estado da criação do agente/veículo na Vuupt + aviso no grupo.
+_COLUNAS_CADASTRO_LINK = [
+    ("origem", "TEXT NOT NULL DEFAULT 'app'"),   # app | link
+    ("data_nascimento", "TEXT"),                 # ISO
+    ("emite_nf", "INTEGER"),
+    ("posicao", "TEXT"),                         # FIXO | ESPORADICO
+    ("celular", "TEXT"),                         # ANDROID | IPHONE
+    ("veiculo_modelo", "TEXT"),
+    ("veiculo_ano", "INTEGER"),
+    ("refrigerado", "INTEGER"),
+    ("temp_min_c", "REAL"),
+    ("selfie_arquivo", "TEXT"),
+    ("antt_arquivo", "TEXT"),
+    ("residencia_arquivo", "TEXT"),
+    ("enviado_em", "TEXT"),
+    ("vuupt_email", "TEXT"),
+    ("vuupt_senha_digitos", "INTEGER"),          # 6 ou 8
+    ("vehicle_id", "INTEGER"),
+    ("bd_motorista_id", "INTEGER"),
+    ("conflito_agent_id", "INTEGER"),
+    ("conflito_resolvido", "INTEGER NOT NULL DEFAULT 0"),
+    ("aviso_grupo_em", "TEXT"),
+    ("aviso_concluido_em", "TEXT"),
+    ("boas_vindas_situacao", "TEXT"),
+    ("pedido_grupo_situacao", "TEXT"),           # pedido ao Atendimento pra criar o grupo do motorista
+    ("ultimo_erro", "TEXT"),
+    ("tentativas", "INTEGER NOT NULL DEFAULT 0"),
+    ("processando_em", "TEXT"),
+    ("concluido_em", "TEXT"),
+    ("conflito_tipo", "TEXT"),                   # telefone | placa
+    ("agente_criado", "INTEGER"),                # 1 = o POST deste cadastro criou o agente (desfazer pode apagar)
+    ("vehicle_criado", "INTEGER"),               # 1 = este cadastro criou o veículo (não reaproveitou)
+    ("agente_criado_em", "TEXT"),                # quando o POST criou o agente (teto diário max_agentes_dia)
+    ("ip_origem", "TEXT"),                       # IP do POST /api/cadastro-link (freio por IP no banco)
 ]
 
 
@@ -337,7 +530,89 @@ _COLUNAS_ROTAS_NOVAS = [
     ("km_volta_estimado", "REAL"),      # última parada -> base (mesma fonte do km_estimado)
     ("km_fonte_estimativa", "TEXT"),    # GOOGLE_ROUTES | HAVERSINE
     ("horas_estimadas", "REAL"),        # 22/09: copiada do rascunho -- rodízio de rotas longas na alocação
+    ("valor_combinado", "REAL"),        # 11/11: valor acertado com o motorista; vence a tarifa no extrato (nucleo/financeiro.py)
+    ("valor_combinado_motivo", "TEXT"),
+    # 12/11: rota da Vuupt operada pelo NOSSO app (nucleo/ponte_vuupt.py). O sync
+    # da Vuupt deixa de sobrescrever resultado e horarios que o app registrou.
+    ("operada_app", "INTEGER NOT NULL DEFAULT 0"),
 ]
+
+
+# Cadastro de motoristas no banco (Hugo, 29/10/2026): a BD_MOTORISTAS.xlsx
+# vira espelho somente leitura gerado daqui (regras/motoristas_banco.py).
+# AGENT_ID_VUUPT pode repetir de propósito (sem UNIQUE); a chave é o id.
+_DDL_BD_MOTORISTAS = """
+CREATE TABLE IF NOT EXISTS bd_motoristas (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    AGENT_ID_VUUPT     INTEGER,
+    VEHICLE_ID_VUUPT   INTEGER,
+    NOME_MOTORISTA     TEXT,
+    ACEITA_VIAGENS     TEXT,
+    DIAS_DISPONIVEIS   TEXT,
+    MAX_ROTAS_DIA      INTEGER,
+    ATIVO              TEXT,
+    ZONAS_PREFERIDAS   TEXT,
+    TELEFONE_MOTORISTA TEXT,
+    EMAIL_MOTORISTA    TEXT,
+    PLACA              TEXT,
+    CPF_MOTORISTA      TEXT,
+    TIPO_VEICULO       TEXT,
+    APENAS_CARGA_SECA  TEXT,
+    SEM_APP            TEXT,
+    POSICAO            TEXT,
+    inativado_em       TEXT,
+    criado_em          TEXT NOT NULL,
+    atualizado_em      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bd_motoristas_agent ON bd_motoristas(AGENT_ID_VUUPT);
+CREATE INDEX IF NOT EXISTS idx_bd_motoristas_cpf ON bd_motoristas(CPF_MOTORISTA);
+
+CREATE TABLE IF NOT EXISTS bd_motoristas_alteracoes (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    motorista_id  INTEGER NOT NULL,
+    agent_id      INTEGER,
+    campo         TEXT NOT NULL,
+    valor_antigo  TEXT,
+    valor_novo    TEXT,
+    origem        TEXT NOT NULL,
+    alterado_em   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bd_motoristas_alt_mot ON bd_motoristas_alteracoes(motorista_id);
+"""
+
+# Atualização cadastral do motorista já existente (link por WhatsApp) e o
+# grupo de WhatsApp de cada motorista.
+_DDL_ATUALIZACAO_MOTORISTA = """
+CREATE TABLE IF NOT EXISTS motoristas_links_atualizacao (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    bd_motorista_id  INTEGER NOT NULL,
+    token_hash       TEXT NOT NULL UNIQUE,
+    criado_em        TEXT,
+    criado_por       TEXT,
+    expira_em        TEXT,
+    aberto_em        TEXT,
+    concluido_em     TEXT,
+    cancelado_em     TEXT,
+    tentativas_cpf   INTEGER NOT NULL DEFAULT 0,
+    cadastro_id      INTEGER,
+    envio_destino    TEXT,
+    envio_situacao   TEXT,
+    enviado_em       TEXT,
+    piloto           INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_links_atualizacao_mot ON motoristas_links_atualizacao(bd_motorista_id);
+
+CREATE TABLE IF NOT EXISTS motoristas_grupos_whatsapp (
+    bd_motorista_id  INTEGER PRIMARY KEY,
+    grupo_id         TEXT NOT NULL,
+    grupo_nome       TEXT,
+    nome_anterior    TEXT,
+    como             TEXT NOT NULL,
+    confirmado_por   TEXT,
+    confirmado_em    TEXT,
+    renomeado_em     TEXT
+);
+"""
 
 
 def agora() -> str:
@@ -356,7 +631,19 @@ def garantir_esquema(conn: sqlite3.Connection):
     """Cria o que falta e aplica migrações aditivas. Seguro rodar a cada
     conexão (mesmo padrão de rascunhos_rota._conectar)."""
     conn.executescript(_DDL)
+    conn.executescript(_DDL_CADASTRO)
+    conn.executescript(_DDL_BD_MOTORISTAS)
+    conn.executescript(_DDL_ATUALIZACAO_MOTORISTA)
     _migrar_colunas(conn, "motoristas", _COLUNAS_MOTORISTAS_NOVAS)
+    _migrar_colunas(conn, "bd_motoristas", [("POSICAO", "TEXT")])   # FIXO | ESPORADICO
+    # Tabela de 08/10 já existia na VPS quando dono_veiculo entrou no DDL:
+    # CREATE IF NOT EXISTS não acrescenta coluna.
+    _migrar_colunas(conn, "motoristas_cadastros", [("dono_veiculo", "INTEGER NOT NULL DEFAULT 1")])
+    # Cadastro pelo link público (Hugo, 02/11/2026): mesma tabela, origem 'link'.
+    _migrar_colunas(conn, "motoristas_cadastros", _COLUNAS_CADASTRO_LINK)
+    # PIX que veio pré-preenchido no rascunho do link de atualização: o login só muda se o
+    # motorista digitou outro (tabela pode já existir de uma rodada anterior deste ramo)
+    _migrar_colunas(conn, "motoristas_links_atualizacao", [("pix_inicial", "TEXT"), ("pix_pendente", "TEXT")])
     _migrar_colunas(conn, "nucleo_pedidos", _COLUNAS_PEDIDOS_NOVAS)
     _migrar_colunas(conn, "nucleo_paradas", _COLUNAS_PARADAS_NOVAS)
     _migrar_colunas(conn, "nucleo_rotas", _COLUNAS_ROTAS_NOVAS)

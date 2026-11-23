@@ -22,12 +22,14 @@ Modo de execução:
     py -3.11 pipeline.py --pedido PS-34345  # processa um único pedido (por código)
 """
 import argparse
+import atexit
 import logging
 import re
 import sqlite3
 import sys
 import time
-from datetime import date
+import unicodedata
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
@@ -42,22 +44,24 @@ from regras.endereco import resolver_endereco_entrega
 from regras.transportadoras import CatalogoTransportadoras
 from stokki.auth import StokkiSession
 from stokki import pedidos as stokki_pedidos
-from stokki.estacao_impressao import listar_pedidos_em_espera
+from stokki.estacao_impressao import imprimir_pedidos_pendentes, listar_pedidos_em_espera
 from vuupt_client import VuuptClient, VuuptAPIError, _converter_data_para_iso
 from geocodificacao import geocodificar
 from historico import registrar_execucao
 from email_utils import notificacoes_automaticas_ativas
 from telefone_origem import indexar_xmls, telefone_correto
-from regras.complexidade_entrega import carregar_niveis, classificar_nivel
+from regras.complexidade_entrega import (
+    carregar_ajustes_manuais, carregar_horarios, carregar_niveis, classificar_nivel)
+from regras.agendamento_automatico import A_PARTIR_DE, data_automatica, janela_automatica
+from regras import alteracoes_entrega
 from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agendamento
+from regras import feriados
 from fingerprint_status_vuupt import ja_confirmado_atribuido, marcar_atribuido
 from agendamento_confirmacao import buscar_confirmacao, enviar_solicitacao
 import redespacho_confirmacao
-from retiradas.regras_retirada import config_retiradas, importar_retirada, montar_payload_retirada
-
-# Seção 'retiradas' do config.yaml, preenchida em main() -- processar_pedido
-# não recebe o config inteiro e tem assinatura usada por vários chamadores.
-config_retiradas_global: dict = {}
+import consulta_transportadora
+import transportadoras_cadastro
+from consulta_transportadora import config_consulta
 
 # ── Configuração de logging ────────────────────────────────────────────────────
 if hasattr(sys.stdout, "reconfigure"):
@@ -77,7 +81,6 @@ logger = logging.getLogger("pipeline")
 
 # ── Constantes ─────────────────────────────────────────────────────────────────
 CONFIG_PATH      = _RAIZ / "config.yaml"
-TRANSPORTADORAS  = _RAIZ / "dados" / "BD_TRANSPORTADORAS.xlsx"
 DB_PATH          = _RAIZ / "dados" / "dados.db"
 PAUSA_ENTRE_PEDIDOS = 1.0  # segundos — ajustada 06/08: 0.3s (04/08) causou 429 em quase
 # TODO pedido em produção real (confirmado pelo Hugo, lote de 241 pedidos). Na época da
@@ -111,16 +114,23 @@ STATUSES_EM_ABERTO              = [
     STATUS_PACK,
     STATUS_HOLD,
 ]
+# Pedidos dos embarcadores NÃO prioritários que também entram antes de
+# "Aguardando Transportador" (Hugo, 09/11) -- ver Fonte 4 em main().
+STATUSES_OUTROS_ANTES_DO_TRANSPORTADOR = [STATUS_ABERTO, STATUS_SEPARANDO, STATUS_PACK]
 
 # Embarcadores com regra especial: importa QUALQUER pedido em aberto,
-# não só "Aguardando Transportador".
+# não só "Aguardando Transportador" (os outros entram desde 09/11 também em
+# aberto/separação/conferência, mas não em "On hold").
 # O filtro 'cliente=' da listagem usa o ID NUMÉRICO do Stokki
 # (confirmado via outbound/select — nome como texto é ignorado).
 # Formato: {id_stokki: nome_legivel}
+# Decisão do Hugo, 05/10/2026: Padrão Puro, Dourado e Quatro Estrelas
+# (Jersey Vale saiu; Padrão Puro entrou). Mesma lista de
+# documentos_pedido/selecionar_pedidos.py::EMBARCADORES_QUALQUER_STATUS.
 EMBARCADORES_IMPORTAR_ABERTOS: dict[str, str] = {
     "98": "COMERCIO DE CEREAIS QUATRO ESTRELAS LTDA",
     "18": "LATICINIOS DOURADO - INDUSTRIA E COMERCIO LTDA",
-    "79": "JERSEY VALE AGROINDUSTRIAL LTDA",
+    "23": "PADRAO PURO LTDA",
 }
 
 
@@ -189,11 +199,9 @@ TIPOS_CARGA_VALIDOS = {"Congelado", "Seco", "Refrigerado"}
 TIPO_CARGA_PADRAO   = "Seco"
 
 def _proximo_dia_util(data):
-    """Rola a data para frente até cair em dia útil (seg-sex)."""
-    from datetime import timedelta
-    while data.weekday() >= 5:  # 5=sábado, 6=domingo
-        data += timedelta(days=1)
-    return data
+    """Rola a data para frente até cair em dia útil (seg-sex sem feriado,
+    regras/feriados.py)."""
+    return feriados.rolar_para_dia_util(data)
 
 
 def calcular_data_entrega(data_saida_str: str):
@@ -412,7 +420,206 @@ def montar_payload_vuupt(
     return payload
 
 
+# ── Transportadora nova (cadastro automatico) ──────────────────────────────────
+
+def _deve_segurar_por_transportadora(detalhe: dict, res_end, servico_existente, catalogo):
+    """
+    Pedido cuja transportadora FORMAL (bloco Transportadora do detalhe) nao
+    esta no cadastro fica parado ate o embarcador dizer o que ela e
+    (retirada/redespacho/entrega). Devolve (nome, cnpj_so_digitos) ou None.
+
+    So segura antes de existir na Vuupt e quando o endereco veio do destino
+    (ou caiu em aguardando_redespacho): Local de Entrega e mensagem ja dizem
+    pra onde ir. "Desconhecida" e calculada pelo catalogo pro nome formal,
+    nao pelo res_end (que pode descrever outra transportadora da mensagem).
+    """
+    transp = detalhe.get("transportadora") or {}
+    nome = (transp.get("nome") or "").strip()
+    if not nome:
+        return None
+    sem_acento = "".join(c for c in unicodedata.normalize("NFD", nome) if unicodedata.category(c) != "Mn")
+    if sem_acento.strip().casefold() == "nao informado":
+        return None
+    if servico_existente is not None or res_end.fonte not in ("destino", "aguardando_redespacho"):
+        return None
+    try:
+        cnpj = transportadoras_cadastro.normalizar_cnpj(transp.get("documento"))
+    except transportadoras_cadastro.ErroCadastro:
+        cnpj = ""  # documento sujo: resolve so pelo nome
+    if not catalogo.resolver(nome, cnpj=cnpj).desconhecida:
+        return None
+    return nome, cnpj
+
+
+def _registrar_e_avisar_transportadora(codigo_ps, detalhe, nome, cnpj, stkkc_id, config_app):
+    """Grava a pendencia e avisa o embarcador (1x por dia). Nunca levanta:
+    falha aqui so e logada, o pedido continua segurado."""
+    try:
+        dados_banco = _buscar_dados_embarcador_banco(stkkc_id) if stkkc_id else {}
+        emb_cnpj = dados_banco.get("cnpj_embarcador") or f"stkkc:{stkkc_id}"
+        local = detalhe.get("local_entrega") or detalhe.get("destino") or {}
+        resumo = {"destinatario": (detalhe.get("destino") or {}).get("nome", ""),
+                  "cidade": local.get("cidade", ""), "uf": local.get("uf", "")}
+        conn = consulta_transportadora.conectar_consultas(DB_PATH)
+        try:
+            reg = consulta_transportadora.registrar_desconhecida(
+                conn, nome, cnpj, codigo_ps, emb_cnpj, stkkc_id, resumo)
+            # So o 1o aviso sai daqui; lembretes sao do job das 08h (dias uteis)
+            if not reg["consulta"].get("enviado_em"):
+                r = consulta_transportadora.enviar_aviso(conn, reg["consulta"], config_app,
+                                                         lembrete=False, modo_teste=False)
+                logger.info(f"  {codigo_ps}: aviso da transportadora {nome}: {r}")
+        except Exception as e:
+            logger.error(f"  {codigo_ps}: falha ao registrar/avisar transportadora nova {nome} "
+                         f"(pedido segue segurado): {e}")
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error(f"  {codigo_ps}: falha ao registrar/avisar transportadora nova {nome} "
+                     f"(pedido segue segurado): {e}")
+
+
+def _liberar_parado_transportadora(res: dict, config_app: dict | None, modo_teste: bool):
+    """Pedido processado sem erro e NAO segurado nesta rodada (transportadora
+    agora conhecida, ja na Vuupt...): se estava em transportadora_pedidos_parados,
+    libera, senao o embarcador seguiria lembrado dele. Desligado ou modo teste:
+    nada. Nunca levanta."""
+    if modo_teste or res.get("erro") or res.get("acao") == "aguardando_transportadora":
+        return
+    if not config_consulta(config_app or {})["ativo"]:
+        return
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        try:
+            if consulta_transportadora.liberar_pedido(conn, res["codigo_ps"]):
+                logger.info(f"  {res['codigo_ps']}: saiu da lista de parados por transportadora nova.")
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"  {res.get('codigo_ps')}: falha ao liberar parado de transportadora: {e}")
+
+
+# ── Agendamento automático (pedido do Hugo, 02/11) ─────────────────────────────
+
+FONTE_PROXIMO_DIA_UTIL = "proximo_dia_util"
+
+
+def _data_automatica_ja_gravada(servico_existente: dict, db_path=None):
+    """Servico que já existe e cuja data foi gravada por nós (origem AUTOMATICO): devolve a MESMA
+    janela, senão o fingerprint (que guarda o payload da criação) vê diferença na rodada seguinte e
+    manda PUT sem data. Qualquer falha só vai pro log e segue como antes (sem data)."""
+    inicio, fim = servico_existente.get("scheduled_start"), servico_existente.get("scheduled_end")
+    if not inicio or not fim:
+        return None
+    try:
+        from nucleo.normalizacao import vuupt_para_local
+        from roteirizacao import registro_dia_fixo
+        ini_local = datetime.fromisoformat(vuupt_para_local(inicio))
+        fim_local = datetime.fromisoformat(vuupt_para_local(fim))
+        conn = registro_dia_fixo.conectar(db_path or registro_dia_fixo.DB_PATH)
+        try:
+            if not registro_dia_fixo.data_e_automatica(conn, servico_existente, ini_local.date()):
+                return None
+        finally:
+            conn.close()
+        par = (_converter_data_para_iso(ini_local.strftime("%d/%m/%Y %H:%M")),
+               _converter_data_para_iso(fim_local.strftime("%d/%m/%Y %H:%M")))
+        return par if all(par) else None
+    except Exception as e:
+        logger.warning(f"  data automática já gravada não conferida ({e}) — segue sem data.")
+        return None
+
+
+def agendamento_automatico(servico_existente, horario_mensagem, documento, data_saida,
+                           inicio_rodada, mapa_horarios, ajustes_manuais, db_path=None):
+    """(inicio, fim) ISO da data automática. Data NOVA só na CRIAÇÃO do serviço: o pipeline reprocessa
+    os not_assigned toda rodada, então serviço que já existe nunca ganha nem muda data (se a data dele
+    é automática, repete a mesma pra o payload não sair sem data)."""
+    if servico_existente:
+        return _data_automatica_ja_gravada(servico_existente, db_path)
+    if inicio_rodada is None or inicio_rodada.date() < A_PARTIR_DE:
+        return None
+    data = data_automatica(inicio_rodada, data_saida).strftime("%d/%m/%Y")
+    ini, fim = janela_automatica(horario_mensagem, documento, mapa_horarios, ajustes_manuais)
+    par = (_converter_data_para_iso(f"{data} {ini}"), _converter_data_para_iso(f"{data} {fim}"))
+    return par if all(par) else None
+
+
+def _texto_agendado_automatico(payload: dict) -> str:
+    ini, fim = payload["scheduled_start"], payload.get("scheduled_end") or payload["scheduled_start"]
+    return (f"agendado automaticamente pra {ini[8:10]}/{ini[5:7]} ({ini[11:16]}-{fim[11:16]})")
+
+
+def registrar_data_automatica(servico: dict, scheduled_start: str, db_path=None) -> int:
+    """Marca a data como AUTOMATICO (não vira dedicado). Tolerante: falha só vai pro log."""
+    try:
+        from roteirizacao import registro_dia_fixo
+        return registro_dia_fixo.registrar_origens(
+            [{"servico": servico, "data": date.fromisoformat(scheduled_start[:10])}],
+            registro_dia_fixo.ORIGEM_AUTOMATICO, db_path or registro_dia_fixo.DB_PATH)
+    except Exception as e:
+        logger.warning(f"  data automática não registrada ({e})")
+        return 0
+
+
 # ── Processamento de um pedido ─────────────────────────────────────────────────
+
+def aplicar_alteracoes_do_cliente(
+    codigo_ps: str,
+    sender_id: int | None,
+    documento_dest: str,
+    endereco_resolvido: dict,
+    horario_entrega: dict | None,
+    conn=None,
+    ajustes=None,
+) -> tuple[dict, dict | None, tuple[float, float] | None]:
+    """O que o cliente escolheu no portal vence o que a importacao extrai.
+    Devolve (endereco, horario, coordenadas fixas ou None):
+      - endereco vigente da alteracao APLICADA (so com sender_id) troca o da NF;
+      - ajuste manual de horario do documento do destinatario troca o extraido.
+    Falha ao ler as tabelas: aviso no log e segue com o da NF (nunca derruba)."""
+    endereco, horario, coords = endereco_resolvido, horario_entrega, None
+    if sender_id is not None:
+        conn_propria = None
+        try:
+            if conn is None:
+                conn = conn_propria = alteracoes_entrega.conectar()
+            vigente = alteracoes_entrega.endereco_vigente(conn, codigo_ps, sender_id)
+        except Exception as e:
+            vigente = None
+            logger.warning(f"  {codigo_ps}: falha ao ler alteracao de entrega do cliente "
+                           f"(segue com o endereco da NF): {e}")
+        finally:
+            if conn_propria is not None:
+                conn_propria.close()
+        if vigente:
+            novo = vigente["endereco"]
+            endereco = dict(endereco_resolvido)
+            endereco.update({
+                "logradouro":  f"{novo.get('logradouro', '')}, {novo.get('numero', '')}".strip(", "),
+                "complemento": novo.get("complemento", ""),
+                "bairro":      novo.get("bairro", ""),
+                "cidade":      novo.get("municipio", ""),
+                "uf":          novo.get("uf", ""),
+                "cep":         novo.get("cep", ""),
+            })
+            if vigente.get("latitude") is not None and vigente.get("longitude") is not None:
+                coords = (vigente["latitude"], vigente["longitude"])
+            logger.info(f"  {codigo_ps}: endereco alterado pelo cliente no portal prevalece sobre o da NF.")
+    try:
+        if ajustes is None:
+            ajustes = carregar_ajustes_manuais()
+        doc = "".join(c for c in str(documento_dest or "") if c.isdigit())
+        aj = ajustes.get(doc)
+        if aj and aj.get("horario_atendimento_inicio") and aj.get("horario_atendimento_fim"):
+            horario = {"inicio": aj["horario_atendimento_inicio"], "fim": aj["horario_atendimento_fim"]}
+            logger.info(f"  {codigo_ps}: horario de recebimento do ajuste manual "
+                        f"({horario['inicio']} as {horario['fim']}) prevalece sobre o extraido.")
+    except Exception as e:
+        logger.warning(f"  {codigo_ps}: falha ao ler ajuste manual de horario "
+                       f"(segue com o extraido): {e}")
+    return endereco, horario, coords
+
 
 def processar_pedido(
     id_stokki: int,
@@ -430,6 +637,11 @@ def processar_pedido(
     mapa_niveis: dict | None = None,
     conjunto_agendamento: set | None = None,
     config_email: dict | None = None,
+    config_app: dict | None = None,
+    mapa_horarios: dict | None = None,
+    ajustes_manuais: dict | None = None,
+    inicio_rodada: datetime | None = None,
+    conn_alteracoes=None,
 ) -> dict:
     """
     Processa um único pedido: detalhe → endereço → VUUPT.
@@ -451,6 +663,10 @@ def processar_pedido(
         "observacao":     "",
         "referencia":     referencia,
         "erro":           None,
+        # servico na Vuupt como ficou (criado, atualizado ou ja existente): a fila do freshhub
+        # (--fila-freshhub, plano 1.2) devolve o id e o espelho ao sistema novo
+        "vuupt_service_id": None,
+        "servico_vuupt":  None,
     }
 
     try:
@@ -461,59 +677,119 @@ def processar_pedido(
         # checagem já existia, mas só rodava no FINAL (criar_ou_
         # atualizar_servico), depois de todo o trabalho caro já feito.
         #
-        # 1ª camada: fingerprint local (instantâneo, sem rede) — uma
-        # vez confirmado que saiu de not_assigned, o VUUPT nunca mais
-        # volta pra esse status, então fica marcado pra sempre.
+        # 1ª camada: fingerprint local (instantâneo, sem rede). 'done'
+        # fica marcado pra sempre; os outros status vencem em 12h e
+        # voltam a ser conferidos (unassign devolve pro pool, 28/09).
         if ja_confirmado_atribuido(codigo_ps):
-            resultado["acao"] = "pulado_ja_atribuido"
+            resultado["acao"] = "pulado_atribuido"
             resultado["observacao"] = "Já confirmado fora de not_assigned em execução anterior (fingerprint)."
             return resultado
 
-        # 2ª camada: se ainda não está no fingerprint local, confere
-        # rápido direto no VUUPT (1 consulta, sem geocodificar nada) —
-        # se já saiu de not_assigned, marca no fingerprint (pra nunca
-        # mais precisar consultar de novo) e pula sem gastar mais nada.
+        # 2ª camada: se não está no fingerprint local (ou a marcação
+        # venceu), confere rápido direto no VUUPT (1 consulta, sem
+        # geocodificar nada) — se saiu de not_assigned, marca no
+        # fingerprint e pula sem gastar mais nada.
         servico_existente = vuupt.buscar_servico_por_code(codigo_ps)
-        if servico_existente and servico_existente.get("status") != vuupt.STATUS_ATUALIZAVEL:
-            marcar_atribuido(codigo_ps, status=servico_existente.get("status", ""))
-            resultado["acao"] = "pulado_ja_atribuido"
-            resultado["observacao"] = f"Status no VUUPT: {servico_existente.get('status')} (não é mais not_assigned)."
+        status_vuupt = (servico_existente or {}).get("status", "")
+        # Serviço CANCELADO com o pedido ainda aberto na Stokki (28/09): não
+        # entra no cache e segue até o desvio de RETIRADA -- é o caso do
+        # reconciliar_pedidos_retirada.py, que cancela o serviço de entrega
+        # de quem virou retirada (aí sai como ignorado_retirada, sem pedir
+        # revisão). Se for ENTREGA, para logo depois com ação própria.
+        cancelado_na_vuupt = status_vuupt == "canceled"
+        if servico_existente and status_vuupt != vuupt.STATUS_ATUALIZAVEL and not cancelado_na_vuupt:
+            marcar_atribuido(codigo_ps, status=status_vuupt)
+            resultado["acao"] = "pulado_atribuido"
+            resultado["observacao"] = f"Status no VUUPT: {status_vuupt} (não é mais not_assigned)."
+            resultado["vuupt_service_id"] = servico_existente.get("id")
+            resultado["servico_vuupt"] = servico_existente
             return resultado
 
         # 1. Detalhe completo do pedido
         detalhe = stokki_pedidos.obter_detalhe(sess_stokki, id_stokki)
 
+        # Cancelado na Stokki depois da listagem da rodada (Hugo, 18/11: PS-44507
+        # cancelado 12:15, criado na Vuupt 12:17, foi pra rota e virou "não
+        # coletado"). Não sobe; o serviço ainda not_assigned é cancelado na Vuupt
+        # (o pedido sai da listagem de abertos, nenhuma rodada volta nele).
+        if "cancel" in (detalhe.get("situacao") or "").lower():
+            resultado["acao"] = "ignorado_cancelado_stokki"
+            resultado["observacao"] = f"Cancelado na Stokki ({detalhe['situacao']}) -- não sobe pra VUUPT."
+            if status_vuupt == vuupt.STATUS_ATUALIZAVEL:
+                if modo_teste:
+                    logger.info(f"  [TESTE] {codigo_ps}: cancelado na Stokki -- cancelaria o serviço "
+                                f"{servico_existente['id']} (not_assigned) na VUUPT.")
+                else:
+                    try:
+                        vuupt.cancelar_servico_oficial(servico_existente["id"])
+                        resultado["observacao"] += f" Serviço {servico_existente['id']} cancelado na VUUPT."
+                    except Exception as e:
+                        resultado["requer_revisao"] = True
+                        resultado["observacao"] += (f" Falha ao cancelar o serviço {servico_existente['id']} "
+                                                    f"na VUUPT ({e}) -- cancelar à mão.")
+            logger.info(f"  {codigo_ps}: {resultado['observacao']}")
+            return resultado
+
         # 2. Resolução do endereço
         res_end = resolver_endereco_entrega(
             detalhe, catalogo, anthropic_api_key, google_maps_api_key)
 
-        # Pedidos com transportadora RETIRADA (cliente retira / terceira
-        # coleta no galpão): SERVIÇO AVULSO na VUUPT, título "[RETIRADA]",
-        # atribuído ao agente fixo de retiradas -- nunca entra em rota
-        # (pedido do Hugo, 28/08; ver retiradas/regras_retirada.py). Sem
-        # retiradas.agent_id no config, mantém o comportamento antigo
-        # (ignora). Quem fecha/cancela depois é acompanhar_retiradas.py.
-        if res_end.transportadora.get("tipo") == "RETIRADA":
-            cfg_ret = config_retiradas(config_retiradas_global or {})
-            if not cfg_ret["ativo"]:
-                logger.info(
-                    f"  {codigo_ps}: RETIRADA ({res_end.transportadora.get('nome')}) "
-                    f"— ignorado, nao importa no VUUPT (retiradas desativadas no config)."
-                )
-                resultado["acao"] = "ignorado_retirada"
+        # Transportadora formal fora do cadastro: segura o pedido e pergunta ao
+        # embarcador (retirada/redespacho/entrega). Antes da RETIRADA e do
+        # aguardando_redespacho. Desligado = comportamento de sempre.
+        if config_consulta(config_app or {})["ativo"]:
+            segurar = _deve_segurar_por_transportadora(detalhe, res_end, servico_existente, catalogo)
+            if segurar:
+                nome_transp, cnpj_transp = segurar
+                resultado["fonte_endereco"] = res_end.fonte
+                resultado["requer_revisao"] = True
+                resultado["observacao"] = (f"Transportadora {nome_transp} nova: aguardando resposta "
+                                           f"do embarcador (retirada/redespacho/entrega).")
+                resultado["acao"] = "aguardando_transportadora"
+                if modo_teste:
+                    logger.info(f"  [TESTE] {codigo_ps}: seguraria o pedido ate o embarcador responder "
+                                f"sobre a transportadora {nome_transp} (nada gravado/enviado).")
+                else:
+                    _registrar_e_avisar_transportadora(
+                        codigo_ps, detalhe, nome_transp, cnpj_transp,
+                        stkkc_id_emb or detalhe.get("stkkc_id"), config_app or {})
                 return resultado
-            stkkc_id_final = stkkc_id_emb or detalhe.get("stkkc_id")
-            dados_banco = _buscar_dados_embarcador_banco(stkkc_id_final) if stkkc_id_final else {}
-            transp_bloco = detalhe.get("transportadora") or {}
-            transp_info = {"nome": res_end.transportadora.get("nome") or transp_bloco.get("nome", ""),
-                           "documento": transp_bloco.get("documento", "")}
-            payload_ret = montar_payload_retirada(
-                codigo_ps, referencia or detalhe.get("referencia", ""), detalhe,
-                transp_info, dados_banco, cfg_ret, data_saida=data_saida)
-            acao_ret, _ = importar_retirada(vuupt, payload_ret, cfg_ret, servico_existente, modo_teste)
-            resultado["acao"] = acao_ret
+
+        # Pedidos com transportadora RETIRADA (cliente retira / terceira
+        # coleta no galpão) NUNCA sobem pra VUUPT (Hugo, 06/11 -- de 28/08
+        # até aqui viravam serviço avulso "[RETIRADA]"; os que já estão lá
+        # o acompanhar_retiradas.py segue fechando). Se a entrega já estava
+        # na VUUPT e o pedido virou retirada depois, cancela enquanto ainda
+        # está not_assigned -- antes de entrar em rota (o reconciliar_
+        # pedidos_retirada.py faz o mesmo de 2 em 2 h, este é o atalho).
+        if res_end.transportadora.get("tipo") == "RETIRADA":
+            resultado["acao"] = "ignorado_retirada"
             resultado["fonte_endereco"] = "retirada_galpao"
-            resultado["observacao"] = f"Retirada no galpão via {transp_info['nome'] or 'cliente'} -- serviço avulso, sem rota."
+            nome_transp = res_end.transportadora.get("nome") or "cliente"
+            resultado["observacao"] = f"Retirada no galpão via {nome_transp} -- não sobe pra VUUPT."
+            if status_vuupt == vuupt.STATUS_ATUALIZAVEL:
+                if modo_teste:
+                    logger.info(f"  [TESTE] {codigo_ps}: RETIRADA -- cancelaria o serviço "
+                                f"{servico_existente['id']} (not_assigned) na VUUPT.")
+                else:
+                    try:
+                        vuupt.cancelar_servico_oficial(servico_existente["id"])
+                        resultado["observacao"] += f" Serviço {servico_existente['id']} cancelado na VUUPT."
+                    except Exception as e:
+                        resultado["requer_revisao"] = True
+                        resultado["observacao"] += (f" Falha ao cancelar o serviço {servico_existente['id']} "
+                                                    f"na VUUPT ({e}) -- cancelar à mão.")
+            logger.info(f"  {codigo_ps}: RETIRADA ({nome_transp}) -- ignorado. {resultado['observacao']}")
+            return resultado
+
+        if cancelado_na_vuupt:
+            # ENTREGA com serviço cancelado: não recria sozinho (o
+            # cancelamento pode ter sido de propósito), mas não some junto
+            # com os atribuídos -- ação própria, reportada em toda rodada.
+            resultado["acao"] = "pulado_cancelado_vuupt"
+            resultado["requer_revisao"] = True
+            resultado["observacao"] = ("Serviço CANCELADO na VUUPT, mas o pedido segue aberto na Stokki "
+                                       "-- conferir se deve voltar pra rota ou ser cancelado na Stokki.")
             return resultado
 
         # Local de Entrega fora da área atendida e sem redespacho conhecido
@@ -541,6 +817,7 @@ def processar_pedido(
                     nome_transportadora=res_end.transportadora.get("nome", ""),
                     email_emb=dados_banco.get("email", ""),
                     config_email=config_email or {},
+                    cnpj_emb=dados_banco.get("cnpj_embarcador", ""),
                 )
                 if enviado:
                     logger.info(f"  {codigo_ps}: solicitação de confirmação de redespacho enviada.")
@@ -571,6 +848,15 @@ def processar_pedido(
         ref_final = referencia or detalhe.get("referencia", "")
         stkkc_id_final = stkkc_id_emb or detalhe.get("stkkc_id")
         dados_banco = _buscar_dados_embarcador_banco(stkkc_id_final) if stkkc_id_final else {}
+
+        # O que o cliente escolheu no portal (endereco/horario) vence o da NF
+        # e o extraido; so neste caminho, que monta o payload da Vuupt.
+        endereco_final, horario_final, coords_fixas = aplicar_alteracoes_do_cliente(
+            codigo_ps, dados_banco.get("sender_id"),
+            detalhe.get("destino", {}).get("documento", ""),
+            res_end.endereco, res_end.horario_entrega,
+            conn=conn_alteracoes, ajustes=ajustes_manuais)
+        resultado["endereco_cliente_portal"] = endereco_final is not res_end.endereco
 
         # Skill do serviço: "{TipoCarga}-{Nível}". Tipo de carga
         # (Congelado/Seco/Refrigerado) é definido pelo EMBARCADOR — vem
@@ -623,11 +909,10 @@ def processar_pedido(
                 f"de complexidade — aplicando nível padrão ({nivel})."
             )
 
-        # Agendamento — só entra no payload quando o destinatário exige
-        # (cadastro clientes_agendamento) e, quando exige, só com um
-        # horário de VERDADE: das mensagens da Stokki (prioridade,
-        # já veio confiável de res_end); senão, de uma confirmação já
-        # recebida por e-mail; senão, dispara a solicitação de
+        # Agendamento — sem data informada, só entra no payload quando o
+        # destinatário exige (cadastro clientes_agendamento) e, quando
+        # exige, só com um horário de VERDADE: das mensagens da Stokki
+        # (já veio confiável de res_end); senão, dispara a solicitação de
         # confirmação e o pedido fica SEM agendamento por enquanto
         # (pedido do Hugo, 29/07).
         scheduled_start_final = None
@@ -635,50 +920,67 @@ def processar_pedido(
         fonte_agendamento = "nao_exigido"
         cnpj_destino_bruto = detalhe.get("destino", {}).get("documento", "")
 
-        if tem_agendamento(cnpj_destino_bruto, conjunto_agendamento or set()):
+        # Data de agendamento INFORMADA (portal, planilha, resposta de
+        # e-mail) vale pra qualquer destinatário, exija agendamento no
+        # cadastro ou não, e vem antes de tudo (pedido do Hugo, 28/09,
+        # caso PS-40316: a data do portal era ignorada porque o
+        # destinatário não estava marcado com AGENDA na BD_CLIENTES).
+        confirmacao = buscar_confirmacao(codigo_ps)
+        if confirmacao:
+            scheduled_start_final = _converter_data_para_iso(
+                f"{confirmacao['data']} {confirmacao['inicio']}")
+            scheduled_end_final = _converter_data_para_iso(
+                f"{confirmacao['data']} {confirmacao['fim']}")
+            fonte_agendamento = "confirmado_email"
+        elif tem_agendamento(cnpj_destino_bruto, conjunto_agendamento or set()):
             if res_end.horario_entrega:
                 scheduled_start_final, scheduled_end_final = montar_agendamento(
                     data_saida, res_end.horario_entrega)
                 fonte_agendamento = "mensagem_stokki"
             else:
-                confirmacao = buscar_confirmacao(codigo_ps)
-                if confirmacao:
-                    scheduled_start_final = _converter_data_para_iso(
-                        f"{confirmacao['data']} {confirmacao['inicio']}")
-                    scheduled_end_final = _converter_data_para_iso(
-                        f"{confirmacao['data']} {confirmacao['fim']}")
-                    fonte_agendamento = "confirmado_email"
-                else:
-                    fonte_agendamento = "aguardando_confirmacao"
-                    resultado["requer_revisao"] = True
-                    if modo_teste:
-                        logger.info(
-                            f"  [TESTE] {codigo_ps}: exigiria solicitação de confirmação "
-                            f"de agendamento (e-mail NÃO enviado em modo teste)."
-                        )
-                    elif dados_banco.get("notificar_email", True) and dados_banco.get("email"):
-                        enviado, motivo_email = enviar_solicitacao(
-                            pedido=codigo_ps,
-                            nome_dest=detalhe.get("destino", {}).get("nome", ""),
-                            numero_nf=ref_final,
-                            cnpj_dest=cnpj_destino_bruto,
-                            cnpj_emb=dados_banco.get("cnpj_embarcador", ""),
-                            email_emb=dados_banco.get("email", ""),
-                            config_email=config_email or {},
-                        )
-                        if enviado:
-                            logger.info(f"  {codigo_ps}: solicitação de confirmação de agendamento enviada.")
-                        elif motivo_email:
-                            logger.debug(
-                                f"  {codigo_ps}: solicitação de agendamento não enviada ({motivo_email})."
-                            )
-                    else:
+                fonte_agendamento = "aguardando_confirmacao"
+                resultado["requer_revisao"] = True
+                if modo_teste:
+                    logger.info(
+                        f"  [TESTE] {codigo_ps}: exigiria solicitação de confirmação "
+                        f"de agendamento (e-mail NÃO enviado em modo teste)."
+                    )
+                elif dados_banco.get("notificar_email", True) and dados_banco.get("email"):
+                    enviado, motivo_email = enviar_solicitacao(
+                        pedido=codigo_ps,
+                        nome_dest=detalhe.get("destino", {}).get("nome", ""),
+                        numero_nf=ref_final,
+                        cnpj_dest=cnpj_destino_bruto,
+                        cnpj_emb=dados_banco.get("cnpj_embarcador", ""),
+                        email_emb=dados_banco.get("email", ""),
+                        config_email=config_email or {},
+                    )
+                    if enviado:
+                        logger.info(f"  {codigo_ps}: solicitação de confirmação de agendamento enviada.")
+                    elif motivo_email:
                         logger.debug(
-                            f"  {codigo_ps}: exige agendamento mas embarcador sem e-mail/"
-                            f"notificação desativada — aguardando confirmação manual."
+                            f"  {codigo_ps}: solicitação de agendamento não enviada ({motivo_email})."
                         )
+                else:
+                    logger.debug(
+                        f"  {codigo_ps}: exige agendamento mas embarcador sem e-mail/"
+                        f"notificação desativada — aguardando confirmação manual."
+                    )
+        else:
+            # Sem agendamento de verdade: pedido NOVO nasce com a data do próximo
+            # dia útil (pedido do Hugo, 02/11). Não é agendamento do cliente.
+            try:
+                automatico = agendamento_automatico(
+                    servico_existente, res_end.horario_entrega, cnpj_destino_bruto, data_saida,
+                    inicio_rodada, mapa_horarios or {}, ajustes_manuais or {})
+            except Exception as e:
+                logger.warning(f"  {codigo_ps}: falha na data automática (segue sem data): {e}")
+                automatico = None
+            if automatico:
+                scheduled_start_final, scheduled_end_final = automatico
+                fonte_agendamento = FONTE_PROXIMO_DIA_UTIL
 
-        resultado["tem_agendamento"] = fonte_agendamento != "nao_exigido"
+        resultado["tem_agendamento"] = fonte_agendamento not in ("nao_exigido", FONTE_PROXIMO_DIA_UTIL)
         resultado["fonte_agendamento"] = fonte_agendamento
 
         payload = montar_payload_vuupt(
@@ -686,8 +988,8 @@ def processar_pedido(
             codigo_ps=codigo_ps,
             referencia=ref_final,
             detalhe=detalhe,
-            endereco_resolvido=res_end.endereco,
-            horario_entrega=res_end.horario_entrega,
+            endereco_resolvido=endereco_final,
+            horario_entrega=horario_final,
             skill_ids=skill_ids,
             sender_id=dados_banco.get("sender_id"),
             apelido_embarcador=dados_banco.get("apelido", ""),
@@ -711,9 +1013,13 @@ def processar_pedido(
         # ainda não tem essa data (servico_existente) -- o pipeline
         # reprocessa pedidos not_assigned toda rodada, e sem essa checagem
         # o remetente receberia o mesmo aviso em toda execução.
-        if payload.get("scheduled_start"):
+        # 28/09 (pedido do Hugo, caso PS-40316): data INFORMADA
+        # (confirmado_email = portal/planilha/resposta) não passa mais por
+        # aqui -- vale como veio. Segue valendo pra mensagem da Stokki, que
+        # só traz HORÁRIO (a data ali é calculada por nós).
+        if payload.get("scheduled_start") and fonte_agendamento != "confirmado_email":
             try:
-                from roteirizacao.regioes_dia_fixo import ajustar_data_por_dia_fixo, nomes_dias
+                from roteirizacao.regioes_dia_fixo import ajustar_data_por_dia_fixo, descricao_dias
                 data_original = date.fromisoformat(payload["scheduled_start"][:10])
                 data_final, regra = ajustar_data_por_dia_fixo(
                     {"address": payload.get("customer", {}).get("address", "")}, data_original)
@@ -723,7 +1029,7 @@ def processar_pedido(
                         payload["scheduled_end"] = data_final.isoformat() + payload["scheduled_end"][10:]
                     logger.info(
                         f"  {codigo_ps}: agendamento {data_original.strftime('%d/%m')} cai fora dos dias de "
-                        f"'{regra['nome']}' ({nomes_dias(regra['dias'])}) — ajustado pra "
+                        f"'{regra['nome']}' ({descricao_dias(regra)}) — ajustado pra "
                         f"{data_final.strftime('%d/%m/%Y')}."
                     )
                     data_ja_no_vuupt = ((servico_existente or {}).get("scheduled_start") or "")[:10]
@@ -748,14 +1054,15 @@ def processar_pedido(
         #   - no customer: alimenta o upsert do contato via
         #     resolver_customer_id, o fingerprint e a forma leve/completa.
         endereco_payload = payload.get("customer", {}).get("address", "")
-        coords = geocodificar(endereco_payload, google_maps_api_key)
+        coords = coords_fixas or geocodificar(endereco_payload, google_maps_api_key)
         if coords:
             payload["latitude"]  = coords[0]
             payload["longitude"] = coords[1]
             payload["customer"]["latitude"]  = coords[0]
             payload["customer"]["longitude"] = coords[1]
+            rotulo = "coordenadas gravadas do endereco do cliente (portal)" if coords_fixas else "geocodificado"
             logger.info(
-                f"  {codigo_ps}: geocodificado ({coords[0]:.6f}, {coords[1]:.6f})"
+                f"  {codigo_ps}: {rotulo} ({coords[0]:.6f}, {coords[1]:.6f})"
             )
         else:
             logger.info(
@@ -766,12 +1073,28 @@ def processar_pedido(
         if modo_teste:
             logger.info(f"  {codigo_ps}: [TESTE] payload montado, fonte={res_end.fonte}")
             resultado["acao"] = "simulado"
+            if fonte_agendamento == FONTE_PROXIMO_DIA_UTIL and payload.get("scheduled_start"):
+                logger.info(f"  {codigo_ps}: [TESTE] {_texto_agendado_automatico(payload)}")
         else:
             resposta_vuupt, acao = vuupt.criar_ou_atualizar_servico(payload)
             resultado["acao"] = acao
+            # POST/PUT /services devolve {"service": {...}} ou o objeto direto; "pulado_sem_alteracao" devolve
+            # None e o servico e o que ja existia (revisao 25/10: a fila do freshhub precisa do id nos dois casos)
+            from nucleo.pedidos import servico_da_resposta
+            servico = servico_da_resposta(resposta_vuupt) or servico_existente or {}
+            if isinstance(servico, dict) and servico.get("id") is not None:
+                resultado["vuupt_service_id"] = servico.get("id")
+                resultado["servico_vuupt"] = servico
             logger.info(
-                f"  {codigo_ps}: {acao} no VUUPT (endereço via {res_end.fonte})"
+                f"  {codigo_ps}: {acao} no VUUPT (endereço via {'cliente no portal' if resultado['endereco_cliente_portal'] else res_end.fonte})"
             )
+            if (acao == "criado" and fonte_agendamento == FONTE_PROXIMO_DIA_UTIL
+                    and resultado.get("vuupt_service_id")):
+                try:
+                    registrar_data_automatica(servico, payload["scheduled_start"])
+                    logger.info(f"  {codigo_ps}: {_texto_agendado_automatico(payload)}")
+                except Exception as e:
+                    logger.warning(f"  {codigo_ps}: data automática não registrada ({e})")
             # Dual-write no núcleo próprio (Fase A do app de motoristas,
             # DOC_EXECUCAO_CLAUDE_APP_MOTORISTAS.md) -- best-effort: a VUUPT
             # já foi atualizada, falha aqui só vira aviso.
@@ -788,18 +1111,357 @@ def processar_pedido(
     return resultado
 
 
+# ── Fila de replica do sistema novo (plano 1.2 do freshhub, Task 6) ───────────
+
+_CHAVES_ESPELHO = ("title", "address", "address_complement", "latitude", "longitude", "dimension_3", "note",
+                   "customer_id", "scheduled_start", "scheduled_end", "created_at", "updated_at",
+                   "recreated_order_origin_id", "sender_id")
+
+
+def _espelho_para_freshhub(servico: dict | None) -> dict | None:
+    """Servico da Vuupt no formato que o freshhub guarda em tentativa.servico_vuupt (a mesma forma que a
+    carga de la monta do nucleo): cliente achatado, datas como a Vuupt devolve."""
+    if not servico:
+        return None
+    customer = servico.get("customer") or {}
+    espelho = {chave: servico.get(chave) for chave in _CHAVES_ESPELHO}
+    espelho.update({
+        "phone_number": customer.get("phone_number") or servico.get("phone_number"),
+        "customer_name": customer.get("name"),
+        "customer_code": customer.get("code"),
+        "operating_hour_start": customer.get("operating_hour_start"),
+        "operating_hour_end": customer.get("operating_hour_end"),
+    })
+    return espelho
+
+
+def atender_fila_freshhub(cliente, processar, *, modo_teste: bool, limite: int = 50,
+                          buscar_servico=None) -> list[dict]:
+    """Pendentes de destino vuupt na fila de replica do sistema novo: pra cada um roda o MESMO
+    processar_pedido do pipeline (`processar(id_stokki, codigo)`: payload, geocodificacao,
+    criar_ou_atualizar_servico idempotente por code, registrar_importacao) e devolve o id do servico e o
+    espelho; erro de um item vira resultado com erro e o lote segue. Servico que ja existia sem alteracao
+    (pipeline normal chegou antes) volta sem id do processar: `buscar_servico(codigo)` (vuupt.
+    buscar_servico_por_code) acha o existente e a fila devolve ok. Em modo teste simula e NAO devolve
+    (o item volta a pendente na API em 1 h). `cliente` None = freshhub_api sem configurar, nada a fazer."""
+    if cliente is None:
+        return []
+    try:
+        itens = cliente.pendentes("vuupt", limite=limite)
+    except Exception as e:  # noqa: BLE001 - API nova fora nao derruba a rodada do pipeline
+        logger.error(f"fila do freshhub indisponivel, nada atendido nesta rodada: {e}")
+        return []
+    saida: list[dict] = []
+    for item in itens:
+        dados = item.get("dados") or {}
+        codigo = str(dados.get("codigo") or item.get("codigo") or "").lstrip("#").upper()
+        id_stokki = dados.get("id_stokki")
+        ident = item.get("id")
+        def _devolver(*args, **kw) -> bool:
+            # a API nova fora no POST do resultado nao derruba o lote: o item fica 'enviado' e volta a
+            # pendente em 1 h (reprocesso da fila), quando o servico ja existente e devolvido pela busca
+            try:
+                cliente.resultado(*args, **kw)
+                return True
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"  fila freshhub {ident} ({codigo}): resultado nao devolvido a API nova ({e})")
+                return False
+
+        if not id_stokki:
+            logger.warning(f"  fila freshhub {ident} ({codigo}): sem id_stokki nos dados, devolvido com erro")
+            if not modo_teste:
+                _devolver(ident, False, erro="sem id_stokki nos dados da replica")
+            saida.append({"id": ident, "codigo": codigo, "ok": False, "vuupt_service_id": None, "acao": None})
+            continue
+        try:
+            res = processar(int(id_stokki), codigo)
+        except Exception as e:  # noqa: BLE001 - o item falha sozinho
+            res = {"acao": None, "erro": str(e), "vuupt_service_id": None, "servico_vuupt": None, "observacao": ""}
+        sid = res.get("vuupt_service_id")
+        servico = res.get("servico_vuupt")
+        if sid is None and not res.get("erro") and buscar_servico is not None:
+            # pulado_sem_alteracao / pulado pelo fingerprint: o servico existe, so nao foi tocado agora
+            try:
+                existente = buscar_servico(codigo)
+            except Exception as e:  # noqa: BLE001
+                existente = None
+                logger.warning(f"  fila freshhub {ident} ({codigo}): busca do servico existente falhou ({e})")
+            if existente and existente.get("id") is not None:
+                sid, servico = existente.get("id"), existente
+        ok = not res.get("erro") and sid is not None
+        devolvido = False
+        if modo_teste:
+            logger.info(f"  [TESTE] fila freshhub {ident} ({codigo}): {res.get('acao')} (nada devolvido)")
+        elif ok:
+            devolvido = _devolver(ident, True, resultado={"vuupt_service_id": sid, "acao": res.get("acao"),
+                                                         "servico": _espelho_para_freshhub(servico)})
+        else:
+            erro = res.get("erro") or f"sem servico na Vuupt: {res.get('acao')} {res.get('observacao') or ''}".strip()
+            _devolver(ident, False, erro=erro)
+        saida.append({"id": ident, "codigo": codigo, "ok": bool(ok) and devolvido,
+                      "vuupt_service_id": sid, "acao": res.get("acao")})
+    if itens:
+        feitos = sum(1 for s in saida if s["ok"])
+        logger.info(f"Fila do freshhub: {len(itens)} item(ns), {feitos} com servico devolvido"
+                    + (" [MODO TESTE: nada devolvido]" if modo_teste else ""))
+    return saida
+
+
 # ── Orquestrador principal ─────────────────────────────────────────────────────
 
+def coletar_abertos(sess_stokki, config: dict) -> tuple[list, bool]:
+    """Pedidos abertos na Stokki das 4 fontes da rodada sem filtro (prioritários em qualquer status
+    aberto, Aguardando Transportador, Estação de Impressão, em aberto/separação/conferência dos
+    outros). Devolve (linhas, completa): completa=False se alguma fonte falhou. Usada pela importação
+    e pelo --so-status (botão "Status Stokki" do planejamento, Hugo 09/11)."""
+    completa = True
+    linhas_ids_vistos: set[int] = set()
+    linhas: list = []
+
+    # Fonte 1: embarcadores prioritários — todos os pedidos abertos
+    for id_emb, nome_emb in EMBARCADORES_IMPORTAR_ABERTOS.items():
+        for status in STATUSES_EM_ABERTO:
+            try:
+                for linha in stokki_pedidos.iterar_todos_pedidos(
+                    sess_stokki, status=status, cliente=id_emb, pausa_entre_paginas=0.3
+                ):
+                    id_ = stokki_pedidos.extrair_id_da_linha(linha)
+                    if id_ and id_ not in linhas_ids_vistos:
+                        linhas_ids_vistos.add(id_)
+                        if isinstance(linha, dict):
+                            linha["_fonte"] = "prioritario"
+                            linha["_status_stokki"] = status
+                        linhas.append(linha)
+            except Exception as e:
+                completa = False
+                logger.warning(f"Erro ao buscar {nome_emb!r} status={status!r}: {e}")
+    logger.info(f"Embarcadores prioritários: {len(linhas)} pedido(s) coletado(s).")
+
+    # Fonte 2: todos os outros — apenas Aguardando Transportador
+    n_antes = len(linhas)
+    for linha in stokki_pedidos.iterar_todos_pedidos(
+        sess_stokki, status=STATUS_AGUARDANDO_TRANSPORTADOR
+    ):
+        id_ = stokki_pedidos.extrair_id_da_linha(linha)
+        if id_ and id_ not in linhas_ids_vistos:
+            # Passa a linha inteira: o filtro decide pelo #stkkc-NN
+            # do campo 'client' (achado 28/09, nome parecido caía fora).
+            if not _embarcador_prioritario(linha):
+                linhas_ids_vistos.add(id_)
+                if isinstance(linha, dict):
+                    linha["_fonte"] = "aguardando_transportador"
+                    linha["_status_stokki"] = STATUS_AGUARDANDO_TRANSPORTADOR
+                linhas.append(linha)
+    logger.info(f"Aguardando Transportador (outros embarcadores): "
+                f"{len(linhas) - n_antes} pedido(s) adicionados.")
+
+    # Fonte 3: Estação de Impressão — pedidos em espera
+    n_antes2 = len(linhas)
+    try:
+        em_espera = listar_pedidos_em_espera(config)
+        for p in em_espera:
+            id_ = p["id_stokki"]
+            if id_ and id_ not in linhas_ids_vistos:
+                linhas_ids_vistos.add(id_)
+                # Converte para o formato de linha esperado pelo pipeline
+                linhas.append({
+                    "id": f'<a href="/show/{id_}">{id_}</a>',
+                    "client": p["cliente"],
+                    "carrier": "",
+                    "destination": "",
+                    "_codigo_ps": p["codigo_ps"].lstrip("#"),
+                    "_fonte": "estacao_impressao",
+                    "_status_stokki": "Em espera",
+                })
+    except Exception as e:
+        completa = False
+        logger.warning(f"Erro ao buscar pedidos da Estação de Impressão: {e}")
+    logger.info(f"Estação de Impressão: {len(linhas) - n_antes2} pedido(s) adicionados.")
+
+    # Fonte 4 (Hugo, 09/11): os outros embarcadores também entram na Vuupt em aberto, em separação e
+    # em conferência, pra poderem ser roteirizados antes do galpão terminar (só "Em espera" barra a rota,
+    # nucleo/prontidao_stokki.py). "On hold" continua de fora pra esses. Vem DEPOIS da Estação de
+    # Impressão: pedido que ela já trouxe fica com "Em espera" (barrado na rota), como antes.
+    n_antes = len(linhas)
+    for status in STATUSES_OUTROS_ANTES_DO_TRANSPORTADOR:
+        try:
+            for linha in stokki_pedidos.iterar_todos_pedidos(
+                sess_stokki, status=status, pausa_entre_paginas=0.3
+            ):
+                id_ = stokki_pedidos.extrair_id_da_linha(linha)
+                if id_ and id_ not in linhas_ids_vistos and not _embarcador_prioritario(linha):
+                    linhas_ids_vistos.add(id_)
+                    if isinstance(linha, dict):
+                        linha["_fonte"] = "em_separacao"
+                        linha["_status_stokki"] = status
+                    linhas.append(linha)
+        except Exception as e:
+            completa = False
+            logger.warning(f"Erro ao buscar outros embarcadores status={status!r}: {e}")
+    logger.info(f"Em aberto/separação/conferência (outros embarcadores): "
+                f"{len(linhas) - n_antes} pedido(s) adicionados.")
+    return linhas, completa
+
+
+def _registrar_retrato_vigia(linhas: list, resultados: list[dict], completa: bool,
+                             preservar_acao: bool = False) -> bool:
+    """Best-effort: falha aqui nunca derruba a importação (devolve False)."""
+    try:
+        from vigia.banco import registrar_listagem_stokki
+        por_codigo = {(r.get("codigo_ps") or "").lstrip("#").upper(): r for r in resultados}
+        itens = []
+        for linha in linhas:
+            codigo = stokki_pedidos.extrair_codigo_ps_da_linha(linha)
+            if not codigo:
+                continue
+            r = por_codigo.get(codigo.lstrip("#").upper(), {})
+            cliente = re.sub(r"#stkkc-\d+", "", re.sub(r"<[^>]+>", "", str(
+                linha.get("client", "") if isinstance(linha, dict) else ""))).strip()
+            itens.append({
+                "codigo": codigo,
+                "id_stokki": stokki_pedidos.extrair_id_da_linha(linha),
+                "embarcador": cliente,
+                "status_stokki": linha.get("_status_stokki") if isinstance(linha, dict) else None,
+                "fonte": linha.get("_fonte") if isinstance(linha, dict) else None,
+                "acao": "erro" if r.get("erro") else r.get("acao"),
+                "observacao": r.get("erro") or r.get("observacao"),
+            })
+        registrar_listagem_stokki(itens, completa, preservar_acao=preservar_acao)
+        logger.info(f"Vigia: retrato de {len(itens)} pedido(s) aberto(s) gravado "
+                    f"({'completo' if completa else 'INCOMPLETO -- alguma fonte falhou'}).")
+        return True
+    except Exception as e:
+        logger.warning(f"Vigia: retrato dos pedidos abertos não gravado: {e}")
+        return False
+
+
+# Rodada de hora em hora durante o dia (Hugo, 28/09, "com o cuidado da
+# concorrência"): a sessão da Stokki é única e um login novo derruba o
+# outro. A rodada horária espera quem está usando (mesma regra do login da
+# StokkiSession) e, se ainda estiver ocupado, DESISTE -- a próxima é em 1h.
+DONO_TRAVA_HORARIO = "pipeline-horario"
+DONO_TRAVA_SEQUENCIA = "pipeline"
+TTL_TRAVA_HORARIO_S = 20 * 60
+
+
+def _obter_trava_horario() -> bool:
+    from stokki import sessao_uso
+    # 05/10 (Hugo): fila -- espera a vez sem limite, por ordem de chegada
+    # (principal, ou a reserva se ela vagar antes).
+    if not sessao_uso.adquirir(DONO_TRAVA_HORARIO, ttl_segundos=TTL_TRAVA_HORARIO_S,
+                               esperar_segundos=None, alternativa=True):
+        logger.info(f"Rodada horária adiada: Stokki em uso ({sessao_uso.em_uso()}).")
+        return False
+    return True
+
+
+def _renovar_trava(dono: str) -> None:
+    try:
+        from stokki import sessao_uso
+        sessao_uso.renovar(dono, TTL_TRAVA_HORARIO_S)
+    except Exception as e:
+        logger.warning(f"Renovação da trava da Stokki falhou: {e}")
+
+
+def _estacao_impressao_horaria(modo_teste: bool) -> None:
+    """22/10 (Hugo): a Estação de Impressão também roda de hora em hora,
+    antes da importação -- pedido faturado esperava até a próxima sequência
+    (16h/18h/22h). O que ela move vira 'Aguardando Transportador' e entra
+    nesta mesma rodada. Falha aqui não para a importação: se o pedido ficar
+    parado, o vigia_fila_impressao.py avisa."""
+    try:
+        r = imprimir_pedidos_pendentes(_carregar_config(), dry_run=modo_teste)
+        logger.info(f"Estação de Impressão (horária): {r['processados']}/{r['pendentes']} processado(s)"
+                    + (f", falhas {r['falhas']}" if r["falhas"] else ""))
+    except Exception as e:
+        logger.error(f"Estação de Impressão (horária) falhou: {e}")
+
+
+def main_horario(modo_teste: bool = False, fila_freshhub: bool = False) -> None:
+    if not _obter_trava_horario():
+        return
+    # Início da rodada (corte das 14h da data automática) logo depois da trava e
+    # ANTES da Estação de Impressão, que pode levar 10+ min e empurraria a
+    # rodada das 14h05 pra D+2 (revisão final, 02/11).
+    inicio_rodada = datetime.now(timezone(timedelta(hours=-3)))
+    from stokki import sessao_uso
+    try:
+        _estacao_impressao_horaria(modo_teste)
+        _renovar_trava(DONO_TRAVA_HORARIO)
+        main(modo_teste=modo_teste, dono_trava=DONO_TRAVA_HORARIO, fila_freshhub=fila_freshhub,
+             inicio_rodada=inicio_rodada)
+    finally:
+        sessao_uso.liberar(DONO_TRAVA_HORARIO)
+
+
+DONO_TRAVA_STATUS = "pipeline-status"
+ESPERA_TRAVA_STATUS_S = 30 * 60
+
+
+def main_status(modo_teste: bool = False) -> None:
+    """--so-status (botão "Status Stokki" do planejamento, Hugo 09/11): relê na Stokki só a situação
+    dos pedidos abertos (as mesmas 4 fontes da importação) e regrava o retrato vigia_stokki_abertos,
+    que o pool, o selo da rota e o envio do rascunho leem. Não cria nem altera nada na Vuupt nem na
+    Stokki. Espera a vez na sessão até 30 min; modo teste só lista."""
+    from stokki import sessao_uso
+    if not sessao_uso.adquirir(DONO_TRAVA_STATUS, ttl_segundos=TTL_TRAVA_HORARIO_S,
+                               esperar_segundos=ESPERA_TRAVA_STATUS_S, alternativa=True):
+        raise RuntimeError(f"Stokki ocupada por '{sessao_uso.em_uso()}' há mais de "
+                           f"{ESPERA_TRAVA_STATUS_S // 60} min -- status não atualizado.")
+    try:
+        inicio = time.monotonic()
+        config = _carregar_config()
+        linhas, completa = coletar_abertos(StokkiSession(config), config)
+        contagem: dict[str, int] = {}
+        for linha in linhas:
+            status = (linha.get("_status_stokki") if isinstance(linha, dict) else None) or "?"
+            contagem[status] = contagem.get(status, 0) + 1
+        logger.info(f"Status Stokki: {len(linhas)} pedido(s) aberto(s) -- "
+                    + ", ".join(f"{k}: {v}" for k, v in sorted(contagem.items()))
+                    + ("" if completa else " [alguma fonte falhou: ninguém sai do retrato]"))
+        if modo_teste:
+            logger.info("[MODO TESTE] retrato não gravado.")
+        elif not _registrar_retrato_vigia(linhas, [], completa, preservar_acao=True):
+            raise RuntimeError("Retrato da Stokki não gravado (ver aviso acima).")
+        logger.info(f"Status Stokki concluído em {time.monotonic() - inicio:.0f}s.")
+    finally:
+        sessao_uso.liberar(DONO_TRAVA_STATUS)
+
+
 def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: str = "",
-         filtro_statuses: list[str] | None = None):
+         filtro_statuses: list[str] | None = None, dono_trava: str | None = None,
+         fila_freshhub: bool = False, inicio_rodada: datetime | None = None):
+    # Início da rodada (corte das 14h da data automática). A rodada horária
+    # passa o horário que o main_horario pegou logo depois da trava (antes da
+    # Estação de Impressão); os outros chamadores usam o do 1º main(). A espera
+    # da trava da Stokki abaixo (sessao_uso.adquirir) conta como processamento:
+    # a chamada recursiva mantém este valor (revisão final, 02/11).
+    if inicio_rodada is None:
+        inicio_rodada = datetime.now(timezone(timedelta(hours=-3)))
+    # Rodada completa fora do --horario (sequências, painel): entra na fila
+    # da Stokki e espera a vez até 2h (Hugo, 05/10). Sem a vez, desiste
+    # SEM logar por cima de ninguém -- o erro vai pro resumo da sequência
+    # (executar_tudo marca a etapa como erro e o aviso sai).
+    if dono_trava is None and not (filtro_pedido or filtro_embarcador):
+        from stokki import sessao_uso
+        if not sessao_uso.adquirir(DONO_TRAVA_SEQUENCIA, ttl_segundos=TTL_TRAVA_HORARIO_S,
+                                   esperar_segundos=sessao_uso.ESPERA_MAXIMA_SEGUNDOS, alternativa=True):
+            raise RuntimeError(f"Stokki ocupada por '{sessao_uso.em_uso()}' há mais de "
+                               f"{sessao_uso.ESPERA_MAXIMA_SEGUNDOS // 3600}h -- importação desistiu pra não "
+                               f"derrubar quem está usando.")
+        try:
+            return main(modo_teste=modo_teste, filtro_statuses=filtro_statuses,
+                        dono_trava=DONO_TRAVA_SEQUENCIA, fila_freshhub=fila_freshhub,
+                        inicio_rodada=inicio_rodada)
+        finally:
+            sessao_uso.liberar(DONO_TRAVA_SEQUENCIA)
+
     inicio_execucao = time.monotonic()
     logger.info(
         f"{'[MODO TESTE] ' if modo_teste else ''}Pipeline iniciado."
     )
 
     config           = _carregar_config()
-    global config_retiradas_global
-    config_retiradas_global = config
     anthropic_key    = config.get("anthropic", {}).get("api_key", "")
     vuupt_token      = config.get("vuupt_api", {}).get("token", "")
     gmaps_key        = config.get("google_maps", {}).get("api_key", "")
@@ -823,6 +1485,15 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
     caminho_niveis = config.get("complexidade_entrega", {}).get("planilha", "")
     mapa_niveis = carregar_niveis(caminho_niveis)
 
+    # Janela de horário do destinatário + início da rodada, pra data automática
+    # de pedido novo sem agendamento (pedido do Hugo, 02/11).
+    try:
+        mapa_horarios = carregar_horarios(caminho_niveis)
+        ajustes_manuais = carregar_ajustes_manuais()
+    except Exception as e:
+        logger.warning(f"Horários do destinatário indisponíveis para a data automática ({e}) — seguem vazios.")
+        mapa_horarios, ajustes_manuais = {}, {}
+
     # Cadastro de clientes (destinatário, por CNPJ/CPF) que exigem
     # agendamento real de entrega. Caminho configurável em config.yaml:
     # clientes_agendamento.planilha. Ausente/não encontrada: set() —
@@ -835,11 +1506,11 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
         raise SystemExit("Token do VUUPT não configurado em config.yaml (vuupt_api.token).")
 
     # Carrega catálogo de transportadoras
-    catalogo = CatalogoTransportadoras.carregar(TRANSPORTADORAS)
+    catalogo = CatalogoTransportadoras.carregar_do_banco(DB_PATH)
     conflitos = catalogo.listar_conflitos()
     if conflitos:
         logger.warning(
-            f"BD_TRANSPORTADORAS tem {len(conflitos)} conflito(s) a resolver: {conflitos}"
+            f"Cadastro de transportadoras tem {len(conflitos)} conflito(s) a resolver: {conflitos}"
         )
 
     # Resolve filtro de embarcador (stkkc_id ou parte do nome)
@@ -861,9 +1532,45 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
             else:
                 raise SystemExit(f"Embarcador '{filtro_embarcador}' não encontrado no banco.")
 
+    # Retrato dos pedidos abertos pro vigia (vigia/banco.py): só vale como
+    # listagem COMPLETA se nenhuma fonte falhou (senão "fecharia" pedido
+    # que continua aberto).
+    listagem_completa = not (filtro_pedido or filtro_embarcador)
+
     # Inicia sessoes
     sess_stokki = StokkiSession(config)
     vuupt = VuuptClient(vuupt_token)
+
+    # Alteracoes do cliente no portal: conexao aberta UMA vez por rodada (falha aqui nao para a
+    # importacao: processar_pedido segue com a NF). Os ajustes manuais ja foram lidos acima.
+    conn_alteracoes = None
+    try:
+        conn_alteracoes = alteracoes_entrega.conectar()
+        atexit.register(conn_alteracoes.close)
+    except Exception as e:
+        logger.warning(f"Alteracoes do cliente indisponiveis nesta rodada (segue com a NF): {e}")
+
+    # Fila de replica do sistema novo (plano 1.2): mesmo processar_pedido, mesma sessao da Stokki e mesma
+    # trava da rodada; roda DEPOIS dos pedidos da Stokki (o pipeline normal pode ja ter criado o servico;
+    # criar_ou_atualizar_servico e idempotente por code e a fila so devolve o id)
+    def _atender_fila():
+        if not fila_freshhub:
+            return
+        from nucleo import freshhub_client
+        cliente = freshhub_client.de_config(config)
+        if cliente is None:
+            logger.info("--fila-freshhub sem freshhub_api.url/token no config.yaml: nada a atender.")
+            return
+        atender_fila_freshhub(
+            cliente,
+            lambda id_stokki, codigo: processar_pedido(
+                id_stokki=id_stokki, codigo_ps=codigo, sess_stokki=sess_stokki, catalogo=catalogo, vuupt=vuupt,
+                anthropic_api_key=anthropic_key, modo_teste=modo_teste, google_maps_api_key=gmaps_key,
+                indice_xmls=indice_xmls, mapa_niveis=mapa_niveis, conjunto_agendamento=conjunto_agendamento,
+                config_email=config.get("email", {}), config_app=config,
+                mapa_horarios=mapa_horarios, ajustes_manuais=ajustes_manuais, inicio_rodada=inicio_rodada,
+                conn_alteracoes=conn_alteracoes),
+            modo_teste=modo_teste, buscar_servico=vuupt.buscar_servico_por_code)
 
     # Lista pedidos
     # ── Coleta pedidos das fontes relevantes ──────────────────────────────────
@@ -904,75 +1611,21 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
             f"Embarcador stkkc_id={filtro_stkkc_id}: {len(linhas)} pedido(s) em aberto."
         )
     else:
-        linhas_ids_vistos: set[int] = set()
-        linhas: list = []
-
-        # Fonte 1: embarcadores prioritários — todos os pedidos abertos
-        for id_emb, nome_emb in EMBARCADORES_IMPORTAR_ABERTOS.items():
-            for status in STATUSES_EM_ABERTO:
-                try:
-                    for linha in stokki_pedidos.iterar_todos_pedidos(
-                        sess_stokki, status=status, cliente=id_emb, pausa_entre_paginas=0.3
-                    ):
-                        id_ = stokki_pedidos.extrair_id_da_linha(linha)
-                        if id_ and id_ not in linhas_ids_vistos:
-                            linhas_ids_vistos.add(id_)
-                            if isinstance(linha, dict):
-                                linha["_fonte"] = "prioritario"
-                            linhas.append(linha)
-                except Exception as e:
-                    logger.warning(f"Erro ao buscar {nome_emb!r} status={status!r}: {e}")
-        logger.info(f"Embarcadores prioritários: {len(linhas)} pedido(s) coletado(s).")
-
-        # Fonte 2: todos os outros — apenas Aguardando Transportador
-        n_antes = len(linhas)
-        for linha in stokki_pedidos.iterar_todos_pedidos(
-            sess_stokki, status=STATUS_AGUARDANDO_TRANSPORTADOR
-        ):
-            id_ = stokki_pedidos.extrair_id_da_linha(linha)
-            nome_cli = re.sub(r"<[^>]+>", "", str(
-                linha.get("client", "") if isinstance(linha, dict) else ""
-            )).strip()
-            if id_ and id_ not in linhas_ids_vistos:
-                if not _embarcador_prioritario(nome_cli):
-                    linhas_ids_vistos.add(id_)
-                    if isinstance(linha, dict):
-                        linha["_fonte"] = "aguardando_transportador"
-                    linhas.append(linha)
-        logger.info(f"Aguardando Transportador (outros embarcadores): "
-                    f"{len(linhas) - n_antes} pedido(s) adicionados.")
-
-        # Fonte 3: Estação de Impressão — pedidos em espera
-        n_antes2 = len(linhas)
-        try:
-            em_espera = listar_pedidos_em_espera(config)
-            for p in em_espera:
-                id_ = p["id_stokki"]
-                if id_ and id_ not in linhas_ids_vistos:
-                    linhas_ids_vistos.add(id_)
-                    # Converte para o formato de linha esperado pelo pipeline
-                    linhas.append({
-                        "id": f'<a href="/show/{id_}">{id_}</a>',
-                        "client": p["cliente"],
-                        "carrier": "",
-                        "destination": "",
-                        "_codigo_ps": p["codigo_ps"].lstrip("#"),
-                        "_fonte": "estacao_impressao",
-                    })
-        except Exception as e:
-            logger.warning(f"Erro ao buscar pedidos da Estação de Impressão: {e}")
-        logger.info(f"Estação de Impressão: {len(linhas) - n_antes2} pedido(s) adicionados.")
-
+        linhas, completa_fontes = coletar_abertos(sess_stokki, config)
+        listagem_completa = listagem_completa and completa_fontes
         logger.info(f"Total: {len(linhas)} pedido(s) a processar.")
 
     if not linhas:
         logger.info("Nenhum pedido encontrado.")
+        if not (filtro_pedido or filtro_embarcador or modo_teste):
+            _registrar_retrato_vigia([], [], listagem_completa)
         registrar_execucao(
             modo_teste=modo_teste,
             filtro=filtro_pedido or filtro_embarcador or "",
             resultados=[],
             duracao_seg=time.monotonic() - inicio_execucao,
         )
+        _atender_fila()
         return
 
     # Processa
@@ -1020,11 +1673,20 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
             mapa_niveis=mapa_niveis,
             conjunto_agendamento=conjunto_agendamento,
             config_email=config.get("email", {}),
+            config_app=config,
+            mapa_horarios=mapa_horarios,
+            ajustes_manuais=ajustes_manuais,
+            inicio_rodada=inicio_rodada,
+            conn_alteracoes=conn_alteracoes,
         )
         res["fonte_coleta"] = (
             linha.get("_fonte", "manual") if isinstance(linha, dict) else "manual"
         )
+        _liberar_parado_transportadora(res, config, modo_teste)
         resultados.append(res)
+
+        if dono_trava and i % 20 == 0:
+            _renovar_trava(dono_trava)
 
         if i < len(linhas):
             time.sleep(PAUSA_ENTRE_PEDIDOS)
@@ -1058,7 +1720,7 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
     # avisa os remetentes no mesmo e-mail do agendamento por dia fixo
     # (1 e-mail por remetente, com data original e data ajustada).
     ajustes_dia_fixo = [r["ajuste_dia_fixo"] for r in resultados if r.get("ajuste_dia_fixo")]
-    if ajustes_dia_fixo and notificacoes_automaticas_ativas(config):
+    if ajustes_dia_fixo:
         try:
             from roteirizacao.notificar_agendamento_dia_fixo import notificar_agendamentos_dia_fixo
             itens = [{
@@ -1068,8 +1730,10 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
                 "data":   date.fromisoformat(a["data"]),
                 "data_original": date.fromisoformat(a["data_original"]),
             } for a in ajustes_dia_fixo]
+            # a chave-mestra é só o fallback; a tela de Notificações vale por cima
             resultado_aviso = notificar_agendamentos_dia_fixo(
-                itens, config.get("email", {}), modo_teste=modo_teste)
+                itens, config.get("email", {}), modo_teste=modo_teste,
+                mestra=notificacoes_automaticas_ativas(config))
             logger.info(f"Notificação de ajuste por dia fixo: {resultado_aviso}")
         except Exception as e:
             logger.warning(f"Falha ao notificar ajustes de dia fixo (não afeta a importação): {e}")
@@ -1081,6 +1745,14 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
         resultados=resultados,
         duracao_seg=time.monotonic() - inicio_execucao,
     )
+
+    # Retrato pro vigia (Hugo, 28/09): quem está aberto na Stokki e o que o
+    # pipeline fez com cada um. Só em rodada sem filtro e de verdade (o
+    # modo teste gravaria acao 'simulado' como motivo).
+    if not (filtro_pedido or filtro_embarcador or modo_teste):
+        _registrar_retrato_vigia(linhas, resultados, listagem_completa)
+
+    _atender_fila()
 
 
 if __name__ == "__main__":
@@ -1096,7 +1768,23 @@ if __name__ == "__main__":
                         help="Restringe a busca (só com --embarcador) a status específico(s) do "
                              "Stokki. Repita a flag para vários. Padrão: todos os 5 status abertos. "
                              f"Valores válidos: {', '.join(STATUSES_EM_ABERTO)}")
+    parser.add_argument("--horario", action="store_true",
+                        help="Rodada horária do timer: espera a vez na sessão da Stokki e desiste "
+                             "se continuar ocupada (a próxima é em 1h).")
+    parser.add_argument("--so-status", action="store_true",
+                        help="Só relê a situação dos pedidos abertos na Stokki e regrava o retrato "
+                             "(vigia_stokki_abertos); não importa nada pra Vuupt.")
+    parser.add_argument("--fila-freshhub", action="store_true",
+                        help="Depois dos pedidos da Stokki, atende a fila de replica do sistema novo "
+                             "(destino vuupt): cria o serviço na Vuupt pelo id da Stokki e devolve o id. "
+                             "Precisa de freshhub_api.url/token no config.yaml.")
     args = parser.parse_args()
 
-    main(modo_teste=args.modo_teste, filtro_pedido=args.pedido or "",
-         filtro_embarcador=args.embarcador or "", filtro_statuses=args.status)
+    if args.so_status:
+        main_status(modo_teste=args.modo_teste)
+    elif args.horario:
+        main_horario(modo_teste=args.modo_teste, fila_freshhub=args.fila_freshhub)
+    else:
+        main(modo_teste=args.modo_teste, filtro_pedido=args.pedido or "",
+             filtro_embarcador=args.embarcador or "", filtro_statuses=args.status,
+             fila_freshhub=args.fila_freshhub)

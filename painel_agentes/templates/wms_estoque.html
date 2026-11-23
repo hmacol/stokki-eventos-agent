@@ -72,7 +72,7 @@
 
   // Só quem opera o estoque pela equipe interna vê o botão de liberar --
   // o mesmo nível que a rota POST exige (nem "leitura", nem "galpao").
-  const PODE_LIBERAR = {{ 'true' if session.get('nivel_acesso') in ('total', 'operador') else 'false' }};
+  const PODE_LIBERAR = {{ 'true' if g.nivel_acesso in ('total', 'operador') else 'false' }};
 
   const botaoLiberar = (p) => (PODE_LIBERAR
     ? `<button type="button" class="liberar" data-pedido="${p.pedido_id || p.id}" data-codigo="${esc(p.codigo_ps)}">Liberar reserva</button>`

@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-pipeline-horario.service seg-sex 08:05-16:05 de hora em hora (a ultima deixa folga ate a sequencia das 18h)
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 08..16:05:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

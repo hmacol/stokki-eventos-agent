@@ -1,0 +1,153 @@
+# -*- coding: utf-8 -*-
+"""
+Regras puras do vigia (estado + prazo). Rodar (da raiz):
+    python -m unittest vigia.test_regras -v
+"""
+import sys
+import unittest
+from datetime import date, datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from vigia import regras as r
+
+HOJE = date(2026, 9, 29)  # terça
+
+
+class TestPrazos(unittest.TestCase):
+    def test_dia_util_pula_fim_de_semana(self):
+        sexta = datetime(2026, 10, 2, 10, 0)
+        self.assertEqual(r.somar_dias_uteis(sexta, 1), datetime(2026, 10, 5, 10, 0))
+        sabado = datetime(2026, 10, 3, 15, 0)
+        self.assertEqual(r.somar_dias_uteis(sabado, 1), datetime(2026, 10, 6, 0, 0))
+
+    def test_prazos_por_estado(self):
+        desde = datetime(2026, 9, 29, 8, 0)
+        self.assertEqual(r.prazo(r.SEM_SERVICO, desde), datetime(2026, 9, 29, 12, 0))
+        self.assertEqual(r.prazo(r.NO_POOL, desde), datetime(2026, 9, 30, 8, 0))
+        self.assertEqual(r.prazo(r.AGUARDANDO_CLIENTE, desde), datetime(2026, 10, 1, 8, 0))
+        # 08h + 12h = 20h, fora da janela da expedição -> rodada das 22h + 1h
+        self.assertEqual(r.prazo(r.INSUCESSO, desde), datetime(2026, 9, 29, 23, 0))
+        # 15h + 12h = 03h -> expedição das 08h + 1h
+        self.assertEqual(r.prazo(r.INSUCESSO, datetime(2026, 9, 29, 15, 0)), datetime(2026, 9, 30, 9, 0))
+        self.assertEqual(r.prazo(r.ROTA_PASSADA, desde), desde)
+        self.assertIsNone(r.prazo(r.AGENDADO, desde))
+
+    def test_rascunho_vence_05h30_do_dia_da_rota(self):
+        # Hugo, 21/11: as rotas saem de madrugada; 19h da véspera alarmava toda noite.
+        segunda = date(2026, 10, 5)
+        self.assertEqual(r.prazo(r.EM_RASCUNHO, datetime(2026, 10, 2, 18, 0), data_rascunho=segunda),
+                         datetime(2026, 10, 5, 5, 30))
+        self.assertIsNone(r.prazo(r.EM_RASCUNHO, datetime(2026, 10, 2, 18, 0)))
+
+    def test_retirada_no_galpao_nao_tem_prazo(self):
+        self.assertIsNone(r.prazo(r.AGUARDANDO_RETIRADA, datetime(2026, 10, 2, 18, 0)))
+
+    def test_pedido_segurado_vence_na_vespera_do_prazo_final(self):
+        desde = datetime(2026, 9, 28, 9, 0)
+        # prazo final quinta 01/10 -> alarme quarta 30/09 19h
+        self.assertEqual(r.prazo(r.NO_POOL, desde, prazo_segurado=date(2026, 10, 1)),
+                         datetime(2026, 9, 30, 19, 0))
+        # prazo final segunda 05/10 -> alarme sexta 02/10 19h
+        self.assertEqual(r.prazo(r.NO_POOL, desde, prazo_segurado=date(2026, 10, 5)),
+                         datetime(2026, 10, 2, 19, 0))
+
+    def test_prazo_segurado_so_vale_no_pool(self):
+        desde = datetime(2026, 9, 29, 8, 0)
+        self.assertEqual(r.prazo(r.SEM_SERVICO, desde, prazo_segurado=date(2026, 10, 1)),
+                         datetime(2026, 9, 29, 12, 0))
+
+    def test_no_pool_de_regiao_semanal_ou_quinzenal_usa_dias_corridos(self):
+        desde = datetime(2026, 9, 29, 8, 0)
+        self.assertEqual(r.prazo(r.NO_POOL, desde, prazo_dias_regiao=7), datetime(2026, 10, 6, 8, 0))
+        self.assertEqual(r.prazo(r.NO_POOL, desde, prazo_dias_regiao=15), datetime(2026, 10, 14, 8, 0))
+        self.assertEqual(r.prazo(r.NO_POOL, desde, prazo_dias_regiao=None), datetime(2026, 9, 30, 8, 0))
+
+    def test_segurado_vence_o_prazo_da_regiao(self):
+        desde = datetime(2026, 9, 29, 8, 0)
+        self.assertEqual(r.prazo(r.NO_POOL, desde, prazo_segurado=date(2026, 10, 1), prazo_dias_regiao=7),
+                         r.prazo(r.NO_POOL, desde, prazo_segurado=date(2026, 10, 1)))
+
+    def test_prazo_da_regiao_so_vale_no_pool(self):
+        desde = datetime(2026, 9, 29, 8, 0)
+        self.assertEqual(r.prazo(r.SEM_SERVICO, desde, prazo_dias_regiao=7), datetime(2026, 9, 29, 12, 0))
+
+
+class TestClassificar(unittest.TestCase):
+    def test_aberto_na_stokki_sem_servico(self):
+        est, motivo = r.classificar({"status_nucleo": None, "aberto_stokki": True,
+                                     "acao_pipeline": "aguardando_redespacho"}, HOJE)
+        self.assertEqual(est, r.SEM_SERVICO)
+        self.assertIn("aguardando_redespacho", motivo)
+        self.assertIsNone(r.classificar({"status_nucleo": None, "aberto_stokki": False}, HOJE))
+
+    def test_retirada_no_galpao_nao_e_sem_servico(self):
+        est, motivo = r.classificar({"status_nucleo": None, "aberto_stokki": True,
+                                     "acao_pipeline": "ignorado_retirada",
+                                     "obs_pipeline": "Retirada no galpão via J3 FLEX"}, HOJE)
+        self.assertEqual(est, r.AGUARDANDO_RETIRADA)
+        self.assertIn("J3 FLEX", motivo)
+
+    def test_pool_rascunho_agendamento(self):
+        base = {"status_nucleo": "ABERTO"}
+        self.assertEqual(r.classificar(base, HOJE)[0], r.NO_POOL)
+        self.assertEqual(r.classificar({**base, "rascunho_status": "RASCUNHO", "rascunho_data": HOJE}, HOJE)[0],
+                         r.EM_RASCUNHO)
+        self.assertEqual(r.classificar({**base, "rascunho_status": "ERRO_ENVIO", "rascunho_data": HOJE}, HOJE)[0],
+                         r.RASCUNHO_COM_ERRO)
+        self.assertEqual(r.classificar({**base, "agendamento": date(2026, 10, 9)}, HOJE)[0], r.AGENDADO)
+        self.assertEqual(r.classificar({**base, "agendamento_pendente": True}, HOJE)[0], r.AGUARDANDO_CLIENTE)
+
+    def test_agendamento_no_servico_vence_pedido_de_data_pendente(self):
+        base = {"status_nucleo": "ABERTO", "agendamento_pendente": True}
+        self.assertEqual(r.classificar({**base, "agendamento": date(2026, 10, 9)}, HOJE)[0], r.AGENDADO)
+        self.assertEqual(r.classificar({**base, "agendamento": HOJE}, HOJE)[0], r.NO_POOL)
+
+    def test_motivo_do_pool(self):
+        est, motivo = r.classificar({"status_nucleo": "ABERTO", "motivo_pool": "dedicado"}, HOJE)
+        self.assertEqual((est, motivo), (r.NO_POOL, "dedicado"))
+
+    def test_rota(self):
+        self.assertEqual(r.classificar({"status_nucleo": "EM_ROTA", "rota_data": date(2026, 9, 28)}, HOJE)[0],
+                         r.ROTA_PASSADA)
+        self.assertEqual(r.classificar({"status_nucleo": "EM_ROTA", "rota_data": HOJE}, HOJE)[0], r.EM_ROTA)
+
+    def test_insucesso(self):
+        base = {"status_nucleo": "INSUCESSO", "aberto_stokki": True}
+        self.assertEqual(r.classificar(base, HOJE)[0], r.INSUCESSO)
+        self.assertIsNone(r.classificar({**base, "tem_reentrega": True}, HOJE))
+        self.assertIsNone(r.classificar({**base, "tratado_na_torre": True}, HOJE))
+        self.assertEqual(r.classificar({**base, "recusado": True}, HOJE)[0], r.RECUSADO)
+
+    def test_entregue_some(self):
+        self.assertIsNone(r.classificar({"status_nucleo": "ENTREGUE", "aberto_stokki": True}, HOJE))
+
+
+class TestAcaoEDono(unittest.TestCase):
+    def test_cada_estado_tem_acao_e_dono(self):
+        for estado in list(r.ORDEM) + [r.ENTREGUE_NAO_EXPEDIDO]:
+            acao, dono = r.acao_e_dono(estado)
+            self.assertTrue(acao, estado)
+            self.assertIn(dono, (r.LOGISTICA, r.ATENDIMENTO, r.EXPEDICAO), estado)
+
+    def test_dono_fixo_por_situacao(self):
+        self.assertEqual(r.acao_e_dono(r.ROTA_PASSADA)[1], r.LOGISTICA)
+        self.assertEqual(r.acao_e_dono(r.NO_POOL)[1], r.LOGISTICA)
+        self.assertEqual(r.acao_e_dono(r.RECUSADO)[1], r.ATENDIMENTO)
+        self.assertEqual(r.acao_e_dono(r.AGUARDANDO_CLIENTE)[1], r.ATENDIMENTO)
+        self.assertEqual(r.acao_e_dono(r.ENTREGUE_NAO_EXPEDIDO)[1], r.EXPEDICAO)
+
+    def test_insucesso_depende_do_motivo(self):
+        self.assertEqual(r.acao_e_dono(r.INSUCESSO, "Não coletado")[1], r.LOGISTICA)
+        self.assertEqual(r.acao_e_dono(r.INSUCESSO, "Problema fiscal")[1], r.ATENDIMENTO)
+        self.assertEqual(r.acao_e_dono(r.INSUCESSO, None)[1], r.ATENDIMENTO)
+
+    def test_sem_servico_depende_da_acao_do_pipeline(self):
+        self.assertEqual(r.acao_e_dono(r.SEM_SERVICO, "pulado_cancelado_vuupt -- Serviço CANCELADO")[1],
+                         r.ATENDIMENTO)
+        self.assertEqual(r.acao_e_dono(r.SEM_SERVICO, "erro -- endereço")[1], r.LOGISTICA)
+
+
+if __name__ == "__main__":
+    unittest.main()

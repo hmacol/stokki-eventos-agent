@@ -23,6 +23,7 @@ Regras de negócio que este módulo garante:
 import hashlib
 import hmac
 import io
+import math
 import re
 import secrets
 import sqlite3
@@ -37,6 +38,7 @@ PREFIXO_QR_PRODUTO = "FL|"
 TEMPERATURAS = ("AMBIENTE", "REFRIGERADO", "CONGELADO")
 TIPOS_AREA = {
     "CONTAINER": ("Container", "AMBIENTE"),
+    "SECA": ("Seca", "AMBIENTE"),
     "CAM_CONGELADA": ("Câmara congelada", "CONGELADO"),
     "CAM_REFRIGERADA": ("Câmara refrigerada", "REFRIGERADO"),
 }
@@ -168,6 +170,18 @@ def conectar(caminho: Path | None = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(_DDL)
+    # Migração aditiva: código interno (FLP + 6 dígitos) pra produto sem SKU e sem EAN.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(wms_produtos)")}
+    if "codigo_interno" not in cols:
+        try:
+            conn.execute("ALTER TABLE wms_produtos ADD COLUMN codigo_interno TEXT")
+        except sqlite3.OperationalError as e:
+            # Corrida: outro processo (painel, timer) criou a coluna entre o PRAGMA e o ALTER.
+            if "duplicate column" not in str(e).lower():
+                raise
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_wms_produtos_codigo_interno "
+                 "ON wms_produtos(codigo_interno) WHERE codigo_interno IS NOT NULL")
+    conn.commit()
     return conn
 
 
@@ -563,6 +577,9 @@ def buscar_por_codigo(conn, codigo: str) -> list[dict]:
     if not out and bruto:
         for r in conn.execute("SELECT * FROM wms_produtos WHERE ativo = 1 AND sku = ? COLLATE NOCASE ORDER BY descricao", (bruto,)):
             d = _produto_dict(r); d["lido_como"] = "SKU"; out.append(d)
+    if not out and bruto:
+        for r in conn.execute("SELECT * FROM wms_produtos WHERE ativo = 1 AND codigo_interno = ? COLLATE NOCASE ORDER BY descricao", (bruto,)):
+            d = _produto_dict(r); d["lido_como"] = "INTERNO"; out.append(d)
     return out
 
 
@@ -682,6 +699,8 @@ def registrar_movimento(conn, *, tipo: str, produto_id: int, quantidade, lote: s
     try:
         quantidade = float(str(quantidade).replace(",", "."))
     except (TypeError, ValueError):
+        raise ErroWMS("Quantidade inválida.")
+    if not math.isfinite(quantidade):
         raise ErroWMS("Quantidade inválida.")
     if tipo == "INVENTARIO":
         if quantidade < 0:
@@ -823,6 +842,13 @@ def ler_codigo(conn, codigo: str) -> dict:
     if bruto.upper().startswith(PREFIXO_QR_PRODUTO):
         import wms_etiqueta_produto
         lido = wms_etiqueta_produto.parse_qr(bruto)
+        if lido and lido["serial"]:
+            import wms_caixas
+            wms_caixas.garantir_tabelas(conn)
+            caixa = wms_caixas.obter_caixa(conn, lido["serial"])
+            if not caixa:
+                return {"tipo": "caixa_inexistente", "serial": lido["serial"], "codigo": bruto}
+            return {"tipo": "caixa", "caixa": caixa, "codigo": bruto}
         if lido:
             produtos = buscar_por_codigo(conn, lido["sku"])
             if not produtos:

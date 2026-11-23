@@ -53,7 +53,7 @@ class TestDefaults(_ComBanco):
         self.assertEqual(prefs["tipos"], {
             "nfs_em_rota": True, "entrega_concluida": True, "faltas_recebimento": True,
             "resumo_diario": False,
-            "insucesso": True, "pedidos_em_espera": True, "agendamento": True,
+            "insucesso": True, "pedidos_em_espera": True, "agendamento": True, "chamado_sem_resposta": True,
         })
 
     def test_sem_linha_emails_vazio_e_cadastro_visivel(self):

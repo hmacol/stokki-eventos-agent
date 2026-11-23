@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block titulo %}Ciências de dedicado{% endblock %}
+{% block estilo_extra %}
+<style>
+  main { max-width: 1300px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  .sub { color: var(--texto-suave); font-size: 13px; margin: 0 0 18px; }
+  form.filtros { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; background: var(--superficie);
+                 border: 1px solid var(--borda); border-radius: 10px; padding: 14px 16px; margin: 0 0 18px; }
+  form.filtros .campo { display: flex; flex-direction: column; gap: 4px; }
+  form.filtros label { font-size: 11px; color: var(--texto-suave); font-weight: 700; text-transform: uppercase; }
+  form.filtros input, form.filtros select { padding: 7px 10px; border: 1px solid var(--borda); border-radius: 6px; font-size: 13px; min-width: 160px; }
+  .tabela-wrap { overflow-x: auto; background: var(--superficie); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; min-width: 900px; }
+  th, td { text-align: left; padding: 9px 12px; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: middle; }
+  th { color: var(--texto-suave); font-weight: 700; text-transform: uppercase; font-size: 11px; }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-size: 12px; white-space: nowrap; }
+  .suave { color: var(--texto-suave); font-size: 12px; }
+  .sit { font-weight: 700; }
+  .sit-PENDENTE { color: var(--erro); }
+  .sit-CIENTE, .sit-REAGENDADO { color: var(--sucesso, #16a34a); }
+  .sit-ENCERRADO { color: var(--texto-suave); }
+  .avisos { font-size: 12px; line-height: 1.5; }
+  .acoes { display: flex; gap: 6px; flex-direction: column; align-items: stretch; }
+  .acoes button { font-size: 12px; padding: 5px 10px; white-space: nowrap; border: 1px solid var(--borda); border-radius: 6px;
+                  background: var(--superficie); color: inherit; cursor: pointer; }
+  .acoes button:hover { border-color: var(--texto-suave); }
+  #historico { position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 100vw); background: var(--superficie);
+               border-left: 1px solid var(--borda); box-shadow: -6px 0 24px rgba(0,0,0,.18); padding: 18px 20px;
+               overflow-y: auto; transform: translateX(105%); transition: transform .18s; z-index: 50; }
+  #historico.aberto { transform: none; }
+  #historico h2 { font-size: 16px; margin: 0 0 4px; }
+  #historico .fechar { float: right; font-size: 13px; background: none; border: 1px solid var(--borda); border-radius: 6px;
+                       padding: 4px 10px; color: inherit; cursor: pointer; }
+  #historico ol { list-style: none; padding: 0; margin: 14px 0 0; }
+  #historico li { border-top: 1px solid var(--borda); padding: 9px 0; font-size: 13px; }
+  #historico .res-enviado { color: var(--sucesso, #16a34a); font-weight: 700; }
+  #historico .res-piloto { color: var(--texto-suave); font-weight: 700; }
+  #historico .res-nao_enviado { color: var(--erro); font-weight: 700; }
+</style>
+{% endblock %}
+{% block conteudo %}
+<h1>Ciências de dedicado</h1>
+<p class="sub">Pedidos de embarcador com dedicado marcado fora do dia fixo: quem já respondeu, quem falta e os avisos
+  enviados por canal. A contagem considera só envios reais; cópias de piloto e envios que não saíram aparecem no
+  histórico de cada pedido. {{ linhas|length }} pedido(s) no filtro.</p>
+
+<form class="filtros" method="GET" action="{{ url_for('ciencias_dedicado') }}">
+  <div class="campo"><label for="situacao">Situação</label>
+    <select id="situacao" name="situacao">
+      <option value="">Todas</option>
+      {% for chave, rotulo in rotulos.items() %}<option value="{{ chave }}" {% if filtros.situacao == chave %}selected{% endif %}>{{ rotulo }}</option>{% endfor %}
+    </select></div>
+  <div class="campo"><label for="embarcador">Embarcador</label><input type="text" id="embarcador" name="embarcador" value="{{ filtros.embarcador }}"></div>
+  <div class="campo"><button type="submit" class="botao">Filtrar</button></div>
+</form>
+
+<div class="tabela-wrap"><table>
+  <thead><tr><th>Pedido</th><th>Embarcador</th><th>Entrega</th><th>Valor</th><th>Situação</th><th>Avisos enviados</th><th>Resposta</th><th></th></tr></thead>
+  <tbody>
+  {% for l in linhas %}
+    <tr data-id="{{ l.id }}">
+      <td class="mono">{{ l.codigo }}<div class="suave">{{ l.destinatario or '' }}</div></td>
+      <td>{{ l.embarcador }}</td>
+      <td class="mono">{% if l.data_entrega %}{{ l.data_entrega[8:10] }}/{{ l.data_entrega[5:7] }}{% else %}—{% endif %}<div class="suave">{{ l.dias_visita or '' }}</div></td>
+      <td class="mono">{% if l.valor_pendente %}a calcular{% elif l.valor is not none %}R$ {{ '%.2f'|format(l.valor)|replace('.', ',') }}{% else %}—{% endif %}</td>
+      <td class="sit sit-{{ l.situacao }}">{{ l.situacao_rotulo }}</td>
+      <td class="avisos" data-contagem="email:{{ l.avisos.email }} whatsapp:{{ l.avisos.whatsapp }} chat:{{ l.avisos.chat }}">
+        e-mail {{ l.avisos.email }}<br>WhatsApp {{ l.avisos.whatsapp }}<br>chat {{ l.avisos.chat }}</td>
+      <td class="mono">
+        {% if l.resposta_em %}respondeu {{ l.resposta_em[8:10] }}/{{ l.resposta_em[5:7] }} {{ l.resposta_em[11:16] }}{% if l.resposta_por %}<div class="suave">{{ l.resposta_por }}{% if l.data_nova %} · nova data {{ l.data_nova[8:10] }}/{{ l.data_nova[5:7] }}{% endif %}</div>{% endif %}
+        {% elif l.encerrado_em %}<span class="suave">encerrado em {{ l.encerrado_em[8:10] }}/{{ l.encerrado_em[5:7] }} {{ l.encerrado_em[11:16] }}</span>
+        {% else %}—{% endif %}</td>
+      <td><div class="acoes">
+        <button type="button" class="ver-historico" data-id="{{ l.id }}">Histórico</button>
+        {% if l.link %}<button type="button" class="copiar-link" data-link="{{ l.link }}">Copiar link</button>{% endif %}
+      </div></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="8" class="suave">Nenhuma ciência nesse filtro.</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div>
+
+<aside id="historico" aria-label="Histórico de avisos" aria-hidden="true">
+  <button type="button" class="fechar">Fechar</button>
+  <h2 id="hist-titulo"></h2>
+  <div class="suave" id="hist-sub"></div>
+  <div id="hist-resposta" style="margin-top:8px;font-size:13px;font-weight:700"></div>
+  <ol id="hist-lista"></ol>
+</aside>
+
+<script>
+(function () {
+  var painel = document.getElementById("historico");
+  var urlApi = "{{ url_for('api_ciencia_dedicado', ciencia_id=0) }}".replace(/0$/, "");
+  var ROTULO_RESULTADO = { nao_enviado: "não enviado", piloto: "cópia de piloto" };
+  function fmt(s) { return s ? s.slice(8, 10) + "/" + s.slice(5, 7) + " " + s.slice(11, 16) : ""; }
+  function item(e) {
+    var li = document.createElement("li");
+    var topo = document.createElement("div");
+    var res = document.createElement("span");
+    res.className = "res-" + e.resultado;
+    res.textContent = ROTULO_RESULTADO[e.resultado] || e.resultado.replace("_", " ");
+    topo.appendChild(document.createTextNode(fmt(e.enviado_em) + " · " + e.canal + " · "));
+    topo.appendChild(res);
+    li.appendChild(topo);
+    var det = document.createElement("div");
+    det.className = "suave";
+    det.textContent = [e.destino, e.motivo, "rodada " + e.rodada].filter(Boolean).join(" · ");
+    li.appendChild(det);
+    return li;
+  }
+  document.querySelectorAll(".ver-historico").forEach(function (b) {
+    b.addEventListener("click", function () {
+      fetch(urlApi + b.dataset.id, { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (!d.ciencia) { return; }
+          document.getElementById("hist-titulo").textContent = "Avisos do pedido " + d.ciencia.codigo;
+          document.getElementById("hist-sub").textContent = d.envios.length + " tentativa(s) de envio";
+          var prova = document.getElementById("hist-resposta");
+          if (d.resposta) {
+            prova.textContent = "Respondido por " + d.resposta.por + " em " + fmt(d.resposta.em) +
+              (d.resposta.origem ? ", " + d.resposta.origem : "") + ", IP " + d.resposta.ip +
+              (d.resposta.data_nova ? ". Nova data: " + d.resposta.data_nova.slice(8, 10) + "/" + d.resposta.data_nova.slice(5, 7) : "") + "." +
+              (d.resposta.navegador ? " Navegador: " + d.resposta.navegador : "");
+          } else if (d.encerramento) {
+            prova.textContent = "Encerrado pelo sistema em " + fmt(d.encerramento.em) + ": " + d.encerramento.motivo + ".";
+          } else {
+            prova.textContent = "";
+          }
+          var lista = document.getElementById("hist-lista");
+          lista.textContent = "";
+          d.envios.forEach(function (e) { lista.appendChild(item(e)); });
+          if (!d.envios.length) {
+            var vazio = document.createElement("li");
+            vazio.className = "suave";
+            vazio.textContent = "Nenhum envio registrado ainda.";
+            lista.appendChild(vazio);
+          }
+          painel.classList.add("aberto");
+          painel.setAttribute("aria-hidden", "false");
+        });
+    });
+  });
+  painel.querySelector(".fechar").addEventListener("click", function () {
+    painel.classList.remove("aberto");
+    painel.setAttribute("aria-hidden", "true");
+  });
+  document.querySelectorAll(".copiar-link").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var texto = b.dataset.link;
+      var ok = function () { b.textContent = "Link copiado"; setTimeout(function () { b.textContent = "Copiar link"; }, 2000); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(texto).then(ok, function () { window.prompt("Copie o link:", texto); });
+      } else {
+        window.prompt("Copie o link:", texto);
+      }
+    });
+  });
+})();
+</script>
+{% endblock %}

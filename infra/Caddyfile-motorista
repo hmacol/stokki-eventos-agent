@@ -13,3 +13,22 @@
 #
 # Uploads de foto: o Flask limita a 15 MB (MAX_CONTENT_LENGTH); o Caddy não
 # precisa de request_body extra pra isso.
+#
+# PWA dos motoristas de iPhone: NÃO fica mais aqui. Mudou pra domínio próprio
+# (https://motorista.freshhub.com.br, ver infra/Caddyfile-motorista-pwa) porque o
+# token do motorista fica no localStorage e esta origem é dividida com painel e
+# portal. O que sobra neste site é só o redirecionamento do endereço antigo
+# (entra ANTES do handle_path /motorista/* da API):
+#
+# 	redir /motorista/web* https://motorista.freshhub.com.br/ permanent
+#
+# APK com link fixo pros motoristas (08/10): o link do artefato do Expo
+# expira em 14-30 dias, então o arquivo fica na VPS em
+# dados/app_motorista/freshlog-motorista.apk (fora do git) e o Caddy serve
+# ANTES do handle_path acima. Build novo = scp do APK por cima + chown www-data.
+#
+# 	handle /motorista/app.apk {
+# 		root * /opt/stokki-eventos/dados/app_motorista
+# 		rewrite * /freshlog-motorista.apk
+# 		file_server
+# 	}

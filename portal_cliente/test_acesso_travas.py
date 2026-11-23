@@ -91,10 +91,12 @@ class RotasDeAcessoTest(unittest.TestCase):
             mock.patch.object(self.portal, "_enviar_link_pin", return_value=True),
             mock.patch.object(self.portal, "_nivel_equipe",
                               side_effect=lambda u, s: "total" if (u, s) == ("hugo", "certa") else None),
+            mock.patch.object(self.portal.acesso_telas, "DB_PATH", Path(self._tmp.name) / "dados.db"),
         ]
         self._patches[0].start()
         self.envio = self._patches[1].start()
         self._patches[2].start()
+        self._patches[3].start()
         conn = auth.conectar()
         conn.execute("CREATE TABLE interno (cnpj_embarcador TEXT, sender_id INTEGER, nome_remetente TEXT, "
                      "apelido TEXT, email TEXT)")
@@ -157,6 +159,101 @@ class RotasDeAcessoTest(unittest.TestCase):
         self.assertEqual(self._login_equipe("certa").status_code, 302)
         for _ in range(auth.MAX_TENTATIVAS - 1):
             self.assertEqual(self._login_equipe("errada").status_code, 200)
+
+
+class EquipeNominalTest(unittest.TestCase):
+    """Login nominal da /acessos com "Portal do cliente" marcado entra no
+    /equipe com poder de operador (Hugo, 29/10)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import app as portal
+        cls.portal = portal
+        cls.telas = portal.acesso_telas
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        db = Path(self._tmp.name) / "dados.db"
+        self._patches = [mock.patch.object(auth, "DB_PATH", db), mock.patch.object(self.telas, "DB_PATH", db)]
+        for p in self._patches:
+            p.start()
+        conn = self.telas.conectar()
+        self.telas.criar(conn, "valeria", "Valéria", "atendimento", "senha-dela", "hugo", set(), "Atendimento")
+        conn.execute("UPDATE painel_usuarios SET trocar_senha = 0")
+        conn.execute("CREATE TABLE interno (cnpj_embarcador TEXT, sender_id INTEGER, nome_remetente TEXT, "
+                     "apelido TEXT, email TEXT)")
+        conn.commit()
+        self.conn = conn
+        self.cli = self.portal.app.test_client()
+
+    def tearDown(self):
+        self.conn.close()
+        for p in self._patches:
+            p.stop()
+        self._tmp.cleanup()
+
+    def _entrar(self, senha="senha-dela"):
+        return self.cli.post("/equipe", data={"usuario": "valeria", "senha": senha},
+                             environ_base={"REMOTE_ADDR": "10.0.3.1"})
+
+    def test_sem_a_caixa_nao_entra(self):
+        r = self._entrar()
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("incorretos", r.get_data(as_text=True))
+
+    def test_com_a_caixa_entra_como_operador(self):
+        self.telas.mudar_portal(self.conn, "valeria", True, "hugo")
+        self.assertEqual(self._entrar("errada").status_code, 200)
+        r = self._entrar()
+        self.assertEqual(r.status_code, 302)
+        with self.cli.session_transaction() as s:
+            self.assertEqual(s["equipe"]["nivel"], "operador")
+        self.assertEqual(self.cli.get("/equipe/cliente").status_code, 200)
+
+    def test_senha_provisoria_nao_entra(self):
+        self.telas.mudar_portal(self.conn, "valeria", True, "hugo")
+        self.telas.redefinir_senha(self.conn, "valeria", "provisoria", "hugo")
+        self.assertEqual(self._entrar("provisoria").status_code, 200)
+
+    def test_desmarcar_desativar_ou_redefinir_derruba_a_sessao(self):
+        for derrubar in (lambda: self.telas.mudar_portal(self.conn, "valeria", False, "hugo"),
+                         lambda: self.telas.mudar_ativo(self.conn, "valeria", False, "hugo"),
+                         lambda: self.telas.redefinir_senha(self.conn, "valeria", "outra-senha", "hugo")):
+            self.conn.execute("UPDATE painel_usuarios SET portal_equipe = 1, ativo = 1, trocar_senha = 0, "
+                              "senha_hash = ?", (self.telas.generate_password_hash("senha-dela"),))
+            self.conn.commit()
+            self.assertEqual(self._entrar().status_code, 302)
+            self.assertEqual(self.cli.get("/equipe/cliente").status_code, 200)
+            derrubar()
+            r = self.cli.get("/equipe/cliente")
+            self.assertEqual(r.status_code, 302)
+            self.assertIn("/equipe", r.headers["Location"])
+
+    def test_derrubar_todas_as_sessoes_derruba_o_portal(self):
+        self.telas.mudar_portal(self.conn, "valeria", True, "hugo")
+        self.assertEqual(self._entrar().status_code, 302)
+        self.assertEqual(self.cli.get("/equipe/cliente").status_code, 200)
+        self.telas.derrubar_sessoes(self.conn, "hugo")
+        self.assertEqual(self.cli.get("/equipe/cliente").status_code, 302)
+
+    def test_entrar_com_a_propria_senha_nao_zera_os_erros_contra_outro_login(self):
+        """Achado A1 da revisão de 29/10: errar 4 no login alheio, entrar com
+        o próprio e repetir não pode virar chute sem fim."""
+        self.telas.mudar_portal(self.conn, "valeria", True, "hugo")
+        self.telas.criar(self.conn, "chefe", "Chefe", "total", "senha-chefe", "hugo", set(), "Diretoria")
+        self.conn.execute("UPDATE painel_usuarios SET trocar_senha = 0, portal_equipe = 1 WHERE usuario = 'chefe'")
+        self.conn.commit()
+
+        def chute(senha):
+            return self.cli.post("/equipe", data={"usuario": "chefe", "senha": senha},
+                                 environ_base={"REMOTE_ADDR": "10.0.3.1"}).status_code
+        erros = 0
+        while erros < self.portal._MAX_ERROS_POR_LOGIN:
+            for _ in range(min(auth.MAX_TENTATIVAS - 1, self.portal._MAX_ERROS_POR_LOGIN - erros)):
+                self.assertEqual(chute("errada"), 200)
+                erros += 1
+            self.assertEqual(self._entrar().status_code, 302)   # zera o IP, não o chefe
+        self.assertEqual(chute("senha-chefe"), 429)
 
 
 if __name__ == "__main__":

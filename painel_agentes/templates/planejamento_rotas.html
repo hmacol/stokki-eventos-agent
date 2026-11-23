@@ -429,6 +429,7 @@
      (1 rota com a seleção como está); o Roteirizar roda o ALGORITMO e
      pode gerar várias rotas, confundir os dois seria fácil */
   #botao-roteirizar-selecao { border-color: var(--remetente); color: var(--remetente); font-weight: 700; }
+  #botao-cancelar-selecao:not(:disabled) { border-color: var(--erro); color: var(--erro); }
   /* laranja: complementa rascunhos JÁ existentes (não cria rota nenhuma),
      terceira ação da família Criar rota / Roteirizar / Incrementar */
   #botao-incrementar-selecao { border-color: var(--laranja-texto); color: var(--laranja-texto); font-weight: 700; }
@@ -514,6 +515,72 @@
     background: var(--rodando-bg);
     color: var(--rodando-texto);
   }
+  /* situação na Stokki ainda não "Aguardando Transportador" (Hugo, 19/10):
+     mesmo âmbar do bloco "Em separação na Stokki" do pool */
+  .item-parada .badge-separacao {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 100px;
+    margin-top: 3px;
+    background: var(--rodando-bg);
+    color: var(--rodando-texto);
+  }
+  .secao-pool-separacao .cabecalho-secao-pool { color: var(--rodando-texto); }
+  /* Retornando (10/11): tirado de rota iniciada, no carro do motorista --
+     mesmo formato do chip de área; no pool não seleciona nem arrasta */
+  .item-parada .badge-retornando {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 100px;
+    margin-top: 3px;
+    background: rgba(255,92,80,0.18);
+    color: var(--erro-texto);
+  }
+  /* Nao carregado (checklist de carregamento): so rotula, continua selecionavel */
+  .item-parada .badge-nao-carregado {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 100px;
+    margin-top: 3px;
+    background: rgba(255,92,80,0.18);
+    color: var(--erro-texto);
+  }
+  #lista-pool .item-parada.retornando { cursor: default; opacity: 0.8; }
+  /* status da parada na VUUPT no card da rota enviada (10/11): neutro
+     enquanto o pedido pode sair da rota, em negrito quando já começou */
+  .item-parada .badge-status-vuupt {
+    display: inline-block;
+    font-size: 10.5px;
+    padding: 0 6px;
+    border-radius: 100px;
+    border: 1px solid var(--borda);
+    color: var(--texto-suave);
+  }
+  .item-parada .badge-status-vuupt.comecado { font-weight: 700; color: var(--texto); }
+  /* resumo da situação na Stokki no card da rota (Hugo, 09/11) */
+  .card-rota .situacao-stokki-rota:not(:empty) {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 100px;
+    margin: 3px 0;
+    background: var(--rodando-bg);
+    color: var(--rodando-texto);
+  }
+  .secao-pool-separacao .retrato-stokki { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--texto-suave); }
   .item-parada .nf-pedido { font-size: 11px; color: var(--texto-suave); }
   /* checkbox de seleção múltipla dentro de uma rota (Hugo, 17/08) --
      coberto pelo filter:"input" do Sortable, então clicar nele nunca
@@ -629,6 +696,9 @@
   .capacidade .fill-cap { height: 100%; border-radius: 4px; background: var(--acento); }
   .capacidade .fill-cap.alerta { background: var(--rodando); }
   .capacidade .fill-cap.estouro { background: var(--erro); }
+  /* motorista e carro lado a lado (carro da rota, 10/11) */
+  .card-rota .linha-motorista-veiculo { display: flex; gap: 6px; }
+  .card-rota .linha-motorista-veiculo select { flex: 1 1 0; min-width: 0; }
   .card-rota select {
     width: 100%;
     font-size: 12px;
@@ -639,6 +709,17 @@
     background: var(--fundo);
     color: var(--texto);
     margin-bottom: 6px;
+  }
+  /* Rota da tarde (turno TARDE): selo neutro, não é aviso de trava */
+  .selo-tarde {
+    display: inline-block;
+    background: var(--fundo);
+    border: 1px solid var(--borda);
+    color: var(--texto-suave);
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 100px;
+    margin-left: 6px;
   }
   .badge-trava {
     display: inline-block;
@@ -710,6 +791,7 @@
   }
   .card-rota.colapsada .lista-paradas,
   .card-rota.colapsada .select-motorista,
+  .card-rota.colapsada .linha-motorista-veiculo,
   .card-rota.colapsada .lalamove-box,
   .card-rota.colapsada .acoes { display: none !important; }
   /* Caixa Lalamove do card: veículo + opcionais da corrida (Hugo, 30/08) */
@@ -819,6 +901,9 @@
   body.cards-numeros .item-parada .badge-caixas,
   body.cards-numeros .item-parada .badge-fora-area,
   body.cards-numeros .item-parada .badge-dedicado,
+  body.cards-numeros .item-parada .badge-retornando,
+  body.cards-numeros .item-parada .badge-nao-carregado,
+  body.cards-numeros .item-parada .badge-status-vuupt,
   body.cards-numeros .item-parada .janela,
   body.cards-numeros .item-parada .nf-pedido { display: none; }
   body.cards-numeros .item-parada .numero {
@@ -1183,6 +1268,20 @@
   .barra-agentes-planejamento .etapa-tudo button:hover:not(:disabled) { background: #26C49A; }
   .barra-agentes-planejamento .etapa-tudo button:disabled { opacity: 0.45; cursor: not-allowed; }
 
+  /* Topo recolhível (Hugo, 29/09): um botão só esconde a barra de
+     agentes + painéis dela + resumo de agendados, pra sobrar tela pro
+     pool/rotas/mapa. Só desktop: no celular esses blocos já moram na
+     aba Mais. Recolhido, a faixa mostra o que está rodando/na fila. */
+  .faixa-topo-planejamento { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .faixa-topo-planejamento .estado-rotinas { display: none; color: var(--texto-suave); font-size: 11.5px; }
+  html.topo-recolhido .faixa-topo-planejamento .estado-rotinas { display: inline; }
+  html.modo-mobile .faixa-topo-planejamento { display: none; }
+  html.topo-recolhido:not(.modo-mobile) #barra-agentes-planejamento,
+  html.topo-recolhido:not(.modo-mobile) #painel-importacao-filtro,
+  html.topo-recolhido:not(.modo-mobile) #painel-expedicao-selecao,
+  html.topo-recolhido:not(.modo-mobile) #painel-romaneios-data,
+  html.topo-recolhido:not(.modo-mobile) #resumo-agendados-container { display: none !important; }
+
   .painel-importacao-filtro {
     display: none; align-items: flex-end; gap: 12px; flex-wrap: wrap;
     background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px;
@@ -1235,6 +1334,47 @@
   .modal-tipo-roteirizacao .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
   .modal-tipo-roteirizacao .acoes button.cancelar:hover { background: var(--fundo); }
 
+  /* Carregando do Roteirizar (Hugo, 15/10): o criador de rotas leva de
+     segundos a mais de um minuto -- cobre a tela (e bloqueia cliques)
+     até a resposta e o reload. Classe fora de "modal-overlay-" de
+     propósito: não é diálogo, o foco não deve ser preso nele. */
+  .carregando-roteirizacao {
+    display: none;
+    position: fixed; inset: 0; z-index: 10002;
+    background: color-mix(in srgb, var(--fundo) 72%, transparent);
+    backdrop-filter: blur(2px);
+    align-items: center; justify-content: center; padding: 16px;
+  }
+  .carregando-roteirizacao.aberto { display: flex; }
+  .carregando-roteirizacao .caixa {
+    background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px;
+    padding: 24px 28px; width: min(380px, 100%); text-align: center;
+    box-shadow: 0 10px 32px rgba(0,0,0,0.3);
+  }
+  .carregando-roteirizacao .giro {
+    width: 42px; height: 42px; margin: 0 auto 14px; border-radius: 50%;
+    border: 4px solid var(--borda); border-top-color: var(--acento);
+    animation: giro-roteirizacao 0.9s linear infinite;
+  }
+  @keyframes giro-roteirizacao { to { transform: rotate(360deg); } }
+  .carregando-roteirizacao h2 { margin: 0 0 6px; font-size: 16px; color: var(--texto); }
+  .carregando-roteirizacao p { margin: 0; font-size: 12.5px; color: var(--texto-suave); line-height: 1.45; }
+  .carregando-roteirizacao .tempo { margin-top: 12px; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--texto-suave); }
+  .carregando-roteirizacao .trilha { margin-top: 14px; height: 4px; border-radius: 100px; background: var(--borda); overflow: hidden; }
+  .carregando-roteirizacao .trilha span {
+    display: block; width: 30%; height: 100%; border-radius: 100px; background: var(--acento);
+    animation: progresso-indeterminado-planejamento 1.4s ease-in-out infinite;
+  }
+  /* rotas que o Roteirizar acabou de criar: destaque por alguns segundos depois do reload */
+  .card-rota.recem-roteirizada { animation: destaque-recem-roteirizada 1.2s ease-in-out 3; }
+  @keyframes destaque-recem-roteirizada {
+    0%,100% { box-shadow: 0 0 0 0 transparent; }
+    50% { box-shadow: 0 0 0 3px var(--acento); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .carregando-roteirizacao .giro, .carregando-roteirizacao .trilha span { animation-duration: 3s; }
+    .card-rota.recem-roteirizada { animation: none; box-shadow: 0 0 0 3px var(--acento); }
+  }
   /* Modal "Disponibilidade de motoristas" (Hugo, 16/08): seleção de quem
      está disponível pra rota no dia -- "Alocar motoristas" sempre parte
      dessa seleção. Mesmo esqueleto visual do modal de tipo de roteirização. */
@@ -1296,6 +1436,12 @@
   .modal-reagendar .subtitulo { font-size: 12px; color: var(--texto-suave); margin: 0 0 14px; }
   .modal-reagendar .campo-reagendar { margin-bottom: 10px; }
   .modal-reagendar .campo-reagendar > label { display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 4px; }
+  .modal-reagendar select, .modal-reagendar textarea {
+    width: 100%; padding: 7px 9px; border: 1px solid var(--borda); border-radius: 6px;
+    font-size: 12.5px; background: var(--fundo); color: var(--texto); font-family: inherit;
+  }
+  .modal-reagendar textarea { resize: vertical; min-height: 60px; }
+  .modal-reagendar input[type="file"] { width: 100%; max-width: 100%; box-sizing: border-box; font-size: 12px; }
   .modal-reagendar .linha-horarios { display: flex; align-items: center; gap: 8px; }
   .modal-reagendar .linha-horarios label { font-size: 12px; font-weight: 400; margin: 0; }
   .modal-reagendar input[type="date"], .modal-reagendar input[type="time"] {
@@ -1306,8 +1452,16 @@
   .modal-reagendar .acoes button { padding: 7px 14px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
   .modal-reagendar .acoes button.confirmar { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
   .modal-reagendar .acoes button.confirmar:hover { background: #26C49A; }
+  .modal-reagendar .acoes button.confirmar.insucesso { background: var(--erro); color: #fff; }
+  .modal-reagendar .opcoes-resultado { display: flex; gap: 18px; font-size: 13px; font-weight: 600; }
+  .modal-reagendar .opcoes-resultado label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
   .modal-reagendar .acoes button.cancelar { background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); }
   .modal-reagendar .acoes button.cancelar:hover { background: var(--fundo); }
+  .modal-reagendar textarea {
+    width: 100%; box-sizing: border-box; resize: vertical; min-height: 60px;
+    padding: 6px 8px; border: 1px solid var(--borda); border-radius: 6px;
+    font-size: 12.5px; font-family: inherit; background: var(--fundo); color: var(--texto);
+  }
 
   /* Modal "Editar endereço" do menu de contexto (Hugo, 18/08) -- mesmo
      esqueleto visual do modal de reagendamento. */
@@ -1465,6 +1619,8 @@
   html.modo-mobile main, html.modo-mobile.tema-escuro main {
     max-width: none; border-radius: 0;
     padding: 0 8px calc(76px + env(safe-area-inset-bottom, 0px));
+    /* o topo e fixed (fora do fluxo): o conteudo comeca abaixo dele */
+    padding-top: calc(var(--altura-topo-mobile, 56px) + 8px);
   }
   /* o h1 some da tela mas fica pro leitor de tela (era display:none, que
      deixava a página sem h1 no celular) */
@@ -1472,11 +1628,14 @@
     position: absolute !important; width: 1px; height: 1px; margin: -1px; padding: 0;
     overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
   }
-  /* topo fixo: data + chips de KPI numa linha que rola de lado */
+  /* topo fixo: data + chips de KPI numa linha que rola de lado. Era
+     sticky (25/09): virou fixed, igual ao ☰ e as abas, pra nao depender
+     do sticky do navegador do celular; o main compensa com padding-top
+     (--altura-topo-mobile, medida pelo JS das abas). */
   html.modo-mobile .barra-controle {
-    position: sticky; top: 0; z-index: 70;
+    position: fixed; top: 0; left: 0; right: 0; z-index: 70;
     flex-wrap: nowrap; overflow-x: auto; gap: 8px;
-    padding: 8px 10px; margin: 0 -8px 8px; border-radius: 0; border-width: 0 0 1px;
+    padding: 8px 10px; margin: 0; border-radius: 0; border-width: 0 0 1px;
     -webkit-overflow-scrolling: touch; scrollbar-width: none;
   }
   html.modo-mobile .barra-controle::-webkit-scrollbar { display: none; }
@@ -1486,10 +1645,14 @@
     html.modo-mobile .barra-controle { padding-left: 52px; }
   }
   /* degradê na borda direita: a tira rola de lado com a barra de rolagem
-     escondida, sem ele nada indica que há mais chips à direita */
-  html.modo-mobile .barra-controle {
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
-    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+     escondida, sem ele nada indica que há mais chips à direita. Era
+     mask-image na propria barra (25/09): mascara em elemento fixo/sticky
+     fica pra tras ao rolar no Safari do iPhone e a barra "some"; agora e
+     um overlay fixo por cima da borda direita, sem mascara. */
+  html.modo-mobile main::before {
+    content: ""; position: fixed; top: 0; right: 0; z-index: 71; pointer-events: none;
+    width: 28px; height: var(--altura-topo-mobile, 56px);
+    background: linear-gradient(to right, transparent, var(--superficie));
   }
   /* o rótulo "Data:" sai da tela mas continua ligado ao campo pro leitor de tela */
   html.modo-mobile .barra-controle > label[for="data"] {
@@ -1506,6 +1669,7 @@
   html.modo-mobile:not([data-aba="mais"]) #barra-agentes-planejamento,
   html.modo-mobile:not([data-aba="mais"]) #painel-importacao-filtro,
   html.modo-mobile:not([data-aba="mais"]) #painel-expedicao-selecao,
+  html.modo-mobile:not([data-aba="mais"]) #painel-romaneios-data,
   html.modo-mobile:not([data-aba="mais"]) #resumo-agendados-container { display: none !important; }
   html.modo-mobile[data-aba="mais"] .painel-mais-mobile { display: block; }
   /* "▶ rodar" das pílulas: no desktop é um botãozinho de 18px de altura;
@@ -1590,6 +1754,101 @@
     border: 1px solid var(--borda); background: var(--fundo); color: var(--texto); font-family: inherit;
   }
   html.modo-mobile body.tem-selecao-pool main { padding-bottom: calc(230px + env(safe-area-inset-bottom, 0px)); }
+  /* aba Mapa (27/09): a .barra-selecao mora dentro de #coluna-pool, que
+     fica display:none fora da aba Pool -- tocar nos pontos selecionava
+     mas nenhuma ação aparecia no mapa. Lá a seleção ganha a "folha"
+     compacta (#folha-mapa, montada pelo JS): pedidos escolhidos + rotas
+     com a MESMA cor do traço no mapa, mais perto primeiro. "Mais ações"
+     leva pra aba Pool com a seleção (Criar rota, Roteirizar...). */
+  .folha-mapa { display: none; }
+  html.modo-mobile[data-aba="mapa"] body.tem-selecao-mapa .folha-mapa { display: flex; }
+  /* desktop (Hugo, 16/11): a mesma folha flutua no canto de baixo do
+     mapa (ultima coluna); "Mais acoes" some, as barras das colunas ja
+     estao a vista */
+  html:not(.modo-mobile) .layout-planejamento { position: relative; }
+  /* left/top/largura vêm do JS (posicionarFolhaDesktop): canto de baixo do #map */
+  html:not(.modo-mobile) body.tem-selecao-mapa .folha-mapa { display: flex; position: absolute; right: auto; bottom: auto; transform: translateY(-100%); max-height: 60vh; z-index: 5; }
+  html:not(.modo-mobile) .folha-mapa #folha-mais { display: none; }
+  @media print { .folha-mapa { display: none !important; } }
+  .folha-mapa {
+    position: fixed; left: 8px; right: 8px; bottom: calc(66px + env(safe-area-inset-bottom, 0px)); z-index: 75;
+    flex-direction: column; gap: 8px; padding: 8px 10px 10px; max-height: 48vh;
+    background: var(--superficie); color: var(--texto); border: 1px solid var(--borda); border-radius: 12px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+  }
+  .folha-mapa .folha-topo { display: flex; align-items: center; gap: 8px; min-height: 36px; }
+  .folha-mapa .folha-topo .resumo { flex: 1; min-width: 0; font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .folha-mapa .folha-topo .resumo small { font-weight: 600; color: var(--texto-suave); font-size: 12px; }
+  .folha-mapa button { font-family: inherit; cursor: pointer; }
+  .folha-mapa .folha-topo button {
+    min-height: 36px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--borda);
+    background: var(--fundo); color: var(--texto); font-size: 12px; font-weight: 600;
+  }
+  .folha-mapa .folha-pedidos { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; flex: none; }
+  .folha-mapa .folha-pedidos::-webkit-scrollbar { display: none; }
+  .folha-mapa .chip-pedido {
+    flex: none; display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 0 4px 0 10px;
+    border-radius: 100px; border: 1px solid var(--borda); background: var(--fundo); color: var(--texto); font-size: 12px; font-weight: 600;
+  }
+  .folha-mapa .chip-pedido::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--cor-origem, #2FD9AE); }
+  /* chip = [código ⓘ] abre os detalhes | [×] tira da seleção */
+  .folha-mapa .chip-pedido button {
+    border: none; background: none; color: inherit; font: inherit; padding: 0; min-height: 30px; display: inline-flex; align-items: center;
+  }
+  .folha-mapa .chip-pedido .ver { gap: 4px; padding: 0 2px; }
+  .folha-mapa .chip-pedido .ver .i { color: var(--texto-suave); font-size: 13px; }
+  .folha-mapa .chip-pedido .x { width: 30px; justify-content: center; color: var(--texto-suave); font-size: 16px; border-left: 1px solid var(--borda); }
+  .folha-mapa .folha-rotulo { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); flex: none; }
+  .folha-mapa .folha-rotas {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: max-content; align-content: start;
+    gap: 6px; overflow: hidden auto; min-height: 0; flex: 1 1 auto;
+    overscroll-behavior: contain;
+  }
+  .folha-mapa .chip-rota {
+    display: flex; min-width: 0; align-items: center; min-height: 44px; padding: 6px 8px; text-align: left;
+    border-radius: 8px; border: 1px solid var(--borda); border-left: 8px solid var(--cor); background: var(--fundo); color: var(--texto);
+  }
+  .folha-mapa .chip-rota .textos { min-width: 0; display: flex; flex-direction: column; }
+  .folha-mapa .chip-rota .nome { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .folha-mapa .chip-rota .info { font-size: 11px; line-height: 1.35; color: var(--texto-suave); }
+  .folha-mapa .chip-rota .info > span { white-space: nowrap; }
+  .folha-mapa .chip-rota .info .estoura { color: var(--laranja-texto); font-weight: 700; }
+  /* escolhida: contorno inteiro na cor da rota + ✓ (cor não é o único sinal) */
+  .folha-mapa .chip-rota.escolhida { border-color: var(--cor); box-shadow: inset 0 0 0 1px var(--cor); }
+  .folha-mapa .chip-rota.escolhida .nome::before { content: "✓ "; }
+  .folha-mapa .folha-vazio { grid-column: 1 / -1; font-size: 12px; color: var(--texto-suave); padding: 4px 0; }
+  .folha-mapa .folha-acoes { display: flex; gap: 6px; flex: none; }
+  .folha-mapa .folha-acoes button {
+    min-height: 44px; border-radius: 8px; border: 1px solid var(--borda); background: var(--fundo); color: var(--texto);
+    font-size: 13px; font-weight: 700; padding: 0 12px;
+  }
+  .folha-mapa .folha-acoes #folha-adicionar { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .folha-mapa .folha-acoes #folha-adicionar:not(:disabled) { background: var(--cor-escolhida, var(--acento)); border-color: var(--cor-escolhida, var(--acento)); color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
+  .folha-mapa .folha-acoes button:disabled { opacity: 0.55; cursor: default; }
+  /* devolve pro pool: contorno laranja pra não parecer a ação principal */
+  .folha-mapa .folha-acoes #folha-tirar { border-color: var(--laranja-texto); color: var(--laranja-texto); white-space: nowrap; }
+  /* com o "Tirar" são 3 botões: o principal ganha a linha de cima inteira
+     (senão o nome da rota some no "Mover N pra …") */
+  .folha-mapa.com-tirar .folha-acoes { flex-wrap: wrap; }
+  .folha-mapa.com-tirar .folha-acoes #folha-adicionar { flex-basis: 100%; }
+  .folha-mapa.com-tirar .folha-acoes #folha-tirar,
+  .folha-mapa.com-tirar .folha-acoes #folha-mais { flex: 1 1 0; }
+  /* detalhes do pedido (ⓘ do chip) ocupam o lugar da lista de rotas */
+  .folha-mapa .folha-detalhes { display: none; position: relative; flex: 0 1 auto; min-height: 0; overflow: auto;
+    padding: 8px 30px 8px 10px; border: 1px solid var(--borda); border-radius: 8px; background: var(--fundo); font-size: 12.5px; line-height: 1.5; }
+  .folha-mapa.mostrando-detalhes .folha-detalhes { display: block; }
+  .folha-mapa.mostrando-detalhes :is(.folha-rotulo, .folha-rotas) { display: none; }
+  .folha-mapa .folha-detalhes .fechar { position: absolute; top: 2px; right: 2px; width: 32px; height: 32px; border: none; background: none; color: var(--texto-suave); font-size: 18px; }
+  .folha-mapa .folha-detalhes .det-rota { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-weight: 700; margin-bottom: 4px; }
+  .folha-mapa .folha-detalhes .det-rota .cor-swatch { flex: none; width: 12px; height: 12px; border-radius: 3px; }
+  .folha-mapa .folha-detalhes .det-motorista { font-weight: 600; color: var(--texto-suave); }
+  .folha-mapa .folha-detalhes .titulo { font-weight: 700; }
+  .folha-mapa .folha-detalhes .remetente { color: #6FA0FF; font-weight: 600; }
+  .folha-mapa .folha-detalhes .destinatario { color: #E0B15C; }
+  .folha-mapa .folha-detalhes .endereco { color: var(--texto-suave); margin-top: 2px; }
+  .folha-mapa .folha-detalhes .extras { margin-top: 4px; color: var(--texto-suave); font-size: 11.5px; }
+  /* recolhida: só a linha do resumo, pra sobrar mapa pra tocar em mais pontos */
+  .folha-mapa.recolhida :is(.folha-pedidos, .folha-detalhes, .folha-rotulo, .folha-rotas, .folha-acoes) { display: none !important; }
   /* cards: alvo de toque maior + botão "⋯" (fica escondido no modo "só número") */
   html.modo-mobile .item-parada { padding-right: 34px; font-size: 12.5px; }
   html.modo-mobile body.cards-compactos .item-parada { padding-right: 34px; }
@@ -1694,6 +1953,27 @@
   </div>
 </div>
 
+<div class="faixa-topo-planejamento" id="faixa-topo-planejamento">
+  <button type="button" class="botao-mini" id="botao-recolher-topo" aria-expanded="true"
+          title="Recolhe (ou mostra) as rotinas e o resumo dos pedidos agendados"
+          onclick="alternarTopoPlanejamento()">▾ Rotinas e agendados</button>
+  <span class="estado-rotinas" id="estado-rotinas-recolhido"></span>
+</div>
+<script>
+  // salvar=false: usado pelo guia da tela, que abre o topo só durante o
+  // passeio e não pode mexer na preferência guardada
+  function alternarTopoPlanejamento(recolher, salvar) {
+    const raiz = document.documentElement;
+    if (recolher === undefined) recolher = !raiz.classList.contains("topo-recolhido");
+    raiz.classList.toggle("topo-recolhido", recolher);
+    const botao = document.getElementById("botao-recolher-topo");
+    botao.textContent = (recolher ? "▸" : "▾") + " Rotinas e agendados";
+    botao.setAttribute("aria-expanded", recolher ? "false" : "true");
+    if (salvar !== false) { try { localStorage.setItem("planejamento.topoRecolhido", recolher ? "1" : "0"); } catch (e) {} }
+  }
+  try { if (localStorage.getItem("planejamento.topoRecolhido") === "1") alternarTopoPlanejamento(true, false); } catch (e) {}
+</script>
+
 <div class="barra-agentes-planejamento" id="barra-agentes-planejamento"></div>
 {# região viva (15/09): a barra acima é reescrita inteira a cada
    consulta, então o leitor de tela recebe só o resumo do que MUDOU #}
@@ -1725,6 +2005,31 @@
   <div class="acoes">
     <button type="button" class="botao" onclick="rodarExpedicaoComSelecao()">Rodar expedição</button>
     <button type="button" onclick="fecharPainelExpedicao()">Cancelar</button>
+  </div>
+</div>
+
+{# Mesmo padrão dos dois painéis acima -- pedido do Hugo, 07/10: o
+   "▶ rodar" do romaneio gerava sempre os PDFs de hoje; agora pergunta
+   a data (abre com a data da tela). Vazio = hoje, igual ao timer das 04h. #}
+<div class="painel-importacao-filtro" id="painel-romaneios-data">
+  <strong>Gerar PDFs de Romaneio</strong>
+  <label>Data das rotas (vazio = hoje)
+    <input type="date" id="data-romaneios"
+           title="Dia das rotas cujos PDFs serão gerados. Abre com a data que esta tela está planejando.">
+  </label>
+  <div class="acoes">
+    <button type="button" class="botao" onclick="rodarRomaneiosComData()">Gerar romaneios</button>
+    <button type="button" onclick="fecharPainelRomaneios()">Cancelar</button>
+  </div>
+</div>
+
+<div class="carregando-roteirizacao" id="carregando-roteirizacao" role="status" aria-live="polite">
+  <div class="caixa">
+    <div class="giro" aria-hidden="true"></div>
+    <h2 id="carregando-roteirizacao-titulo">Roteirizando...</h2>
+    <p id="carregando-roteirizacao-texto">Agrupando por região, otimizando a sequência e sugerindo motorista. Pode levar até um minuto.</p>
+    <div class="trilha" aria-hidden="true"><span></span></div>
+    <div class="tempo" id="carregando-roteirizacao-tempo">0 s</div>
   </div>
 </div>
 
@@ -1830,6 +2135,79 @@
   </div>
 </div>
 
+{# "Marcar como entregue" de parada em rota já enviada (Hugo, 08/10): fecha o
+   servico na VUUPT por API (POST /api/torre/marcar-entregue). Com foto do
+   canhoto ela vai para o checklist da VUUPT; sem foto, justificativa da lista.
+   "Sem sucesso" (Hugo, 06/11): mesma tela, fecha como insucesso com o motivo
+   da lista da VUUPT e observacao opcional (fluxo normal de insucesso). #}
+<div class="modal-overlay-reagendar" id="modal-entregue">
+  <div class="modal-reagendar" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-entregue">
+    <h2 id="titulo-modal-entregue">Marcar pedido como entregue</h2>
+    <p class="subtitulo"><span id="entregue-prefixo">Pedido</span> <strong id="entregue-codigo"></strong></p>
+    <div class="campo-reagendar opcoes-resultado" role="radiogroup" aria-label="Resultado">
+      <label><input type="radio" name="entregue-resultado" value="entregue" checked onchange="aoMudarResultadoEntregue()"> Entregue</label>
+      <label><input type="radio" name="entregue-resultado" value="sem_sucesso" onchange="aoMudarResultadoEntregue()"> Sem sucesso</label>
+    </div>
+    <div id="entregue-bloco-entregue">
+    <p class="subtitulo">Fecha na VUUPT agora. Com foto, ela vai para o checklist da VUUPT.</p>
+    <div class="campo-reagendar">
+      <label for="entregue-foto-canhoto">Foto do canhoto</label>
+      <input type="file" id="entregue-foto-canhoto" accept="image/*,application/pdf" onchange="aoMudarFotoEntregue()">
+    </div>
+    <div class="campo-reagendar">
+      <label for="entregue-foto-nota">Foto da nota de retorno (opcional) — só com a foto do canhoto</label>
+      <input type="file" id="entregue-foto-nota" accept="image/*" disabled>
+    </div>
+    <div class="campo-reagendar" id="entregue-campo-justificativa">
+      <label for="entregue-justificativa">Sem foto do canhoto: por quê?</label>
+      <select id="entregue-justificativa" onchange="aoMudarJustificativaEntregue()">
+        <option value="">Selecione...</option>
+        {% for codigo, rotulo in justificativas.items() %}<option value="{{ codigo }}">{{ rotulo }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="campo-reagendar" id="entregue-campo-outro" hidden>
+      <label for="entregue-texto-outro">Descreva</label>
+      <textarea id="entregue-texto-outro" maxlength="200" placeholder="De 5 a 200 caracteres"></textarea>
+    </div>
+    </div>
+    <div id="entregue-bloco-sem-sucesso" hidden>
+      <p class="subtitulo">Fecha na VUUPT agora como insucesso e segue o fluxo normal de insucesso.</p>
+      <div class="campo-reagendar">
+        <label for="entregue-motivo">Motivo da não entrega</label>
+        <select id="entregue-motivo">
+          <option value="">Selecione...</option>
+          {% for codigo, rotulo in motivos_sem_sucesso %}<option value="{{ codigo }}">{{ rotulo }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="campo-reagendar">
+        <label for="entregue-observacao">Observação (opcional)</label>
+        <textarea id="entregue-observacao" maxlength="200" placeholder="Até 200 caracteres"></textarea>
+      </div>
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" onclick="fecharModalEntregue()">Cancelar</button>
+      <button type="button" class="confirmar" id="botao-confirmar-entregue" onclick="confirmarEntregue(this)">Marcar como entregue</button>
+    </div>
+  </div>
+</div>
+
+{# Reagendamento fora do dia de visita da região (Hugo, 03/10 -- dias fixos v2,
+   spec 5.4): pergunta antes de salvar. Sim = salva a data e abre o modal de
+   dedicado com o valor da calculadora; Não = salva normal (fica como EQUIPE). #}
+<div class="modal-overlay-reagendar" id="modal-fora-dia-fixo">
+  <div class="modal-reagendar" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-fora-dia-fixo">
+    <h2 id="titulo-modal-fora-dia-fixo">Fora do dia de visita da região</h2>
+    <p class="subtitulo" id="fora-dia-fixo-texto"></p>
+    <ul id="fora-dia-fixo-lista" style="margin:0 0 10px; padding-left:18px; font-size:12.5px; max-height:160px; overflow:auto;"></ul>
+    <div class="acoes">
+      <button type="button" class="cancelar" id="botao-fora-dia-fixo-nao">Não, só reagendar</button>
+      <button type="button" class="confirmar" id="botao-fora-dia-fixo-sim">Sim, marcar como dedicado</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay-editar-endereco" id="modal-editar-endereco">
   <div class="modal-editar-endereco" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-editar-endereco">
     <h2 id="titulo-modal-editar-endereco">Editar endereço</h2>
@@ -1846,12 +2224,12 @@
 </div>
 
 {# Transportadora de redespacho (Hugo, 16/09): mesmo esqueleto visual do
-   modal de endereço. Só TERCEIROS da BD_TRANSPORTADORAS entram no select;
+   modal de endereço. Só TERCEIROS do cadastro de transportadoras entram no select;
    escolher uma troca o endereço do pedido pelo galpão dela. #}
 <div class="modal-overlay-editar-endereco" id="modal-transportadora">
   <div class="modal-editar-endereco" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-transportadora">
     <h2 id="titulo-modal-transportadora">Transportadora (redespacho)</h2>
-    <p class="subtitulo"><span id="transportadora-prefixo">Pedido</span> <strong id="transportadora-codigo"></strong> — o endereço de entrega passa a ser o galpão da transportadora escolhida (gravado direto na VUUPT). Só transportadoras TERCEIROS da planilha BD_TRANSPORTADORAS.</p>
+    <p class="subtitulo"><span id="transportadora-prefixo">Pedido</span> <strong id="transportadora-codigo"></strong> — o endereço de entrega passa a ser o galpão da transportadora escolhida (gravado direto na VUUPT). Só transportadoras TERCEIROS do cadastro de transportadoras (tela Transportadoras).</p>
     <div class="campo-reagendar">
       <label for="transportadora-select">Transportadora</label>
       <select id="transportadora-select"><option value="">Carregando…</option></select>
@@ -1882,6 +2260,28 @@
     <div class="acoes">
       <button type="button" class="cancelar" id="botao-cancelar-dedicado">Cancelar</button>
       <button type="button" class="confirmar" id="botao-confirmar-dedicado" disabled>Marcar</button>
+    </div>
+  </div>
+</div>
+
+{# Tirar da rota enviada (10/11): mesma lista de motivo da Torre
+   (expedicao.MOTIVOS_EXCLUSAO, preenchida pelo JS). Na VUUPT o pedido fica
+   sem rota, nunca é cancelado. #}
+<div class="modal-overlay-editar-endereco" id="modal-tirar-da-rota">
+  <div class="modal-editar-endereco" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-tirar-da-rota">
+    <h2 id="titulo-modal-tirar-da-rota">Tirar da rota</h2>
+    <p class="subtitulo">Pedido <strong id="tirar-da-rota-codigo"></strong> — sai da rota na VUUPT sem ser cancelado. Se o motorista ainda não saiu, volta pro pool; se a rota já começou, fica Retornando até o galpão receber.</p>
+    <div class="campo-reagendar">
+      <label for="tirar-da-rota-motivo">Motivo</label>
+      <select id="tirar-da-rota-motivo"><option value="">Selecione...</option></select>
+    </div>
+    <div class="campo-reagendar">
+      <label for="tirar-da-rota-observacao">Observação (opcional)</label>
+      <textarea id="tirar-da-rota-observacao" maxlength="200" placeholder="Detalhe o motivo, se precisar..."></textarea>
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" onclick="fecharModalTirarDaRota()">Cancelar</button>
+      <button type="button" class="confirmar" onclick="confirmarTirarDaRota(this)">Tirar da rota</button>
     </div>
   </div>
 </div>
@@ -1965,7 +2365,8 @@
   function escaparHtmlAgentes(texto) {
     const div = document.createElement('div');
     div.textContent = texto == null ? '' : String(texto);
-    return div.innerHTML;
+    // aspas também: o resultado vai pra dentro de atributo (title="...", data-x="...")
+    return div.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
 
   async function postJSONAgentesPlanejamento(url, body) {
@@ -2004,6 +2405,10 @@
         ? "abrirPainelImportacao()"
         : e.agente_id === "somente_expedicao"
         ? "abrirPainelExpedicao()"
+        : e.agente_id === "atualizar_status_stokki"
+        ? "rodarStatusStokki()"
+        : e.agente_id === "gerar_romaneios"
+        ? "abrirPainelRomaneios()"
         : `rodarAgentePlanejamento('${e.agente_id}', '${escaparHtmlAgentes(e.titulo)}')`;
       const desabilitado = e.rodando || e.na_fila;
       // Pílula (cockpit compacto, 30/08): sem botão enquanto roda/na fila
@@ -2050,6 +2455,7 @@
     let resumo = "";
     if (rodando.length) resumo += `Rodando: ${rodando.join(", ")}.`;
     if (naFila.length) resumo += ` Na fila: ${naFila.join(", ")}.`;
+    document.getElementById("estado-rotinas-recolhido").textContent = resumo;
     if (!resumo && ultimoAnuncioAgentes) resumo = "Agentes terminaram.";
     if (resumo !== ultimoAnuncioAgentes) {
       ultimoAnuncioAgentes = resumo;
@@ -2093,6 +2499,19 @@
     algumaEtapaAgentePlanejamentoRodando = true;
     // feedback imediato na barra, sem esperar o próximo ciclo
     fetch(`${BASE_PATH}/api/planejamento/agentes/etapas`).then(r => r.json()).then(j => renderAgentesPlanejamento(j.etapas));
+  }
+
+  // Status Stokki (Hugo, 09/11): relê a situação na Stokki e, quando termina, atualiza o pool e o
+  // selo das rotas com o retrato novo (mesmo Atualizar do pool).
+  async function rodarStatusStokki() {
+    if (!confirm("Reler agora na Stokki quem está em aberto, separação, conferência ou espera?\n(Não importa nada pra VUUPT.)")) return;
+    try {
+      await iniciarExecucaoAgentePlanejamento("atualizar_status_stokki");
+    } catch (e) {
+      alert(`Falha ao iniciar: ${e.message}`);
+      return;
+    }
+    aguardarExpedicaoEAtualizarPool("atualizar_status_stokki");
   }
 
   async function rodarAgentePlanejamento(agenteId, titulo) {
@@ -2154,6 +2573,31 @@
     fecharPainelExpedicao();
     try {
       await iniciarExecucaoAgentePlanejamento("somente_expedicao", { pedidos });
+    } catch (e) {
+      alert(`Falha ao iniciar: ${e.message}`);
+    }
+  }
+
+  // Gerar PDFs de Romaneio com escolha da data (Hugo, 07/10) -- mesmo
+  // padrão dos painéis da Importação e da Expedição. O campo abre com a
+  // data que a tela está planejando (DATA_ALVO_ISO); o backend já
+  // traduz "data" em --data (agentes.py["parametros"]). Vazio = hoje.
+  function abrirPainelRomaneios() {
+    document.getElementById("data-romaneios").value = DATA_ALVO_ISO;
+    abrirPainelAgente("painel-romaneios-data");
+  }
+  function fecharPainelRomaneios() {
+    document.getElementById("painel-romaneios-data").classList.remove("aberto");
+  }
+  async function rodarRomaneiosComData() {
+    const data = document.getElementById("data-romaneios").value;
+    const pergunta = data
+      ? `Gerar os PDFs de romaneio das rotas de ${data.split("-").reverse().join("/")} (modo real)?`
+      : "Gerar os PDFs de romaneio das rotas de HOJE (modo real)?";
+    if (!confirm(pergunta)) return;
+    fecharPainelRomaneios();
+    try {
+      await iniciarExecucaoAgentePlanejamento("gerar_romaneios", { data });
     } catch (e) {
       alert(`Falha ao iniciar: ${e.message}`);
     }
@@ -2277,7 +2721,7 @@
     <div class="ajuda-pool" id="ajuda-pool" hidden>
       <p><strong>Selecionar:</strong> clique num pedido (ou no ponto dele no mapa) pra selecionar e centralizar o mapa nele; clique de novo pra desmarcar. Passar o mouse num card acende o ponto no mapa.</p>
       <p><strong>Blocos:</strong> "Pra rotear hoje" (agendado pro dia, atrasado ou sem agendamento) e "Agendados pra depois" (agendamento futuro, badge cinza). Cada bloco colapsa e tem o próprio "Selecionar". Dá pra arrastar um agendado pra depois pra uma rota, pra adiantar a entrega.</p>
-      <p><strong>Mapa:</strong> "Não alocados" mostra o pool em vermelho; "Alocados" e "Enviadas" mostram ou escondem as rotas; "Futuros" mostra os agendados pra depois (escondidos por padrão). "Selecionar área" laça vários de uma vez: cada clique é um vértice, duplo clique conclui, Esc cancela.</p>
+      <p><strong>Mapa:</strong> "Não alocados" mostra o pool em vermelho; "Alocados" e "Enviadas" mostram ou escondem as rotas; "Futuros" mostra os agendados pra depois (escondidos por padrão); "Em separação" mostra os que ainda não estão prontos na Stokki (escondidos por padrão). "Selecionar área" laça só o que está aparecendo no mapa: cada clique é um vértice, duplo clique conclui, Esc cancela.</p>
     </div>
     <button id="botao-atualizar-pool" type="button" class="botao" style="width:100%;margin-bottom:10px;">Atualizar (buscar novos pedidos)</button>
     <div class="linha-busca-pool">
@@ -2291,11 +2735,12 @@
       <button type="button" id="botao-limpar-selecao" disabled>Limpar</button>
       <button type="button" id="botao-criar-rota-selecao" disabled title="Cria um rascunho de rota já com os pedidos selecionados">Criar rota</button>
       <button type="button" id="botao-roteirizar-selecao" disabled title="Roda o criador de rotas só com os pedidos selecionados: pergunta qual tipo de roteirização usar (ou deixa o sistema escolher sozinho), agrupa por região (Seco e Refrigerado/Congelado podem ir juntos, frota toda tem baú térmico), otimiza a sequência e sugere motorista — pode gerar mais de uma rota">Roteirizar</button>
-      <button type="button" id="botao-incrementar-selecao" disabled title="Complementa as rotas EM RASCUNHO com os pedidos selecionados: cada um vai pro rascunho mais próximo (até 20 km) que ainda o comporte — sem teto de pedidos por rota, respeitando caixas, macro-região, seco/frio, janela de horário e o motorista já escolhido. Nunca mexe em rota já enviada à VUUPT; quem não couber fica no pool">Incrementar</button>
+      <button type="button" id="botao-incrementar-selecao" disabled title="Complementa as rotas EM RASCUNHO com os pedidos selecionados: cada um vai pro rascunho mais próximo (até 20 km) que ainda o comporte — até 15 pedidos por rota, respeitando caixas, macro-região, seco/frio, janela de horário e o motorista já escolhido. Nunca mexe em rota já enviada à VUUPT; quem não couber fica no pool">Incrementar</button>
       <button type="button" id="botao-editar-endereco-selecao" disabled title="Edita o MESMO endereço em todos os pedidos selecionados">Editar endereço</button>
-      <button type="button" id="botao-transportadora-selecao" disabled title="Manda os pedidos selecionados por redespacho: troca o endereço de todos pelo galpão da transportadora TERCEIROS escolhida (BD_TRANSPORTADORAS)">Transportadora</button>
+      <button type="button" id="botao-transportadora-selecao" disabled title="Manda os pedidos selecionados por redespacho: troca o endereço de todos pelo galpão da transportadora TERCEIROS escolhida (cadastro de transportadoras, tela Transportadoras)">Transportadora</button>
       <button type="button" id="botao-dedicado-selecao" disabled title="Marca os pedidos selecionados como envio dedicado e divide o valor da cotação entre eles (fora da rota automática; vai pro financeiro na quinzena)">Dedicado</button>
       <button type="button" id="botao-reagendar-selecao" disabled title="Aplica a MESMA janela de data/horário a todos os pedidos selecionados">Agendar</button>
+      <button type="button" id="botao-cancelar-selecao" disabled title="Cancela na VUUPT todos os pedidos selecionados (igual ao × de cada card; não mexe na Stokki) -- não pode ser desfeito">Cancelar</button>
       {# só no modo celular (CSS): põe os selecionados numa rota existente,
          no lugar do arrastar pool→rota, que não existe entre abas #}
       <select id="select-adicionar-rota" disabled title="Adiciona os pedidos selecionados ao fim de uma rota já existente"><option value="">Adicionar à rota…</option></select>
@@ -2305,9 +2750,21 @@
         <div class="cabecalho-secao-pool">
           <span class="seta-secao">▾</span>
           <span class="titulo-secao-pool">Pra rotear hoje (<span id="contagem-secao-hoje">0</span>)</span>
-          <button type="button" class="botao-mini botao-selecionar-secao" data-secao="hoje" title="Seleciona só os pedidos visíveis desta seção -- não pega agendamento futuro nem fora de área">Selecionar</button>
+          <button type="button" class="botao-mini botao-selecionar-secao" data-secao="hoje" title="Seleciona só os pedidos visíveis desta seção -- não pega agendamento futuro, fora de área nem pedido ainda em separação na Stokki">Selecionar</button>
         </div>
         <ul class="lista-paradas pool" id="lista-pool-hoje" data-list-id="pool"></ul>
+      </div>
+      {# Em separação na Stokki (Hugo, 19/10): já está na Vuupt, mas o galpão
+         ainda não liberou (Em aberto / Em separação / Em conferência / Em
+         espera). Vem do retrato que o pipeline grava a cada rodada, não da
+         Stokki ao vivo -- por isso a hora no título. Continua arrastável. #}
+      <div class="secao-pool secao-pool-separacao" data-secao="separacao" id="secao-pool-separacao">
+        <div class="cabecalho-secao-pool" title="Pedidos que já estão na Vuupt mas a Stokki ainda não marcou 'Aguardando Transportador' (em aberto, em separação, em conferência ou em espera). A situação é a do último retrato do pipeline, não ao vivo. Pode ir pra rota; só os em espera saem dela no envio à Vuupt.">
+          <span class="seta-secao">▾</span>
+          <span class="titulo-secao-pool">Em separação na Stokki (<span id="contagem-secao-separacao">0</span>) <span class="retrato-stokki" id="retrato-stokki">{% if dados and dados.retrato_stokki_em %}· retrato de {{ dados.retrato_stokki_em }}{% endif %}</span></span>
+          <button type="button" class="botao-mini botao-selecionar-secao" data-secao="separacao" title="Seleciona só os pedidos visíveis desta seção">Selecionar</button>
+        </div>
+        <ul class="lista-paradas pool" id="lista-pool-separacao" data-list-id="pool"></ul>
       </div>
       <div class="secao-pool" data-secao="futuro" id="secao-pool-futuro">
         <div class="cabecalho-secao-pool">
@@ -2411,8 +2868,9 @@
       <select id="select-destino-mover"><option value="">Mover pra...</option></select>
       <button type="button" id="botao-mover-selecionados" disabled>Mover</button>
       <button type="button" id="botao-editar-endereco-selecao-rotas" disabled title="Edita o MESMO endereço em todos os pedidos selecionados">Editar endereço</button>
-      <button type="button" id="botao-transportadora-selecao-rotas" disabled title="Manda os pedidos selecionados por redespacho: troca o endereço de todos pelo galpão da transportadora TERCEIROS escolhida (BD_TRANSPORTADORAS)">Transportadora</button>
+      <button type="button" id="botao-transportadora-selecao-rotas" disabled title="Manda os pedidos selecionados por redespacho: troca o endereço de todos pelo galpão da transportadora TERCEIROS escolhida (cadastro de transportadoras, tela Transportadoras)">Transportadora</button>
       <button type="button" id="botao-reagendar-selecao-rotas" disabled title="Aplica a MESMA janela de data/horário a todos os pedidos selecionados">Agendar</button>
+      <button type="button" id="botao-entregue-selecao-rotas" disabled title="Fecha na VUUPT como entregue ou sem sucesso os pedidos selecionados que estão em rota já ENVIADA -- os de rascunho ficam de fora">Entregue / sem sucesso</button>
       <button type="button" id="botao-limpar-selecao-rotas">Limpar</button>
     </div>
     <div id="lista-rotas"></div>
@@ -2444,6 +2902,23 @@
   const LIMITE_ALERTA_CAIXAS = {{ dados.limite_alerta_caixas | tojson }};
   const TRAVAS = {{ dados.travas | tojson }};
   const TIPOS_CARGA_POR_SENDER = {{ dados.tipos_carga_por_sender | tojson }};
+  // Editar rota enviada (10/11): motivo do "Tirar da rota" (mesma lista da
+  // Torre, expedicao.MOTIVOS_EXCLUSAO), status da Vuupt em que o pedido ainda
+  // pode sair (o servidor confere ao vivo de novo) e agentes virtuais que
+  // nunca "faltam carro" (regras/veiculos.AGENTES_SEM_CARRO)
+  const MOTIVOS_EXCLUSAO = {{ (motivos_exclusao or []) | tojson }};
+  const AGENTES_SEM_CARRO = new Set({{ (agentes_sem_carro or []) | tojson }});
+  const STATUS_PODE_SAIR = new Set(["not_assigned", "assigned", "accepted"]);
+  const ROTULO_STATUS_VUUPT = {
+    not_assigned: "sem motorista", assigned: "atribuído", accepted: "aceito",
+    on_route: "a caminho", arrived: "no local", done: "finalizado", canceled: "cancelado",
+  };
+  const TEXTO_TRAVA_MOTORISTA = "Rota já começou: só o carro pode mudar.";
+  // carros do seletor do card (/api/planejamento/veiculos, sem genérico, dono
+  // primeiro, com rodizio_no_dia) -- carregado depois que a tela monta; null
+  // = ainda carregando ou falhou (o select mostra só o carro atual)
+  let VEICULOS = null;
+  let VEICULOS_FALHOU = false;  // lista não carregou: o select avisa pra recarregar
   const TIPO_CARGA_PADRAO = "Seco";
   const PADRAO_SUFIXO_REENTREGA = /-R\d+$/;
   // Paleta SEM nenhum tom de vermelho/rosa/coral de propósito (Hugo,
@@ -2480,7 +2955,8 @@
   function escaparHtml(texto) {
     const div = document.createElement('div');
     div.textContent = texto == null ? '' : String(texto);
-    return div.innerHTML;
+    // aspas também: o resultado vai pra dentro de atributo (title="...", data-x="...")
+    return div.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
 
   function iconeNumerado(numero, cor) {
@@ -2522,16 +2998,20 @@
   // (cor, "Rota N", posição, motorista) + cópia do card da parada, igual
   // ao do pool (sem os controles). Nome lido do card na hora do clique
   // pra pegar renomeação.
+  function motoristaDaRota(r) {
+    if (r && rotaEhLalamove(r)) return "Lalamove";
+    if (r && r.agent_id) {
+      const cadastro = MOTORISTAS.find(m => m.agent_id === r.agent_id);
+      return (r.motorista_nome || (cadastro && cadastro.nome) || `Motorista ${r.agent_id}`).trim();
+    }
+    return "sem motorista";
+  }
+
   function montarInfoHtml(li, rascunhoId, posicao, total) {
     const card = document.getElementById(`card-rota-${rascunhoId}`);
     const nomeRota = card?.querySelector(".titulo-rota .nome")?.textContent || "";
     const r = RASCUNHOS.find(x => x.id === rascunhoId);
-    let motorista = "sem motorista";
-    if (r && rotaEhLalamove(r)) motorista = "Lalamove";
-    else if (r && r.agent_id) {
-      const cadastro = MOTORISTAS.find(m => m.agent_id === r.agent_id);
-      motorista = (r.motorista_nome || (cadastro && cadastro.nome) || `Motorista ${r.agent_id}`).trim();
-    }
+    const motorista = motoristaDaRota(r);
     const cor = coresPorRascunho[rascunhoId] || "#6B7280";
     const copia = document.createElement("div");
     copia.className = "item-parada";
@@ -2565,16 +3045,37 @@
   function badgesPedidoHtml(p) {
     // agendamento + alerta de pedido grande (> LIMITE_ALERTA_CAIXAS caixas)
     const partes = [];
+    // Retornando (10/11): tirado de rota já iniciada, ainda no carro do
+    // motorista -- só volta a ser roteirizável depois que /retornos receber
+    if (p.nao_carregado) {
+      partes.push(`<span class="badge-nao-carregado" title="${escaparHtml(p.nao_carregado.observacao || "")}">↺ Não carregado: ${escaparHtml(p.nao_carregado.motivo || "")}</span>`);
+    }
+    if (p.retornando) {
+      const motivo = p.retornando.motivo ? ` Motivo: ${p.retornando.motivo}.` : "";
+      partes.push(`<span class="badge-retornando" title="Tirado de rota já iniciada: não entra em rota até o galpão receber em Retornos.${escaparHtml(motivo)}">↩ Retornando — no carro de ${escaparHtml(p.retornando.motorista_nome || "?")}</span>`);
+    }
     // dedicado (Hugo, 23/09): transporte cotado à parte, fora da rota automática
     if (p.dedicado) {
       const brl = v => Number(v).toFixed(2).replace(".", ",");
       const titulo = p.dedicado.n_grupo > 1
         ? ` title="Cotação R$ ${brl(p.dedicado.valor_total)} dividida entre ${p.dedicado.n_grupo} pedidos"` : "";
-      partes.push(`<span class="badge-dedicado"${titulo}>🚚 Dedicado · R$ ${brl(p.dedicado.valor)}</span>`);
+      // motivo (Hugo, 03/10): marcado sozinho por data fora do dia fixo da região
+      const motivo = p.dedicado.motivo ? ` · ${p.dedicado.motivo}` : "";
+      partes.push(`<span class="badge-dedicado"${titulo}>🚚 Dedicado · R$ ${brl(p.dedicado.valor)}${motivo}</span>`);
+    }
+    // segurado (Hugo, 29/09): rota fraca adiada pra juntar com o volume do dia seguinte
+    if (p.segurado) {
+      const dm = iso => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
+      partes.push(`<span class="badge-dedicado" title="Rota fraca: pedido adiado para ${dm(p.segurado.data_nova)}. Pode ser colocado em rota à mão.">⏸ Segurado · prazo ${dm(p.segurado.prazo_final)}</span>`);
+    }
+    // em espera a pedido do cliente (27/10): fica no pool, mas a roteirização pula
+    if (p.pausado_cliente) {
+      partes.push(`<span class="badge-dedicado" title="Pausado a pedido do cliente: não entra em rota automática nem em Roteirizar selecionados.">⏸ Em espera (cliente)</span>`);
     }
     if (p.tipo_area) {
       partes.push(`<span class="badge-fora-area">⚠ ${ROTULO_TIPO_AREA[p.tipo_area] || "Fora de área"}</span>`);
     }
+    if (p.situacao_stokki) partes.push(badgeSeparacaoHtml(p));
     if (p.agendado_para) {
       const [ano, mes, dia] = p.agendado_para.split("-");
       if (p.agendado_para < DATA_ALVO_ISO) {
@@ -2607,6 +3108,13 @@
     return partes.length ? `<br>${partes.join(" ")}` : "";
   }
 
+  // situação na Stokki ainda não "Aguardando Transportador" (Hugo, 19/10)
+  // -- separado de badgesPedidoHtml porque atualizarPool troca só esse
+  // badge num card que já existe, quando o retrato muda
+  function badgeSeparacaoHtml(p) {
+    return `<span class="badge-separacao" title="Situação na Stokki no último retrato do pipeline">📦 ${escaparHtml(p.situacao_stokki)}</span>`;
+  }
+
   function itemParadaHtml(p, opts = {}) {
     const destinatario = p.destinatario_nome
       ? `<br><span class="destinatario">${escaparHtml(p.destinatario_nome)}</span>`
@@ -2616,9 +3124,21 @@
     const nf = p.numero_nf ? ` <span class="nf-pedido">NF ${escaparHtml(p.numero_nf)}</span>` : "";
     // cancela o pedido de verdade na VUUPT (Hugo, 15/08) -- leitura não
     // recebe o botão (mesma trava dos demais controles de ação)
-    const botaoCancelar = PODE_EDITAR
+    let botaoCancelar = PODE_EDITAR
       ? `<button type="button" class="botao-cancelar-pedido" title="Cancelar esse pedido na VUUPT -- não pode ser desfeito">×</button>`
       : "";
+    // rota já enviada (10/11): o "×" vira "Tirar da rota" (pede o motivo,
+    // não cancela na VUUPT) e só aparece em pedido que o motorista não
+    // começou -- status sem espelho ainda (null) também mostra, o servidor
+    // confere ao vivo. Cancelar o pedido continua no menu de contexto.
+    let statusVuupt = "";
+    if (opts.enviada) {
+      const st = p.status_vuupt || null;
+      botaoCancelar = (opts.edicaoEnviada && (st === null || STATUS_PODE_SAIR.has(st)))
+        ? `<button type="button" class="botao-cancelar-pedido botao-tirar-da-rota" title="Tirar da rota (pede o motivo; o pedido não é cancelado na VUUPT)">×</button>`
+        : "";
+      if (st) statusVuupt = ` <span class="badge-status-vuupt${STATUS_PODE_SAIR.has(st) ? "" : " comecado"}" title="Status na VUUPT (espelho de até 15 min; tirar da rota confere ao vivo)">VUUPT: ${escaparHtml(ROTULO_STATUS_VUUPT[st] || st)}</span>`;
+    }
     // checkbox de seleção múltipla pra "Mover selecionados" -- só dentro
     // de rota editável (nunca no pool, que já tem o próprio mecanismo de
     // seleção por clique; ver opts.emRota em criarLiParada/criarCardRota)
@@ -2627,7 +3147,7 @@
       : "";
     // .numero é preenchido por renumerarPool/renumerarRotaEl (posição
     // no pool ou ordem na rota -- o MESMO número do ponto no mapa)
-    return `${checkSelecao}${botaoCancelar}<span class="numero"></span><span class="codigo">${escaparHtml(p.codigo)}</span>${nf}<br>
+    return `${checkSelecao}${botaoCancelar}<span class="numero"></span><span class="codigo">${escaparHtml(p.codigo)}</span>${nf}${statusVuupt}<br>
       <span class="remetente">${escaparHtml(p.remetente_nome || p.remetente)}</span>${destinatario}<br>
       <span class="endereco">${escaparHtml(p.endereco)}</span>${badgesPedidoHtml(p)}`;
   }
@@ -2653,8 +3173,12 @@
     li.dataset.lng = p.longitude ?? "";
     li.dataset.agendadoPara = p.agendado_para || "";
     li.dataset.tipoArea = p.tipo_area || "";
+    li.dataset.situacaoStokki = p.situacao_stokki || "";  // "Em separação" etc. (Hugo, 19/10)
     li.dataset.dedicado = p.dedicado ? "1" : "";
     li.dataset.foraDiaFixo = p.fora_dia_fixo || "";  // "Americana: só Quartas" (Hugo, 23/09)
+    // Retornando (10/11): pedido no carro do motorista -- no pool fica sem
+    // seleção e sem arraste (o filtro do Sortable pega a classe)
+    if (p.retornando) { li.dataset.retornando = "1"; li.classList.add("retornando"); }
     // nível de dificuldade / horário de atendimento do CLIENTE (Hugo,
     // 22/08 -- editável pelo menu de contexto, ver abrirModalNivelHorario)
     li.dataset.nivelDificuldade = p.nivel_dificuldade || "1";
@@ -2692,6 +3216,42 @@
       [...MOTORISTAS].sort((a, b) => (a.nome || "").localeCompare(b.nome || "", "pt-BR", { sensitivity: "base" })).map(m => `<option value="${m.agent_id}" ${m.agent_id === rascunho.agent_id ? "selected" : ""}>${escaparHtml(m.nome)}</option>`)
     );
     return opcoes.join("");
+  }
+
+  // Seletor de carro do card (10/11): o valor é o vehicle_id do rascunho;
+  // trocar aqui vale só pra essa rota (o cadastro do motorista não muda)
+  function montarSelectVeiculo(rascunho) {
+    const atual = rascunho.vehicle_id || null;
+    const opcoes = ['<option value="">Sem carro</option>'];
+    const lista = VEICULOS || [];
+    lista.forEach(v => {
+      const dono = v.dono ? ` — ${v.dono}` : "";
+      const rodizio = v.rodizio_no_dia ? " (rodízio no dia)" : "";
+      opcoes.push(`<option value="${v.vehicle_id}" ${v.vehicle_id === atual ? "selected" : ""}>${escaparHtml(v.placa || `Carro ${v.vehicle_id}`)}${escaparHtml(dono)}${rodizio}</option>`);
+    });
+    // carro atual fora da lista (genérico, excluído ou lista ainda carregando)
+    if (atual && !lista.some(v => v.vehicle_id === atual)) {
+      const rotulo = VEICULOS ? `Carro ${atual} (genérico ou fora da lista)` : `Carro ${atual}`;
+      opcoes.push(`<option value="${atual}" selected>${escaparHtml(rotulo)}</option>`);
+    }
+    if (VEICULOS_FALHOU) opcoes.push('<option value="" disabled>Lista de carros indisponível — recarregue a página</option>');
+    return opcoes.join("");
+  }
+
+  // mesma regra de regras/veiculos.falta_carro: motorista de verdade sem
+  // vehicle_id, ou com placa genérica (começa com "."). Carro que só não
+  // está na lista do seletor não conta como "sem carro".
+  function rascunhoSemCarro(rascunho) {
+    if (!rascunho.agent_id || AGENTES_SEM_CARRO.has(rascunho.agent_id)) return false;
+    if (!rascunho.vehicle_id) return true;
+    const veiculo = (VEICULOS || []).find(v => v.vehicle_id === rascunho.vehicle_id);
+    return !!veiculo && (veiculo.placa || "").trim().startsWith(".");
+  }
+
+  function seloSemCarroHtml(rascunho) {
+    if (!rascunho.falta_carro) return "";
+    const nome = rascunho.motorista_nome || `Motorista ${rascunho.agent_id}`;
+    return `<span class="badge-trava" title="Motorista ${escaparHtml(nome)} sem carro cadastrado: escolha o carro no card ou cadastre o veículo dele.">sem carro</span>`;
   }
 
   function rotaEhLalamove(rascunho) {
@@ -2813,12 +3373,38 @@
       return barraCapacidadeHtml("caixas", caixas, infoVeiculo.volume_maximo_cx) +
              barraCapacidadeHtml("endereços", enderecos, infoVeiculo.max_enderecos_distintos);
     }
-    return barraCapacidadeHtml("caixas", caixas, TRAVAS.max_caixas) +
-           barraCapacidadeHtml("paradas", rascunho.paradas.length, TRAVAS.max_paradas);
+    const receptora = rascunho.recebeu_rota_fraca;  // folga de rota fraca (Hugo, 03/10)
+    return barraCapacidadeHtml("caixas", caixas, receptora ? TRAVAS.max_caixas_receptora : TRAVAS.max_caixas) +
+           barraCapacidadeHtml("paradas", rascunho.paradas.length,
+                               receptora ? TRAVAS.max_paradas_receptora : TRAVAS.max_paradas);
   }
 
   function badgesHtml(badges) {
     return (badges || []).map(b => `<span class="badge-trava">${escaparHtml(b)}</span>`).join("");
+  }
+
+  // Situação na Stokki das paradas de uma rota (Hugo, 09/11), lida dos cards: muda por arrasto sem
+  // recarregar. Ex.: "📦 Stokki: 2 em separação · 1 em conferência"; códigos no title.
+  function situacaoStokkiDasParadas(lis) {
+    return lis.filter(li => li.dataset.situacaoStokki).map(li => ({
+      codigo: (li.querySelector(".codigo")?.textContent || "").trim(), situacao: li.dataset.situacaoStokki }));
+  }
+
+  function textoContagemSituacoes(itens) {
+    const contagem = {};
+    itens.forEach(i => { contagem[i.situacao] = (contagem[i.situacao] || 0) + 1; });
+    return Object.entries(contagem).map(([s, n]) => `${n} ${s.toLowerCase()}`).join(" · ");
+  }
+
+  function atualizarSituacaoStokkiRota(ul, lis) {
+    const el = ul.closest(".card-rota")?.querySelector(".situacao-stokki-rota");
+    if (!el) return;
+    const itens = situacaoStokkiDasParadas(lis);
+    el.textContent = itens.length ? `📦 Stokki: ${textoContagemSituacoes(itens)}` : "";
+    el.title = itens.length
+      ? `Situação na Stokki no último retrato do pipeline (só "Em espera" sai da rota no envio):\n`
+        + itens.map(i => `${i.codigo}: ${i.situacao}`).join("\n")
+      : "";
   }
 
   function renumerarRotaEl(ul, rascunhoId) {
@@ -2828,6 +3414,7 @@
     const enviada = !!ul.closest(".card-rota.enviada");
     const lis = Array.from(ul.children);
     const corRota = coresPorRascunho[rascunhoId] || "#6B7280";
+    atualizarSituacaoStokkiRota(ul, lis);
     lis.forEach((li, i) => {
       li.dataset.numero = i + 1;
       const el = li.querySelector(".numero");
@@ -2932,7 +3519,15 @@
   function criarCardRota(rascunho, cor) {
     const enviada = rascunho.status === "ENVIADO";
     const ofertada = rascunho.status === "OFERTADA";
-    const bloqueada = enviada || ofertada; // sem edição enquanto publicada, mesmo padrão de enviada
+    const bloqueada = enviada || ofertada; // ações de rascunho (otimizar, enviar, fundir...) somem nas duas
+    // rota enviada (10/11): motorista, carro, "×" e drop do pool voltam a
+    // funcionar -- só OFERTADA trava tudo. Rota iniciada só troca o carro;
+    // Lalamove com corrida lançada não se edita (o carro é o da corrida).
+    const lalamoveComCorrida = enviada && !!rascunho.lalamove_order_id;
+    const edicaoEnviada = enviada && PODE_EDITAR && !lalamoveComCorrida;
+    const travaMotorista = ofertada || !PODE_EDITAR || lalamoveComCorrida || (enviada && !!rascunho.rota_iniciada);
+    const tituloTravaMotorista = lalamoveComCorrida ? "Rota da Lalamove com corrida lançada: não dá pra editar por aqui."
+      : (enviada && rascunho.rota_iniciada ? TEXTO_TRAVA_MOTORISTA : "");
     const colapsada = rotasColapsadas.has(rascunho.id);
     const div = document.createElement("div");
     div.className = "card-rota" + (enviada ? " enviada" : "") + (ofertada ? " ofertada" : "") + (colapsada ? " colapsada" : "") + (rotaEhLalamove(rascunho) ? " lalamove" : "");
@@ -2947,16 +3542,23 @@
           <span class="nome">${escaparHtml(rascunho.nome)}</span>
           ${(bloqueada || !PODE_EDITAR) ? "" : `<button type="button" class="botao-editar-nome" data-rascunho-id="${rascunho.id}" title="Renomear rota">✎</button>`}
           ${rascunho.tipo_veiculo && TRAVAS.tipos_veiculo[rascunho.tipo_veiculo] ? `<span class="badge-trava" title="Classificada como veículo grande pelo volume/nº de endereços do lote (ver regras/tipo_veiculo.py)">${escaparHtml(TRAVAS.tipos_veiculo[rascunho.tipo_veiculo].nome)}</span>` : ""}
+          ${rascunho.selo_tarde ? `<span class="selo-tarde" title="Rota da tarde: sai da base neste horário, perto da janela tardia">${escaparHtml(rascunho.selo_tarde)}</span>` : ""}
+          <span id="sem-carro-${rascunho.id}">${seloSemCarroHtml(rascunho)}</span>
         </span>
         <button type="button" class="botao-colapsar">${colapsada ? "▸" : "▾"}</button>
       </div>
       <div class="metricas" id="metricas-${rascunho.id}">${metricasTexto(rascunho)}</div>
       <div class="capacidade" id="capacidade-${rascunho.id}">${capacidadeHtml(rascunho)}</div>
       <div id="badges-${rascunho.id}">${badgesHtml(rascunho.badges)}</div>
+      <div class="situacao-stokki-rota"></div>
       <div id="status-${rascunho.id}">${statusHtml(rascunho)}</div>
       <div id="confirmacao-${rascunho.id}">${confirmacaoMotoristaHtml(rascunho)}</div>
       <div id="oferta-${rascunho.id}">${ofertaHtml(rascunho)}</div>
-      <select data-rascunho-id="${rascunho.id}" class="select-motorista" ${(bloqueada || !PODE_EDITAR) ? "disabled" : ""}>${montarSelectMotorista(rascunho)}</select>
+      ${/* title também no contêiner: select desligado pode não mostrar o próprio */""}
+      <div class="linha-motorista-veiculo" ${tituloTravaMotorista ? `title="${escaparHtml(tituloTravaMotorista)}"` : ""}>
+        <select data-rascunho-id="${rascunho.id}" class="select-motorista" aria-label="Motorista" ${travaMotorista ? "disabled" : ""} ${tituloTravaMotorista ? `title="${escaparHtml(tituloTravaMotorista)}"` : ""}>${montarSelectMotorista(rascunho)}</select>
+        <select data-rascunho-id="${rascunho.id}" class="select-veiculo" aria-label="Carro desta rota" title="Carro desta rota (o cadastro do motorista não muda)" ${ofertada ? "disabled" : ""} ${(rotaEhLalamove(rascunho) || !PODE_EDITAR) ? "hidden" : ""}>${montarSelectVeiculo(rascunho)}</select>
+      </div>
       ${/* veículo/opcionais editáveis até a corrida existir: o lançamento
            agora é um botão separado do envio (Hugo, 30/08) */""}
       ${lalamoveBoxHtml(rascunho, PODE_EDITAR && !ofertada && !(enviada && rascunho.lalamove_order_id))}
@@ -2970,12 +3572,13 @@
         <button type="button" class="botao-descartar perigo" data-rascunho-id="${rascunho.id}">Descartar</button>`}
         ${(ofertada && PODE_EDITAR) ? `<button type="button" class="botao-despublicar-oferta perigo" data-rascunho-id="${rascunho.id}" title="Tira a rota do marketplace -- volta a ser rascunho editável (se ninguém já tiver escolhido)">Despublicar</button>` : ""}
         ${(enviada && PODE_EDITAR) ? `<button type="button" class="botao-cancelar-rota perigo" data-rascunho-id="${rascunho.id}" title="Cancela essa rota na VUUPT -- só funciona se o motorista ainda não iniciou o deslocamento; a rota volta a ser rascunho editável, pronta pra ajustar e reenviar">Cancelar rota</button>` : ""}
+        ${(enviada && PODE_EDITAR) ? `<button type="button" class="botao-cancelar-notificar perigo" data-rascunho-id="${rascunho.id}" title="Cancela a rota na VUUPT (mesma regra do Cancelar rota) e avisa o grupo Rotas canceladas do Atendimento e os embarcadores dos pedidos, pelo chat do portal">Cancelar e notificar</button>` : ""}
         ${PODE_EDITAR ? `<button type="button" class="botao-duplicar" data-rascunho-id="${rascunho.id}">Duplicar rota</button>` : ""}
         <button type="button" class="botao-imprimir" data-rascunho-id="${rascunho.id}">Imprimir rota</button>
       </div>
       ${(bloqueada || !PODE_EDITAR) ? "" : selectFundirHtml(rascunho)}`;
     const ul = div.querySelector(".lista-paradas");
-    rascunho.paradas.forEach(p => ul.appendChild(criarLiParada(p, { emRota: !bloqueada && PODE_EDITAR })));
+    rascunho.paradas.forEach(p => ul.appendChild(criarLiParada(p, { emRota: !bloqueada && PODE_EDITAR, enviada, edicaoEnviada })));
     renumerarRotaEl(ul, rascunho.id);
     return div;
   }
@@ -3063,6 +3666,7 @@
       janelaFonte: li.dataset.janelaFonte || "",
       chegadaPrevista: li.dataset.chegadaPrevista || "",
       foraJanela: li.dataset.foraJanela === "1",
+      situacaoStokki: li.dataset.situacaoStokki || "",
     };
   }
 
@@ -3085,6 +3689,7 @@
     if (d.nivel) extras.push(`nível ${d.nivel}`);
     if (d.horarioInicio && d.horarioFim) extras.push(`atende ${d.horarioInicio}–${d.horarioFim}`);
     if (textoJanelaParada(d)) extras.push(textoJanelaParada(d));
+    if (d.situacaoStokki) extras.push(`Stokki: ${d.situacaoStokki}`);
     partes.push(`<div class="extras">${escaparHtml(extras.join(" — "))}</div>`);
     return partes.join("");
   }
@@ -3102,6 +3707,7 @@
     if (d.nivel) extras.push(`nível ${d.nivel}`);
     if (d.horarioInicio && d.horarioFim) extras.push(`atende ${d.horarioInicio}–${d.horarioFim}`);
     if (textoJanelaParada(d)) extras.push(textoJanelaParada(d));
+    if (d.situacaoStokki) extras.push(`Stokki: ${d.situacaoStokki}`);
     linhas.push(extras.join(" — "));
     return linhas.join("\n");
   }
@@ -3158,6 +3764,13 @@
     });
   }
 
+  // hover/scroll não apagam o halo aberto pelo "ⓘ" da folha do mapa: no
+  // toque o navegador solta um mouseover sintético logo depois do click
+  // (que apagaria na hora) -- ele some quando o popup de detalhes fecha
+  function removerDestaqueHover() {
+    if (!destaqueDetalhesFolha) removerDestaqueMapa();
+  }
+
   function removerDestaqueMapa() {
     liDestaque = null;
     if (marcadorDestaque) { marcadorDestaque.setMap(null); marcadorDestaque = null; }
@@ -3173,7 +3786,7 @@
     if (!rascunho) return;
     const metricasEl = document.getElementById(`metricas-${rascunho.id}`);
     if (metricasEl) {
-      metricasEl.textContent = metricasTexto(rascunho);
+      metricasEl.innerHTML = metricasTexto(rascunho);  // metricasTexto devolve HTML (spans de km)
     }
     const capacidadeEl = document.getElementById(`capacidade-${rascunho.id}`);
     if (capacidadeEl) capacidadeEl.innerHTML = capacidadeHtml(rascunho);
@@ -3219,11 +3832,23 @@
     const visivel = grupoVisivelNoMapa(rascunhoId);
 
     const markers = paradas.map((p, idx) => {
+      const serviceId = Number(p.li.dataset.serviceId);
       const marker = new google.maps.Marker({
         position: { lat: p.lat, lng: p.lng }, map: visivel ? map : null,
-        icon: iconeNumerado(idx + 1, cor), title: p.codigo,
+        icon: iconeNumerado(idx + 1, SELECIONADOS_ROTA.has(serviceId) ? COR_SELECIONADO : cor), title: p.codigo,
       });
+      marker.serviceId = serviceId;
+      marker.numero = idx + 1;
       marker.addListener("click", () => {
+        // rota ainda em rascunho (celular na aba Mapa; desktop desde
+        // 16/11): clique (des)seleciona pra mover pela folha
+        // (#folha-mapa); rota enviada segue só mostrando o balão
+        const r = RASCUNHOS.find(x => x.id === rascunhoId);
+        const li = document.querySelector(`#lista-rotas .item-parada[data-service-id="${serviceId}"]`);
+        if (PODE_EDITAR && (!MODO_MOBILE || document.documentElement.dataset.aba === "mapa") && r && r.status === "RASCUNHO" && li) {
+          alternarSelecaoRota(serviceId, li);
+          return;
+        }
         infoWindow.setContent(montarInfoHtml(p.li, rascunhoId, idx + 1, paradas.length));
         infoWindow.open(map, marker);
       });
@@ -3317,6 +3942,13 @@
   // liga a exibição deles quando for útil enxergar tudo de uma vez.
   let mostrarFuturosNoMapa = localStorage.getItem("planejamento.mostrarFuturosNoMapa") === "1";
   let botaoFuturosMapa = null;
+
+  // Toggle "em separação no mapa" (Hugo, 23/10) -- esconde do MAPA os
+  // pedidos que ainda não estão prontos na Stokki (bloco "Em separação",
+  // situacao_stokki preenchida); a lista continua igual. Default desligado,
+  // igual ao "Futuros" (Hugo, 23/10).
+  let mostrarSeparacaoNoMapa = localStorage.getItem("planejamento.mostrarSeparacaoNoMapa") === "1";
+  let botaoSeparacaoMapa = null;
 
   // Toggle "rotas enviadas no mapa" -- rota já enviada à VUUPT (motorista
   // a caminho) continua aparecendo no card, mas por padrão segue no mapa
@@ -3566,8 +4198,9 @@
       // "Futuros" da barra do mapa estiver ligado, ou se já estiver
       // selecionado (seleção explícita sempre aparece, mesmo filtrada)
       const ocultoPorFuturo = li.dataset.urgencia === "futuro" && !mostrarFuturosNoMapa;
+      const ocultoPorSeparacao = !!li.dataset.situacaoStokki && !mostrarSeparacaoNoMapa;
       const mostrar = !isNaN(lat) && !isNaN(lng) &&
-        (selecionado || (mostrarPool && liVisivelNoPool(li) && !ocultoPorFuturo));
+        (selecionado || (mostrarPool && liVisivelNoPool(li) && !ocultoPorFuturo && !ocultoPorSeparacao));
       const existente = marcadoresPreview[id];
       if (!mostrar) {
         if (existente) { existente.setMap(null); delete marcadoresPreview[id]; }
@@ -3660,10 +4293,14 @@
     document.getElementById("botao-transportadora-selecao").disabled = SELECIONADOS.size === 0;
     document.getElementById("botao-dedicado-selecao").disabled = SELECIONADOS.size === 0;
     document.getElementById("botao-reagendar-selecao").disabled = SELECIONADOS.size === 0;
+    const botaoCancelarSel = document.getElementById("botao-cancelar-selecao");
+    botaoCancelarSel.disabled = SELECIONADOS.size === 0;
+    botaoCancelarSel.textContent = SELECIONADOS.size ? `Cancelar (${SELECIONADOS.size})` : "Cancelar";
     document.getElementById("botao-limpar-selecao").disabled = SELECIONADOS.size === 0;
     // celular: a barra só aparece com seleção (rodapé flutuante) e ganha
     // "Adicionar à rota…" com os rascunhos ainda editáveis
     document.body.classList.toggle("tem-selecao-pool", SELECIONADOS.size > 0);
+    atualizarFolhaMapa();
     const selectAdicionar = document.getElementById("select-adicionar-rota");
     if (selectAdicionar) {
       const opcoes = RASCUNHOS.filter(r => r.status === "RASCUNHO")
@@ -3675,7 +4312,7 @@
 
   function alternarSelecao(serviceId) {
     const li = document.querySelector(`#lista-pool .item-parada[data-service-id="${serviceId}"]`);
-    if (!li) return;
+    if (!li || li.dataset.retornando) return;  // Retornando (10/11): no carro do motorista, sem seleção
     if (SELECIONADOS.has(serviceId)) SELECIONADOS.delete(serviceId);
     else SELECIONADOS.add(serviceId);
     li.classList.toggle("selecionada", SELECIONADOS.has(serviceId));
@@ -3685,7 +4322,7 @@
 
   function selecionarVisiveis() {
     document.querySelectorAll("#lista-pool .item-parada").forEach(li => {
-      if (!liVisivelNoPool(li)) return;
+      if (!liVisivelNoPool(li) || li.dataset.retornando) return;  // Retornando não entra em rota
       SELECIONADOS.add(Number(li.dataset.serviceId));
       li.classList.add("selecionada");
     });
@@ -3712,7 +4349,7 @@
     // escopado à seção: no bloco "Pra rotear hoje" nunca pega agendamento
     // futuro, porque esses pedidos nem estão nesse bloco.
     secaoEl.querySelectorAll(".item-parada").forEach(li => {
-      if (!liVisivelNoPool(li)) return;
+      if (!liVisivelNoPool(li) || li.dataset.retornando) return;
       SELECIONADOS.add(Number(li.dataset.serviceId));
       li.classList.add("selecionada");
     });
@@ -3726,7 +4363,11 @@
     // pra essa tela é sinalizar que precisa de decisão manual antes de
     // qualquer coisa (cotação/redespacho), não quando ele "venceria".
     if (li.dataset.tipoArea) return document.getElementById("lista-pool-fora-area");
-    return document.getElementById(li.dataset.urgencia === "futuro" ? "lista-pool-futuro" : "lista-pool-hoje");
+    if (li.dataset.urgencia === "futuro") return document.getElementById("lista-pool-futuro");
+    // ainda não pronto na Stokki (Hugo, 19/10): só tira do "hoje" -- agendado
+    // pra depois continua no bloco da data, fora de área continua vencendo
+    if (li.dataset.situacaoStokki) return document.getElementById("lista-pool-separacao");
+    return document.getElementById("lista-pool-hoje");
   }
 
   function reencaixarNaSecaoCorreta(li) {
@@ -3927,14 +4568,14 @@
   // expedir_pedidos fecha o serviço na VUUPT na hora, então o refresh
   // já volta sem os expedidos). Polling barato no /agentes/etapas
   // (SQLite), 5s; para sozinho em 30 min se algo ficar pendurado.
-  async function aguardarExpedicaoEAtualizarPool() {
+  async function aguardarExpedicaoEAtualizarPool(agenteId = "somente_expedicao") {
     const inicio = Date.now();
     while (Date.now() - inicio < 30 * 60 * 1000) {
       await new Promise(r => setTimeout(r, 5000));
       try {
         const resp = await fetch(`${BASE_PATH}/api/planejamento/agentes/etapas`);
         if (!resp.ok) continue;
-        const etapa = ((await resp.json()).etapas || []).find(e => e.agente_id === "somente_expedicao");
+        const etapa = ((await resp.json()).etapas || []).find(e => e.agente_id === agenteId);
         // o POST de disparo já deixou a execução RODANDO/NA_FILA antes
         // deste polling começar -- "não ativa" aqui significa "terminou"
         if (!etapa || (!etapa.rodando && !etapa.na_fila)) break;
@@ -3948,6 +4589,8 @@
     const elHoje = document.getElementById("contagem-secao-hoje");
     const elForaArea = document.getElementById("contagem-secao-fora-area");
     const elFuturo = document.getElementById("contagem-secao-futuro");
+    const elSeparacao = document.getElementById("contagem-secao-separacao");
+    if (elSeparacao) elSeparacao.textContent = document.getElementById("lista-pool-separacao").children.length;
     if (elHoje) elHoje.textContent = document.getElementById("lista-pool-hoje").children.length;
     if (elForaArea) elForaArea.textContent = document.getElementById("lista-pool-fora-area").children.length;
     if (elFuturo) elFuturo.textContent = document.getElementById("lista-pool-futuro").children.length;
@@ -3964,6 +4607,7 @@
     secoesPoolColapsadas = {};
   }
   if (secoesPoolColapsadas.hoje === undefined) secoesPoolColapsadas.hoje = false;
+  if (secoesPoolColapsadas.separacao === undefined) secoesPoolColapsadas.separacao = false;
   if (secoesPoolColapsadas["fora-area"] === undefined) secoesPoolColapsadas["fora-area"] = false;
   if (secoesPoolColapsadas.futuro === undefined) secoesPoolColapsadas.futuro = true;
 
@@ -4037,6 +4681,16 @@
     if (botaoFuturosMapa) {
       botaoFuturosMapa.textContent = valor ? "● Futuros" : "○ Futuros";
       botaoFuturosMapa.classList.toggle("ativo", valor);
+    }
+    atualizarPreviewPool();
+  }
+
+  function definirMostrarSeparacaoNoMapa(valor) {
+    mostrarSeparacaoNoMapa = valor;
+    localStorage.setItem("planejamento.mostrarSeparacaoNoMapa", valor ? "1" : "0");
+    if (botaoSeparacaoMapa) {
+      botaoSeparacaoMapa.textContent = valor ? "● Em separação" : "○ Em separação";
+      botaoSeparacaoMapa.classList.toggle("ativo", valor);
     }
     atualizarPreviewPool();
   }
@@ -4116,12 +4770,13 @@
     const vertices = verticesPoligono.map(v => ({ lat: v.lat(), lng: v.lng() }));
     pararDesenhoPoligono();
     if (vertices.length < 3) return;  // sem área fechada -- vale como cancelamento
-    // pega só quem está visível com os filtros atuais (busca/flag/CEP)
-    // -- selecionar item escondido criaria seleção "invisível"
+    // pega só quem tem ponto no mapa agora -- filtros da lista e toggles
+    // Futuros/Em separação inclusive (Hugo, 23/10); selecionar item
+    // escondido criaria seleção "invisível"
     document.querySelectorAll("#lista-pool .item-parada").forEach(li => {
       const lat = parseFloat(li.dataset.lat), lng = parseFloat(li.dataset.lng);
-      if (isNaN(lat) || isNaN(lng) || !liVisivelNoPool(li)) return;
-      if (!dentroDoPoligono(lat, lng, vertices)) return;
+      if (isNaN(lat) || isNaN(lng) || !marcadoresPreview[Number(li.dataset.serviceId)]) return;
+      if (!dentroDoPoligono(lat, lng, vertices) || li.dataset.retornando) return;
       SELECIONADOS.add(Number(li.dataset.serviceId));
       li.classList.add("selecionada");
     });
@@ -4148,6 +4803,11 @@
     botaoFuturosMapa.title = "Mostrar/ocultar no mapa os pedidos do pool agendados pra depois da data em edição -- eles continuam na lista (badge cinza) e dá pra alocar em rota normalmente, só a exibição no mapa muda";
     botaoFuturosMapa.addEventListener("click", () => definirMostrarFuturosNoMapa(!mostrarFuturosNoMapa));
 
+    botaoSeparacaoMapa = document.createElement("button");
+    botaoSeparacaoMapa.type = "button";
+    botaoSeparacaoMapa.title = "Mostrar/ocultar no mapa os pedidos do pool que ainda estão em separação na Stokki (retrato do pipeline) -- eles continuam na lista, só a exibição no mapa muda";
+    botaoSeparacaoMapa.addEventListener("click", () => definirMostrarSeparacaoNoMapa(!mostrarSeparacaoNoMapa));
+
     botaoEnviadasMapa = document.createElement("button");
     botaoEnviadasMapa.type = "button";
     botaoEnviadasMapa.title = "Mostrar/ocultar no mapa os pontos e trajetos das rotas já ENVIADAS à VUUPT -- os cards continuam intactos, só a exibição no mapa muda";
@@ -4158,13 +4818,14 @@
     botaoPoligono.className = "controle-area";  // ação, não camada: destaque cheio quando ativo
     botaoPoligono.addEventListener("click", alternarDesenhoPoligono);
 
-    // 4 toggles de camada | ação de seleção por área (separador visual)
+    // 5 toggles de camada | ação de seleção por área (separador visual)
     const separador = document.createElement("span");
     separador.className = "separador-controle";
 
     container.appendChild(botaoPoolMapa);
     container.appendChild(botaoAlocadosMapa);
     container.appendChild(botaoFuturosMapa);
+    container.appendChild(botaoSeparacaoMapa);
     container.appendChild(botaoEnviadasMapa);
     container.appendChild(separador);
     container.appendChild(botaoPoligono);
@@ -4173,6 +4834,7 @@
     definirMostrarPoolNoMapa(mostrarPoolNoMapa);  // inicializa rótulos e, se persistido ligado, já desenha
     definirMostrarAlocadosNoMapa(mostrarAlocadosNoMapa);  // idem pro toggle dos alocados
     definirMostrarFuturosNoMapa(mostrarFuturosNoMapa);  // idem pro toggle dos agendados futuros
+    definirMostrarSeparacaoNoMapa(mostrarSeparacaoNoMapa);  // idem pro toggle dos em separação
     definirMostrarEnviadasNoMapa(mostrarEnviadasNoMapa);  // idem pro toggle das rotas enviadas
     pararDesenhoPoligono();  // inicializa o rótulo do botão de polígono
 
@@ -4186,7 +4848,8 @@
   // (vira alerta), arrastar pool→rota entre abas (vira "Adicionar à
   // rota…"). O resto da tela é o mesmo código do desktop.
   function iniciarModoMobile() {
-    if (!MODO_MOBILE) return;
+    // a folha de seleção do mapa vale também no desktop (16/11)
+    if (!MODO_MOBILE) { montarFolhaMapa(); return; }
     // coluna colapsada no desktop (persistida) esconderia o painel inteiro
     document.querySelectorAll(".coluna.colapsada").forEach(c => c.classList.remove("colapsada"));
     // contadores das abas espelham os da tela (pool muda sem reload no
@@ -4232,29 +4895,432 @@
       select.value = "";
       if (rascunhoId && SELECIONADOS.size) adicionarSelecionadosARota(rascunhoId);
     });
+    montarFolhaMapa();
   }
 
   async function adicionarSelecionadosARota(rascunhoId) {
     // mesma chamada do soltar um card do pool numa rota (onDragEnd), só
     // que pra vários de uma vez, ao fim da rota; recarrega no final
-    const ids = Array.from(document.querySelectorAll("#lista-pool .item-parada"))
-      .map(li => Number(li.dataset.serviceId)).filter(id => SELECIONADOS.has(id));
+    const ids = idsPoolSelecionados();
     const rota = RASCUNHOS.find(r => r.id === rascunhoId);
     if (!ids.length || !rota) return;
     if (!confirm(`Adicionar ${ids.length} pedido(s) ao fim da rota "${rota.nome}"?`)) return;
+    if (!confirmarDiaFixo(ids, "Adicionar à rota")) return;
     const select = document.getElementById("select-adicionar-rota");
     select.disabled = true;
     try {
-      for (const id of ids) {
-        const parada = POOL_BY_ID[id];
-        if (!parada) continue;
-        await postJSON("/api/planejamento/adicionar-parada", { rascunho_id: rascunhoId, parada, ordem: null });
-      }
+      await postarNaRota(rascunhoId, ids, []);
       location.reload();
     } catch (e) {
       alert(`Falha ao adicionar à rota: ${e.message}. Recarregue a página.`);
       select.disabled = false;
     }
+  }
+
+  // pool selecionado na ordem em que aparece no pool
+  function idsPoolSelecionados() {
+    return Array.from(document.querySelectorAll("#lista-pool .item-parada"))
+      .map(li => Number(li.dataset.serviceId)).filter(id => SELECIONADOS.has(id));
+  }
+
+  // parada de rota selecionada -> {service_id, rascunho_origem_id}, com a
+  // origem lida do DOM agora (mesmo padrão de moverSelecionados)
+  function itensRotaSelecionados() {
+    return Array.from(SELECIONADOS_ROTA).map(serviceId => {
+      const li = document.querySelector(`#lista-rotas .item-parada[data-service-id="${serviceId}"]`);
+      const ul = li && li.closest(".lista-paradas");
+      return ul ? { service_id: serviceId, rascunho_origem_id: Number(ul.dataset.listId), li } : null;
+    }).filter(Boolean);
+  }
+
+  // pool -> adicionar-parada (um por um, ao fim); paradas de outras rotas
+  // -> mover-paradas (um POST só). Quem já está na rota de destino fica.
+  async function postarNaRota(rascunhoId, idsPool, itensRota) {
+    for (const id of idsPool) {
+      const parada = POOL_BY_ID[id];
+      if (!parada) continue;
+      await postJSON("/api/planejamento/adicionar-parada", { rascunho_id: rascunhoId, parada, ordem: null });
+    }
+    const mover = itensRota.filter(i => i.rascunho_origem_id !== rascunhoId)
+      .map(({ service_id, rascunho_origem_id }) => ({ service_id, rascunho_origem_id }));
+    if (mover.length) await postJSON("/api/planejamento/mover-paradas", { itens: mover, rascunho_destino_id: rascunhoId });
+  }
+
+  // ---- Folha de seleção da aba Mapa (celular, Hugo 27/09) ----
+  // Tocar num ponto vermelho (pool) ou num número de rota em rascunho
+  // (des)seleciona; em vez das barras, sobe esta folha: chips dos pedidos
+  // escolhidos (toque tira; os que já estão em rota trazem a cor dela),
+  // rotas em rascunho com a cor do traço delas no mapa, ordenadas pela
+  // distância até a seleção, e a lotação que a rota fica depois de
+  // receber. Tocar numa rota destaca o traço dela (as outras esmaecem);
+  // o botão confirma -- pool entra no fim da rota, parada de outra rota
+  // é movida. O mapa segue livre acima pra continuar tocando em pontos.
+  let folhaRotaEscolhida = null;
+
+  function montarFolhaMapa() {
+    if (document.getElementById("folha-mapa")) return;
+    const folha = document.createElement("div");
+    folha.id = "folha-mapa";
+    folha.className = "folha-mapa";
+    folha.setAttribute("role", "region");
+    folha.setAttribute("aria-label", "Pedidos selecionados no mapa");
+    folha.innerHTML = `
+      <div class="folha-topo">
+        <div class="resumo" id="folha-resumo" aria-live="polite"></div>
+        <button type="button" id="folha-recolher" aria-expanded="true" title="Recolher/expandir">▾</button>
+        <button type="button" id="folha-limpar">Limpar</button>
+      </div>
+      <div class="folha-pedidos" id="folha-pedidos"></div>
+      <div class="folha-detalhes" id="folha-detalhes" role="region" aria-label="Detalhes do pedido">
+        <button type="button" class="fechar" id="folha-detalhes-fechar" aria-label="Fechar detalhes">×</button>
+        <div id="folha-detalhes-corpo"></div>
+      </div>
+      <div class="folha-rotulo" id="folha-rotulo">Levar pra rota · mais perto primeiro</div>
+      <div class="folha-rotas" id="folha-rotas" role="radiogroup" aria-label="Rota de destino"></div>
+      <div class="folha-acoes">
+        <button type="button" id="folha-adicionar" disabled>Escolha uma rota</button>
+        <button type="button" id="folha-tirar" title="Devolve as paradas de rota selecionadas pro pool (não cancela na VUUPT), igual ao &quot;Remover da rota&quot; do ⋯">Tirar da rota</button>
+        <button type="button" id="folha-mais" title="Abre a aba Pool (ou Rotas) com a seleção: Criar rota, Roteirizar, endereço, agendar...">Mais ações ›</button>
+      </div>`;
+    // desktop: mora no layout das colunas, presa ao canto do mapa
+    (MODO_MOBILE ? document.body : document.querySelector(".layout-planejamento")).appendChild(folha);
+    if (!MODO_MOBILE) window.addEventListener("resize", posicionarFolhaDesktop);
+    folha.querySelector("#folha-limpar").addEventListener("click", () => {
+      limparSelecao();
+      limparSelecaoRotas();
+    });
+    folha.querySelector("#folha-detalhes-fechar").addEventListener("click", fecharDetalhesNaFolha);
+    folha.querySelector("#folha-recolher").addEventListener("click", (e) => {
+      const recolhida = folha.classList.toggle("recolhida");
+      e.currentTarget.textContent = recolhida ? "▴" : "▾";
+      e.currentTarget.setAttribute("aria-expanded", String(!recolhida));
+    });
+    folha.querySelector("#folha-pedidos").addEventListener("click", (e) => {
+      const chip = e.target.closest(".chip-pedido");
+      const botao = e.target.closest("button");
+      if (!chip || !botao) return;
+      const id = Number(chip.dataset.id);
+      const li = document.querySelector(chip.dataset.origem === "pool"
+        ? `#lista-pool .item-parada[data-service-id="${id}"]`
+        : `#lista-rotas .item-parada[data-service-id="${id}"]`);
+      if (!li) return;
+      if (botao.classList.contains("ver")) {
+        if (detalhesFolhaServiceId === id) fecharDetalhesNaFolha();  // ⓘ de novo fecha
+        else verDetalhesNaFolha(li);
+        return;
+      }
+      if (chip.dataset.origem === "pool") alternarSelecao(id);
+      else alternarSelecaoRota(id, li);
+    });
+    folha.querySelector("#folha-rotas").addEventListener("click", (e) => {
+      const chip = e.target.closest(".chip-rota");
+      if (!chip) return;
+      const id = Number(chip.dataset.id);
+      escolherRotaFolha(folhaRotaEscolhida === id ? null : id);
+    });
+    folha.querySelector("#folha-adicionar").addEventListener("click", (e) => aplicarFolhaNaRota(e.currentTarget));
+    folha.querySelector("#folha-tirar").addEventListener("click", (e) => tirarDaRotaSelecionados(e.currentTarget));
+    folha.querySelector("#folha-mais").addEventListener("click", () => {
+      escolherRotaFolha(null);
+      // as ações de lote de cada seleção moram na aba dela
+      const aba = SELECIONADOS.size || !SELECIONADOS_ROTA.size ? "pool" : "rotas";
+      document.querySelector(`#abas-mobile button[data-aba="${aba}"]`)?.click();
+    });
+    atualizarFolhaMapa();
+  }
+
+  // "ⓘ" do chip: detalhes do pedido DENTRO da folha, no lugar da lista
+  // de rotas (um popup cobriria o pouco de mapa que sobra acima dela no
+  // celular) -- mesmo conteúdo do "Ver detalhes" do ⋯ (montarTooltipParada)
+  // + rota/posição/motorista quando já está numa rota (o que o balão do
+  // número mostrava). O ponto ganha o halo de destaque e o mapa centraliza
+  // nele na área livre acima da folha. Fecha no × ou abrindo outro.
+  let destaqueDetalhesFolha = false;
+  let detalhesFolhaServiceId = null;
+  function verDetalhesNaFolha(li) {
+    const folha = document.getElementById("folha-mapa");
+    if (!folha) return;
+    const serviceId = Number(li.dataset.serviceId);
+    const ul = li.closest(".lista-paradas");
+    const rascunhoId = ul && ul.dataset.listId !== "pool" ? Number(ul.dataset.listId) : null;
+    let cabecalho = `<div class="det-rota"><span class="cor-swatch" style="background:${COR_NAO_ALOCADO}"></span>No pool (sem rota)</div>`;
+    if (rascunhoId !== null) {
+      const nome = document.querySelector(`#card-rota-${rascunhoId} .titulo-rota .nome`)?.textContent || "";
+      const r = RASCUNHOS.find(x => x.id === rascunhoId);
+      cabecalho = `<div class="det-rota"><span class="cor-swatch" style="background:${coresPorRascunho[rascunhoId] || "#6B7280"}"></span>
+        ${escaparHtml(rotuloCurtoRota(nome))} · parada ${Array.from(ul.children).indexOf(li) + 1} de ${ul.children.length}
+        <span class="det-motorista">· ${escaparHtml(motoristaDaRota(r))}</span></div>`;
+    }
+    folha.querySelector("#folha-detalhes-corpo").innerHTML = cabecalho + montarTooltipParada(li);
+    folha.classList.add("mostrando-detalhes");
+    folha.classList.remove("recolhida");
+    detalhesFolhaServiceId = serviceId;
+    destaqueDetalhesFolha = true;
+    destacarNoMapa(li);
+    centrarNaAreaLivreDoMapa(li);
+  }
+
+  function fecharDetalhesNaFolha() {
+    const folha = document.getElementById("folha-mapa");
+    if (folha) folha.classList.remove("mostrando-detalhes");
+    detalhesFolhaServiceId = null;
+    if (destaqueDetalhesFolha) { destaqueDetalhesFolha = false; removerDestaqueMapa(); }
+  }
+
+  // centro do mapa fica atrás da folha: panTo põe o ponto no centro e o
+  // panBy sobe ele pro meio do pedaço de mapa visível acima da folha
+  function centrarNaAreaLivreDoMapa(li) {
+    const lat = parseFloat(li.dataset.lat), lng = parseFloat(li.dataset.lng);
+    const folha = document.getElementById("folha-mapa");
+    const mapaEl = document.getElementById("map");
+    if (!map || isNaN(lat) || isNaN(lng) || !folha || !mapaEl) return;
+    map.panTo({ lat, lng });
+    if (!MODO_MOBILE) return;  // no desktop a folha cobre só um canto do mapa
+    const r = mapaEl.getBoundingClientRect();
+    const livreCentro = (r.top + Math.min(folha.getBoundingClientRect().top, r.bottom)) / 2;
+    const deslocamento = Math.round((r.top + r.bottom) / 2 - livreCentro);
+    if (deslocamento > 0) map.panBy(0, deslocamento);
+  }
+
+  async function aplicarFolhaNaRota(botao) {
+    const destinoId = folhaRotaEscolhida;
+    if (!destinoId) return;
+    const idsPool = idsPoolSelecionados();
+    const itensRota = itensRotaSelecionados();
+    // a folha já é a confirmação (rota colorida escolhida + botão); só o
+    // aviso de dia fixo continua, igual a Criar rota/Roteirizar
+    if (idsPool.length && !confirmarDiaFixo(idsPool, "Adicionar à rota")) return;
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Salvando...";
+    try {
+      await postarNaRota(destinoId, idsPool, itensRota);
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao levar pra rota: ${e.message}. Recarregue a página.`);
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+
+  // "Tirar da rota" da folha: cada parada de rota selecionada volta pro
+  // pool pelo mesmo endpoint do "Remover da rota" do ⋯ (não há lote no
+  // backend -- um POST por parada; falha no meio deixa parte já no pool,
+  // o reload/aviso mostra o estado real). Pedidos do pool na seleção
+  // ficam como estão.
+  async function tirarDaRotaSelecionados(botao) {
+    const itens = itensRotaSelecionados();
+    if (!itens.length) return;
+    if (!confirm(`Tirar ${itens.length} pedido(s) da rota e devolver pro pool?\n\nSe voltarem pra uma rota, entram no fim dela.`)) return;
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Tirando...";
+    try {
+      for (const i of itens) {
+        await postJSON("/api/planejamento/remover-parada", { rascunho_id: i.rascunho_origem_id, service_id: i.service_id });
+      }
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao tirar da rota: ${e.message}. Recarregue a página.`);
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+  }
+
+  function distanciaKm(a, b) {
+    const rad = Math.PI / 180;
+    const dLat = (b.lat - a.lat) * rad, dLng = (b.lng - a.lng) * rad;
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+    return 12742 * Math.asin(Math.sqrt(h));
+  }
+
+  function pontosDoLi(lis) {
+    return lis.map(li => ({ lat: parseFloat(li.dataset.lat), lng: parseFloat(li.dataset.lng) }))
+      .filter(p => !isNaN(p.lat) && !isNaN(p.lng));
+  }
+
+  // quantos entram de fato na rota (quem já está nela não conta)
+  function selecaoParaRota(rascunhoId, lisPool, itensRota) {
+    const lis = lisPool.concat(itensRota.filter(i => i.rascunho_origem_id !== rascunhoId).map(i => i.li));
+    return { n: lis.length, caixas: lis.reduce((s, li) => s + Number(li.dataset.caixas || 1), 0) };
+  }
+
+  // desktop (16/11): a folha fica no canto de baixo, à direita, do mapa
+  function posicionarFolhaDesktop() {
+    const folha = document.getElementById("folha-mapa");
+    const mapaEl = document.getElementById("map");
+    if (MODO_MOBILE || !folha || !mapaEl) return;
+    const largura = Math.min(400, mapaEl.offsetWidth - 24);
+    folha.style.width = `${largura}px`;
+    folha.style.left = `${mapaEl.offsetLeft + mapaEl.offsetWidth - 12 - largura}px`;
+    folha.style.top = `${mapaEl.offsetTop + mapaEl.offsetHeight - 24}px`;
+  }
+
+  function atualizarFolhaMapa() {
+    const folha = document.getElementById("folha-mapa");
+    if (!folha) return;
+    const total = SELECIONADOS.size + SELECIONADOS_ROTA.size;
+    document.body.classList.toggle("tem-selecao-mapa", total > 0);
+    posicionarFolhaDesktop();
+    if (detalhesFolhaServiceId !== null && !SELECIONADOS.has(detalhesFolhaServiceId) && !SELECIONADOS_ROTA.has(detalhesFolhaServiceId)) {
+      fecharDetalhesNaFolha();
+    }
+    if (!total) {
+      escolherRotaFolha(null);
+      return;
+    }
+    const lisPool = Array.from(document.querySelectorAll("#lista-pool .item-parada"))
+      .filter(li => SELECIONADOS.has(Number(li.dataset.serviceId)));
+    const itensRota = itensRotaSelecionados();
+    const todosLis = lisPool.concat(itensRota.map(i => i.li));
+    const caixasSel = todosLis.reduce((s, li) => s + Number(li.dataset.caixas || 1), 0);
+    const n = todosLis.length;
+    folha.querySelector("#folha-resumo").innerHTML =
+      `${n} pedido${n === 1 ? "" : "s"} <small>· ${caixasSel} cx · ${MODO_MOBILE ? "toque" : "clique"} no mapa pra somar mais</small>`;
+    const chip = (id, codigo, cor, origem) =>
+      `<span class="chip-pedido" data-id="${id}" data-origem="${origem}" style="--cor-origem:${cor}">
+        <button type="button" class="ver" aria-label="Ver detalhes de ${escaparHtml(codigo)}">${escaparHtml(codigo)}<span class="i" aria-hidden="true">ⓘ</span></button>
+        <button type="button" class="x" aria-label="Tirar ${escaparHtml(codigo)} da seleção">×</button>
+      </span>`;
+    folha.querySelector("#folha-pedidos").innerHTML =
+      lisPool.map(li => {
+        const id = Number(li.dataset.serviceId);
+        return chip(id, POOL_BY_ID[id]?.codigo || li.querySelector(".codigo")?.textContent || id, COR_SELECIONADO, "pool");
+      }).join("") +
+      itensRota.map(i => chip(i.service_id, i.li.querySelector(".codigo")?.textContent || i.service_id,
+        coresPorRascunho[i.rascunho_origem_id] || "#6B7280", "rota")).join("");
+
+    // leitura não edita: sem lista de rotas nem botão
+    const rotasEl = folha.querySelector("#folha-rotas");
+    folha.querySelector("#folha-rotulo").style.display = PODE_EDITAR ? "" : "none";
+    rotasEl.style.display = PODE_EDITAR ? "" : "none";
+    folha.querySelector("#folha-adicionar").style.display = PODE_EDITAR ? "" : "none";
+    const tirar = folha.querySelector("#folha-tirar");
+    tirar.style.display = PODE_EDITAR && itensRota.length ? "" : "none";
+    folha.classList.toggle("com-tirar", PODE_EDITAR && itensRota.length > 0);
+    tirar.textContent = `Tirar ${itensRota.length} da rota`;
+    if (!PODE_EDITAR) return;
+
+    const pontosSel = pontosDoLi(todosLis);
+    const rotas = RASCUNHOS.filter(r => r.status === "RASCUNHO").map(r => {
+      const lis = Array.from(document.querySelectorAll(`#lista-parada-${r.id} .item-parada`));
+      // distância até as paradas da rota que NÃO estão selecionadas (a
+      // parada selecionada daria 0 km pra própria rota)
+      const pontos = pontosDoLi(lis.filter(li => !SELECIONADOS_ROTA.has(Number(li.dataset.serviceId))));
+      let km = Infinity;
+      pontosSel.forEach(a => pontos.forEach(b => { km = Math.min(km, distanciaKm(a, b)); }));
+      const entra = selecaoParaRota(r.id, lisPool, itensRota);
+      const caixas = lis.reduce((s, li) => s + Number(li.dataset.caixas || 1), 0) + entra.caixas;
+      const paradas = lis.length + entra.n;
+      const nome = document.querySelector(`#card-rota-${r.id} .titulo-rota .nome`)?.textContent || r.nome;
+      const origem = itensRota.some(i => i.rascunho_origem_id === r.id);
+      return { r, km, caixas, paradas, nome, origem };
+    }).sort((a, b) => a.km - b.km);
+
+    if (folhaRotaEscolhida && !rotas.some(x => x.r.id === folhaRotaEscolhida)) folhaRotaEscolhida = null;
+    if (!rotas.length) {
+      rotasEl.innerHTML = `<div class="folha-vazio">Nenhuma rota em rascunho. Use "Mais ações" → Criar rota.</div>`;
+    } else {
+      rotasEl.innerHTML = rotas.map(({ r, km, caixas, paradas, nome, origem }) => {
+        const cor = coresPorRascunho[r.id] || "#6B7280";
+        // mesma régua do capacidadeHtml: veículo grande conta só caixas
+        // contra o teto do tipo; rota comum, caixas e paradas
+        const infoVeiculo = r.tipo_veiculo && TRAVAS.tipos_veiculo[r.tipo_veiculo];
+        const maxCx = infoVeiculo ? infoVeiculo.volume_maximo_cx
+          : (r.recebeu_rota_fraca ? TRAVAS.max_caixas_receptora : TRAVAS.max_caixas);
+        const fmt = (v, max, rot) => {
+          const txt = max ? `${v}/${max} ${rot}` : `${v} ${rot}`;
+          return max && v > max ? `<span class="estoura">⚠ ${txt}</span>` : txt;
+        };
+        const partes = [];
+        if (origem) partes.push("origem");
+        if (isFinite(km)) partes.push(`${km < 10 ? km.toFixed(1).replace(".", ",") : Math.round(km)} km`);
+        if (!infoVeiculo) partes.push(fmt(paradas, TRAVAS.max_paradas, "par"));
+        partes.push(fmt(caixas, maxCx, "cx"));
+        const escolhida = r.id === folhaRotaEscolhida;
+        return `<button type="button" class="chip-rota${escolhida ? " escolhida" : ""}" data-id="${r.id}"
+            role="radio" aria-checked="${escolhida}" style="--cor:${cor}">
+          <span class="textos"><span class="nome">${escaparHtml(rotuloCurtoRota(nome))}</span>
+          <span class="info">${partes.map(t => `<span>${t}</span>`).join(" · ")}</span></span>
+        </button>`;
+      }).join("");
+    }
+    atualizarBotaoAdicionarFolha();
+    // seleção mudou com rota escolhida: repinta o destaque (a parada
+    // recém-selecionada de outra rota não pode ficar esmaecida)
+    if (folhaRotaEscolhida) destacarRotaFolha(folhaRotaEscolhida, true);
+  }
+
+  function atualizarBotaoAdicionarFolha() {
+    const botao = document.getElementById("folha-adicionar");
+    if (!botao) return;
+    const rota = folhaRotaEscolhida && RASCUNHOS.find(r => r.id === folhaRotaEscolhida);
+    if (!rota) {
+      botao.disabled = true;
+      botao.textContent = "Escolha uma rota";
+      botao.style.removeProperty("--cor-escolhida");
+      return;
+    }
+    const nome = rotuloCurtoRota(document.querySelector(`#card-rota-${rota.id} .titulo-rota .nome`)?.textContent || rota.nome);
+    const nPool = SELECIONADOS.size;
+    const nMover = itensRotaSelecionados().filter(i => i.rascunho_origem_id !== rota.id).length;
+    botao.disabled = nPool + nMover === 0;
+    botao.textContent = nPool + nMover === 0 ? `Já estão na ${nome}`
+      : nMover === 0 ? `Adicionar ${nPool} à ${nome}`
+      : `Mover ${nPool + nMover} pra ${nome}`;
+    botao.style.setProperty("--cor-escolhida", coresPorRascunho[rota.id] || "#6B7280");
+  }
+
+  function escolherRotaFolha(id) {
+    folhaRotaEscolhida = id;
+    document.querySelectorAll("#folha-rotas .chip-rota").forEach(chip => {
+      const escolhida = Number(chip.dataset.id) === id;
+      chip.classList.toggle("escolhida", escolhida);
+      chip.setAttribute("aria-checked", String(escolhida));
+    });
+    destacarRotaFolha(id);
+    atualizarBotaoAdicionarFolha();
+  }
+
+  // destaca a rota escolhida no mapa: ela aparece (mesmo com "Alocados"
+  // desligado) com traço mais grosso; as outras esmaecem, menos as
+  // paradas selecionadas (verdes). id=null volta tudo ao que os toggles
+  // do mapa mandam.
+  let rotaDestacadaFolha = null;
+  function destacarRotaFolha(id, forcar = false) {
+    if ((id === rotaDestacadaFolha && !forcar) || !map) return;
+    rotaDestacadaFolha = id;
+    Object.keys(gruposMapa).forEach(chave => {
+      const g = gruposMapa[chave];
+      const rid = Number(chave);
+      const alvo = id !== null && rid === id;
+      const apagada = id !== null && !alvo;
+      const visivel = alvo || grupoVisivelNoMapa(rid);
+      g.markers.forEach(m => {
+        m.setMap(visivel ? map : null);
+        m.setOpacity(apagada && !SELECIONADOS_ROTA.has(m.serviceId) ? 0.3 : 1);
+      });
+      if (!g.renderer) return;
+      g.renderer.setMap(visivel ? map : null);
+      const direcoes = g.renderer.getDirections();
+      g.renderer.setOptions({
+        preserveViewport: true,
+        // sem strokeOpacity fora do esmaecido: volta ao padrão do Google, igual ao redesenharRota
+        polylineOptions: { strokeColor: coresPorRascunho[rid] || "#6B7280", strokeWeight: alvo ? 7 : 4, ...(apagada ? { strokeOpacity: 0.2 } : {}) },
+      });
+      if (direcoes) g.renderer.setDirections(direcoes);  // setOptions sozinho não redesenha a linha
+    });
+  }
+
+  // ponto numerado da rota fica verde quando a parada está selecionada
+  // (mesmo verde do chip do card, ver renumerarRotaEl)
+  function pintarMarcadoresRota(rascunhoId) {
+    const g = gruposMapa[rascunhoId];
+    if (!g) return;
+    const cor = coresPorRascunho[rascunhoId] || "#6B7280";
+    g.markers.forEach(m => {
+      if (m.numero) m.setIcon(iconeNumerado(m.numero, SELECIONADOS_ROTA.has(m.serviceId) ? COR_SELECIONADO : cor));
+    });
   }
 
   function confirmarDiaFixo(ids, acao) {
@@ -4327,20 +5393,70 @@
     if (!ids.length) return;
     botao.disabled = true;
     botao.textContent = "Roteirizando...";
+    const pararCarregando = mostrarCarregandoRoteirizacao(ids.length);
     try {
       const resp = await postJSON("/api/planejamento/roteirizar-selecionados",
         { data_alvo: DATA_ALVO_ISO, service_ids: ids, modelo_forcado: modeloForcado || null,
           max_paradas_por_rota: maxParadasPorRota });
-      if (resp.pedidos_indisponiveis) {
-        alert(`${resp.rotas_criadas} rota(s) criada(s) com ${resp.pedidos_roteirizados} pedido(s). ` +
-          `${resp.pedidos_indisponiveis} pedido(s) ficaram de fora (já em rascunho ou não estão ` +
-          `mais disponíveis na VUUPT).`);
+      if (resp.pedidos_indisponiveis || resp.pedidos_pausados) {
+        let msg = `${resp.rotas_criadas} rota(s) criada(s) com ${resp.pedidos_roteirizados} pedido(s).`;
+        if (resp.pedidos_indisponiveis) msg += ` ${resp.pedidos_indisponiveis} pedido(s) ficaram de fora (já em rascunho ou não estão mais disponíveis na VUUPT).`;
+        if (resp.pedidos_pausados) msg += ` ${resp.pedidos_pausados} pedido(s) em espera a pedido do cliente ficaram de fora.`;
+        alert(msg);
       }
+      // depois do reload: abre direto nas rotas em rascunho (aba Rotas no
+      // celular) e destaca as novas -- as que não estão na lista de agora
+      try {
+        sessionStorage.setItem(CHAVE_POS_ROTEIRIZAR, JSON.stringify(RASCUNHOS.map(r => r.id)));
+        sessionStorage.setItem("planejamento.abaMobile", "rotas");
+        localStorage.setItem("planejamento.abaRotas", "rascunhos");
+      } catch (e) { /* storage bloqueado: recarrega sem o destaque */ }
+      document.getElementById("carregando-roteirizacao-titulo").textContent =
+        `${resp.rotas_criadas} rota(s) criada(s)`;
+      document.getElementById("carregando-roteirizacao-texto").textContent = "Carregando as rotas na tela...";
       location.reload();
     } catch (e) {
+      pararCarregando();
       alert(`Falha ao roteirizar: ${e.message}`);
       atualizarBarraSelecao();
     }
+  }
+
+  const CHAVE_POS_ROTEIRIZAR = "planejamento.posRoteirizar";
+
+  // Abre a camada "Roteirizando N pedidos" com contador de segundos;
+  // devolve a função que fecha (só usada no erro -- no sucesso a camada
+  // fica até o reload trocar a página).
+  function mostrarCarregandoRoteirizacao(qtdPedidos) {
+    const camada = document.getElementById("carregando-roteirizacao");
+    const tempo = document.getElementById("carregando-roteirizacao-tempo");
+    document.getElementById("carregando-roteirizacao-titulo").textContent = `Roteirizando ${qtdPedidos} pedido(s)...`;
+    document.getElementById("carregando-roteirizacao-texto").textContent =
+      "Agrupando por região, otimizando a sequência e sugerindo motorista. Pode levar até um minuto.";
+    const inicio = Date.now();
+    tempo.textContent = "0 s";
+    const relogio = setInterval(() => { tempo.textContent = `${Math.round((Date.now() - inicio) / 1000)} s`; }, 1000);
+    camada.classList.add("aberto");
+    return () => { clearInterval(relogio); camada.classList.remove("aberto"); };
+  }
+
+  // Depois do reload do Roteirizar: rola até a primeira rota nova e pisca
+  // as criadas agora (ids que não existiam antes do clique).
+  function destacarRotasRecemRoteirizadas() {
+    let anteriores = null;
+    try {
+      anteriores = JSON.parse(sessionStorage.getItem(CHAVE_POS_ROTEIRIZAR) || "null");
+      sessionStorage.removeItem(CHAVE_POS_ROTEIRIZAR);
+    } catch (e) { return; }
+    if (!Array.isArray(anteriores)) return;
+    const jaExistiam = new Set(anteriores);
+    const cards = RASCUNHOS.filter(r => !jaExistiam.has(r.id))
+      .map(r => document.getElementById(`card-rota-${r.id}`))
+      .filter(Boolean);
+    if (!cards.length) return;
+    cards.forEach(card => card.classList.add("recem-roteirizada"));
+    cards[0].scrollIntoView({ block: "start", behavior: "smooth" });
+    setTimeout(() => cards.forEach(card => card.classList.remove("recem-roteirizada")), 4000);
   }
 
   async function incrementarSelecionados(botao) {
@@ -4397,7 +5513,9 @@
         return;
       }
 
-      if (fromId === "pool") {
+      if (fromId === "pool" && rascunhoEnviado(Number(toId))) {
+        await adicionarEmRotaEnviada(Number(toId), serviceId, evt.item);
+      } else if (fromId === "pool") {
         const parada = POOL_BY_ID[serviceId];
         const resp = await postJSON("/api/planejamento/adicionar-parada", { rascunho_id: Number(toId), parada, ordem: evt.newIndex });
         delete POOL_BY_ID[serviceId];
@@ -4438,14 +5556,21 @@
   // levantada quando ele chega.
   let dragRecente = false;
 
-  function iniciarSortable(ul) {
+  function iniciarSortable(ul, { soRecebe = false } = {}) {
     if (!PODE_EDITAR) return;  // leitura: sem arrastar-e-soltar
     new Sortable(ul, {
-      group: "paradas", animation: 150,
+      // rota já enviada (10/11): só recebe pedido do pool -- a parada dela
+      // não sai arrastando (tirar pede motivo) nem muda de ordem por aqui
+      group: soRecebe
+        ? { name: "paradas", pull: false, put: (_para, de) => de.el.dataset.listId === "pool" }
+        : "paradas",
+      animation: 150,
+      sort: !soRecebe,
       // clicar no campo de posição (modo "digitando a posição") ou no
       // "x" de cancelar não pode iniciar um drag -- preventOnFilter:false
-      // deixa o clique neles funcionar normalmente
-      filter: "input, .botao-cancelar-pedido, .botao-menu-parada", preventOnFilter: false,
+      // deixa o clique neles funcionar normalmente. Pedido Retornando
+      // (10/11) não arrasta; na rota enviada nenhuma parada arrasta.
+      filter: soRecebe ? ".item-parada" : "input, .botao-cancelar-pedido, .botao-menu-parada, .retornando", preventOnFilter: false,
       // touch: segurar 250ms pra começar a arrastar (senão não dá pra
       // rolar a lista); no mouse continua imediato
       delay: 250, delayOnTouchOnly: true, touchStartThreshold: 5,
@@ -4522,12 +5647,15 @@
     const valorAtual = select.value;
     const opcoes = RASCUNHOS.filter(r => r.status === "RASCUNHO")
       .map(r => `<option value="${r.id}">${escaparHtml(r.nome)}</option>`).join("");
-    select.innerHTML = `<option value="">Mover pra...</option>${opcoes}`;
+    // "nova" (Hugo, 06/10): cria um rascunho vazio na hora e move pra ele
+    select.innerHTML = `<option value="">Mover pra...</option>${opcoes}<option value="nova">+ Nova rota</option>`;
     if (valorAtual) select.value = valorAtual;
     document.getElementById("botao-mover-selecionados").disabled = SELECIONADOS_ROTA.size === 0 || !select.value;
     document.getElementById("botao-editar-endereco-selecao-rotas").disabled = SELECIONADOS_ROTA.size === 0;
     document.getElementById("botao-transportadora-selecao-rotas").disabled = SELECIONADOS_ROTA.size === 0;
     document.getElementById("botao-reagendar-selecao-rotas").disabled = SELECIONADOS_ROTA.size === 0;
+    document.getElementById("botao-entregue-selecao-rotas").disabled = itensEntregaveisSelecionados().length === 0;
+    atualizarFolhaMapa();
   }
 
   // clique no card inteiro (des)seleciona, igual ao pool (alternarSelecao)
@@ -4541,6 +5669,8 @@
     const check = li.querySelector(".check-parada");
     if (check) check.checked = selecionado;
     renumerarRotaDoLi(li);  // repinta o chip (verde = selecionado)
+    const ul = li.closest(".lista-paradas");
+    if (ul) pintarMarcadoresRota(Number(ul.dataset.listId));
     atualizarBarraSelecaoRotas();
   }
 
@@ -4561,13 +5691,18 @@
       const ul = li.closest(".lista-paradas");
       if (ul) rotasTocadas.add(ul);
     });
-    rotasTocadas.forEach(ul => renumerarRotaEl(ul, Number(ul.dataset.listId)));
+    rotasTocadas.forEach(ul => {
+      renumerarRotaEl(ul, Number(ul.dataset.listId));
+      pintarMarcadoresRota(Number(ul.dataset.listId));
+    });
     atualizarBarraSelecaoRotas();
   }
 
   async function moverSelecionados(botao) {
-    const destinoId = Number(document.getElementById("select-destino-mover").value);
-    if (!destinoId || !SELECIONADOS_ROTA.size) return;
+    const valorDestino = document.getElementById("select-destino-mover").value;
+    const criarNova = valorDestino === "nova";
+    let destinoId = criarNova ? null : Number(valorDestino);
+    if ((!destinoId && !criarNova) || !SELECIONADOS_ROTA.size) return;
     // origem de cada item lida do DOM agora, não de um estado guardado
     // na hora do clique no checkbox -- ver comentário de SELECIONADOS_ROTA
     const itens = Array.from(SELECIONADOS_ROTA).map(serviceId => {
@@ -4578,8 +5713,15 @@
     if (!itens.length) return;
     const original = botao.textContent;
     botao.disabled = true;
-    botao.textContent = "Movendo...";
+    botao.textContent = criarNova ? "Criando rota..." : "Movendo...";
     try {
+      if (criarNova) {
+        // mesmo rascunho vazio do "+ Nova rota" da coluna; se o mover
+        // abaixo falhar, ele fica na tela (descartar pelo card)
+        const resp = await postJSON("/api/planejamento/nova-rota", { data_alvo: DATA_ALVO_ISO });
+        destinoId = resp.rascunho.id;
+        botao.textContent = "Movendo...";
+      }
       await postJSON("/api/planejamento/mover-paradas", { itens, rascunho_destino_id: destinoId });
       location.reload();
     } catch (e) {
@@ -4716,7 +5858,11 @@
         const select = document.querySelector(`.select-motorista[data-rascunho-id="${a.rascunho_id}"]`);
         if (select) select.value = String(a.agent_id);
         const r = RASCUNHOS.find(x => x.id === a.rascunho_id);
-        if (r) { r.agent_id = a.agent_id; r.vehicle_id = a.vehicle_id; r.motorista_nome = a.motorista_nome; }
+        if (r) {
+          r.agent_id = a.agent_id; r.vehicle_id = a.vehicle_id; r.motorista_nome = a.motorista_nome;
+          r.falta_carro = rascunhoSemCarro(r);
+          atualizarCarroNoCard(r);
+        }
       });
       const linhas = [];
       if (resp.alocados && resp.alocados.length) {
@@ -4752,7 +5898,7 @@
         const select = document.querySelector(`.select-motorista[data-rascunho-id="${d.rascunho_id}"]`);
         if (select) select.value = "";
         const r = RASCUNHOS.find(x => x.id === d.rascunho_id);
-        if (r) { r.agent_id = null; r.vehicle_id = null; r.motorista_nome = null; }
+        if (r) { r.agent_id = null; r.vehicle_id = null; r.motorista_nome = null; r.falta_carro = false; atualizarCarroNoCard(r); }
       });
       const linhas = [];
       if (resp.desalocados && resp.desalocados.length) {
@@ -4990,14 +6136,22 @@
 
   function aplicarResultadoEnvio(resultado) {
     const statusEl = document.getElementById(`status-${resultado.rascunho_id}`);
+    // Pedido em espera na Stokki sai da rota antes do envio e volta pro pool (plano 1.2 do sistema novo;
+    // desde 09/11 separação/conferência vão na rota); a tela SEMPRE diz quem saiu, inclusive quando a VUUPT falha depois
+    // (revisão 25/10 -- mesma lição do 19/08: pedido nunca some sem aviso).
+    const naoProntos = resultado.codigos_nao_prontos || [];
+    const avisoNaoProntos = naoProntos.length
+      ? ` -- ${naoProntos.length} pedido(s) em espera na Stokki (retrato de ${resultado.retrato_stokki_em || "?"}) voltaram pro pool, NÃO foram enviados: ${naoProntos.join(", ")}`
+      : "";
     if (resultado.ok) {
       let msg = `Enviada à VUUPT (rota #${resultado.vuupt_route_id})`;
       if (resultado.codigos_removidos && resultado.codigos_removidos.length) {
         msg += ` -- ${resultado.codigos_removidos.length} pedido(s) já estavam em outra rota e voltaram pro pool: ${resultado.codigos_removidos.join(", ")}`;
       }
+      msg += avisoNaoProntos;
       if (statusEl) statusEl.innerHTML = `<div class="status-envio ok">${escaparHtml(msg)}</div>`;
     } else if (statusEl) {
-      statusEl.innerHTML = `<div class="status-envio erro">Falha no envio: ${escaparHtml(resultado.erro)}</div>`;
+      statusEl.innerHTML = `<div class="status-envio erro">Falha no envio: ${escaparHtml(resultado.erro + avisoNaoProntos)}</div>`;
     }
   }
 
@@ -5013,11 +6167,18 @@
     const comBadge = alvo.filter(r => (r.badges || []).length > 0);
     const isoladas = alvo.filter(r => (r.badges || []).some(b => b.startsWith("rota isolada")));
     const kmTotal = alvo.reduce((soma, r) => soma + (r.km_estimado || 0), 0);
+    // situação na Stokki pelos cards (Hugo, 09/11): em espera sai da rota no envio, o resto vai
+    const situacoes = alvo.flatMap(r => situacaoStokkiDasParadas(
+      Array.from(document.getElementById(`lista-parada-${r.id}`)?.children || [])));
+    const emEspera = situacoes.filter(i => i.situacao === "Em espera");
+    const noGalpao = situacoes.filter(i => i.situacao !== "Em espera");
     let html = `
       <div class="resumo-linha"><span>Rota(s) a enviar</span><span>${alvo.length}</span></div>
       <div class="resumo-linha${comBadge.length ? " alerta" : ""}"><span>Com aviso ativo (badge)</span><span>${comBadge.length}</span></div>
       <div class="resumo-linha${isoladas.length ? " alerta" : ""}"><span>Rota(s) isolada(s) (&le;2 paradas)</span><span>${isoladas.length}</span></div>
-      <div class="resumo-linha"><span>Km total do lote (estimado)</span><span>${kmTotal.toFixed(1)} km</span></div>`;
+      <div class="resumo-linha"><span>Km total do lote (estimado)</span><span>${kmTotal.toFixed(1)} km</span></div>
+      <div class="resumo-linha" title="${escaparHtml(noGalpao.map(i => `${i.codigo}: ${i.situacao}`).join("\n"))}"><span>Ainda no galpão (aberto/separação/conferência) -- vão na rota</span><span>${noGalpao.length}${noGalpao.length ? ` (${escaparHtml(textoContagemSituacoes(noGalpao))})` : ""}</span></div>
+      <div class="resumo-linha${emEspera.length ? " alerta" : ""}" title="${escaparHtml(emEspera.map(i => i.codigo).join("\n"))}"><span>Em espera na Stokki -- saem da rota no envio</span><span>${emEspera.length}</span></div>`;
     if (comBadge.length) {
       html += `<ul class="lista-rotas-alerta">${comBadge.map(r => `<li>${escaparHtml(r.nome)}: ${r.badges.map(escaparHtml).join("; ")}</li>`).join("")}</ul>`;
     }
@@ -5063,6 +6224,21 @@
           return `• ${nome}: ${r.codigos_removidos.join(", ")}`;
         });
         alert(`Atenção: a VUUPT recusou ${comRemovidos.reduce((n, r) => n + r.codigos_removidos.length, 0)} pedido(s) por já constar(em) em outra rota (dado desatualizado) -- voltaram pro pool, NÃO foram enviados:\n${linhas.join("\n")}`);
+      }
+      // idem pros pedidos em espera na Stokki (plano 1.2): saem da rota antes do envio, ok ou não
+      const comNaoProntos = resp.resultados.filter(r => r.codigos_nao_prontos && r.codigos_nao_prontos.length);
+      if (comNaoProntos.length) {
+        const linhas = comNaoProntos.map(r => {
+          const nome = (RASCUNHOS.find(x => x.id === r.rascunho_id) || {}).nome || `rota ${r.rascunho_id}`;
+          return `• ${nome}: ${r.codigos_nao_prontos.join(", ")}`;
+        });
+        const retrato = (comNaoProntos.find(r => r.retrato_stokki_em) || {}).retrato_stokki_em || "?";
+        alert(`Atenção: ${comNaoProntos.reduce((n, r) => n + r.codigos_nao_prontos.length, 0)} pedido(s) em espera na Stokki (retrato de ${retrato}) voltaram pro pool, NÃO foram enviados:\n${linhas.join("\n")}`);
+      }
+      // trava de carro desligada (planejamento.trava_sem_carro): rota saiu sem carro, só avisa
+      const semCarro = resp.resultados.filter(r => r.ok && r.aviso);
+      if (semCarro.length) {
+        alert(`Atenção: ${semCarro.length} rota(s) enviada(s) sem carro:\n${semCarro.map(r => `• ${r.aviso}`).join("\n")}`);
       }
       // recarrega pra travar as rotas enviadas (some seus botões/drag) e refletir o pool atualizado
       location.reload();
@@ -5156,6 +6332,29 @@
     }
   }
 
+  // "Cancelar e notificar" (Hugo, 27/10): mesmo cancelamento do botão
+  // acima + aviso no grupo Rotas canceladas e no chat de cada embarcador.
+  async function cancelarENotificar(rascunhoId, botaoOrigem) {
+    const motivo = (prompt("Motivo do cancelamento (vai para o grupo Rotas canceladas e para os embarcadores dos pedidos):\nEx.: motorista não conseguiu realizar a coleta") || "").trim();
+    if (!motivo) return;
+    const textoOriginal = botaoOrigem.textContent;
+    botaoOrigem.disabled = true; botaoOrigem.textContent = "Cancelando...";
+    try {
+      const resp = await postJSON("/api/planejamento/cancelar-e-notificar", { rascunho_id: rascunhoId, motivo });
+      if (!resp.ok) {
+        alert(`A rota não foi cancelada e ninguém foi avisado:\n${resp.erro}`);
+        botaoOrigem.disabled = false; botaoOrigem.textContent = textoOriginal;
+        return;
+      }
+      const linhas = resp.aviso.embarcadores.map(e => `• ${e.nome} (${e.codigos.length}): ${e.aviso}`);
+      alert(`Rota cancelada.\n${resp.aviso.grupo ? "Aviso postado no grupo Rotas canceladas." : "FALHOU o aviso no grupo Rotas canceladas -- avise o Atendimento."}\n\nEmbarcadores:\n${linhas.join("\n") || "(rota sem pedidos)"}`);
+      location.reload();
+    } catch (e) {
+      alert(`Falha ao cancelar: ${e.message}`);
+      botaoOrigem.disabled = false; botaoOrigem.textContent = textoOriginal;
+    }
+  }
+
   async function cancelarPedido(serviceId, rascunhoId, botaoOrigem) {
     // rascunhoId é null pro pool; pra parada em rota (rascunho ainda
     // não enviado OU rota já enviada -- ver planejamento_rotas.
@@ -5172,6 +6371,255 @@
       alert(`Falha ao cancelar: ${e.message}`);
       if (botaoOrigem) botaoOrigem.disabled = false;
     }
+  }
+
+  // Cancelamento em lote do pool (Hugo, 23/10): mesmo endpoint do ×, um
+  // pedido por vez -- falha em um não impede os outros (padrão do
+  // cancelarRota). Só VUUPT, Stokki fica intocada.
+  async function cancelarSelecionados(botaoOrigem) {
+    const ids = Array.from(SELECIONADOS);
+    if (!ids.length) return;
+    const codigoDe = id => document.querySelector(`#lista-pool .item-parada[data-service-id="${id}"] .codigo`)?.textContent.trim() || `#${id}`;
+    const codigos = ids.map(codigoDe);
+    const lista = codigos.length > 30 ? codigos.slice(0, 30).join(", ") + ` e mais ${codigos.length - 30}` : codigos.join(", ");
+    if (!confirm(`Cancelar ${ids.length} pedido(s) na VUUPT? Essa ação não pode ser desfeita.\n\n${lista}`)) return;
+    botaoOrigem.disabled = true;
+    const falhas = [];
+    for (let i = 0; i < ids.length; i++) {
+      botaoOrigem.textContent = `Cancelando ${i + 1}/${ids.length}...`;
+      try {
+        await postJSON("/api/planejamento/cancelar-pedido", { service_id: ids[i], rascunho_id: null });
+      } catch (e) {
+        falhas.push(`• ${codigos[i]}: ${e.message}`);
+      }
+    }
+    if (falhas.length) {
+      alert(`${falhas.length} de ${ids.length} pedido(s) não puderam ser cancelados:\n${falhas.join("\n")}`);
+    }
+    location.reload();
+  }
+
+  // "Marcar como entregue" do menu de contexto, só em rota já enviada
+  // (Hugo, 08/10): fecha o serviço na VUUPT por API, mesmo endpoint do
+  // chip da Torre. A observação é obrigatória e vira auditoria.
+  // Em massa (Hugo, 23/10): botão "Marcar entregue" da barra de seleção
+  // das rotas, ou o menu de contexto num card que está na seleção --
+  // mesma observação pra todos, um POST por pedido (o endpoint é
+  // unitário; assim dá pra mostrar o progresso e uma falha não para o lote).
+  let entreguePendente = null;
+
+  // selecionados que estão em rota já ENVIADA (os de rascunho não têm
+  // serviço atribuído na VUUPT, ficam de fora)
+  function itensEntregaveisSelecionados() {
+    return Array.from(SELECIONADOS_ROTA).map(serviceId => {
+      const li = document.querySelector(`#lista-rotas .item-parada[data-service-id="${serviceId}"]`);
+      if (!li || !li.closest(".card-rota.enviada")) return null;
+      return { serviceId, codigo: li.querySelector(".codigo")?.textContent.trim() || `#${serviceId}` };
+    }).filter(Boolean);
+  }
+
+  function abrirModalEntregue(li, serviceId) {
+    const codigo = li.querySelector(".codigo")?.textContent.trim() || `#${serviceId}`;
+    abrirModalEntregueLote([{ serviceId, codigo }]);
+  }
+
+  function abrirModalEntregueLote(itens) {
+    if (!itens.length) return;
+    const lote = itens.length > 1;
+    document.getElementById("entregue-prefixo").textContent = lote ? `${itens.length} pedidos:` : "Pedido";
+    document.getElementById("entregue-codigo").textContent = itens.map(it => it.codigo).join(", ");
+    document.getElementById("entregue-foto-canhoto").value = "";
+    document.getElementById("entregue-foto-nota").value = "";
+    document.getElementById("entregue-justificativa").value = "";
+    document.getElementById("entregue-texto-outro").value = "";
+    document.querySelector('input[name="entregue-resultado"][value="entregue"]').checked = true;
+    document.getElementById("entregue-motivo").value = "";
+    document.getElementById("entregue-observacao").value = "";
+    aoMudarFotoEntregue();
+    entreguePendente = { itens };
+    aoMudarResultadoEntregue();
+    document.getElementById("modal-entregue").classList.add("aberto");
+    document.getElementById("entregue-foto-canhoto").focus();
+  }
+
+  // "Sem sucesso" (Hugo, 06/11): troca fotos/justificativa por motivo + observação.
+  function resultadoEntregue() {
+    return document.querySelector('input[name="entregue-resultado"]:checked').value;
+  }
+
+  function aoMudarResultadoEntregue() {
+    const semSucesso = resultadoEntregue() === "sem_sucesso";
+    const n = entreguePendente ? entreguePendente.itens.length : 1;
+    document.getElementById("entregue-bloco-entregue").hidden = semSucesso;
+    document.getElementById("entregue-bloco-sem-sucesso").hidden = !semSucesso;
+    document.getElementById("titulo-modal-entregue").textContent = semSucesso
+      ? (n > 1 ? `Marcar ${n} pedidos sem sucesso` : "Marcar pedido sem sucesso")
+      : (n > 1 ? `Marcar ${n} pedidos como entregues` : "Marcar pedido como entregue");
+    const botao = document.getElementById("botao-confirmar-entregue");
+    botao.textContent = semSucesso ? "Marcar sem sucesso" : "Marcar como entregue";
+    botao.classList.toggle("insucesso", semSucesso);
+  }
+
+  // Com foto do canhoto a justificativa some; sem foto ela é obrigatória.
+  // A nota de retorno só vai junto da FOTO do canhoto (Hugo, 30/10): sem ela (ou PDF) fica travada e vazia.
+  function aoMudarFotoEntregue() {
+    const canhoto = document.getElementById("entregue-foto-canhoto").files[0];
+    const temFoto = !!canhoto;
+    const nota = document.getElementById("entregue-foto-nota");
+    nota.disabled = !canhoto || canhoto.type === "application/pdf";
+    if (nota.disabled) nota.value = "";
+    document.getElementById("entregue-campo-justificativa").hidden = temFoto;
+    aoMudarJustificativaEntregue();
+  }
+
+  function aoMudarJustificativaEntregue() {
+    const temFoto = document.getElementById("entregue-foto-canhoto").files.length > 0;
+    const outro = !temFoto && document.getElementById("entregue-justificativa").value === "outro";
+    document.getElementById("entregue-campo-outro").hidden = !outro;
+  }
+
+  function fecharModalEntregue() {
+    document.getElementById("modal-entregue").classList.remove("aberto");
+    entreguePendente = null;
+  }
+
+  document.getElementById("modal-entregue").addEventListener("click", (e) => {
+    if (e.target.id === "modal-entregue") fecharModalEntregue();
+  });
+
+  const URL_PLANEJAMENTO_MARCAR_ENTREGUE = "{{ url_for('api_torre_marcar_entregue') }}";
+  const URL_PLANEJAMENTO_VALIDAR_LOTE_FOTO = "{{ url_for('api_torre_validar_lote_foto') }}";
+
+{% include "_reduzir_imagem.js.html" %}
+
+  // Foto em massa (Hugo, 30/10): só pedidos do mesmo embarcador e do mesmo
+  // destinatário ou local de entrega. Uma chamada antes do laço; sem foto o
+  // lote segue livre. Devolve null (ok) ou a mensagem de recusa.
+  async function validarLoteFoto(itens) {
+    const resp = await fetch(URL_PLANEJAMENTO_VALIDAR_LOTE_FOTO, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ service_ids: itens.map(it => it.serviceId) }),
+    });
+    let dados = {};
+    try { dados = await resp.json(); } catch (e) {}
+    if (resp.ok) return null;
+    const fora = (dados.fora || []).length ? `\nFora da regra: ${dados.fora.join(", ")}` : "";
+    return `${dados.erro || "Falha ao conferir o lote."}${fora}\n\nRemova a foto e use uma justificativa, ou marque um a um.`;
+  }
+
+  async function confirmarEntregue(botao) {
+    const pendente = entreguePendente;
+    if (!pendente) return;
+    if (resultadoEntregue() === "sem_sucesso") return confirmarSemSucesso(botao, pendente);
+    let fotoCanhoto = document.getElementById("entregue-foto-canhoto").files[0] || null;
+    let fotoNota = document.getElementById("entregue-foto-nota").files[0] || null;
+    const justificativa = document.getElementById("entregue-justificativa").value;
+    const textoOutro = document.getElementById("entregue-texto-outro").value.trim();
+    if (!fotoCanhoto) {
+      if (!justificativa) { alert("Anexe a foto do canhoto ou escolha uma justificativa."); return; }
+      if (justificativa === "outro" && (textoOutro.length < 5 || textoOutro.length > 200)) {
+        alert("Descreva o motivo em 5 a 200 caracteres."); return;
+      }
+    }
+    const original = botao.textContent;
+    botao.disabled = true;
+    const fechados = [], jaEstavam = [], falhas = [], avisos = [];
+    try {
+      if (fotoCanhoto && pendente.itens.length > 1) {
+        botao.textContent = "Conferindo o lote...";
+        const recusa = await validarLoteFoto(pendente.itens);
+        if (recusa) { alert(recusa); return; }   // modal fica aberto: remover a foto ou marcar um a um
+      }
+      // reduz uma vez no navegador e reaproveita o mesmo File em todos os POSTs
+      botao.textContent = "Preparando a foto...";
+      fotoCanhoto = fotoCanhoto ? await reduzirImagem(fotoCanhoto) : null;
+      fotoNota = fotoNota ? await reduzirImagem(fotoNota) : null;
+    } catch (e) {
+      alert(`Falha ao conferir o lote: ${e.message}`);
+      return;
+    } finally {
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+    botao.disabled = true;
+    try {
+      // um FormData (e um checklist na VUUPT) por pedido; mesmos arquivos e
+      // justificativa em todos; falha de um não para os outros. Com foto, os
+      // itens 2..N levam o 1o como lote_referencia (o servidor confere de novo).
+      for (const [i, it] of pendente.itens.entries()) {
+        botao.textContent = pendente.itens.length > 1
+          ? `Fechando na VUUPT... ${i + 1}/${pendente.itens.length}` : "Fechando na VUUPT...";
+        try {
+          const fd = new FormData();
+          fd.append("service_id", it.serviceId);
+          if (fotoCanhoto && i > 0) fd.append("lote_referencia", pendente.itens[0].serviceId);
+          if (fotoCanhoto) fd.append("foto_canhoto", fotoCanhoto);
+          if (fotoNota) fd.append("foto_nota_retorno", fotoNota);
+          if (!fotoCanhoto) {
+            fd.append("justificativa", justificativa);
+            if (justificativa === "outro") fd.append("texto_outro", textoOutro);
+          }
+          const resp = await fetch(URL_PLANEJAMENTO_MARCAR_ENTREGUE, { method: "POST", body: fd });
+          const dados = await resp.json();
+          if (!resp.ok) throw new Error(dados.erro || "Falha ao marcar como entregue.");
+          (dados.ja_estava ? jaEstavam : fechados).push(dados.codigo || it.codigo);
+          if (dados.aviso) avisos.push(`${dados.codigo || it.codigo}: ${dados.aviso}`);
+        } catch (e) {
+          falhas.push(`${it.codigo}: ${e.message}`);
+        }
+      }
+    } finally {
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+    fecharModalEntregue();
+    if (pendente.itens.length > 1 && !falhas.length) limparSelecaoRotas();
+    const linhas = [];
+    if (fechados.length) linhas.push(`Marcado(s) como entregue(s) na VUUPT: ${fechados.join(", ")}`);
+    if (jaEstavam.length) linhas.push(`Já constava(m) como entregue(s): ${jaEstavam.join(", ")}`);
+    if (avisos.length) linhas.push(`Avisos:\n${avisos.join("\n")}`);
+    if (falhas.length) linhas.push(`Falharam (${falhas.length}):\n${falhas.join("\n")}`);
+    alert(linhas.join("\n\n"));
+  }
+
+  // mesmo motivo e observação pra todos, um POST por pedido (falha de um não para os outros)
+  async function confirmarSemSucesso(botao, pendente) {
+    const motivo = document.getElementById("entregue-motivo").value;
+    const observacao = document.getElementById("entregue-observacao").value.trim();
+    if (!motivo) { alert("Escolha o motivo da não entrega."); return; }
+    const original = botao.textContent;
+    botao.disabled = true;
+    const fechados = [], jaEstavam = [], falhas = [];
+    try {
+      for (const [i, it] of pendente.itens.entries()) {
+        botao.textContent = pendente.itens.length > 1
+          ? `Fechando na VUUPT... ${i + 1}/${pendente.itens.length}` : "Fechando na VUUPT...";
+        try {
+          const fd = new FormData();
+          fd.append("service_id", it.serviceId);
+          fd.append("resultado", "sem_sucesso");
+          fd.append("failed_reason_id", motivo);
+          if (observacao) fd.append("observacao", observacao);
+          const resp = await fetch(URL_PLANEJAMENTO_MARCAR_ENTREGUE, { method: "POST", body: fd });
+          const dados = await resp.json();
+          if (!resp.ok) throw new Error(dados.erro || "Falha ao marcar sem sucesso.");
+          (dados.ja_estava ? jaEstavam : fechados).push(dados.codigo || it.codigo);
+        } catch (e) {
+          falhas.push(`${it.codigo}: ${e.message}`);
+        }
+      }
+    } finally {
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+    fecharModalEntregue();
+    if (pendente.itens.length > 1 && !falhas.length) limparSelecaoRotas();
+    const linhas = [];
+    if (fechados.length) linhas.push(`Marcado(s) sem sucesso na VUUPT: ${fechados.join(", ")}`);
+    if (jaEstavam.length) linhas.push(`Já constava(m) sem sucesso: ${jaEstavam.join(", ")}`);
+    if (falhas.length) linhas.push(`Falharam (${falhas.length}):\n${falhas.join("\n")}`);
+    alert(linhas.join("\n\n"));
   }
 
   // pedido (ou lote de pedidos, ver abrirModalReagendarLote) sendo
@@ -5214,7 +6662,48 @@
     document.getElementById("modal-reagendar").classList.add("aberto");
   }
 
-  async function confirmarReagendamento(botao) {
+  // Reagendamento fora do dia de visita (Hugo, 03/10 -- dias fixos v2, spec
+  // 5.4): antes de salvar, pergunta se os pedidos fora do dia viram dedicado.
+  // Falha na checagem não trava o reagendamento (segue sem a pergunta).
+  let foraDiaFixoPendente = null;  // { fora: [{service_id, codigo, regiao, dias, valor}], botao }
+
+  async function checarForaDiaFixo(serviceIds, data) {
+    try {
+      const resp = await postJSON("/api/planejamento/checar-dia-fixo", { service_ids: serviceIds, data });
+      return resp.fora_do_dia || [];
+    } catch (e) {
+      console.warn("Checagem de dia fixo falhou; reagendando sem a pergunta.", e);
+      return [];
+    }
+  }
+
+  function perguntarForaDiaFixo(fora, botao) {
+    const texto = fora.length === 1
+      ? `Este pedido é de ${fora[0].regiao}, com visita só às ${fora[0].dias}. Marcar como dedicado?`
+      : `Estes ${fora.length} pedidos ficam fora do dia de visita da região. Marcar como dedicado? Os demais selecionados são reagendados normalmente.`;
+    document.getElementById("fora-dia-fixo-texto").textContent = texto;
+    document.getElementById("fora-dia-fixo-lista").innerHTML = fora.length > 1
+      ? fora.map(f => `<li>${escaparHtml(f.codigo || "#" + f.service_id)} — ${escaparHtml(f.regiao)}: só ${escaparHtml(f.dias)}</li>`).join("")
+      : "";
+    foraDiaFixoPendente = { fora, botao };
+    document.getElementById("modal-fora-dia-fixo").classList.add("aberto");
+  }
+
+  async function salvarReagendamento(pendente, data, horaInicio, horaFim) {
+    if (pendente.itens) {
+      const resp = await postJSON("/api/planejamento/reagendar-pedidos", {
+        itens: pendente.itens, data, hora_inicio: horaInicio, hora_fim: horaFim,
+      });
+      return resp.falhas || [];
+    }
+    await postJSON("/api/planejamento/reagendar-pedido", {
+      service_id: pendente.serviceId, data, hora_inicio: horaInicio, hora_fim: horaFim,
+    });
+    return [];
+  }
+
+  // marcarDedicado: null = ainda não perguntou; [] = "Não"; lista = "Sim" (pedidos fora do dia)
+  async function confirmarReagendamento(botao, marcarDedicado = null) {
     const pendente = reagendarPendente;
     if (!pendente) return;
     const data = document.getElementById("reagendar-data").value;
@@ -5225,21 +6714,27 @@
     botao.disabled = true;
     botao.textContent = "Salvando...";
     try {
-      let falhas = [];
-      if (pendente.itens) {
-        const resp = await postJSON("/api/planejamento/reagendar-pedidos", {
-          itens: pendente.itens, data, hora_inicio: horaInicio, hora_fim: horaFim,
-        });
-        falhas = resp.falhas || [];
-      } else {
-        await postJSON("/api/planejamento/reagendar-pedido", {
-          service_id: pendente.serviceId, data, hora_inicio: horaInicio, hora_fim: horaFim,
-        });
+      if (marcarDedicado === null) {
+        const ids = pendente.itens ? pendente.itens.map(it => it.service_id) : [pendente.serviceId];
+        const fora = await checarForaDiaFixo(ids, data);
+        if (fora.length) {
+          botao.disabled = false;
+          botao.textContent = original;
+          perguntarForaDiaFixo(fora, botao);
+          return;
+        }
       }
+      const falhas = await salvarReagendamento(pendente, data, horaInicio, horaFim);
       document.getElementById("modal-reagendar").classList.remove("aberto");
       if (falhas.length) {
         alert(`Agendamento aplicado, mas ${falhas.length} de ${pendente.itens.length} pedido(s) falharam:\n` +
           falhas.map(f => `#${f.service_id}: ${f.erro}`).join("\n"));
+      }
+      if (marcarDedicado && marcarDedicado.length) {
+        // só os que a Vuupt aceitou viram dedicado
+        const falhou = new Set(falhas.map(f => f.service_id));
+        const aceitos = marcarDedicado.filter(f => !falhou.has(f.service_id));
+        if (aceitos.length) { abrirModalDedicadoForaDia(aceitos); return; }
       }
       // recarrega -- o novo agendado_para pode mudar a seção/urgência
       // do card (mesmo padrão de cancelarPedido)
@@ -5326,6 +6821,9 @@
   // eles. POST/DELETE /api/planejamento/dedicado; depois location.reload()
   // (mesmo padrão da transportadora) pra chip e menu refletirem a marca.
   let dedicadoPendente = null;  // { itens: [{service_id, codigo, sender_id, remetente_nome, numero_nf}] }
+  // reagendamento fora do dia (03/10): a data já foi salva quando o modal de
+  // dedicado abre por ele -- fechar sem marcar precisa recarregar a tela.
+  let recarregarAoFecharDedicado = false;
 
   function itemDedicadoDe(serviceId) {
     const p = POOL_BY_ID[serviceId];
@@ -5361,6 +6859,21 @@
     document.getElementById("dedicado-valor").value = "";
     atualizarPreviaDedicado();
     document.getElementById("modal-dedicado").classList.add("aberto");
+  }
+
+  // Sim no "Fora do dia de visita" (03/10): abre o modal de dedicado com os
+  // pedidos fora do dia e o valor da calculadora já somado (editável). Valor
+  // que não deu pra calcular deixa o campo vazio pra digitar.
+  function abrirModalDedicadoForaDia(fora) {
+    dedicadoPendente = null;
+    abrirModalDedicado(fora.map(f => f.service_id));
+    if (!dedicadoPendente) { location.reload(); return; }
+    const valores = fora.map(f => f.valor);
+    if (valores.every(v => typeof v === "number" && v > 0)) {
+      document.getElementById("dedicado-valor").value = valores.reduce((a, b) => a + b, 0).toFixed(2).replace(".", ",");
+    }
+    atualizarPreviaDedicado();
+    recarregarAoFecharDedicado = true;
   }
 
   async function confirmarDedicado(botao) {
@@ -5427,7 +6940,7 @@
     try {
       const lista = await carregarTransportadorasTerceiros();
       if (!lista.length) {
-        select.innerHTML = `<option value="">Nenhuma TERCEIROS com endereço na BD_TRANSPORTADORAS</option>`;
+        select.innerHTML = `<option value="">Nenhuma TERCEIROS com endereço no cadastro de transportadoras</option>`;
         return;
       }
       select.innerHTML = `<option value="">Escolha a transportadora…</option>` +
@@ -5532,6 +7045,196 @@
     atualizarContagensSecoesPool();
     atualizarBarraSelecao();
     atualizarContagensTotais();
+  }
+
+  // ---- Rota já enviada (10/11): incluir, tirar e trocar motorista/carro ----
+  // O servidor fala com a VUUPT antes de gravar; recusa volta como erro e a
+  // tela desfaz o gesto. A resposta traz o rascunho cru (buscar_rascunho):
+  // mesclarRascunho mantém o que só a carga da tela calcula (status da
+  // VUUPT e selos por parada, rota_iniciada, tem_centro_expandido).
+  function rascunhoEnviado(rascunhoId) {
+    const r = RASCUNHOS.find(x => x.id === rascunhoId);
+    return !!r && r.status === "ENVIADO";
+  }
+
+  function mesclarRascunho(rascunhoId, novo, extrasPorServico = {}) {
+    const r = RASCUNHOS.find(x => x.id === rascunhoId);
+    if (!r || !novo) return novo;
+    const antigas = {};
+    (r.paradas || []).forEach(p => { antigas[p.service_id] = p; });
+    const paradas = (novo.paradas || []).map(p => ({ ...(extrasPorServico[p.service_id] || {}), ...(antigas[p.service_id] || {}), ...p }));
+    Object.assign(r, novo, { paradas });
+    r.falta_carro = rascunhoSemCarro(r);
+    return r;
+  }
+
+  async function adicionarEmRotaEnviada(rascunhoId, serviceId, li) {
+    const parada = POOL_BY_ID[serviceId];
+    const ul = document.getElementById(`lista-parada-${rascunhoId}`);
+    li.style.opacity = "0.5";
+    try {
+      const resp = await postJSON("/api/planejamento/adicionar-parada", { rascunho_id: rascunhoId, parada });
+      delete POOL_BY_ID[serviceId];
+      SELECIONADOS.delete(serviceId);
+      document.getElementById("contagem-pool").textContent = Object.keys(POOL_BY_ID).length;
+      // a VUUPT põe o pedido no fim da rota (nunca antes de um já começado)
+      const novaParada = { ...parada, status_vuupt: null };
+      const r = mesclarRascunho(rascunhoId, resp.rascunho, { [serviceId]: novaParada });
+      li.remove();
+      if (ul) ul.appendChild(criarLiParada(novaParada, { enviada: true, edicaoEnviada: true }));
+      atualizarCardComResposta(r);
+      mostrarToastPlanejamento(`${parada.codigo || "Pedido"} incluído na rota.`);
+    } catch (e) {
+      // recusa (em espera na Stokki, Retornando, rota encerrada...): volta pro pool
+      li.style.opacity = "";
+      reencaixarNaSecaoCorreta(li);
+      alert(`Não deu pra incluir o pedido na rota: ${e.message}`);
+    }
+  }
+
+  let tirarDaRotaPendente = null;  // { rascunhoId, serviceId, li }
+
+  function abrirModalTirarDaRota(li, serviceId, rascunhoId) {
+    tirarDaRotaPendente = { rascunhoId, serviceId, li };
+    document.getElementById("tirar-da-rota-codigo").textContent = li.querySelector(".codigo")?.textContent.trim() || `#${serviceId}`;
+    document.getElementById("tirar-da-rota-motivo").innerHTML = '<option value="">Selecione...</option>'
+      + MOTIVOS_EXCLUSAO.map(m => `<option>${escaparHtml(m)}</option>`).join("");
+    document.getElementById("tirar-da-rota-observacao").value = "";
+    document.getElementById("modal-tirar-da-rota").classList.add("aberto");
+  }
+
+  function fecharModalTirarDaRota() {
+    document.getElementById("modal-tirar-da-rota").classList.remove("aberto");
+    tirarDaRotaPendente = null;
+  }
+
+  async function confirmarTirarDaRota(botao) {
+    if (!tirarDaRotaPendente) return;
+    const motivo = document.getElementById("tirar-da-rota-motivo").value;
+    if (!motivo) { alert("Escolha o motivo."); return; }
+    const observacao = document.getElementById("tirar-da-rota-observacao").value.trim();
+    const { rascunhoId, serviceId, li } = tirarDaRotaPendente;
+    const original = botao.textContent;
+    botao.disabled = true;
+    botao.textContent = "Tirando...";
+    let resp;
+    try {
+      resp = await postJSON("/api/planejamento/remover-parada", { rascunho_id: rascunhoId, service_id: serviceId, motivo, observacao });
+    } catch (e) {
+      alert(`Não deu pra tirar o pedido da rota: ${e.message}`);
+      return;
+    } finally {
+      botao.disabled = false;
+      botao.textContent = original;
+    }
+    fecharModalTirarDaRota();
+    if (resp.aviso) alert(resp.aviso);
+    if (resp.rota_cancelada) {
+      // era o último pedido e ninguém tinha saído: a rota volta a ser rascunho
+      alert("Era o último pedido da rota: a rota foi cancelada na VUUPT e voltou a ser rascunho. O pedido volta pro pool.");
+      location.reload();
+      return;
+    }
+    const r = RASCUNHOS.find(x => x.id === rascunhoId);
+    const antiga = (r && r.paradas.find(p => p.service_id === serviceId)) || {};
+    li.remove();
+    if (SELECIONADOS_ROTA.delete(serviceId)) atualizarBarraSelecaoRotas();
+    if (resp.ja_fora_da_rota) {
+      mostrarToastPlanejamento(resp.mensagem || "O pedido já tinha saído dessa rota na VUUPT — card atualizado.");
+    } else {
+      // volta pro pool (na VUUPT ele fica sem rota, nunca cancelado); tirado
+      // de rota iniciada fica Retornando, no carro do motorista
+      const p = { ...antiga, ...(resp.parada_removida || {}) };
+      delete p.status_vuupt;
+      p.retornando = resp.retornando ? { motorista_nome: motoristaDaRota(r), motivo, criado_em: null } : null;
+      POOL_BY_ID[serviceId] = p;
+      const novoLi = criarLiParada(p);
+      secaoDoItem(novoLi).appendChild(novoLi);
+      document.getElementById("contagem-pool").textContent = Object.keys(POOL_BY_ID).length;
+      mostrarToastPlanejamento(resp.retornando
+        ? `${p.codigo || "Pedido"} tirado da rota: fica Retornando até o galpão receber.`
+        : `${p.codigo || "Pedido"} tirado da rota e de volta ao pool.`);
+    }
+    atualizarCardComResposta(mesclarRascunho(rascunhoId, resp.rascunho));
+    aplicarFiltroFlag();
+    aplicarFiltroCep();
+    aplicarFiltroCaixas();
+    atualizarContagensSecoesPool();
+    atualizarBarraSelecao();
+    atualizarContagensTotais();
+  }
+
+  // Troca de motorista e/ou carro (rascunho ou rota enviada). Recusa da
+  // VUUPT (ex.: rota já começou) desfaz a escolha nos selects.
+  async function trocarMotoristaCarro(rascunhoId, agentId, vehicleId, motoristaNome) {
+    const r = RASCUNHOS.find(x => x.id === rascunhoId);
+    const selMotorista = document.querySelector(`.select-motorista[data-rascunho-id="${rascunhoId}"]`);
+    const selVeiculo = document.querySelector(`.select-veiculo[data-rascunho-id="${rascunhoId}"]`);
+    const travados = [selMotorista && selMotorista.disabled, selVeiculo && selVeiculo.disabled];
+    [selMotorista, selVeiculo].forEach(s => { if (s) s.disabled = true; });
+    try {
+      const resp = await postJSON("/api/planejamento/trocar-motorista", {
+        rascunho_id: rascunhoId, agent_id: agentId, vehicle_id: vehicleId, motorista_nome: motoristaNome,
+      });
+      if (r) {
+        if (resp.rascunho) mesclarRascunho(rascunhoId, resp.rascunho);
+        else { Object.assign(r, { agent_id: agentId, vehicle_id: vehicleId, motorista_nome: motoristaNome }); r.falta_carro = rascunhoSemCarro(r); }
+      }
+      // trava de carro desligada (planejamento.trava_sem_carro): trocou, mas avisa
+      if (resp.aviso) alert(resp.aviso);
+      return true;
+    } catch (err) {
+      alert(`Falha ao trocar motorista/carro: ${err.message}`);
+      return false;
+    } finally {
+      // selects e selo refletem o que ficou gravado (o novo, ou o antigo na recusa)
+      if (r) {
+        if (selMotorista) selMotorista.value = r.agent_id ? String(r.agent_id) : "";
+        atualizarCarroNoCard(r);
+      }
+      if (selMotorista) selMotorista.disabled = travados[0];
+      if (selVeiculo) selVeiculo.disabled = travados[1];
+    }
+  }
+
+  // placa no rodízio do dia + rota com parada no Centro Expandido: pede
+  // confirmação (não bloqueia -- a troca à mão é decisão de quem opera).
+  // true = pode seguir com a troca.
+  function confirmarRodizio(r, vehicleId) {
+    if (!vehicleId || vehicleId === r.vehicle_id) return true;
+    const veiculo = (VEICULOS || []).find(v => v.vehicle_id === vehicleId);
+    if (!veiculo || !veiculo.rodizio_no_dia || !r.tem_centro_expandido) return true;
+    return confirm(`A placa ${veiculo.placa} está no rodízio neste dia e a rota tem parada no Centro Expandido. Trocar o carro mesmo assim?`);
+  }
+
+  // seletor de carro + selo "sem carro" do card, depois de mudar motorista/carro
+  function atualizarCarroNoCard(r) {
+    const selVeiculo = document.querySelector(`.select-veiculo[data-rascunho-id="${r.id}"]`);
+    if (selVeiculo) {
+      selVeiculo.innerHTML = montarSelectVeiculo(r);
+      selVeiculo.hidden = rotaEhLalamove(r);
+    }
+    const selo = document.getElementById(`sem-carro-${r.id}`);
+    if (selo) selo.innerHTML = seloSemCarroHtml(r);
+  }
+
+  // carros do seletor: uma chamada só por carga da tela (o servidor guarda
+  // a lista da VUUPT por 10 min); falha deixa o select só com o carro atual
+  async function carregarVeiculos() {
+    if (!PODE_EDITAR) return;
+    try {
+      const resp = await fetch(`${BASE_PATH}/api/planejamento/veiculos?data=${encodeURIComponent(DATA_ALVO_ISO)}`);
+      const dados = await resp.json();
+      if (!resp.ok) throw new Error(dados.erro || `HTTP ${resp.status}`);
+      VEICULOS = dados.veiculos || [];
+    } catch (e) {
+      console.warn("Lista de carros indisponível:", e);
+      VEICULOS_FALHOU = true;
+    }
+    document.querySelectorAll(".select-veiculo").forEach(sel => {
+      const r = RASCUNHOS.find(x => x.id === Number(sel.dataset.rascunhoId));
+      if (r) sel.innerHTML = montarSelectVeiculo(r);
+    });
   }
 
   function copiarCodigoParada(li) {
@@ -5689,8 +7392,8 @@
     const serviceId = Number(li.dataset.serviceId);
     const ul = li.closest(".lista-paradas");
     const rascunhoId = ul && ul.dataset.listId !== "pool" ? Number(ul.dataset.listId) : null;
-    // rota já ENVIADA não aceita tirar parada por aqui -- mesma trava do
-    // drag-and-drop (Sortable nem é criado pra ela, ver initMap)
+    // rota já ENVIADA não usa o "Remover da rota" do rascunho: tirar pede
+    // motivo e passa pela VUUPT ("Tirar da rota…", 10/11)
     const cardRota = rascunhoId !== null ? document.getElementById(`card-rota-${rascunhoId}`) : null;
     const rotaTravada = !!cardRota && cardRota.classList.contains("enviada");
 
@@ -5718,6 +7421,18 @@
     }
     if (PODE_EDITAR && rascunhoId !== null && !rotaTravada) {
       itens.push({ rotulo: "Remover da rota", acao: () => removerDaRota(serviceId, rascunhoId, li) });
+    }
+    // rota enviada (10/11): mesmo "Tirar da rota" do "×" (que some no modo só número)
+    if (rotaTravada && li.querySelector(".botao-tirar-da-rota")) {
+      itens.push({ rotulo: "Tirar da rota…", acao: () => abrirModalTirarDaRota(li, serviceId, rascunhoId) });
+    }
+    // rota já enviada à VUUPT: dá pra fechar o pedido como entregue por
+    // aqui (Hugo, 08/10) -- mesmo endpoint do chip da Torre
+    if (PODE_EDITAR && rotaTravada) {
+      // card na seleção: vale pra todos os selecionados em rota enviada (23/10)
+      const loteEntregue = SELECIONADOS_ROTA.has(serviceId) ? itensEntregaveisSelecionados() : [];
+      if (loteEntregue.length > 1) itens.push({ rotulo: `Marcar entregue / sem sucesso (${loteEntregue.length} selecionados)`, acao: () => abrirModalEntregueLote(loteEntregue) });
+      else itens.push({ rotulo: "Marcar entregue / sem sucesso", acao: () => abrirModalEntregue(li, serviceId) });
     }
     if (PODE_EDITAR) {
       itens.push({ rotulo: "Cancelar pedido", classe: "perigo", acao: () => cancelarPedido(serviceId, rascunhoId, null) });
@@ -5756,7 +7471,34 @@
       const listaPool = document.getElementById("lista-pool");
       let novos = 0;
       dados.pool.forEach(p => {
-        if (POOL_BY_ID[p.service_id]) return;  // já estava no pool, nada a fazer
+        const existente = POOL_BY_ID[p.service_id];
+        if (existente && !!existente.retornando !== !!p.retornando) {
+          // virou ou deixou de ser Retornando (10/11: /retornos recebeu o
+          // pedido): recria o card, que muda selo, seleção e arraste
+          const liAntigo = listaPool.querySelector(`.item-parada[data-service-id="${p.service_id}"]`);
+          if (liAntigo) liAntigo.remove();
+          SELECIONADOS.delete(p.service_id);
+          POOL_BY_ID[p.service_id] = p;
+          const li = criarLiParada(p);
+          secaoDoItem(li).appendChild(li);
+          return;
+        }
+        if (existente) {
+          // já estava no pool: só a situação Stokki pode ter mudado no
+          // retrato (galpão liberou → sai de "Em separação" pra "hoje")
+          if ((existente.situacao_stokki || "") !== (p.situacao_stokki || "")) {
+            existente.situacao_stokki = p.situacao_stokki;
+            const li = listaPool.querySelector(`.item-parada[data-service-id="${p.service_id}"]`);
+            if (li) {
+              li.dataset.situacaoStokki = p.situacao_stokki || "";
+              const badge = li.querySelector(".badge-separacao");
+              if (badge) badge.remove();
+              if (p.situacao_stokki) li.insertAdjacentHTML("beforeend", " " + badgeSeparacaoHtml(p));
+              reencaixarNaSecaoCorreta(li);
+            }
+          }
+          return;
+        }
         POOL_BY_ID[p.service_id] = p;
         const li = criarLiParada(p);
         secaoDoItem(li).appendChild(li);
@@ -5777,6 +7519,23 @@
         }
       });
 
+      // paradas já em rota: situação do mesmo retrato, pelo código base (Hugo, 09/11)
+      if (dados.situacoes_stokki) {
+        document.querySelectorAll(".card-rota .lista-paradas").forEach(ul => {
+          const lis = Array.from(ul.children);
+          lis.forEach(li => {
+            const codigos = (li.querySelector(".codigo")?.textContent || "").split(",")
+              .map(c => c.trim().replace(/^#/, "").toUpperCase().replace(/-R\d+$/, "")).filter(Boolean);
+            const situacao = codigos.map(c => dados.situacoes_stokki[c]).find(Boolean) || "";
+            if ((li.dataset.situacaoStokki || "") === situacao) return;
+            li.dataset.situacaoStokki = situacao;
+            li.querySelector(".badge-separacao")?.remove();
+            if (situacao) li.insertAdjacentHTML("beforeend", " " + badgeSeparacaoHtml({ situacao_stokki: situacao }));
+          });
+          atualizarSituacaoStokkiRota(ul, lis);
+        });
+      }
+
       document.getElementById("contagem-pool").textContent = Object.keys(POOL_BY_ID).length;
       document.getElementById("busca-pool").dispatchEvent(new Event("input"));  // reaplica filtro de busca ativo
       aplicarFiltroFlag();    // idem pro filtro de "precisa sair no dia"
@@ -5785,6 +7544,8 @@
       atualizarBarraSelecao();
       atualizarContagensTotais();
       atualizarContagensSecoesPool();
+      const elRetrato = document.getElementById("retrato-stokki");
+      if (elRetrato) elRetrato.textContent = dados.retrato_stokki_em ? `· retrato de ${dados.retrato_stokki_em}` : "";
       if (dados.pool_retiradas !== undefined) renderizarRetiradas(dados.pool_retiradas);
 
       // resumo dos agendados (por dia/região) vem já renderizado
@@ -5967,11 +7728,13 @@
     const listaPoolHoje = document.getElementById("lista-pool-hoje");
     const listaPoolForaArea = document.getElementById("lista-pool-fora-area");
     const listaPoolFuturo = document.getElementById("lista-pool-futuro");
+    const listaPoolSeparacao = document.getElementById("lista-pool-separacao");
     POOL.forEach(p => {
       const li = criarLiParada({ ...p, remetente_nome: p.remetente_nome });
       secaoDoItem(li).appendChild(li);
     });
     iniciarSortable(listaPoolHoje);
+    iniciarSortable(listaPoolSeparacao);
     iniciarSortable(listaPoolForaArea);
     iniciarSortable(listaPoolFuturo);
     inicializarSecoesPool();
@@ -6042,6 +7805,7 @@
     document.getElementById("botao-reagendar-selecao").addEventListener("click", () => {
       abrirModalReagendarLote(itensDoPoolSelecionado());
     });
+    document.getElementById("botao-cancelar-selecao").addEventListener("click", (e) => cancelarSelecionados(e.target));
     document.getElementById("botao-cancelar-tipo-roteirizacao").addEventListener("click", () => {
       document.getElementById("modal-tipo-roteirizacao").classList.remove("aberto");
       botaoRoteirizarPendente = null;
@@ -6101,17 +7865,19 @@
       itens.forEach(rascunho => {
         const card = criarCardRota(rascunho, coresPorRascunho[rascunho.id]);
         listaRotas.appendChild(card);
-        // rota já ENVIADA não recebe Sortable -- fica travada, sem
-        // aceitar arrastar pra dentro/fora dela (já virou rota de
-        // verdade na VUUPT, editar aqui só mudaria o rascunho local)
+        // rota já ENVIADA (10/11): só recebe pedido do pool (o servidor
+        // inclui na VUUPT antes de gravar); Lalamove com corrida não edita
         if (rascunho.status !== "ENVIADO") {
           iniciarSortable(card.querySelector(".lista-paradas"));
+        } else if (!rascunho.lalamove_order_id) {
+          iniciarSortable(card.querySelector(".lista-paradas"), { soRecebe: true });
         }
         redesenharRota(rascunho.id);
       });
     });
 
     atualizarBotaoColapsarTodas();
+    carregarVeiculos();  // seletor de carro dos cards (10/11), sem segurar a tela
     document.getElementById("botao-colapsar-todas").addEventListener("click", () => {
       const cards = Array.from(document.querySelectorAll("#lista-rotas .card-rota"));
       const colapsar = cards.some(c => !c.classList.contains("colapsada"));
@@ -6180,6 +7946,7 @@
       }
       aplicarAba(abaAtiva);
     }
+    destacarRotasRecemRoteirizadas();
 
     // arrastar um pedido por cima de um card colapsado expande ele na
     // hora (senão a lista escondida não teria onde receber o drop) --
@@ -6200,6 +7967,13 @@
       }
       if (e.target.classList.contains("input-nome-rota")) {
         return;  // clique dentro do campo só posiciona o cursor -- não colapsa o card
+      }
+      if (e.target.classList.contains("botao-tirar-da-rota")) {
+        // rota enviada (10/11): o "×" tira da rota com motivo, não cancela
+        const li = e.target.closest(".item-parada");
+        const ul = e.target.closest(".lista-paradas");
+        if (li && ul) abrirModalTirarDaRota(li, Number(li.dataset.serviceId), Number(ul.dataset.listId));
+        return;
       }
       if (e.target.classList.contains("botao-cancelar-pedido")) {
         const li = e.target.closest(".item-parada");
@@ -6240,6 +8014,8 @@
         duplicarRota(Number(e.target.dataset.rascunhoId));
       } else if (e.target.classList.contains("botao-cancelar-rota")) {
         cancelarRota([Number(e.target.dataset.rascunhoId)], e.target);
+      } else if (e.target.classList.contains("botao-cancelar-notificar")) {
+        cancelarENotificar(Number(e.target.dataset.rascunhoId), e.target);
       } else if (e.target.classList.contains("botao-lancar-lalamove")) {
         lancarLalamove(Number(e.target.dataset.rascunhoId), e.target);
       } else if (e.target.classList.contains("botao-lalamove-horario-limpar")) {
@@ -6311,22 +8087,38 @@
         }
         return;
       }
+      if (e.target.classList.contains("select-veiculo")) {
+        // carro só dessa rota (10/11): o motorista fica o mesmo. Placa no
+        // rodízio do dia com parada no Centro Expandido pede confirmação
+        // (não bloqueia -- a troca à mão é decisão de quem opera)
+        const rascunhoId = Number(e.target.dataset.rascunhoId);
+        const r = RASCUNHOS.find(x => x.id === rascunhoId);
+        if (!r) return;
+        const vehicleId = e.target.value ? Number(e.target.value) : null;
+        if (!confirmarRodizio(r, vehicleId)) {
+          e.target.value = r.vehicle_id ? String(r.vehicle_id) : "";
+          return;
+        }
+        await trocarMotoristaCarro(rascunhoId, r.agent_id, vehicleId, r.motorista_nome);
+        return;
+      }
       if (!e.target.classList.contains("select-motorista")) return;
       const rascunhoId = Number(e.target.dataset.rascunhoId);
       const agentId = e.target.value ? Number(e.target.value) : null;
       const motorista = MOTORISTAS.find(m => m.agent_id === agentId);
-      try {
-        await postJSON("/api/planejamento/trocar-motorista", {
-          rascunho_id: rascunhoId, agent_id: agentId,
-          vehicle_id: motorista ? motorista.vehicle_id : null,
-          motorista_nome: motorista ? motorista.nome : null,
-        });
-        const r = RASCUNHOS.find(x => x.id === rascunhoId);
-        if (r) { r.agent_id = agentId; r.motorista_nome = motorista ? motorista.nome : null; }
+      // trocar o motorista põe o carro do cadastro dele (o seletor de carro ajusta depois);
+      // o carro novo passa pelo mesmo aviso de rodízio da troca de carro
+      const rAtual = RASCUNHOS.find(x => x.id === rascunhoId);
+      if (rAtual && !confirmarRodizio(rAtual, motorista ? motorista.vehicle_id : null)) {
+        e.target.value = rAtual.agent_id ? String(rAtual.agent_id) : "";
+        atualizarCarroNoCard(rAtual);
+        return;
+      }
+      const ok = await trocarMotoristaCarro(rascunhoId, agentId,
+        motorista ? motorista.vehicle_id : null, motorista ? motorista.nome : null);
+      if (ok) {
         const boxLala2 = document.querySelector(`.lalamove-box[data-rascunho-id="${rascunhoId}"]`);
         if (boxLala2) boxLala2.style.display = (LALAMOVE.agent_id && agentId === LALAMOVE.agent_id) ? "" : "none";
-      } catch (err) {
-        alert(`Falha ao trocar motorista: ${err.message}`);
       }
     });
 
@@ -6341,6 +8133,9 @@
     });
     document.getElementById("botao-reagendar-selecao-rotas").addEventListener("click", () => {
       abrirModalReagendarLote(itensDaRotaSelecionada());
+    });
+    document.getElementById("botao-entregue-selecao-rotas").addEventListener("click", () => {
+      abrirModalEntregueLote(itensEntregaveisSelecionados());
     });
     document.getElementById("select-destino-mover").addEventListener("change", (e) => {
       document.getElementById("botao-mover-selecionados").disabled = SELECIONADOS_ROTA.size === 0 || !e.target.value;
@@ -6376,6 +8171,19 @@
     document.getElementById("botao-cancelar-dedicado").addEventListener("click", () => {
       document.getElementById("modal-dedicado").classList.remove("aberto");
       dedicadoPendente = null;
+      if (recarregarAoFecharDedicado) location.reload();  // a data já foi salva (reagendamento fora do dia)
+    });
+    document.getElementById("botao-fora-dia-fixo-nao").addEventListener("click", () => {
+      const p = foraDiaFixoPendente;
+      foraDiaFixoPendente = null;
+      document.getElementById("modal-fora-dia-fixo").classList.remove("aberto");
+      if (p) confirmarReagendamento(p.botao, []);
+    });
+    document.getElementById("botao-fora-dia-fixo-sim").addEventListener("click", () => {
+      const p = foraDiaFixoPendente;
+      foraDiaFixoPendente = null;
+      document.getElementById("modal-fora-dia-fixo").classList.remove("aberto");
+      if (p) confirmarReagendamento(p.botao, p.fora);
     });
     document.getElementById("dedicado-valor").addEventListener("input", atualizarPreviaDedicado);
     document.getElementById("botao-confirmar-dedicado").addEventListener("click", (e) => confirmarDedicado(e.target));
@@ -6467,7 +8275,7 @@
     // não rouba o mouse do card embaixo.
     document.addEventListener("mouseover", (e) => {
       const li = e.target.closest ? e.target.closest(".item-parada") : null;
-      if (!li || dragRecente) removerDestaqueMapa();
+      if (!li || dragRecente) removerDestaqueHover();
       else if (li !== liDestaque) destacarNoMapa(li);
       if (!li || densidadeCards === "normal" || dragRecente) {
         if (liTooltip && li !== liTooltip) esconderTooltipParada();
@@ -6477,8 +8285,8 @@
     });
     // capture pega o scroll das colunas (que não borbulha) -- o card
     // saiu do lugar, tooltip e destaque fechariam desalinhados
-    document.addEventListener("scroll", () => { esconderTooltipParada(); removerDestaqueMapa(); fecharMenuContexto(); }, true);
-    document.addEventListener("mouseleave", () => { esconderTooltipParada(); removerDestaqueMapa(); });
+    document.addEventListener("scroll", () => { esconderTooltipParada(); removerDestaqueHover(); fecharMenuContexto(); }, true);
+    document.addEventListener("mouseleave", () => { esconderTooltipParada(); removerDestaqueHover(); });
 
     // menu de contexto (botão direito) num pedido -- em qualquer
     // densidade de card e tanto no pool quanto numa rota

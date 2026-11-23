@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-vigia-documentos.service todo dia as 06:43 (depois do romaneio das 04h e da impressao, antes da saida dos motoristas)
+
+[Timer]
+OnCalendar=*-*-* 06:43:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

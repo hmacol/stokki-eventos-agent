@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-batimento-pedidos.service as 07h25 (depois do verificar-entregues-nao-expedidos 07h15, antes do comparar-vuupt 07h40 e da expedicao 08h)
+
+[Timer]
+OnCalendar=*-*-* 07:25:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

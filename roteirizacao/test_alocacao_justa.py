@@ -129,6 +129,34 @@ class TestNadaVirouFiltro(BaseAlocacao):
         self.assertEqual(escolhido.agent_id, 1)
 
 
+class TestFixoAntesDoEsporadico(BaseAlocacao):
+    def test_fixo_com_muitas_rotas_ganha_de_esporadico_zerado(self):
+        fixo = replace(_motorista(50), posicao="FIXO")
+        espor = _motorista(1)
+        escolhido = self.escolher([espor, fixo], rotas_7d={50: 10, 1: 0})
+        self.assertEqual(escolhido.agent_id, 50)
+
+    def test_dois_fixos_seguem_a_regra_de_hoje(self):
+        f1 = replace(_motorista(1), posicao="FIXO")
+        f2 = replace(_motorista(2), posicao="FIXO")
+        escolhido = self.escolher([f1, f2], rotas_7d={1: 4, 2: 1})
+        self.assertEqual(escolhido.agent_id, 2)
+
+    def test_fixo_inelegivel_deixa_o_esporadico_ser_escolhido(self):
+        fixo = replace(_motorista(1, zonas=("ZONA NORTE",)), posicao="FIXO")
+        espor = _motorista(2, zonas=("ZONA SUL",))
+        with mock.patch.object(
+            alocacao_motoristas, "classificar_rota_zona", lambda *a, **k: "ZONA SUL"
+        ):
+            escolhido = self.escolher([fixo, espor])
+        self.assertEqual(escolhido.agent_id, 2)
+
+    def test_todos_esporadicos_escolhe_igual_a_antes(self):
+        escolhido = self.escolher([_motorista(1), _motorista(99)],
+                                  rotas_7d={1: 4, 99: 0})
+        self.assertEqual(escolhido.agent_id, 99)
+
+
 class TestCompatibilidade(BaseAlocacao):
     def test_sem_parametros_novos_escolhe_igual_a_antes(self):
         # Comportamento historico: menor carga do dia, desempate por agent_id.

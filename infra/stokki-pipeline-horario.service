@@ -1,0 +1,11 @@
+[Unit]
+Description=Stokki Eventos - Importacao Stokki -> Vuupt de hora em hora (pipeline.py --horario; desiste se a sessao da Stokki estiver em uso)
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+# --fila-freshhub (plano 1.2 do sistema novo): depois dos pedidos da Stokki, atende a fila de replica do
+# freshhub (cria o servico na Vuupt pelo id da Stokki). Sem freshhub_api no config.yaml, nao faz nada.
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/pipeline.py --horario --fila-freshhub

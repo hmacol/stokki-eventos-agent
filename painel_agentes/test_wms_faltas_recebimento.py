@@ -95,20 +95,21 @@ class Base(unittest.TestCase):
 
 class TestEncerrarComDivergencia(Base):
     def test_sem_falta_nenhuma_nao_deixa_encerrar_com_divergencia(self):
-        """Recebimento que chegou inteiro fecha sozinho -- o botao nao serve
-        pra ele, e nao pode gerar relatorio de falta que nao existe."""
+        """Recebimento que chegou inteiro nao gera relatorio de falta que nao
+        existe; ele continua ESPERADO ate o botao Encerrar recebimento."""
         self._enderecar(1, 10)
         self._enderecar(2, 6)
         self.assertEqual(
             self.conn.execute("SELECT estado FROM wms_recebimentos WHERE id = ?", (self.rid,)).fetchone()[0],
-            "ENDERECADO")
+            "ESPERADO")
         with self.assertRaises(wms.ErroWMS):
             wms_pedidos.encerrar_com_divergencia(self.conn, self.rid, "nada faltou")
 
     def test_encerramento_normal_nao_dispara_email(self):
-        """Fechou sozinho (ENDERECADO) -> nao ha o que reportar."""
+        """Encerrado sem falta (ENDERECADO) -> nao ha o que reportar."""
         self._enderecar(1, 10)
         self._enderecar(2, 6)
+        wms_pedidos.encerrar_recebimento(self.conn, self.rid, "", operador={"nome": "Jonas"})
         r, envio = self._notificar()
         self.assertFalse(r["enviado"])
         self.assertEqual(r["motivo"], "nao_encerrado")
@@ -357,19 +358,77 @@ class TestEmailIdentificaACarga(Base):
 
 
 class TestUmCriterioSo(Base):
-    """Fechar sozinho e "nao ha falta nenhuma" -- a mesma funcao decide as
-    duas coisas. Enquanto eram duas comparacoes iguais em lugares
-    diferentes, divergir criava o recebimento que nao fecha e tambem nao
-    tem falta pra reportar."""
+    """O encerramento (botao, desde 02/11) usa faltas_do_recebimento pra
+    decidir entre ENDERECADO e DIVERGENCIA: o mesmo criterio do relatorio
+    que vai pro cliente."""
 
-    def test_fecha_sozinho_exatamente_quando_nao_ha_falta(self):
-        for linha, qtd in ((1, 4), (1, 6), (2, 6)):
+    def test_nunca_fecha_sozinho(self):
+        for linha, qtd in ((1, 4), (1, 6), (2, 6), (2, 3)):
             self._enderecar(linha, qtd)
             estado = self.conn.execute("SELECT estado FROM wms_recebimentos WHERE id = ?",
                                        (self.rid,)).fetchone()[0]
-            sem_falta = not wms_pedidos.faltas_do_recebimento(self.conn, self.rid)
-            self.assertEqual(estado == "ENDERECADO", sem_falta,
-                             f"depois de {qtd} na linha {linha}: estado={estado}, sem_falta={sem_falta}")
+            self.assertEqual(estado, "ESPERADO", f"depois de {qtd} na linha {linha}")
+
+    def test_encerrar_sem_falta_vira_enderecado_com_falta_vira_divergencia(self):
+        self._enderecar(1, 10)
+        self._enderecar(2, 6)
+        r = wms_pedidos.encerrar_recebimento(self.conn, self.rid, "", operador={"nome": "Jonas"})
+        self.assertEqual(r["recebimento"]["estado"], "ENDERECADO")
+        self.assertEqual(r["recebimento"]["encerrado_por"], "Jonas")
+        self.assertFalse(r["resumo"]["divergente"])
+
+    def test_encerrar_com_falta_congela_e_vira_divergencia(self):
+        self._enderecar(1, 6)
+        r = wms_pedidos.encerrar_recebimento(self.conn, self.rid, "nao veio", operador={"nome": "Jonas"})
+        self.assertEqual(r["recebimento"]["estado"], "DIVERGENCIA")
+        self.assertEqual(sorted((f["linha"], f["falta_un"]) for f in r["faltas"]), [(1, 4.0), (2, 6.0)])
+
+    def test_encerrar_so_com_sobra_vira_enderecado_sem_falta(self):
+        self._enderecar(1, 12)   # 2 a mais
+        self._enderecar(2, 6)
+        r = wms_pedidos.encerrar_recebimento(self.conn, self.rid, "2 caixas a mais")
+        self.assertEqual(r["recebimento"]["estado"], "ENDERECADO")
+        self.assertEqual(r["faltas"], [])
+        self.assertEqual(r["resumo"]["sobras"], 1)
+        self.assertEqual(r["recebimento"]["observacao_divergencia"], "2 caixas a mais")
+
+    def test_encerrar_duas_vezes_recusa(self):
+        self._enderecar(1, 10)
+        self._enderecar(2, 6)
+        wms_pedidos.encerrar_recebimento(self.conn, self.rid)
+        with self.assertRaises(wms.ErroWMS):
+            wms_pedidos.encerrar_recebimento(self.conn, self.rid)
+
+
+class TestResumoEncerramento(Base):
+    def test_situacao_de_cada_linha(self):
+        self._enderecar(1, 7)    # falta 3
+        self._enderecar(2, 8)    # sobra 2
+        res = wms_pedidos.resumo_encerramento(self.conn, self.rid)
+        por_linha = {l["linha"]: l for l in res["linhas"]}
+        self.assertEqual((por_linha[1]["anunciado"], por_linha[1]["recebido"], por_linha[1]["diferenca"],
+                          por_linha[1]["situacao"]), (10.0, 7.0, -3.0, "FALTA"))
+        self.assertEqual((por_linha[2]["diferenca"], por_linha[2]["situacao"]), (2.0, "SOBRA"))
+        self.assertEqual((res["faltas"], res["sobras"], res["sem_cadastro"], res["divergente"]), (1, 1, 0, True))
+
+    def test_tudo_certo_nao_e_divergente(self):
+        self._enderecar(1, 10)
+        self._enderecar(2, 6)
+        res = wms_pedidos.resumo_encerramento(self.conn, self.rid)
+        self.assertEqual([l["situacao"] for l in res["linhas"]], ["OK", "OK"])
+        self.assertFalse(res["divergente"])
+
+    def test_linha_sem_cadastro_nao_e_falta(self):
+        self.conn.execute("UPDATE wms_recebimento_itens SET produto_id = NULL, qtd_un = NULL, "
+                          "motivo_pendencia = 'sem produto' WHERE recebimento_id = ? AND linha = 2", (self.rid,))
+        self.conn.commit()
+        self._enderecar(1, 10)
+        res = wms_pedidos.resumo_encerramento(self.conn, self.rid)
+        l2 = [l for l in res["linhas"] if l["linha"] == 2][0]
+        self.assertEqual((l2["situacao"], l2["anunciado"], l2["diferenca"]), ("SEM_CADASTRO", 6.0, None))
+        self.assertEqual((res["faltas"], res["sem_cadastro"]), (0, 1))
+        r = wms_pedidos.encerrar_recebimento(self.conn, self.rid)
+        self.assertEqual(r["recebimento"]["estado"], "ENDERECADO")
 
     def test_enderecamento_atrasado_nao_apaga_o_encerramento_com_divergencia(self):
         self._enderecar(1, 6)
@@ -435,18 +494,24 @@ class TestTelaDoGalpao(unittest.TestCase):
     _WMS = (Path(__file__).parent / "templates" / "wms.html").read_text(encoding="utf-8")
 
     def test_posta_na_rota_de_encerrar(self):
-        self.assertIn("'/recebimentos/' + r.id + '/encerrar-divergencia'", self._WMS)
+        self.assertIn("'/recebimentos/' + r.id + '/encerrar'", self._WMS)
+        self.assertIn("'/recebimentos/' + r.id + '/encerramento'", self._WMS)
+        self.assertIn('id="btn-encerrar"', self._WMS)
 
-    def test_pede_confirmacao_dizendo_que_o_cliente_sera_avisado(self):
-        self.assertIn("O cliente vai receber por e-mail", self._WMS)
-        self.assertIn("confirm(", self._WMS)
+    def test_avisa_que_o_cliente_recebe_o_relatorio_quando_falta(self):
+        self.assertIn("o cliente recebe o relatório de faltas por e-mail", self._WMS)
 
     def test_manda_a_observacao_do_operador(self):
-        self.assertIn("div-obs", self._WMS)
-        self.assertIn("body: { observacao: obs }", self._WMS)
+        self.assertIn("enc-obs", self._WMS)
+        self.assertIn("body: { observacao: (document.getElementById('enc-obs')", self._WMS)
 
-    def test_linha_sem_produto_no_catalogo_nao_entra_nas_faltas_da_tela(self):
-        self.assertIn(".filter((it) => it.produto_id && it.qtd_un !== null && it.falta > 0)", self._WMS)
+    def test_linha_sem_produto_no_catalogo_aparece_como_sem_cadastro(self):
+        self.assertIn("SEM_CADASTRO", self._WMS)
+
+    def test_sobra_pede_confirmacao_ou_reconferencia(self):
+        self.assertIn("function confirmarSobra(", self._WMS)
+        self.assertIn("Reconferir", self._WMS)
+        self.assertIn("confirmar_sobra: true", self._WMS)
 
     def test_tentativa_repetida_nao_aparece_como_erro_pro_operador(self):
         """Resposta perdida no tablet + novo toque: o trabalho dele ja foi

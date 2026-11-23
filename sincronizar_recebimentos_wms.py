@@ -59,6 +59,7 @@ import yaml
 
 import wms_pedidos
 import entradas as portal_entradas
+import wms_pilotos
 from stokki import recebimentos as stokki_recebimentos
 from stokki import sessao_uso
 from stokki.auth import StokkiSession
@@ -71,7 +72,7 @@ logger = logging.getLogger("sincronizar_recebimentos_wms")
 # faz sentido esperar mais que isso -- so perderia a proxima janela tambem.
 DONO_TRAVA = "wms-recebimentos"
 TRAVA_TTL_SEGUNDOS = 600
-TRAVA_ESPERA_SEGUNDOS = 120
+TRAVA_ESPERA_SEGUNDOS = None  # 05/10 (Hugo): fila, espera a vez sem limite
 
 _PADRAO_STKKC_ID = re.compile(r"#stkkc-(\d+)")
 
@@ -168,7 +169,11 @@ def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste:
         # Leitura HTTP fora da transacao; commit por recebimento, porque o
         # dados.db e compartilhado com o painel e todos os agentes.
         try:
-            detalhe = stokki_recebimentos.ler_detalhe(sess, dados["id_stokki"])
+            # "Aguardando recebimento" (22/11, Hugo): a mercadoria chegou e quem recebe e o
+            # NOSSO app. A Stokki ainda nao tem a quantidade recebida, entao a entrada
+            # esperada nasce com a quantidade do pedido de compra. "Em transito" segue fora.
+            aguardando = "AGUARDANDO" in _sem_acento(dados.get("situacao", "")).upper()
+            detalhe = stokki_recebimentos.ler_detalhe(sess, dados["id_stokki"], usar_esperada=aguardando)
             itens = detalhe["itens"]
         except Exception as e:  # noqa: BLE001 -- um recebimento ruim nao derruba a rodada
             logger.warning("Leitura do recebimento %s falhou: %s", dados["id_stokki"], e)
@@ -233,8 +238,11 @@ def main(argv=None) -> int:
         handlers=[logging.StreamHandler(),
                   logging.FileHandler(_RAIZ / "dados" / "wms_recebimentos.log", encoding="utf-8")])
     config = _carregar_config()
-    piloto_id = (args.embarcador_id or _piloto_id(config)).strip()
-    piloto_nome = (args.embarcador or _piloto_nome(config)).strip().upper()
+    # Varios pilotos (17/11): lista wms.pilotos do config; --embarcador-id roda so aquele.
+    if args.embarcador_id:
+        alvos = [(args.embarcador_id.strip(), (args.embarcador or _piloto_nome(config)).strip().upper())]
+    else:
+        alvos = [(str(p["id"]), p["nome"]) for p in wms_pilotos.pilotos(config)]
 
     # Trava cooperativa da sessao Stokki (sessao unica -- ver stokki/sessao_uso.py
     # e sincronizar_pedidos_wms.py). Adquire ANTES de abrir a conexao com o
@@ -242,7 +250,7 @@ def main(argv=None) -> int:
     # tocar em nada. Vale tambem pro --modo-teste (ele le da Stokki de
     # verdade, so pula a escrita).
     if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=TRAVA_TTL_SEGUNDOS,
-                                esperar_segundos=TRAVA_ESPERA_SEGUNDOS):
+                                esperar_segundos=TRAVA_ESPERA_SEGUNDOS, alternativa=True):
         # Sai com 0: desistir por trava ocupada e operacao NORMAL, nao
         # falha (o .service tem OnFailure=stokki-alerta-falha@%n, que
         # alertava a cada rodada). Mesmo precedente de
@@ -251,17 +259,27 @@ def main(argv=None) -> int:
         logger.warning("Stokki ocupada por '%s' -- desistindo desta rodada (proxima em 30 min).", ocupante)
         return 0
 
-    t0 = time.time()
+    erro = None
     try:
         conn = wms_pedidos.conectar()
         sess = StokkiSession(config)
         try:
-            res = rodar(conn, sess, piloto_nome, piloto_id, args.limite, args.modo_teste)
+            for piloto_id, piloto_nome in alvos:
+                t0 = time.time()
+                try:
+                    res = rodar(conn, sess, piloto_nome, piloto_id, args.limite, args.modo_teste)
+                except Exception as e:  # noqa: BLE001 -- um piloto ruim nao impede o seguinte
+                    logger.exception("Piloto %s (#stkkc-%s) falhou", piloto_nome, piloto_id)
+                    conn.rollback()
+                    erro = erro or e
+                    continue
+                logger.info("Piloto %s (#stkkc-%s): %s (%.0fs)", piloto_nome, piloto_id, res, time.time() - t0)
         finally:
             conn.close()
     finally:
         sessao_uso.liberar(DONO_TRAVA)
-    logger.info("Piloto %s (#stkkc-%s): %s (%.0fs)", piloto_nome, piloto_id, res, time.time() - t0)
+    if erro:
+        raise erro  # a rodada falha (OnFailure avisa), mas so depois de tentar todos
     return 0
 
 

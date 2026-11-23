@@ -16,6 +16,7 @@ sys.path.insert(0, str(_RAIZ))
 sys.path.insert(0, str(Path(__file__).parent))
 
 import wms  # noqa: E402
+import wms_caixas  # noqa: E402
 import wms_etiqueta_produto as etq  # noqa: E402
 import wms_pedidos  # noqa: E402
 
@@ -28,9 +29,15 @@ class TestConteudoQR(unittest.TestCase):
     def test_sem_validade_deixa_o_campo_vazio(self):
         self.assertEqual(etq.conteudo_qr("72400017", "L-A", None), "FL|72400017|L-A|")
 
-    def test_parse_devolve_os_tres_campos(self):
+    def test_qr_com_serial(self):
+        self.assertEqual(etq.conteudo_qr("72400017", "L-A", "2026-10-15", "C0000001"),
+                         "FL|72400017|L-A|2026-10-15|C0000001")
+        self.assertEqual(etq.parse_qr("FL|72400017|L-A|2026-10-15|C0000001")["serial"], "C0000001")
+
+    def test_parse_da_etiqueta_antiga_tem_serial_vazio(self):
+        # substitui test_parse_devolve_os_tres_campos
         self.assertEqual(etq.parse_qr("FL|72400017|L-A|2026-10-15"),
-                         {"sku": "72400017", "lote": "L-A", "validade": "2026-10-15"})
+                         {"sku": "72400017", "lote": "L-A", "validade": "2026-10-15", "serial": ""})
 
     def test_parse_ignora_o_que_nao_e_nosso(self):
         self.assertIsNone(etq.parse_qr("POS:C9-E1-N1"))
@@ -145,9 +152,15 @@ class TestProdutoSemSKU(unittest.TestCase):
         self.assertEqual(lido["tipo"], "produto_lote")
         self.assertEqual(lido["produtos"][0]["id"], 1)
 
-    def test_sem_sku_e_sem_ean_recusa_em_vez_de_imprimir_etiqueta_cega(self):
-        with self.assertRaises(wms.ErroWMS):
-            etq.gerar_etiquetas_produto_pdf(self.conn, 2, "L-A", "2026-10-15")
+    def test_produto_sem_sku_e_sem_ean_ganha_codigo_interno_em_vez_de_recusar(self):
+        # substitui o teste que esperava ErroWMS
+        pdf = etq.gerar_etiquetas_produto_pdf(self.conn, 2, "L-A", "2026-10-15")
+        self.assertTrue(pdf.startswith(b"%PDF"))
+        codigo = self.conn.execute("SELECT codigo_interno FROM wms_produtos WHERE id = 2").fetchone()[0]
+        self.assertEqual(codigo, "FLP000001")
+        r = wms.ler_codigo(self.conn, etq.conteudo_qr(codigo, "L-A", "2026-10-15"))
+        self.assertEqual(r["tipo"], "produto_lote")
+        self.assertEqual(r["produtos"][0]["id"], 2)
 
 
 class TestCorteDeTexto(unittest.TestCase):
@@ -165,6 +178,76 @@ class TestCorteDeTexto(unittest.TestCase):
         # nenhuma palavra picada no meio
         self.assertTrue(texto.startswith(cortado[:-1].rstrip()))
         self.assertIn(cortado[:-1].rstrip().split()[-1], texto.split())
+
+
+class TestCaixasEtiqueta(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.conn = wms_caixas.conectar(Path(self._tmp.name) / "dados.db")
+        self.conn.execute(
+            "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, embarcador_id, ean, "
+            "qtd_por_caixa, unidade, controla_validade, atualizado_em) VALUES (1, 900, '72400017', "
+            "'COXINHA FESTA ZC 5KG PCT', 'MARIA DOLORES', 48, NULL, 6, 'UN', 1, '2026-09-21 10:00:00')")
+        self.conn.commit()
+
+    def tearDown(self):
+        self.conn.close()
+        self._tmp.cleanup()
+
+    def _criar(self, n=1):
+        return wms_caixas.criar_caixas(self.conn, produto_id=1, lote="L1", validade="2026-12-15",
+                                       qtd_un=None, quantidade=n)["seriais"]
+
+    def test_pdf_de_caixas_tem_uma_pagina_por_serial(self):
+        import re
+        seriais = self._criar(3)
+        pdf = etq.gerar_pdf_caixas(self.conn, seriais)
+        self.assertTrue(pdf.startswith(b"%PDF"))
+        self.assertEqual(len(re.findall(rb"/Type\s*/Page(?![s\w])", pdf)), 3)
+
+    def test_pdf_recusa_serial_cancelado_ou_inexistente(self):
+        seriais = self._criar(2)
+        self.conn.execute("UPDATE wms_caixas SET situacao = 'CANCELADA' WHERE serial = ?", (seriais[1],))
+        self.conn.commit()
+        with self.assertRaises(wms.ErroWMS):
+            etq.gerar_pdf_caixas(self.conn, seriais)
+        with self.assertRaises(wms.ErroWMS):
+            etq.gerar_pdf_caixas(self.conn, ["C9999999"])
+        with self.assertRaises(wms.ErroWMS):
+            etq.gerar_pdf_caixas(self.conn, [])
+
+    def test_reimpressao_de_caixa_em_estoque_funciona(self):
+        s = self._criar(1)
+        self.conn.execute("UPDATE wms_caixas SET situacao = 'EM_ESTOQUE' WHERE serial = ?", (s[0],))
+        self.conn.commit()
+        self.assertTrue(etq.gerar_pdf_caixas(self.conn, s).startswith(b"%PDF"))
+
+    def test_ler_codigo_qr_com_serial_vira_caixa(self):
+        self._criar(1)
+        r = wms.ler_codigo(self.conn, "FL|72400017|L1|2026-12-15|C0000001")
+        self.assertEqual((r["tipo"], r["caixa"]["serial"]), ("caixa", "C0000001"))
+
+    def test_ler_codigo_com_serial_inexistente(self):
+        r = wms.ler_codigo(self.conn, "FL|72400017|L1|2026-12-15|C0000099")
+        self.assertEqual((r["tipo"], r["serial"]), ("caixa_inexistente", "C0000099"))
+
+    def test_ler_codigo_com_serial_em_conexao_sem_tabelas_de_caixa(self):
+        conn = wms_pedidos.conectar(Path(self._tmp.name) / "outro.db")
+        try:
+            r = wms.ler_codigo(conn, "FL|72400017|L1|2026-12-15|C0000001")
+            self.assertEqual(r["tipo"], "caixa_inexistente")
+        finally:
+            conn.close()
+
+    def test_qr_sem_serial_nao_vira_caixa(self):
+        self._criar(1)
+        self.assertEqual(wms.ler_codigo(self.conn, "FL|72400017|L1|2026-12-15")["tipo"], "produto_lote")
+
+    def test_buscar_pelo_codigo_interno(self):
+        codigo = wms_caixas.garantir_codigo_interno(self.conn, 1)
+        achados = wms.buscar_por_codigo(self.conn, codigo)
+        self.assertEqual([(p["id"], p["lido_como"]) for p in achados], [(1, "INTERNO")])
+        self.assertEqual(len(wms.buscar_por_codigo(self.conn, codigo.lower())), 1)
 
 
 if __name__ == "__main__":

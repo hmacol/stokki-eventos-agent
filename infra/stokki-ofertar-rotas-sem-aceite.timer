@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-ofertar-rotas-sem-aceite.service 2 min depois de cada rodada terminar
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=2min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

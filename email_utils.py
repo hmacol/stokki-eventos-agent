@@ -160,6 +160,14 @@ def notificacoes_automaticas_ativas(config: dict) -> bool:
     return bool((config or {}).get("notificacoes_automaticas", {}).get("ativo", True))
 
 
+def notificacao_transportadoras_ativa(config: dict) -> bool:
+    """Flag PRÓPRIO do e-mail às transportadoras (notificar_transportadoras.py),
+    exigido ALÉM da chave-mestra (Hugo, 23/10: ligar os e-mails aos
+    embarcadores não liga as transportadoras). config.yaml:
+    notificacao_transportadoras.ativo -- default False (ausente = desligado)."""
+    return bool((config or {}).get("notificacao_transportadoras", {}).get("ativo", False))
+
+
 def notificacao_pedidos_em_espera_ativa(config: dict) -> bool:
     """Flag PRÓPRIO da cobrança de XML dos pedidos em espera
     (notificar_pedidos_em_espera.py). Separado da chave-mestra

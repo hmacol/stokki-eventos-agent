@@ -1,0 +1,335 @@
+{% extends "base.html" %}
+{% block titulo %}Ondas{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  main { max-width: 1180px; }
+  .cabecalho-pagina { margin-bottom: 14px; }
+  .cabecalho-pagina h1 { font-size: 20px; margin: 0; }
+  .cabecalho-pagina p { margin: 4px 0 0; color: var(--texto-suave); font-size: 12.5px; max-width: 80ch; }
+  .bloco { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
+  .bloco h2 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .filtros { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .filtros select, .falta-item select { padding: 7px 10px; border: 1px solid var(--borda); border-radius: 6px; background: var(--fundo); color: var(--texto); font: inherit; font-size: 13px; }
+  .datas { display: flex; flex-wrap: wrap; gap: 6px; }
+  .datas button { padding: 6px 11px; border: 1px solid var(--borda); border-radius: 999px; background: var(--fundo); color: var(--texto); font: inherit; font-size: 12.5px; cursor: pointer; }
+  .datas button.on { background: var(--primaria); border-color: var(--primaria); color: #fff; }
+  .datas button b { font-variant-numeric: tabular-nums; }
+  .rolagem { overflow-x: auto; }
+  table.tab { width: 100%; border-collapse: collapse; }
+  table.tab th, table.tab td { padding: 8px 10px; text-align: left; font-size: 13px; border-bottom: 1px solid var(--borda); vertical-align: middle; white-space: nowrap; }
+  table.tab th { color: var(--texto-suave); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  table.tab tr:last-child td { border-bottom: none; }
+  table.tab td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.tab td.quebra { white-space: normal; min-width: 180px; }
+  .vazio { color: var(--texto-suave); font-size: 13px; padding: 10px 2px; }
+  .selo { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; background: var(--nunca-bg); color: var(--texto-suave); }
+  .selo.ok { background: var(--sucesso-bg); color: var(--acento-texto); }
+  .selo.atencao { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .selo.erro { background: var(--erro-bg); color: var(--erro-texto); }
+  .rodape-bloco { display: flex; align-items: center; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+  .btn { padding: 8px 14px; border: 1px solid var(--borda); border-radius: 6px; background: var(--fundo); color: var(--texto); font: inherit; font-size: 13px; cursor: pointer; }
+  .btn.primario { background: var(--acento); border-color: var(--acento); color: #fff; font-weight: 600; }
+  .btn.perigo { color: var(--erro-texto); }
+  .btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+  .mono { font-family: ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
+  #aviso { font-size: 13px; margin: 0 0 12px; min-height: 1.2em; }
+  #aviso.erro { color: var(--erro-texto); }
+  #aviso.ok { color: var(--acento-texto); }
+  .falta-item { border: 1px solid var(--borda); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .falta-item .topo { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .falta-item ul { margin: 6px 0 8px; padding-left: 18px; font-size: 13px; }
+  .falta-item input { padding: 7px 10px; border: 1px solid var(--borda); border-radius: 6px; background: var(--fundo); color: var(--texto); font: inherit; font-size: 13px; min-width: 240px; flex: 1; }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<div class="cabecalho-pagina">
+  <h1>Ondas</h1>
+  <p>Monte a onda de separação por embarcador e data de entrega, decida os pedidos que a conferência travou e acompanhe cada pedido. A equipe separa, confere e etiqueta no app do galpão.</p>
+</div>
+<p id="aviso" role="alert"></p>
+
+<section class="bloco">
+  <h2>Planilha de lotes do cliente</h2>
+  <p class="vazio" style="padding:0 0 8px">Quando o cliente pede lote específico, envie aqui a planilha dele (por nota fiscal e produto). O que não tiver lote indicado sai pelo que vence primeiro.</p>
+  <div class="filtros" style="margin-bottom:0">
+    <label for="sel-emb-lotes">Embarcador</label>
+    <select id="sel-emb-lotes">
+      {% for e in pilotos %}<option value="{{ e.id }}">{{ e.nome }}</option>{% endfor %}
+    </select>
+    <input type="file" id="arq-lotes" accept=".xls,.xlsx,.xlsm" aria-label="Arquivo da planilha de lotes">
+    <button type="button" class="btn" id="btn-lotes-planilha">Enviar planilha</button>
+  </div>
+  <div id="resultado-lotes"></div>
+</section>
+<script>
+(function() {
+  const aviso = document.getElementById("aviso");
+  function esc(t) { const d = document.createElement("div"); d.textContent = t == null ? "" : String(t); return d.innerHTML; }
+  function num(v) { const n = Number(v); return Number.isInteger(n) ? String(n) : n.toLocaleString("pt-BR", { maximumFractionDigits: 3 }); }
+  function dizer(msg, tipo) { aviso.textContent = msg || ""; aviso.className = tipo || ""; }
+  document.getElementById("btn-lotes-planilha").addEventListener("click", async function(ev) {
+    const campo = document.getElementById("arq-lotes");
+    const alvo = document.getElementById("resultado-lotes");
+    if (!campo.files.length) { dizer("Escolha o arquivo da planilha de lotes.", "erro"); return; }
+    const corpo = new FormData();
+    corpo.append("arquivo", campo.files[0]);
+    corpo.append("embarcador_id", document.getElementById("sel-emb-lotes").value);
+    ev.target.disabled = true;
+    try {
+      const resp = await fetch("{{ url_for('api_ondas_lotes_planilha') }}", { method: "POST", body: corpo, credentials: "same-origin", headers: { "Accept": "application/json" } });
+      const r = await resp.json().catch(function() { return {}; });
+      if (!resp.ok) throw new Error(r.erro || ("Erro " + resp.status));
+      dizer("Planilha lida: " + r.gravadas + " indicação(ões) de lote gravada(s); " + r.sem_lote + " linha(s) sem lote saem pelo que vence primeiro.", "ok");
+      alvo.innerHTML = '<div class="falta-item" style="margin-top:10px">' +
+        (r.avisos.length ? "<ul>" + r.avisos.map(function(a) { return "<li>" + esc(a) + "</li>"; }).join("") + "</ul>" : "") +
+        '<div class="rolagem"><table class="tab"><thead><tr><th>NF</th><th>Pedido</th><th>SKU</th><th>Lote</th><th>Quantidade</th><th>Cliente</th></tr></thead><tbody>' +
+        r.linhas.map(function(l) {
+          return '<tr><td class="mono">' + esc(l.nf) + '</td><td class="mono">' + (esc(l.codigo_ps) || '<span class="selo">ainda não chegou</span>') + "</td><td>" + esc(l.sku) +
+            "</td><td><b>" + esc(l.lote) + '</b></td><td class="num">' + num(l.qtd_un) + '</td><td class="quebra">' + esc(l.cliente) + "</td></tr>";
+        }).join("") + "</tbody></table></div></div>";
+      campo.value = "";
+      document.dispatchEvent(new CustomEvent("lotes-importados"));
+    } catch (e) { dizer(e.message, "erro"); }
+    ev.target.disabled = false;
+  });
+})();
+</script>
+
+{% if not embarcadores %}
+<div class="bloco"><div class="vazio">Nenhum embarcador opera por caixa ainda (config <span class="mono">wms.pilotos</span>). Sem isso não há onda.</div></div>
+{% else %}
+
+<section class="bloco" id="bloco-faltas" hidden>
+  <h2>Faltas esperando decisão <span class="selo erro" id="n-faltas"></span></h2>
+  <div id="faltas"></div>
+</section>
+
+<section class="bloco">
+  <h2>Montar onda</h2>
+  <div class="filtros">
+    <label for="sel-embarcador">Embarcador</label>
+    <select id="sel-embarcador">
+      {% for e in embarcadores %}<option value="{{ e.id }}">{{ e.nome }}</option>{% endfor %}
+    </select>
+    <div class="datas" id="datas"></div>
+  </div>
+  <div class="rolagem">
+    <table class="tab" id="tab-pedidos">
+      <thead><tr><th><input type="checkbox" id="marcar-todos" aria-label="Marcar todos"></th><th>Pedido</th><th>Entrega</th><th>Destinatário</th><th>Cidade</th><th>Linhas</th><th>Unidades</th><th>Estoque</th><th>Na Stokki</th><th>Lote</th></tr></thead>
+      <tbody><tr><td colspan="10" class="vazio">Carregando…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="rodape-bloco">
+    <button type="button" class="btn primario" id="btn-montar" disabled>Montar onda</button>
+    <span id="resumo-selecao" class="vazio" style="padding:0"></span>
+  </div>
+  <div id="ondas-vivas" style="margin-top:14px"></div>
+</section>
+
+<section class="bloco">
+  <h2>Andamento <button type="button" class="btn" id="btn-atualizar" style="margin-left:auto">Atualizar</button></h2>
+  <div class="rolagem">
+    <table class="tab" id="tab-andamento">
+      <thead><tr><th>Pedido</th><th>Etapa</th><th>Onda</th><th>Entrega</th><th>Destinatário</th><th>Separou</th><th>Conferiu</th><th>Volumes</th><th>Lotes</th><th>Na Stokki</th><th>Atualizado</th></tr></thead>
+      <tbody><tr><td colspan="11" class="vazio">Carregando…</td></tr></tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+(function() {
+  const URL_PEDIDOS = "{{ url_for('api_ondas_pedidos') }}";
+  const URL_MONTAR = "{{ url_for('api_ondas_montar') }}";
+  const URL_CANCELAR = "{{ url_for('api_ondas_cancelar', onda_id=0) }}";
+  const URL_ANDAMENTO = "{{ url_for('api_ondas_andamento') }}";
+  const URL_FALTAS = "{{ url_for('api_ondas_faltas') }}";
+  const URL_DECIDIR = "{{ url_for('api_ondas_faltas_decidir', pedido_id=0) }}";
+  const URL_LIBERAR = "{{ url_for('api_ondas_conferencia_liberar', pedido_id=0) }}";
+  const URL_LOTES = "{{ url_for('api_ondas_pedido_lotes', pedido_id=0) }}";
+  const sel = document.getElementById("sel-embarcador");
+  const aviso = document.getElementById("aviso");
+  const corpoPedidos = document.querySelector("#tab-pedidos tbody");
+  let dataEscolhida = "";   // "" = todas; "sem" = sem data; AAAA-MM-DD
+  const ETAPAS = { NA_ONDA: ["na onda", ""], SEPARANDO: ["separando", "atencao"], SEPARADO: ["separado", "atencao"],
+                   CONFERINDO: ["conferindo", "atencao"], AGUARDANDO_DECISAO: ["esperando decisão", "erro"],
+                   CONFERIDO: ["conferido", "ok"], EMBALADO: ["embalado", "ok"] };
+
+  function esc(t) { const d = document.createElement("div"); d.textContent = t == null ? "" : String(t); return d.innerHTML; }
+  function num(v) { const n = Number(v); return Number.isInteger(n) ? String(n) : n.toLocaleString("pt-BR", { maximumFractionDigits: 3 }); }
+  function dataBr(iso) { return iso ? iso.slice(8, 10) + "/" + iso.slice(5, 7) : ""; }
+  function dizer(msg, tipo) { aviso.textContent = msg || ""; aviso.className = tipo || ""; }
+  async function chamar(url, corpo) {
+    const init = { credentials: "same-origin", headers: { "Accept": "application/json" } };
+    if (corpo !== undefined) { init.method = "POST"; init.headers["Content-Type"] = "application/json"; init.body = JSON.stringify(corpo); }
+    const r = await fetch(url, init);
+    const j = await r.json().catch(function() { return {}; });
+    if (!r.ok) throw new Error(j.erro || ("Erro " + r.status));
+    return j;
+  }
+  function entrega(p) {
+    if (!p.data_entrega) return '<span class="selo">sem data</span>';
+    const hoje = new Date().toLocaleDateString("sv-SE");
+    const atrasada = p.data_entrega < hoje;
+    let t = dataBr(p.data_entrega) + ' <span class="selo' + (atrasada ? " erro" : "") + '">' + (p.fonte_data === "agendamento" ? "agendado" : "expedição") + (atrasada ? " · atrasada" : "") + "</span>";
+    if (p.regiao) t += ' <span class="selo atencao" title="A data de expedição foi empurrada para o dia de entrega da região">' + esc(p.regiao) + "</span>";
+    return t;
+  }
+
+  async function carregarPedidos() {
+    const url = URL_PEDIDOS + "?embarcador_id=" + encodeURIComponent(sel.value) + (dataEscolhida ? "&data_entrega=" + encodeURIComponent(dataEscolhida) : "");
+    try {
+      const r = await chamar(url);
+      const total = r.datas.reduce(function(n, d) { return n + d.pedidos; }, 0);
+      document.getElementById("datas").innerHTML =
+        '<button type="button" data-data="" class="' + (dataEscolhida === "" ? "on" : "") + '">Todas <b>' + total + "</b></button>" +
+        r.datas.map(function(d) {
+          const chave = d.data || "sem";
+          return '<button type="button" data-data="' + chave + '" class="' + (dataEscolhida === chave ? "on" : "") + '">' + (d.data ? dataBr(d.data) : "Sem data") + " <b>" + d.pedidos + "</b></button>";
+        }).join("");
+      corpoPedidos.innerHTML = r.pedidos.map(function(p) {
+        const estoque = p.linhas_sem_cadastro ? '<span class="selo erro">' + p.linhas_sem_cadastro + " item sem cadastro</span>"
+          : (p.falta_un > 0 ? '<span class="selo atencao">faltam ' + num(p.falta_un) + " UN</span>" : '<span class="selo ok">reservado</span>');
+        return '<tr><td><input type="checkbox" class="marca" value="' + p.id + '" aria-label="' + esc(p.codigo_ps) + '"></td><td class="mono">' + esc(p.codigo_ps) +
+          "</td><td>" + entrega(p) + '</td><td class="quebra">' + esc(p.destinatario) + "</td><td>" + esc(p.cidade) + (p.uf ? " - " + esc(p.uf) : "") +
+          '</td><td class="num">' + p.linhas + '</td><td class="num">' + num(p.un) + "</td><td>" + estoque + "</td><td>" + esc(p.situacao) +
+          '</td><td><button type="button" class="btn" data-lotes="' + p.id + '" title="Sem indicação a separação segue o que vence primeiro. Use quando o cliente pedir um lote específico.">Lote do cliente</button>' +
+          ((p.lotes_cliente || []).length ? ' <span class="selo atencao" title="Lote pedido pelo cliente">lote ' + esc(p.lotes_cliente.join(", ")) + "</span>" : "") + "</td></tr>" +
+          '<tr class="linha-lotes" id="lotes-' + p.id + '" hidden><td colspan="10"></td></tr>';
+      }).join("") || '<tr><td colspan="10" class="vazio">Nenhum pedido deste embarcador esperando onda' + (dataEscolhida ? " nesta data" : "") + ".</td></tr>";
+      document.getElementById("marcar-todos").checked = false;
+      document.getElementById("ondas-vivas").innerHTML = r.ondas.length ? '<div class="vazio" style="padding:0 0 6px">Ondas abertas deste embarcador</div>' + r.ondas.map(function(o) {
+        return '<div class="falta-item"><div class="topo"><b>Onda ' + o.id + '</b><span class="selo ' + (o.situacao === "ABERTA" ? "atencao" : "ok") + '">' + (o.situacao === "ABERTA" ? "liberada, ninguém começou" : "em separação") +
+          '</span><span class="mono">' + esc(o.pedidos.join(", ")) + '</span><span class="vazio" style="padding:0">por ' + esc(o.criada_por) + " · " + esc(o.criada_em) + "</span>" +
+          (o.situacao === "ABERTA" ? '<button type="button" class="btn perigo" data-cancelar="' + o.id + '" style="margin-left:auto">Desfazer onda</button>' : "") + "</div></div>";
+      }).join("") : "";
+      atualizarSelecao();
+    } catch (e) { corpoPedidos.innerHTML = '<tr><td colspan="10" class="vazio">' + esc(e.message) + "</td></tr>"; }
+  }
+  // Lote indicado pelo cliente: sem indicação sai primeiro o que vence primeiro
+  function desenharLotes(linha, r) {
+    linha.querySelector("td").innerHTML = '<div class="falta-item" style="margin:0">' + (r.produtos.map(function(p) {
+      // sem indicação do cliente sai o primeiro da lista (o que vence primeiro): mostra o LOTE, não a sigla
+      function rotulo(l) {
+        return "Lote " + esc(l.lote || "(sem lote)") + (l.validade ? " · val. " + dataBr(l.validade) + "/" + l.validade.slice(0, 4) : " · sem validade") +
+          " · " + num(l.livre_un) + " UN livres · " + esc(l.posicoes.join(", "));
+      }
+      const padrao = p.lotes.length ? rotulo(p.lotes[0]) + " (vai este: vence primeiro)" : "Sem caixa disponível deste produto";
+      const opcoes = '<option value="">' + padrao + "</option>" + p.lotes.map(function(l) {
+        return '<option value="' + esc(l.lote) + '"' + (l.lote === p.indicado ? " selected" : "") + ">" + rotulo(l) + " (pedido do cliente)</option>";
+      }).join("");
+      return '<div class="rodape-bloco" style="margin:4px 0"><span style="min-width:260px"><b>' + esc(p.sku) + "</b> " + esc(p.descricao) + " · " + num(p.pedido_un) + ' UN</span>' +
+        '<select data-produto="' + p.produto_id + '" data-pedido="' + r.pedido_id + '" aria-label="Lote de ' + esc(p.sku) + '">' + opcoes + "</select>" +
+        ((p.planilha || []).length ? ' <span class="selo atencao">indicado pelo cliente: ' + p.planilha.map(function(x) { return x.qtd_un == null ? "tudo do lote " + esc(x.lote) : num(x.qtd_un) + " UN do lote " + esc(x.lote); }).join(", ") + "</span>" : "") +
+        (p.indicado && !p.lotes.some(function(l) { return l.lote === p.indicado; }) ? ' <span class="selo erro">lote ' + esc(p.indicado) + " indicado, sem caixa disponível</span>" : "") + "</div>";
+    }).join("") || '<span class="vazio">Pedido sem produto cadastrado.</span>') + "</div>";
+  }
+  corpoPedidos.addEventListener("click", async function(ev) {
+    const b = ev.target.closest("[data-lotes]"); if (!b) return;
+    const linha = document.getElementById("lotes-" + b.dataset.lotes);
+    if (!linha.hidden) { linha.hidden = true; return; }
+    try { desenharLotes(linha, await chamar(URL_LOTES.replace("/0/", "/" + b.dataset.lotes + "/"))); linha.hidden = false; }
+    catch (e) { dizer(e.message, "erro"); }
+  });
+  corpoPedidos.addEventListener("change", async function(ev) {
+    const s = ev.target.closest("select[data-produto]"); if (!s) return;
+    const linha = s.closest("tr");
+    try {
+      const r = await chamar(URL_LOTES.replace("/0/", "/" + s.dataset.pedido + "/"), { produto_id: Number(s.dataset.produto), lote: s.value });
+      desenharLotes(linha, r);
+      dizer(r.codigo_ps + (s.value ? ": lote " + s.value + " indicado. A separação só vai aceitar esse lote." : ": sem lote indicado, sai o lote que vence primeiro."), "ok");
+    } catch (e) { dizer(e.message, "erro"); }
+  });
+  function marcados() { return Array.from(document.querySelectorAll(".marca:checked")).map(function(c) { return Number(c.value); }); }
+  function atualizarSelecao() {
+    const n = marcados().length;
+    document.getElementById("btn-montar").disabled = n === 0;
+    document.getElementById("resumo-selecao").textContent = n ? n + " pedido(s) marcado(s)" : "Marque os pedidos que entram na onda.";
+  }
+
+  async function carregarAndamento() {
+    const corpo = document.querySelector("#tab-andamento tbody");
+    try {
+      const r = await chamar(URL_ANDAMENTO);
+      corpo.innerHTML = r.pedidos.map(function(p) {
+        const e = ETAPAS[p.execucao] || [p.execucao, ""];
+        return '<tr><td class="mono">' + esc(p.codigo_ps) + '</td><td><span class="selo ' + e[1] + '">' + esc(e[0]) + "</span></td><td>" + (p.onda_id || "") +
+          "</td><td>" + (p.data_entrega ? dataBr(p.data_entrega) : "") + '</td><td class="quebra">' + esc(p.destinatario) + "</td><td>" + esc(p.separado_por) +
+          "</td><td>" + esc(p.conferente) + (p.conferencia === "FALTA" ? ' <span class="selo erro">não bateu</span>' : "") +
+          (p.execucao === "CONFERINDO" ? ' <button type="button" class="btn" data-liberar="' + p.pedido_id + '" title="O conferente largou a conferência aberta? Libera o pedido para outra pessoa conferir.">Liberar</button>' : "") +
+          '</td><td class="num">' + (p.volumes || "") + '</td><td class="quebra">' +
+          (p.lotes || []).map(function(l) { return esc(l.sku) + " " + esc(l.lote || "(sem lote)") + (l.validade ? " val. " + dataBr(l.validade) : "") + " · " + num(l.un); }).join("<br>") +
+          "</td><td>" + esc(p.situacao_stokki) + "</td><td>" + esc((p.atualizado_em || "").slice(5, 16)) + "</td></tr>";
+      }).join("") || '<tr><td colspan="11" class="vazio">Nenhum pedido em separação ou conferência.</td></tr>';
+    } catch (e) { corpo.innerHTML = '<tr><td colspan="11" class="vazio">' + esc(e.message) + "</td></tr>"; }
+  }
+
+  async function carregarFaltas() {
+    try {
+      const r = await chamar(URL_FALTAS);
+      document.getElementById("bloco-faltas").hidden = r.faltas.length === 0;
+      document.getElementById("n-faltas").textContent = r.faltas.length;
+      document.getElementById("faltas").innerHTML = r.faltas.map(function(f) {
+        return '<div class="falta-item" data-pedido="' + f.pedido_id + '"><div class="topo"><b class="mono">' + esc(f.codigo_ps) + "</b><span>" + esc(f.destinatario) +
+          '</span><span class="vazio" style="padding:0">conferido por ' + esc(f.conferente) + " · " + esc((f.fechada_em || "").slice(5, 16)) + "</span></div><ul>" +
+          f.faltas.map(function(x) { return "<li>" + esc(x.sku) + " " + esc(x.descricao) + ": pedido " + num(x.esperado_un) + ", conferido <b>" + num(x.conferido_un) + "</b></li>"; }).join("") +
+          f.sobras.map(function(x) { return "<li>" + esc(x.sku) + " " + esc(x.descricao) + ": veio a mais (pedido " + num(x.esperado_un) + ", conferido " + num(x.conferido_un) + ")</li>"; }).join("") +
+          (f.nao_separado || []).map(function(x) { return "<li>" + esc(x.sku) + " " + esc(x.descricao) + ": unidades soltas contadas " + num(x.contado_solto_un) + ", separadas soltas " + num(x.separado_solto_un) + " (o conferente digitou quantidade onde a separação registrou outra coisa)</li>"; }).join("") +
+          (f.sem_cadastro || []).map(function(x) { return "<li>Linha " + esc(x.linha) + " (" + esc(x.sku) + " " + esc(x.descricao) + ", " + num(x.qtd) + "): o sistema não reconhece o produto, confira à mão</li>"; }).join("") +
+          '</ul><div class="rodape-bloco" style="margin-top:0"><input type="text" class="motivo" placeholder="Motivo da decisão (obrigatório)" aria-label="Motivo da decisão do ' + esc(f.codigo_ps) + '">' +
+          '<button type="button" class="btn" data-decisao="VOLTAR">Voltar para separação</button><button type="button" class="btn" data-decisao="PARCIAL">Liberar parcial</button></div></div>';
+      }).join("");
+    } catch (e) { dizer(e.message, "erro"); }
+  }
+
+  sel.addEventListener("change", function() { dataEscolhida = ""; carregarPedidos(); });
+  document.getElementById("datas").addEventListener("click", function(ev) {
+    const b = ev.target.closest("[data-data]"); if (!b) return;
+    dataEscolhida = b.dataset.data; carregarPedidos();
+  });
+  corpoPedidos.addEventListener("change", atualizarSelecao);
+  document.getElementById("marcar-todos").addEventListener("change", function(ev) {
+    document.querySelectorAll(".marca").forEach(function(c) { c.checked = ev.target.checked; }); atualizarSelecao();
+  });
+  document.getElementById("btn-montar").addEventListener("click", async function(ev) {
+    const ids = marcados(); if (!ids.length) return;
+    ev.target.disabled = true;
+    try {
+      const r = await chamar(URL_MONTAR, { embarcador_id: Number(sel.value), pedido_ids: ids });
+      dizer("Onda " + r.onda_id + " montada com " + ids.length + " pedido(s). Ela já aparece na aba Separar do app do galpão.", "ok");
+      carregarPedidos(); carregarAndamento();
+    } catch (e) { dizer(e.message, "erro"); ev.target.disabled = false; }
+  });
+  document.getElementById("ondas-vivas").addEventListener("click", async function(ev) {
+    const b = ev.target.closest("[data-cancelar]"); if (!b) return;
+    b.disabled = true;
+    try { await chamar(URL_CANCELAR.replace("/0/", "/" + b.dataset.cancelar + "/"), {}); dizer("Onda " + b.dataset.cancelar + " desfeita: os pedidos voltaram para a lista.", "ok"); carregarPedidos(); carregarAndamento(); }
+    catch (e) { dizer(e.message, "erro"); b.disabled = false; }
+  });
+  document.getElementById("faltas").addEventListener("click", async function(ev) {
+    const b = ev.target.closest("[data-decisao]"); if (!b) return;
+    const item = b.closest("[data-pedido]");
+    const motivo = item.querySelector(".motivo").value.trim();
+    if (motivo.length < 3) { dizer("Escreva o motivo da decisão antes de escolher.", "erro"); item.querySelector(".motivo").focus(); return; }
+    b.disabled = true;
+    try {
+      const r = await chamar(URL_DECIDIR.replace("/0/", "/" + item.dataset.pedido + "/"), { decisao: b.dataset.decisao, motivo: motivo });
+      dizer(r.codigo_ps + (r.decisao === "VOLTAR" ? ": voltou para separação (onda " + r.onda_id + ")." : ": liberado parcial, segue para volumes."), "ok");
+      carregarFaltas(); carregarAndamento();
+    } catch (e) { dizer(e.message, "erro"); b.disabled = false; }
+  });
+  document.querySelector("#tab-andamento tbody").addEventListener("click", async function(ev) {
+    const b = ev.target.closest("[data-liberar]"); if (!b) return;
+    b.disabled = true;
+    try { const r = await chamar(URL_LIBERAR.replace("/0/", "/" + b.dataset.liberar + "/"), {}); dizer(r.codigo_ps + ": conferência liberada, o pedido voltou para a fila de conferência.", "ok"); carregarAndamento(); }
+    catch (e) { dizer(e.message, "erro"); b.disabled = false; }
+  });
+  document.addEventListener("lotes-importados", function() { carregarPedidos(); });
+  document.getElementById("btn-atualizar").addEventListener("click", function() { carregarPedidos(); carregarAndamento(); carregarFaltas(); });
+  carregarPedidos(); carregarAndamento(); carregarFaltas();
+  setInterval(function() { if (!document.hidden) { carregarAndamento(); carregarFaltas(); } }, 30000);
+})();
+</script>
+{% endif %}
+{% endblock %}

@@ -60,7 +60,7 @@ class Base(unittest.TestCase):
             cfg=cfg or r.ConfigEntregas(ativo=True, forcar_destino=""), agora=AGORA, conn=self.conn,
             enviar=self._enviar, baixar_canhoto=self._baixar, buscar_nf=lambda codigo: "4567",
             portal_url="https://app.freshhub.com.br/cliente", promete_email_reenvio=False,
-            dormir=lambda s: None, **kw)
+            dormir=lambda s: None, db_path=self.pasta / "t.db", **kw)
 
     def _estado(self, sid):
         return fp.estados(self.conn, [sid]).get(sid)

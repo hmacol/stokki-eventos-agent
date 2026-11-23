@@ -2,6 +2,7 @@
 // DOC_EXECUCAO seção 3.4). Pontos vão pra fila offline em lotes; a API
 // soma o km real (nucleo/operacao.calcular_km_gps) e ele entra no
 // financeiro no lugar do km estimado.
+import { Platform } from 'react-native';
 import * as Location from 'expo-location';
 import * as fila from './fila';
 
@@ -29,6 +30,8 @@ export async function posicaoAtual(): Promise<{ latitude: number; longitude: num
 }
 
 export async function iniciar(rotaId: number): Promise<boolean> {
+  // PWA: o navegador não rastreia com a tela bloqueada. Sem trajeto, o km pago é o estimado.
+  if (Platform.OS === 'web') return false;
   if (rotaAtual === rotaId && assinatura) return true;
   await parar();
   const { status } = await Location.requestForegroundPermissionsAsync();

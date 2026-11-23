@@ -66,7 +66,34 @@
 /* Menu agrupado por momento do dia (11/09) -- 13 itens num bloco só
    não se lê. O cabeçalho do grupo é rótulo, não link. */
 .sidebar nav .grupo { display: flex; flex-direction: column; }
-.sidebar nav .grupo + .grupo { margin-top: 12px; }
+.sidebar nav .grupo + .grupo { margin-top: 0; }
+/* Sanfona por área (17/11): o cabeçalho abre/fecha, os itens ficam
+   recuados e o badge do cabeçalho (soma da área) só aparece fechado. */
+.sidebar nav details.grupo { display: block; }
+.sidebar nav summary {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  color: #E4E4F3;
+  font-size: 13.5px;
+  font-weight: 600;
+  padding: 8px 11px;
+  margin: 1px 10px;
+  border-radius: 8px;
+  white-space: nowrap;
+  cursor: pointer;
+  list-style: none;
+}
+.sidebar nav summary::-webkit-details-marker { display: none; }
+.sidebar nav summary:hover { background: rgba(255,255,255,0.06); }
+.sidebar nav summary .icone { display: flex; flex: none; }
+.sidebar nav summary .icone svg { width: 18px; height: 18px; }
+.sidebar nav summary .rotulo { flex: 1; }
+.sidebar nav summary .seta { flex: none; width: 10px; height: 10px; opacity: 0.7; transition: transform 0.15s; }
+.sidebar nav details[open] > summary .seta { transform: rotate(90deg); }
+.sidebar nav details[open] > summary .badge { display: none; }
+.sidebar nav details.grupo > a { margin-left: 24px; }
+.sidebar nav details.grupo > .grupo-titulo { display: block; padding: 8px 22px 4px 36px; }
 .sidebar nav .grupo-titulo {
   font-size: 10px;
   font-weight: 700;
@@ -113,7 +140,7 @@
 /* Badge: quantos itens estão esperando ação naquela tela. Vem do JS
    (/api/sidebar/contadores) -- nasce escondido e só aparece com
    número > 0, senão o menu fica cheio de zeros. */
-.sidebar nav a .badge {
+.sidebar nav .badge {
   flex: none;
   min-width: 19px;
   padding: 0 5px;
@@ -127,9 +154,29 @@
   font-variant-numeric: tabular-nums;
 }
 /* texto escuro no badge critico: branco sobre o vermelho dava 3,0:1 (escuro) e 4,0:1 (claro) */
-.sidebar nav a .badge.critico { background: var(--erro); color: #1A0705; }
-.sidebar nav a .badge[hidden] { display: none; }
+.sidebar nav .badge.critico { background: var(--erro); color: #1A0705; }
+.sidebar nav .badge[hidden] { display: none; }
+/* Botao X da gaveta (25/10): no celular o veu fica estreito (gaveta de
+   264px numa tela de 360) e o ☰ some atras da gaveta, entao nao havia
+   jeito obvio de fechar sem escolher uma tela. So aparece como gaveta. */
+.fecha-menu { display: none; }
 {% if not gaveta_sempre %}@media (max-width: 760px) { {% endif %}
+  .fecha-menu {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    top: 14px; right: 12px;
+    width: 40px; height: 40px;
+    border: none;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.08);
+    color: #fff;
+    cursor: pointer;
+  }
+  .fecha-menu:hover, .fecha-menu:focus-visible { background: rgba(255,255,255,0.18); }
+  .fecha-menu svg { width: 18px; height: 18px; }
+  .sidebar .marca { padding-right: 60px; }
   .sidebar {
     position: fixed;
     top: 0; left: 0; bottom: 0;

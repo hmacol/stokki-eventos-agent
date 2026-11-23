@@ -179,7 +179,8 @@ Rodapé explica que as preferências são ajustadas no portal, botão Notificaç
 
 ### Travas
 
-- Respeita `email_utils.notificacoes_automaticas_ativas(config)`; `--modo-teste` ignora.
+- NÃO depende da chave-mestra `notificacoes_automaticas.ativo` (Hugo, 29/09): o resumo foi
+  liberado sozinho, com os outros e-mails automáticos ainda desligados.
 - `resumo_diario_embarcador.forcar_destino`: **default no código = hugo@freshlogbr.com**
   (chave ausente = piloto). Envio real = `forcar_destino: ""` no config da VPS,
   decisão do Hugo. Com `forcar_destino`, o log mostra o destinatário real.

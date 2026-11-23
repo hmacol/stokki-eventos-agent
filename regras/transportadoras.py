@@ -6,7 +6,11 @@ Resolução de transportadoras: dado o nome de uma transportadora vindo
 do Stokki, determina seu Tipo (ENTREGA / RETIRADA / TERCEIROS) e, se
 for TERCEIROS, retorna o endereço fixo de redespacho.
 
-Fonte de verdade: BD_TRANSPORTADORAS.xlsx (colunas A-I, S, T).
+Fonte de verdade: tabela `transportadoras` do dados.db (carregar_do_banco;
+cadastro em transportadoras_cadastro.py). carregar(xlsx) so existe
+para migrar_transportadoras_planilha.py (carga unica); nenhum leitor de
+producao o usa. Formato historico da planilha BD_TRANSPORTADORAS.xlsx
+(colunas A-I, S, T), lido so pela migracao:
   A: TRANSPORTADORA (nome, pode ter variações de grafia)
   B: Tipo (ENTREGA | RETIRADA | TERCEIROS)
   C-I: Destinatário - UF, Municipio, Bairro, Endereço, Numero, Complemento, CEP
@@ -26,7 +30,7 @@ um dos dois.
 Uso:
     from regras.transportadoras import CatalogoTransportadoras
 
-    catalogo = CatalogoTransportadoras.carregar(Path("dados/BD_TRANSPORTADORAS.xlsx"))
+    catalogo = CatalogoTransportadoras.carregar_do_banco(DB_PATH)  # dados/dados.db
     resultado = catalogo.resolver("TRANSFRIOS TRANSPORTES LTDA")
     if resultado.tipo == "TERCEIROS":
         endereco = resultado.endereco_redespacho
@@ -36,6 +40,7 @@ Uso:
 """
 import logging
 import re
+import sqlite3
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -139,7 +144,7 @@ class PontoRedespacho:
 
 class CatalogoTransportadoras:
     """
-    Catálogo carregado da planilha BD_TRANSPORTADORAS.xlsx.
+    Catálogo carregado da tabela transportadoras do dados.db (carregar_do_banco).
     Imutável após carregamento.
     """
 
@@ -160,7 +165,7 @@ class CatalogoTransportadoras:
         conflitos = {k: v for k, v in self._indice.items() if len({e.tipo for e in v}) > 1}
         if conflitos:
             logger.warning(
-                f"BD_TRANSPORTADORAS tem {len(conflitos)} nome(s) com tipos conflitantes — "
+                f"Cadastro de transportadoras (tela /transportadoras) tem {len(conflitos)} nome(s) com tipos conflitantes — "
                 f"esses precisarão de resolução manual: "
                 f"{list(conflitos.keys())}"
             )
@@ -306,6 +311,55 @@ class CatalogoTransportadoras:
         logger.info(f"Catálogo carregado: {len(entradas)} entradas de {caminho.name}.")
         return cls(entradas)
 
+    @classmethod
+    def carregar_do_banco(cls, db_path: Path) -> "CatalogoTransportadoras":
+        """Carrega o catálogo da tabela transportadoras (só situacao='ATIVA').
+        FileNotFoundError se o banco, a tabela ou as linhas ATIVA faltarem."""
+        db_path = Path(db_path)
+        if not db_path.exists():
+            raise FileNotFoundError(f"Banco não encontrado: {db_path}")
+        conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            linhas = conn.execute(
+                "SELECT * FROM transportadoras WHERE situacao='ATIVA' ORDER BY id").fetchall()
+        except sqlite3.OperationalError as e:
+            raise FileNotFoundError(f"Tabela transportadoras ausente em {db_path}: {e}")
+        finally:
+            conn.close()
+        if not linhas:
+            # Tabela criada sem a carga da planilha: catalogo vazio faria toda
+            # transportadora virar desconhecida (RETIRADA importada como entrega,
+            # TERCEIROS no endereco do destinatario). Mesmo erro de "sem planilha".
+            raise FileNotFoundError(
+                f"cadastro de transportadoras vazio (0 ATIVA) em {db_path} -- "
+                f"rodar migrar_transportadoras_planilha.py")
+
+        entradas = []
+        for r in linhas:
+            tipo = (r["tipo"] or "").strip().upper()
+            if tipo not in ("ENTREGA", "RETIRADA", "TERCEIROS"):
+                continue
+            nome = (r["nome"] or "").strip()
+            endereco = None
+            if tipo == "TERCEIROS":
+                endereco = EnderecoRedespacho(
+                    uf=(r["uf"] or "").strip(), municipio=(r["municipio"] or "").strip(),
+                    bairro=(r["bairro"] or "").strip(), logradouro=(r["logradouro"] or "").strip(),
+                    numero=(r["numero"] or "").strip(), complemento=(r["complemento"] or "").strip(),
+                    cep=(r["cep"] or "").strip(),
+                )
+            entradas.append(_Entrada(
+                nome_original=nome,
+                nome_normalizado=_normalizar(nome),
+                cnpj=(r["cnpj"] or "").strip(),
+                tipo=tipo,
+                endereco=endereco,
+                email=(r["email"] or "").strip(),
+            ))
+        logger.info(f"Catálogo carregado: {len(entradas)} entradas do banco ({db_path.name}).")
+        return cls(entradas)
+
     def resolver(self, nome_transportadora: str, cnpj: str = "") -> ResultadoResolucao:
         """
         Resolve o tipo e endereço de redespacho para o nome/CNPJ dado.
@@ -357,8 +411,8 @@ class CatalogoTransportadoras:
                     nome_normalizado=_normalizar(nome_transportadora),
                     conflito=True,
                     motivo=(
-                        f"CNPJ {cnpj!r} tem tipos conflitantes em BD_TRANSPORTADORAS.xlsx: "
-                        f"[{entradas_detalhes}]. Remover as entradas duplicadas/erradas da planilha."
+                        f"CNPJ {cnpj!r} tem tipos conflitantes no cadastro de transportadoras (tela /transportadoras): "
+                        f"[{entradas_detalhes}]. Remover as entradas duplicadas/erradas do cadastro."
                     ),
                 )
             entrada = candidatos_cnpj[0]
@@ -380,9 +434,9 @@ class CatalogoTransportadoras:
                 nome_normalizado=nome_norm,
                 desconhecida=True,
                 motivo=(
-                    f"Transportadora {nome_transportadora!r} não encontrada em "
-                    f"BD_TRANSPORTADORAS.xlsx. Pode ser uma entrada nova — "
-                    f"adicionar à planilha com o tipo correto."
+                    f"Transportadora {nome_transportadora!r} não encontrada no "
+                    f"cadastro de transportadoras (tela /transportadoras). Pode ser uma entrada nova — "
+                    f"cadastrar com o tipo correto."
                 ),
             )
 
@@ -401,8 +455,8 @@ class CatalogoTransportadoras:
                 conflito=True,
                 motivo=(
                     f"Transportadora {nome_transportadora!r} tem tipos conflitantes "
-                    f"em BD_TRANSPORTADORAS.xlsx: [{entradas_detalhes}]. "
-                    f"Remover as entradas duplicadas/erradas da planilha."
+                    f"no cadastro de transportadoras (tela /transportadoras): [{entradas_detalhes}]. "
+                    f"Remover as entradas duplicadas/erradas do cadastro."
                 ),
             )
 

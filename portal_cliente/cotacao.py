@@ -40,6 +40,7 @@ Onde entra o que:
     consultar_cep(cep)                   -> ViaCEP (BrasilAPI de reserva)
 """
 import csv
+import itertools
 import io
 import json
 import logging
@@ -98,6 +99,9 @@ REGRAS_PADRAO = {
     # Hugo, 17/09: calculadora oculta do cliente (link some, rotas dão 404).
     # A equipe Fresh Log operando em nome do cliente continua vendo. True reabre.
     "visivel_cliente": False,
+    # Hugo, 14/10: mesmo oculta, estes CNPJs (só dígitos) veem a calculadora.
+    # Padrão: só o CLIENTE TESTE FRESH LOG, aberto pelo botão "Cotação" da Torre.
+    "cnpjs_liberados": ["00000000000191"],
     "veiculos": VEICULOS_PADRAO,
 }
 
@@ -238,6 +242,9 @@ def calcular(entrada: dict, regras: dict) -> dict:
 # ── Entrada: CEP, endereços, lista ───────────────────────────────────────────────
 
 _CACHE_CEP: dict[str, dict | None] = {}
+# CEP inexistente também fica (None): sem teto o dicionário só cresce
+# (revisão de segurança 30/10). Passou do teto, começa de novo.
+_MAX_CACHE_CEP = 5000
 
 
 def normalizar_cep(valor) -> str:
@@ -262,7 +269,8 @@ def _http_json(url: str, timeout: float = 8) -> dict | None:
 
 
 def consultar_cep(cep: str) -> dict | None:
-    """{cep, logradouro, bairro, cidade, uf} ou None. ViaCEP, BrasilAPI de reserva."""
+    """{cep, logradouro, bairro, cidade, uf, ibge} ou None. ViaCEP, BrasilAPI de reserva
+    (a BrasilAPI não traz o código IBGE: ibge vazio)."""
     d = normalizar_cep(cep)
     if not d:
         return None
@@ -272,14 +280,18 @@ def consultar_cep(cep: str) -> dict | None:
     v = _http_json(f"https://viacep.com.br/ws/{d}/json/")
     if v and not v.get("erro"):
         resultado = {"cep": formatar_cep(d), "logradouro": v.get("logradouro") or "", "bairro": v.get("bairro") or "",
-                     "cidade": v.get("localidade") or "", "uf": v.get("uf") or ""}
+                     "cidade": v.get("localidade") or "", "uf": v.get("uf") or "", "ibge": v.get("ibge") or ""}
     else:
         b = _http_json(f"https://brasilapi.com.br/api/cep/v1/{d}")
         if b and b.get("city"):
             resultado = {"cep": formatar_cep(d), "logradouro": b.get("street") or "", "bairro": b.get("neighborhood") or "",
-                         "cidade": b.get("city") or "", "uf": b.get("state") or ""}
-    if resultado is not None or v is not None:
-        # só cacheia resposta definitiva (achou, ou o ViaCEP disse que não existe)
+                         "cidade": b.get("city") or "", "uf": b.get("state") or "", "ibge": ""}
+    if (resultado is not None and resultado["ibge"]) or (resultado is None and v is not None):
+        # só cacheia resposta definitiva (achou pelo ViaCEP, ou o ViaCEP disse
+        # que não existe); a da BrasilAPI vem sem ibge e o endereço de entrega
+        # precisa dele -- da próxima vez tenta o ViaCEP de novo
+        if len(_CACHE_CEP) >= _MAX_CACHE_CEP:
+            _CACHE_CEP.clear()
         _CACHE_CEP[d] = resultado
     return resultado
 
@@ -380,10 +392,20 @@ def modelo_lista() -> bytes:
     return buf.getvalue()
 
 
+# Tetos da lista enviada (19/11, revisão de segurança): um .xlsx de poucos KB pode declarar 16 mil
+# colunas e milhões de linhas, e o openpyxl (read_only) completa cada linha até a coluna declarada.
+# O modelo tem 8 colunas e a cotação aceita no máximo `max_paradas` (25) entregas.
+MAX_BYTES_LISTA = 2 * 1024 * 1024
+MAX_LINHAS_LISTA = 500
+MAX_COLUNAS_LISTA = 50
+
+
 def ler_lista(conteudo: bytes, nome_arquivo: str) -> list[dict]:
     """Planilha (.xlsx) ou .csv com as colunas do modelo -> lista de paradas
     (ainda sem validação; normalizar_paradas faz isso)."""
     nome = (nome_arquivo or "").lower()
+    if len(conteudo or b"") > MAX_BYTES_LISTA:
+        raise ErroCotacao("Arquivo grande demais (limite de 2 MB). Use o modelo .xlsx ou um .csv.")
     linhas: list[list] = []
     if nome.endswith(".csv") or nome.endswith(".txt"):
         texto = conteudo.decode("utf-8-sig", errors="replace")
@@ -392,15 +414,26 @@ def ler_lista(conteudo: bytes, nome_arquivo: str) -> list[dict]:
         except csv.Error:
             dialeto = csv.excel
             dialeto.delimiter = ";"
-        linhas = [r for r in csv.reader(io.StringIO(texto), dialeto)]
+        try:
+            linhas = [r[:MAX_COLUNAS_LISTA] for r in itertools.islice(csv.reader(io.StringIO(texto), dialeto),
+                                                                       MAX_LINHAS_LISTA + 1)]
+        except csv.Error:
+            raise ErroCotacao("Não consegui ler o arquivo. Use o modelo .xlsx ou um .csv.")
     else:
         import openpyxl
         try:
             wb = openpyxl.load_workbook(io.BytesIO(conteudo), read_only=True, data_only=True)
         except Exception:
             raise ErroCotacao("Não consegui ler o arquivo. Use o modelo .xlsx ou um .csv.")
-        ws = wb.active
-        linhas = [list(r) for r in ws.iter_rows(values_only=True)]
+        try:
+            linhas = [list(r) for r in wb.active.iter_rows(max_row=MAX_LINHAS_LISTA + 1, max_col=MAX_COLUNAS_LISTA,
+                                                           values_only=True)]
+        except Exception:
+            raise ErroCotacao("Não consegui ler o arquivo. Use o modelo .xlsx ou um .csv.")
+        finally:
+            wb.close()
+    if len(linhas) > MAX_LINHAS_LISTA:
+        raise ErroCotacao(f"Lista grande demais: no máximo {MAX_LINHAS_LISTA} linhas.")
     linhas = [l for l in linhas if any(c not in (None, "") for c in l)]
     if not linhas:
         raise ErroCotacao("Arquivo vazio.")
@@ -796,6 +829,7 @@ def _abrir_chamado(conn: sqlite3.Connection, cot: dict, config: dict) -> int | N
             ch.mensagem_sistema(conn_ch, chamado, f"Cliente aceitou a proposta {cot['numero']} ({r['veiculo_nome']}, "
                                                   f"{r['km_total']:.1f} km, {_fmt_brl(r['total'])}).\nEntregas:\n{entregas}\n"
                                                   f"Programar coleta e confirmar data com o cliente.")
+            ch.whatsapp_para_atendimento(chamado, config)
             return chamado["id"]
         finally:
             conn_ch.close()

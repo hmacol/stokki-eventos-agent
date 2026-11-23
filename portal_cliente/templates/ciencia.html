@@ -1,0 +1,99 @@
+{% extends "base_acesso.html" %}
+{% block titulo %}Entrega dedicada{% endblock %}
+{% block conteudo %}
+<style>
+  .caixa { max-width: 560px; }
+  .faixa-piloto { background: #FFF7E6; border: 1px dashed #F5A623; color: #7A4B00; font-size: 13px; font-weight: 600;
+                  padding: 10px 12px; border-radius: 7px; margin-bottom: 16px; }
+  .ok { background: #E7F7F1; color: #08734F; font-size: 13.5px; font-weight: 600; padding: 10px 12px; border-radius: 7px; margin-bottom: 16px; }
+  .pedido { border: 1px solid var(--borda); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .pedido h2 { font-size: 15px; margin: 0 0 10px; color: var(--primaria); }
+  .dados { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0 0 16px; font-size: 13.5px; }
+  .dados dt { color: var(--texto-suave); }
+  .dados dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+  .pedido form { margin: 0; }
+  .pedido input[type=text] { margin-bottom: 10px; }
+  .pedido button.principal { padding: 14px; font-size: 15px; }
+  details.reagendar { margin-top: 12px; }
+  details.reagendar summary { list-style: none; cursor: pointer; text-align: center; padding: 12px; border: 2px solid var(--primaria);
+                              border-radius: 7px; font-size: 15px; font-weight: 700; color: var(--primaria); }
+  details.reagendar summary::-webkit-details-marker { display: none; }
+  details.reagendar[open] summary { margin-bottom: 12px; }
+  .datas { border: 0; padding: 0; margin: 0 0 12px; }
+  .datas legend { font-size: 13px; font-weight: 600; color: var(--primaria); margin-bottom: 8px; padding: 0; }
+  .datas label { display: flex; align-items: center; gap: 10px; padding: 12px; margin-bottom: 8px; border: 1px solid var(--borda);
+                 border-radius: 7px; font-size: 15px; font-weight: 600; cursor: pointer; }
+  .datas input { width: 18px; height: 18px; margin: 0; accent-color: var(--acento); }
+  button.secundario { width: 100%; background: var(--primaria); color: #fff; border: none; padding: 14px; border-radius: 7px;
+                      font-size: 15px; font-weight: 700; cursor: pointer; font-family: inherit; }
+  .sem-reagendar { font-size: 13px; color: var(--texto-suave); margin: 12px 0 0; }
+  h2.secao { font-size: 14px; color: var(--primaria); margin: 24px 0 8px; }
+  .respondidos li { display: block; }
+  .respondidos .quando { display: block; color: var(--texto-suave); font-size: 12.5px; }
+</style>
+
+<h1>Entrega dedicada: confirme a ciência</h1>
+<p>A data pedida para os pedidos abaixo não é um dia de visita da região de destino. Para cumprir essa data,
+eles vão como <b>entrega dedicada</b> (carro só para eles), com o valor indicado. Confirme que está ciente
+ou escolha um dia de visita da região.</p>
+
+{% if piloto %}<div class="faixa-piloto">Modo piloto: nada é gravado. As respostas desta página são só uma simulação.</div>{% endif %}
+{% if aviso %}<div class="ok" role="status">{{ aviso }}</div>{% endif %}
+{% if erro %}<div class="erro" role="alert">{{ erro }}</div>{% endif %}
+
+{% for p in pendentes %}
+<section class="pedido">
+  <h2>Pedido {{ p.codigo }}</h2>
+  <dl class="dados">
+    <dt>Destinatário</dt><dd>{{ p.destinatario or '-' }}</dd>
+    <dt>Cidade</dt><dd>{{ p.cidade or '-' }}</dd>
+    <dt>Data pedida</dt><dd>{{ p.data_br }}</dd>
+    <dt>Dias de visita</dt><dd>{{ p.dias_visita or '-' }}</dd>
+    <dt>Valor</dt><dd>{{ p.valor_txt }}</dd>
+  </dl>
+
+  <form method="post" action="{{ url_for('ciencia_ciente', token=token) }}">
+    <input type="hidden" name="ciencia_id" value="{{ p.id }}">
+    <label for="nome-ciente-{{ p.id }}">Seu nome</label>
+    <input type="text" id="nome-ciente-{{ p.id }}" name="nome" minlength="2" maxlength="80" required autocomplete="name"
+           value="{{ nome if abrir == p.id else '' }}">
+    <button type="submit" class="principal">Estou ciente do carro dedicado</button>
+  </form>
+
+  {% if p.datas %}
+  <details class="reagendar"{% if abrir == p.id %} open{% endif %}>
+    <summary>Reagendar para um dia de visita</summary>
+    <form method="post" action="{{ url_for('ciencia_reagendar', token=token) }}">
+      <input type="hidden" name="ciencia_id" value="{{ p.id }}">
+      <fieldset class="datas">
+        <legend>Escolha a nova data de entrega</legend>
+        {% for d in p.datas %}
+        <label><input type="radio" name="data" value="{{ d.iso }}" required{% if loop.first %} checked{% endif %}> {{ d.rotulo }}</label>
+        {% endfor %}
+      </fieldset>
+      <label for="nome-reagendar-{{ p.id }}">Seu nome</label>
+      <input type="text" id="nome-reagendar-{{ p.id }}" name="nome" minlength="2" maxlength="80" required autocomplete="name"
+             value="{{ nome if abrir == p.id else '' }}">
+      <button type="submit" class="secundario">Reagendar para a data escolhida</button>
+    </form>
+  </details>
+  {% else %}
+  <p class="sem-reagendar">Para reagendar este pedido, fale com a Fresh Log pelo chat do portal.</p>
+  {% endif %}
+</section>
+{% else %}
+<p class="suave">Nenhum pedido aguardando resposta.</p>
+{% endfor %}
+
+{% if respondidos %}
+<h2 class="secao">Respondidos nos últimos 30 dias</h2>
+<ul class="lista respondidos">
+  {% for r in respondidos %}
+  <li><b>{{ r.codigo }}</b> · {{ r.rotulo }}
+    <span class="quando">{% if r.quem %}por {{ r.quem }}{% if r.quando %}, {% endif %}{% endif %}{% if r.quando %}em {{ r.quando }}{% endif %}</span></li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+<p class="suave">Dúvidas: fale com a Fresh Log pelo chat do portal.</p>
+{% endblock %}

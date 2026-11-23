@@ -61,6 +61,7 @@ logging.basicConfig(
 logger = logging.getLogger("relatorio_operacional")
 
 from vuupt_client import VuuptClient
+from regras import feriados
 from email_utils import (
     enviar_email, COR_PRIMARIA, COR_PRIMARIA_CLARA, COR_ACENTO, COR_DESTAQUE,
     COR_TEXTO, COR_TEXTO_SUAVE, COR_FUNDO, COR_BORDA, LOGO_PATH,
@@ -176,11 +177,12 @@ def coletar_dados(vuupt, data_inicio, data_fim_exclusiva) -> dict:
 
 
 def _eh_fim_de_semana(dia) -> bool:
-    """True se sábado (5) ou domingo (6) — sem entrega, por isso são
+    """True se sábado, domingo ou feriado — sem entrega, por isso são
     ignorados em gráficos de tendência e em qualquer média calculada
     sobre dias (pedido do Hugo, 28/07: 'ignorar sábados e domingos que
-    não tem entrega tanto para gráficos quanto para médias')."""
-    return dia.weekday() >= 5
+    não tem entrega tanto para gráficos quanto para médias'; feriado
+    entrou em 07/10/2026, regras/feriados.py)."""
+    return not feriados.eh_dia_util(dia)
 
 
 def _dia_util_anterior(dia):

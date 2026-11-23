@@ -1,8 +1,8 @@
 [Unit]
-Description=Dispara stokki-sequencia-tarde.service todo dia as 18:00
+Description=Dispara stokki-sequencia-tarde.service todo dia as 16:00 (05/10, Hugo: era 18:00)
 
 [Timer]
-OnCalendar=*-*-* 18:00:00
+OnCalendar=*-*-* 16:00:00
 Persistent=false
 AccuracySec=1min
 

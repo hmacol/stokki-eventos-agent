@@ -1,5 +1,5 @@
 [Unit]
-Description=Stokki Eventos - Compara o pool Vuupt x nucleo (sombra da Entrega 1) e avisa por e-mail se divergir
+Description=Stokki Eventos - Compara o pool Vuupt x nucleo (sombra da Entrega 1) e Vuupt x freshhub (sombra do plano 1.2) e avisa por e-mail se divergir
 OnFailure=stokki-alerta-falha@%n.service
 
 [Service]
@@ -10,3 +10,6 @@ WorkingDirectory=/opt/stokki-eventos
 # ja conta a historia). Duplicado na Vuupt nao conta: so aparece no relatorio.
 SuccessExitStatus=2
 ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/nucleo/comparar_pool.py --salvar --email
+# Sombra do plano 1.2 (sistema novo): Vuupt x GET /api/pool do freshhub. Sem freshhub_api no config.yaml,
+# so avisa no log e sai 0 (sombra desligada); portao = 3 dias uteis em 0 na fonte freshhub.
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/nucleo/comparar_pool.py --salvar --email --fonte freshhub

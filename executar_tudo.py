@@ -111,11 +111,18 @@ def main(modo_teste: bool = False,
                 f"{resultado_agendamento['atualizados']} pedido(s) confirmado(s), "
                 f"{resultado_agendamento['nao_entendidos']} nao entendida(s)."
             )
-            resumo_etapas["Agendamento"] = {
-                "status": "ok",
-                "detalhe": f"{resultado_agendamento['processados']} processada(s), "
-                          f"{resultado_agendamento['atualizados']} confirmada(s)",
-            }
+            detalhe_agendamento = (f"{resultado_agendamento['processados']} processada(s), "
+                                   f"{resultado_agendamento['atualizados']} confirmada(s)")
+            if resultado_agendamento.get("falhas_ia"):
+                detalhe_agendamento += (f"; {resultado_agendamento['falhas_ia']} adiada(s) por falha da IA "
+                                        f"(tenta de novo na proxima rodada)")
+            # Respostas de embarcador que nao deu pra aplicar sozinho: o
+            # e-mail ja foi marcado como lido, entao so este resumo avisa
+            # (28/09 -- antes a resposta sumia sem ninguem ver).
+            if resultado_agendamento.get("para_conferir"):
+                detalhe_agendamento += ("; CONFERIR A MAO: "
+                                        + "; ".join(resultado_agendamento["para_conferir"]))
+            resumo_etapas["Agendamento"] = {"status": "ok", "detalhe": detalhe_agendamento}
         except Exception as e:
             logger.error(f"Erro na leitura de respostas de agendamento: {e}")
             resumo_etapas["Agendamento"] = {"status": "erro", "detalhe": str(e)}
@@ -220,7 +227,9 @@ def main(modo_teste: bool = False,
     logger.info("\n>>> ETAPA 3: Pipeline de importacao Stokki -> VUUPT")
     logger.info("-" * 60)
     try:
-        pipeline_mod.main(modo_teste=modo_teste)
+        # fila_freshhub (plano 1.2 do sistema novo): atende a fila de replica do freshhub depois dos pedidos da
+        # Stokki, nas sequencias das 16h/18h/22h tambem (so age com freshhub_api no config)
+        pipeline_mod.main(modo_teste=modo_teste, fila_freshhub=True)
         ultimo = historico.ultima_execucao()
         if ultimo:
             contagem = ultimo.get("contagem", {})

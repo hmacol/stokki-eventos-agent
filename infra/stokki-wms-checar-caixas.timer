@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-wms-checar-caixas.service todo dia as 06h40
+
+[Timer]
+OnCalendar=*-*-* 06:40:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

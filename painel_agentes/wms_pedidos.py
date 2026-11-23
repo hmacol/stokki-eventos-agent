@@ -15,7 +15,11 @@ Regras que este modulo garante:
   falta (decisao do Hugo, 21/09).
 - A baixa reusa wms.registrar_movimento(tipo="SAIDA") com uuid
   deterministico, entao rodar duas vezes nao baixa duas vezes.
+- A baixa tambem consome as caixas com serial (wms_caixas.consumir_caixas),
+  em melhor esforco: falha ali e registrada em log e nunca quebra a baixa.
 """
+import logging
+import math
 import re
 import sqlite3
 from datetime import datetime, timedelta
@@ -125,7 +129,25 @@ CREATE TABLE IF NOT EXISTS wms_recebimento_enderecamentos (
 # precisa do ALTER TABLE -- feito uma vez por conexao, e barato.
 _COLUNAS_NOVAS = {
     "wms_pedidos": {"motivo_cancelamento": "TEXT NOT NULL DEFAULT ''",
-                    "saldo_negativo": "TEXT NOT NULL DEFAULT ''"},
+                    "saldo_negativo": "TEXT NOT NULL DEFAULT ''",
+                    # 17/11 (separacao no nosso sistema): de qual tabela da Stokki os itens
+                    # vieram ('' = Produto|EAN|Quantidade, 'PEDIDO' = #example1), a data de
+                    # expedicao lancada, a data de entrega ja ajustada pelo dia da regiao e
+                    # o destino (onda por data de entrega e etiqueta de volume).
+                    "fonte_itens": "TEXT NOT NULL DEFAULT ''",
+                    "data_expedicao": "TEXT NOT NULL DEFAULT ''",
+                    "data_entrega_calc": "TEXT NOT NULL DEFAULT ''",
+                    "regiao_dia_fixo": "TEXT NOT NULL DEFAULT ''",
+                    "destinatario": "TEXT NOT NULL DEFAULT ''",
+                    "endereco_destino": "TEXT NOT NULL DEFAULT ''",
+                    "cidade": "TEXT NOT NULL DEFAULT ''",
+                    "uf": "TEXT NOT NULL DEFAULT ''",
+                    "nf": "TEXT NOT NULL DEFAULT ''",   # numero da NF-e (etiqueta de volume, 17/11)
+                    # separacao no nosso sistema (wms_separacao.py): etapa do pedido, onda e
+                    # o id do embarcador (a onda e por embarcador)
+                    "embarcador_id": "TEXT NOT NULL DEFAULT ''",
+                    "execucao": "TEXT NOT NULL DEFAULT ''",
+                    "onda_id": "INTEGER"},
     "wms_pedido_itens": {"falta_un": "REAL NOT NULL DEFAULT 0",
                          "removido_em": "TEXT NOT NULL DEFAULT ''"},
     "wms_recebimentos": {"stkkc_id": "TEXT NOT NULL DEFAULT ''",
@@ -136,6 +158,10 @@ _COLUNAS_NOVAS = {
                          "data_prevista": "TEXT NOT NULL DEFAULT ''"},
     "wms_recebimento_itens": {"falta_un": "REAL NOT NULL DEFAULT 0"},
 }
+
+
+_CAMPOS_OPCIONAIS_PEDIDO = ("embarcador_id", "fonte_itens", "data_expedicao", "data_entrega_calc", "regiao_dia_fixo",
+                            "destinatario", "endereco_destino", "cidade", "uf", "nf")
 
 
 def _migrar(conn) -> None:
@@ -177,10 +203,40 @@ def resolver_item(conn, item: dict) -> dict:
     sku = str(item.get("sku") or "").strip()
     qtd = float(item.get("qtd_embalagem") or 0)
 
+    # Linha da tabela #example1 (pedido aberto, 17/11): uma linha por SKU, ja na
+    # unidade do produto e sem EAN. So o SKU decide, dentro do embarcador do pedido
+    # (SKU repete entre embarcadores).
+    if item.get("unidade_do_produto"):
+        sql, args = "SELECT * FROM wms_produtos WHERE ativo = 1 AND sku = ? COLLATE NOCASE", [sku]
+        if item.get("embarcador_id"):
+            sql += " AND embarcador_id = ?"
+            args.append(int(item["embarcador_id"]))
+        rows = conn.execute(sql, args).fetchall() if sku else []
+        if len(rows) == 1:
+            return {"produto_id": rows[0]["id"], "qtd_un": qtd, "motivo_pendencia": ""}
+        if len(rows) > 1:
+            return {"produto_id": None, "qtd_un": None,
+                    "motivo_pendencia": f"SKU {sku} esta em {len(rows)} produtos ativos"}
+        return {"produto_id": None, "qtd_un": None,
+                "motivo_pendencia": f"Produto nao encontrado no catalogo (SKU {sku or '-'}, EAN -)"}
+
+    # Com o embarcador do pedido (18/11), o codigo e procurado so entre os produtos DELE: o
+    # mesmo EAN curto ("004") aparece em produtos de embarcadores diferentes e travava a linha.
+    emb = int(item["embarcador_id"]) if item.get("embarcador_id") else None
+
+    def _buscar(coluna: str, valor: str, colate: str = "") -> list:
+        """Primeiro so no embarcador do pedido; nada ali (produto sem embarcador no cadastro),
+        busca como antes. O filtro so desempata, nunca perde produto."""
+        sql = f"SELECT * FROM wms_produtos WHERE ativo = 1 AND {coluna} = ?{colate}"
+        if emb is not None:
+            rows = conn.execute(sql + " AND embarcador_id = ?", (valor, emb)).fetchall()
+            if rows:
+                return rows
+        return conn.execute(sql, (valor,)).fetchall()
+
     if ean:
         for coluna, fator_caixa in (("dun", True), ("ean", False)):
-            rows = conn.execute(
-                f"SELECT * FROM wms_produtos WHERE ativo = 1 AND {coluna} = ?", (ean,)).fetchall()
+            rows = _buscar(coluna, ean)
             if len(rows) == 1:
                 p = rows[0]
                 por_caixa = float(p["qtd_por_caixa"] or 1)
@@ -192,8 +248,7 @@ def resolver_item(conn, item: dict) -> dict:
                         "motivo_pendencia": f"EAN {ean} esta em {len(rows)} produtos ativos"}
 
     if sku:
-        rows = conn.execute(
-            "SELECT * FROM wms_produtos WHERE ativo = 1 AND sku = ? COLLATE NOCASE", (sku,)).fetchall()
+        rows = _buscar("sku", sku, " COLLATE NOCASE")
         if len(rows) == 1:
             p = rows[0]
             por_caixa = float(p["qtd_por_caixa"] or 1)
@@ -312,9 +367,18 @@ def registrar_pedido(conn, pedido: dict, itens: list[dict]) -> int:
              pedido.get("situacao", ""), agora, agora))
         pedido_id = cur.lastrowid
 
+    # Campos opcionais (17/11): so grava o que quem chamou mandou, pra releitura sem
+    # o dado nao apagar o que ja estava la.
+    for campo in _CAMPOS_OPCIONAIS_PEDIDO:
+        if campo in pedido:
+            conn.execute(f"UPDATE wms_pedidos SET {campo} = ? WHERE id = ?",
+                         (str(pedido[campo] or ""), pedido_id))
+
     linhas_novas = [int(item["linha"]) for item in itens]
 
     for item in itens:
+        if pedido.get("embarcador_id"):
+            item = {**item, "embarcador_id": pedido["embarcador_id"]}
         r = resolver_item(conn, item)
         conn.execute("""
             INSERT INTO wms_pedido_itens (pedido_id, linha, sku, ean_linha, descricao, qtd_embalagem,
@@ -390,6 +454,10 @@ def reservar_pedido(conn, pedido_id: int) -> dict:
     criadas = 0
     pedido = conn.execute("SELECT * FROM wms_pedidos WHERE id = ?", (pedido_id,)).fetchone()
     if pedido and pedido["estado_reserva"] in ("BAIXADO", "CANCELADO"):
+        return {"estado": pedido["estado_reserva"], "reservas": 0, "pendencias": [], "ignorado": True}
+    # Pedido ja conferido/embalado no nosso sistema (17/11): as reservas dele sao o que foi
+    # bipado. Re-reservar aqui traria de volta o que o escritorio liberou como parcial.
+    if pedido and (dict(pedido).get("execucao") or "") in ("CONFERIDO", "EMBALADO"):
         return {"estado": pedido["estado_reserva"], "reservas": 0, "pendencias": [], "ignorado": True}
     itens = conn.execute(
         "SELECT * FROM wms_pedido_itens WHERE pedido_id = ? AND removido_em = '' ORDER BY linha",
@@ -467,6 +535,13 @@ def cancelar_reservas(conn, pedido_id: int, motivo: str = "") -> int:
     conn.execute(
         "UPDATE wms_pedidos SET estado_reserva = 'CANCELADO', motivo_cancelamento = ?, atualizado_em = ? "
         "WHERE id = ?", (str(motivo or "")[:300], agora, pedido_id))
+    # O que ja estava separado pro pedido vira DEVOLVIDA e ele sai da onda (17/11). Falha aqui
+    # nao pode impedir o cancelamento da reserva.
+    try:
+        import wms_separacao
+        wms_separacao.ao_cancelar_pedido(conn, pedido_id)
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger(__name__).warning("ao_cancelar_pedido falhou (pedido %s): %s", pedido_id, e)
     return cur.rowcount
 
 
@@ -545,6 +620,27 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
     # IMMEDIATE e nao aceita rodar dentro de uma ja aberta.
     conn.commit()
 
+    # Caixas com serial (so produtos que as usam; sem caixa e no-op). Import
+    # lazy: wms_caixas importa wms_pedidos. Tabela garantida 1x antes do laco.
+    # Falha aqui (ex.: database is locked) nunca derruba a baixa: so pula o
+    # consumo das caixas nesta chamada (a checagem caixas x saldo mostra).
+    try:
+        import wms_caixas
+        wms_caixas.garantir_tabelas(conn)
+        conn.commit()
+        try:  # banco que nunca abriu a separacao (17/11): cria as tabelas antes do laco
+            import wms_separacao
+            wms_separacao.garantir_tabelas(conn)
+        except Exception as e_sep:  # noqa: BLE001 -- a baixa segue pela ordem antiga
+            conn.rollback()
+            logging.getLogger(__name__).warning("garantir_tabelas da separacao falhou: %s", e_sep)
+    except Exception as e_tab:  # noqa: BLE001
+        conn.rollback()
+        wms_caixas = None
+        logging.getLogger(__name__).warning(
+            "garantir_tabelas das caixas falhou (%s): baixa segue sem consumir caixas: %s",
+            pedido["codigo_ps"], e_tab)
+
     baixas, erros, negativos = 0, [], []
     for r in reservas:
         # O uuid vem do ID DA RESERVA, que e estavel pra sempre -- nunca
@@ -588,6 +684,40 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
             conn.commit()
             if not mov.get("duplicado"):
                 baixas += 1
+            # Consumo das caixas com try proprio: falha aqui nunca vira erro de
+            # baixa nem muda o estado do pedido (a checagem caixas x saldo e que
+            # mostra). Roda tambem se a SAIDA foi duplicada (idempotente pelo
+            # uuid do movimento).
+            if wms_caixas is None:
+                continue
+            try:
+                # BEGIN IMMEDIATE: leitura e escrita das caixas na mesma
+                # transacao (sem corrida com outra baixa ou com cancelar).
+                conn.execute("BEGIN IMMEDIATE")
+                # Primeiro o que foi separado PARA este pedido naquela chave (17/11); o que
+                # sobrar (pedido que nao passou pela nossa separacao) segue a ordem antiga.
+                resto = r["quantidade_un"]
+                if not mov.get("duplicado"):
+                    try:
+                        import wms_separacao
+                        resto = wms_separacao.consumir_do_pedido(
+                            conn, pedido_id=pedido["id"], reserva_id=r["id"], qtd_un=r["quantidade_un"],
+                            movimento_uuid=mov["uuid"])
+                    except Exception as e_sep:  # noqa: BLE001 -- sem a separacao, vale a ordem antiga
+                        conn.rollback()
+                        conn.execute("BEGIN IMMEDIATE")
+                        resto = r["quantidade_un"]
+                        logging.getLogger(__name__).warning(
+                            "consumir_do_pedido falhou (%s, reserva %s): %s", uuid, r["id"], e_sep)
+                if resto > 0.0004:
+                    wms_caixas.consumir_caixas(
+                        conn, posicao=r["posicao"], produto_id=r["produto_id"], lote=r["lote"],
+                        validade=r["validade"], qtd_un=resto, movimento_uuid=mov["uuid"])
+                conn.commit()
+            except Exception as e_cx:  # noqa: BLE001
+                conn.rollback()
+                logging.getLogger(__name__).warning(
+                    "consumir_caixas falhou (%s, reserva %s): %s", uuid, r["id"], e_cx)
         except Exception as e:  # noqa: BLE001 -- uma reserva ruim nao derruba a expedicao
             erros.append(f"linha {r['linha']}: {e}")
 
@@ -697,6 +827,27 @@ def reservas_antigas(conn, dias: int = RESERVA_ANTIGA_DIAS, limite: int = 50) ->
     return out
 
 
+def _item_em_un(conn, item: dict, stkkc_id) -> dict:
+    """
+    Linha de recebimento sem EAN nao diz se a quantidade e caixa ou unidade, e o resolver_item
+    nao chuta. Mas a tabela da Stokki tem a coluna "unidade": quando ela diz UN e o produto
+    (unico, do proprio embarcador) tambem e cadastrado em UN, a quantidade JA e em unidades
+    (22/11/2026). Qualquer outro caso (CX, sem unidade, sem embarcador) segue a regra antiga.
+    """
+    if str(item.get("unidade") or "").strip().upper() != "UN" or not stkkc_id or not item.get("sku"):
+        return item
+    try:
+        emb = int(stkkc_id)
+    except (TypeError, ValueError):
+        return item
+    rows = conn.execute(
+        "SELECT unidade FROM wms_produtos WHERE ativo = 1 AND sku = ? COLLATE NOCASE AND embarcador_id = ?",
+        (str(item["sku"]).strip(), emb)).fetchall()
+    if len(rows) == 1 and str(rows[0]["unidade"] or "").strip().upper() == "UN":
+        return {**item, "unidade_do_produto": True, "embarcador_id": emb}
+    return item
+
+
 def registrar_recebimento(conn, recebimento: dict, itens: list[dict]) -> int:
     """
     Cria ou atualiza o espelho de um recebimento (entrada esperada) e as
@@ -743,7 +894,7 @@ def registrar_recebimento(conn, recebimento: dict, itens: list[dict]) -> int:
         recebimento_id = cur.lastrowid
 
     for item in itens:
-        r = resolver_item(conn, item)
+        r = resolver_item(conn, _item_em_un(conn, item, recebimento.get("stkkc_id")))
         conn.execute("""
             INSERT INTO wms_recebimento_itens (recebimento_id, linha, sku, ean_linha, descricao,
                                                qtd_embalagem, qtd_un, produto_id, motivo_pendencia)
@@ -846,6 +997,8 @@ def contabilizar_enderecamento(conn, recebimento_id: int, item_id: int, qtd: flo
     if not item:
         raise wms.ErroWMS("Item do recebimento nao encontrado.")
     qtd = round(float(qtd or 0), 3)
+    if not math.isfinite(qtd):
+        raise wms.ErroWMS("Quantidade invalida.")
     uuid = str(uuid or "").strip()
     duplicado = False
     if uuid:
@@ -859,19 +1012,9 @@ def contabilizar_enderecamento(conn, recebimento_id: int, item_id: int, qtd: flo
         conn.execute(
             "UPDATE wms_recebimento_itens SET qtd_enderecada = ROUND(qtd_enderecada + ?, 3) WHERE id = ?",
             (qtd, int(item_id)))
-    # "Fecha sozinho" e exatamente "nao ha falta nenhuma": e a MESMA funcao
-    # que decide o que vai no relatorio de faltas do cliente, de proposito.
-    # Enquanto eram duas comparacoes iguais escritas em lugares diferentes
-    # (uma em SQL aqui, outra em Python la), qualquer mexida numa delas
-    # criava em silencio o recebimento que nao fecha automatico e tambem nao
-    # tem falta pra reportar -- o operador ficaria sem saida nenhuma.
-    if not faltas_do_recebimento(conn, recebimento_id):
-        # So o ESPERADO vira ENDERECADO: recebimento ja encerrado com
-        # DIVERGENCIA (relatorio enviado ao cliente) nao pode ser apagado
-        # por um enderecamento atrasado.
-        conn.execute("UPDATE wms_recebimentos SET estado = 'ENDERECADO', atualizado_em = ? "
-                     "WHERE id = ? AND estado = 'ESPERADO'",
-                     (wms.agora(), int(recebimento_id)))
+    # Nao fecha sozinho (Hugo, 02/11): o recebimento so sai da lista pelo
+    # botao "Encerrar recebimento" (encerrar_recebimento), que mostra a
+    # tabela de divergencias antes de confirmar.
     conn.commit()
     return {
         "duplicado": duplicado,
@@ -957,7 +1100,7 @@ def encerrar_com_divergencia(conn, recebimento_id: int, observacao: str = "",
     faltas = faltas_do_recebimento(conn, recebimento_id)
     if not faltas:
         raise wms.ErroWMS(
-            "Nao ha falta nenhuma neste recebimento -- ele fecha sozinho quando a ultima linha bater.")
+            "Nao ha falta nenhuma neste recebimento -- encerre pelo botao Encerrar recebimento.")
 
     agora = wms.agora()
     for f in faltas:
@@ -972,6 +1115,63 @@ def encerrar_com_divergencia(conn, recebimento_id: int, observacao: str = "",
     return {"recebimento": dict(conn.execute(
         "SELECT * FROM wms_recebimentos WHERE id = ?", (int(recebimento_id),)).fetchone()),
         "faltas": faltas}
+
+
+def resumo_encerramento(conn, recebimento_id: int) -> dict:
+    """
+    Tabela da tela de encerramento: cada linha com anunciado x recebido e a
+    situacao (OK, FALTA, SOBRA ou SEM_CADASTRO). FALTA usa o mesmo criterio
+    de faltas_do_recebimento (e o que vai no e-mail do cliente); linha sem
+    produto no catalogo aparece como SEM_CADASTRO e nunca conta como falta.
+    """
+    if not conn.execute("SELECT 1 FROM wms_recebimentos WHERE id = ?", (int(recebimento_id),)).fetchone():
+        raise wms.ErroWMS("Recebimento nao encontrado.")
+    linhas = []
+    for it in itens_do_recebimento(conn, recebimento_id):
+        recebido = round(float(it.get("qtd_enderecada") or 0), 3)
+        if not it.get("produto_id") or it.get("qtd_un") is None:
+            anunciado, diferenca, situacao = it.get("qtd_embalagem"), None, "SEM_CADASTRO"
+        else:
+            anunciado = round(float(it["qtd_un"]), 3)
+            diferenca = round(recebido - anunciado, 3)
+            situacao = "OK" if diferenca == 0 else ("FALTA" if diferenca < 0 else "SOBRA")
+        linhas.append({"item_id": it["id"], "linha": it["linha"], "sku": it.get("sku") or "",
+                       "descricao": it.get("descricao") or "", "unidade": it.get("unidade") or "UN",
+                       "anunciado": anunciado, "recebido": recebido, "diferenca": diferenca,
+                       "situacao": situacao, "motivo_pendencia": it.get("motivo_pendencia") or ""})
+    conta = {s: sum(1 for l in linhas if l["situacao"] == s) for s in ("FALTA", "SOBRA", "SEM_CADASTRO")}
+    return {"linhas": linhas, "faltas": conta["FALTA"], "sobras": conta["SOBRA"],
+            "sem_cadastro": conta["SEM_CADASTRO"], "divergente": any(conta.values())}
+
+
+def encerrar_recebimento(conn, recebimento_id: int, observacao: str = "",
+                         operador: dict | None = None) -> dict:
+    """
+    Botao "Encerrar recebimento" (unico jeito de fechar, desde 02/11). Com
+    falta, segue o caminho de sempre (encerrar_com_divergencia: congela a
+    falta, estado DIVERGENCIA, e a rota manda o relatorio ao cliente). Sem
+    falta vira ENDERECADO; sobra e linha sem cadastro ficam registradas na
+    tabela (qtd_enderecada x qtd_un) e na observacao, sem e-mail.
+    """
+    rec = conn.execute("SELECT * FROM wms_recebimentos WHERE id = ?", (int(recebimento_id),)).fetchone()
+    if not rec:
+        raise wms.ErroWMS("Recebimento nao encontrado.")
+    if rec["estado"] != "ESPERADO":
+        raise wms.ErroWMS(f"Recebimento ja encerrado ({rec['estado']}).")
+    resumo = resumo_encerramento(conn, recebimento_id)
+    if resumo["faltas"]:
+        r = encerrar_com_divergencia(conn, recebimento_id, observacao, operador=operador)
+        return dict(r, resumo=resumo)
+    agora = wms.agora()
+    conn.execute(
+        "UPDATE wms_recebimentos SET estado = 'ENDERECADO', observacao_divergencia = ?, "
+        "encerrado_em = ?, encerrado_por = ?, atualizado_em = ? WHERE id = ? AND estado = 'ESPERADO'",
+        (" ".join(str(observacao or "").split())[:500], agora,
+         str((operador or {}).get("nome") or "")[:60], agora, int(recebimento_id)))
+    conn.commit()
+    return {"recebimento": dict(conn.execute(
+        "SELECT * FROM wms_recebimentos WHERE id = ?", (int(recebimento_id),)).fetchone()),
+        "faltas": [], "resumo": resumo}
 
 
 def listar_pedidos_wms(conn, estado: str | None = None, limite: int = 50) -> list[dict]:

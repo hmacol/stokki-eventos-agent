@@ -9,12 +9,20 @@ O endpoint fica na area /provider/ que usa sessao separada da area
 em vez de requests.
 
 Endpoints:
-  GET  /provider/operation/order/printing/order  -- lista em espera
+  GET  /provider/operation/order/printing/list   -- fila por aba (JSON)
   POST /provider/operation/order/printing/search -- busca por NF/PO
+
+22/10: a Stokki trocou a tela por abas (Aguardando Faturamento /
+Faturados para imprimir / Ultimos impressos). Os antigos #div_billed,
+#div_printing e /printing/order sumiram -- o robo passou a ver 0 todo dia
+e mandar "OK". Agora a fila vem de /printing/list?tab=billed e
+_conferir_fila levanta erro se a tela nao bater com o JSON.
 """
+import json
 import logging
 import re
 import time
+from datetime import datetime
 from pathlib import Path
 
 from bs4 import BeautifulSoup
@@ -22,13 +30,26 @@ from playwright.sync_api import sync_playwright
 
 logger = logging.getLogger(__name__)
 
+# 05/10: cada operação da Estação entra na fila da conta provider e
+# libera ao terminar (stokki/sessao_uso.na_vez_da_provider).
+from stokki.sessao_uso import na_vez_da_provider  # noqa: E402
+from stokki.auth import aguardar_saida_do_login  # noqa: E402
+
 BASE_URL     = "https://freshlog.stokki.com.br"
 URL_PRINTING = f"{BASE_URL}/pt-br/provider/operation/order/printing"
-URL_ORDER    = f"{BASE_URL}/pt-br/provider/operation/order/printing/order"
+URL_LIST     = f"{BASE_URL}/pt-br/provider/operation/order/printing/list"
 URL_SEARCH   = f"{BASE_URL}/pt-br/provider/operation/order/printing/search"
 LIMITE_SEGURANCA_IMPRESSAO = 300  # trava de segurança: máx. de cliques em "Imprimir" por execução
-# Botões 'Imprimir' da fila de verdade ('Pedidos faturados'); ver comentário em imprimir_pedidos_pendentes.
-_SEL_BOTAO_FILA = "#div_billed button.btn_finish"
+# Aba 'Faturados para imprimir' da tela nova (22/10); a aba 'Últimos
+# impressos' também tem btn_finish, por isso o escopo no tbody da aba.
+_ABA_FILA = "billed"
+_SEL_BOTAO_ABA = f"#printing_tabs button[data-tab='{_ABA_FILA}']"
+_SEL_CONTADOR_ABA = f"#printing_tabs_count_{_ABA_FILA}"
+_SEL_BOTAO_FILA = f"#printing_tabs_tbody_{_ABA_FILA} button.btn_finish"
+_POR_PAGINA_LISTA = 100
+# Coluna (0-based) com a data em que o pedido entrou em cada aba:
+# 'Solicitado em' / 'Faturado em' / 'Impresso em'.
+_COLUNA_DESDE = {"awaiting_billing": 5, "billed": 4, "printed": 4}
 
 _RAIZ_DADOS = Path(__file__).resolve().parent.parent / "dados"
 
@@ -72,7 +93,7 @@ def _preencher_form_login(page, usuario, senha, tentativas=3, timeout_ms=15_000)
             page.fill("[name='email']", usuario)
             page.fill("[name='password']", senha)
             page.click("button[type='submit']")
-            page.wait_for_url(lambda u: "login" not in u, timeout=30_000)
+            aguardar_saida_do_login(page)  # 28/10: passa pela tela de sessão ativa
             return
         except Exception as e:
             ultimo_erro = e
@@ -88,6 +109,7 @@ def _preencher_form_login(page, usuario, senha, tentativas=3, timeout_ms=15_000)
     raise ultimo_erro
 
 
+@na_vez_da_provider
 def listar_pedidos_em_espera(config: dict) -> list:
     """
     Retorna a lista de pedidos em espera na Estacao de Impressao.
@@ -109,36 +131,119 @@ def listar_pedidos_em_espera(config: dict) -> list:
             # Navega para o provider antes do login para estabelecer sessao correta
             page.goto(URL_PRINTING, wait_until="domcontentloaded", timeout=30_000)
             _preencher_form_login(page, usuario, senha)
+            page.goto(URL_PRINTING, wait_until="domcontentloaded", timeout=30_000)
 
-            # Captura a resposta JSON da estacao de impressao
-            resultado_json = {}
-
-            def capturar(response):
-                if "printing/order" in response.url:
-                    try:
-                        resultado_json["data"] = response.json()
-                    except Exception:
-                        pass
-
-            page.on("response", capturar)
-            page.goto(URL_PRINTING, wait_until="networkidle", timeout=30_000)
-            page.wait_for_timeout(2000)
+            pedidos, _ = _ler_aba(context, _ABA_FILA)
         finally:
             # Garante que o Chromium headless sempre e fechado -- sem isso,
             # uma falha de login (seletor mudou, timeout, etc.) deixava o
             # processo orfao, acumulando a cada execucao agendada.
             browser.close()
 
-    html_tabela = resultado_json.get("data", {}).get("div_billing", "")
-    if not html_tabela:
+    if not pedidos:
         logger.info("Estacao de Impressao: nenhum pedido em espera.")
         return []
-
-    pedidos = _parsear_tabela_impressao(html_tabela)
     logger.info(f"Estacao de Impressao: {len(pedidos)} pedido(s) em espera.")
     return pedidos
 
 
+def _extrair_pagina_lista(texto: str, aba: str) -> tuple[list, dict]:
+    """Valida a resposta de /printing/list e devolve (pedidos, pagination).
+    Levanta RuntimeError se o formato não for o esperado -- é isso que
+    impede um 'fila vazia' falso quando a Stokki mexe na tela."""
+    try:
+        dados = json.loads(texto)
+    except ValueError:
+        raise RuntimeError(
+            f"Estação de Impressão: /printing/list?tab={aba} não devolveu JSON "
+            f"(sessão caiu ou a Stokki mudou a tela): {texto[:120]!r}"
+        )
+    conteudo = dados.get("content") if isinstance(dados, dict) else None
+    if (not dados.get("success") or not isinstance(conteudo, dict)
+            or conteudo.get("tab") != aba
+            or not isinstance(conteudo.get("pagination"), dict)
+            or "total" not in conteudo["pagination"]):
+        raise RuntimeError(
+            f"Estação de Impressão: resposta de /printing/list?tab={aba} fora do "
+            f"formato esperado: {texto[:200]!r}"
+        )
+    return (_parsear_tabela_impressao(conteudo.get("data") or "", _COLUNA_DESDE.get(aba)),
+            conteudo["pagination"])
+
+
+def _ler_aba(context, aba: str) -> tuple[list, int]:
+    """Todos os pedidos de uma aba da Estação (percorre as páginas) e o
+    total que a Stokki informa. Usa a sessão do contexto já logado."""
+    pedidos, pagina = [], 1
+    while True:
+        resp = context.request.get(
+            URL_LIST,
+            params={"tab": aba, "page": pagina, "per_page": _POR_PAGINA_LISTA,
+                    "sort": "", "direction": "desc", "search": "", "client_id": ""},
+            headers={"X-Requested-With": "XMLHttpRequest", "Accept": "application/json",
+                     "Referer": URL_PRINTING},
+        )
+        lote, paginacao = _extrair_pagina_lista(resp.text(), aba)
+        pedidos.extend(lote)
+        if pagina >= int(paginacao.get("last_page") or 1):
+            return pedidos, int(paginacao["total"])
+        pagina += 1
+
+
+def _conferir_fila(total_stokki: int, ids_lidos: list, contador_tela: str | None,
+                   botoes_visiveis: int | None) -> None:
+    """Confere a fila por três caminhos e levanta RuntimeError se não
+    baterem (pedido do Hugo, 22/10: zero só vale se for zero de verdade).
+      - total_stokki:    pagination.total de /printing/list
+      - ids_lidos:       data-ids parseados das linhas
+      - contador_tela:   texto do contador da aba na página (None = sumiu)
+      - botoes_visiveis: botões 'Iniciar Impressão' na aba aberta (None =
+                         não deu pra abrir a aba); só a 1ª página aparece.
+    """
+    problemas = []
+    if len(ids_lidos) != total_stokki:
+        problemas.append(f"Stokki informa {total_stokki} na fila mas foram lidos {len(ids_lidos)} pedido(s)")
+    if contador_tela is None:
+        problemas.append("contador da aba 'Faturados para imprimir' não encontrado na tela")
+    elif contador_tela.strip() != str(total_stokki):
+        problemas.append(f"contador da tela mostra {contador_tela.strip()!r} e a lista {total_stokki}")
+    if botoes_visiveis is None:
+        problemas.append("aba 'Faturados para imprimir' não abriu")
+    elif total_stokki and not botoes_visiveis:
+        problemas.append(f"aba aberta sem botão 'Iniciar Impressão' com {total_stokki} na fila")
+    elif not total_stokki and botoes_visiveis:
+        problemas.append(f"lista diz 0 mas a aba mostra {botoes_visiveis} botão(ões) 'Iniciar Impressão'")
+    if problemas:
+        raise RuntimeError("Estação de Impressão: conferência da fila falhou -- " + "; ".join(problemas))
+
+
+@na_vez_da_provider
+def ler_filas(config: dict, abas: tuple = ("awaiting_billing", "billed")) -> dict:
+    """Só leitura: {aba: lista de pedidos} das abas da Estação (cada pedido
+    com "desde"). Levanta RuntimeError se a Stokki não responder no
+    formato esperado. Usado por vigia_fila_impressao.py."""
+    usuario, senha = _credenciais_provider(config)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            context = _novo_contexto_disfarcado(browser)
+            page    = context.new_page()
+            page.goto(URL_PRINTING, wait_until="domcontentloaded", timeout=30_000)
+            _preencher_form_login(page, usuario, senha)
+            page.goto(URL_PRINTING, wait_until="domcontentloaded", timeout=30_000)
+            filas = {}
+            for aba in abas:
+                pedidos, total = _ler_aba(context, aba)
+                if len(pedidos) != total:
+                    raise RuntimeError(f"Estação de Impressão: aba {aba} informa {total} pedido(s) "
+                                       f"mas foram lidos {len(pedidos)}")
+                filas[aba] = pedidos
+            return filas
+        finally:
+            browser.close()
+
+
+@na_vez_da_provider
 def buscar_pedido_por_nf(config: dict, numero_nf: str):
     """
     Busca um pedido especifico pelo numero da NF ou PO.
@@ -177,8 +282,18 @@ def buscar_pedido_por_nf(config: dict, numero_nf: str):
     return dados
 
 
-def _parsear_tabela_impressao(html: str) -> list:
-    """Parseia o HTML da tabela retornada pelo endpoint /printing/order."""
+def _data_hora(texto: str) -> datetime | None:
+    m = re.search(r"(\d{2}/\d{2}/\d{4})\D+(\d{2}:\d{2})", texto or "")
+    return datetime.strptime(f"{m.group(1)} {m.group(2)}", "%d/%m/%Y %H:%M") if m else None
+
+
+def _parsear_tabela_impressao(html: str, coluna_desde: int | None = None) -> list:
+    """Parseia as linhas (<tr>) devolvidas em content.data por /printing/list.
+
+    coluna_desde: coluna com a data em que o pedido entrou na aba (ver
+    _COLUNA_DESDE); vira o campo "desde" (datetime), com a data do pedido
+    como reserva quando a célula vem "—". Linha sem botão (aba Aguardando
+    Faturamento) entra com id_stokki None."""
     soup    = BeautifulSoup(html, "html.parser")
     pedidos = []
 
@@ -199,7 +314,8 @@ def _parsear_tabela_impressao(html: str) -> list:
         cliente    = linhas_cli[0] if linhas_cli else ""
         codigo_cli = linhas_cli[1] if len(linhas_cli) > 1 else ""
 
-        botao     = tds[3].find("button")
+        # 22/10: na tela nova o botão é a última coluna (antes era a 4ª).
+        botao     = tr.find("button", class_="btn_finish")
         id_stokki = None
         if botao:
             data_id = botao.get("data-id", "")
@@ -210,7 +326,10 @@ def _parsear_tabela_impressao(html: str) -> list:
                 if m:
                     id_stokki = int(m.group(1))
 
-        if id_stokki:
+        if id_stokki or codigo_ps.startswith("#PS-"):
+            desde = None
+            if coluna_desde is not None and len(tds) > coluna_desde:
+                desde = _data_hora(tds[coluna_desde].get_text(" ", strip=True))
             pedidos.append({
                 "id_stokki":  id_stokki,
                 "codigo_ps":  codigo_ps,
@@ -219,6 +338,8 @@ def _parsear_tabela_impressao(html: str) -> list:
                 "hora":       hora,
                 "cliente":    cliente,
                 "codigo_cli": codigo_cli,
+                "transportadora": tds[3].find("span").get_text(strip=True) if tds[3].find("span") else "",
+                "desde":      desde or _data_hora(f"{data} {hora}"),
             })
 
     return pedidos
@@ -248,6 +369,31 @@ def _aguardar_pagina_acalmar(page, timeout=8000):
         page.wait_for_load_state("networkidle", timeout=timeout)
     except Exception:
         pass
+
+
+def _abrir_aba_fila(page) -> tuple[str | None, int | None]:
+    """Clica na aba 'Faturados para imprimir' e espera as linhas chegarem.
+    Devolve (texto do contador da aba, nº de botões 'Iniciar Impressão'
+    visíveis); None em cada um quando a peça não existe na tela."""
+    contador = page.query_selector(_SEL_CONTADOR_ABA)
+    texto_contador = contador.inner_text() if contador else None
+    aba = page.query_selector(_SEL_BOTAO_ABA)
+    if not aba:
+        return texto_contador, None
+    if "st-active" in (aba.get_attribute("class") or ""):
+        # Já aberta: clicar de novo não recarrega a lista (esperava 15s à toa).
+        return texto_contador, len(page.query_selector_all(_SEL_BOTAO_FILA))
+    try:
+        with page.expect_response(lambda r: "/printing/list" in r.url and f"tab={_ABA_FILA}" in r.url,
+                                  timeout=15_000):
+            aba.click()
+    except Exception as e:
+        logger.warning(f"Aba 'Faturados para imprimir' não carregou: {e}")
+        return texto_contador, None
+    page.wait_for_timeout(300)  # o station-tabs.js preenche o tbody logo depois da resposta
+    contador = page.query_selector(_SEL_CONTADOR_ABA)
+    texto_contador = contador.inner_text() if contador else None
+    return texto_contador, len(page.query_selector_all(_SEL_BOTAO_FILA))
 
 
 def _login_provider(page, usuario, senha):
@@ -415,6 +561,29 @@ def _aguardar_fluxo_impressao(page, data_id: str, timeout_s: int = 60) -> bool:
 def imprimir_pedidos_pendentes(config: dict, dry_run: bool = False,
                                visivel: bool = False,
                                apenas_ids: set | None = None) -> dict:
+    """Etapa nova (22/11) + impressão. Antes de imprimir, informa na Stokki
+    as notas que o cliente anexou no portal (stokki/informar_nf_portal.py):
+    o pedido sai de 'Aguardando faturamento' e entra na fila desta mesma
+    rodada. Fica FORA da vez da provider (a etapa usa a conta admin; quem
+    segura a admin e espera a provider é o pipeline). Falha da etapa não
+    impede a impressão. O resultado ganha a chave "nfs_portal"."""
+    nfs_portal = None
+    if not apenas_ids:
+        try:
+            from stokki.informar_nf_portal import informar_nfs_do_portal
+            nfs_portal = informar_nfs_do_portal(config, dry_run=dry_run)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Informar NF do portal falhou (a impressão segue): {e}")
+            nfs_portal = {"erro": str(e)}
+    resultado = _imprimir_fila(config, dry_run=dry_run, visivel=visivel, apenas_ids=apenas_ids)
+    resultado["nfs_portal"] = nfs_portal
+    return resultado
+
+
+@na_vez_da_provider
+def _imprimir_fila(config: dict, dry_run: bool = False,
+                   visivel: bool = False,
+                   apenas_ids: set | None = None) -> dict:
     """
     Processa TODOS os pedidos pendentes na Estação de Impressão, clicando
     de verdade em 'Imprimir' (botão button.btn_finish) e fechando o popup
@@ -498,20 +667,25 @@ def imprimir_pedidos_pendentes(config: dict, dry_run: bool = False,
                     "'Imprimindo Danfe...' (fluxo antigo de 'Pular Impressão' segue como fallback)."
                 )
 
-            # Só a tabela 'Pedidos faturados' (#div_billed). A tabela
-            # 'Últimos pedidos impressos' (#div_printing) também tem botão
-            # 'Imprimir' (reimpressão) com a mesma classe btn_finish -- sem
-            # o escopo, um pedido já impresso hoje era contado como
-            # pendente, clicado de novo e, na conferência, dado como
-            # "ainda na fila" (achado 15/09 com o 39222).
-            botoes = page.query_selector_all(_SEL_BOTAO_FILA)
-            resultado["pendentes"] = len(botoes)
-            logger.info(f"{len(botoes)} pedido(s) pendente(s) na Estação de Impressão.")
+            # Fila = aba 'Faturados para imprimir', lida pelo JSON da própria
+            # tela e conferida contra o contador e os botões da aba. Se não
+            # bater, levanta -- e-mail sai como erro em vez de "0, OK"
+            # (achado 22/10: a Stokki trocou a tela e o robô via 0 sempre).
+            fila, total = _ler_aba(context, _ABA_FILA)
+            ids_fila = [str(p["id_stokki"]) for p in fila if p["id_stokki"]]
+            contador_tela, botoes_visiveis = _abrir_aba_fila(page)
+            _conferir_fila(total, ids_fila, contador_tela, botoes_visiveis)
+            resultado["pendentes"] = len(ids_fila)
+            logger.info(
+                f"{len(ids_fila)} pedido(s) pendente(s) na Estação de Impressão "
+                f"(conferido: lista={total}, contador da tela={contador_tela!r}, "
+                f"botões visíveis={botoes_visiveis})."
+            )
 
-            if dry_run or not botoes:
+            if dry_run or not ids_fila:
                 return resultado
 
-            ids_para_processar = [b.get_attribute("data-id") for b in botoes]
+            ids_para_processar = ids_fila
             if apenas_ids:
                 apenas = {str(i) for i in apenas_ids}
                 ids_para_processar = [i for i in ids_para_processar if i in apenas]
@@ -556,11 +730,19 @@ def imprimir_pedidos_pendentes(config: dict, dry_run: bool = False,
                     )
                     _aguardar_fluxo_impressao(page, "anterior", timeout_s=30)
 
+                # Depois de cada 'Finalizar' a Stokki volta pra aba padrão
+                # (Aguardando Faturamento): reabre a fila antes de procurar.
+                _abrir_aba_fila(page)
                 # re-busca o botão pelo data-id específico — se já saiu da
                 # fila (processado por outra via nesse meio-tempo), pula
                 botao = page.query_selector(f"{_SEL_BOTAO_FILA}[data-id='{data_id}']")
                 if not botao:
-                    logger.info(f"  Pedido data-id={data_id} já saiu da fila, pulando.")
+                    ainda = {str(p["id_stokki"]) for p in _ler_aba(context, _ABA_FILA)[0]}
+                    if data_id in ainda:
+                        # A aba mostra só a 1ª página; sai nas próximas rodadas.
+                        logger.warning(f"  Pedido data-id={data_id} fora da página visível da aba, fica pra próxima rodada.")
+                    else:
+                        logger.info(f"  Pedido data-id={data_id} já saiu da fila, pulando.")
                     continue
 
                 logger.info(f"  Imprimindo pedido data-id={data_id}...")
@@ -582,7 +764,7 @@ def imprimir_pedidos_pendentes(config: dict, dry_run: bool = False,
                     # também some se o /printing/store falhar e a página
                     # for recarregada pelo fallback).
                     _aguardar_pagina_acalmar(page)
-                    ainda_na_fila = page.query_selector(f"{_SEL_BOTAO_FILA}[data-id='{data_id}']")
+                    ainda_na_fila = data_id in {str(p["id_stokki"]) for p in _ler_aba(context, _ABA_FILA)[0]}
                     if fechou and not ainda_na_fila:
                         resultado["processados"] += 1
                         logger.info(

@@ -18,6 +18,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from homologacao import ambiente as _ambiente
+
 logger = logging.getLogger(__name__)
 
 _RAIZ = Path(__file__).parent.parent  # painel_agentes/ -> raiz do projeto
@@ -187,6 +189,7 @@ def iniciar_execucao(agente: dict, modo_teste: bool, args_extra: list[str] | Non
     agentes do planejamento deixa filtrar a Importação por pedido/
     embarcador na hora, sem precisar de uma entrada nova em agentes.py
     pra cada combinação possível de filtro."""
+    _ambiente.recusar_na_homologacao("Agentes")
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     carimbo = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = LOGS_DIR / f"{agente['id']}_{carimbo}.log"
@@ -227,6 +230,7 @@ def iniciar_sequencia(passos: list[dict], ids_do_grupo: tuple[str, ...] | None =
 
     passos: [{"agente": <dict de agentes.py>, "args_extra": [...] | None}, ...]
     """
+    _ambiente.recusar_na_homologacao("Agentes")
     thread = threading.Thread(target=_rodar_sequencia, args=(passos, ids_do_grupo), daemon=True)
     thread.start()
 
@@ -296,6 +300,7 @@ def iniciar_execucao_com_fila(agente: dict, modo_teste: bool, ids_do_grupo: tupl
 
     Retorna (execucao_id, entrou_na_fila).
     """
+    _ambiente.recusar_na_homologacao("Agentes")
     agora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     carimbo = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = LOGS_DIR / f"{agente['id']}_{carimbo}.log"

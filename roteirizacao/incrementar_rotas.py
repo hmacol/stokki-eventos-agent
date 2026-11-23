@@ -11,6 +11,15 @@ nunca têm -- a ordem final não importa de qualquer forma, o bloco de
 resequenciamento mais abaixo reordena tudo por distância da base
 depois).
 
+05/10 (Hugo): rascunho às 16h, incremento automático às 18h e às 22h;
+09/11 (Hugo): o das 18h foi desligado, fica só o das 22h
+(infra/sequencia_noite.sh). Pedido que não
+cabe em rota já enviada vai pro RASCUNHO ainda não confirmado mais
+próximo (planejamento_rotas.incrementar_rascunhos_com_selecionados, o
+mesmo do botão "Incrementar" do pool); pedido já em rascunho não é
+"novo". O corte por pedido passou de 19h pra 22h -- os exemplos abaixo
+são da regra antiga de 19h.
+
 Dois padrões fixos (pedido do Hugo, 10/09 -- valem sempre, sem flag):
 
   - CORTE DE 19h POR PEDIDO (HORA_CORTE_PEDIDO): só entra no
@@ -23,11 +32,12 @@ Dois padrões fixos (pedido do Hugo, 10/09 -- valem sempre, sem flag):
     rodada de quarta 15h mira quinta -> corte = quarta 19h, ainda no
     futuro, então nada é barrado por horário.
 
-  - SEM TETO DE PEDIDOS POR ROTA: o incremento não aplica mais o
-    limite de entregas por rota (TAMANHO_MAXIMO_ROTA do criador
-    diário). Continuam valendo o teto de caixas (VOLUME_MAXIMO_ROTA),
-    os limites do tipo de veículo grande, o raio de 20 km, macro-região,
-    zona, viagem e janela de horário.
+  - TETO DE PEDIDOS POR ROTA: de 10/09 a 07/10 o incremento não
+    olhava a quantidade de entregas. 07/10 (Hugo): rota comum recebe
+    pedido só até TAMANHO_MAXIMO_ROTA (15) pedidos, o mesmo teto do
+    rascunho; rota de veículo grande segue os limites do tipo. Valem
+    também o teto de caixas (VOLUME_MAXIMO_ROTA), o raio de 20 km,
+    macro-região, zona, viagem e janela de horário.
 
 "Novo" é decidido CONTRA A API, não por um fingerprint local (mudado
 06/08, pedido do Hugo): busca todas as rotas existentes com
@@ -67,7 +77,7 @@ import re
 import sys
 import time
 from collections import Counter
-from datetime import date, datetime, time as dt_time, timedelta, timezone
+from datetime import date, datetime, time as dt_time, timezone
 from pathlib import Path
 
 _RAIZ_LOCAL   = Path(__file__).parent
@@ -100,21 +110,27 @@ from notificar_execucao_agente import notificar_execucao
 from roteirizacao_dados import (
     obter_coordenadas, elegivel_para_data, extrair_volume_caixas, _distancia_km,
     macro_regiao_do_servico, definir_coords_base, janela_viavel, tem_janela,
+    hora_saida_de_start_at, ordenar_com_janelas,
 )
-from otimizacao_rotas import ordenar_2opt
+import roteirizacao_dados
+from otimizacao_rotas import ordenar_2opt, pedido_cabe_no_trajeto
 from rotas_client import listar_rotas, adicionar_atividades, atualizar_rota
 from documentacao_rota import agendar_varias as agendar_documentacao_varias, aguardar as aguardar_documentacao
 from nucleo.pool import listar_pool_not_assigned
+from nucleo import eventos_freshhub, prontidao_stokki  # plano 1.2 do sistema novo
 from criar_rotas_diarias import (
-    ENDERECO_BASE, PREFIXO_NOME_ROTA, VOLUME_MAXIMO_ROTA,
-    DISTANCIA_MAXIMA_ROTA_KM, TZ_BRASILIA, _data_alvo_rotas, _preparar_janelas, DB_PATH,
+    ENDERECO_BASE, PREFIXO_NOME_ROTA, VOLUME_MAXIMO_ROTA, TAMANHO_MAXIMO_ROTA,
+    DISTANCIA_MAXIMA_ROTA_KM, DISTANCIA_MAXIMA_VIAGEM_KM, KM_ACUMULADO_MAXIMO_ROTA_KM,
+    KM_ACUMULADO_MAXIMO_VIAGEM_KM, TZ_BRASILIA, _data_alvo_rotas, _preparar_janelas, DB_PATH,
 )
+import rascunhos_rota  # painel_agentes/ -- criar_rotas_diarias já pôs no sys.path
 from regras.tipo_carga_embarcador import carregar_tipos_carga_por_sender, marcar_tipo_carga, carga_seca_confirmada
 from regras.complexidade_entrega import (
     carregar_niveis, carregar_horarios, carregar_ajustes_manuais, nivel_efetivo, horario_efetivo,
 )
 from notificar_agendamento_pendente import identificar_pendentes
 from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agendamento
+from regras import feriados
 from agendamento_confirmacao import buscar_confirmacao
 from regioes_dia_fixo import aplicar_regioes_dia_fixo
 from notificar_agendamento_dia_fixo import notificar_agendamentos_dia_fixo
@@ -125,7 +141,7 @@ from email_utils import notificacoes_automaticas_ativas
 from regras.preferencias_motoristas import CatalogoMotoristas
 from alocacao_motoristas import classificar_rota_viagem
 from zonas_sp import classificar_zona
-from regras.tipo_veiculo import classificar_tipo_veiculo
+from regras.tipo_veiculo import classificar_tipo_veiculo, tipo_por_codigo
 
 
 def _carregar_config() -> dict:
@@ -138,17 +154,16 @@ PADRAO_DATA_ROTA = re.compile(r"(\d{2})/(\d{2})/(\d{4})")
 # Corte de horário do pedido (pedido do Hugo, 10/09): pedido que chegou
 # na VUUPT depois das 19h do último dia útil anterior à data alvo NÃO
 # entra no incremento -- fica pro rascunho do dia seguinte. Ver docstring
-# do módulo pros exemplos.
-HORA_CORTE_PEDIDO = 19
+# do módulo pros exemplos. 05/10 (Hugo): rascunho passou pras 16h e o
+# incremento roda às 18h e às 22h -- o corte foi pras 22h, pra rodada
+# das 22h pegar tudo que chegou até ela.
+HORA_CORTE_PEDIDO = 22
 
 
 def _dia_util_anterior(data: date) -> date:
-    """Último dia útil (seg-sex) ESTRITAMENTE anterior a `data` -- mesmo
-    critério simples, sem feriados, de criar_rotas_diarias._proximo_dia_util."""
-    anterior = data - timedelta(days=1)
-    while anterior.weekday() >= 5:
-        anterior -= timedelta(days=1)
-    return anterior
+    """Último dia útil ESTRITAMENTE anterior a `data` (seg-sex sem feriado,
+    regras/feriados.py)."""
+    return feriados.dia_util_anterior(data)
 
 
 def limite_corte_pedidos(data_alvo: date) -> datetime:
@@ -332,6 +347,26 @@ def _centroide_rota(rota: dict, api_key: str | None) -> tuple[float, float] | No
     )
 
 
+# Receptora de rota fraca (Hugo, 03/10): vai ate 100 + 10 caixas e
+# continua Fiorino -- mesmo valor de rotas_fracas.FOLGA_CAIXAS_EXTRA.
+FOLGA_CAIXAS_ROTA_FRACA = 10
+
+
+def _veiculo_da_rota_existente(caixas: int, enderecos: int, tipo_motorista: str | None):
+    """(tipo_veiculo, teto de caixas da rota comum) de uma rota que JA
+    existe na Vuupt. A Vuupt nao guarda se a rota foi receptora de rota
+    fraca: rota com 101-110 caixas classificada como VAN/HR mas rodando
+    de Fiorino (ou sem motorista conhecido -- na duvida, Fiorino) e
+    tratada como Fiorino com teto de 110, senao cresceria ate 400."""
+    tipo = classificar_tipo_veiculo(caixas, enderecos)
+    teto_fiorino = VOLUME_MAXIMO_ROTA + FOLGA_CAIXAS_ROTA_FRACA
+    if tipo is not None and tipo.codigo == "VAN_HR" and caixas <= teto_fiorino:
+        motorista = tipo_por_codigo(tipo_motorista)
+        if motorista is None or motorista.codigo == "FIORINO":
+            return None, teto_fiorino
+    return tipo, VOLUME_MAXIMO_ROTA
+
+
 def _cabe_na_rota(rota: dict, cx_pedido: int, endereco_pedido: str | None) -> bool:
     """
     True se `cx_pedido` (do endereço `endereco_pedido`) ainda cabe na
@@ -342,19 +377,51 @@ def _cabe_na_rota(rota: dict, cx_pedido: int, endereco_pedido: str | None) -> bo
     endereços diferentes do PRÓPRIO tipo -- em vez do teto genérico de
     última milha (`VOLUME_MAXIMO_ROTA`), que não faz sentido pra uma
     rota dessas (pode ter dezenas de pedidos pro MESMO endereço, e cabe
-    bem mais que 100 caixas). Rota comum só respeita o teto de caixas.
+    bem mais que 100 caixas). Rota comum respeita o teto de caixas e o
+    de pedidos.
 
-    SEM TETO DE PEDIDOS (pedido do Hugo, 10/09): o incremento não olha
-    mais a quantidade de entregas da rota (antes: < TAMANHO_MAXIMO_ROTA)
-    -- a ideia é COMPLEMENTAR as rotas vigentes com tudo que chegou
-    dentro do corte, e não deixar pedido pra trás por causa do teto.
+    TETO DE PEDIDOS: de 10/09 a 07/10 não havia (a ideia era complementar
+    as rotas com tudo que chegou dentro do corte). 07/10 (Hugo): rota
+    comum fica em até TAMANHO_MAXIMO_ROTA (15) pedidos, como o rascunho.
     """
     tipo = rota["tipo_veiculo"]
     if tipo is not None:
         caixas_cabe = rota["caixas"] + cx_pedido <= tipo.volume_maximo_cx
         enderecos_cabe = len(rota["enderecos"] | {endereco_pedido}) <= tipo.max_enderecos_distintos
         return caixas_cabe and enderecos_cabe
-    return rota["caixas"] + cx_pedido <= VOLUME_MAXIMO_ROTA
+    return (rota["qtd"] + 1 <= TAMANHO_MAXIMO_ROTA
+            and rota["caixas"] + cx_pedido <= rota.get("teto_caixas", VOLUME_MAXIMO_ROTA))
+
+
+def _hora_saida_da_rota(start_at: str | None) -> float | None:
+    """Saída da rota pro simulador de janelas: a hora do start_at só
+    quando é mais de 1 min depois de HORA_SAIDA_BASE (rota da tarde);
+    rota da manhã fica com None pra valer o hora_saida_base do config
+    (decisão R9, 23/10)."""
+    hora = hora_saida_de_start_at(start_at)
+    if hora is None or round((hora - roteirizacao_dados.HORA_SAIDA_BASE) * 60) <= 1:
+        return None
+    return hora
+
+
+def _ordenar_rota_incrementada(servicos: list[dict], coords_base, gmaps_key, hora_saida: float | None) -> list[dict]:
+    """Resequencia a rota que ganhou pedido. Rota da tarde (hora_saida)
+    é sequenciada a partir da saída dela; a da manhã segue ordenar_2opt."""
+    if hora_saida is not None:
+        return ordenar_com_janelas(servicos, coords_base[0], coords_base[1], gmaps_key, hora_saida=hora_saida)
+    return ordenar_2opt(servicos, coords_base[0], coords_base[1], gmaps_key)
+
+
+def _registrar_roteirizado_incremento(config: dict, pedido: dict, rota: dict, data_alvo_iso: str, *,
+                                      modo_teste: bool) -> None:
+    """Pedido posto numa rota existente no incremento vira `roteirizado` no freshhub (plano 1.2, sombra)."""
+    try:
+        eventos_freshhub.registrar(config, [eventos_freshhub.evento(
+            pedido.get("code") or "", "roteirizado",
+            {"vuupt_route_id": rota.get("id"), "rota_nome": rota.get("nome"), "data": data_alvo_iso,
+             "service_id": pedido.get("id"), "origem": "incremento"})], modo_teste=modo_teste)
+    except Exception as e:  # noqa: BLE001 - sombra: nunca derruba o incremento
+        logger.warning(f"evento roteirizado de {pedido.get('code')} nao enviado ao freshhub: {e}")
 
 
 def main(modo_teste: bool = False):
@@ -392,6 +459,15 @@ def main(modo_teste: bool = False):
         # planejamento.fonte_pool -- ver nucleo/pool.py. include=customer
         # continua vindo (CNPJ do destinatário resolve nível e horário).
         servicos = listar_pool_not_assigned(config, vuupt)
+
+        # Em espera a pedido do cliente (27/10): pausado não é encaixado. Sai
+        # ANTES do dia fixo (que gravaria data e avisaria o remetente).
+        import pedidos_pausados_cliente
+        servicos, _pausados = pedidos_pausados_cliente.separar_pausados(servicos)
+
+        # Data automática não é agendamento do cliente (marca; não anda a data aqui).
+        from datas_automaticas import marcar_datas_automaticas
+        marcar_datas_automaticas(servicos)
 
         # Busca as rotas ATIVAS (hoje em diante) -- pedido do Hugo, 06/08:
         # antes buscava o HISTÓRICO INTEIRO de rotas (rotas de anos atrás,
@@ -440,11 +516,9 @@ def main(modo_teste: bool = False):
         # not_assigned está de fato em alguma rota agora? Se sim, pula
         # (já foi cuidado, seja pelo agente ou manualmente). Se não, é
         # elegível -- sempre respeitando o agendamento (ver mais abaixo).
-        ids_ja_em_alguma_rota: set[int] = set()
-        for r in todas_rotas:
-            for s in _extrair_servicos_da_rota(r):
-                if isinstance(s, dict) and s.get("id") is not None:
-                    ids_ja_em_alguma_rota.add(s["id"])
+        # (revisão final, 02/11: mesma conta que a data automática usa pra não
+        # andar pedido que está em rota -- roteirizacao_dados.ids_servicos_em_rotas)
+        ids_ja_em_alguma_rota: set[int] = roteirizacao_dados.ids_servicos_em_rotas(todas_rotas)
 
         # Regiões com dia fixo de entrega (pedido do Hugo, 02/08) --
         # roda antes de tudo, mesma lógica de criar_rotas_diarias.py.
@@ -455,12 +529,21 @@ def main(modo_teste: bool = False):
                 ressincronizar_ids(vuupt, [a["servico"]["id"] for a in agendados_dia_fixo])
                 logger.info(f"{len(agendados_dia_fixo)} pedido(s) agendado(s) por região de dia fixo.")
                 # Avisa o remetente da data agendada (pedido do Hugo, 12/08).
-                if notificacoes_automaticas_ativas(config):
-                    resultado_aviso = notificar_agendamentos_dia_fixo(
-                        agendados_dia_fixo, config.get("email", {}), modo_teste=modo_teste)
-                    logger.info(f"Notificação de agendamento por dia fixo: {resultado_aviso}")
+                # (a chave-mestra é só o fallback; a tela de Notificações vale por cima)
+                resultado_aviso = notificar_agendamentos_dia_fixo(
+                    agendados_dia_fixo, config.get("email", {}), modo_teste=modo_teste,
+                    mestra=notificacoes_automaticas_ativas(config))
+                logger.info(f"Notificação de agendamento por dia fixo: {resultado_aviso}")
         except Exception as e:
             logger.error(f"Falha ao aplicar regiões de dia fixo (não afeta o incremento): {e}")
+
+        # Fora do dia fixo (Hugo, 03/10): mesma regra do criar_rotas_diarias --
+        # data do embarcador fora do dia de visita vira dedicado e é avisada.
+        try:
+            from fora_dia_fixo import tratar_fora_dia_fixo
+            tratar_fora_dia_fixo(servicos, config, modo_teste=modo_teste)
+        except Exception as e:
+            logger.error(f"Falha na regra de data fora do dia fixo (não afeta o incremento): {e}")
 
         # Dedicado (Hugo, 23/09): sai antes da checagem de área não atendida
         # (sem e-mail, sem rota compartilhada). Só some do lote deste ciclo.
@@ -469,6 +552,17 @@ def main(modo_teste: bool = False):
             servicos, _dedicados = separar_dedicados(servicos)
         except Exception as e:
             logger.error(f"Falha ao separar pedidos dedicados (seguem no incremento normal): {e}")
+
+        # Segurado (Hugo, 29/09): pedido de rota fraca adiado pra depois
+        # desta data alvo não é encaixado -- senão o incremento desfaz a
+        # decisão da roteirização. Só some do lote deste ciclo.
+        from pedidos_segurados import separar_segurados
+        servicos, _segurados = separar_segurados(servicos, data_alvo)
+
+        # Retornando (editar rota enviada, 10/11): pedido no carro do motorista
+        # nao e encaixado ate o galpao receber em /retornos.
+        from pedidos_retornando import separar_retornando
+        servicos, _retornando = separar_retornando(servicos)
 
         # Área não atendida (pedido do Hugo, 02/08) -- diferente do
         # agendamento pendente, esse aviso é ÚNICO (não é rate-limitado
@@ -534,6 +628,37 @@ def main(modo_teste: bool = False):
             and s["id"] not in ids_apos_corte
         ]
 
+        # Rascunhos do lote ativo (Hugo, 05/10): o incremento também
+        # encaixa pedido em rascunho ainda não confirmado. Pedido que já
+        # está em parada de rascunho continua not_assigned na VUUPT, mas
+        # não é "novo" -- senão iria pra uma rota enviada e ficaria
+        # duplicado no rascunho.
+        rascunhos_do_dia = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
+        ids_em_rascunho = {p["service_id"] for r in rascunhos_do_dia for p in r["paradas"]}
+        tem_rascunho_aberto = any(r.get("status") == rascunhos_rota.STATUS_RASCUNHO for r in rascunhos_do_dia)
+        ja_em_rascunho = [s for s in novos if s["id"] in ids_em_rascunho]
+        if ja_em_rascunho:
+            logger.info(f"{len(ja_em_rascunho)} pedido(s) já estão em rascunho de {data_alvo_br} e ficam onde estão.")
+        novos = [s for s in novos if s["id"] not in ids_em_rascunho]
+
+        # Corte da noite (plano 1.2 do sistema novo, spec 5.4): pedido que o retrato da Stokki mostra
+        # em espera (desde 09/11 so esse; separacao/conferencia entram) nao entra em rota nem em rascunho; vira `nao_aprontou` no freshhub
+        # e volta ao pool da proxima rodada sozinho (continua not_assigned na Vuupt). So entre os NOVOS:
+        # pedido que ja esta em rascunho continua not_assigned, mas o veredito dele e do envio do rascunho
+        # (revisao 25/10: emitir aqui derrubaria o 'roteirizado' do novo todo dia).
+        retrato_stokki, _ = prontidao_stokki.carregar_retrato_stokki()
+        novos, nao_prontos = prontidao_stokki.separar_prontos(novos, retrato_stokki, chave="code")
+        if nao_prontos:
+            logger.info(f"{len(nao_prontos)} pedido(s) em espera na Stokki ficam fora do incremento: "
+                        + ", ".join(f"{p.get('code')} ({p['situacao_stokki']})" for p in nao_prontos))
+            try:
+                eventos_freshhub.nao_aprontaram(
+                    config, [{"codigo": p.get("code"), "service_id": p.get("id"),
+                              "situacao_stokki": p["situacao_stokki"]} for p in nao_prontos],
+                    contexto={"origem": "incremento", "data": data_alvo.isoformat()}, modo_teste=modo_teste)
+            except Exception as e:  # noqa: BLE001 - sombra: nunca derruba o incremento
+                logger.warning(f"eventos nao_aprontou nao enviados ao freshhub: {e}")
+
         # Detalhamento completo do que aconteceu com CADA pedido not_assigned
         # (pedido do Hugo, 06/08: "só 36 de 76 foram roteirizados, quero
         # entender o motivo") -- antes só logava o total elegível, sem
@@ -556,7 +681,10 @@ def main(modo_teste: bool = False):
                    f"{len(ids_ja_em_rota_deste_lote)} já em alguma rota).")
 
         if not novos:
-            resumo_etapas["Incremento de rotas"] = {"status": "ok", "detalhe": "Nenhum pedido novo pra alocar."}
+            detalhe = "Nenhum pedido novo pra alocar."
+            if nao_prontos:
+                detalhe += f" {len(nao_prontos)} ainda em espera na Stokki (fora do incremento, voltam ao pool)."
+            resumo_etapas["Incremento de rotas"] = {"status": "ok", "detalhe": detalhe}
             return
 
         prefixo_hoje = f"{PREFIXO_NOME_ROTA} - {data_alvo_br}"
@@ -585,11 +713,14 @@ def main(modo_teste: bool = False):
         # o que já estava desenhado no rascunho. Agora falha explícito
         # (status erro + e-mail de alerta) em vez de mascarar o
         # esquecimento com uma duplicidade silenciosa.
-        if not rotas_hoje:
+        # 05/10 (Hugo): com rascunho ainda aberto, os pedidos vão pra ele
+        # (bloco dos órfãos, abaixo) -- só falha se não há nem rota
+        # enviada nem rascunho.
+        if not rotas_hoje and not tem_rascunho_aberto:
             raise RuntimeError(
-                f"Nenhuma rota de hoje ('{prefixo_hoje}*') encontrada na VUUPT -- rascunho de "
-                f"{data_alvo_br} não foi confirmado em /planejamento. {len(novos)} pedido(s) novo(s) "
-                f"ficaram sem alocar; confirme o rascunho e rode o incremento de novo."
+                f"Nenhuma rota de hoje ('{prefixo_hoje}*') na VUUPT nem rascunho aberto de "
+                f"{data_alvo_br} em /planejamento. {len(novos)} pedido(s) novo(s) "
+                f"ficaram sem alocar; gere ou confirme o rascunho e rode o incremento de novo."
             )
 
         # TRAVA DE SEGURANÇA (06/08, pedido do Hugo -- crítico): motorista
@@ -627,6 +758,9 @@ def main(modo_teste: bool = False):
             macro_rota = Counter(macros_rota).most_common(1)[0][0] if macros_rota else None
             enderecos_rota = {s.get("address") for s in servicos_rota}
             caixas_rota = sum(extrair_volume_caixas(s) for s in servicos_rota)
+            motorista_rota = motoristas_por_id.get(r.get("agent_id"))
+            tipo_veiculo_rota, teto_caixas_rota = _veiculo_da_rota_existente(
+                caixas_rota, len(enderecos_rota), getattr(motorista_rota, "tipo_veiculo", None))
             info_rotas.append({
                 "id": r["id"], "nome": r["name"],
                 "centroide": _centroide_rota(r, gmaps_key), "qtd": len(servicos_rota),
@@ -640,11 +774,15 @@ def main(modo_teste: bool = False):
                 # do PRÓPRIO tipo ao receber pedido novo por hora, em
                 # vez do teto genérico de 100 caixas/16 paradas.
                 "enderecos": enderecos_rota,
-                "tipo_veiculo": classificar_tipo_veiculo(caixas_rota, len(enderecos_rota)),
+                "tipo_veiculo": tipo_veiculo_rota,
+                "teto_caixas": teto_caixas_rota,
                 "service_ids": [s["id"] for s in servicos_rota],
                 "agent_id": r.get("agent_id"),
                 "vehicle_id": r.get("vehicle_id"),
                 "macro": macro_rota,
+                # Saída real da rota (rota da tarde sai ~14h, não 06h): a
+                # janela do pedido novo é avaliada a partir dela.
+                "hora_saida": _hora_saida_da_rota(r.get("start_at")),
             })
 
         ids_rotas_existentes_desde_inicio = {info["id"] for info in info_rotas}
@@ -680,7 +818,7 @@ def main(modo_teste: bool = False):
             if not tem_janela(candidato):
                 return True
             try:
-                return janela_viavel(candidato, gmaps_key)
+                return janela_viavel(candidato, gmaps_key, hora_saida=rota_info.get("hora_saida"))
             except Exception as e:
                 logger.warning(f"  Falha ao checar janela na rota '{rota_info['nome']}' (não bloqueia): {e}")
                 return True
@@ -780,9 +918,20 @@ def main(modo_teste: bool = False):
                     # km) -- só considera rota cujo centroide esteja a até
                     # DISTANCIA_MAXIMA_ROTA_KM do pedido; nenhuma dentro do
                     # raio -- vira órfão, igual pedido sem rota nenhuma perto.
+                    # 16/10: rota comum também passa pelas travas de trajeto
+                    # da montagem das 16h (distância até cada parada, km
+                    # acumulado, 9h) -- antes só o centroide era conferido.
                     candidatas_no_raio = [
                         r for r in candidatas_com_centroide
                         if _distancia_km(*coords_pedido, *r["centroide"]) <= DISTANCIA_MAXIMA_ROTA_KM
+                        and (r["tipo_veiculo"] is not None or pedido_cabe_no_trajeto(
+                            pedido, _servicos_da_rota_info(r), gmaps_key,
+                            distancia_maxima_km=DISTANCIA_MAXIMA_ROTA_KM,
+                            distancia_maxima_viagem_km=DISTANCIA_MAXIMA_VIAGEM_KM,
+                            km_acumulado_maximo=KM_ACUMULADO_MAXIMO_ROTA_KM,
+                            km_acumulado_maximo_viagem=KM_ACUMULADO_MAXIMO_VIAGEM_KM,
+                            eh_viagem_fn=lambda sub: classificar_rota_viagem(sub, gmaps_key),
+                            base=coords_base))
                     ]
                     if candidatas_no_raio:
                         rota_escolhida = min(
@@ -791,8 +940,8 @@ def main(modo_teste: bool = False):
                 elif not pedido_eh_viagem and candidatas_com_espaco:
                     # sem coordenada do pedido (ou nenhuma rota com centroide
                     # disponível) -- pega a rota com MENOS pedidos, último
-                    # recurso (sem teto de pedidos desde 10/09, "mais espaço
-                    # livre" virou simplesmente "menos entregas"). Pedido de
+                    # recurso ("mais espaço livre" = "menos entregas"; o teto de
+                    # 15 pedidos já entrou em _cabe_na_rota). Pedido de
                     # VIAGEM nunca usa esse caminho (trava de macro-região,
                     # pedido do Hugo, 12/08): sem coordenada não dá pra
                     # verificar proximidade, mas a CIDADE já diz que ele é
@@ -821,6 +970,8 @@ def main(modo_teste: bool = False):
                     # distância da base depois de qualquer pedido novo.
                     adicionar_atividades(token, rota_escolhida["id"], [pedido["id"]], position="end")
                     alocado_em_existente = True
+                    _registrar_roteirizado_incremento(config, pedido, rota_escolhida, data_alvo.isoformat(),
+                                                      modo_teste=modo_teste)
                     break
                 except Exception as e:
                     if PADRAO_ROTA_INVALIDA.search(str(e)):
@@ -854,8 +1005,26 @@ def main(modo_teste: bool = False):
                 # recolhe no rascunho do dia seguinte.
                 orfaos.append(pedido)
 
+        # Sobra vai pros rascunhos ainda não confirmados (Hugo, 05/10):
+        # mesma lógica do botão "Incrementar" do pool -- rascunho mais
+        # próximo que comporte, com as mesmas travas.
+        alocados_rascunho = 0
+        if orfaos and tem_rascunho_aberto:
+            from planejamento_rotas import incrementar_rascunhos_com_selecionados
+            from mapa_util import carregar_remetentes_por_sender_id
+            remetentes_por_id = carregar_remetentes_por_sender_id()
+            try:
+                res = incrementar_rascunhos_com_selecionados(
+                    data_alvo, [rascunhos_rota._parada_de_servico(p, remetentes_por_id) for p in orfaos],
+                    modo_teste=modo_teste)
+                alocados_rascunho = len(res["alocados"])
+                codigos_orfaos = set(res["orfaos"])
+                orfaos = [p for p in orfaos if p.get("code", "") in codigos_orfaos]
+            except Exception as e:
+                logger.error(f"Falha ao encaixar pedidos nos rascunhos (ficam not_assigned): {e}")
+
         if orfaos:
-            logger.info(f"{len(orfaos)} pedido(s) sem correspondência em rota existente -- "
+            logger.info(f"{len(orfaos)} pedido(s) sem correspondência em rota existente nem rascunho -- "
                        f"ficam not_assigned pro rascunho do dia seguinte: "
                        f"{[p.get('code') for p in orfaos]}")
 
@@ -882,7 +1051,8 @@ def main(modo_teste: bool = False):
                         logger.warning(f"  Rota '{rota_info['nome']}': faltam dados de algum serviço pra "
                                       f"reordenar -- mantendo ordem atual.")
                         continue
-                    ordenados = ordenar_2opt(servicos_da_rota, coords_base[0], coords_base[1], gmaps_key)
+                    ordenados = _ordenar_rota_incrementada(servicos_da_rota, coords_base, gmaps_key,
+                                                           rota_info.get("hora_saida"))
                     ordem_ids = [s["id"] for s in ordenados]
                     if ordem_ids != rota_info["service_ids"]:
                         atualizar_rota(token, rota_info["id"], ordem_ids)
@@ -900,7 +1070,10 @@ def main(modo_teste: bool = False):
         prefixo_teste = "[Teste] " if modo_teste else ""
         resumo_etapas["Incremento de rotas"] = {
             "status": "ok",
-            "detalhe": f"{prefixo_teste}{alocados} pedido(s) alocado(s) em rota existente"
+            "detalhe": f"{prefixo_teste}{alocados} pedido(s) alocado(s) em rota existente, "
+                      f"{alocados_rascunho} em rascunho"
+                      + (f", {len(nao_prontos)} ainda em espera na Stokki (fora do incremento, voltam ao pool)"
+                         if nao_prontos else "")
                       + (f", {len(orfaos)} pedido(s) sem rota com espaço/compatibilidade hoje "
                          f"(ficam pro rascunho do dia seguinte)." if orfaos else "."),
         }

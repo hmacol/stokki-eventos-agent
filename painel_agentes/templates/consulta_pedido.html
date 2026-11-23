@@ -21,6 +21,8 @@
   .grade-dados div { background: var(--superficie); padding: 10px 14px; }
   .grade-dados .rotulo { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--texto-suave); font-weight: 600; }
   .grade-dados .valor { font-size: 13.5px; margin-top: 2px; }
+  .no-galpao { margin-top: 10px; padding: 10px 14px; border-radius: 8px; font-size: 13.5px; background: var(--sucesso-bg); color: var(--texto); }
+  .no-galpao.divergente { background: var(--erro-bg); }
   .titulo-secao { font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--texto-suave); font-weight: 600; margin: 22px 0 8px; }
   .passagem { background: var(--superficie); border: 1px solid var(--borda); border-radius: 8px; padding: 12px 14px; margin-bottom: 8px; }
   .passagem-topo { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
@@ -96,6 +98,16 @@
     </div>
     {% endif %}
   </div>
+
+  {% for r in no_galpao %}
+  <div class="no-galpao{% if r.divergente %} divergente{% endif %}">
+    <b>No galpão</b> · {{ r.recebido_em[8:10] }}/{{ r.recebido_em[5:7] }} {{ r.recebido_em[11:16] }} · recebido por {{ r.recebedor }}
+    · {{ r.caixas_recebidas }}{% if r.caixas_esperadas is not none %} de {{ r.caixas_esperadas }}{% endif %} cx
+    {% if r.parcial %}· parcial{% endif %}{% if r.avaria %} · avaria{% endif %}{% if r.divergente %} · divergência{% endif %}
+    · {{ r.motivo }}{% if r.observacao %} · obs: {{ r.observacao }}{% endif %}
+    · <a href="{{ url_for('retornos_tela') }}">descarga #{{ r.descarga_id }}</a>
+  </div>
+  {% endfor %}
 
   {% if not p %}
   <p class="aviso" style="margin-top: 12px">

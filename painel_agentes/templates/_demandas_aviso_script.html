@@ -1,0 +1,132 @@
+{# Aviso de demanda nova em QUALQUER tela do painel (25/10, Hugo): bip,
+   caixinha com link e titulo da aba piscando. Incluido pelo
+   _menu_lateral_script.html (base.html e base_mobile.html) e direto no
+   wms.html, que nao tem menu. Precisa de BASE_PATH definido antes.
+   Ponteiro = id do ultimo evento visto (demandas_eventos), guardado por
+   login no localStorage: primeira visita no aparelho so grava, sem tocar.
+   O navegador so deixa tocar depois do primeiro clique/toque na pagina;
+   antes disso a caixinha oferece "Ativar som". #}
+<style>
+  .demandas-aviso { position: fixed; right: 16px; bottom: 16px; z-index: 9999; max-width: min(380px, calc(100vw - 32px));
+    background: var(--superficie, #fff); color: var(--texto, #1d1d1f); border: 1px solid var(--borda, #d9d9de);
+    border-left: 4px solid var(--primaria, #2f6f4f); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.18);
+    padding: 12px 14px; font-size: 14px; line-height: 1.35; }
+  .demandas-aviso[hidden] { display: none; }
+  .demandas-aviso strong { display: block; margin-bottom: 6px; }
+  .demandas-aviso a.item { display: block; color: inherit; text-decoration: none; padding: 4px 0; border-top: 1px solid var(--borda, #eee); }
+  .demandas-aviso a.item:hover { text-decoration: underline; }
+  .demandas-aviso .urgente { color: var(--erro, #b3261e); font-weight: 700; }
+  .demandas-aviso .acoes { display: flex; gap: 8px; margin-top: 8px; justify-content: flex-end; }
+  .demandas-aviso button { font: inherit; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--borda, #ccc);
+    background: transparent; color: inherit; cursor: pointer; }
+</style>
+<div id="demandas-aviso" class="demandas-aviso" hidden role="status" aria-live="polite"></div>
+<script>
+  (function() {
+    if (window.__demandasAviso) return;
+    window.__demandasAviso = true;
+    var INTERVALO_MS = 45000;  // segue com a aba escondida: o ponto e ouvir de outra tela
+    var CHAVE = "demandas_ultimo:" + {{ (session.get('usuario') or '')|tojson }};
+    var caixa = document.getElementById("demandas-aviso");
+    var audioCtx = null, parado = false, tituloOriginal = document.title, piscando = null;
+
+    function liberarSom() {
+      try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch (e) {}
+    }
+    document.addEventListener("click", liberarSom);
+    document.addEventListener("keydown", liberarSom);
+    document.addEventListener("touchstart", liberarSom, { passive: true });
+    function somLiberado() { return audioCtx && audioCtx.state === "running"; }
+    function bip() {
+      if (!somLiberado()) return;
+      var t = audioCtx.currentTime;
+      [[880, 0], [1320, 0.13], [880, 0.32], [1320, 0.45]].forEach(function(p) {
+        var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        o.frequency.value = p[0]; o.type = "sine";
+        g.gain.setValueAtTime(0.0001, t + p[1]);
+        g.gain.exponentialRampToValueAtTime(0.25, t + p[1] + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + p[1] + 0.18);
+        o.connect(g).connect(audioCtx.destination); o.start(t + p[1]); o.stop(t + p[1] + 0.2);
+      });
+    }
+
+    function ler() {
+      try { var v = localStorage.getItem(CHAVE); return v === null ? null : parseInt(v, 10); } catch (e) { return null; }
+    }
+    function gravar(n) { try { localStorage.setItem(CHAVE, String(n)); } catch (e) {} }
+    function esc(s) {
+      return String(s == null ? "" : s).replace(/[&<>"']/g, function(c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+
+    function pintarBadge(b) {
+      var el = document.querySelector('.sidebar nav .badge[data-contador="demandas"]');
+      if (!el || !b) return;
+      var qtd = b.qtd || 0;
+      el.hidden = qtd === 0;
+      el.textContent = qtd > 99 ? "99+" : qtd;
+      el.classList.toggle("critico", (b.criticas || 0) > 0);
+    }
+
+    function pararPiscar() {
+      if (piscando) { clearInterval(piscando); piscando = null; document.title = tituloOriginal; }
+    }
+    function piscar(n) {
+      pararPiscar();
+      var alterna = false;
+      piscando = setInterval(function() {
+        alterna = !alterna;
+        document.title = alterna ? "(" + n + ") Demanda nova" : tituloOriginal;
+      }, 1000);
+    }
+    window.addEventListener("focus", pararPiscar);
+
+    function mostrar(itens) {
+      var html = "<strong>" + (itens.length > 1 ? itens.length + " demandas novas" : "Demanda nova") + "</strong>";
+      itens.slice(0, 3).forEach(function(i) {
+        html += '<a class="item" href="' + BASE_PATH + "/demandas?abrir=" + i.demanda_id + '">' +
+          (i.prioridade === "URGENTE" ? '<span class="urgente">URGENTE · </span>' : "") +
+          "#" + i.demanda_id + " " + esc(i.titulo) + "<br><small>" + esc(i.motivo) + " · " + esc(i.equipe) + "</small></a>";
+      });
+      html += '<div class="acoes">' + (somLiberado() ? "" : '<button type="button" data-acao="som">Ativar som</button>') +
+        '<button type="button" data-acao="fechar">Fechar</button></div>';
+      caixa.innerHTML = html;
+      caixa.hidden = false;
+    }
+    caixa.addEventListener("click", function(e) {
+      var b = e.target.closest("button");
+      if (!b) return;
+      if (b.dataset.acao === "som") { liberarSom(); setTimeout(bip, 150); b.remove(); }
+      if (b.dataset.acao === "fechar") { caixa.hidden = true; pararPiscar(); }
+    });
+
+    function buscar() {
+      if (parado) return;
+      var desde = ler();
+      fetch(BASE_PATH + "/api/demandas/avisos" + (desde === null ? "" : "?desde=" + desde), { credentials: "same-origin" })
+        .then(function(r) {
+          if (r.status === 401 || r.status === 403) { parado = true; return null; }
+          return r.ok ? r.json() : null;
+        })
+        .then(function(d) {
+          if (!d) return;
+          pintarBadge(d.badge);
+          var atual = ler();  // outra aba pode ter andado o ponteiro enquanto isto voltava
+          if (atual === null || d.max_id < atual) { gravar(d.max_id); return; }
+          if (d.max_id <= atual) return;
+          gravar(d.max_id);
+          var novos = (d.itens || []).filter(function(i) { return i.evento_id > atual; });
+          if (!novos.length) return;
+          bip();
+          mostrar(novos);
+          if (document.hidden || !document.hasFocus()) piscar(novos.length);
+          window.dispatchEvent(new CustomEvent("demandas:novidade", { detail: novos }));
+        })
+        .catch(function() { /* sem aviso nesta rodada; tenta de novo no proximo ciclo */ });
+    }
+
+    setTimeout(buscar, 1500);
+    setInterval(buscar, INTERVALO_MS);
+  })();
+</script>

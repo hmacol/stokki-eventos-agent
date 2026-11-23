@@ -197,12 +197,10 @@ class TestExecutar(_ComBanco):
         self._executar()
         self.assertEqual(self.enviados[1][0], ["log@a.com"])
 
-    def test_chave_mestra_desligada_bloqueia_envio_real_mas_nao_o_piloto(self):
+    def test_chave_mestra_desligada_nao_bloqueia_o_resumo(self):
         r = self._executar(config={**CONFIG, "notificacoes_automaticas": {"ativo": False}})
-        self.assertEqual(self.enviados, [])
-        self.assertTrue(r["desativado"])
-        self._executar(config={"notificacoes_automaticas": {"ativo": False}})
-        self.assertEqual(self.enviados[0][0], [mod.EMAIL_TESTE])
+        self.assertFalse(r["desativado"])
+        self.assertEqual(self.enviados[0][0], ["log@a.com"])
 
     def test_flag_propria_desligada(self):
         r = self._executar(config={"resumo_diario_embarcador": {"ativo": False}})

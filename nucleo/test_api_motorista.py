@@ -247,6 +247,22 @@ class TestApiMotorista(unittest.TestCase):
         self.assertEqual((fin["total"], fin["total_rotas"], fin["total_pedagio"], fin["pedagio_pendente"]), (562.0, 550.0, 12.0, 0.0))
         self.assertEqual(fin["por_dia"][0]["valor"], 562.0)
 
+    def test_comprovante_tipo_invalido_nao_grava_arquivo(self):
+        # `tipo` entra no nome do arquivo: precisa ser validado ANTES de gravar
+        # em disco, senão "../.." escreve fora da pasta de comprovantes.
+        h = self._auth()
+        rota_id = self._rota_app()
+        self.cli.post(f"/api/rotas/{rota_id}/aceitar", json={"uuid": "u-aceite"}, headers=h)
+        p1 = self.cli.post(f"/api/rotas/{rota_id}/iniciar", json={}, headers=h).get_json()["paradas"][0]["id"]
+        antes = {p for p in Path(self._tmp.name).rglob("*") if p.is_file()}
+        for tipo in ("../../fora", "XYZ"):
+            r = self.cli.post(f"/api/paradas/{p1}/comprovantes", headers=h,
+                              data={"arquivo": (io.BytesIO(b"\xff\xd8\xff x"), "c.jpg"), "tipo": tipo, "uuid": f"t-{tipo}"},
+                              content_type="multipart/form-data")
+            self.assertEqual(r.status_code, 400, r.get_json())
+        depois = {p for p in Path(self._tmp.name).rglob("*") if p.is_file()}
+        self.assertEqual({p for p in depois - antes if p.suffix == ".jpg"}, set())
+
     def test_motorista_cancela_pedagio_pendente(self):
         h = self._auth()
         rota_id = self._rota_app()
@@ -367,6 +383,40 @@ class TestApiMotorista(unittest.TestCase):
         self.assertEqual(operacao.motoristas_com_pedagio(conn),
                          [{"agent_id": AGENT, "nome": "Teste"}, {"agent_id": 999, "nome": "Zé Outro"}])
         conn.close()
+
+    def test_rota_de_amanha_so_avisa_e_libera_a_meia_noite(self):
+        h = self._auth()
+        amanha = (date.today() + timedelta(days=1)).isoformat()
+        rota_id = self._rota_app(data=amanha)
+
+        lista = self.cli.get(f"/api/rotas?de={amanha}&ate={amanha}", headers=h).get_json()["rotas"]
+        self.assertEqual(len(lista), 1)
+        for r in (lista[0], self.cli.get(f"/api/rotas/{rota_id}", headers=h).get_json()):
+            self.assertFalse(r["liberada"])
+            self.assertEqual(r["paradas"], [])
+            self.assertIsNone(r["nome"])
+            self.assertEqual(r["total_paradas"], 0)
+            self.assertEqual(r["start_at"], f"{amanha} 07:00:00")
+            self.assertNotIn("km_estimado", r)
+        for acao in ("aceitar", "recusar", "iniciar"):
+            self.assertEqual(self.cli.post(f"/api/rotas/{rota_id}/{acao}", json={}, headers=h).status_code, 409, acao)
+        conn = banco.conectar()
+        parada_id = conn.execute("SELECT id FROM nucleo_paradas WHERE rota_id = ?", (rota_id,)).fetchone()["id"]
+        self.assertEqual(conn.execute("SELECT status FROM nucleo_rotas WHERE id = ?", (rota_id,)).fetchone()["status"], "PLANEJADA")
+        conn.close()
+        self.assertEqual(self.cli.post(f"/api/paradas/{parada_id}/eventos", json={"uuid": "u1", "tipo": "CHEGADA"}, headers=h).status_code, 409)
+
+        # Virou o dia: a mesma rota abre inteira.
+        class _Amanha(date):
+            @classmethod
+            def today(cls):
+                return date.fromisoformat(amanha)
+        from nucleo import operacao
+        with mock.patch.object(operacao, "date", _Amanha):
+            r = self.cli.get(f"/api/rotas/{rota_id}", headers=h).get_json()
+            self.assertTrue(r["liberada"])
+            self.assertEqual(len(r["paradas"]), 2)
+            self.assertEqual(self.cli.post(f"/api/rotas/{rota_id}/aceitar", json={}, headers=h).status_code, 200)
 
     def test_rota_vuupt_e_somente_leitura_mas_aceite_alimenta_confirmacao(self):
         h = self._auth()
@@ -504,6 +554,43 @@ class TestApiMotorista(unittest.TestCase):
         r = self.cli.get("/api/checklist", headers=h).get_json()
         self.assertEqual(r["fluxos"]["ENTREGUE"][0]["chave"], "nome_recebedor")
         self.assertEqual(r["motivos"][0]["motivo_texto"], "Local fechado")
+
+    def test_troca_de_pin_obrigatoria_no_primeiro_acesso(self):
+        # PIN inicial igual pra todos (Hugo, 08/10): o cadastro marca trocar_pin
+        # e o app obriga a troca no primeiro acesso.
+        conn = banco.conectar()
+        auth.criar_ou_atualizar_motorista(conn, "98765432100", "Novato", "123456", agent_id=7, trocar_pin=True)
+        conn.close()
+        r = self._login(cpf="98765432100", pin="123456")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["motorista"]["trocar_pin"])
+        self.assertFalse(self._login().get_json()["motorista"]["trocar_pin"])   # motorista do setUp: sem troca
+        h = {"Authorization": f"Bearer {r.get_json()['acesso']}"}
+
+        # Com o PIN provisório só /eu e /trocar-pin respondem (revisão 08/10)
+        self.assertEqual(self.cli.get("/api/eu", headers=h).status_code, 200)
+        self.assertEqual(self.cli.get("/api/rotas", headers=h).status_code, 403)
+        self.assertEqual(self.cli.get("/api/atendimento/nao-lidas", headers=h).status_code, 403)
+
+        # PIN atual errado -> 401 (e conta tentativa como no login)
+        r = self.cli.post("/api/trocar-pin", json={"pin_atual": "000000", "pin_novo": "482913"}, headers=h)
+        self.assertEqual(r.status_code, 401)
+        # PIN novo fora do formato, igual ao atual ou fácil demais -> 400
+        for fraco in ("12345", "123456", "111111", "654321", "012345", "987654"):
+            r = self.cli.post("/api/trocar-pin", json={"pin_atual": "123456", "pin_novo": fraco}, headers=h)
+            self.assertEqual(r.status_code, 400, fraco)
+
+        # Troca certa: tokens novos, flag limpa, token antigo morre, PIN novo entra e libera o resto
+        r = self.cli.post("/api/trocar-pin", json={"pin_atual": "123456", "pin_novo": "482913"}, headers=h)
+        self.assertEqual(r.status_code, 200, r.get_json())
+        novo = r.get_json()
+        self.assertFalse(novo["motorista"]["trocar_pin"])
+        self.assertEqual(self.cli.get("/api/eu", headers=h).status_code, 401)
+        h2 = {"Authorization": f"Bearer {novo['acesso']}"}
+        self.assertEqual(self.cli.get("/api/eu", headers=h2).status_code, 200)
+        self.assertEqual(self.cli.get("/api/rotas", headers=h2).status_code, 200)
+        self.assertEqual(self._login(cpf="98765432100", pin="123456").status_code, 401)
+        self.assertFalse(self._login(cpf="98765432100", pin="482913").get_json()["motorista"]["trocar_pin"])
 
 
 if __name__ == "__main__":

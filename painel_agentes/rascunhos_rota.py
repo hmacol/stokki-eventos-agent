@@ -37,6 +37,8 @@ _RAIZ = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ))
 sys.path.insert(0, str(_RAIZ / "roteirizacao"))
 
+from nucleo import eventos_freshhub, prontidao_stokki  # noqa: E402  (plano 1.2 do sistema novo)
+
 logger = logging.getLogger(__name__)
 
 DB_PATH = _RAIZ / "dados" / "dados.db"
@@ -104,6 +106,19 @@ def _conectar() -> sqlite3.Connection:
             criado_em          TEXT NOT NULL DEFAULT (datetime('now','localtime'))
         )
     """)
+    # Foto do plano (Hugo, 17/10): em qual rascunho cada pedido NASCEU.
+    # Só criar_lote_rascunhos grava; as edições da tela mexem em
+    # rascunhos_parada. Base de roteirizacao/aderencia_plano.py.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS rascunhos_plano_original (
+            lote_id      TEXT NOT NULL,
+            rascunho_id  INTEGER NOT NULL,
+            service_id   INTEGER NOT NULL,
+            gravado_em   TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rascunhos_plano_original_rascunho "
+                 "ON rascunhos_plano_original(rascunho_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rascunhos_rota_lote ON rascunhos_rota(lote_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rascunhos_rota_data ON rascunhos_rota(data_alvo, status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rascunhos_parada_rascunho ON rascunhos_parada(rascunho_id)")
@@ -170,6 +185,25 @@ def _conectar() -> sqlite3.Connection:
     # timestamp (nucleo/tempos.py).
     if "horas_estimadas" not in colunas_rota:
         conn.execute("ALTER TABLE rascunhos_rota ADD COLUMN horas_estimadas REAL")
+
+    # Migração 29/09: motivo de a rota ter saído fraca (poucos pedidos e
+    # poucas caixas) sem juntar nem segurar -- ver roteirizacao/
+    # rotas_fracas.py. Vira etiqueta no card (planejamento_rotas._badges_trava).
+    if "rota_fraca_motivo" not in colunas_rota:
+        conn.execute("ALTER TABLE rascunhos_rota ADD COLUMN rota_fraca_motivo TEXT")
+
+    # Migração 03/10: a rota recebeu pedido de rota fraca na junção, que
+    # aceita teto + 2 paradas e 20 km entre paradas SÓ na rota que recebe.
+    # O aviso de limite (planejamento_rotas._badges_trava) usa o mesmo
+    # teto nela, senão a receptora sairia com "17 paradas (máx 16)".
+    if "recebeu_rota_fraca" not in colunas_rota:
+        conn.execute("ALTER TABLE rascunhos_rota ADD COLUMN recebeu_rota_fraca INTEGER NOT NULL DEFAULT 0")
+
+    # Migração 23/10: 'TARDE' marca a rota da tarde (pedido de janela tardia
+    # que não cabe na manhã; sem motorista sugerido), NULL = rota normal.
+    # O nome da rota não muda -- ver roteirizacao/rota_tarde.py.
+    if "turno" not in colunas_rota:
+        conn.execute("ALTER TABLE rascunhos_rota ADD COLUMN turno TEXT")
 
     conn.commit()
     return conn
@@ -275,14 +309,16 @@ def _inserir_parada(conn: sqlite3.Connection, rascunho_id: int, ordem: int, para
     ))
 
 
-def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | None = None) -> str:
+def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | None = None,
+                         modo_teste: bool = False) -> str:
     """
     Grava um lote novo de rascunhos numa única transação.
 
     `rascunhos` é uma lista de dicts com as chaves: nome, particao,
     tipo_rota, zona, tipo_veiculo, agent_id, vehicle_id, motorista_nome,
     start_location_base_id, end_location_base_id, start_at,
-    km_estimado, horas_estimadas, sublote (lista de serviços brutos da
+    km_estimado, horas_estimadas, rota_fraca_motivo, recebeu_rota_fraca
+    (bool; ausente = não recebeu), turno ('TARDE'; ausente = rota normal), sublote (lista de serviços brutos da
     VUUPT).
 
     `lote_id` explícito ACRESCENTA os rascunhos a um lote já existente
@@ -291,7 +327,8 @@ def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | 
     novo a cada roteirização da seleção esconderia os rascunhos que já
     estavam em edição.
 
-    Retorna o lote_id usado (gerado ou repassado).
+    Retorna o lote_id usado (gerado ou repassado). `modo_teste` (criar_rotas_diarias --modo-teste
+    --gerar-rascunho): o rascunho e gravado como antes, mas os eventos `roteirizado` pro freshhub nao saem.
     """
     from mapa_util import carregar_remetentes_por_sender_id
 
@@ -299,6 +336,7 @@ def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | 
     remetentes_por_id = carregar_remetentes_por_sender_id()
 
     conn = _conectar()
+    gravados: list[tuple[int, str, list[dict]]] = []  # (rascunho_id, nome, paradas) pros eventos roteirizado
     try:
         for r in rascunhos:
             cursor = conn.execute("""
@@ -306,25 +344,38 @@ def criar_lote_rascunhos(data_alvo: date, rascunhos: list[dict], lote_id: str | 
                     data_alvo, lote_id, nome, particao, tipo_rota, zona, tipo_veiculo,
                     agent_id, vehicle_id, motorista_nome,
                     start_location_base_id, end_location_base_id,
-                    start_at, km_estimado, horas_estimadas, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    start_at, km_estimado, horas_estimadas, rota_fraca_motivo, recebeu_rota_fraca, turno, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 data_alvo.isoformat(), lote_id, r["nome"], r.get("particao"),
                 r.get("tipo_rota"), r.get("zona"), r.get("tipo_veiculo"), r.get("agent_id"), r.get("vehicle_id"),
                 r.get("motorista_nome"), r["start_location_base_id"], r.get("end_location_base_id"),
-                r["start_at"], r.get("km_estimado"), r.get("horas_estimadas"), STATUS_RASCUNHO,
+                r["start_at"], r.get("km_estimado"), r.get("horas_estimadas"), r.get("rota_fraca_motivo"),
+                1 if r.get("recebeu_rota_fraca") else 0, r.get("turno"), STATUS_RASCUNHO,
             ))
             rascunho_id = cursor.lastrowid
+            paradas_gravadas: list[dict] = []
             for ordem, servico in enumerate(r["sublote"]):
-                _inserir_parada(conn, rascunho_id, ordem, _parada_de_servico(servico, remetentes_por_id))
+                parada = _parada_de_servico(servico, remetentes_por_id)
+                _inserir_parada(conn, rascunho_id, ordem, parada)
+                conn.execute("INSERT INTO rascunhos_plano_original (lote_id, rascunho_id, service_id) "
+                             "VALUES (?, ?, ?)", (lote_id, rascunho_id, servico["id"]))
+                paradas_gravadas.append(parada)
+            gravados.append((rascunho_id, r["nome"], paradas_gravadas))
         conn.commit()
         logger.info(f"Lote de rascunhos '{lote_id}' gravado: {len(rascunhos)} rascunho(s).")
-        return lote_id
     except Exception:
         conn.rollback()
         raise
     finally:
         conn.close()
+    # plano 1.2 do sistema novo: cada parada do rascunho vira evento `roteirizado` no freshhub (sombra)
+    config = _carregar_config()
+    for rascunho_id, nome, paradas in gravados:
+        _avisar_freshhub(f"roteirizado, rascunho {rascunho_id}", lambda: eventos_freshhub.roteirizados(
+            config, paradas, rascunho_id=rascunho_id, rota_nome=nome, data_alvo=data_alvo.isoformat(),
+            modo_teste=modo_teste))
+    return lote_id
 
 
 def _lote_ativo_id(conn: sqlite3.Connection, data_alvo: date) -> str | None:
@@ -358,7 +409,10 @@ def _chave_ordem_rota(nome: str | None) -> tuple:
 
 def listar_rascunhos_do_dia(data_alvo: date) -> list[dict]:
     """Rascunhos (com paradas aninhadas) do lote ativo mais recente da
-    data, prontos pra tela de planejamento."""
+    data, prontos pra tela de planejamento -- mais as rotas ENVIADAS de
+    qualquer lote da data (Hugo, 18/11: em 17/11 um lote novo gerado no
+    painel as 12h41 escondeu as 18 rotas ja enviadas do lote anterior;
+    rota enviada e rota real do dia, nao depende de lote)."""
     conn = _conectar()
     try:
         lote_id = _lote_ativo_id(conn, data_alvo)
@@ -366,8 +420,8 @@ def listar_rascunhos_do_dia(data_alvo: date) -> list[dict]:
             return []
         rows = conn.execute("""
             SELECT * FROM rascunhos_rota
-            WHERE lote_id = ? AND status != ?
-        """, (lote_id, STATUS_DESCARTADO)).fetchall()
+            WHERE data_alvo = ? AND status != ? AND (lote_id = ? OR status = ?)
+        """, (data_alvo.isoformat(), STATUS_DESCARTADO, lote_id, STATUS_ENVIADO)).fetchall()
         rows = sorted(rows, key=lambda r: _chave_ordem_rota(r["nome"]))
         return [_montar_rascunho(conn, r) for r in rows]
     finally:
@@ -393,11 +447,25 @@ def _tocar(conn: sqlite3.Connection, rascunho_id: int):
 ENDERECO_BASE = "Rua Zilda, 288, Casa Verde Alta, São Paulo"  # mesma base de mapa_rotas.py/criar_rotas_diarias.py
 
 
-def _gmaps_key() -> str:
+def _carregar_config() -> dict:
     import yaml
-    with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
-        config = yaml.safe_load(f) or {}
-    return config.get("google_maps", {}).get("api_key", "")
+    try:
+        with open(_RAIZ / "config.yaml", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except OSError:
+        return {}
+
+
+def _gmaps_key() -> str:
+    return _carregar_config().get("google_maps", {}).get("api_key", "")
+
+
+def _avisar_freshhub(descricao: str, enviar) -> None:
+    """Eventos pro sistema novo sao sombra (plano 1.2): falha nunca derruba a operacao do rascunho."""
+    try:
+        enviar()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"eventos pro freshhub ({descricao}) nao enviados: {e}")
 
 
 def _recalcular_km_silencioso(conn: sqlite3.Connection, rascunho_id: int):
@@ -572,9 +640,19 @@ def otimizar_sequencia(rascunho_id: int):
              "_janela_inicio": p["janela_inicio"], "_janela_fim": p["janela_fim"]}
             for p in paradas
         ]
-        from roteirizacao_dados import definir_coords_base
-        definir_coords_base(*base)
-        nova_ordem = ordenar_2opt(servicos_fake, base[0], base[1], api_key)
+        import roteirizacao_dados
+        roteirizacao_dados.definir_coords_base(*base)
+        # Rota da tarde (turno TARDE, 23/10): sequencia a partir da saída
+        # dela (start_at), não das 06h -- a da manhã segue o 2-opt de sempre
+        rascunho = conn.execute("SELECT turno, start_at FROM rascunhos_rota WHERE id = ?",
+                                (rascunho_id,)).fetchone()
+        hora_saida = (roteirizacao_dados.hora_saida_de_start_at(rascunho["start_at"])
+                      if rascunho and rascunho["turno"] == "TARDE" else None)
+        if hora_saida is not None:
+            nova_ordem = roteirizacao_dados.ordenar_com_janelas(servicos_fake, base[0], base[1], api_key,
+                                                                hora_saida=hora_saida)
+        else:
+            nova_ordem = ordenar_2opt(servicos_fake, base[0], base[1], api_key)
         for ordem, s in enumerate(nova_ordem):
             conn.execute(
                 "UPDATE rascunhos_parada SET ordem = ? WHERE rascunho_id = ? AND service_id = ?",
@@ -775,6 +853,23 @@ def remover_parada(rascunho_id: int, service_id: int) -> dict | None:
         conn.close()
 
 
+def _recusar_se_retornando(service_ids) -> None:
+    """Pedido Retornando (no carro do motorista, editar rota enviada) nao entra em rascunho.
+    Le o conjunto ativo uma vez so. Falha ao ler a tabela nao barra (so loga)."""
+    import pedidos_retornando
+    try:
+        conn = pedidos_retornando.conectar(DB_PATH)
+        try:
+            ativos = pedidos_retornando.ativos(conn)
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        logger.warning(f"nao checou pedido retornando ({e}); seguindo")
+        return
+    if any(sid in ativos for sid in service_ids):
+        raise ValueError("Pedido retornando ao galpão: só entra em rota depois do recebimento em /retornos.")
+
+
 def adicionar_parada(rascunho_id: int, parada: dict, ordem: int | None = None):
     """`parada` já vem no formato processado (mesmas chaves de
     _parada_de_servico/planejamento_rotas._servico_para_pool: service_id,
@@ -783,6 +878,7 @@ def adicionar_parada(rascunho_id: int, parada: dict, ordem: int | None = None):
     horario_atendimento_inicio, horario_atendimento_fim) -- o endpoint da
     tela repassa o item do pool tal como já foi carregado no GET
     /planejamento, sem precisar bater na VUUPT de novo."""
+    _recusar_se_retornando([parada.get("service_id")])
     conn = _conectar()
     try:
         if ordem is None:
@@ -822,17 +918,58 @@ def renomear_rascunho(rascunho_id: int, novo_nome: str):
         conn.close()
 
 
-def trocar_motorista(rascunho_id: int, agent_id: int | None, vehicle_id: int | None, motorista_nome: str | None):
-    conn = _conectar()
+def trocar_motorista(rascunho_id: int, agent_id: int | None, vehicle_id: int | None, motorista_nome: str | None,
+                     token: str | None = None, placas: dict | None = None,
+                     trava_sem_carro: bool = False) -> dict:
+    """Em rota ENVIADA (editar rota enviada, 10/11) a troca vai primeiro pra Vuupt
+    (edicao_rota.trocar_motorista_veiculo: rota iniciada so troca o carro) e so grava
+    aqui depois do ok. Recusa vira ValueError. Fora de ENVIADO so mexe no banco local.
+    Em ENVIADO, motorista de verdade sem carro (regras.veiculos, placas = {vehicle_id: placa}
+    ou None) e recusado com trava_sem_carro ligada; desligada passa e volta {"aviso": texto}.
+    "Sem motorista" (agent_id None) sempre passa."""
+    rascunho = buscar_rascunho(rascunho_id)
+    retorno = {}
+    enviado = bool(rascunho and rascunho["status"] == STATUS_ENVIADO)
+    if enviado:
+        import edicao_rota
+        from regras import veiculos as veiculos_regras
+        _recusar_se_lalamove_com_corrida(rascunho)
+        erro_carro = veiculos_regras.verificar_carro(
+            {"agent_id": agent_id, "vehicle_id": vehicle_id, "motorista_nome": motorista_nome}, placas)
+        if erro_carro and trava_sem_carro:
+            raise ValueError(erro_carro)
+        if erro_carro:
+            retorno["aviso"] = erro_carro
+        resultado = edicao_rota.trocar_motorista_veiculo(token, rascunho["vuupt_route_id"], agent_id, vehicle_id)
+        if not resultado["ok"]:
+            raise ValueError(resultado["erro"])
+        logger.info(f"Rota {rascunho['vuupt_route_id']} (rascunho {rascunho_id}): motorista/carro "
+                    f"{rascunho['agent_id']}/{rascunho['vehicle_id']} -> {agent_id}/{vehicle_id}")
     try:
-        conn.execute(
-            "UPDATE rascunhos_rota SET agent_id = ?, vehicle_id = ?, motorista_nome = ? WHERE id = ?",
-            (agent_id, vehicle_id, motorista_nome, rascunho_id),
-        )
-        _tocar(conn, rascunho_id)
-        conn.commit()
-    finally:
-        conn.close()
+        conn = _conectar()
+        try:
+            conn.execute(
+                "UPDATE rascunhos_rota SET agent_id = ?, vehicle_id = ?, motorista_nome = ? WHERE id = ?",
+                (agent_id, vehicle_id, motorista_nome, rascunho_id),
+            )
+            _tocar(conn, rascunho_id)
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        if enviado:
+            # a Vuupt ja trocou: card e Vuupt divergem ate alguem corrigir
+            logger.error(f"Rota {rascunho['vuupt_route_id']} (rascunho {rascunho_id}): Vuupt trocou para "
+                         f"agent {agent_id} / vehicle {vehicle_id}, mas o rascunho local NAO foi gravado")
+        raise
+    if enviado:
+        # romaneio leva motorista/placa: refaz em segundo plano (best-effort)
+        try:
+            from documentacao_rota import agendar as _agendar_documentacao
+            _agendar_documentacao(rascunho["vuupt_route_id"], rascunho["data_alvo"], motivo="motorista/carro trocado")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Romaneio da rota {rascunho['vuupt_route_id']} nao reagendado: {e}")
+    return retorno
 
 
 def publicar_oferta(rascunho_id: int):
@@ -910,7 +1047,13 @@ def referencia_para_rascunho_manual(data_alvo: date) -> dict:
     na ida e na volta, saída 13:00Z, partição Seco/GRANDE_SP), e o
     rascunho criado passa a ser ele mesmo o lote ativo da data.
     """
-    rascunhos_do_dia = listar_rascunhos_do_dia(data_alvo)
+    conn = _conectar()
+    try:
+        lote_ativo = _lote_ativo_id(conn, data_alvo)
+    finally:
+        conn.close()
+    # a lista traz tambem ENVIADAS de lotes anteriores (18/11): a referencia e sempre do lote ativo
+    rascunhos_do_dia = [r for r in listar_rascunhos_do_dia(data_alvo) if r["lote_id"] == lote_ativo]
     if rascunhos_do_dia:
         r = rascunhos_do_dia[0]
         return {chave: r[chave] for chave in (
@@ -977,6 +1120,7 @@ def criar_rascunho_com_paradas(data_alvo: date, lote_id: str, particao: str, tip
     selecionar vários cards e virar rascunho direto, sem criar rota
     vazia e arrastar um por um. `paradas` no mesmo formato processado
     de adicionar_parada (itens do pool, tal como carregados no GET)."""
+    _recusar_se_retornando([p.get("service_id") for p in paradas])
     conn = _conectar()
     try:
         nome = f"Planejamento - {data_alvo.strftime('%d/%m/%Y')} - #{_proximo_numero_ordem(conn, data_alvo)}"
@@ -1057,19 +1201,24 @@ def duplicar_rascunho(rascunho_id: int) -> int:
 
     conn = _conectar()
     try:
-        nome_copia = _nome_copia(conn, origem["nome"], origem["lote_id"])
+        # 18/11: a copia vai pro lote ATIVO da data -- a origem pode ser uma
+        # ENVIADA de lote anterior (a tela mostra todas); copia no lote antigo
+        # tornaria ele o ativo de novo e esconderia os rascunhos do lote novo.
+        lote_destino = _lote_ativo_id(conn, date.fromisoformat(origem["data_alvo"])) or origem["lote_id"]
+        nome_copia = _nome_copia(conn, origem["nome"], lote_destino)
         cursor = conn.execute("""
             INSERT INTO rascunhos_rota (
                 data_alvo, lote_id, nome, particao, tipo_rota, zona, tipo_veiculo,
                 agent_id, vehicle_id, motorista_nome,
                 start_location_base_id, end_location_base_id,
-                start_at, km_estimado, horas_estimadas, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                start_at, km_estimado, horas_estimadas, turno, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            origem["data_alvo"], origem["lote_id"], nome_copia, origem["particao"],
+            origem["data_alvo"], lote_destino, nome_copia, origem["particao"],
             origem["tipo_rota"], origem["zona"], origem.get("tipo_veiculo"), origem["agent_id"], origem["vehicle_id"],
             origem["motorista_nome"], origem["start_location_base_id"], origem["end_location_base_id"],
-            origem["start_at"], origem["km_estimado"], origem.get("horas_estimadas"), STATUS_RASCUNHO,
+            origem["start_at"], origem["km_estimado"], origem.get("horas_estimadas"), origem.get("turno"),
+            STATUS_RASCUNHO,
         ))
         novo_id = cursor.lastrowid
         for p in origem["paradas"]:
@@ -1248,9 +1397,12 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
     gravados na criação do rascunho.
 
     Idempotente: rascunho que não está mais em status RASCUNHO (já
-    ENVIADO, DESCARTADO, ou já em ERRO_ENVIO de uma tentativa anterior
-    -- esse último só é reenviado se chamado de novo explicitamente,
-    nunca automaticamente) é pulado sem reprocessar.
+    ENVIADO ou DESCARTADO) é pulado sem reprocessar. ERRO_ENVIO de uma
+    tentativa anterior é aceito (Hugo, 07/10): o clique em "Confirmar e
+    enviar" é a tentativa explícita de reenvio -- antes o card ficava
+    preso com a mensagem velha e só saía dali descartando a rota ou
+    mexendo no banco. "Confirmar e enviar todas" continua mandando só
+    os RASCUNHO (filtro na tela), nunca reenvia erro sozinho.
 
     Se algum(ns) pedido(s) do rascunho já estavam em outra rota
     (conflito com dado desatualizado, mesmo achado de produção que
@@ -1266,14 +1418,38 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
 
     rascunho = buscar_rascunho(rascunho_id)
     if not rascunho:
-        return {"rascunho_id": rascunho_id, "ok": False, "erro": "Rascunho não encontrado."}
-    if rascunho["status"] != STATUS_RASCUNHO:
-        return {"rascunho_id": rascunho_id, "ok": False, "erro": f"Rascunho não está pendente de envio (status={rascunho['status']})."}
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": "Rascunho não encontrado.", "codigos_nao_prontos": []}
+    if rascunho["status"] not in (STATUS_RASCUNHO, STATUS_ERRO_ENVIO):
+        return {"rascunho_id": rascunho_id, "ok": False, "codigos_nao_prontos": [],
+                "erro": f"Rascunho não está pendente de envio (status={rascunho['status']})."}
     if not rascunho["paradas"]:
         marcar_erro_envio(rascunho_id, "Rascunho sem paradas -- nada pra enviar.")
-        return {"rascunho_id": rascunho_id, "ok": False, "erro": "Rascunho sem paradas."}
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": "Rascunho sem paradas.", "codigos_nao_prontos": []}
 
-    sublote = [{"id": p["service_id"], "code": p["codigo"]} for p in rascunho["paradas"]]
+    # A rota so sai com pedido liberado pela Stokki (plano 1.2 do sistema novo, spec 5.4): parada cujo
+    # pedido o retrato do pipeline mostra em espera (desde 09/11 so esse; separacao/conferencia vao) sai do rascunho (volta ao
+    # pool; o servico continua not_assigned na Vuupt) e vira evento `nao_aprontou` no freshhub. Todo retorno
+    # daqui em diante leva `codigos_nao_prontos` e a hora do retrato: a tela avisa quem saiu (revisao 25/10).
+    config = _carregar_config()
+    retrato, retrato_em = prontidao_stokki.carregar_retrato_stokki()
+    paradas, nao_prontas = prontidao_stokki.separar_prontos(rascunho["paradas"], retrato)
+    codigos_nao_prontos = [p["codigo"] for p in nao_prontas]
+    saiu = {"codigos_nao_prontos": codigos_nao_prontos, "retrato_stokki_em": retrato_em}
+    if nao_prontas:
+        for p in nao_prontas:
+            remover_parada(rascunho_id, p["service_id"])
+        logger.info(f"Rascunho {rascunho_id}: {len(nao_prontas)} parada(s) em espera na Stokki "
+                    f"voltaram ao pool: " + ", ".join(f"{p['codigo']} ({p['situacao_stokki']})" for p in nao_prontas))
+        _avisar_freshhub("nao_aprontou", lambda: eventos_freshhub.nao_aprontaram(
+            config, nao_prontas, contexto={"rascunho_id": rascunho_id, "rota_nome": rascunho["nome"],
+                                           "origem": "envio"}))
+    if not paradas:
+        mensagem = (f"Todas as paradas estao em espera na Stokki ({len(nao_prontas)}) -- nada enviado; "
+                    f"os pedidos voltaram ao pool.")
+        marcar_erro_envio(rascunho_id, mensagem)
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem, **saiu}
+
+    sublote = [{"id": p["service_id"], "code": p["codigo"]} for p in paradas]
 
     try:
         rota, sublote_criado, codigos_removidos = criar_rota_removendo_conflitos(
@@ -1284,12 +1460,12 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
         )
     except Exception as e:
         marcar_erro_envio(rascunho_id, str(e))
-        return {"rascunho_id": rascunho_id, "ok": False, "erro": str(e)}
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": str(e), **saiu}
 
     if rota is None:
         mensagem = f"Todos os {len(sublote)} pedido(s) já estavam em outra rota -- nenhum enviado."
         marcar_erro_envio(rascunho_id, mensagem)
-        return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem}
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem, **saiu}
 
     for codigo in codigos_removidos:
         parada = next((p for p in rascunho["paradas"] if p["codigo"] == codigo), None)
@@ -1321,7 +1497,13 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
     # VUUPT e nada daqui pode desfazer isso.
     from documentacao_rota import agendar as _agendar_documentacao
     _agendar_documentacao(rota["id"], rascunho["data_alvo"], motivo=f"rota enviada ({rascunho['nome']})")
-    return {"rascunho_id": rascunho_id, "ok": True, "vuupt_route_id": rota["id"], "codigos_removidos": codigos_removidos}
+    # plano 1.2: o que saiu na rota vira `rota_enviada` no freshhub (sombra)
+    ids_enviados = {s["id"] for s in sublote_criado}
+    _avisar_freshhub("rota_enviada", lambda: eventos_freshhub.rota_enviada(
+        config, [p for p in paradas if p["service_id"] in ids_enviados], vuupt_route_id=rota["id"],
+        rascunho_id=rascunho_id, rota_nome=rascunho["nome"]))
+    return {"rascunho_id": rascunho_id, "ok": True, "vuupt_route_id": rota["id"],
+            "codigos_removidos": codigos_removidos, **saiu}
 
 
 def lancar_lalamove(rascunho_id: int, token: str) -> dict:
@@ -1570,19 +1752,16 @@ def preparar_cancelamento_de_parada(rascunho_id: int, service_id: int, token: st
     Por quê: a rota de verdade na VUUPT (api.vuupt.com/routes) ainda
     referencia o service_id mesmo depois de cancelado via DELETE
     /services/{id} (domínio separado, app.vuupt.com) -- sem tirar a
-    referência antes, a rota fica com uma parada fantasma. Mesma trava
-    de cancelar_rota_enviada: só mexe se a rota, checada AO VIVO contra
-    a API (não o status gravado localmente, nunca atualizado depois do
-    envio), ainda não iniciou deslocamento (STATUS_ROTA_NAO_INICIADA).
+    referência antes, a rota fica com uma parada fantasma. Desde 10/11
+    (editar rota enviada) a trava é a de edicao_rota.tirar_pedido: o
+    PEDIDO, checado AO VIVO, não pode ter começado (on_route/arrived/
+    done); a rota pode já estar rodando. Pedido cancelado não vira
+    Retornando (sai da operação).
 
-      - Pedido é a ÚLTIMA parada da rota: não dá pra ter rota com 0
-        paradas -- cancela a ROTA INTEIRA (services_action="unassign",
-        mesmo mecanismo de cancelar_rota_enviada) e descarta o
-        rascunho local.
-      - Rota com mais paradas: tira só essa parada via atualizar_rota
-        (PUT /routes/{id} com o restante, na mesma ordem) -- a rota
-        segue ENVIADA, só com 1 parada a menos (mesmo padrão que
-        enviar_rascunho já usa pra pedido em conflito) -- e remove a
+      - Pedido é a ÚLTIMA parada da rota e nada começou: cancela a ROTA
+        INTEIRA (services_action="unassign") e descarta o rascunho local.
+      - Senão: tira só esse serviço (DELETE /routes/{id}/services/{sid})
+        -- a rota segue ENVIADA com 1 parada a menos -- e remove a
         parada do rascunho local (remover_parada).
 
     Se o rascunho não estiver ENVIADO (ainda em RASCUNHO, ERRO_ENVIO ou
@@ -1597,7 +1776,7 @@ def preparar_cancelamento_de_parada(rascunho_id: int, service_id: int, token: st
     if rascunho["status"] != STATUS_ENVIADO:
         return {"ok": True}
 
-    from rotas_client import atualizar_rota, buscar_rota, cancelar_rota
+    from rotas_client import buscar_rota
 
     route_id = rascunho["vuupt_route_id"]
     try:
@@ -1615,20 +1794,314 @@ def preparar_cancelamento_de_parada(rascunho_id: int, service_id: int, token: st
     if status_atual == "canceled":
         descartar_rascunho(rascunho_id, permitir_enviado=True)
         return {"ok": True}
-    if status_atual not in STATUS_ROTA_NAO_INICIADA:
-        return {"ok": False,
-                "erro": f"Rota #{route_id} não pode ser alterada por aqui (status atual na VUUPT: "
-                        f"'{status_atual}') -- só rotas que ainda não iniciaram deslocamento."}
 
-    ids_restantes = [p["service_id"] for p in rascunho["paradas"] if p["service_id"] != service_id]
-    try:
-        if not ids_restantes:
-            cancelar_rota(token, route_id, services_action="unassign")
-            descartar_rascunho(rascunho_id, permitir_enviado=True)
-            return {"ok": True}
-        atualizar_rota(token, route_id, ids_restantes)
-    except Exception as e:
-        return {"ok": False, "erro": str(e)}
+    # Editar rota enviada (10/11): a trava deixou de ser "rota nao iniciada" -- pedido
+    # nao comecado sai mesmo com a rota rodando (status ao vivo, DELETE do servico).
+    # Pedido cancelado sai da operacao: nao vira Retornando.
+    import edicao_rota
+    resultado = edicao_rota.tirar_pedido(token, route_id, service_id)
+    if not resultado["ok"] and resultado.get("fora_da_rota"):
+        # o pedido ja saiu da rota por outra tela: so atualiza o card e segue pro cancelamento
+        # (o PUT /cancel recusa servico comecado/entregue, e esse erro chega na tela)
+        remover_parada(rascunho_id, service_id)
+        return {"ok": True}
+    if not resultado["ok"]:
+        return {"ok": False, "erro": resultado["erro"]}
+    if resultado["rota_cancelada"]:
+        descartar_rascunho(rascunho_id, permitir_enviado=True)
+        return {"ok": True}
 
+    local = next((p for p in rascunho["paradas"] if p["service_id"] == service_id), None)
     remover_parada(rascunho_id, service_id)
-    return {"ok": True}
+    # rota_iniciada: se o cancelamento que vem depois falhar, quem chama marca Retornando
+    # (retornando_se_cancelamento_falhou) -- o pedido saiu da rota mas segue no carro
+    return {"ok": True, "rota_iniciada": resultado["rota_iniciada"], "vuupt_route_id": route_id,
+            "codigo": (local or {}).get("codigo") or (resultado.get("servico") or {}).get("code") or "",
+            "agent_id": rascunho["agent_id"], "motorista_nome": rascunho["motorista_nome"]}
+
+
+# ---------------------------------------------------------------------------
+# Editar rota ja enviada pela tela Planejamento (Hugo, 10/11; spec
+# docs/superpowers/specs/2026-11-10-editar-rota-enviada-design.md). A regra de
+# quem pode sair / se a rota comecou mora em roteirizacao/edicao_rota.py (le a
+# rota ao vivo); aqui ficam as travas da tela e os efeitos locais depois do ok.
+# ---------------------------------------------------------------------------
+
+def _recusar_se_lalamove_com_corrida(rascunho: dict) -> None:
+    """Rota da Lalamove com corrida lancada: o carro e o da corrida (paga), nao se edita."""
+    if rascunho.get("lalamove_order_id"):
+        raise ValueError("Rota da Lalamove com corrida lançada: não dá pra editar por aqui.")
+
+
+def _rascunho_enviado(rascunho_id: int) -> dict:
+    rascunho = buscar_rascunho(rascunho_id)
+    if not rascunho:
+        raise ValueError(f"Rascunho {rascunho_id} não encontrado.")
+    if rascunho["status"] != STATUS_ENVIADO or not rascunho["vuupt_route_id"]:
+        raise ValueError(f"Rota não está enviada à Vuupt (status={rascunho['status']}).")
+    _recusar_se_lalamove_com_corrida(rascunho)
+    return rascunho
+
+
+def rascunho_por_vuupt_route_id(vuupt_route_id: int) -> dict | None:
+    """Rascunho ENVIADO (com paradas) da rota da Vuupt, ou None."""
+    conn = _conectar()
+    try:
+        row = conn.execute(
+            "SELECT * FROM rascunhos_rota WHERE vuupt_route_id = ? AND status = ? ORDER BY id DESC LIMIT 1",
+            (vuupt_route_id, STATUS_ENVIADO),
+        ).fetchone()
+        return _montar_rascunho(conn, row) if row else None
+    finally:
+        conn.close()
+
+
+def adicionar_em_rota_enviada(rascunho_id: int, parada: dict, token: str, usuario: str) -> dict:
+    """Inclui um pedido do pool numa rota ja enviada (inclusive iniciada), no fim da rota.
+    Mesmas travas do envio: Retornando e pedido em espera na Stokki nao entram. So grava
+    local depois do ok da Vuupt; recusa vira ValueError."""
+    import edicao_rota
+    from fingerprint_rotas import marcar_alocado
+
+    rascunho = _rascunho_enviado(rascunho_id)
+    service_id = parada["service_id"]
+    _recusar_se_retornando([service_id])
+    retrato, _ = prontidao_stokki.carregar_retrato_stokki()
+    situacao = prontidao_stokki.situacao_nao_pronta(parada.get("codigo"), retrato,
+                                                    prontidao_stokki.STATUS_STOKKI_BARRA_ROTA)
+    if situacao:
+        raise ValueError(f"Pedido {parada.get('codigo')} está {situacao} na Stokki: "
+                         f"só entra em rota depois de liberado.")
+
+    route_id = rascunho["vuupt_route_id"]
+    try:
+        rota = edicao_rota.ler_rota(token, route_id)
+    except edicao_rota.ErroEdicao as e:
+        raise ValueError(str(e))
+    if rota["status"] in edicao_rota.STATUS_ROTA_ENCERRADA:
+        raise ValueError(f"Rota #{route_id} já foi encerrada — não dá pra incluir pedido.")
+
+    # pedido AO VIVO: o pool pode estar velho e a Vuupt nao recusa sempre um pedido que ja
+    # esta em outra rota -- so entra quem esta sem rota (not_assigned e sem route_id)
+    from vuupt_client import VuuptClient
+    servico = VuuptClient(token).buscar_servico_por_id(service_id)
+    if not servico:
+        raise ValueError(f"Não deu pra conferir o pedido {parada.get('codigo')} na Vuupt agora. Tente de novo.")
+    if servico.get("status") != "not_assigned" or servico.get("route_id"):
+        raise ValueError(f"Pedido {parada.get('codigo')} não está livre na Vuupt "
+                         f"(status {servico.get('status')}, rota {servico.get('route_id') or '-'}): "
+                         f"atualize o pool antes de incluir.")
+
+    resultado = edicao_rota.adicionar_pedidos(token, route_id, [service_id], position="end")
+    if not resultado["ok"]:
+        raise ValueError(resultado["erro"])
+    if resultado["falharam"]:  # qualquer recusa (mesmo item sem id) conta
+        raise ValueError(f"A Vuupt recusou incluir o pedido {parada.get('codigo')} na rota #{route_id} "
+                         f"(já está em outra rota ou o status não permite).")
+
+    conn = _conectar()
+    try:
+        ordem = conn.execute(
+            "SELECT COALESCE(MAX(ordem), -1) + 1 AS prox FROM rascunhos_parada WHERE rascunho_id = ?",
+            (rascunho_id,),
+        ).fetchone()["prox"]
+        _inserir_parada(conn, rascunho_id, ordem, parada)
+        _tocar(conn, rascunho_id)
+        _recalcular_km_silencioso(conn, rascunho_id)
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info(f"Rota {route_id} (rascunho {rascunho_id}): pedido {parada.get('codigo')} incluido por {usuario}")
+
+    # mesmos efeitos do envio, so pra essa parada (best-effort: o pedido ja esta na rota)
+    try:
+        marcar_alocado(service_id, route_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Pedido {service_id} nao marcado como alocado na rota {route_id}: {e}")
+    try:
+        from nucleo.pedidos import marcar_em_rota_por_service_ids
+        marcar_em_rota_por_service_ids([service_id], route_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Pedido {service_id} nao marcado EM_ROTA no nucleo: {e}")
+    try:
+        from documentacao_rota import agendar as _agendar_documentacao
+        _agendar_documentacao(route_id, rascunho["data_alvo"], motivo="pedido incluido na rota")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Romaneio da rota {route_id} nao reagendado apos incluir o pedido {service_id}: {e}")
+    _avisar_freshhub("rota_enviada", lambda: eventos_freshhub.rota_enviada(
+        _carregar_config(), [parada], vuupt_route_id=route_id, rascunho_id=rascunho_id,
+        rota_nome=rascunho["nome"]))
+    return {"ok": True, "rascunho_id": rascunho_id, "vuupt_route_id": route_id, "service_id": service_id}
+
+
+def _marcar_retornando_com_retry(*, service_id: int, codigo: str, vuupt_route_id: int, agent_id,
+                                 motorista_nome, motivo: str, observacao: str, usuario: str) -> bool:
+    """Grava o Retornando (pedido no carro). Sem ele o pedido fica roteavel no pool: 1 nova
+    tentativa e, se falhar de novo, erro no log (quem chama avisa quem clicou). Nunca levanta."""
+    import pedidos_retornando
+
+    for tentativa in (1, 2):
+        try:
+            conn = pedidos_retornando.conectar(DB_PATH)
+            try:
+                pedidos_retornando.marcar(conn, service_id=service_id, codigo=codigo,
+                                          vuupt_route_id=vuupt_route_id, agent_id=agent_id,
+                                          motorista_nome=motorista_nome, motivo=motivo,
+                                          observacao=observacao, usuario=usuario)
+            finally:
+                conn.close()
+            return True
+        except Exception as e:  # noqa: BLE001
+            if tentativa == 1:
+                logger.warning(f"Retornando do pedido {codigo} (rota {vuupt_route_id}) falhou, "
+                               f"tentando de novo: {e}")
+            else:
+                logger.error(f"Retornando do pedido {codigo} (rota {vuupt_route_id}) NAO gravado "
+                             f"apos 2 tentativas: {e}")
+    return False
+
+
+def _aviso_retornando_nao_gravado(codigo: str, motorista_nome) -> str:
+    return (f"ATENÇÃO: {codigo} está no carro de {motorista_nome or 'motorista'} mas NÃO ficou "
+            f"como Retornando. Não coloque em rota até receber em /retornos e avise o time.")
+
+
+def retornando_se_cancelamento_falhou(preparo: dict, service_id: int, erro: str, usuario: str) -> str | None:
+    """preparar_cancelamento_de_parada ja tirou o pedido de rota INICIADA, mas o cancelamento
+    do servico falhou: o pedido segue vivo e esta no carro -- vira Retornando (mesmo retry e
+    aviso da remocao). Devolve o texto pra quem clicou, ou None se nao havia o que marcar."""
+    if not preparo.get("rota_iniciada"):
+        return None
+    codigo = preparo.get("codigo") or str(service_id)
+    if _marcar_retornando_com_retry(
+            service_id=service_id, codigo=codigo, vuupt_route_id=preparo["vuupt_route_id"],
+            agent_id=preparo.get("agent_id"), motorista_nome=preparo.get("motorista_nome"),
+            motivo="Cancelamento falhou na Vuupt", observacao=(erro or "")[:300], usuario=usuario):
+        return (f"{codigo} saiu da rota mas o cancelamento falhou: ficou como Retornando "
+                f"(está no carro); receba em /retornos.")
+    return _aviso_retornando_nao_gravado(codigo, preparo.get("motorista_nome"))
+
+
+def aplicar_efeitos_pos_remocao(*, rascunho: dict | None, resultado: dict, vuupt_route_id: int,
+                                service_id: int, codigo: str, agent_id, motorista_nome,
+                                motivo: str, observacao: str, usuario: str,
+                                data_auditoria: date, rota_nome: str) -> dict:
+    """Efeitos locais depois que a Vuupt aceitou tirar o pedido (edicao_rota.tirar_pedido ok), comuns
+    ao card do Planejamento e a Excluir da Rota da Torre. Cada passo e best-effort (a Vuupt ja
+    mudou): Retornando (rota iniciada) -> card (remove a parada; rota cancelada volta o rascunho a
+    RASCUNHO) -> auditoria -> pool do nucleo (rota nao iniciada) -> romaneio.
+    Devolve {"retornando": bool, "parada_removida": dict | None}."""
+    import expedicao
+
+    retornando = False
+    aviso = None
+    if resultado["rota_iniciada"]:
+        retornando = _marcar_retornando_com_retry(
+            service_id=service_id, codigo=codigo, vuupt_route_id=vuupt_route_id, agent_id=agent_id,
+            motorista_nome=motorista_nome, motivo=motivo, observacao=observacao, usuario=usuario)
+        if not retornando:
+            aviso = _aviso_retornando_nao_gravado(codigo, motorista_nome)
+
+    parada_removida = None
+    if rascunho:
+        try:
+            parada_removida = remover_parada(rascunho["id"], service_id)
+            if resultado["rota_cancelada"]:
+                # tambem descarta o romaneio da rota que deixou de existir
+                reverter_para_rascunho(rascunho["id"])
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Rascunho {rascunho['id']} nao atualizado apos tirar o pedido {codigo}: {e}")
+
+    try:
+        expedicao.registrar_exclusao(data_auditoria, vuupt_route_id, rota_nome, service_id, codigo,
+                                     motivo, observacao, usuario)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Auditoria da retirada do pedido {codigo} (rota {vuupt_route_id}) nao gravada: {e}")
+
+    if not resultado["rota_iniciada"]:
+        # rota nao iniciada: o pedido volta ao pool do nucleo na hora (sem esperar a sincronizacao)
+        try:
+            from nucleo.pedidos import marcar_aberto_por_service_ids
+            marcar_aberto_por_service_ids([service_id])
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Pedido {service_id} nao voltou ABERTO no nucleo: {e}")
+
+    data_doc = rascunho["data_alvo"] if rascunho else data_auditoria
+    try:
+        import documentacao_rota
+        if resultado["rota_cancelada"]:
+            if not rascunho:  # com rascunho, reverter_para_rascunho ja descartou
+                documentacao_rota.descartar(vuupt_route_id, data_doc)
+        else:
+            documentacao_rota.agendar(vuupt_route_id, data_doc, motivo="pedido excluido da rota")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Romaneio da rota {vuupt_route_id} nao atualizado: {e}")
+    efeitos = {"retornando": retornando, "parada_removida": parada_removida}
+    if aviso:
+        efeitos["aviso"] = aviso
+    return efeitos
+
+
+def remover_de_rota_enviada(rascunho_id: int, service_id: int, motivo: str, observacao: str,
+                            token: str, usuario: str) -> dict:
+    """Tira um pedido nao comecado de rota ja enviada (status ao vivo, DELETE; nunca cancela o
+    pedido). Rota iniciada: o pedido esta no carro e vira Retornando ate o galpao receber.
+    Ultimo pedido de rota nao iniciada: a rota e cancelada e o rascunho volta a RASCUNHO.
+    Recusa vira ValueError."""
+    import edicao_rota
+    import expedicao
+
+    rascunho = _rascunho_enviado(rascunho_id)
+    if motivo not in expedicao.MOTIVOS_EXCLUSAO:
+        raise ValueError(f"Motivo inválido: {motivo!r}. Escolha um de: {', '.join(expedicao.MOTIVOS_EXCLUSAO)}.")
+
+    route_id = rascunho["vuupt_route_id"]
+    resultado = edicao_rota.tirar_pedido(token, route_id, service_id)
+    if not resultado["ok"] and resultado.get("fora_da_rota"):
+        # card velho: outra tela ja tirou o pedido da rota na Vuupt -- so atualiza o local
+        parada_removida = remover_parada(rascunho_id, service_id)
+        logger.info(f"Rota {route_id} (rascunho {rascunho_id}): servico {service_id} ja estava fora da rota "
+                    f"na Vuupt; parada local removida")
+        return {"ok": True, "ja_fora_da_rota": True, "rota_cancelada": False, "rota_iniciada": False,
+                "retornando": False, "parada_removida": parada_removida,
+                "mensagem": "O pedido já tinha saído dessa rota na Vuupt — card atualizado."}
+    if not resultado["ok"]:
+        raise ValueError(resultado["erro"])
+
+    local = next((p for p in rascunho["paradas"] if p["service_id"] == service_id), None)
+    codigo = (local or {}).get("codigo") or resultado["servico"].get("code") or ""
+
+    efeitos = aplicar_efeitos_pos_remocao(
+        rascunho=rascunho, resultado=resultado, vuupt_route_id=route_id, service_id=service_id,
+        codigo=codigo, agent_id=rascunho["agent_id"], motorista_nome=rascunho["motorista_nome"],
+        motivo=motivo, observacao=observacao, usuario=usuario,
+        data_auditoria=date.fromisoformat(rascunho["data_alvo"]), rota_nome=rascunho["nome"])
+    logger.info(f"Rota {route_id} (rascunho {rascunho_id}): pedido {codigo} tirado por {usuario} "
+                f"({motivo}); retornando={efeitos['retornando']} rota_cancelada={resultado['rota_cancelada']}")
+    retorno = {"ok": True, "rota_cancelada": resultado["rota_cancelada"], "rota_iniciada": resultado["rota_iniciada"],
+               "retornando": efeitos["retornando"], "parada_removida": efeitos["parada_removida"]}
+    if efeitos.get("aviso"):
+        retorno["aviso"] = efeitos["aviso"]
+    return retorno
+
+
+def espelho_rota_enviada(vuupt_route_id: int) -> dict:
+    """Status bruto da Vuupt no espelho do nucleo (sincronizado a cada 15 min), so pra
+    exibir no card: {"status_rota": str | None, "paradas": {service_id: status}}. Falha
+    ou rota ainda fora do espelho = vazio."""
+    vazio = {"status_rota": None, "paradas": {}}
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            rota = conn.execute("SELECT id, status_provedor FROM nucleo_rotas WHERE vuupt_route_id = ?",
+                                (vuupt_route_id,)).fetchone()
+            if not rota:
+                return vazio
+            paradas = conn.execute("SELECT service_id, status_provedor FROM nucleo_paradas "
+                                   "WHERE rota_id = ? AND service_id IS NOT NULL", (rota[0],)).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        logger.warning(f"Espelho da rota {vuupt_route_id} nao lido ({e}); card sem status da Vuupt")
+        return vazio
+    return {"status_rota": rota[1], "paradas": {sid: st for sid, st in paradas}}

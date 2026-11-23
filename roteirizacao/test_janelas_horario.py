@@ -106,6 +106,33 @@ class ResolverJanelaTestCase(unittest.TestCase):
              "_horario_atendimento_inicio": "08:00", "_horario_atendimento_fim": "12:00"}
         self.assertEqual(rd.resolver_janela(s), ("15:00", "16:00", rd.FONTE_JANELA_AGENDAMENTO))
 
+    # Formato que a Vuupt devolve de verdade: UTC sem fuso (investigação
+    # 23/10: '11:00:00'-'19:00:00' era o padrão 08-16 virando janela falsa)
+    def test_vuupt_utc_padrao_08_16_sem_janela(self):
+        s = {"code": "PS-1", "scheduled_start": "2026-10-22 11:00:00", "scheduled_end": "2026-10-22 19:00:00"}
+        self.assertEqual(rd.resolver_janela(s), (None, None, None))
+
+    def test_vuupt_utc_padrao_08_18_cai_no_atendimento(self):
+        s = {"code": "PS-1", "scheduled_start": "2026-10-23 11:00:00", "scheduled_end": "2026-10-23 21:00:00",
+             "_horario_atendimento_inicio": "07:00", "_horario_atendimento_fim": "16:00"}
+        self.assertEqual(rd.resolver_janela(s), ("07:00", "16:00", rd.FONTE_JANELA_ATENDIMENTO))
+
+    def test_vuupt_utc_janela_real_convertida(self):
+        s = {"code": "PS-1", "scheduled_start": "2026-10-22 12:00:00", "scheduled_end": "2026-10-22 17:00:00"}
+        self.assertEqual(rd.resolver_janela(s), ("09:00", "14:00", rd.FONTE_JANELA_AGENDAMENTO))
+
+    def test_vuupt_utc_08_08_vira_08_09(self):
+        # 08:00-08:00 é pedido com prioridade (Hugo, 23/10): continua janela
+        s = {"code": "PS-1", "scheduled_start": "2026-10-20 11:00:00", "scheduled_end": "2026-10-20 11:00:00"}
+        self.assertEqual(rd.resolver_janela(s), ("08:00", "09:00", rd.FONTE_JANELA_AGENDAMENTO))
+
+    def test_hora_de_iso_formatos(self):
+        self.assertEqual(rd._hora_de_iso("2026-10-22 11:00:00"), "08:00")
+        self.assertEqual(rd._hora_de_iso("2026-10-22T11:00:00Z"), "08:00")
+        self.assertEqual(rd._hora_de_iso("2026-10-22T08:00:00-03:00"), "08:00")
+        self.assertIsNone(rd._hora_de_iso(""))
+        self.assertIsNone(rd._hora_de_iso("amanha"))
+
     def test_operating_hour_do_customer_como_reserva(self):
         s = {"code": "PS-1", "customer": {"operating_hour_start": "13:00", "operating_hour_end": "17:00"}}
         self.assertEqual(rd.resolver_janela(s), ("13:00", "17:00", rd.FONTE_JANELA_ATENDIMENTO))
@@ -167,6 +194,40 @@ class SimuladorTestCase(_SemGeocodificar):
         # janela que já fechou antes da saída da base: nenhum agrupamento resolve
         rota = [_servico(1, 0.0, 0.0, ("06:00", "08:00")), _servico(2, 0.01, 0.0)]
         self.assertTrue(rd.janela_respeitada(rota, coords_base=BASE))
+
+
+class TetoDeTempoDaJanelaTestCase(unittest.TestCase):
+    """A janela do cliente nao cede, mas a duracao com esperas segue o
+    teto do dia da rota: 9h normal, 10h30 na receptora de rota fraca
+    (Hugo, 03/10)."""
+
+    def setUp(self):
+        self.sim = {"atraso_h": 0.0, "duracao_h": 10.0, "espera_tardia_h": 0.0}
+        for p in (mock.patch.object(rd, "simular_horarios", lambda *a, **k: self.sim),
+                  mock.patch.object(rd, "_atraso_intrinseco", lambda *a, **k: 0.0),
+                  mock.patch.object(rd, "_orcamento_inviavel_por_distancia", lambda *a, **k: False)):
+            p.start()
+            self.addCleanup(p.stop)
+        self.rota = [_servico(1, 0.0, 0.0, ("08:00", "18:00")), _servico(2, 0.01, 0.0)]
+
+    def test_10h_com_janela_passa_no_teto_de_10h30(self):
+        self.assertTrue(rd.janela_respeitada(self.rota, coords_base=BASE, tempo_maximo_horas=10.5))
+
+    def test_10h_com_janela_reprova_no_padrao_de_9h(self):
+        self.assertFalse(rd.janela_respeitada(self.rota, coords_base=BASE))
+
+    def test_tolerancia_de_atraso_nao_muda(self):
+        self.sim = {"atraso_h": rd.TOLERANCIA_JANELA_HORAS + 0.1, "duracao_h": 5.0}
+        self.assertFalse(rd.janela_respeitada(self.rota, coords_base=BASE, tempo_maximo_horas=10.5))
+
+    def test_rota_valida_repassa_o_teto(self):
+        import polimento_rotas as pr
+        with mock.patch.object(pr, "janela_respeitada", return_value=True) as janela, \
+             mock.patch.object(pr, "estimar_tempo_rota", lambda *a, **k: 1.0):
+            pr._rota_valida(self.rota, None, 16, 100, None, None, None, BASE, tempo_maximo_horas=10.5)
+            self.assertEqual(janela.call_args.kwargs["tempo_maximo_horas"], 10.5)
+            pr._rota_valida(self.rota, None, 16, 100, None, None, None, BASE)
+            self.assertEqual(janela.call_args.kwargs["tempo_maximo_horas"], rd.ROTA_TEMPO_MAXIMO_HORAS)
 
 
 class SequenciamentoTestCase(_SemGeocodificar):

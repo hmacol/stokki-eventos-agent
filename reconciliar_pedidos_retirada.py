@@ -12,7 +12,7 @@ depois do serviço já estar no VUUPT, ninguém cancelou).
 Este script fecha esse buraco: audita os serviços 'not_assigned'
 recentes no VUUPT, reconsulta a transportadora ATUAL de cada um no
 Stokki e cancela os que hoje resolvem pra RETIRADA no catálogo
-BD_TRANSPORTADORAS.xlsx. Só cancela quando o serviço ainda está
+cadastro de transportadoras. Só cancela quando o serviço ainda está
 'not_assigned' (sem motorista/rota) -- qualquer outro status vira
 aviso de intervenção manual, nunca cancelamento automático.
 
@@ -52,7 +52,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("reconciliar_retirada")
 
-TRANSPORTADORAS = _RAIZ / "dados" / "BD_TRANSPORTADORAS.xlsx"
+DB_PATH = _RAIZ / "dados" / "dados.db"
 
 
 def _carregar_config() -> dict:
@@ -97,7 +97,7 @@ def main(modo_teste: bool = True, cancelar: bool = False, dias: int = 10):
         notificar_execucao(resumo_etapas, duracao, modo_teste, config)
         return
 
-    catalogo = CatalogoTransportadoras.carregar(TRANSPORTADORAS)
+    catalogo = CatalogoTransportadoras.carregar_do_banco(DB_PATH)
     sess_stokki = StokkiSession(config)
 
     cancelados = []

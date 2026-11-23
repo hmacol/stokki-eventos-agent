@@ -1,9 +1,14 @@
-"""Regras das retiradas no galpão: identificação do serviço, payload da
-VUUPT e importação como serviço avulso atribuído ao agente fixo.
+"""Regras das retiradas no galpão: identificação do serviço e payload da
+VUUPT dos serviços avulsos "[RETIRADA]".
 
-Fluxo (Hugo, 28/08/2026):
-  - pipeline.py detecta transportadora RETIRADA (regras/transportadoras.py)
-    e, em vez de ignorar, chama importar_retirada();
+Desde 06/11 (Hugo) a retirada NUNCA sobe pra VUUPT: o pipeline ignora o
+pedido e nada mais cria serviço "[RETIRADA]". Este módulo continua pra ler
+e fechar os que já foram criados (acompanhar_retiradas, e-mail de
+"Retirado", card do /planejamento, consulta da Expedição).
+
+Fluxo antigo (Hugo, 28/08/2026 até 06/11):
+  - pipeline.py detectava transportadora RETIRADA (regras/transportadoras.py)
+    e criava o serviço avulso;
   - o serviço nasce com título "[RETIRADA] #PS-xxxxx - ref / Embarcador /
     Destinatário / via Transportadora", customer = o próprio galpão
     (retiradas.customer_id) e é ATRIBUÍDO ao agente retiradas.agent_id
@@ -13,10 +18,7 @@ Fluxo (Hugo, 28/08/2026):
   - acompanhar_retiradas.py fecha (check-out sucesso) quando a Stokki
     marca "Enviado" e cancela na VUUPT quando a Stokki cancela.
 """
-import logging
 import re
-
-logger = logging.getLogger(__name__)
 
 PREFIXO_TITULO = "[RETIRADA]"
 STATUSES_ABERTOS = ("assigned", "accepted", "on_route", "arrived")
@@ -128,36 +130,3 @@ def montar_payload_retirada(codigo_ps: str, referencia: str, detalhe: dict,
     if dados_banco.get("sender_id"):
         payload["sender_id"] = dados_banco["sender_id"]
     return payload
-
-
-def importar_retirada(vuupt, payload: dict, cfg: dict, servico_existente: dict | None,
-                      modo_teste: bool = False) -> tuple[str, dict | None]:
-    """Cria (ou atualiza, se ainda not_assigned) o serviço avulso e o
-    atribui ao agente de retiradas. Retorna (acao, servico):
-    'retirada_criada' | 'retirada_atualizada' | 'simulado'.
-
-    Não passa por criar_ou_atualizar_servico: aquele caminho faz upsert do
-    contato (destinatário) e fingerprint -- aqui o contato é fixo (o galpão)
-    e, uma vez atribuído, o pipeline pula o pedido pra sempre (checagem
-    antecipada de status em processar_pedido)."""
-    code = payload["code"]
-    if modo_teste:
-        logger.info(f"  {code}: [TESTE] retirada -- criaria serviço avulso '{payload['title']}' "
-                    f"e atribuiria ao agente {cfg['agent_id']}.")
-        return "simulado", None
-
-    if servico_existente and servico_existente.get("status") == "not_assigned":
-        service_id = servico_existente["id"]
-        vuupt.atualizar_servico(service_id, payload)
-        acao = "retirada_atualizada"
-    else:
-        resposta = vuupt.criar_servico(payload)
-        servico = resposta.get("service", resposta)
-        service_id = servico["id"]
-        acao = "retirada_criada"
-
-    vuupt.atribuir_agente(service_id, cfg["agent_id"])
-    logger.info(f"  {code}: {acao} -- serviço avulso {service_id} atribuído ao agente de retiradas "
-                f"({cfg['agent_id']}), sem rota.")
-    servico_final = vuupt.buscar_servico_por_id(service_id) or {}
-    return acao, (servico_final.get("service") or servico_final)

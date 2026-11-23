@@ -20,7 +20,7 @@ from roteirizacao_dados import macro_regiao_do_servico, MACRO_GRANDE_SP, caixas_
 from zonas_sp import classificar_rota_zona
 from rodizio_sp import placa_restrita_no_dia, sublote_em_area_rodizio
 from regras.preferencias_motoristas import MotoristaPreferencias
-from regras.tipo_veiculo import classificar_tipo_veiculo, veiculo_comporta
+from regras.tipo_veiculo import classificar_tipo_veiculo_com_folga, veiculo_comporta
 from regras.tipo_carga_embarcador import carga_seca_confirmada
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,7 @@ def selecionar_motorista_equitativo(
     rotas_30d: dict[int, int] | None = None,
     longas_7d: dict[int, int] | None = None,
     rota_longa: bool = False,
+    folga_fiorino_cx: int = 0,
 ) -> "MotoristaPreferencias | None":
     """
     Seleciona o motorista elegível com a menor carga do dia (Least-
@@ -83,13 +84,14 @@ def selecionar_motorista_equitativo(
         classificar_tipo_veiculo, a partir do volume/nº de endereços do
         próprio sublote -- mesma classificação usada no empacotamento,
         roteirizacao_dados.py::separar_pedidos_exclusivos), só motorista
-        com TIPO_VEICULO cadastrado de capacidade igual ou maior é
-        elegível (veiculo_comporta -- ex: motorista de Truck também
-        serve rota classificada VUC). Motorista sem TIPO_VEICULO
-        cadastrado nunca é elegível pra essa rota (dado ausente não
-        deve virar elegibilidade "universal" pra veículo grande). Rota
-        fora da faixa de veículo grande (classificação None) não é
-        afetada por essa trava, igual a hoje.
+        com TIPO_VEICULO cadastrado desse porte EXATO é elegível
+        (veiculo_comporta -- desde 25/09, Hugo: Truck não serve rota
+        VUC, e vice-versa). Motorista sem TIPO_VEICULO cadastrado nunca
+        é elegível pra essa rota (dado ausente não deve virar
+        elegibilidade "universal" pra veículo grande). Rota fora da
+        faixa de veículo grande (classificação None) só aceita Fiorino
+        ou motorista sem tipo -- veículo grande fica reservado pra
+        carga do tamanho dele.
 
     `ajustes_disponibilidade` (pedido do Hugo, 16/08, ver
     regras/disponibilidade_motoristas.py): ajustes pontuais de
@@ -121,6 +123,14 @@ def selecionar_motorista_equitativo(
     isso (estimar_tempo_rota > roteirizacao.rota_longa_horas) -- este
     módulo não estima tempo.
 
+    `folga_fiorino_cx` (Hugo, 03/10): rota que recebeu pedido de rota
+    fraca vai até 100 + folga caixas e continua sendo Fiorino (ver
+    regras/tipo_veiculo.classificar_tipo_veiculo_com_folga). Padrão 0 =
+    classificação de sempre.
+
+    `posicao` (Hugo, 28/10 e 02/11): motorista FIXO elegível sempre vem
+    antes de ESPORADICO elegível; dentro de cada grupo, a ordem acima.
+
     Tudo isto é ORDENAÇÃO, nunca filtro: nenhum motorista deixa de ser
     elegível por histórico, e nenhuma rota fica sem motorista por causa
     dessa ordem.
@@ -131,6 +141,7 @@ def selecionar_motorista_equitativo(
     """
     elegiveis, tipo_str, rodizio_str, veiculo_str = _elegibilidade_sublote(
         sublote, data_rota, motoristas, contagem_alocacoes_dia, api_key, ajustes_disponibilidade,
+        folga_fiorino_cx=folga_fiorino_cx,
     )
 
     if not elegiveis:
@@ -148,7 +159,10 @@ def selecionar_motorista_equitativo(
     rotas_7d = rotas_7d or {}
     rotas_30d = rotas_30d or {}
     longas_7d = longas_7d or {}
+    # Fixo antes do esporádico (Hugo, 28/10 e 02/11): entre elegíveis, o
+    # FIXO sempre vence; dentro do grupo vale a ordem acima, inalterada.
     elegiveis.sort(key=lambda m: (
+        0 if m.posicao == "FIXO" else 1,
         contagem_alocacoes_dia.get(m.agent_id, 0),
         longas_7d.get(m.agent_id, 0) if rota_longa else 0,
         rotas_7d.get(m.agent_id, 0),
@@ -173,6 +187,7 @@ def _elegibilidade_sublote(
     contagem_alocacoes_dia: dict[int, int],
     api_key: str | None = None,
     ajustes_disponibilidade: dict[int, dict] | None = None,
+    folga_fiorino_cx: int = 0,
 ):
     """Filtro de elegibilidade compartilhado por selecionar_motorista_equitativo
     (escolhe 1) e contar_motoristas_elegiveis (só quer o tamanho, pra ordenar
@@ -183,7 +198,7 @@ def _elegibilidade_sublote(
     zona = None if eh_viagem else classificar_rota_zona(sublote, api_key)
     dia_semana = data_rota.weekday()
 
-    tipo_veiculo = classificar_tipo_veiculo(*caixas_e_enderecos(sublote))
+    tipo_veiculo = classificar_tipo_veiculo_com_folga(*caixas_e_enderecos(sublote), folga_fiorino_cx=folga_fiorino_cx)
     tipo_veiculo_necessario = tipo_veiculo.codigo if tipo_veiculo else None
 
     # Rodízio de placas de SP: só vale a pena checar a área do sublote
@@ -226,6 +241,7 @@ def contar_motoristas_elegiveis(
     contagem_alocacoes_dia: dict[int, int],
     api_key: str | None = None,
     ajustes_disponibilidade: dict[int, dict] | None = None,
+    folga_fiorino_cx: int = 0,
 ) -> int:
     """
     Quantos motoristas do catálogo estão elegíveis pra esse sublote agora
@@ -241,6 +257,7 @@ def contar_motoristas_elegiveis(
     """
     elegiveis, _, _, _ = _elegibilidade_sublote(
         sublote, data_rota, motoristas, contagem_alocacoes_dia, api_key, ajustes_disponibilidade,
+        folga_fiorino_cx=folga_fiorino_cx,
     )
     return len(elegiveis)
 
@@ -252,6 +269,7 @@ def listar_motoristas_elegiveis(
     contagem_alocacoes_dia: dict[int, int],
     api_key: str | None = None,
     ajustes_disponibilidade: dict[int, dict] | None = None,
+    folga_fiorino_cx: int = 0,
 ) -> list[MotoristaPreferencias]:
     """
     Lista completa de motoristas elegíveis pra esse sublote (mesmos
@@ -261,5 +279,6 @@ def listar_motoristas_elegiveis(
     """
     elegiveis, _, _, _ = _elegibilidade_sublote(
         sublote, data_rota, motoristas, contagem_alocacoes_dia, api_key, ajustes_disponibilidade,
+        folga_fiorino_cx=folga_fiorino_cx,
     )
     return elegiveis

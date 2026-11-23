@@ -10,7 +10,15 @@
   .vistas button em.on { display: inline-block; }
   #vista-envios { display: flex; flex-direction: column; gap: 16px; }
   .env-grade { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
-  @media (max-width: 980px) { .env-grade { grid-template-columns: minmax(0, 1fr); } }
+  @media (max-width: 1280px) { .env-grade { grid-template-columns: minmax(0, 1fr); } }
+  /* Tabela de envios (19/11): colunas com largura pensada pra caber sem cortar "Ações" */
+  #env-tabela th, #env-tabela td { padding-left: 8px; padding-right: 8px; }
+  #env-tabela td:nth-child(1) { white-space: normal; width: 84px; }
+  #env-tabela td:nth-child(3) { min-width: 220px; }
+  #env-tabela th:nth-child(4), #env-tabela td:nth-child(4) { width: 1%; }
+  #env-tabela td:nth-child(7) { white-space: normal; min-width: 96px; }
+  #env-tabela td:nth-child(8) { min-width: 170px; }
+  #env-tabela .acoes-linha { max-width: 230px; }
   .zona { border: 2px dashed var(--borda); border-radius: 10px; padding: 26px 18px; text-align: center; color: var(--texto-suave); cursor: pointer; transition: border-color .15s, background .15s; }
   .zona:hover, .zona.sobre { border-color: var(--acento); background: var(--sucesso-bg); color: var(--texto); }
   .zona b { color: var(--texto); }
@@ -22,10 +30,39 @@
   .b-DUPLICADO { background: var(--sucesso-bg); color: var(--st-sucesso); opacity: .8; }
   .b-ERRO { background: var(--erro-bg); color: var(--st-falha); }
   .b-CANCELADO { background: var(--interrompido-bg); color: var(--interrompido-texto); }
+  .b-EM_ESPERA_CLIENTE { background: var(--rodando-bg); color: var(--rodando-texto); }
+  .b-RETOMANDO { background: var(--rodando-bg); color: var(--rodando-texto); opacity: .75; }
+  .retomar-opcao { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0; }
+  .b-CANCELANDO { background: var(--interrompido-bg); color: var(--interrompido-texto); opacity: .75; }
   /* área não atendida (23/09): retido até a Fresh Log liberar */
   .b-AGUARDANDO_LIBERACAO { background: var(--erro-bg); color: var(--st-falha); }
   .bloq-txt { font-size: 11px; color: var(--st-falha); margin-top: 3px; max-width: 260px; white-space: normal; }
   .chip.dedicado { background: var(--rota-bg); color: var(--st-rota); }
+  /* NF com local de entrega (<entrega>) diferente do fiscal (24/09): só informa */
+  .end-entrega { font-size: 11px; color: var(--st-rota); margin-top: 2px; white-space: normal; }
+  /* Endereço de entrega escolhido na prévia (27/10, spec endereco-entrega-portal) */
+  .c-end { min-width: 260px; max-width: 420px; white-space: normal; }
+  .c-end .rot { display: block; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--texto-suave); margin-bottom: 2px; }
+  .c-end .end-linha { font-size: 12.5px; color: var(--texto); line-height: 1.45; }
+  .c-end .fiscal-txt, .c-end .info-ent { font-size: 11.5px; color: var(--texto-suave); margin-top: 5px; }
+  .c-end .chip.ok { background: var(--sucesso-bg); color: var(--st-sucesso); }
+  .c-end .chip.rota { background: var(--rota-bg); color: var(--st-rota); }
+  .c-end .btn-alt { margin-top: 7px; border: 1px solid var(--st-rota); color: var(--st-rota); background: none; border-radius: 6px; padding: 4px 10px; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit; }
+  .c-end .link { background: none; border: none; padding: 0; color: var(--st-rota); font-size: 11.5px; font-weight: 600; text-decoration: underline; cursor: pointer; font-family: inherit; }
+  .c-end .links-ent { display: flex; gap: 12px; margin-top: 6px; flex-wrap: wrap; }
+  .c-end .peq { padding: 4px 10px; font-size: 12px; }
+  .c-end .sug { margin-top: 7px; border: 1px solid var(--rodando-borda); background: var(--rodando-bg); border-radius: 8px; padding: 8px 10px; font-size: 12px; display: flex; flex-direction: column; gap: 7px; }
+  .c-end .sug .bts { display: flex; gap: 6px; flex-wrap: wrap; }
+  .c-end .form-ent { margin-top: 7px; border: 1px solid var(--st-rota); border-radius: 8px; padding: 9px 10px; display: grid; grid-template-columns: 105px 1fr 1fr; gap: 7px; background: var(--superficie); }
+  .c-end .form-ent label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; font-weight: 600; color: var(--texto-suave); }
+  .c-end .form-ent input { border: 1px solid var(--borda); border-radius: 6px; padding: 5px 7px; font-family: inherit; font-size: 12.5px; background: var(--superficie); color: var(--texto); min-width: 0; }
+  .c-end .form-ent input[readonly] { background: var(--fundo); }
+  .c-end .form-ent .l2 { grid-column: span 2; }
+  .c-end .form-ent .l3, .c-end .ent-erro, .c-end .acoes-ent { grid-column: 1 / -1; }
+  .c-end .ent-erro { font-size: 11.5px; color: var(--st-falha); }
+  .c-end .ent-erro:empty { display: none; }
+  .c-end .acoes-ent { display: flex; gap: 8px; }
+  @media (max-width: 560px) { .c-end .form-ent { grid-template-columns: 1fr; } .c-end .form-ent .l2 { grid-column: auto; } }
   .acoes-linha button.cotacao { border-color: var(--st-rota); color: var(--st-rota); font-weight: 700; }
   .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 100px; background: var(--rodando-bg); color: var(--rodando-texto); white-space: nowrap; }
   .chip.falha { background: var(--erro-bg); color: var(--st-falha); }
@@ -59,12 +96,39 @@
   .modal label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; }
   .modal .pe { display: flex; justify-content: flex-end; gap: 8px; }
   .modal textarea { min-height: 60px; resize: vertical; }
+  /* Colunas da planilha indicadas pelo cliente (16/11) */
+  .modal.largo { max-width: 680px; }
+  .map-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; max-height: 58vh; overflow: auto; padding-right: 4px; }
+  .map-cols select { font-family: inherit; font-size: 12.5px; font-weight: 400; color: var(--texto); background: var(--superficie); border: 1px solid var(--borda); border-radius: 6px; padding: 5px 8px; width: 100%; }
+  .map-cols label.falta select { border-color: var(--st-falha); }
+  @media (max-width: 560px) { .map-cols { grid-template-columns: 1fr; } }
   .lista-env .linha .suave { color: var(--texto-suave); }
   .atencao-env { border-color: var(--rodando-borda); background: var(--rodando-bg); }
   .atencao-env h3 { color: var(--rodando-texto); }
   .atencao-env .item { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; padding: 6px 0; border-top: 1px dashed var(--rodando-borda); }
   .atencao-env .item:first-of-type { border-top: none; }
   .erro-txt { color: var(--st-falha); font-size: 11.5px; }
+  /* Documentos do pedido em PDF (11/11, anexos_pedido.py) */
+  .c-doc { min-width: 190px; max-width: 280px; white-space: normal; }
+  .anx { border: 1px solid var(--borda); border-radius: 6px; padding: 5px 8px; margin-bottom: 5px; font-size: 12px; display: flex; flex-direction: column; gap: 2px; background: var(--fundo); }
+  .anx.diverge { border-color: var(--st-falha); }
+  .anx-nome { font-weight: 600; color: var(--texto); word-break: break-all; }
+  .anx-info { font-size: 11px; color: var(--texto-suave); }
+  .anx-alerta { font-size: 11px; color: var(--st-falha); font-weight: 600; }
+  .lotes-res { font-size: 11.5px; color: var(--st-rota); margin-top: 3px; white-space: normal; }
+  .lotes-tab { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .lotes-tab th, .lotes-tab td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--borda); vertical-align: middle; }
+  .lotes-tab input { width: 100%; min-width: 90px; box-sizing: border-box; }
+  .lotes-box { border: 1px solid var(--rodando-borda); background: var(--rodando-bg); border-radius: 8px; padding: 10px 14px; font-size: 12.5px; display: flex; flex-direction: column; gap: 8px; }
+  .lotes-box ul { margin: 0; padding-left: 18px; color: var(--rodando-texto); }
+  .anx-link { background: none; border: none; padding: 0; color: var(--st-rota); font-size: 11.5px; font-weight: 600; text-decoration: underline; cursor: pointer; font-family: inherit; align-self: flex-start; }
+  .anx-mais { border: 1px dashed var(--borda); color: var(--texto-suave); background: none; border-radius: 6px; padding: 3px 9px; font-size: 11.5px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .anx-mais:hover { border-color: var(--acento); color: var(--acento); }
+  .anx-soltos { border: 1px solid var(--rodando-borda); background: var(--rodando-bg); border-radius: 8px; padding: 10px 14px; font-size: 12.5px; display: flex; flex-direction: column; gap: 8px; }
+  .anx-solto { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
+  .anx-solto select { font-family: inherit; font-size: 12.5px; color: var(--texto); background: var(--superficie); border: 1px solid var(--borda); border-radius: 6px; padding: 4px 8px; max-width: 320px; }
+  .anx-conf { display: inline-flex !important; flex-direction: row !important; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 700; color: var(--texto); border: 1px solid var(--rodando-borda); background: var(--rodando-bg); border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+  .anx-lista { display: flex; flex-direction: column; gap: 6px; }
 </style>
 
 <section id="vista-envios" class="oculto" data-aba-inicial="{{ aba_inicial }}" data-pode-enviar="{{ 1 if pode_enviar else 0 }}">
@@ -75,32 +139,37 @@
       <div class="card" id="card-enviar" style="display:flex; flex-direction:column; gap:14px;">
         <div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;">
           <h3 style="margin:0;">Enviar novos pedidos</h3>
-          {% if empresas_envio | length > 1 %}
-          {# Login de grupo (17/09): cada empresa é um cliente na Stokki -- o envio é numa empresa por vez #}
-          <select id="env-empresa" aria-label="Empresa que está enviando os pedidos" style="font-family:inherit; font-size:12.5px; color:var(--texto); background:var(--superficie); border:1px solid var(--borda); border-radius:6px; padding:5px 9px; max-width:280px;">
-            {% for e in empresas_envio %}<option value="{{ e.cnpj }}">{{ e.nome }}</option>{% endfor %}
-          </select>
-          {% endif %}
           <span style="font-size:12px; color:var(--texto-suave);" id="env-regra"></span>
         </div>
         <label class="zona" id="zona">
-          <input type="file" id="arquivos" multiple accept=".xml,.zip,.xlsx,.xls,text/xml,application/xml,application/zip,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel">
+          <input type="file" id="arquivos" multiple accept=".xml,.zip,.xlsx,.xls,.pdf,application/pdf,text/xml,application/xml,application/zip,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
           <div><b>Arraste os XMLs das notas ou a planilha de pedidos aqui</b> ou clique pra escolher</div>
-          <div style="font-size:11.5px; margin-top:4px;">XML: vários .xml de uma vez ou um .zip (só NF-e de saída da sua empresa). Planilha: .xlsx no modelo Fresh Log, uma linha por item.</div>
+          <div style="font-size:11.5px; margin-top:4px;">XML: vários .xml de uma vez ou um .zip (só NF-e de saída da sua empresa). Planilha: .xlsx no modelo Fresh Log ou a sua, uma linha por item (se os nomes das colunas forem outros, você indica qual é qual).</div>
+          <div style="font-size:11.5px; margin-top:4px;">Documentos dos pedidos (boleto e outros, em PDF) podem vir juntos: o sistema coloca cada um no pedido certo e você confere antes de enviar. Eles saem impressos com a nota na entrega.</div>
+          {% if lotes_ativo %}<div style="font-size:11.5px; margin-top:4px;">Lote específico: envie junto a sua planilha de lotes (por nota fiscal e produto) ou use "Indicar lote" em cada nota da prévia. Sem indicação, sai primeiro o que vence primeiro.</div>{% endif %}
         </label>
+        <input type="file" id="anx-arquivo" multiple accept=".pdf,.xml,application/pdf,text/xml,application/xml" hidden>
         <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:12px; color:var(--texto-suave);">
           <a class="botao-linha" id="btn-modelo" href="{{ request.script_root }}/api/envios/modelo-planilha" download style="text-decoration:none;">Baixar modelo de planilha (.xlsx)</a>
           <span>Sem XML da nota? Preencha o modelo e suba aqui -- os pedidos são criados do mesmo jeito.</span>
+          <button type="button" class="botao-linha" id="btn-indicar" title="Suba a planilha que você já usa e diga qual coluna é cada informação">Usar a minha planilha (indicar colunas)</button>
+          {% if empresas_envio | length > 1 %}
+          {# Login de grupo (12/11): sem seletor -- a planilha diz a empresa de cada pedido; o XML vai pelo emitente #}
+          <span>Seu acesso tem {{ empresas_envio | length }} empresas: na planilha, preencha a coluna "CNPJ da empresa (quem envia)" em cada pedido (o modelo já vem com ela). No XML, a empresa é a emitente da nota.</span>
+          {% endif %}
         </div>
         <div class="msg" id="env-msg"></div>
+        <div class="lotes-box oculto" id="env-lotes"></div>
         <div class="previa" id="previa">
           <div class="rej oculto" id="previa-rej"></div>
+          <div class="anx-soltos oculto" id="previa-anexos"></div>
           <div>
             <h4 id="previa-titulo"></h4>
-            <div class="rolagem"><table id="previa-tabela"><thead><tr><th>NF / Pedido</th><th>Destinatário</th><th>Endereço</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Agendamento</th></tr></thead><tbody></tbody></table></div>
+            <div class="rolagem"><table id="previa-tabela"><thead><tr><th>NF / Pedido</th><th>Destinatário</th><th>Endereço</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Documentos</th><th>Agendamento</th></tr></thead><tbody></tbody></table></div>
           </div>
           <div id="previa-dest" style="display:flex; flex-direction:column; gap:8px;"></div>
+          <label class="anx-conf oculto" id="anx-conf-box"><input type="checkbox" id="anx-conf"> <span id="anx-conf-txt"></span></label>
           <div class="barra-confirmar">
             <button type="button" class="botao" id="btn-confirmar">Confirmar envio</button>
             <button type="button" class="botao-linha" id="btn-limpar">Descartar</button>
@@ -120,6 +189,7 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
             <input type="search" id="env-busca" placeholder="Buscar por NF, destinatário ou pedido">
           </div>
+          <button type="button" class="botao-linha oculto" id="env-reenviar-todos" data-acao="reenviar-todos"></button>
           <button type="button" class="botao-linha" id="env-atualizar">Atualizar</button>
         </div>
         <div class="rolagem"><table id="env-tabela"><thead><tr><th>Enviado em</th><th>NF / Pedido</th><th>Destinatário</th><th style="text-align:center">Vol.</th><th>Situação</th><th>Pedido</th><th>Entrega</th><th>Ações</th></tr></thead><tbody></tbody></table></div>
@@ -136,6 +206,7 @@
           <div><b style="color:var(--texto)">2.</b> A gente confere: NF-e precisa ser de saída da sua empresa e não pode ter sido enviada antes; na planilha, cada pedido precisa de destinatário, endereço completo e pelo menos um SKU com quantidade.</div>
           <div><b style="color:var(--texto)">3.</b> Na primeira vez que um destinatário aparece, você informa o horário em que ele recebe. Quem só recebe com agendamento pede a data (ou fica como <i>agendamento pendente</i>).</div>
           <div><b style="color:var(--texto)">4.</b> O pedido entra na fila e é criado na Stokki em instantes. Se der erro, aparece aqui e você recebe um e-mail.</div>
+          <div><b style="color:var(--texto)">5.</b> Boleto ou outro documento que precisa ir com a nota? Suba os PDFs junto com os pedidos, ou anexe depois em <i>Documentos</i>, na lista, enquanto o pedido não saiu pra entrega. O XML da nota também pode ser anexado, pelo botão do próprio pedido (não é impresso).</div>
         </div>
       </div>
       <div class="card">
@@ -159,12 +230,9 @@
   const BASE = {{ request.script_root | tojson }};
   const secao = document.getElementById('vista-envios');
   const PODE_ENVIAR = secao.dataset.podeEnviar === '1';
-  // Empresa do envio (login de grupo): vai no cabeçalho de TODA chamada desta
-  // vista -- fila, prévia, confirmação, ações e destinatários são por empresa.
-  const EMPRESAS_ENVIO = {{ empresas_envio | tojson }};
-  let empresaEnvio = EMPRESAS_ENVIO.length ? EMPRESAS_ENVIO[0].cnpj : '';
-  const fetch = (url, o = {}) => window.fetch(url, { ...o, headers: { ...(o.headers || {}), ...(empresaEnvio ? { 'X-Portal-Empresa': empresaEnvio } : {}) } });
-  const comEmpresa = url => empresaEnvio ? `${url}?empresa=${empresaEnvio}` : url;
+  // Login de grupo (12/11): a tela não escolhe mais a empresa. Cada pedido tem a
+  // dele (coluna da planilha ou emitente do XML) e a lista junta todas.
+  const empresaDe = x => x.empresa ? `<div class="end">${esc(x.empresa)}</div>` : '';
   const $ = id => document.getElementById(id);
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const brl = v => (Number(v) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -209,7 +277,8 @@
       $('env-carimbo').textContent = e.message;
     }
     clearTimeout(timer);
-    const ativo = dados && dados.envios.some(x => x.status === 'NA_FILA' || x.status === 'ENVIANDO');
+    // 06/10: cancelamento roda no worker (ciclo de 20 s): recarrega enquanto houver "Cancelando"
+    const ativo = dados && dados.envios.some(x => x.status === 'NA_FILA' || x.status === 'ENVIANDO' || x.status === 'CANCELANDO' || x.status === 'RETOMANDO');
     timer = setTimeout(carregar, ativo ? 20000 : 120000);
   }
 
@@ -218,7 +287,7 @@
     $('env-regra').textContent = d.regra_xml && d.regra_xml !== 'nenhuma' ? `Regra aplicada ao XML: ${d.regra_xml_rotulo}` : '';
     if (!d.envio_ativo) mensagem('O envio de pedidos está temporariamente desativado pra sua empresa. Fale com a Fresh Log.', 'info');
     if (!PODE_ENVIAR) { $('card-enviar').classList.add('oculto'); }
-    const badge = k.erros + k.agendamento_pendente;
+    const badge = k.erros + k.agendamento_pendente + k.em_espera;
     $('vistas-badge').textContent = badge; $('vistas-badge').classList.toggle('on', badge > 0);
 
     $('env-tiles').innerHTML = `
@@ -226,8 +295,8 @@
       <div class="tile rota" data-aba="fila"><span class="rotulo">Na fila</span><span class="valor">${k.na_fila}</span><span class="sub">${k.na_fila ? 'sendo criados na Stokki' : 'nada pendente'}</span></div>
       <div class="tile bom" data-aba="criados"><span class="rotulo">Criados na Stokki</span><span class="valor">${k.criados}</span><span class="sub">últimos ${d.dias} dias</span></div>
       <div class="tile ${k.erros ? 'ruim' : ''}" data-aba="erros"><span class="rotulo">Com erro</span><span class="valor">${k.erros}</span><span class="sub">${k.erros ? 'precisam de correção' : '—'}</span></div>
-      <div class="tile" data-aba="pendencias"><span class="rotulo">Pendências</span><span class="valor">${k.agendamento_pendente + k.solicitacoes_pendentes}</span><span class="sub">${k.agendamento_pendente ? k.agendamento_pendente + ' agendamento' + (k.agendamento_pendente > 1 ? 's' : '') + ' pendente' + (k.agendamento_pendente > 1 ? 's' : '') : (k.solicitacoes_pendentes ? 'com a Fresh Log' : '—')}</span></div>`;
-    const abas = [['todos', 'Todos', k.total], ['fila', 'Na fila', k.na_fila], ['criados', 'Criados', k.criados], ['erros', 'Com erro', k.erros], ['pendencias', 'Pendências', k.agendamento_pendente + k.solicitacoes_pendentes]];
+      <div class="tile" data-aba="pendencias"><span class="rotulo">Pendências</span><span class="valor">${k.agendamento_pendente + k.solicitacoes_pendentes + k.em_espera}</span><span class="sub">${k.agendamento_pendente ? k.agendamento_pendente + ' agendamento' + (k.agendamento_pendente > 1 ? 's' : '') + ' pendente' + (k.agendamento_pendente > 1 ? 's' : '') : (k.em_espera ? k.em_espera + ' em espera pra retomar' : (k.solicitacoes_pendentes ? 'com a Fresh Log' : '—'))}</span></div>`;
+    const abas = [['todos', 'Todos', k.total], ['fila', 'Na fila', k.na_fila], ['criados', 'Criados', k.criados], ['erros', 'Com erro', k.erros], ['pendencias', 'Pendências', k.agendamento_pendente + k.solicitacoes_pendentes + k.em_espera]];
     $('env-abas').innerHTML = abas.map(([id, r, n]) => `<button type="button" class="${aba === id ? 'ativa' : ''}" data-aba="${id}">${r} <em>${n}</em></button>`).join('');
     renderTabela();
     renderLateral();
@@ -240,17 +309,28 @@
     if (aba === 'fila') lista = lista.filter(x => ['NA_FILA', 'ENVIANDO', 'AGUARDANDO_LIBERACAO'].includes(x.status));
     else if (aba === 'criados') lista = lista.filter(x => x.status === 'CRIADO' || x.status === 'DUPLICADO');
     else if (aba === 'erros') lista = lista.filter(x => x.status === 'ERRO');
-    else if (aba === 'pendencias') lista = lista.filter(x => (x.agendamento_pendente && x.status !== 'CANCELADO') || x.solicitacoes_pendentes.length || x.status === 'AGUARDANDO_LIBERACAO');
+    else if (aba === 'pendencias') lista = lista.filter(x => (x.agendamento_pendente && x.status !== 'CANCELADO') || x.solicitacoes_pendentes.length || x.status === 'AGUARDANDO_LIBERACAO' || x.status === 'EM_ESPERA_CLIENTE');
     const q = busca.trim().toLowerCase();
-    if (q) lista = lista.filter(x => [x.numero_nf, x.referencia, x.destinatario_nome, x.codigo_pedido, x.endereco_curto].join(' ').toLowerCase().includes(q));
+    if (q) lista = lista.filter(x => [x.numero_nf, x.referencia, x.destinatario_nome, x.codigo_pedido, x.endereco_curto, x.empresa].join(' ').toLowerCase().includes(q));
     return lista;
   }
 
   // "NF 123" (XML) ou "PED-1 · planilha" (importação por planilha, 09/09)
+  // Fluxo Cross (25/10): pedido entra com o item XD e a NF original é trocada depois.
+  const SELO_TROCA = { PENDENTE: ['NF a trocar', 'A NF original ainda vai entrar no pedido na Stokki'],
+                       FEITA: ['NF trocada', 'A NF original já está no pedido na Stokki'],
+                       ERRO: ['Troca de NF com erro', 'A Fresh Log foi avisada e vai trocar a NF à mão'] };
+  function seloCross(x) {
+    if (x.fluxo !== 'cross') return '';
+    const s = SELO_TROCA[x.troca_nf_status];
+    return ' <span class="chip" title="Fluxo Cross">Cross</span>' + (s ? ` <span class="chip" title="${esc(s[1])}">${esc(s[0])}</span>` : '');
+  }
+
   function docCurto(x) {
     const plan = x.origem === 'planilha';
     return `<span class="mono num" style="font-weight:600">${esc(x.documento_curto || x.numero_nf || x.referencia || '—')}</span>` +
       (plan ? ` <span class="chip" title="Pedido importado de planilha${x.numero_nf ? '' : ' (sem NF-e)'}">planilha</span>` : '') +
+      seloCross(x) +
       (plan && x.numero_nf && x.referencia ? `<div class="end">${esc(x.referencia)}</div>` : '');
   }
 
@@ -264,24 +344,32 @@
     const lista = filtrados();
     $('env-tabela').querySelector('tbody').innerHTML = lista.map(x => `<tr>
       <td class="nw num">${esc(x.criado_em_br)}${x.enviado_por && x.enviado_por.startsWith('equipe') ? ' <span class="chip" title="Enviado pela equipe Fresh Log">equipe</span>' : ''}</td>
-      <td class="nw">${docCurto(x)}</td>
-      <td><div class="dest" style="border:none;padding:0;background:none;gap:1px;"><span style="font-weight:600">${esc(x.destinatario_nome)}</span><span class="end">${esc(x.endereco_curto)}</span></div></td>
+      <td class="nw">${docCurto(x)}${empresaDe(x)}</td>
+      <td><div class="dest" style="border:none;padding:0;background:none;gap:1px;"><span style="font-weight:600">${esc(x.destinatario_nome)}</span><span class="end">${esc(x.endereco_curto)}</span>${x.endereco_entrega_origem === 'cliente' || x.endereco_entrega_origem === 'ultima_entrega' ? `<span class="end-entrega" title="Endereço fiscal do destinatário: ${esc(x.endereco_fiscal)}">Endereço de entrega alterado no envio</span>` : x.endereco_fiscal ? `<span class="end-entrega" title="Endereço fiscal do destinatário: ${esc(x.endereco_fiscal)}">Local de entrega indicado na NF</span>` : ''}</div></td>
       <td class="num nw" style="text-align:center">${x.volumes || '—'}</td>
-      <td class="nw"><span class="badge b-${x.status}"><span class="pt"></span>${esc(x.status_rotulo)}</span>${x.status === 'ERRO' && x.erro ? `<div class="erro-txt" title="${esc(x.erro)}">${esc(x.erro.slice(0, 90))}${x.erro.length > 90 ? '…' : ''}</div>` : ''}${x.status === 'AGUARDANDO_LIBERACAO' ? `<div class="bloq-txt">${esc(x.bloqueio_texto)}</div>` : ''}${x.dedicado ? `<div><span class="chip dedicado" title="Transporte dedicado combinado com a Fresh Log">Envio dedicado</span></div>` : ''}${x.solicitacoes_pendentes.map(s => `<div><span class="chip">${esc(s.rotulo)} · aguardando Fresh Log</span></div>`).join('')}</td>
+      <td class="nw"><span class="badge b-${x.status}"><span class="pt"></span>${esc(x.status_rotulo)}</span>${x.status === 'ERRO' && x.erro ? `<div class="erro-txt" title="${esc(x.erro)}">${esc(x.erro.slice(0, 90))}${x.erro.length > 90 ? '…' : ''}</div>` : ''}${x.status === 'AGUARDANDO_LIBERACAO' ? `<div class="bloq-txt">${esc(x.bloqueio_texto)}</div>` : ''}${x.dedicado ? `<div><span class="chip dedicado" title="Transporte dedicado combinado com a Fresh Log">Envio dedicado</span></div>${x.dedicado.motivo ? `<div class="bloq-txt">${esc(x.dedicado.motivo)}</div>` : ''}` : ''}${x.solicitacoes_pendentes.map(s => `<div><span class="chip">${esc(s.rotulo)} · aguardando Fresh Log</span></div>`).join('')}</td>
       <td class="nw"><span class="mono">${x.codigo_pedido ? '#' + esc(x.codigo_pedido) : '<span style="color:var(--texto-suave)">—</span>'}</span></td>
       <td class="nw">${entrega(x)}</td>
       <td><div class="acoes-linha">
         ${x.status === 'AGUARDANDO_LIBERACAO' && x.bloqueio_chamado_id ? `<button type="button" class="cotacao" data-acao="cotacao" data-id="${x.id}" data-chamado="${x.bloqueio_chamado_id}">Solicitar cotação de envio dedicado</button><button type="button" data-acao="chat" data-id="${x.id}" data-chamado="${x.bloqueio_chamado_id}">Falar com a equipe Fresh Log</button>` : ''}
+        ${PODE_ENVIAR && dados.endereco_entrega_ativo && x.pode_alterar_endereco ? `<button type="button" data-acao="alterar_endereco" data-id="${x.id}" title="A entrega é em outro endereço? Informe aqui e a região é conferida de novo">Alterar endereço de entrega</button>` : ''}
         ${PODE_ENVIAR && x.pode_reagendar ? `<button type="button" data-acao="reagendar" data-id="${x.id}">${x.agendamento_pendente ? 'Definir agendamento' : 'Reagendar'}</button>` : ''}
+        ${PODE_ENVIAR && x.pode_retomar ? `<button type="button" data-acao="retomar" data-id="${x.id}">Retomar entrega</button>` : ''}
         ${PODE_ENVIAR && x.pode_em_espera ? `<button type="button" data-acao="em_espera" data-id="${x.id}">Tirar da rota</button>` : ''}
         ${PODE_ENVIAR && x.pode_reenviar ? `<button type="button" data-acao="reenviar" data-id="${x.id}">Reenviar</button>` : ''}
         ${PODE_ENVIAR && x.pode_cancelar ? `<button type="button" class="perigo" data-acao="cancelar" data-id="${x.id}">Cancelar</button>` : ''}
+        ${(PODE_ENVIAR && x.pode_anexar) || (x.anexos || []).length ? `<button type="button" data-acao="documentos" data-id="${x.id}" title="Documentos do pedido: PDFs que vão impressos com a nota e o XML da nota">Documentos${(x.anexos || []).length ? ' (' + x.anexos.length + ')' : ''}</button>` : ''}
         <button type="button" data-acao="xml" data-id="${x.id}" title="${x.origem === 'planilha' ? 'Baixar a planilha enviada' : 'Baixar o XML enviado'}">${x.origem === 'planilha' ? 'Planilha' : 'XML'}</button>
       </div></td></tr>`).join('');
     const vazio = $('env-vazia');
     if (!lista.length) { vazio.classList.remove('oculto'); vazio.textContent = busca ? 'Nada bate com a busca.' : (dados.envios.length ? 'Nenhum pedido nessa situação.' : 'Você ainda não enviou nenhum pedido por aqui.'); }
     else vazio.classList.add('oculto');
     $('env-contagem').textContent = lista.length ? `${lista.length} pedido${lista.length > 1 ? 's' : ''}` : '';
+    // reenviar em lote (02/10): só na aba Erros e com 2+ erros
+    const nErros = dados.envios.filter(x => x.status === 'ERRO').length;
+    const btLote = $('env-reenviar-todos');
+    btLote.classList.toggle('oculto', !(PODE_ENVIAR && aba === 'erros' && nErros >= 2));
+    btLote.textContent = `Reenviar todos (${nErros})`;
   }
 
   function renderLateral() {
@@ -297,7 +385,7 @@
     const card = $('env-atencao');
     if (!pend.length && !erros.length) { card.classList.add('oculto'); card.innerHTML = ''; return; }
     card.classList.remove('oculto');
-    card.innerHTML = `<h3>Precisa da sua atenção (${pend.length + erros.length})</h3>` +
+    card.innerHTML = `<h3 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">Precisa da sua atenção (${pend.length + erros.length})${PODE_ENVIAR && erros.length >= 2 ? `<button type="button" class="botao-linha" style="margin-left:auto;" data-acao="reenviar-todos">Reenviar todos com erro (${erros.length})</button>` : ''}</h3>` +
       pend.map(x => `<div class="item"><span class="chip">Agendamento pendente</span><span><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)} só recebe com agendamento.</span>${PODE_ENVIAR ? `<button type="button" class="botao" style="padding:5px 12px;font-size:12px;margin-left:auto;" data-acao="reagendar" data-id="${x.id}">Definir data</button>` : ''}</div>`).join('') +
       erros.map(x => `<div class="item"><span class="chip falha">Erro</span><span><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}: ${esc((x.erro || '').slice(0, 140))}</span>${PODE_ENVIAR ? `<button type="button" class="botao-linha" style="margin-left:auto;" data-acao="reenviar" data-id="${x.id}">Reenviar</button>` : ''}</div>`).join('');
   }
@@ -305,22 +393,129 @@
   // ── Upload → prévia ────────────────────────────────────────────────────────
   function mensagem(texto, tipo) { const m = $('env-msg'); m.className = 'msg' + (texto ? ' ' + tipo : ''); m.textContent = texto || ''; }
 
-  async function analisar(arquivos) {
+  // Colunas da planilha indicadas pelo cliente (16/11): o lote fica guardado pra
+  // reler depois que ele disser qual coluna é cada informação.
+  let arquivosLote = [], colunasLote = {}, pedirIndicacao = false;
+
+  async function analisar(arquivos, relendo) {
     if (!arquivos || !arquivos.length) return;
+    if (!relendo) { arquivosLote = [...arquivos]; colunasLote = {}; }
+    arquivos = arquivosLote;
+    // Só PDFs: são documentos de pedidos. Com prévia aberta entram nela;
+    // sem prévia não há pedido pra receber.
+    if ([...arquivos].every(f => /\.pdf$/i.test(f.name))) {
+      if (previa && previa.itens.length) await adicionarAnexosPrevia(arquivos, null);
+      else mensagem('Os documentos em PDF entram junto com os pedidos: suba os XMLs ou a planilha (pode ser tudo de uma vez). Pra um pedido já enviado, use "Documentos" na lista abaixo.', 'info');
+      $('arquivos').value = '';
+      return;
+    }
     const fd = new FormData();
     for (const f of arquivos) fd.append('arquivos', f);
+    if (Object.keys(colunasLote).length) fd.append('colunas', JSON.stringify(colunasLote));
+    if (pedirIndicacao) fd.append('indicar', '1');
     mensagem(`Lendo ${arquivos.length} arquivo${arquivos.length > 1 ? 's' : ''}…`, 'info');
     try {
       const r = await fetch(`${BASE}/api/envios/analisar`, { method: 'POST', credentials: 'same-origin', body: fd });
       const j = await r.json();
       if (!r.ok) throw new Error(j.erro || 'Falha ao ler os arquivos.');
+      if ((j.indicar || []).length) {   // falta dizer as colunas de uma planilha: a prévia vem depois
+        mensagem('', '');
+        $('arquivos').value = '';
+        indicarColunas(j.indicar[0]);
+        return;
+      }
+      pedirIndicacao = false;
       previa = j;
-      mensagem('', '');
+      previa.anexos = j.anexos || [];
+      mensagem(previa.anexos.length && !j.itens.length ? 'Nenhum pedido válido neste lote: os documentos em PDF não foram anexados.' : '', 'info');
+      renderLotesPlanilha(j.lotes_planilhas || []);
       renderPrevia();
     } catch (e) {
+      pedirIndicacao = false;
       mensagem(e.message, 'erro');
     }
     $('arquivos').value = '';
+  }
+
+  function indicarColunas(d) {
+    pedirIndicacao = false;   // só a primeira planilha do lote é forçada
+    const opcoes = sel => '<option value="">— não tem —</option>' + d.colunas.map(c =>
+      `<option value="${c.indice}"${sel === c.indice ? ' selected' : ''}>${esc(c.nome)}${c.exemplos.length ? ' · ex.: ' + esc(c.exemplos[0]) : ''}</option>`).join('');
+    modal(`<h3>Colunas da planilha</h3>
+      <p><b>${esc(d.arquivo)}</b>: diga qual coluna da sua planilha é cada informação. Os campos com * são obrigatórios. Sua escolha fica guardada pras próximas planilhas.</p>
+      ${d.pares ? `<p>Os produtos já foram reconhecidos: ${d.pares} par${d.pares > 1 ? 'es' : ''} de colunas de SKU e quantidade, um pedido por linha.</p>` : ''}
+      <div class="map-cols">${d.campos.map(c => `<label data-obrig="${c.obrigatoria ? 1 : ''}">${esc(c.rotulo)}${c.obrigatoria ? ' *' : ''}<select data-campo="${esc(c.chave)}">${opcoes(d.sugestao[c.chave])}</select></label>`).join('')}</div>
+      <div class="msg" id="m-msg"></div>
+      <div class="pe"><button type="button" class="botao-linha" data-fechar>Voltar</button><button type="button" class="botao" id="m-ok">Ler a planilha</button></div>`, true);
+    $('modal-caixa').querySelectorAll('.map-cols select').forEach(el => el.addEventListener('change', () => el.closest('label').classList.remove('falta')));
+    $('m-ok').addEventListener('click', () => {
+      const colunas = {};
+      let faltam = 0;
+      $('modal-caixa').querySelectorAll('.map-cols label').forEach(l => {
+        const s = l.querySelector('select');
+        if (s.value !== '') colunas[s.dataset.campo] = Number(s.value);
+        const falta = l.dataset.obrig && s.value === '';
+        l.classList.toggle('falta', !!falta);
+        if (falta) faltam++;
+      });
+      if (faltam) {
+        const m = $('m-msg'); m.className = 'msg erro';
+        m.textContent = `Falta indicar ${faltam} coluna${faltam > 1 ? 's' : ''} obrigatória${faltam > 1 ? 's' : ''}. Se a sua planilha não tem essa informação, inclua uma coluna com ela.`;
+        return;
+      }
+      colunasLote[d.arquivo] = { linha: d.linha, colunas };
+      fecharModal();
+      analisar(arquivosLote, true);
+    });
+  }
+
+  // ── Lote indicado pelo cliente (18/11, lotes_cliente.py) ──────────────────────
+  // Planilha de lotes: já gravada na leitura; aqui só mostra o resultado.
+  function renderLotesPlanilha(lista) {
+    const box = $('env-lotes');
+    box.classList.toggle('oculto', !lista.length);
+    const SIT = { aguardando_pedido: 'pedido ainda não chegou: vale quando chegar', produto_desconhecido: 'produto fora do cadastro', chegou_tarde: 'pedido já em separação: não aplicado' };
+    box.innerHTML = lista.map(r => `<div><b>Planilha de lotes ${esc(r.arquivo)}:</b> ${r.gravadas} indicaç${r.gravadas === 1 ? 'ão' : 'ões'} de lote gravada${r.gravadas === 1 ? '' : 's'}${r.sem_lote ? `; ${r.sem_lote} linha${r.sem_lote > 1 ? 's' : ''} sem lote sai${r.sem_lote > 1 ? 'em' : ''} pelo que vence primeiro` : ''}.</div>
+      ${r.avisos.length ? `<ul>${r.avisos.map(a => `<li>${esc(a)}</li>`).join('')}</ul>` : ''}
+      ${r.linhas.length ? `<div class="rolagem"><table class="lotes-tab"><thead><tr><th>NF</th><th>Pedido</th><th>SKU</th><th>Lote</th><th style="text-align:right">Quantidade</th><th></th></tr></thead><tbody>${r.linhas.map(l => `<tr><td class="mono">${esc(l.nf)}</td><td class="mono">${esc(l.codigo_ps || '—')}</td><td>${esc(l.sku)}</td><td><b>${esc(l.lote)}</b></td><td class="num" style="text-align:right">${Number(l.qtd_un).toLocaleString('pt-BR')}</td><td>${SIT[l.situacao] ? `<span class="chip">${esc(SIT[l.situacao])}</span>` : ''}</td></tr>`).join('')}</tbody></table></div>` : ''}`).join('');
+  }
+
+  const resumoLotes = it => {
+    const m = Object.entries(it._lotes || {});
+    return m.length ? `<div class="lotes-res">Lote: ${m.map(([s, l]) => `<b>${esc(l)}</b> (${esc(s)})`).join(', ')}</div>` : '';
+  };
+
+  function abrirLotes(i) {
+    const it = previa.itens[i], est = it.lotes_estoque || {}, marc = it._lotes || {};
+    modal(`<h3>Lote dos produtos · ${esc(rotIt(it))}</h3>
+      <p>Diga de qual lote deve sair cada produto (o produto inteiro sai desse lote). Deixe em branco para sair o que vence primeiro. Para dividir um produto entre dois lotes, envie a sua planilha de lotes junto com os XMLs.</p>
+      <div class="rolagem"><table class="lotes-tab"><thead><tr><th>SKU</th><th>Produto</th><th style="text-align:right">Qtd.</th><th>Lote</th></tr></thead><tbody>
+      ${it.produtos.map((pr, k) => {
+        const sku = pr.sku.toUpperCase(), ops = est[sku] || [];
+        return `<tr><td class="mono">${esc(pr.sku)}</td><td>${esc(pr.descricao)}</td><td class="num nw" style="text-align:right">${Number(pr.quantidade).toLocaleString('pt-BR')} ${esc(pr.unidade)}</td>
+          <td><input type="text" maxlength="40" data-sku="${esc(sku)}" value="${esc(marc[sku] || '')}" ${ops.length ? `list="dl-lote-${k}"` : ''} aria-label="Lote de ${esc(pr.sku)}" autocomplete="off">
+          ${ops.length ? `<datalist id="dl-lote-${k}">${ops.map(o => `<option value="${esc(o.lote)}">${o.validade ? 'val. ' + esc(dataBr(o.validade)) : 'sem validade'}</option>`).join('')}</datalist>` : ''}</td></tr>`;
+      }).join('')}</tbody></table></div>
+      <div class="msg" id="m-msg"></div>
+      <div class="pe"><button type="button" class="botao-linha" data-fechar>Voltar</button><button type="button" class="botao" id="m-ok">Guardar lotes</button></div>`, true);
+    $('m-ok').addEventListener('click', () => {
+      const novo = {};
+      for (const el of $('modal-caixa').querySelectorAll('input[data-sku]')) {
+        const v = el.value.trim().replace(/\s+/g, ' ').toUpperCase();
+        if (!v) continue;
+        if (!/^[A-Z0-9][A-Z0-9 ./_-]{0,39}$/.test(v)) {
+          const m = $('m-msg'); m.className = 'msg erro';
+          m.textContent = `Lote "${v}" de ${el.dataset.sku}: use letras, números, espaço, ponto, barra, hífen ou sublinhado.`;
+          el.focus();
+          return;
+        }
+        novo[el.dataset.sku] = v;
+      }
+      it._lotes = novo;
+      fecharModal();
+      const td = $('previa-tabela').querySelector(`tr[data-i="${i}"] .lotes-cel`);
+      if (td) td.innerHTML = resumoLotes(it);
+    });
   }
 
   function renderPrevia() {
@@ -334,21 +529,42 @@
         p.rejeitados.map(r => `<div>• ${esc(r.rotulo || (r.numero_nf ? 'NF ' + r.numero_nf : r.arquivo))}${r.rotulo && r.arquivo && r.arquivo !== r.rotulo ? ` <span style="opacity:.7">(${esc(r.arquivo)})</span>` : ''} — ${esc(r.erro)}</div>`).join('');
     } else { rej.classList.add('oculto'); rej.innerHTML = ''; }
     const nPlan = p.itens.filter(it => it.origem === 'planilha').length;
-    $('previa-titulo').textContent = p.itens.length ? `${p.itens.length} pedido${p.itens.length > 1 ? 's' : ''} pronto${p.itens.length > 1 ? 's' : ''} pra enviar${nPlan ? ` (${nPlan} de planilha)` : ''}` : 'Nenhum pedido válido neste lote';
+    $('previa-titulo').textContent = (p.itens.length ? `${p.itens.length} pedido${p.itens.length > 1 ? 's' : ''} pronto${p.itens.length > 1 ? 's' : ''} pra enviar${nPlan ? ` (${nPlan} de planilha)` : ''}` : 'Nenhum pedido válido neste lote') +
+      (p.xd && p.xd.erro && (p.fluxos_disponiveis || []).length ? ' · Cross indisponível: produto XD não encontrado (a Fresh Log foi avisada)' : '');
+    const multi = (p.fluxos_disponiveis || []).length > 1;
+    const rotFl = p.fluxo_rotulos || {};
+    $('previa-tabela').querySelector('thead').innerHTML = '<tr><th>NF / Pedido</th>' +
+      (multi ? `<th>Fluxo <select id="fl-todos" title="Aplicar a todos"><option value="">todos…</option>${p.fluxos_disponiveis.map(f => `<option value="${esc(f)}">${esc(rotFl[f] || f)}</option>`).join('')}</select></th>` : '') +
+      `<th>Destinatário</th><th>${p.entrega_ativa ? 'Endereço de entrega' : 'Endereço'}</th><th>Transportadora</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Documentos</th><th>Agendamento</th></tr>`;
+    // Transportadora da nota; no XML o embarcador pode trocar por uma do cadastro (o servidor reescreve o <transporta>)
+    const celulaTransportadora = (it, lista) => {
+      if (it.origem === 'planilha') return '<span style="color:var(--texto-suave)">—</span>';
+      const nome = `<div>${esc(it.transportadora_nome || 'não informada na nota')}</div>`;
+      if (!lista.length) return nome;
+      return nome + `<select class="tp" aria-label="Trocar a transportadora do pedido"><option value="">manter a da nota</option>${lista.map(t => `<option value="${t.id}" data-tipo="${esc(t.tipo || '')}">${esc(t.nome)}</option>`).join('')}</select>`;
+    };
+    const opcoesFluxo = it =>(it.fluxos || p.fluxos_disponiveis || []).filter(f => !(it.origem === 'planilha' && f === 'cross'));
     $('previa-tabela').querySelector('tbody').innerHTML = p.itens.map((it, i) => {
       const d = p.destinatarios[it.destinatario_doc] || {};
       const plan = it.origem === 'planilha';
       const doc = plan
         ? `<span class="mono num" style="font-weight:600">${esc(it.referencia)}</span> <span class="chip" title="Pedido lido da planilha${it.linhas && it.linhas.length ? ' (linhas ' + it.linhas.join(', ') + ')' : ''}">planilha</span>` +
           `<div class="end">${it.numero_nf ? 'NF ' + esc(it.numero_nf) + ' · ' : ''}${it.itens} ${it.itens > 1 ? 'itens' : 'item'}${it.data_expedicao ? ' · expede ' + dataBr(it.data_expedicao) : ''}</div>`
-        : `<span class="mono num" style="font-weight:600">${esc(it.numero_nf)}</span>`;
+        : `<span class="mono num" style="font-weight:600">${esc(it.numero_nf)}</span>` +
+          (it.lotes_ativo ? `<div><button type="button" class="anx-link" data-lote="${i}" title="Escolher de qual lote sai cada produto desta nota">Indicar lote</button><span class="lotes-cel">${resumoLotes(it)}</span></div>` : '');
+      const ops = opcoesFluxo(it);
+      const celFluxo = !multi ? '' : (ops.length === 1
+        ? `<td class="nw" data-fluxo="${esc(ops[0])}">${esc(rotFl[ops[0]] || ops[0])}</td>`
+        : `<td class="nw"><select class="fl" aria-label="Fluxo do pedido"><option value="">escolha</option>${ops.map(f => `<option value="${esc(f)}">${esc(rotFl[f] || f)}</option>`).join('')}</select></td>`);
       return `<tr data-i="${i}">
-        <td class="nw">${doc}${it.avisos.length ? `<div class="avisos">${esc(it.avisos.join(' '))}</div>` : ''}</td>
+        <td class="nw">${doc}${empresaDe(it)}${it.avisos.length ? `<div class="avisos">${esc(it.avisos.join(' '))}</div>` : ''}</td>${celFluxo}
         <td><div style="font-weight:600">${esc(it.destinatario_nome)}</div><div class="end">${esc(it.destinatario_doc_formatado)}</div></td>
-        <td><div class="end" style="color:var(--texto)">${esc([it.destinatario_endereco, it.destinatario_bairro, it.destinatario_municipio].filter(Boolean).join(', '))}</div></td>
+        <td class="c-end" data-i="${i}">${celulaEndereco(it)}</td>
+        <td class="c-transp">${celulaTransportadora(it, p.transportadoras || [])}</td>
         <td class="num nw" style="text-align:center">${it.volumes}</td>
         <td class="num nw" style="text-align:right">${it.peso_kg ? it.peso_kg.toLocaleString('pt-BR') + ' kg' : '—'}</td>
         <td class="num nw" style="text-align:right">${brl(it.valor_nf)}</td>
+        <td class="c-doc" data-i="${i}"></td>
         <td class="nw">${d.requer_agendamento ? `<div class="ag"><label><input type="date" class="ag-data" min="${p.hoje}"></label><label>das <input type="time" class="ag-ini" value="${esc(d.horario_inicio || '08:00')}"></label><label>às <input type="time" class="ag-fim" value="${esc(d.horario_fim || '12:00')}"></label><label><input type="checkbox" class="ag-pend"> pendente</label></div>` : '<span style="color:var(--texto-suave)">—</span>'}</td>
       </tr>`;
     }).join('');
@@ -364,7 +580,271 @@
     }).join('');
     $('btn-confirmar').disabled = !p.itens.length;
     $('btn-confirmar').textContent = p.itens.length ? `Confirmar envio de ${p.itens.length} pedido${p.itens.length > 1 ? 's' : ''}` : 'Nada a enviar';
+    renderAnexos();
   }
+
+  // ── Documentos dos pedidos (PDF) -- 11/11, anexos_pedido.py ─────────────────
+  // previa.anexos: [{token, nome, tipo, numero_nf, pedido (token do item ou
+  // null), motivo, manual}]. O servidor só SUGERE o pedido; quem decide é o
+  // usuário, que marca a conferência antes de enviar (o confirmar recusa sem).
+  const nfLimpa = v => String(v || '').replace(/\D/g, '').replace(/^0+/, '');
+  const rotIt = it => it.rotulo || ('NF ' + it.numero_nf);
+  // ped: o pedido onde o documento está. Em pedido de planilha, o XML da nota é o XML do pedido.
+  const infoAnexo = (a, ped) => esc(a.tipo === 'XML da NF-e' && ped && ped.origem === 'planilha' ? 'XML do pedido' : a.tipo || 'Documento') + (a.numero_nf ? ' · NF ' + esc(a.numero_nf) : '');
+  const diverge = (a, numeroNf) => a.numero_nf && numeroNf && nfLimpa(a.numero_nf) !== nfLimpa(numeroNf);
+  // pedido (da prévia) que o sistema sugeriu, quando o usuário pôs o documento em outro
+  const outroPedido = (a, it) => a.sugerido && a.sugerido !== it.token && a.motivo !== 'único pedido' && previa.itens.find(v => v.token === a.sugerido);
+  let anxDestino = null, docNovos = [];
+
+  function renderAnexos() {
+    const p = previa;
+    if (!p) return;
+    p.anexos = p.anexos || [];
+    p.itens.forEach((it, i) => {
+      const td = $('previa-tabela').querySelector(`td.c-doc[data-i="${i}"]`);
+      if (!td) return;
+      td.innerHTML = p.anexos.filter(a => a.pedido === it.token).map(a => `<div class="anx ${diverge(a, it.numero_nf) || outroPedido(a, it) ? 'diverge' : ''}">
+          <span class="anx-nome">${esc(a.nome)}</span>
+          <span class="anx-info">${infoAnexo(a, it)} · ${a.manual ? 'escolhido por você' : 'colocado pelo sistema (' + esc(a.motivo) + ')'}</span>
+          ${diverge(a, it.numero_nf) ? `<span class="anx-alerta">Atenção: o documento cita a NF ${esc(a.numero_nf)}, e este pedido é a NF ${esc(it.numero_nf)}.</span>` : ''}
+          ${outroPedido(a, it) ? `<span class="anx-alerta">Atenção: pelo nome ou conteúdo, este documento parece ser de ${esc(rotIt(outroPedido(a, it)))}.</span>` : ''}
+          <button type="button" class="anx-link" data-anx="tirar" data-token="${esc(a.token)}">tirar deste pedido</button></div>`).join('') +
+        `<button type="button" class="anx-mais" data-anx="anexar" data-i="${i}">+ Anexar PDF ou XML</button>`;
+    });
+    const soltos = p.anexos.filter(a => !p.itens.some(it => it.token === a.pedido));
+    const box = $('previa-anexos');
+    box.classList.toggle('oculto', !soltos.length);
+    box.innerHTML = !soltos.length ? '' : `<div><b>${soltos.length} documento${soltos.length > 1 ? 's' : ''} sem pedido.</b> O sistema não conseguiu identificar de qual pedido ${soltos.length > 1 ? 'são' : 'é'}: escolha o pedido ou descarte.</div>` +
+      soltos.map(a => `<div class="anx-solto"><span><span class="anx-nome">${esc(a.nome)}</span> <span class="anx-info">${infoAnexo(a)}</span></span>
+        <select data-anx-sel="${esc(a.token)}" aria-label="Pedido do documento ${esc(a.nome)}"><option value="">escolha o pedido…</option>${p.itens.map(it => `<option value="${esc(it.token)}">${esc(rotIt(it))} · ${esc(it.destinatario_nome)}</option>`).join('')}</select>
+        <button type="button" class="anx-link" data-anx="descartar" data-token="${esc(a.token)}">descartar</button></div>`).join('');
+    const n = p.anexos.length;
+    $('anx-conf-box').classList.toggle('oculto', !n);
+    $('anx-conf').checked = false;   // qualquer mudança nos documentos pede conferência de novo
+    $('anx-conf-txt').textContent = n > 1 ? `Conferi os ${n} documentos: cada um está no pedido correto.` : 'Conferi o documento: ele está no pedido correto.';
+  }
+
+  async function lerAnexos(arquivos, pedidos) {
+    const fd = new FormData();
+    for (const f of arquivos) fd.append('arquivos', f);
+    fd.append('pedidos', JSON.stringify(pedidos));
+    const r = await fetch(`${BASE}/api/envios/anexos/ler`, { method: 'POST', credentials: 'same-origin', body: fd });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.erro || 'Falha ao ler os documentos.');
+    return j;
+  }
+
+  // tokenItem: anexo unitário (botão do pedido); null: vários de uma vez, o sistema distribui
+  async function adicionarAnexosPrevia(arquivos, tokenItem) {
+    mensagem(`Lendo ${arquivos.length} documento${arquivos.length > 1 ? 's' : ''}…`, 'info');
+    try {
+      const j = await lerAnexos(arquivos, previa.itens.map(it => ({ chave: it.token, numero_nf: it.numero_nf, destinatario_doc: it.destinatario_doc, referencia: it.referencia })));
+      for (const a of j.anexos) {
+        // anexo unitário: guarda o que o sistema leu pra alertar se parecer de outro pedido
+        if (tokenItem) { a.sugerido = a.pedido; a.pedido = tokenItem; a.manual = true; }
+        previa.anexos.push(a);
+      }
+      mensagem(j.rejeitados.map(r => r.erro).join(' '), j.rejeitados.length ? 'erro' : '');
+      renderAnexos();
+    } catch (e) {
+      mensagem(e.message, 'erro');
+    }
+  }
+
+  function acaoAnexoPrevia(e) {
+    const b = e.target.closest('[data-anx]');
+    if (!b || !previa) return;
+    const a = previa.anexos.find(v => v.token === b.dataset.token);
+    if (b.dataset.anx === 'anexar') { anxDestino = { item: previa.itens[Number(b.dataset.i)].token }; $('anx-arquivo').click(); return; }
+    if (!a) return;
+    if (b.dataset.anx === 'tirar') Object.assign(a, { pedido: null, manual: true });
+    else if (b.dataset.anx === 'descartar') previa.anexos = previa.anexos.filter(v => v !== a);
+    renderAnexos();
+  }
+
+  // Documentos de um pedido já enviado (lista): ver, remover e anexar até a rota sair
+  function abrirDocumentos(id, erro = '') {
+    const x = dados.envios.find(e => e.id === Number(id));
+    if (!x) { fecharModal(); return; }
+    const pode = PODE_ENVIAR && x.pode_anexar, atuais = x.anexos || [];
+    modal(`<h3>Documentos do pedido</h3>
+      <p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}</p>
+      <p>Os documentos em PDF anexados aqui saem impressos junto da nota fiscal na entrega. O XML da nota fica guardado no pedido e não é impresso.</p>
+      <div class="anx-lista">${atuais.length ? atuais.map(a => `<div class="anx-solto"><a href="${BASE}/api/envios/${x.id}/anexos/${a.id}" target="_blank" rel="noopener" class="anx-nome">${esc(a.nome)}</a><span class="anx-info">${infoAnexo(a, x)}</span>${pode ? `<button type="button" class="anx-link" data-doc-remover="${a.id}">remover</button>` : ''}</div>`).join('') : '<div class="anx-info">Nenhum documento anexado ainda.</div>'}</div>
+      ${docNovos.length ? `<div class="anx-lista"><b style="font-size:12.5px;">Pra anexar agora:</b>${docNovos.map(a => `<div class="anx ${diverge(a, x.numero_nf) ? 'diverge' : ''}"><span class="anx-nome">${esc(a.nome)}</span><span class="anx-info">${infoAnexo(a, x)}</span>${diverge(a, x.numero_nf) ? `<span class="anx-alerta">Atenção: o documento cita a NF ${esc(a.numero_nf)}, e este pedido é a NF ${esc(x.numero_nf)}.</span>` : ''}</div>`).join('')}
+        <label class="anx-conf"><input type="checkbox" id="m-conf"> ${docNovos.length > 1 ? `Conferi os ${docNovos.length} documentos: são deste pedido.` : 'Conferi o documento: é deste pedido.'}</label></div>` : ''}
+      ${!pode && PODE_ENVIAR ? '<p>Este pedido já saiu pra entrega ou foi encerrado: não aceita mais documentos.</p>' : ''}
+      <div class="msg ${erro ? 'erro' : ''}" id="m-msg">${esc(erro)}</div>
+      <div class="pe"><button type="button" class="botao-linha" data-fechar>Fechar</button>${pode ? `<button type="button" class="botao-linha" id="m-escolher">${docNovos.length ? 'Escolher mais arquivos' : 'Escolher PDF ou XML…'}</button>` : ''}${pode && docNovos.length ? `<button type="button" class="botao" id="m-ok">Anexar ${docNovos.length} documento${docNovos.length > 1 ? 's' : ''}</button>` : ''}</div>`);
+    const falha = t => { const m = $('m-msg'); m.className = 'msg erro'; m.textContent = t; };
+    const chamar = async (url, corpo) => {
+      const r = await fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.erro || 'Não foi possível concluir.');
+    };
+    if ($('m-escolher')) $('m-escolher').addEventListener('click', () => { anxDestino = { envio: x.id }; $('anx-arquivo').click(); });
+    if ($('m-ok')) $('m-ok').addEventListener('click', async () => {
+      if (!$('m-conf').checked) { falha('Confira os documentos e marque a confirmação antes de anexar.'); return; }
+      $('m-ok').disabled = true;
+      try {
+        await chamar(`${BASE}/api/envios/${x.id}/anexos`, { anexos: docNovos.map(a => a.token), conferido: true });
+        docNovos = [];
+        await carregar();
+        abrirDocumentos(x.id);
+      } catch (e) { falha(e.message); $('m-ok').disabled = false; }
+    });
+    $('modal-caixa').querySelectorAll('[data-doc-remover]').forEach(b => b.addEventListener('click', async () => {
+      b.disabled = true;
+      try {
+        await chamar(`${BASE}/api/envios/${x.id}/anexos/${b.dataset.docRemover}/remover`, {});
+        await carregar();
+        abrirDocumentos(x.id);
+      } catch (e) { falha(e.message); b.disabled = false; }
+    }));
+  }
+
+  $('anx-arquivo').addEventListener('change', async e => {
+    const arquivos = [...e.target.files], destino = anxDestino;
+    e.target.value = '';
+    if (!arquivos.length || !destino) return;
+    if (destino.item) { if (previa) await adicionarAnexosPrevia(arquivos, destino.item); return; }
+    const x = dados.envios.find(v => v.id === destino.envio);
+    if (!x) return;
+    try {
+      const j = await lerAnexos(arquivos, [{ chave: String(x.id), numero_nf: x.numero_nf, destinatario_doc: x.destinatario_doc, referencia: x.referencia }]);
+      docNovos.push(...j.anexos);
+      abrirDocumentos(x.id, j.rejeitados.map(r => r.erro).join(' '));
+    } catch (err) { abrirDocumentos(x.id, err.message); }
+  });
+
+  // ── Endereço de entrega na prévia (27/10, spec endereco-entrega-portal) ──────
+  // item.entrega.modo vem do servidor (nota | terceiros | retirada | sugestao |
+  // livre); a escolha do cliente fica em item._ent e o confirmar revalida tudo.
+  const AVISO_FISCAL = 'Se a entrega for em outro lugar, informe abaixo. Sem alteração, o pedido vai pro endereço fiscal da nota.';
+  const CAMPOS_VAZIOS = { cep: '', logradouro: '', bairro: '', numero: '', complemento: '', cidade: '', uf: '', erro: '' };
+  const cepFmt = c => { const d = String(c || '').replace(/\D/g, ''); return d.length === 8 ? d.slice(0, 5) + '-' + d.slice(5) : d; };
+  const enderecoNota = it => [it.destinatario_endereco, it.destinatario_bairro, it.destinatario_municipio].filter(Boolean).join(', ');
+
+  function celulaEndereco(it) {
+    const fiscal = enderecoNota(it), ent = it.entrega;
+    if (!previa.entrega_ativa || !ent) {
+      return `<div class="end" style="color:var(--texto)">${esc(fiscal)}</div>${it.endereco_fiscal ? `<div class="end-entrega">Local de entrega indicado na NF: é este o endereço considerado na entrega. Endereço fiscal: ${esc(it.endereco_fiscal)}</div>` : ''}`;
+    }
+    const st = it._ent || (it._ent = { escolha: '', end: null, editando: false, origem: 'cliente', form: { ...CAMPOS_VAZIOS } });
+    if (ent.modo === 'nota') {
+      return `<span class="rot">Entregar em <span class="chip ok">informado na nota</span></span><div class="end-linha">${esc(fiscal)}</div><div class="fiscal-txt">Endereço fiscal: ${esc(it.endereco_fiscal)}</div>`;
+    }
+    if (ent.modo === 'terceiros' || ent.modo === 'retirada') {
+      return `<div class="end-linha">${esc(fiscal)}</div><div class="info-ent">${ent.modo === 'retirada' ? 'Retirada' : 'Redespacho: entregue à transportadora ' + esc(ent.transportadora)}</div>`;
+    }
+    const topo = `<span class="rot">Endereço fiscal da nota</span><div class="end-linha">${esc(fiscal)}</div>`;
+    if (st.editando) return topo + formEndereco(st.form);
+    if (st.escolha === 'cliente' || st.escolha === 'ultima_entrega') {
+      const e = st.end;
+      return `<span class="rot">Entregar em <span class="chip rota">alterado por você</span></span>
+        <div class="end-linha"><b>${esc(e.logradouro)}, ${esc(e.numero)}${e.complemento ? ' - ' + esc(e.complemento) : ''}</b><br>${esc(e.bairro)}${e.bairro ? ', ' : ''}${esc(e.cidade)}/${esc(e.uf)} · ${esc(cepFmt(e.cep))}</div>
+        <div class="fiscal-txt">Endereço fiscal: <s>${esc(fiscal)}</s></div>
+        <div class="links-ent"><button type="button" class="link" data-ent="editar">Editar</button><button type="button" class="link" data-ent="voltar">Voltar pro endereço fiscal</button></div>`;
+    }
+    if (ent.modo === 'sugestao' && st.escolha !== 'fiscal') {
+      return topo + `<div class="sug"><div>No último pedido pra este destinatário (${esc(ent.sugestao.data_br)}) a entrega foi em <b>${esc(ent.sugestao.texto)}</b>. Onde entregar este?</div>
+        <div class="bts"><button type="button" class="botao peq" data-ent="repetir">Entregar lá de novo</button><button type="button" class="botao-linha peq" data-ent="fiscal">Endereço fiscal</button><button type="button" class="botao-linha peq" data-ent="outro">Outro endereço</button></div></div>`;
+    }
+    return topo + `<div class="info-ent">${AVISO_FISCAL}</div><button type="button" class="btn-alt" data-ent="abrir">Alterar endereço de entrega</button>` +
+      (ent.modo === 'sugestao' ? ` <button type="button" class="link" data-ent="rever">ver a última entrega</button>` : '');
+  }
+
+  function formEndereco(f) {
+    return `<div class="form-ent">
+      <label>CEP <input data-f="cep" inputmode="numeric" maxlength="9" placeholder="00000-000" value="${esc(cepFmt(f.cep))}"></label>
+      <label class="l2">Rua / Avenida <input data-f="logradouro" maxlength="60" placeholder="preenche pelo CEP" value="${esc(f.logradouro)}"></label>
+      <label>Número <input data-f="numero" maxlength="60" value="${esc(f.numero)}"></label>
+      <label class="l2">Bairro <input data-f="bairro" maxlength="60" value="${esc(f.bairro)}"></label>
+      <label class="l3">Cidade / UF <input data-f="cidade_uf" readonly tabindex="-1" value="${esc(f.cidade ? f.cidade + '/' + f.uf : '')}"></label>
+      <label class="l3">Complemento / referência <input data-f="complemento" maxlength="60" placeholder="ex.: doca 2, entrada pela Rua X" value="${esc(f.complemento)}"></label>
+      <div class="ent-erro">${esc(f.erro)}</div>
+      <div class="acoes-ent"><button type="button" class="botao peq" data-ent="usar">Usar este endereço</button><button type="button" class="botao-linha peq" data-ent="cancelar">Cancelar</button></div>
+    </div>`;
+  }
+
+  const celula = i => $('previa-tabela').querySelector(`td.c-end[data-i="${i}"]`);
+  function redesenharEndereco(i) { const td = celula(i); if (td) td.innerHTML = celulaEndereco(previa.itens[i]); }
+  function lerForm(i) {
+    const st = previa.itens[i]._ent;
+    for (const el of celula(i).querySelectorAll('[data-f]')) if (el.dataset.f !== 'cidade_uf') st.form[el.dataset.f] = el.value.trim();
+  }
+
+  async function buscarCep(i) {
+    const f = previa.itens[i]._ent.form, d = (f.cep || '').replace(/\D/g, '');
+    if (d.length !== 8) return;
+    Object.assign(f, { cidade: '', uf: '', erro: '' });
+    const mudou = () => (f.cep || '').replace(/\D/g, '') !== d;  // cliente corrigiu o CEP antes da resposta
+    let limite = '';
+    try {
+      const r = await fetch(`${BASE}/api/envios/cep/${d}`, { credentials: 'same-origin' });
+      const j = await r.json();
+      if (mudou()) return;
+      if (r.status === 429) limite = j.erro;
+      if (!r.ok) throw new Error(j.erro);
+      if (j.logradouro) f.logradouro = j.logradouro;
+      if (j.bairro) f.bairro = j.bairro;
+      Object.assign(f, { cidade: j.cidade, uf: j.uf });
+    } catch (e) {
+      if (mudou()) return;
+      f.erro = limite || 'CEP não encontrado';
+    }
+    if (!previa || !previa.itens[i]._ent.editando) return;
+    redesenharEndereco(i);
+    const foco = celula(i).querySelector(`[data-f="${f.erro ? 'cep' : (f.logradouro ? 'numero' : 'logradouro')}"]`);
+    if (foco) foco.focus();
+  }
+
+  $('previa-tabela').addEventListener('click', e => {
+    const bl = e.target.closest('[data-lote]');
+    if (bl) { abrirLotes(Number(bl.dataset.lote)); return; }
+    const b = e.target.closest('[data-ent]');
+    if (!b) return;
+    const i = Number(b.closest('td.c-end').dataset.i), it = previa.itens[i], st = it._ent, acao = b.dataset.ent;
+    if (acao === 'abrir' || acao === 'outro') Object.assign(st, { form: { ...CAMPOS_VAZIOS }, origem: 'cliente', editando: true });
+    else if (acao === 'repetir') {
+      const c = it.entrega.sugestao.campos || {};
+      Object.assign(st, { form: { ...CAMPOS_VAZIOS, ...c, cidade: c.municipio || '', uf: c.uf || '' }, origem: 'ultima_entrega', editando: true });
+    } else if (acao === 'editar') Object.assign(st, { form: { ...CAMPOS_VAZIOS, ...st.end }, origem: st.escolha, editando: true });
+    else if (acao === 'fiscal') Object.assign(st, { escolha: 'fiscal', end: null });
+    else if (acao === 'rever') st.escolha = '';
+    else if (acao === 'voltar') Object.assign(st, { escolha: it.entrega.modo === 'sugestao' ? 'fiscal' : '', end: null });
+    else if (acao === 'cancelar') st.editando = false;
+    else if (acao === 'usar') {
+      lerForm(i);
+      const f = st.form;
+      f.erro = f.cep.replace(/\D/g, '').length !== 8 || !f.cidade ? 'CEP não encontrado'
+        : !f.logradouro ? 'Informe a rua' : !f.numero ? 'Informe o número' : '';
+      if (!f.erro) Object.assign(st, { end: { ...f }, escolha: st.origem, editando: false });
+    }
+    redesenharEndereco(i);
+    if (acao === 'repetir') buscarCep(i);
+    else if (st.editando && acao !== 'usar') { const c = celula(i).querySelector('[data-f="cep"]'); if (c) c.focus(); }
+  });
+
+  $('previa-tabela').addEventListener('input', e => {
+    if (e.target.dataset.f !== 'cep') return;
+    const td = e.target.closest('td.c-end'), i = Number(td.dataset.i);
+    if (e.target.value.replace(/\D/g, '').length !== 8) {  // CEP mudou: a cidade da consulta anterior não vale mais
+      Object.assign(previa.itens[i]._ent.form, { cidade: '', uf: '' });
+      td.querySelector('[data-f="cidade_uf"]').value = '';
+      return;
+    }
+    lerForm(i);
+    buscarCep(i);
+  });
+
+  // "todos…" no cabeçalho da coluna Fluxo aplica a escolha nas linhas que aceitam aquele fluxo
+  $('previa-tabela').addEventListener('change', e => {
+    if (e.target.id !== 'fl-todos' || !e.target.value) return;
+    for (const sel of $('previa-tabela').querySelectorAll('select.fl')) {
+      if ([...sel.options].some(o => o.value === e.target.value)) sel.value = e.target.value;
+    }
+  });
 
   // mudar "só recebe com agendamento" reflete nas linhas daquele destinatário
   $('previa-dest').addEventListener('change', e => {
@@ -379,12 +859,15 @@
     });
   });
 
-  async function confirmar() {
+  async function confirmar(aceitos = new Set()) {
     const p = previa;
     const horarios = {};
     for (const el of $('previa-dest').querySelectorAll('.dest')) {
       horarios[el.dataset.doc] = { ini: el.querySelector('.h-ini').value, fim: el.querySelector('.h-fim').value, ag: el.querySelector('.h-ag').checked };
     }
+    const anx = p.anexos || [];
+    if (anx.some(a => !p.itens.some(it => it.token === a.pedido))) { mensagem('Há documentos sem pedido: escolha o pedido de cada um ou descarte.', 'erro'); return; }
+    if (anx.length && !$('anx-conf').checked) { mensagem('Confira os documentos de cada pedido e marque a confirmação de que estão nos pedidos corretos.', 'erro'); return; }
     const itens = [];
     for (let i = 0; i < p.itens.length; i++) {
       const it = p.itens[i], h = horarios[it.destinatario_doc] || {};
@@ -392,6 +875,12 @@
       const rotuloIt = it.rotulo || ('NF ' + it.numero_nf);
       const tr = $('previa-tabela').querySelector(`tr[data-i="${i}"]`);
       const item = { token: it.token, horario_inicio: h.ini, horario_fim: h.fim, requer_agendamento: h.ag };
+      if ((p.fluxos_disponiveis || []).length > 1) {
+        const sel = tr.querySelector('select.fl'), fixo = tr.querySelector('td[data-fluxo]');
+        item.fluxo = sel ? sel.value : (fixo ? fixo.dataset.fluxo : '');
+        if (!item.fluxo) { mensagem(`${rotuloIt}: escolha o fluxo do pedido (${p.fluxos_disponiveis.map(f => (p.fluxo_rotulos || {})[f] || f).join(', ')}).`, 'erro'); return; }
+      }
+      if (aceitos.has(it.token)) item.aceita_fora_dia_fixo = true;
       if (h.ag) {
         const pend = tr.querySelector('.ag-pend'), data = tr.querySelector('.ag-data');
         item.agendamento_pendente = !!(pend && pend.checked);
@@ -400,16 +889,37 @@
         item.agendamento_hora_fim = (tr.querySelector('.ag-fim') || {}).value;
         if (!item.agendamento_pendente && !item.agendamento_data) { mensagem(`${rotuloIt}: ${it.destinatario_nome} só recebe com agendamento — informe a data ou marque "pendente".`, 'erro'); return; }
       }
+      const tp = tr.querySelector('select.tp'), tpOpt = tp && tp.value ? tp.selectedOptions[0] : null;
+      if (tpOpt) item.transportadora_id = Number(tp.value);
+      // retirada/redespacho não têm endereço de entrega a escolher (o servidor também recusa)
+      const semEntrega = !!tpOpt && ['RETIRADA', 'TERCEIROS'].includes(tpOpt.dataset.tipo);
+      const st = it._ent;
+      if (p.entrega_ativa && it.entrega && st && !semEntrega) {
+        if (st.editando) { mensagem(`${rotuloIt}: termine o endereço de entrega (Usar este endereço ou Cancelar).`, 'erro'); return; }
+        if (it.entrega.modo === 'sugestao' && !st.escolha) { mensagem(`${rotuloIt}: escolha onde entregar este pedido.`, 'erro'); return; }
+        if (st.escolha) item.entrega_escolha = st.escolha;
+        if (st.end) item.entrega_endereco = { cep: st.end.cep, logradouro: st.end.logradouro, numero: st.end.numero,
+                                              complemento: st.end.complemento, bairro: st.end.bairro };
+      }
+      const meus = anx.filter(a => a.pedido === it.token);
+      if (meus.length) item.anexos = meus.map(a => ({ token: a.token, casado_por: a.manual ? 'manual' : 'automatico' }));
+      if (it._lotes && Object.keys(it._lotes).length) item.lotes = it._lotes;
       itens.push(item);
     }
     $('btn-confirmar').disabled = true;
     mensagem('Registrando os pedidos…', 'info');
     try {
-      const r = await fetch(`${BASE}/api/envios/confirmar`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itens }) });
+      const r = await fetch(`${BASE}/api/envios/confirmar`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ itens, anexos_conferidos: anx.length > 0 }) });
       const j = await r.json();
+      if (r.status === 409 && j.fora_dia_fixo) {
+        mensagem('', '');
+        $('btn-confirmar').disabled = false;
+        perguntarForaDiaFixo(j.fora_dia_fixo, aceitos);
+        return;
+      }
       if (!r.ok) throw new Error(j.erro || 'Falha ao confirmar.');
       previa = null; $('previa').classList.remove('aberta');
-      mensagem(j.mensagem, (j.bloqueados || []).length ? 'info' : 'ok');
+      mensagem(j.mensagem, (j.bloqueados || []).length || (j.anexos_falhas || []).length ? 'info' : 'ok');
       aba = 'fila';
       carregar();
     } catch (e) {
@@ -418,37 +928,169 @@
     }
   }
 
+  // Data fora do dia de visita da região (Hugo, 03/10): o embarcador troca a
+  // data na prévia ou confirma assim mesmo (vira envio dedicado, com valor).
+  function perguntarForaDiaFixo(lista, aceitos) {
+    modal(`<h3>Data fora do dia de visita da região</h3>
+      <p>Atendemos estas regiões só em alguns dias da semana. Se a data for mantida, o pedido vai como <b>envio dedicado</b>, com valor calculado pela tabela de frete dedicado da Fresh Log.</p>
+      <ul style="margin:0 0 12px;padding-left:18px;font-size:13px;">${lista.map(a => `<li><b>${esc(a.rotulo)}</b> · ${esc(a.destinatario_nome)} · ${esc(a.data_br)} — ${esc(a.regiao)}: ${esc(a.dias)}</li>`).join('')}</ul>
+      <div class="pe"><button type="button" class="botao-linha" data-fechar>Trocar a data</button><button type="button" class="botao" id="m-ok">Confirmar assim mesmo</button></div>`);
+    $('m-ok').addEventListener('click', () => {
+      lista.forEach(a => aceitos.add(a.token));
+      fecharModal();
+      confirmar(aceitos);
+    });
+  }
+
   // ── Ações sobre pedidos ────────────────────────────────────────────────────
-  function modal(html) { $('modal-caixa').innerHTML = html; $('modal').classList.add('aberto'); }
+  function modal(html, largo) { $('modal-caixa').innerHTML = html; $('modal-caixa').classList.toggle('largo', !!largo); $('modal').classList.add('aberto'); }
   function fecharModal() { $('modal').classList.remove('aberto'); }
   $('modal').addEventListener('click', e => { if (e.target === $('modal') || e.target.closest('[data-fechar]')) fecharModal(); });
 
   async function enviarAcao(id, corpo) {
     const r = await fetch(`${BASE}/api/envios/${id}/acao`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
     const j = await r.json();
-    if (!r.ok) throw new Error(j.erro || 'Falha ao aplicar.');
+    if (!r.ok) throw Object.assign(new Error(j.erro || 'Falha ao aplicar.'), { dados: j });
     return j;
   }
 
+  function reenviarTodos() {
+    const n = dados.envios.filter(x => x.status === 'ERRO').length;
+    if (!n) return;
+    modal(`<h3>Reenviar todos com erro</h3><p>Os <b>${n}</b> pedidos com erro voltam pra fila e serão criados na Stokki de novo. Pedidos de região não atendida voltam pra liberação da Fresh Log.</p>
+      <div class="msg" id="m-msg"></div>
+      <div class="pe"><button type="button" class="botao-linha" data-fechar>Voltar</button><button type="button" class="botao" id="m-ok">Reenviar ${n} pedidos</button></div>`);
+    $('m-ok').addEventListener('click', async () => {
+      $('m-ok').disabled = true;
+      try {
+        const r = await fetch(`${BASE}/api/envios/reenviar-erros`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.erro || 'Falha ao reenviar.');
+        fecharModal();
+        mensagem(j.mensagem, 'ok');
+        aba = 'fila';
+        carregar();
+      } catch (e) {
+        const m = $('m-msg'); m.className = 'msg erro'; m.textContent = e.message; $('m-ok').disabled = false;
+      }
+    });
+  }
+
+  // Pedido barrado pela área (13/11): troca o endereço de entrega; o servidor
+  // valida pelo CEP e confere a região de novo.
+  function alterarEndereco(x) {
+    modal(`<h3>Alterar endereço de entrega</h3>
+      <p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}</p>
+      <p>${esc(x.bloqueio_texto)} Se a entrega for em outro endereço, informe abaixo: a região é conferida de novo e, se for atendida, o pedido segue pra Stokki.</p>
+      <label>CEP <input id="m-cep" inputmode="numeric" maxlength="9" placeholder="00000-000"></label>
+      <label>Rua / Avenida <input id="m-logradouro" maxlength="60" placeholder="preenche pelo CEP"></label>
+      <div style="display:flex;gap:8px;"><label style="flex:1">Número <input id="m-numero" maxlength="60"></label><label style="flex:2">Bairro <input id="m-bairro" maxlength="60"></label></div>
+      <label>Cidade / UF <input id="m-cidade" readonly tabindex="-1"></label>
+      <label>Complemento / referência <input id="m-complemento" maxlength="60" placeholder="ex.: doca 2, entrada pela Rua X"></label>
+      <div id="m-dia-fixo" style="display:none">
+        <p id="m-dia-fixo-txt"></p>
+        <label>Nova data de entrega <input type="date" id="m-data" min="${new Date().toISOString().slice(0, 10)}"></label>
+      </div>
+      <div class="msg" id="m-msg"></div>
+      <div class="pe"><button type="button" class="botao-linha" data-fechar>Voltar</button><button type="button" class="botao-linha" id="m-manter" style="display:none">Manter a data (envio dedicado)</button><button type="button" class="botao" id="m-ok">Alterar endereço</button></div>`);
+    const erro = t => { const m = $('m-msg'); m.className = t ? 'msg erro' : 'msg'; m.textContent = t; };
+    const digitos = () => $('m-cep').value.replace(/\D/g, '');
+    $('m-cep').addEventListener('input', async () => {
+      const d = digitos();
+      $('m-cidade').value = '';
+      if (d.length !== 8) return;
+      erro('');
+      try {
+        const r = await fetch(`${BASE}/api/envios/cep/${d}`, { credentials: 'same-origin' });
+        const j = await r.json();
+        if (!$('m-cep') || digitos() !== d) return;   // fechou o modal ou corrigiu o CEP antes da resposta
+        if (!r.ok) throw new Error(r.status === 429 ? j.erro : 'CEP não encontrado');
+        if (j.logradouro) $('m-logradouro').value = j.logradouro;
+        if (j.bairro) $('m-bairro').value = j.bairro;
+        $('m-cidade').value = `${j.cidade}/${j.uf}`;
+        $(j.logradouro ? 'm-numero' : 'm-logradouro').focus();
+      } catch (e) {
+        if ($('m-cep') && digitos() === d) erro(e.message || 'CEP não encontrado');
+      }
+    });
+    // Região nova com outro dia de visita (16/11): o servidor devolve 409 e o
+    // cliente escolhe outra data ou mantém a dele (envio dedicado).
+    const enviar = async manter => {
+      const v = c => $('m-' + c).value.trim();
+      if (digitos().length !== 8 || !$('m-cidade').value) { erro('CEP não encontrado'); return; }
+      if (!v('logradouro')) { erro('Informe a rua'); return; }
+      if (!v('numero')) { erro('Informe o número'); return; }
+      const corpo = { tipo: 'alterar_endereco', endereco: { cep: digitos(), logradouro: v('logradouro'),
+        numero: v('numero'), bairro: v('bairro'), complemento: v('complemento') } };
+      const pedindoData = $('m-dia-fixo').style.display !== 'none';
+      if (manter) corpo.aceita_fora_dia_fixo = true;
+      else if (pedindoData) {
+        if (!$('m-data').value) { erro('Informe a nova data de entrega'); return; }
+        corpo.agendamento_data = $('m-data').value;
+      }
+      $('m-ok').disabled = $('m-manter').disabled = true;
+      try {
+        const j = await enviarAcao(x.id, corpo);
+        fecharModal();
+        mensagem(j.mensagem, j.aplicado ? 'ok' : 'info');
+        carregar();
+      } catch (e) {
+        const f = e.dados && e.dados.fora_dia_fixo;
+        if (f) {
+          $('m-dia-fixo-txt').textContent = `A entrega está agendada para ${f.data_br}, mas no endereço novo (${f.regiao}) atendemos só: ${f.dias}. Escolha outra data ou mantenha a sua: mantendo, o pedido vai como envio dedicado, com valor calculado pela tabela de frete dedicado da Fresh Log.`;
+          if (!pedindoData) $('m-data').value = f.sugestao || '';
+          $('m-dia-fixo').style.display = 'block';
+          $('m-manter').style.display = '';
+          $('m-ok').textContent = 'Alterar endereço e data';
+          erro('');
+        } else erro(e.message);
+        $('m-ok').disabled = $('m-manter').disabled = false;
+      }
+    };
+    $('m-ok').addEventListener('click', () => enviar(false));
+    $('m-manter').addEventListener('click', () => enviar(true));
+    $('m-cep').focus();
+  }
+
   function abrirAcao(tipo, id) {
+    if (tipo === 'reenviar-todos') { reenviarTodos(); return; }
     const x = dados.envios.find(e => e.id === Number(id));
     if (!x) return;
-    if (tipo === 'xml') { window.open(comEmpresa(`${BASE}/api/envios/${id}/xml`), '_blank'); return; }
+    if (tipo === 'alterar_endereco') { alterarEndereco(x); return; }
+    if (tipo === 'xml') { window.open(`${BASE}/api/envios/${id}/xml`, '_blank'); return; }
+    if (tipo === 'documentos') { docNovos = []; abrirDocumentos(x.id); return; }
     const cab = `<p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}</p>`;
     const textos = {
       cancelar: ['Cancelar pedido', x.status === 'NA_FILA' || x.status === 'ERRO' ? 'O pedido ainda não foi criado na Stokki — será cancelado na hora.' : 'O pedido já existe na Stokki. A Fresh Log vai cancelá-lo e você acompanha por aqui.'],
       em_espera: ['Tirar da rota', 'O pedido fica em espera (não sai pra entrega) até você pedir pra reenviar. A Fresh Log aplica e avisa aqui.'],
       reenviar: ['Reenviar pedido', 'O pedido volta pra fila e será criado na Stokki de novo.'],
+      retomar: ['Retomar entrega', 'Escolha como o pedido volta pra rota.'],
       reagendar: [x.agendamento_pendente ? 'Definir agendamento' : 'Reagendar entrega', 'Informe a data combinada com o destinatário e a janela de horário.'],
     }[tipo];
     modal(`<h3>${textos[0]}</h3>${cab}<p>${textos[1]}</p>
       ${tipo === 'reagendar' ? `<label>Data <input type="date" id="m-data" min="${new Date().toISOString().slice(0, 10)}" value="${esc(x.agendamento_data || '')}"></label>
         <div style="display:flex;gap:8px;"><label style="flex:1">Das <input type="time" id="m-ini" value="${esc(x.agendamento_hora_inicio || x.horario_inicio || '08:00')}"></label><label style="flex:1">Às <input type="time" id="m-fim" value="${esc(x.agendamento_hora_fim || x.horario_fim || '12:00')}"></label></div>` : ''}
+      ${tipo === 'retomar' ? `<label class="retomar-opcao"><input type="radio" name="m-modo" value="proxima_rota" checked> <span>Próxima rota da sua região</span></label>
+        <label class="retomar-opcao"><input type="radio" name="m-modo" value="agendamento"> <span>Agendar data e horário</span></label>
+        <div id="m-agenda" style="display:none">
+          <label>Data <input type="date" id="m-data" min="${new Date().toISOString().slice(0, 10)}" value=""></label>
+          <div style="display:flex;gap:8px;"><label style="flex:1">Das <input type="time" id="m-ini" value="${esc(x.horario_inicio || '08:00')}"></label><label style="flex:1">Às <input type="time" id="m-fim" value="${esc(x.horario_fim || '12:00')}"></label></div>
+        </div>` : ''}
       ${tipo === 'cancelar' || tipo === 'em_espera' ? '<label>Motivo (opcional) <textarea id="m-motivo" maxlength="300"></textarea></label>' : ''}
       <div class="msg" id="m-msg"></div>
       <div class="pe"><button type="button" class="botao-linha" data-fechar>Voltar</button><button type="button" class="botao" id="m-ok">${textos[0]}</button></div>`);
+    if (tipo === 'retomar') {
+      document.querySelectorAll('input[name="m-modo"]').forEach(r => r.addEventListener('change', () => {
+        const ag = document.querySelector('input[name="m-modo"]:checked').value === 'agendamento';
+        $('m-agenda').style.display = ag ? 'block' : 'none';
+      }));
+    }
     $('m-ok').addEventListener('click', async () => {
       const corpo = { tipo };
+      if (tipo === 'retomar') {
+        corpo.modo = document.querySelector('input[name="m-modo"]:checked').value;
+        if (corpo.modo === 'agendamento') { corpo.data = $('m-data').value; corpo.hora_inicio = $('m-ini').value; corpo.hora_fim = $('m-fim').value; }
+      }
       if (tipo === 'reagendar') { corpo.data = $('m-data').value; corpo.hora_inicio = $('m-ini').value; corpo.hora_fim = $('m-fim').value; }
       if ($('m-motivo')) corpo.motivo = $('m-motivo').value;
       $('m-ok').disabled = true;
@@ -466,22 +1108,22 @@
   // ── Eventos ────────────────────────────────────────────────────────────────
   const zona = $('zona');
   $('btn-modelo').addEventListener('click', e => e.stopPropagation());
+  $('btn-indicar').addEventListener('click', () => { pedirIndicacao = true; $('arquivos').click(); });
+  $('arquivos').addEventListener('cancel', () => { pedirIndicacao = false; });
   $('arquivos').addEventListener('change', e => analisar(e.target.files));
   ['dragenter', 'dragover'].forEach(ev => zona.addEventListener(ev, e => { e.preventDefault(); zona.classList.add('sobre'); }));
   ['dragleave', 'drop'].forEach(ev => zona.addEventListener(ev, e => { e.preventDefault(); zona.classList.remove('sobre'); }));
   zona.addEventListener('drop', e => analisar(e.dataTransfer.files));
-  $('btn-confirmar').addEventListener('click', confirmar);
+  $('btn-confirmar').addEventListener('click', () => confirmar());
+  $('previa-tabela').addEventListener('click', acaoAnexoPrevia);
+  $('previa-anexos').addEventListener('click', acaoAnexoPrevia);
+  $('previa-anexos').addEventListener('change', e => {
+    const a = previa && e.target.dataset.anxSel && previa.anexos.find(v => v.token === e.target.dataset.anxSel);
+    if (!a || !e.target.value) return;
+    Object.assign(a, { pedido: e.target.value, manual: true });
+    renderAnexos();
+  });
   $('btn-limpar').addEventListener('click', () => { previa = null; $('previa').classList.remove('aberta'); mensagem('', ''); });
-  if ($('env-empresa')) {
-    const trocarEmpresa = () => {
-      empresaEnvio = $('env-empresa').value;
-      previa = null; $('previa').classList.remove('aberta'); mensagem('', '');   // a prévia era da outra empresa
-      $('btn-modelo').href = comEmpresa(`${BASE}/api/envios/modelo-planilha`);
-      if (vista === 'envios') carregar();
-    };
-    $('env-empresa').addEventListener('change', trocarEmpresa);
-    $('btn-modelo').href = comEmpresa(`${BASE}/api/envios/modelo-planilha`);
-  }
   $('env-abas').addEventListener('click', e => { const b = e.target.closest('[data-aba]'); if (!b) return; aba = b.dataset.aba; render(); });
   $('env-tiles').addEventListener('click', e => { const t = e.target.closest('[data-aba]'); if (!t) return; aba = t.dataset.aba; render(); });
   $('env-busca').addEventListener('input', e => { busca = e.target.value; renderTabela(); });
@@ -505,7 +1147,7 @@
   // badge na aba mesmo sem abrir a vista
   fetch(`${BASE}/api/envios`, { credentials: 'same-origin' }).then(r => r.ok ? r.json() : null).then(j => {
     if (!j) return;
-    if (!dados) { dados = j; const n = j.resumo.erros + j.resumo.agendamento_pendente; $('vistas-badge').textContent = n; $('vistas-badge').classList.toggle('on', n > 0); }
+    if (!dados) { dados = j; const n = j.resumo.erros + j.resumo.agendamento_pendente + (j.resumo.em_espera || 0); $('vistas-badge').textContent = n; $('vistas-badge').classList.toggle('on', n > 0); }
   }).catch(() => {});
   mostrar(secao.dataset.abaInicial === 'envios' ? 'envios' : 'acompanhamento');
 })();

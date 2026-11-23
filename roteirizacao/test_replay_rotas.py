@@ -5,7 +5,9 @@ Rodar (da raiz): py -3.11 -m unittest roteirizacao.test_replay_rotas -v"""
 import sqlite3
 import sys
 import unittest
+from datetime import date
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
@@ -52,6 +54,91 @@ class LeituraTestCase(unittest.TestCase):
     def test_dia_sem_rotas(self):
         servicos, rotas = rr.servicos_do_dia(_banco(), "2026-09-18", {})
         self.assertEqual((servicos, rotas), ([], []))
+
+
+class HorasDaReceptoraTestCase(unittest.TestCase):
+    """Receptora de rota fraca com 101-110 caixas continua Fiorino (Hugo,
+    03/10): o replay estima as horas dela (exige_orcamento_horas a trataria
+    como veiculo grande e devolveria 0, escondendo rota acima de 10h30)."""
+
+    def test_receptora_acima_de_100_caixas_tem_horas(self):
+        rota = [{"id": i, "latitude": -23.5, "longitude": -46.6 + 0.01 * i, "dimension_3": 35,
+                 "address": f"Rua {i}", "_nivel_dificuldade": 1} for i in range(3)]  # 105 caixas
+        with mock.patch.object(rr.rd, "estimar_tempo_rota", return_value=7.0):
+            self.assertEqual(rr._horas([rota], {id(rota)}), [7.0])
+            self.assertEqual(rr._horas([rota]), [0.0])
+
+
+class CorteDaRotaFracaTestCase(unittest.TestCase):
+    """O replay conta rota fraca com o MESMO corte da roteirizacao
+    (rotas_fracas.py), nao com o padrao de metricas_plano."""
+
+    def test_metricas_usam_o_corte_de_rotas_fracas(self):
+        import criar_rotas_diarias as crd
+        import rotas_fracas
+        rota = [{"id": 1, "latitude": -23.5, "longitude": -46.6, "dimension_3": 1, "_nivel_dificuldade": 1}]
+        with mock.patch.object(rotas_fracas, "PARADAS_ROTA_FRACA", 3),              mock.patch.object(rotas_fracas, "CAIXAS_ROTA_FRACA", 11),              mock.patch.object(crd, "planejar_sublotes", return_value=[{"sublotes": [rota]}]),              mock.patch.object(rr.mp, "metricas_plano", return_value={}) as metricas:
+            rr.rodar_dia(rota, [rota], (-23.49, -46.66), date(2026, 9, 17))
+        self.assertEqual(metricas.call_count, 2)
+        for chamada in metricas.call_args_list:
+            self.assertEqual((chamada.kwargs["paradas_fraca"], chamada.kwargs["caixas_fraca"]), (3, 11))
+            self.assertEqual(chamada.kwargs["horas_fraca"], rotas_fracas.HORAS_ROTA_FRACA)
+
+
+class DiasFixosV2TestCase(unittest.TestCase):
+    ABCD = "Rua A 1, Centro, Santo André - SP, 09000-000, Brasil"
+    TRANSFRIOS = "Estrada Francisco Hengles, 591, Potuvera, Itapecerica da Serra - SP, 06885-160, Brasil"
+    CAMPINAS = "Rua B 2, Centro, Campinas - SP, 13000-000, Brasil"
+    SP = "Rua C 3, Centro, Sao Paulo - SP, 01000-000, Brasil"
+
+    def test_move_so_quem_caiu_no_dia_pela_regra_antiga(self):
+        seg, ter, qua, qui, sex = (date(2026, 9, 28), date(2026, 9, 29), date(2026, 9, 30),
+                                   date(2026, 10, 1), date(2026, 10, 2))
+        s = lambda i, endereco: {"id": i, "address": endereco}  # noqa: E731
+        mapa = {seg: [s(1, self.ABCD), s(6, self.TRANSFRIOS)],
+                qua: [s(2, self.ABCD), s(3, self.CAMPINAS), s(4, self.SP)],
+                qui: [s(5, self.CAMPINAS)],
+                sex: [s(7, self.ABCD)]}
+        novo, movidos = rr.redistribuir_dias_fixos_v2(mapa)
+        ids = lambda d: sorted(x["id"] for x in novo.get(d, []))  # noqa: E731
+        self.assertEqual(movidos, 3)
+        self.assertEqual(ids(seg), [1])
+        self.assertEqual(ids(ter), [6])              # Transfrios segunda -> terça
+        self.assertEqual(ids(qua), [3, 4])
+        self.assertEqual(ids(qui), [2, 5])           # ABCD quarta -> quinta; Campinas quinta (embarcador) fica
+        self.assertEqual(ids(sex), [])
+        self.assertEqual(ids(date(2026, 10, 5)), [7])  # ABCD sexta -> segunda
+
+
+
+class HorariosDoPlanoTestCase(unittest.TestCase):
+    """horarios_do_plano e resumo_tarde (metricas do replay, 23/10)."""
+
+    def test_resumo_tarde_media_e_maximo(self):
+        r = rr.resumo_tarde({date(2026, 10, 1): (2, ["a", "b", "c"]), date(2026, 10, 2): (0, []),
+                             date(2026, 10, 5): (1, ["d"])})
+        self.assertEqual((r["dias"], r["dias_com_tarde"], r["pedidos_total"], r["pedidos_max"]), (3, 2, 4, 3))
+        self.assertAlmostEqual(r["pedidos_media"], 4 / 3)
+        self.assertEqual((r["rotas_total"], r["rotas_max"]), (3, 2))
+        self.assertAlmostEqual(r["rotas_media"], 1.0)
+
+    def test_histograma_paradas(self):
+        self.assertEqual(rr.histograma_paradas([1, 1, 2, 5, 12, 40]),
+                         "1: 2 | 2: 1 | 3: 0 | 4-6: 1 | 7-10: 0 | 11-15: 1 | 16+: 1")
+
+    def test_resumo_tarde_vazio(self):
+        self.assertEqual(rr.resumo_tarde({})["pedidos_max"], 0)
+
+    def test_espera_conta_da_saida_da_propria_rota(self):
+        base = (-23.50, -46.60)
+        servico = {"latitude": base[0], "longitude": base[1], "_janela_inicio": "13:00", "_janela_fim": "17:00",
+                   "_janela_fonte": "agendamento"}
+        coords = lambda s: (s["latitude"], s["longitude"])
+        manha = rr.horarios_do_plano([([servico], None)], base, coords)
+        tarde = rr.horarios_do_plano([([servico], 13.0)], base, coords)
+        self.assertGreater(manha["espera_h"], 5.0)
+        self.assertAlmostEqual(tarde["espera_h"], 0.0)
+        self.assertAlmostEqual(tarde["atraso_evitavel_h"], 0.0)
 
 
 if __name__ == "__main__":

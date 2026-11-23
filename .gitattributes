@@ -1,0 +1,2 @@
+# Scripts shell sempre com LF: tunel.sh roda no Git Bash do Windows e CRLF quebra o bash
+*.sh text eol=lf

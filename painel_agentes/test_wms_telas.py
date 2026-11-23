@@ -90,7 +90,7 @@ class TestBotaoLiberarReserva(unittest.TestCase):
     botao, o motivo e obrigatorio e o POST vai pra rota certa."""
 
     def test_botao_so_aparece_pra_equipe_interna(self):
-        self.assertIn("session.get('nivel_acesso') in ('total', 'operador')", _ESTOQUE)
+        self.assertIn("g.nivel_acesso in ('total', 'operador')", _ESTOQUE)
 
     def test_pede_motivo_e_nao_manda_vazio(self):
         self.assertIn("prompt(", _ESTOQUE)
@@ -134,6 +134,45 @@ class TestUnidadeDoItemDoRecebimento(unittest.TestCase):
         itens = wms_pedidos.itens_do_recebimento(self.conn, self.rid)
         self.assertIsNone(itens[1]["produto_id"])
         self.assertEqual(itens[1]["unidade"], "UN")
+
+
+class TestCaixasNaTela(unittest.TestCase):
+    """Task 8: caixa com serial na tela do galpao (inventario, receber, consultar)."""
+
+    def test_aba_inventario_existe(self):
+        self.assertIn('data-aba="inventario"', _WMS)
+
+    def test_ativacao_chama_a_rota_da_caixa(self):
+        self.assertIn("'/caixas/' + ", _WMS)
+        self.assertIn("/ativar'", _WMS)
+
+    def test_receber_respeita_usa_caixas(self):
+        self.assertIn("it.usa_caixas", _WMS)
+
+    def test_fila_offline_reenvia_ativacao(self):
+        self.assertIn("ativar_caixa", _WMS)
+
+    def test_consultar_trata_caixa(self):
+        self.assertIn("r.tipo === 'caixa'", _WMS)
+        self.assertIn("caixa_inexistente", _WMS)
+
+    def test_fila_nao_reenvia_recusado_pra_sempre(self):
+        # recusa do servidor tira da fila; so falha de rede mantem
+        self.assertIn("filaRecusados", _WMS)
+
+    def test_separar_aceita_etiqueta_de_caixa(self):
+        self.assertIn("function caixaComoLote", _WMS)
+        self.assertIn("r = caixaComoLote(r);", _WMS)
+
+    def test_mover_reusa_o_uuid_no_retry(self):
+        self.assertIn("ctx.mover.uuid", _WMS)
+
+    def test_produto_fora_do_piloto_nao_pede_etiqueta(self):
+        self.assertIn("Produto fora do piloto: use Movimentos.", _WMS)
+
+    def test_inventario_respeita_a_chave_caixas_ativo(self):
+        self.assertIn("BOOT.caixas_ativo", _WMS)
+        self.assertIn("Caixas desligadas", _WMS)
 
 
 if __name__ == "__main__":

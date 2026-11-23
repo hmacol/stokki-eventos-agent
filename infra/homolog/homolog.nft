@@ -1,0 +1,33 @@
+# Homologacao do legado: saida do usuario homolog (copia em /etc/nftables.d/homolog.nft,
+# carregada pelo homolog-nft.service). Tabela propria: nao toca nas cadeias do Docker.
+# NUNCA "flush ruleset" aqui.
+# Idempotente: declara a tabela (cria se faltar), apaga e define de novo, tudo numa
+# transacao do nft -f; rodar de novo nunca duplica regra.
+#
+# Vale so para processos do usuario homolog: respostas ao Caddy (established), DNS so
+# para o resolvedor local (127.0.0.53) e o freshhub de producao em 127.0.0.1:8100 passam.
+# Caem: o resto do loopback (OpenWA, Evolution, freshhub hml, Postgres), qualquer endereco
+# da propria maquina (IP publico, gateways das redes do Docker), redes privadas e
+# link-local, DNS para fora e as portas de e-mail.
+
+table inet homolog
+delete table inet homolog
+
+table inet homolog {
+	chain saida {
+		type filter hook output priority 0;
+		meta skuid != "homolog" accept
+		ct state established,related accept
+		ip daddr 127.0.0.53 udp dport 53 accept
+		ip daddr 127.0.0.53 tcp dport 53 accept
+		ip daddr 127.0.0.1 tcp dport 8100 accept
+		fib daddr type local drop
+		ip daddr 127.0.0.0/8 drop
+		ip6 daddr ::1 drop
+		ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } drop
+		ip6 daddr { fc00::/7, fe80::/10 } drop
+		udp dport 53 drop
+		tcp dport 53 drop
+		tcp dport { 25, 143, 465, 587, 993 } drop
+	}
+}

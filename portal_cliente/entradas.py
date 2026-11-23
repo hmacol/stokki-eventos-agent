@@ -257,13 +257,32 @@ _MENSAGEM_CABECALHO_ENTRADA = ("Não achei o cabeçalho da planilha -- use o mod
                                "e mantenha a primeira linha com os nomes das colunas.")
 
 
+def _achar_cabecalho_entrada(linhas: list[list]) -> tuple[int, dict[int, str]]:
+    """Cabecalho da planilha de entrada: nas 15 primeiras linhas, a que mais
+    parece (>= 3 colunas conhecidas). Devolve (indice da linha, {coluna: chave}).
+    Propria daqui desde o merge de 22/11: a de Envio (ep._achar_cabecalho) passou
+    a devolver {chave: coluna} e a aceitar o mapa guardado do cliente."""
+    melhor = (0, -1, {})
+    for i, linha in enumerate(linhas[:15]):
+        mapa = {}
+        for j, v in enumerate(linha):
+            chave = _APELIDOS_ENTRADA.get(ep._normalizar_texto(v))
+            if chave and chave not in mapa.values():
+                mapa[j] = chave
+        if len(mapa) > melhor[0]:
+            melhor = (len(mapa), i, mapa)
+    if melhor[0] < 3:
+        raise ErroEnvio(_MENSAGEM_CABECALHO_ENTRADA)
+    return melhor[1], melhor[2]
+
+
 def ler_planilha_entrada(conteudo: bytes, nome: str, cnpj_embarcador: str) -> tuple[list[dict], list[dict]]:
     """(remessas, rejeitados). Cada remessa tem o MESMO formato do dict de
     ler_nfe_entrada (origem, referencia, data_prevista, itens_lista, ...)."""
     linhas = ep._abrir_planilha(conteudo, nome)
     if not linhas:
         raise ErroEnvio(f"{nome}: a planilha está vazia.")
-    i_cab, mapa = ep._achar_cabecalho(linhas, _APELIDOS_ENTRADA, _MENSAGEM_CABECALHO_ENTRADA)
+    i_cab, mapa = _achar_cabecalho_entrada(linhas)
     faltando = [c[1] for c in COLUNAS_PLANILHA_ENTRADA if c[2] and c[0] not in mapa.values()]
     if faltando:
         raise ErroEnvio(f"{nome}: faltam colunas obrigatórias no cabeçalho: {', '.join(faltando)}. "

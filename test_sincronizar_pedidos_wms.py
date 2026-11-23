@@ -207,6 +207,28 @@ class TestRodar(BaseRotina):
         chamadas_show = [c for c in sess.chamadas if "/show/" in c[0]]
         self.assertEqual(len(chamadas_show), 1)
 
+    def test_status_com_mais_que_uma_pagina_e_lido_inteiro(self):
+        # 28/10: o piloto tinha mais de 50 em "Waiting for Carrier" e a
+        # rodada lia sempre a mesma primeira pagina -- o resto nunca entrava.
+        linhas = _linhas_vazias()
+        linhas["Waiting for Carrier"] = [_linha(40100 + i, PILOTO_ID) for i in range(7)]
+        sess = SessaoFalsa(linhas, {})
+
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=3, modo_teste=True)
+
+        self.assertEqual(res["lidos"], 7)
+        self.assertEqual(res["do_piloto"], 7)
+
+    def test_teto_de_paginas_por_status(self):
+        linhas = _linhas_vazias()
+        linhas["Waiting for Carrier"] = [_linha(40200 + i, PILOTO_ID) for i in range(10)]
+        sess = SessaoFalsa(linhas, {})
+
+        with mock.patch.object(mod, "MAX_PAGINAS_POR_STATUS", 2):
+            res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=3, modo_teste=True)
+
+        self.assertEqual(res["lidos"], 6)
+
     def test_linha_de_outro_embarcador_e_ignorada_mesmo_se_vier_na_listagem(self):
         # Rede de seguranca (correcao 2): simula uma Stokki que, apesar do
         # filtro client= no request, devolvesse tambem uma linha de outro
@@ -915,7 +937,8 @@ class TestTravaStokki(unittest.TestCase):
 
         self.assertEqual(codigo, 0)
         adquirir.assert_called_once_with(mod.DONO_TRAVA, ttl_segundos=mod.TRAVA_TTL_SEGUNDOS,
-                                          esperar_segundos=mod.TRAVA_ESPERA_SEGUNDOS)
+                                          esperar_segundos=mod.TRAVA_ESPERA_SEGUNDOS,
+                                          alternativa=True)
         conectar.assert_not_called()
         sessao_cls.assert_not_called()
         liberar.assert_not_called()  # nunca adquiriu -- nao ha o que liberar
@@ -966,6 +989,34 @@ class TestTravaStokki(unittest.TestCase):
 
         liberar.assert_called_once_with(mod.DONO_TRAVA)
 
+
+class TestVariosPilotos(unittest.TestCase):
+    """17/11: wms.pilotos no config -- a rodada passa por todos, um por vez, na mesma trava."""
+
+    CFG = {"wms": {"pilotos": [{"id": 48, "nome": "Maria Dolores"}, {"id": 22, "nome": "Mombak", "caixas": True}]}}
+
+    def _main(self, argv, **rodar_kw):
+        with mock.patch("stokki.sessao_uso.adquirir", return_value=True),              mock.patch("stokki.sessao_uso.liberar") as liberar,              mock.patch("sincronizar_pedidos_wms._carregar_config", return_value=self.CFG),              mock.patch("sincronizar_pedidos_wms.wms_pedidos.conectar", return_value=mock.Mock()),              mock.patch("sincronizar_pedidos_wms.StokkiSession"),              mock.patch("sincronizar_pedidos_wms.rodar", **rodar_kw) as rodar_mock:
+            try:
+                codigo = mod.main(argv)
+            except RuntimeError as e:
+                codigo = e
+        liberar.assert_called_once_with(mod.DONO_TRAVA)
+        return codigo, [(c.args[3], c.args[2]) for c in rodar_mock.call_args_list]
+
+    def test_roda_um_por_piloto_na_ordem_do_config(self):
+        codigo, chamadas = self._main(["--limite", "5"], return_value={"lidos": 0})
+        self.assertEqual(codigo, 0)
+        self.assertEqual(chamadas, [("48", "MARIA DOLORES"), ("22", "MOMBAK")])
+
+    def test_embarcador_id_na_linha_de_comando_roda_so_aquele(self):
+        codigo, chamadas = self._main(["--embarcador-id", "22", "--embarcador", "mombak"], return_value={})
+        self.assertEqual((codigo, chamadas), (0, [("22", "MOMBAK")]))
+
+    def test_piloto_que_falha_nao_impede_o_seguinte_e_a_rodada_falha_no_fim(self):
+        codigo, chamadas = self._main([], side_effect=[RuntimeError("bug"), {"lidos": 0}])
+        self.assertIsInstance(codigo, RuntimeError)
+        self.assertEqual(len(chamadas), 2)
 
 if __name__ == "__main__":
     unittest.main()

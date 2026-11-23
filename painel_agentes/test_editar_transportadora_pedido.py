@@ -108,7 +108,7 @@ class EditarTransportadoraPedidosTestCase(unittest.TestCase):
         resultado = planejamento_rotas.editar_transportadora_pedidos(self.itens, "KANEJO")
 
         self.assertFalse(resultado["ok"])
-        self.assertIn("BD_TRANSPORTADORAS", resultado["erro"])
+        self.assertIn("cadastro de transportadoras", resultado["erro"])
         self.mock_vuupt_cls.assert_not_called()
 
     # -- efeito principal: endereco do galpao gravado como no "Editar endereco" --

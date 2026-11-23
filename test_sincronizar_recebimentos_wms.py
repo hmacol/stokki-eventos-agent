@@ -355,6 +355,44 @@ class TestRodar(BaseRotina):
         recebimento = self.conn.execute("SELECT * FROM wms_recebimentos WHERE id_stokki = 2483").fetchone()
         self.assertIsNone(recebimento)
 
+    def test_aguardando_recebimento_entra_com_a_quantidade_esperada(self):
+        # 22/11 (PE-2659 da OIE): a mercadoria chegou e quem recebe e o NOSSO app. A Stokki
+        # ainda nao tem "Quantidade total recebida"; a entrada esperada nasce da "Quantidade".
+        sem_recebida = _HTML_ITENS.replace("<td>4</td><td></td>\n    </tr>\n  </tbody>\n</table>\n\"\"\"", "") \
+            .replace("<td>4</td><td></td>", "<td></td><td></td>")
+        self.assertNotEqual(sem_recebida, _HTML_ITENS)
+        for situacao, gravados in (("Aguardando recebimento", 1), ("Em transito", 0), ("Recebimento iniciado", 0)):
+            with self.subTest(situacao=situacao):
+                self.conn.execute("DELETE FROM wms_recebimento_itens")
+                self.conn.execute("DELETE FROM wms_recebimentos")
+                self.conn.commit()
+                sess = SessaoFalsa([_linha(2659, PILOTO_ID, situacao=situacao)], {"2659": sem_recebida})
+                res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+                self.assertEqual(res["gravados"], gravados)
+                qtds = [r[0] for r in self.conn.execute("SELECT qtd_embalagem FROM wms_recebimento_itens").fetchall()]
+                self.assertEqual(qtds, [4.0] if gravados else [])
+
+    def test_item_em_un_de_produto_em_un_ja_vem_em_unidades(self):
+        # 22/11: recebimento nao traz EAN; a coluna "unidade" da Stokki resolve o caso UN x UN
+        for pid, sku, unidade in ((50, "TST-UN", "UN"), (51, "TST-CX", "CX")):
+            self.conn.execute(
+                "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, embarcador_id, qtd_por_caixa, "
+                "unidade, atualizado_em) VALUES (?, ?, ?, 'P', 'E', ?, 12, ?, '2026-09-21 10:00:00')",
+                (pid, 9000 + pid, sku, PILOTO_ID, unidade))
+        self.conn.commit()
+        itens = [{"linha": 1, "sku": "TST-UN", "ean_linha": "", "descricao": "", "qtd_embalagem": 120.0, "unidade": "UN"},
+                 {"linha": 2, "sku": "TST-CX", "ean_linha": "", "descricao": "", "qtd_embalagem": 5.0, "unidade": "UN"},
+                 {"linha": 3, "sku": "TST-UN", "ean_linha": "", "descricao": "", "qtd_embalagem": 7.0, "unidade": "CX"},
+                 {"linha": 4, "sku": "TST-UN", "ean_linha": "", "descricao": "", "qtd_embalagem": 9.0}]
+        rid = wms_pedidos.registrar_recebimento(self.conn, {"id_stokki": 7001, "codigo": "#PE-7001", "stkkc_id": PILOTO_ID}, itens)
+        self.conn.commit()
+        linhas = self.conn.execute("SELECT linha, produto_id, qtd_un, motivo_pendencia <> '' FROM wms_recebimento_itens "
+                                   "WHERE recebimento_id = ? ORDER BY linha", (rid,)).fetchall()
+        self.assertEqual([tuple(l) for l in linhas], [(1, 50, 120.0, 0), (2, 51, None, 1), (3, 50, None, 1), (4, 50, None, 1)])
+        # sem o embarcador no recebimento, nada muda
+        rid2 = wms_pedidos.registrar_recebimento(self.conn, {"id_stokki": 7002, "codigo": "#PE-7002"}, itens[:1])
+        self.assertIsNone(self.conn.execute("SELECT qtd_un FROM wms_recebimento_itens WHERE recebimento_id = ?", (rid2,)).fetchone()[0])
+
     def test_recebido_sem_tabela_de_itens_conta_como_erro_mas_nao_derruba_a_rodada(self):
         # sem a tabela de itens na pagina (formato mudou/pagina quebrada
         # de verdade) -- vira erro, e mesmo assim tem que aguentar sem
@@ -479,7 +517,8 @@ class TestTravaStokki(unittest.TestCase):
 
         self.assertEqual(codigo, 0)
         adquirir.assert_called_once_with(mod.DONO_TRAVA, ttl_segundos=mod.TRAVA_TTL_SEGUNDOS,
-                                          esperar_segundos=mod.TRAVA_ESPERA_SEGUNDOS)
+                                          esperar_segundos=mod.TRAVA_ESPERA_SEGUNDOS,
+                                          alternativa=True)
         conectar.assert_not_called()
         sessao_cls.assert_not_called()
         liberar.assert_not_called()  # nunca adquiriu -- nao ha o que liberar
@@ -524,6 +563,34 @@ class TestTravaStokki(unittest.TestCase):
 
         liberar.assert_called_once_with(mod.DONO_TRAVA)
 
+
+class TestVariosPilotos(unittest.TestCase):
+    """17/11: wms.pilotos no config -- a rodada passa por todos, um por vez, na mesma trava."""
+
+    CFG = {"wms": {"pilotos": [{"id": 48, "nome": "Maria Dolores"}, {"id": 22, "nome": "Mombak", "caixas": True}]}}
+
+    def _main(self, argv, **rodar_kw):
+        with mock.patch("stokki.sessao_uso.adquirir", return_value=True),              mock.patch("stokki.sessao_uso.liberar") as liberar,              mock.patch("sincronizar_recebimentos_wms._carregar_config", return_value=self.CFG),              mock.patch("sincronizar_recebimentos_wms.wms_pedidos.conectar", return_value=mock.Mock()),              mock.patch("sincronizar_recebimentos_wms.StokkiSession"),              mock.patch("sincronizar_recebimentos_wms.rodar", **rodar_kw) as rodar_mock:
+            try:
+                codigo = mod.main(argv)
+            except RuntimeError as e:
+                codigo = e
+        liberar.assert_called_once_with(mod.DONO_TRAVA)
+        return codigo, [(c.args[3], c.args[2]) for c in rodar_mock.call_args_list]
+
+    def test_roda_um_por_piloto_na_ordem_do_config(self):
+        codigo, chamadas = self._main(["--limite", "5"], return_value={"lidos": 0})
+        self.assertEqual(codigo, 0)
+        self.assertEqual(chamadas, [("48", "MARIA DOLORES"), ("22", "MOMBAK")])
+
+    def test_embarcador_id_na_linha_de_comando_roda_so_aquele(self):
+        codigo, chamadas = self._main(["--embarcador-id", "22", "--embarcador", "mombak"], return_value={})
+        self.assertEqual((codigo, chamadas), (0, [("22", "MOMBAK")]))
+
+    def test_piloto_que_falha_nao_impede_o_seguinte_e_a_rodada_falha_no_fim(self):
+        codigo, chamadas = self._main([], side_effect=[RuntimeError("bug"), {"lidos": 0}])
+        self.assertIsInstance(codigo, RuntimeError)
+        self.assertEqual(len(chamadas), 2)
 
 if __name__ == "__main__":
     unittest.main()

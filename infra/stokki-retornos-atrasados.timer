@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-retornos-atrasados.service seg-sex 07h00 (feriado o proprio script pula)
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 07:00:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

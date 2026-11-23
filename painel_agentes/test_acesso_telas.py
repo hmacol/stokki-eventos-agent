@@ -1,0 +1,410 @@
+# -*- coding: utf-8 -*-
+"""
+Acesso personalizado por usuario (21/10, acesso_telas.py).
+
+    py -3.11 -m unittest test_acesso_telas   (de dentro de painel_agentes/)
+"""
+import re
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+_AQUI = Path(__file__).parent
+_RAIZ = _AQUI.parent
+for _p in (_RAIZ, _AQUI):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+import importlib.util  # noqa: E402
+_spec = importlib.util.spec_from_file_location("painel_agentes_app", _AQUI / "painel_agentes.py")
+painel_agentes = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = painel_agentes
+_spec.loader.exec_module(painel_agentes)
+import acesso_telas  # noqa: E402
+
+# Rotas sem login de painel (ou so do total de verdade) -- fora do catalogo de proposito.
+FORA_DO_CATALOGO = {"static", "login", "logout", "api_romaneios_pendentes", "api_romaneio_pdf",
+                    "wms_manifest", "wms_service_worker", "acessos", "api_acessos", "api_acessos_novo",
+                    "api_acessos_senha", "api_acessos_ativo", "api_acessos_derrubar_sessoes", "trocar_senha",
+                    "galpao_3d", "api_galpao_3d_estado", "notificacoes", "api_notificacoes_tipo",
+                    "api_notificacoes_historico", "api_notificacoes_geral", "api_notificacoes_estado",
+                    "api_notificacoes_excecao", "api_notificacoes_piloto", "api_notificacoes_desfazer",
+                    "api_notificacoes_embarcador", "api_notificacoes_embarcador_salvar",
+                    "api_notificacoes_embarcador_situacao", "api_notificacoes_disparo_dados",
+                    "api_notificacoes_disparo",
+                    "embarcadores_portal", "api_embarcadores_conta",
+                    "homologacao.saude", "homologacao.envios", "homologacao.envio_detalhe"}
+
+
+def _caminho_exemplo(regra: str) -> str:
+    regra = re.sub(r"<int:[^>]+>", "1", regra)
+    regra = re.sub(r"<path:[^>]+>", "a/b.pdf", regra)
+    return re.sub(r"<[^>]+>", "x", regra)
+
+
+class TestCatalogo(unittest.TestCase):
+
+    def test_toda_rota_do_painel_cai_em_alguma_tela(self):
+        soltas = [r.rule for r in painel_agentes.app.url_map.iter_rules()
+                  if r.endpoint not in FORA_DO_CATALOGO
+                  and not acesso_telas.caminho_liberado(_caminho_exemplo(r.rule), acesso_telas.CHAVES)]
+        self.assertEqual(soltas, [], "rota nova precisa entrar numa tela de acesso_telas.TELAS")
+
+    def test_chave_de_cada_tela_e_uma_pagina(self):
+        with painel_agentes.app.test_request_context():
+            for chave in acesso_telas.PAGINAS:
+                painel_agentes.url_for(chave)
+
+    def test_inicio_nao_aprova_embarcador_sem_a_permissao(self):
+        self.assertFalse(acesso_telas.caminho_liberado("/api/cadastro-embarcador/123/aprovar", ["inicio"]))
+        self.assertTrue(acesso_telas.caminho_liberado("/api/cadastro-embarcador/123/aprovar", ["aprovar_embarcadores"]))
+
+    def test_pedidos_tabela_abre_canhotos(self):
+        for caminho in ("/pedidos/canhoto/manual/PS-1.pdf", "/pedidos/canhoto/vuupt/5.pdf",
+                        "/api/pedidos/acao/comprovantes", "/canhotos/5/foto"):
+            self.assertTrue(acesso_telas.caminho_liberado(caminho, ["pedidos_tabela"]), caminho)
+
+    def test_planejamento_valida_foto_em_massa(self):
+        # o modal do Planejamento chama a validacao do lote antes do marcar-entregue (30/10)
+        self.assertTrue(acesso_telas.caminho_liberado("/api/torre/validar-lote-foto", ["planejamento"]))
+        self.assertTrue(acesso_telas.caminho_liberado("/api/torre/marcar-entregue", ["planejamento"]))
+        self.assertFalse(acesso_telas.caminho_liberado("/api/torre/dados", ["planejamento"]))
+
+    def test_galpao_nao_abre_estoque_nem_expedicao_abre_consulta(self):
+        self.assertFalse(acesso_telas.caminho_liberado("/wms/estoque", ["wms"]))
+        self.assertTrue(acesso_telas.caminho_liberado("/wms/etiquetas.pdf", ["wms"]))
+        self.assertFalse(acesso_telas.caminho_liberado("/expedicao/consulta", ["expedicao"]))
+        self.assertTrue(acesso_telas.caminho_liberado("/api/wms/produtos/7/saldo", ["wms_estoque"]))
+        self.assertFalse(acesso_telas.caminho_liberado("/api/wms/movimentos", ["wms_estoque"]))
+
+
+class TestAcessoPersonalizado(unittest.TestCase):
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        base = painel_agentes._carregar_config()
+        self.cfg_painel = {**base["painel_agentes"], "usuario": "u_total", "senha": "s_total", "usuarios_extras": [
+            {"usuario": "ana", "senha": "s_ana", "nivel": "leitura"},
+            {"usuario": "chefe", "senha": "s_chefe", "nivel": "total"}]}
+        cfg = {**base, "painel_agentes": self.cfg_painel}
+        self._patches = [mock.patch.object(painel_agentes, "_carregar_config", return_value=cfg),
+                         mock.patch.object(acesso_telas, "DB_PATH", Path(self._tmp.name) / "t.db")]
+        for p in self._patches:
+            p.start()
+        painel_agentes.app.config["TESTING"] = True
+        conn = acesso_telas.conectar()
+        try:
+            acesso_telas.importar_do_config(conn, self.cfg_painel)
+        finally:
+            conn.close()
+
+    def tearDown(self):
+        for p in self._patches:
+            p.stop()
+        self._tmp.cleanup()
+
+    def _gravar(self, usuario, telas):
+        conn = acesso_telas.conectar()
+        try:
+            acesso_telas.salvar(conn, usuario, telas, "u_total")
+        finally:
+            conn.close()
+
+    def _logar(self, usuario, senha):
+        cliente = painel_agentes.app.test_client()
+        return cliente, cliente.post("/login", data={"usuario": usuario, "senha": senha})
+
+    def test_menu_e_rotas_seguem_a_lista(self):
+        self._gravar("ana", ["index", "historico_tratativas"])
+        cliente, r = self._logar("ana", "s_ana")
+        self.assertEqual(r.headers["Location"], "/historico-tratativas")   # primeira tela na ordem do menu
+        r = cliente.get("/")                                      # tela so do total: liberada completa
+        self.assertEqual(r.status_code, 200)
+        html = r.get_data(as_text=True)
+        nav = html[html.index('aria-label="Telas do painel"'):]
+        nav = nav[:nav.index("</nav>")]
+        self.assertEqual(set(re.findall(r'<span class="rotulo">([^<]+)</span>', nav)),
+                         {"Agentes", "Tratativas", "Aula (vídeos)"})   # a Aula todo login ve (13/11)
+        self.assertIn("personalizado", html)
+        for url in ("/inicio", "/torre", "/acessos", "/historico"):
+            self.assertEqual(cliente.get(url).status_code, 403, url)
+
+    def test_mudanca_vale_sem_novo_login(self):
+        self._gravar("ana", ["index"])
+        cliente, _ = self._logar("ana", "s_ana")
+        self.assertEqual(cliente.get("/").status_code, 200)
+        self._gravar("ana", None)                                 # volta ao nivel leitura do config
+        self.assertEqual(cliente.get("/").status_code, 403)
+
+    def test_inicio_esconde_cadastros_sem_a_permissao(self):
+        dados = {"pendencias": [], "operacao": None, "cadastros_embarcador": [{"cnpj": "1"}]}
+        with mock.patch.object(painel_agentes.pagina_inicial, "montar_dados", side_effect=lambda *a, **k: dict(dados)):
+            self._gravar("ana", ["inicio"])
+            cliente, _ = self._logar("ana", "s_ana")
+            self.assertNotIn("cadastros_embarcador", cliente.get("/api/inicio/dados").get_json())
+            self._gravar("ana", ["inicio", "aprovar_embarcadores"])
+            self.assertIn("cadastros_embarcador", cliente.get("/api/inicio/dados").get_json())
+
+    def test_so_permissao_sem_tela_nao_entra(self):
+        self._gravar("ana", ["aprovar_embarcadores"])
+        _, r = self._logar("ana", "s_ana")
+        self.assertIn("nenhuma tela liberada", r.get_data(as_text=True))
+
+    def test_lista_vazia_nao_entra(self):
+        self._gravar("ana", [])
+        _, r = self._logar("ana", "s_ana")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("nenhuma tela liberada", r.get_data(as_text=True))
+
+    def test_par_fixo_nunca_e_personalizado(self):
+        self.assertIsNone(acesso_telas.telas_do_usuario("u_total"))
+        conn = acesso_telas.conectar()
+        try:
+            with self.assertRaises(ValueError):
+                acesso_telas.salvar(conn, "u_total", ["index"], "chefe")
+        finally:
+            conn.close()
+
+    def test_api_salva_e_nao_deixa_mudar_o_proprio(self):
+        cliente, _ = self._logar("chefe", "s_chefe")
+        hdr = {"Origin": "http://localhost"}
+        r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": ["torre", "consulta"]}, headers=hdr)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(acesso_telas.telas_do_usuario("ana"), ["torre", "consulta"])
+        r = cliente.post("/api/acessos", json={"usuario": "chefe", "telas": ["torre"]}, headers=hdr)
+        self.assertEqual(r.status_code, 400)
+        r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": ["nao_existe"]}, headers=hdr)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(cliente.get("/acessos").status_code, 200)
+
+    def test_personalizado_nao_abre_a_tela_de_acessos(self):
+        self._gravar("chefe", ["index"])
+        cliente, _ = self._logar("chefe", "s_chefe")
+        self.assertEqual(cliente.get("/acessos").status_code, 403)
+        r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": None}, headers={"Origin": "http://localhost"})
+        self.assertEqual(r.status_code, 403)
+        r = cliente.post("/api/acessos/novo", json={"usuario": "zé", "nivel": "total", "senha": "123456"},
+                         headers={"Origin": "http://localhost"})
+        self.assertEqual(r.status_code, 403)
+
+
+class TestCadastroPelaTela(TestAcessoPersonalizado):
+    """Cadastro, nome, nivel e senha pela /acessos (23/10)."""
+
+    def _chefe(self):
+        cliente, _ = self._logar("chefe", "s_chefe")
+        return cliente, {"Origin": "http://localhost"}
+
+    def test_cadastro_com_senha_provisoria_obriga_troca(self):
+        cliente, hdr = self._chefe()
+        r = cliente.post("/api/acessos/novo", json={"usuario": " Maria.Souza ", "nome": "Maria Souza",
+                                                     "nivel": "operador", "senha": "prov123", "equipe": "Logística"},
+                         headers=hdr)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(r.get_json()["usuario"], "maria.souza")
+        maria, r = self._logar("maria.souza", "prov123")
+        self.assertTrue(r.headers["Location"].endswith("/trocar-senha"))
+        self.assertTrue(maria.get("/torre").headers["Location"].endswith("/trocar-senha"))
+        self.assertEqual(maria.get("/api/torre/dados").status_code, 403)
+        r = maria.post("/trocar-senha", data={"nova": "prov123", "repetir": "prov123"}, headers=hdr)
+        self.assertIn("diferente", r.get_data(as_text=True))
+        r = maria.post("/trocar-senha", data={"nova": "minha99", "repetir": "minha99"}, headers=hdr)
+        self.assertEqual(r.status_code, 302)
+        self.assertIn("Maria Souza", maria.get("/torre").get_data(as_text=True))
+        self.assertIsNone(painel_agentes._nivel_das_credenciais("maria.souza", "prov123", self.cfg_painel))
+        self.assertEqual(painel_agentes._nivel_das_credenciais("maria.souza", "minha99", self.cfg_painel), "operador")
+
+    def test_cadastro_recusa_repetido_par_fixo_e_senha_curta(self):
+        cliente, hdr = self._chefe()
+        for corpo in ({"usuario": "ana", "nivel": "leitura", "senha": "123456"},
+                      {"usuario": "u_total", "nivel": "leitura", "senha": "123456"},
+                      {"usuario": "novo", "nivel": "leitura", "senha": "123"},
+                      {"usuario": "novo", "nivel": "admin", "senha": "123456"},
+                      {"usuario": "com espaco", "nivel": "leitura", "senha": "123456"}):
+            self.assertEqual(cliente.post("/api/acessos/novo", json={**corpo, "equipe": "Estoque"}, headers=hdr).status_code,
+                             400, corpo)
+
+    def test_cadastro_exige_equipe_da_lista(self):
+        # Hugo, 25/10: campo Equipe obrigatorio; galpao dividido em Estoque/Separacao/Conferencia
+        cliente, hdr = self._chefe()
+        base = {"usuario": "werlly", "nome": "Werlly", "nivel": "galpao", "senha": "prov123"}
+        self.assertEqual(cliente.post("/api/acessos/novo", json=base, headers=hdr).status_code, 400)
+        self.assertEqual(cliente.post("/api/acessos/novo", json={**base, "equipe": "Galpão"}, headers=hdr).status_code, 400)
+        r = cliente.post("/api/acessos/novo", json={**base, "equipe": "Separação"}, headers=hdr)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        conn = acesso_telas.conectar()
+        try:
+            self.assertEqual(acesso_telas.conta("werlly", conn)["equipe"], "Separação")
+            self.assertEqual([u["equipe"] for u in acesso_telas.listar(conn) if u["usuario"] == "werlly"], ["Separação"])
+        finally:
+            conn.close()
+        self.assertEqual(acesso_telas.EQUIPES[:3], ("Estoque", "Separação", "Conferência"))
+        html = cliente.get("/acessos").get_data(as_text=True)
+        self.assertIn('name="equipe"', html)
+        self.assertIn("Conferência", html)
+
+    def test_editar_grava_equipe_e_exige_quando_muda_nivel(self):
+        cliente, hdr = self._chefe()
+        r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": None, "nome": "Ana", "nivel": "leitura",
+                                               "equipe": "Conferência"}, headers=hdr)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        conn = acesso_telas.conectar()
+        try:
+            self.assertEqual(acesso_telas.conta("ana", conn)["equipe"], "Conferência")
+        finally:
+            conn.close()
+        r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": None, "nome": "Ana", "nivel": "leitura"},
+                         headers=hdr)
+        self.assertEqual(r.status_code, 400)
+        # so telas (sem nivel) continua valendo sem equipe
+        self.assertEqual(cliente.post("/api/acessos", json={"usuario": "ana", "telas": ["index"]}, headers=hdr).status_code, 200)
+
+    def test_portal_do_cliente_liga_sem_mexer_no_nivel(self):
+        cliente, hdr = self._chefe()
+        self.assertIn('name="portal_equipe"', cliente.get("/acessos").get_data(as_text=True))
+        r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": None, "portal_equipe": True}, headers=hdr)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        conn = acesso_telas.conectar()
+        try:
+            c = acesso_telas.conta("ana", conn)
+            self.assertTrue(c["portal_equipe"])
+            self.assertIsNone(c["telas"])            # segue o nivel
+            self.assertEqual([u["portal_equipe"] for u in acesso_telas.listar(conn) if u["usuario"] == "ana"], [True])
+            with self.assertRaises(ValueError):       # ninguem liga o proprio
+                acesso_telas.mudar_portal(conn, "ana", False, "ana")
+        finally:
+            conn.close()
+        cliente.post("/api/acessos", json={"usuario": "ana", "telas": None, "portal_equipe": False}, headers=hdr)
+        self.assertFalse(acesso_telas.conta("ana")["portal_equipe"])
+
+    def test_tabela_antiga_ganha_equipe(self):
+        conn = acesso_telas.conectar()
+        conn.execute("DROP TABLE painel_usuarios")
+        conn.execute("CREATE TABLE painel_usuarios (usuario TEXT PRIMARY KEY, nome TEXT NOT NULL DEFAULT '', "
+                     "senha_hash TEXT NOT NULL, nivel TEXT NOT NULL, trocar_senha INTEGER NOT NULL DEFAULT 0, "
+                     "criado_por TEXT, criado_em TEXT NOT NULL, atualizado_por TEXT, atualizado_em TEXT, "
+                     "versao_senha INTEGER NOT NULL DEFAULT 0, ativo INTEGER NOT NULL DEFAULT 1)")
+        conn.commit()
+        conn.close()
+        conn = acesso_telas.conectar()
+        try:
+            acesso_telas.importar_do_config(conn, self.cfg_painel)
+            self.assertEqual(acesso_telas.conta("ana", conn)["equipe"], "")
+        finally:
+            conn.close()
+
+    def test_mudar_nivel_e_nome_vale_sem_novo_login(self):
+        ana, _ = self._logar("ana", "s_ana")
+        self.assertEqual(ana.get("/").status_code, 403)
+        cliente, hdr = self._chefe()
+        r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": None, "nome": "Ana Lima", "nivel": "total",
+                                               "equipe": "Diretoria"}, headers=hdr)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        r = ana.get("/")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Ana Lima", r.get_data(as_text=True))
+        r = cliente.post("/api/acessos", json={"usuario": "ana", "telas": None, "nome": "", "nivel": "admin",
+                                               "equipe": "Diretoria"}, headers=hdr)
+        self.assertEqual(r.status_code, 400)
+
+    def test_redefinir_senha_de_outro_e_nao_a_propria(self):
+        cliente, hdr = self._chefe()
+        self.assertEqual(cliente.post("/api/acessos/senha", json={"usuario": "ana", "senha": "nova123"},
+                                      headers=hdr).status_code, 200)
+        _, r = self._logar("ana", "nova123")
+        self.assertTrue(r.headers["Location"].endswith("/trocar-senha"))
+        self.assertEqual(cliente.post("/api/acessos/senha", json={"usuario": "chefe", "senha": "nova123"},
+                                      headers=hdr).status_code, 400)
+
+    def test_sessao_aberta_antes_de_redefinir_cai_e_nao_escolhe_a_senha(self):
+        ana_velha, _ = self._logar("ana", "s_ana")
+        self.assertEqual(ana_velha.get("/historico-tratativas").status_code, 200)
+        cliente, hdr = self._chefe()
+        cliente.post("/api/acessos/senha", json={"usuario": "ana", "senha": "nova123"}, headers=hdr)
+        r = ana_velha.post("/trocar-senha", data={"nova": "invasor1", "repetir": "invasor1"}, headers=hdr)
+        self.assertTrue(r.headers["Location"].endswith("/login"))
+        self.assertTrue(ana_velha.get("/historico-tratativas").headers["Location"].startswith("/login"))
+        self.assertIsNone(painel_agentes._nivel_das_credenciais("ana", "invasor1", self.cfg_painel))
+        ana, _ = self._logar("ana", "nova123")
+        self.assertEqual(ana.post("/trocar-senha", data={"nova": "minha99", "repetir": "minha99"},
+                                  headers=hdr).status_code, 302)
+        self.assertEqual(ana.get("/historico-tratativas").status_code, 200)
+
+    def test_troca_com_versao_velha_nao_grava(self):
+        cliente, hdr = self._chefe()
+        cliente.post("/api/acessos/senha", json={"usuario": "ana", "senha": "nova123"}, headers=hdr)
+        conn = acesso_telas.conectar()
+        try:
+            self.assertIsNone(acesso_telas.trocar_senha(conn, "ana", "invasor1", 0))
+            self.assertEqual(acesso_telas.trocar_senha(conn, "ana", "minha99", 1), 2)
+        finally:
+            conn.close()
+
+    def test_desativar_derruba_sessao_e_reativar_devolve(self):
+        ana, _ = self._logar("ana", "s_ana")
+        ana_parada, _ = self._logar("ana", "s_ana")                # sessao que so volta depois de reativar
+        self.assertEqual(ana.get("/historico-tratativas").status_code, 200)
+        cliente, hdr = self._chefe()
+        r = cliente.post("/api/acessos/ativo", json={"usuario": "ana", "ativo": False}, headers=hdr)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertTrue(ana.get("/historico-tratativas").headers["Location"].startswith("/login"))
+        _, r = self._logar("ana", "s_ana")
+        self.assertIn("incorretos", r.get_data(as_text=True))
+        self.assertIn("desativado", cliente.get("/acessos").get_data(as_text=True))
+        self.assertEqual(cliente.post("/api/acessos/novo", json={"usuario": "ana", "nivel": "leitura", "senha": "123456"},
+                                      headers=hdr).status_code, 400)
+        cliente.post("/api/acessos/ativo", json={"usuario": "ana", "ativo": True}, headers=hdr)
+        self.assertTrue(ana_parada.get("/historico-tratativas").headers["Location"].startswith("/login"))
+        _, r = self._logar("ana", "s_ana")
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(cliente.post("/api/acessos/ativo", json={"usuario": "chefe", "ativo": False},
+                                      headers=hdr).status_code, 400)
+
+    def test_login_nao_trava_depois_de_erros(self):
+        # 29/10 (Hugo): sem trava de senha errada no /login do painel
+        for _ in range(30):
+            _, r = self._logar("ana", "errada")
+            self.assertEqual(r.status_code, 200)
+        _, r = self._logar("ana", "s_ana")
+        self.assertEqual(r.status_code, 302)
+
+    def test_derrubar_todas_as_sessoes(self):
+        ana, _ = self._logar("ana", "s_ana")
+        galpao = painel_agentes.app.test_client()
+        with galpao.session_transaction() as s:
+            s["nivel_acesso"] = "galpao"                         # aparelho compartilhado, sessao de antes
+        self.assertEqual(galpao.get("/api/sessao/estado").status_code, 200)
+        cliente, hdr = self._chefe()
+        r = cliente.post("/api/acessos/derrubar-sessoes", headers=hdr)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(cliente.get("/acessos").status_code, 302)                 # quem clicou tambem cai
+        self.assertTrue(ana.get("/historico-tratativas").headers["Location"].startswith("/login"))
+        self.assertEqual(galpao.get("/api/sessao/estado").status_code, 401)
+        cliente, _ = self._chefe()                                                 # login novo entra
+        self.assertIn("Última vez: chefe", cliente.get("/acessos").get_data(as_text=True))
+
+    def test_personalizado_nao_derruba_sessoes(self):
+        self._gravar("chefe", ["index"])
+        cliente, hdr = self._chefe()
+        self.assertEqual(cliente.post("/api/acessos/derrubar-sessoes", headers=hdr).status_code, 403)
+
+    def test_tabela_antiga_ganha_versao_senha(self):
+        conn = acesso_telas.conectar()
+        conn.execute("DROP TABLE painel_usuarios")
+        conn.execute("CREATE TABLE painel_usuarios (usuario TEXT PRIMARY KEY, nome TEXT NOT NULL DEFAULT '', "
+                     "senha_hash TEXT NOT NULL, nivel TEXT NOT NULL, trocar_senha INTEGER NOT NULL DEFAULT 0, "
+                     "criado_por TEXT, criado_em TEXT NOT NULL, atualizado_por TEXT, atualizado_em TEXT)")
+        conn.commit()
+        conn.close()
+        conn = acesso_telas.conectar()
+        try:
+            acesso_telas.importar_do_config(conn, self.cfg_painel)
+            self.assertEqual(acesso_telas.conta("ana", conn)["versao_senha"], 0)
+        finally:
+            conn.close()
+
+
+if __name__ == "__main__":
+    unittest.main()

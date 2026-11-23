@@ -25,14 +25,19 @@ nao tem mostra "ainda nao disponivel" e passa a abrir quando chegar.
 Tratativa: so rotulos padronizados (tratativa_para_cliente). Texto livre da
 Torre nunca vai pro cliente.
 
+Tela de Notificacoes (controle_notificacoes.py): vale POR CIMA do config --
+  geral desligado, tipo "resumo_diario" desligado/piloto/ligado e excecao por
+  embarcador (BLOQUEADO/LIBERADO). Sem linha na tela vale o config abaixo.
+
 Travas:
   - config.yaml resumo_diario_embarcador.ativo (default True) desliga so
     esta rotina.
   - resumo_diario_embarcador.forcar_destino: enquanto preenchido, TODO e-mail
     vai so pra ele. SEM a secao no config o padrao e o e-mail do Hugo: envio
     real pro cliente exige `forcar_destino: ""` explicito.
-  - chave-mestra notificacoes_automaticas.ativo vale pro envio real (o
-    redirecionado nao sai de casa, entao nao depende dela).
+  - a chave-mestra notificacoes_automaticas.ativo NAO vale aqui (Hugo,
+    29/09): o resumo e opt-in por embarcador e foi liberado sozinho, com os
+    outros e-mails automaticos ainda desligados.
   - notificacoes_enviadas (tipo + chave sender|data): rodar duas vezes no
     mesmo dia nao manda duas vezes.
 
@@ -42,6 +47,7 @@ Execute:
   py -3.11 resumo_diario_embarcador.py --modo-teste                  (tudo pra hugo@, nao marca envio)
   py -3.11 resumo_diario_embarcador.py --modo-teste --sender-id 123  (um embarcador, mesmo com o resumo desligado)
   py -3.11 resumo_diario_embarcador.py --data 2026-09-16
+  py -3.11 resumo_diario_embarcador.py --sender-id 123 --reenviar    (reenvia mesmo ja enviado hoje)
 """
 import argparse
 import html
@@ -60,10 +66,11 @@ _RAIZ = Path(__file__).parent
 sys.path.insert(0, str(_RAIZ))
 
 from email_utils import (COR_BORDA, COR_ERRO, COR_PRIMARIA, COR_PRIMARIA_CLARA, COR_TEXTO,
-                         COR_TEXTO_SUAVE, enviar_email, envelope_html, notificacoes_automaticas_ativas)
+                         COR_TEXTO_SUAVE, enviar_email, envelope_html)
 from notificar_execucao_agente import notificar_execucao
 from portal_cliente import dados_cliente, link_canhoto
 import preferencias_notificacao
+from controle_notificacoes import acao_do_config, decidir
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -404,21 +411,30 @@ def montar_email(nome_emb: str, blocos: dict[str, list[dict]], data_alvo: date, 
 
 def executar(config: dict, data_alvo: date, modo_teste: bool = False, sender_id: int | None = None,
              rotas: list[dict] | None = None, motoristas: dict | None = None,
-             enviar=enviar_email, db_path: Path = DB_PATH) -> dict:
+             enviar=enviar_email, db_path: Path = DB_PATH, reenviar: bool = False) -> dict:
+    """reenviar: ignora o "ja enviado hoje" -- exige sender_id (reenvio pontual de um embarcador)."""
+    if reenviar and sender_id is None:
+        raise ValueError("reenviar exige sender_id.")
     r = {"enviados": 0, "falhas": 0, "sem_notas": 0, "sem_email": 0, "ja_enviados": 0,
-         "notas": 0, "desativado": ""}
+         "notas": 0, "bloqueados": 0, "desativado": ""}
 
     forcar = forcar_destino_do_config(config)
+    # o que o config decidiria hoje (a chave-mestra nao vale aqui); a tela (decidir) vale por cima
+    motivo_config = "" if rotina_ativa(config) else "resumo_diario_embarcador.ativo=false"
+    fallback = acao_do_config(not motivo_config, forcar)
+
+    todos = preferencias_notificacao.carregar_embarcadores(TIPO_NOTIFICACAO, db_path=db_path)
+    decisoes = {}
     if not modo_teste:
-        if not rotina_ativa(config):
-            r["desativado"] = "resumo_diario_embarcador.ativo=false"
-        elif not forcar and not notificacoes_automaticas_ativas(config):
-            r["desativado"] = "notificacoes_automaticas.ativo=false"
-        if r["desativado"]:
+        decisoes = {sid: decidir(TIPO_NOTIFICACAO, emb["cnpj"], fallback_acao=fallback,
+                                 fallback_piloto=forcar, db_path=db_path) for sid, emb in todos.items()}
+        # retorna cedo so se NENHUM embarcador puder receber
+        if todos and all(d.acao == "NAO" for d in decisoes.values()):
+            primeira = next(iter(decisoes.values()))
+            r["desativado"] = (motivo_config or primeira.motivo) if primeira.origem == "config" else primeira.motivo
             logger.info(f"Desativado ({r['desativado']}) -- nada enviado.")
             return r
 
-    todos = preferencias_notificacao.carregar_embarcadores(TIPO_NOTIFICACAO, db_path=db_path)
     # --sender-id em modo teste prova o e-mail de quem ainda nao ligou o resumo
     forcado = modo_teste and sender_id is not None
     embarcadores = sorted(((sid, emb) for sid, emb in todos.items()
@@ -447,14 +463,20 @@ def executar(config: dict, data_alvo: date, modo_teste: bool = False, sender_id:
                 if not total:
                     r["sem_notas"] += 1
                     continue
+                decisao = decisoes.get(sid)
+                if decisao is not None and decisao.acao == "NAO":
+                    logger.info(f"  {nome}: {total} nota(s) -- nao enviado pela tela ({decisao.motivo}).")
+                    r["bloqueados"] += 1
+                    continue
                 if not emb["emails"]:
                     logger.warning(f"  {nome}: {total} nota(s) -- sem e-mail cadastrado.")
                     r["sem_email"] += 1
                     continue
 
-                destinos, redirecionado = resolver_destinos(emb["emails"], modo_teste, forcar)
+                piloto = decisao.destino_piloto if decisao is not None and decisao.acao == "PILOTO" else ""
+                destinos, redirecionado = resolver_destinos(emb["emails"], modo_teste, piloto)
                 chave = _chave(sid, data_alvo, redirecionado)
-                if not modo_teste and ja_enviado(conn, chave):
+                if not modo_teste and not reenviar and ja_enviado(conn, chave):
                     logger.info(f"  {nome}: ja enviado hoje -- pulando.")
                     r["ja_enviados"] += 1
                     continue
@@ -490,14 +512,16 @@ def _interpretar_data(valor: str) -> date:
     return date.fromisoformat(v)
 
 
-def main(modo_teste: bool = False, data: str = "hoje", sender_id: int | None = None) -> None:
+def main(modo_teste: bool = False, data: str = "hoje", sender_id: int | None = None,
+         reenviar: bool = False) -> None:
     logger.info(f"{'[MODO TESTE] ' if modo_teste else ''}Resumo diario por embarcador iniciado.")
     inicio = time.time()
     resultado = {"status": "ok", "detalhe": ""}
     config = {}
     try:
         config = _carregar_config()
-        r = executar(config, _interpretar_data(data), modo_teste=modo_teste, sender_id=sender_id)
+        r = executar(config, _interpretar_data(data), modo_teste=modo_teste, sender_id=sender_id,
+                     reenviar=reenviar)
         if r["desativado"]:
             resultado["detalhe"] = f"Desativado ({r['desativado']})."
         else:
@@ -532,5 +556,9 @@ if __name__ == "__main__":
     parser.add_argument("--modo-teste", action="store_true")
     parser.add_argument("--data", default="hoje", help="hoje, ontem ou AAAA-MM-DD")
     parser.add_argument("--sender-id", type=int, default=None)
+    parser.add_argument("--reenviar", action="store_true",
+                        help="ignora o 'ja enviado hoje' do --sender-id dado (exige --sender-id)")
     args = parser.parse_args()
-    main(modo_teste=args.modo_teste, data=args.data, sender_id=args.sender_id)
+    if args.reenviar and args.sender_id is None:
+        parser.error("--reenviar exige --sender-id")
+    main(modo_teste=args.modo_teste, data=args.data, sender_id=args.sender_id, reenviar=args.reenviar)

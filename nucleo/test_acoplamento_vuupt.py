@@ -48,10 +48,12 @@ PERMITIDOS = {
     "nucleo/comparar_vuupt.py",             # 15/09: compara os dois lados; some quando a Vuupt sair
     "nucleo/comparar_pool.py",              # 24/09: sombra do pool (Entrega 1); some na virada
     "nucleo/exportar_historico_vuupt.py",   # 16/09: tira o historico da Vuupt pro nosso bucket (Etapa 1)
+    "nucleo/ponte_vuupt.py",                # 12/11: a ponte nucleo -> Vuupt do app proprio (Hugo, 12/09); morre na virada
     "nucleo/relatorios_financeiro.py",      # 16/09: --atualizar-cadastros puxa usuario/veiculo (nome e placa)
     "nucleo/sincronizar_servicos_vuupt.py",  # 16/09: espelha o pedido fora da rota (pool, retirada, reentrega)
     "nucleo/sincronizar_vuupt.py",          # a ponte Vuupt -> núcleo (morre na virada)
     "notificacao_entregas/vuupt_entregas.py",  # 17/09: só lê concluídos + canhoto; peça isolada que troca por nucleo_* na saída
+    "painel_agentes/consulta_expedicao.py",  # 02/10: Consultar pedido cruza Vuupt e Stokki ao vivo (so leitura)
     "painel_agentes/expedicao.py",
     "painel_agentes/laboratorio_rotas.py",
     "painel_agentes/mapa_rotas.py",
@@ -60,10 +62,12 @@ PERMITIDOS = {
     "painel_agentes/rascunhos_rota.py",
     "painel_agentes/test_editar_endereco_pedido.py",
     "painel_agentes/test_editar_endereco_pedidos_lote.py",
+    "painel_agentes/test_agendamento_equipe.py",  # 04/10: so simula a Vuupt (mock) pro reagendar da equipe
     "painel_agentes/test_reagendar_pedidos_lote.py",
     "painel_agentes/torre_controle.py",
     "pipeline.py",
     "portal_cliente/dados_cliente.py",
+    "portal_cliente/alterar_entrega.py",     # 29/10: aplica na hora, na Vuupt, a alteracao pedida pelo cliente no portal (tirar da rota, endereco, data e contato); mesmo caso de solicitacoes_execucao
     "reconciliar_pedidos_retirada.py",
     "regras/cadastro_motoristas.py",
     "relatorio_operacional.py",
@@ -78,7 +82,10 @@ PERMITIDOS = {
     "roteirizacao/incrementar_rotas.py",
     "roteirizacao/otimizacao_client.py",
     "roteirizacao/reprocessar_rotas.py",
+    "roteirizacao/edicao_rota.py",  # 10/11: editar rota viva (status ao vivo, DELETE/PUT/POST na rota); o núcleo não grava rota
     "roteirizacao/rotas_client.py",
+    "roteirizacao/test_conflito_rota.py",  # 28/09: teste do rotas_client (mocka criar_rota)
+    "roteirizacao/test_rotas_client_edicao.py",  # 10/11: teste do rotas_client (remover servico, trocar motorista/carro)
     # roteirizacao/roteirizacao_dados.py saiu da lista: só cita a Vuupt em
     # comentário, recebe o serviço pronto de quem chamou (não é acoplamento).
     "roteirizacao/roteirizar.py",

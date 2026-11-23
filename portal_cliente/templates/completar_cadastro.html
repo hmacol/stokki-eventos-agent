@@ -1,0 +1,42 @@
+{% extends "base_acesso.html" %}
+{% block titulo %}Complete o cadastro{% endblock %}
+{% block conteudo %}
+<style>
+  fieldset { border: none; padding: 0; margin: 0 0 16px; }
+  legend { font-size: 13px; font-weight: 600; color: var(--primaria); margin-bottom: 8px; }
+  label.opcao { display: flex; gap: 10px; align-items: flex-start; padding: 9px 11px; border: 1px solid var(--borda);
+                border-radius: 7px; margin-bottom: 6px; cursor: pointer; font-weight: 400; color: var(--texto); }
+  label.opcao:has(input:checked) { border-color: var(--acento); }
+  label.opcao input { margin-top: 3px; accent-color: var(--acento); }
+  label.opcao b { display: block; font-size: 13.5px; color: var(--primaria); }
+  label.opcao span { font-size: 12.5px; line-height: 1.4; color: var(--texto-suave); }
+  textarea, input[type=tel] { width: 100%; padding: 10px 12px; border: 1px solid var(--borda); border-radius: 7px;
+                              font-size: 14px; margin-bottom: 6px; font-family: inherit; }
+  textarea { min-height: 70px; resize: vertical; }
+  textarea:focus, input[type=tel]:focus { outline: 2px solid var(--acento); outline-offset: -1px; border-color: var(--acento); }
+  .ajuda { font-size: 12px; color: var(--texto-suave); margin: 0 0 16px; }
+</style>
+<h1>Complete o cadastro</h1>
+<p><strong>{{ cliente.nome }}</strong><br><span class="suave">CNPJ {{ cliente.cnpj_formatado }}</span></p>
+<p class="suave">Falta pouco. Essas informações ajudam a Fresh Log a planejar as suas entregas e a avisar a pessoa certa.</p>
+{% if erro %}<div class="erro" role="alert">{{ erro }}</div>{% endif %}
+<form method="post" autocomplete="off">
+  <fieldset>
+    <legend>Tipo de carga</legend>
+    {% for tipo, descricao in habilidades %}
+    <label class="opcao">
+      <input type="radio" name="habilidade" value="{{ tipo }}" {% if valores.habilidade == tipo %}checked{% endif %} required>
+      <span><b>{{ tipo }}</b>{{ descricao }}</span>
+    </label>
+    {% endfor %}
+  </fieldset>
+  <label for="emails">E-mails para os avisos de entrega</label>
+  <textarea id="emails" name="emails" rows="3" spellcheck="false" placeholder="um e-mail por linha">{{ valores.emails }}</textarea>
+  <p class="ajuda">Até 5 endereços, um por linha.</p>
+  <label for="whatsapp">WhatsApp (celular com DDD)</label>
+  <input type="tel" id="whatsapp" name="whatsapp" inputmode="tel" autocomplete="tel-national" placeholder="(11) 99999-0000" maxlength="20" value="{{ valores.whatsapp }}">
+  <p class="ajuda">Opcional. Usado só para avisos de chamado aguardando a sua resposta.</p>
+  <button type="submit" class="principal">Salvar e entrar</button>
+</form>
+<p class="suave" style="margin-top:14px"><a href="{{ url_for('sair') }}">Sair</a></p>
+{% endblock %}

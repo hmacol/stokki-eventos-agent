@@ -70,7 +70,7 @@ def registrar(app, *, config: dict, secret: str):
             return _indisponivel("Comprovante ainda não disponível",
                                  "O motorista ainda não enviou a foto do canhoto deste pedido, ou ela ainda "
                                  "está sendo processada. Tente de novo mais tarde, pelo mesmo link.", 404)
-        pdf = dados.baixar_canhoto_pdf(token_vuupt, checklist_id, codigo)
+        pdf = dados.comprovante_proprio(servico, config) or dados.baixar_canhoto_pdf(token_vuupt, checklist_id, codigo)
         if not pdf:
             return _indisponivel("Comprovante indisponível",
                                  "Não conseguimos gerar o comprovante agora. Tente de novo em alguns minutos.", 502)

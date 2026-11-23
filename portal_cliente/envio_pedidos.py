@@ -27,6 +27,7 @@ Tabelas (dados/dados.db):
 
 Status da fila (portal_envios.status):
   NA_FILA -> ENVIANDO -> CRIADO | ERRO | DUPLICADO ; CANCELADO (antes de ir)
+  CRIADO/DUPLICADO -> CANCELANDO -> CANCELADO | CRIADO (precisa da operação)  (06/10)
 
 Origem do pedido (portal_envios.origem), 09/09/2026:
   xml       -- NF-e (fluxo original); chave_nfe é a chave de acesso real.
@@ -55,8 +56,13 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent
-if str(_RAIZ) not in sys.path:
-    sys.path.insert(0, str(_RAIZ))
+for _p in (_RAIZ, Path(__file__).parent):  # painel importa como portal_cliente.envio_pedidos
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+import endereco_entrega  # noqa: E402
+import transportadora_envio  # noqa: E402
+from nucleo.fluxo_embarcador import FLUXOS, ROTULOS as FLUXO_ROTULOS  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +71,7 @@ PASTA_XMLS = _RAIZ / "dados" / "portal_envios"
 PASTA_TEMP = PASTA_XMLS / "_temporarios"
 TEMP_VALIDADE_SEGUNDOS = 2 * 3600
 DIAS_LISTAGEM = 30
+MAX_PRODUTOS_NFE = 300   # produtos da nota na prévia (indicação de lote)
 
 NS_NFE = "http://www.portalfiscal.inf.br/nfe"
 NS = {"nfe": NS_NFE}
@@ -75,9 +82,13 @@ STATUS_CRIADO = "CRIADO"
 STATUS_ERRO = "ERRO"
 STATUS_DUPLICADO = "DUPLICADO"
 STATUS_CANCELADO = "CANCELADO"
+STATUS_CANCELANDO = "CANCELANDO"   # cancelamento pedido pelo cliente, worker ainda vai executar (06/10)
+STATUS_EM_ESPERA_CLIENTE = "EM_ESPERA_CLIENTE"   # segurado a pedido do cliente (27/10); linha em pedidos_pausados_cliente
+STATUS_RETOMANDO = "RETOMANDO"   # cliente pediu pra retomar, falta a operacao/worker soltar a pausa
 # Área não atendida (Hugo, 23/09): não vai pra Stokki até a equipe liberar
 # no /atendimento do painel. O worker só pega NA_FILA, então fica parado.
 STATUS_AGUARDANDO_LIBERACAO = "AGUARDANDO_LIBERACAO"
+DIAS_MAX_AGENDAMENTO = 120  # teto da data escolhida pelo cliente (reagendar e retomar)
 STATUS_ABERTOS = (STATUS_NA_FILA, STATUS_ENVIANDO, STATUS_AGUARDANDO_LIBERACAO)
 ROTULOS_STATUS = {
     STATUS_NA_FILA: "Na fila",
@@ -86,6 +97,9 @@ ROTULOS_STATUS = {
     STATUS_ERRO: "Erro",
     STATUS_DUPLICADO: "Já existia na Stokki",
     STATUS_CANCELADO: "Cancelado",
+    STATUS_CANCELANDO: "Cancelando",
+    STATUS_EM_ESPERA_CLIENTE: "Em espera (a seu pedido)",
+    STATUS_RETOMANDO: "Retomando",
     STATUS_AGUARDANDO_LIBERACAO: "Aguardando liberação",
 }
 MOTIVOS_BLOQUEIO = {"fora_sp": "fora do estado de SP", "sp_nao_atendido": "fora da área atendida em SP"}
@@ -93,12 +107,18 @@ MOTIVOS_BLOQUEIO = {"fora_sp": "fora do estado de SP", "sp_nao_atendido": "fora 
 ORIGEM_XML = "xml"
 ORIGEM_PLANILHA = "planilha"
 
+# Pedido do cliente pra retomar um pedido em espera (28/10): o worker le essas colunas
+COLUNAS_RETOMAR = {"retomar_modo": "TEXT", "retomar_data": "TEXT",
+                   "retomar_hora_inicio": "TEXT", "retomar_hora_fim": "TEXT"}
+MODOS_RETOMAR = ("proxima_rota", "agendamento")
+
 TIPOS_SOLICITACAO = ("cancelar", "em_espera", "reagendar", "reenviar")
 ROTULOS_SOLICITACAO = {
     "cancelar": "Cancelamento",
     "em_espera": "Tirar da rota (em espera)",
     "reagendar": "Reagendamento",
     "reenviar": "Reenvio",
+    "alterar_endereco": "Alteração do endereço de entrega",
 }
 
 # Regras de transformação do XML (as MESMAS do importador por e-mail,
@@ -108,12 +128,18 @@ REGRAS_XML = {
     "nenhuma": "XML como veio",
     "emporio_quatro_estrelas": "Consolida os itens num único produto (Quatro Estrelas)",
     "muai": "Converte itens em KG pra caixas (Muai)",
+    "maiz": "Tira a barra do código do produto, 1/014 vira 1014 (Maíz Food)",
 }
-REGRAS_PADRAO_POR_STKKC = {98: "emporio_quatro_estrelas", 99: "muai"}
+REGRAS_PADRAO_POR_STKKC = {98: "emporio_quatro_estrelas", 99: "muai", 93: "maiz"}
 
 
 class ErroEnvio(Exception):
     pass
+
+
+# Dedicado por data fora do dia fixo (Hugo, 03/10/2026 -- spec dias fixos v2):
+# texto do detalhe do chip "Envio dedicado".
+MOTIVO_DEDICADO_FORA_DIA_FIXO = "data fora do dia de visita da região"
 
 
 # ── Banco ──────────────────────────────────────────────────────────────────────
@@ -197,6 +223,13 @@ def conectar() -> sqlite3.Connection:
             envio_ativo     INTEGER NOT NULL DEFAULT 1,
             atualizado_em   TEXT NOT NULL
         );
+        -- Colunas da planilha indicadas pelo cliente (16/11): uma linha por login
+        CREATE TABLE IF NOT EXISTS portal_mapa_planilha (
+            cnpj_login    TEXT PRIMARY KEY,
+            mapa_json     TEXT NOT NULL,
+            por           TEXT,
+            atualizado_em TEXT NOT NULL
+        );
     """)
     # Colunas que entraram depois (09/09, importação por planilha) -- as
     # tabelas já existem em produção, então é ALTER TABLE guardado.
@@ -209,6 +242,23 @@ def conectar() -> sqlite3.Connection:
         # bloqueio por área não atendida (23/09)
         "bloqueio_motivo": "TEXT",
         "bloqueio_chamado_id": "INTEGER",
+        # fluxo Cross (25/10): fluxo do pedido e acompanhamento da troca de NF
+        # (espelho de trocas_nf_pendentes, ver trocas_nf.py)
+        "fluxo": "TEXT",
+        "id_stokki": "INTEGER",
+        "troca_nf_status": "TEXT",
+        "troca_nf_em": "TEXT",
+        "troca_nf_erro": "TEXT",
+        **COLUNAS_RETOMAR,
+        # endereço fiscal quando o XML tem <entrega> (24/09); vazio = igual
+        "endereco_fiscal": "TEXT",
+        # endereço de entrega escolhido no envio (27/10, endereco_entrega.py):
+        # origem fiscal|nota|cliente|ultima_entrega; json só em cliente/ultima_entrega
+        "endereco_entrega_origem": "TEXT",
+        "endereco_entrega_json": "TEXT",
+        # transportadora escolhida na prévia (transportadora_envio.py): {id, nome, cnpj};
+        # vazio = a do XML. O worker reescreve o <transporta> na cópia do lote.
+        "transportadora_json": "TEXT",
     })
     _garantir_colunas(conn, "portal_clientes_envio", {"carrier_id": "TEXT", "prioridade": "TEXT"})
     conn.commit()
@@ -263,6 +313,15 @@ def _texto(el, caminho: str) -> str:
         return ""
     achado = el.find(caminho, NS)
     return (achado.text or "").strip() if achado is not None and achado.text else ""
+
+
+def _endereco_linha(el) -> str:
+    """'Rua X, 10 - Compl' de um <enderDest> ou <entrega> (mesmas tags)."""
+    endereco = ", ".join(p for p in (_texto(el, "nfe:xLgr"), _texto(el, "nfe:nro")) if p)
+    compl = _texto(el, "nfe:xCpl")
+    if compl:
+        endereco = f"{endereco} - {compl}" if endereco else compl
+    return endereco
 
 
 def ler_nfe(conteudo: bytes, nome_arquivo: str = "", permitir_entrada: bool = False) -> dict:
@@ -328,15 +387,38 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "", permitir_entrada: bool = Fa
     except ValueError:
         valor = 0.0
 
-    logradouro = _texto(ender, "nfe:xLgr")
-    numero = _texto(ender, "nfe:nro")
-    compl = _texto(ender, "nfe:xCpl")
-    endereco = ", ".join(p for p in (logradouro, numero) if p)
-    if compl:
-        endereco = f"{endereco} - {compl}" if endereco else compl
+    endereco = _endereco_linha(ender)
+    bairro, municipio, uf = _texto(ender, "nfe:xBairro"), _texto(ender, "nfe:xMun"), _texto(ender, "nfe:UF")
+    cep, fone = _so_digitos(_texto(ender, "nfe:CEP")), _so_digitos(_texto(ender, "nfe:fone"))
+    # Grupo <entrega> (Hugo, 24/09, caso NF 41240 Maria Dolores): local de
+    # entrega diferente do endereço fiscal. É ESSE que vale pro processo todo
+    # (a Stokki também lê como "Local de Entrega" e o pipeline prioriza); o
+    # fiscal fica em endereco_fiscal só pra tela.
+    endereco_fiscal = ""
+    entrega = inf.find("nfe:entrega", NS)
+    if entrega is not None and _texto(entrega, "nfe:xLgr"):
+        endereco_fiscal = endereco_entrega.linha_fiscal({
+            "destinatario_endereco": endereco, "destinatario_bairro": bairro, "destinatario_municipio": municipio,
+            "destinatario_uf": uf, "destinatario_cep": cep})
+        endereco = _endereco_linha(entrega)
+        bairro, municipio, uf = _texto(entrega, "nfe:xBairro"), _texto(entrega, "nfe:xMun"), _texto(entrega, "nfe:UF")
+        cep = _so_digitos(_texto(entrega, "nfe:CEP"))
+        fone = _so_digitos(_texto(entrega, "nfe:fone")) or fone
 
     emitida = _texto(ide, "nfe:dhEmi") or _texto(ide, "nfe:dEmi")
     transporta = inf.find("nfe:transp/nfe:transporta", NS)
+    # Produtos da nota (18/11): a prévia mostra pra o cliente indicar o lote (lotes_cliente.py)
+    produtos = []
+    for det in dets[:MAX_PRODUTOS_NFE]:
+        sku = _texto(det, "nfe:prod/nfe:cProd")
+        if not sku:
+            continue
+        try:
+            qtd = round(float(_texto(det, "nfe:prod/nfe:qCom") or 0), 4)
+        except ValueError:
+            qtd = 0.0
+        produtos.append({"sku": sku[:60], "descricao": _texto(det, "nfe:prod/nfe:xProd")[:120], "quantidade": qtd,
+                         "unidade": _texto(det, "nfe:prod/nfe:uCom")[:12]})
     return {
         "chave_nfe": chave,
         "numero_nf": _texto(ide, "nfe:nNF"),
@@ -347,15 +429,17 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "", permitir_entrada: bool = Fa
         "destinatario_doc": _so_digitos(_texto(dest, "nfe:CNPJ") or _texto(dest, "nfe:CPF")),
         "destinatario_nome": _texto(dest, "nfe:xNome"),
         "destinatario_endereco": endereco,
-        "destinatario_bairro": _texto(ender, "nfe:xBairro"),
-        "destinatario_municipio": _texto(ender, "nfe:xMun"),
-        "destinatario_uf": _texto(ender, "nfe:UF"),
-        "destinatario_cep": _so_digitos(_texto(ender, "nfe:CEP")),
-        "destinatario_telefone": _so_digitos(_texto(ender, "nfe:fone")),
+        "destinatario_bairro": bairro,
+        "destinatario_municipio": municipio,
+        "destinatario_uf": uf,
+        "destinatario_cep": cep,
+        "destinatario_telefone": fone,
+        "endereco_fiscal": endereco_fiscal,
         "volumes": volumes or 1,
         "peso_kg": round(peso, 3),
         "valor_nf": round(valor, 2),
         "itens": len(dets),
+        "produtos": produtos,
         "nome_arquivo": nome_arquivo or f"{chave}.xml",
         "transportadora_nome": _texto(transporta, "nfe:xNome"),
         "transportadora_cnpj": _so_digitos(_texto(transporta, "nfe:CNPJ") or _texto(transporta, "nfe:CPF")),
@@ -384,10 +468,14 @@ def expandir_upload(nome: str, conteudo: bytes) -> list[tuple[str, bytes]]:
         saida = []
         try:
             with zipfile.ZipFile(io.BytesIO(conteudo)) as zf:
+                # teto do total descompactado: PDFs de 10 MB comprimem muito (12/11)
+                if sum(i.file_size for i in zf.infolist()) > 150 * 1024 * 1024:
+                    raise ErroEnvio(f"{nome}: o ZIP é grande demais depois de aberto. Envie em partes.")
                 for info in zf.infolist():
-                    if info.is_dir() or not info.filename.lower().endswith((".xml",) + EXTENSOES_PLANILHA):
+                    # .pdf: documento do pedido (anexos_pedido.py, 11/11)
+                    if info.is_dir() or not info.filename.lower().endswith((".xml", ".pdf") + EXTENSOES_PLANILHA):
                         continue
-                    if info.file_size > 5 * 1024 * 1024:
+                    if info.file_size > (10 if info.filename.lower().endswith(".pdf") else 5) * 1024 * 1024:
                         continue
                     saida.append((Path(info.filename).name, zf.read(info)))
         except zipfile.BadZipFile:
@@ -407,11 +495,11 @@ def expandir_upload(nome: str, conteudo: bytes) -> list[tuple[str, bytes]]:
 # (chave, rótulo no modelo, obrigatória, apelidos aceitos no cabeçalho, largura, exemplo)
 COLUNAS_PLANILHA: list[tuple[str, str, bool, tuple[str, ...], int, str]] = [
     ("referencia", "Pedido (nº ou referência)", True,
-     ("pedido", "n pedido", "numero do pedido", "num pedido", "referencia", "po", "ordem", "order", "codigo do pedido"), 22, "PED-1001"),
+     ("pedido", "n pedido", "numero do pedido", "num pedido", "referencia", "po", "numero da po", "ordem", "order", "codigo do pedido"), 22, "PED-1001"),
     ("numero_nf", "Nº da NF (opcional)", False,
      ("nf", "n nf", "numero nf", "numero da nf", "nota", "nota fiscal", "n da nf", "nfe", "nf e"), 16, "45120"),
     ("destinatario_doc", "CNPJ/CPF do destinatário", True,
-     ("cnpj", "cpf", "cnpj cpf", "cnpj/cpf", "documento", "cnpj/cpf do destinatario", "cnpj destinatario", "cpf cnpj", "doc"), 22, "12.345.678/0001-90"),
+     ("cnpj", "cpf", "cnpj cpf", "cnpj/cpf", "cpf/cnpj", "documento", "cnpj/cpf do destinatario", "cnpj destinatario", "cpf cnpj", "doc"), 22, "12.345.678/0001-90"),
     ("destinatario_nome", "Nome do destinatário", True,
      ("destinatario", "nome", "cliente", "razao social", "nome do destinatario", "nome fantasia", "loja"), 30, "Mercado Bom Preço Ltda"),
     ("cep", "CEP", True, ("cep",), 12, "01310-100"),
@@ -435,7 +523,21 @@ COLUNAS_PLANILHA: list[tuple[str, str, bool, tuple[str, ...], int, str]] = [
      ("valor unitario", "vlr unitario", "vlr unit", "valor unit", "preco", "preco unitario", "unitario"), 16, "45,00"),
 ]
 _COLUNAS_POR_CHAVE = {c[0]: c for c in COLUNAS_PLANILHA}
+# Login de grupo (12/11): a planilha diz de qual empresa é cada pedido, no
+# lugar do seletor da tela. Fora de COLUNAS_PLANILHA de propósito: o modelo e
+# a leitura dos outros clientes não mudam (a coluna só é exigida com `empresas`).
+COLUNA_EMPRESA: tuple[str, str, bool, tuple[str, ...], int, str] = (
+    "empresa_cnpj", "CNPJ da empresa (quem envia)", True,
+    ("cnpj da empresa", "cnpj empresa", "empresa", "cnpj do embarcador", "cnpj embarcador", "embarcador",
+     "cnpj do remetente", "cnpj remetente", "remetente"), 26, "")
 MAX_LINHAS_PLANILHA = 2000
+MAX_ITENS_PLANILHA = 10000   # planilha de pares (um pedido por linha) multiplica itens por linha
+# Revisão de segurança (19/11): um .xlsx de 2 KB pode declarar 16 mil colunas e várias abas, e o
+# openpyxl (read_only) completa cada linha até a coluna declarada: o portal esgotava a memória.
+# As planilhas reais têm 22 colunas e 2 abas; a de pares da Marchef (16 fixas + 100 pares de
+# Sku/Quantidade = 216 colunas) cabe com folga.
+MAX_COLUNAS_PLANILHA = 300
+MAX_ABAS_PLANILHA = 10
 UFS = {"AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ",
        "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"}
 NOMES_UF = {"AC": "Acre", "AL": "Alagoas", "AP": "Amapá", "AM": "Amazonas", "BA": "Bahia", "CE": "Ceará", "DF": "Distrito Federal",
@@ -455,7 +557,7 @@ def _normalizar_texto(valor) -> str:
 
 
 _APELIDOS_NORMALIZADOS: dict[str, str] = {}
-for _c in COLUNAS_PLANILHA:
+for _c in (*COLUNAS_PLANILHA, COLUNA_EMPRESA):
     _APELIDOS_NORMALIZADOS[_normalizar_texto(_c[1])] = _c[0]
     for _a in _c[3]:
         _APELIDOS_NORMALIZADOS.setdefault(_normalizar_texto(_a), _c[0])
@@ -525,80 +627,252 @@ def _abrir_planilha(conteudo: bytes, nome: str):
         except ImportError:
             raise ErroEnvio(f"{nome}: o formato .xls (Excel 97-2003) não é suportado -- salve a planilha como .xlsx e envie de novo.")
         try:
-            wb = xlrd.open_workbook(file_contents=conteudo)
+            wb = xlrd.open_workbook(file_contents=conteudo, on_demand=True)   # carrega só a aba pedida
         except Exception as e:
             raise ErroEnvio(f"{nome}: não consegui abrir a planilha ({e}).")
-        for sh in wb.sheets():
-            linhas = [[sh.cell_value(r, c) for c in range(sh.ncols)] for r in range(min(sh.nrows, MAX_LINHAS_PLANILHA + 20))]
-            if any(any(_celula_texto(v) for v in l) for l in linhas):
-                return linhas
-        return []
+        try:
+            for i in range(min(wb.nsheets, MAX_ABAS_PLANILHA)):
+                sh = wb.sheet_by_index(i)
+                linhas = [[sh.cell_value(r, c) for c in range(min(sh.ncols, MAX_COLUNAS_PLANILHA))]
+                          for r in range(min(sh.nrows, MAX_LINHAS_PLANILHA + 20))]
+                if any(any(_celula_texto(v) for v in l) for l in linhas):
+                    return linhas
+                wb.unload_sheet(i)
+            return []
+        except ErroEnvio:
+            raise
+        except Exception as e:
+            raise ErroEnvio(f"{nome}: não consegui ler a planilha ({type(e).__name__}).")
+        finally:
+            wb.release_resources()
     try:
         import openpyxl
         wb = openpyxl.load_workbook(io.BytesIO(conteudo), read_only=True, data_only=True)
     except Exception as e:
         raise ErroEnvio(f"{nome}: não consegui abrir a planilha ({type(e).__name__}). Envie um .xlsx no modelo Fresh Log.")
     try:
-        for ws in wb.worksheets:
+        for ws in wb.worksheets[:MAX_ABAS_PLANILHA]:
             if (ws.title or "").strip().lower().startswith("instru"):
                 continue
-            linhas = []
-            for i, row in enumerate(ws.iter_rows(values_only=True)):
-                if i > MAX_LINHAS_PLANILHA + 20:
-                    break
-                linhas.append(list(row))
+            linhas = [list(row) for row in ws.iter_rows(max_row=MAX_LINHAS_PLANILHA + 21, max_col=MAX_COLUNAS_PLANILHA,
+                                                        values_only=True)]
             if any(any(_celula_texto(v) for v in l) for l in linhas):
                 return linhas
         return []
+    except Exception as e:
+        raise ErroEnvio(f"{nome}: não consegui ler a planilha ({type(e).__name__}).")
     finally:
         wb.close()
 
 
-def _achar_cabecalho(linhas: list[list], apelidos: dict[str, str] | None = None,
-                     mensagem: str | None = None) -> tuple[int, dict[int, str]]:
-    """Procura nas primeiras 15 linhas a que mais parece o cabeçalho
-    (>= 3 colunas conhecidas). Devolve (índice da linha, {coluna: chave}).
-    `apelidos`/`mensagem` (25/09): a aba Pedidos de Entrada reaproveita este
-    parser com o próprio dicionário de colunas -- sem eles, o comportamento
-    de Envios fica igual."""
-    apelidos = _APELIDOS_NORMALIZADOS if apelidos is None else apelidos
+def _colunas_pelos_nomes(linha: list, guardado: dict | None) -> dict[str, int]:
+    """{chave: coluna} de uma linha candidata a cabeçalho. Primeiro as colunas
+    que o cliente indicou (`guardado`, de carregar_mapa_planilha: vale o nome
+    do cabeçalho; nome repetido na planilha desempata pela posição guardada;
+    a mesma coluna pode servir a dois campos), depois os apelidos conhecidos
+    nas colunas e campos que sobraram. Campo guardado como "não tem" (None)
+    não é procurado pelos apelidos."""
+    nomes = [_normalizar_texto(v) for v in linha]
+    col_de: dict[str, int] = {}
+    for chave, alvo in (guardado or {}).items():
+        if not isinstance(alvo, dict) or not alvo.get("nome"):
+            continue
+        achadas = [j for j, n in enumerate(nomes) if n == alvo["nome"]]
+        if achadas:
+            col_de[chave] = alvo["pos"] if alvo.get("pos") in achadas else achadas[0]
+    fechados = {k for k, v in (guardado or {}).items() if v is None}
+    usadas = set(col_de.values())
+    for j, n in enumerate(nomes):
+        chave = _APELIDOS_NORMALIZADOS.get(n)
+        if chave and j not in usadas and chave not in col_de and chave not in fechados:
+            col_de[chave] = j
+    return col_de
+
+
+# Planilha com um pedido por linha e os itens em pares de colunas numeradas
+# (Sku1 | Quantidade1 | Sku2 | Quantidade2 ...), como a que a Marchef usa (16/11).
+_CAMPOS_ITEM = ("sku", "quantidade", "valor_unitario")
+_RE_PAR_SKU = re.compile(r"^(?:sku|produto|codigo|cod|item) ?(\d{1,3})$")
+_RE_PAR_QTD = re.compile(r"^(?:quantidade|qtd|qtde|quant) ?(\d{1,3})$")
+
+
+def _pares_de_itens(cabecalho: list, ocupadas: set[int] | None = None, avisos: list[str] | None = None) -> list[tuple[int, int]]:
+    """[(coluna do SKU, coluna da quantidade)] dos pares numerados do cabeçalho,
+    na ordem do número; vazio quando a planilha é de uma linha por item.
+    Cabeçalho alterado pelo cliente não trava (17/11, pedido do Hugo): lê e
+    explica em `avisos`. SkuN sem a QuantidadeN usa a coluna logo à direita,
+    desde que ela não seja outro SKU, quantidade de outro par nem campo do
+    pedido (`ocupadas`); e as colunas de SKU/quantidade do modelo, no meio de
+    uma planilha de pares, valem como mais um item (o primeiro)."""
+    skus: dict[int, int] = {}
+    qtds: dict[int, int] = {}
+    nomes = [_normalizar_texto(v) for v in cabecalho]
+    for j, n in enumerate(nomes):
+        for padrao, destino in ((_RE_PAR_SKU, skus), (_RE_PAR_QTD, qtds)):
+            m = padrao.match(n)
+            if m:
+                destino.setdefault(int(m.group(1)), j)
+    if not skus:
+        return []
+    fora = set(ocupadas or ()) | set(skus.values()) | set(qtds.values())
+    notas = []
+    nome = lambda j: _celula_texto(cabecalho[j])[:60]   # texto do cliente: curto no aviso e no log
+    for k in sorted(skus):
+        j = skus[k] + 1
+        if k not in qtds and j < len(nomes) and nomes[j] and j not in fora:
+            qtds[k] = j
+            fora.add(j)
+            notas.append(f'Coluna "{nome(j)}" lida como a quantidade do item da coluna '
+                         f'"{nome(skus[k])}" (o esperado era "Quantidade{k}").')
+    soltas = {}
+    for j, n in enumerate(nomes):
+        chave = _APELIDOS_NORMALIZADOS.get(n)
+        if chave in ("sku", "quantidade") and j not in fora:
+            soltas.setdefault(chave, j)
+    if len(soltas) == 2:
+        skus[0], qtds[0] = soltas["sku"], soltas["quantidade"]
+        notas.append(f'Colunas "{nome(soltas["sku"])}" e "{nome(soltas["quantidade"])}" '
+                     "lidas como um item do pedido, junto com os pares numerados.")
+    if avisos is not None:
+        avisos.extend(notas)
+    return [(skus[k], qtds[k]) for k in sorted(skus) if k in qtds]
+
+
+def _achar_cabecalho(linhas: list[list], guardado: dict | None = None) -> tuple[int, dict[str, int]]:
+    """Procura nas primeiras 15 linhas a que mais parece o cabeçalho.
+    Devolve (índice da linha, {chave: coluna}). Com menos de 3 colunas
+    reconhecidas, devolve a primeira linha com 2+ células de texto e o que
+    reconheceu nela: quem chama decide se pede ao cliente pra indicar."""
     melhor = (0, -1, {})
     for i, linha in enumerate(linhas[:15]):
-        mapa = {}
-        for j, v in enumerate(linha):
-            chave = apelidos.get(_normalizar_texto(v))
-            if chave and chave not in mapa.values():
-                mapa[j] = chave
+        mapa = _colunas_pelos_nomes(linha, guardado)
         if len(mapa) > melhor[0]:
             melhor = (len(mapa), i, mapa)
-    if melhor[0] < 3:
-        raise ErroEnvio(mensagem or "Não achei o cabeçalho da planilha -- use o modelo Fresh Log (botão \"Baixar modelo\") "
-                        "e mantenha a primeira linha com os nomes das colunas.")
-    return melhor[1], melhor[2]
+    if melhor[0] >= 3:
+        return melhor[1], melhor[2]
+    for i, linha in enumerate(linhas[:15]):
+        if sum(1 for v in linha if isinstance(v, str) and v.strip()) >= 2:
+            return i, _colunas_pelos_nomes(linha, guardado)
+    raise ErroEnvio("Não achei o cabeçalho da planilha -- mantenha uma linha com os nomes das colunas "
+                    "(ou use o modelo Fresh Log, botão \"Baixar modelo\").")
 
 
-def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str) -> tuple[list[dict], list[dict]]:
-    """Lê a planilha no modelo Fresh Log. Devolve (pedidos, rejeitados):
+class ColunasPorIndicar(ErroEnvio):
+    """A planilha não tem todas as colunas obrigatórias com nome conhecido (ou
+    o cliente pediu pra indicar): `dados` leva o que a tela precisa pra ele
+    dizer qual coluna da planilha dele é cada campo (16/11, pedido do Hugo:
+    aproveitar a planilha que o cliente já usa)."""
+
+    def __init__(self, mensagem: str, dados: dict):
+        super().__init__(mensagem)
+        self.dados = dados
+
+
+def _campos_planilha(com_empresa: bool) -> list[tuple]:
+    return ([COLUNA_EMPRESA] if com_empresa else []) + COLUNAS_PLANILHA
+
+
+def _pedido_de_indicacao(nome: str, linhas: list[list], i_cab: int, col_de: dict[str, int], campos: list[tuple],
+                         faltando: list[str], pares: list[tuple[int, int]]) -> ColunasPorIndicar:
+    cab = linhas[i_cab]
+    dos_pares = {j for par in pares for j in par}   # as colunas dos itens não entram na escolha
+    amostra = [l for l in linhas[i_cab + 1:] if any(_celula_texto(v) for v in l)][:3]
+    colunas = [{"indice": j, "nome": _celula_texto(v)[:60],
+                "exemplos": [_celula_texto(l[j])[:40] for l in amostra if j < len(l) and _celula_texto(l[j])]}
+               for j, v in enumerate(cab) if _celula_texto(v) and j not in dos_pares]
+    return ColunasPorIndicar(
+        f"{nome}: indique qual coluna da sua planilha é cada informação"
+        + (f" (faltam: {', '.join(faltando)})." if faltando else "."),
+        {"arquivo": nome, "linha": i_cab, "colunas": colunas, "sugestao": dict(col_de), "faltando": faltando,
+         "pares": len(pares),
+         "campos": [{"chave": c[0], "rotulo": c[1], "obrigatoria": bool(c[2])} for c in campos]})
+
+
+def carregar_mapa_planilha(conn: sqlite3.Connection, cnpj_login: str) -> dict | None:
+    """Colunas que este login indicou da última vez: {chave: {"nome", "pos"} | None}."""
+    r = conn.execute("SELECT mapa_json FROM portal_mapa_planilha WHERE cnpj_login = ?", (_so_digitos(cnpj_login),)).fetchone()
+    try:
+        mapa = json.loads(r[0]) if r else None
+    except ValueError:
+        return None
+    return mapa if isinstance(mapa, dict) else None
+
+
+def guardar_mapa_planilha(conn: sqlite3.Connection, cnpj_login: str, mapa: dict, por: str) -> None:
+    conn.execute("INSERT INTO portal_mapa_planilha (cnpj_login, mapa_json, por, atualizado_em) VALUES (?, ?, ?, ?) "
+                 "ON CONFLICT(cnpj_login) DO UPDATE SET mapa_json = excluded.mapa_json, por = excluded.por, "
+                 "atualizado_em = excluded.atualizado_em",
+                 (_so_digitos(cnpj_login), json.dumps(mapa, ensure_ascii=False), por, _agora()))
+    conn.commit()
+
+
+def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
+                 empresas: dict[str, str] | None = None, guardado: dict | None = None,
+                 indicado: dict | None = None, pedir_indicacao: bool = False,
+                 mapa_usado: dict | None = None, avisos: list[str] | None = None) -> tuple[list[dict], list[dict]]:
+    """Lê a planilha de pedidos. Devolve (pedidos, rejeitados):
     cada pedido tem o MESMO formato do dict de ler_nfe (pra prévia, validação
     e gravação serem as mesmas) mais origem/referencia/itens_lista/
-    data_expedicao/linhas; rejeitados = {arquivo, rotulo, linha, erro}."""
+    data_expedicao/linhas; rejeitados = {arquivo, rotulo, linha, erro}.
+    `empresas` ({cnpj: nome}, login de grupo): a empresa de cada pedido vem da
+    coluna "CNPJ da empresa" (primeira linha do pedido) e vira o emitente;
+    sem `empresas`, todo pedido é do `cnpj_embarcador`.
+    Colunas (16/11): valem os nomes do modelo Fresh Log e os apelidos, mais o
+    que o cliente já indicou (`guardado`). `indicado` = {"linha": i, "colunas":
+    {chave: índice}} é o que ele acabou de escolher na tela e vale sozinho;
+    lido sem faltar coluna, sai em `mapa_usado` (dict de quem chama) pra guardar.
+    Faltando coluna obrigatória (ou com `pedir_indicacao`), levanta
+    ColunasPorIndicar no lugar de recusar a planilha.
+    Cabeçalho com pares numerados (Sku1 | Quantidade1 | Sku2 ...): cada linha é
+    um pedido e os itens saem dos pares preenchidos. Coluna de item com o nome
+    alterado é lida assim mesmo e explicada em `avisos` (lista de quem chama)."""
     linhas = _abrir_planilha(conteudo, nome)
     if not linhas:
         raise ErroEnvio(f"{nome}: a planilha está vazia.")
-    i_cab, mapa = _achar_cabecalho(linhas)
-    faltando = [c[1] for c in COLUNAS_PLANILHA if c[2] and c[0] not in mapa.values()]
-    if faltando:
-        raise ErroEnvio(f"{nome}: faltam colunas obrigatórias no cabeçalho: {', '.join(faltando)}. "
-                        f"Baixe o modelo Fresh Log pra conferir os nomes.")
-    emb = _so_digitos(cnpj_embarcador)
+    escolhas = None
+    if indicado is not None:
+        try:
+            i_cab = int(indicado["linha"])
+            escolhas = {str(k): int(v) for k, v in (indicado.get("colunas") or {}).items() if v not in (None, "")}
+        except (TypeError, ValueError, AttributeError, KeyError):
+            raise ErroEnvio(f"{nome}: colunas indicadas inválidas -- envie a planilha de novo.")
+        if not 0 <= i_cab < min(len(linhas), 15):
+            raise ErroEnvio(f"{nome}: colunas indicadas inválidas -- envie a planilha de novo.")
+    else:
+        i_cab, col_de = _achar_cabecalho(linhas, guardado)
+    # colunas que já são campo do pedido não viram quantidade de item (volumes pode: é quantidade também)
+    ocupadas = {j for k, j in (escolhas if escolhas is not None else col_de).items() if k not in (*_CAMPOS_ITEM, "volumes")}
+    pares = _pares_de_itens(linhas[i_cab], ocupadas, avisos)
+    campos_validos = [c for c in _campos_planilha(empresas is not None) if not (pares and c[0] in _CAMPOS_ITEM)]
+    chaves = {c[0] for c in campos_validos}
+    if escolhas is not None:
+        col_de = {}
+        for chave, j in escolhas.items():   # uma coluna pode servir a dois campos; o inverso não
+            if chave in chaves and 0 <= j < len(linhas[i_cab]):
+                col_de.setdefault(chave, j)
+    else:
+        col_de = {k: j for k, j in col_de.items() if k in chaves}
+    faltando = [c[1] for c in campos_validos if c[2] and c[0] not in col_de]
+    if faltando or (pedir_indicacao and indicado is None):
+        raise _pedido_de_indicacao(nome, linhas, i_cab, col_de, campos_validos, faltando, pares)
+    if indicado is not None and mapa_usado is not None:
+        cab = linhas[i_cab]
+        mapa_usado.update({c[0]: ({"nome": _normalizar_texto(cab[col_de[c[0]]]), "pos": col_de[c[0]]} if c[0] in col_de else None)
+                           for c in campos_validos})
+    emb_padrao = _so_digitos(cnpj_embarcador)
     hoje = date.today()
     grupos: dict[str, dict] = {}
     rejeitados: list[dict] = []
     erros_grupo: dict[str, list[str]] = {}
-    total_linhas = 0
+    total_linhas = total_itens = 0
     for n, linha in enumerate(linhas[i_cab + 1:], start=i_cab + 2):
-        campos = {chave: (linha[j] if j < len(linha) else None) for j, chave in mapa.items()}
-        if not any(_celula_texto(v) for v in campos.values()):
+        campos = {chave: (linha[j] if j < len(linha) else None) for chave, j in col_de.items()}
+        if pares:
+            brutos = [(linha[js] if js < len(linha) else None, linha[jq] if jq < len(linha) else None, None) for js, jq in pares]
+            brutos = [b for b in brutos if _celula_texto(b[0]) or _celula_texto(b[1])]
+        else:
+            brutos = [(campos.get("sku"), campos.get("quantidade"), campos.get("valor_unitario"))]
+        if not any(_celula_texto(v) for v in campos.values()) and not (pares and brutos):
             continue
         total_linhas += 1
         if total_linhas > MAX_LINHAS_PLANILHA:
@@ -608,29 +882,35 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str) -> tuple[list
             rejeitados.append({"arquivo": nome, "rotulo": f"linha {n}", "linha": n, "erro": "Sem o número/referência do pedido."})
             continue
         chave_grupo = ref.strip().upper()
-        sku = _celula_texto(campos.get("sku"))
-        try:
-            qtd = _numero_br(campos.get("quantidade"))
-        except ValueError:
-            qtd = None
-            erros_grupo.setdefault(chave_grupo, []).append(f"linha {n}: quantidade inválida ({_celula_texto(campos.get('quantidade'))}).")
-        try:
-            vu = _numero_br(campos.get("valor_unitario"))
-        except ValueError:
-            vu = None
-            erros_grupo.setdefault(chave_grupo, []).append(f"linha {n}: valor unitário inválido ({_celula_texto(campos.get('valor_unitario'))}).")
-        if not sku:
-            erros_grupo.setdefault(chave_grupo, []).append(f"linha {n}: sem SKU.")
-        elif qtd is None or qtd <= 0:
-            erros_grupo.setdefault(chave_grupo, []).append(f"linha {n}: quantidade precisa ser maior que zero.")
-        item = {"sku": sku, "quantidade": qtd or 0, "valor_unitario": vu, "linha": n}
+        total_itens += len(brutos)
+        if total_itens > MAX_ITENS_PLANILHA:
+            raise ErroEnvio(f"{nome}: a planilha tem mais de {MAX_ITENS_PLANILHA} itens -- divida em arquivos menores.")
+        itens_linha = []
+        for bruto_sku, bruto_qtd, bruto_vu in brutos:
+            sku = _celula_texto(bruto_sku)
+            de = f"linha {n}" + (f" ({sku})" if pares and sku else "")
+            try:
+                qtd = _numero_br(bruto_qtd)
+            except ValueError:
+                qtd = None
+                erros_grupo.setdefault(chave_grupo, []).append(f"{de}: quantidade inválida ({_celula_texto(bruto_qtd)}).")
+            try:
+                vu = _numero_br(bruto_vu)
+            except ValueError:
+                vu = None
+                erros_grupo.setdefault(chave_grupo, []).append(f"{de}: valor unitário inválido ({_celula_texto(bruto_vu)}).")
+            if not sku:
+                erros_grupo.setdefault(chave_grupo, []).append(f"{de}: sem SKU.")
+            elif qtd is None or qtd <= 0:
+                erros_grupo.setdefault(chave_grupo, []).append(f"{de}: quantidade precisa ser maior que zero.")
+            itens_linha.append({"sku": sku, "quantidade": qtd or 0, "valor_unitario": vu, "linha": n})
 
         g = grupos.get(chave_grupo)
         if g is None:
             doc = _so_digitos(campos.get("destinatario_doc"))
             cep = _so_digitos(campos.get("cep"))
             uf = _celula_texto(campos.get("uf")).upper()[:2]
-            logradouro = _celula_texto(campos.get("logradouro"))
+            logradouro = _celula_texto(campos.get("logradouro")).rstrip(" ,")
             numero = _celula_texto(campos.get("numero"))
             compl = _celula_texto(campos.get("complemento"))
             endereco = ", ".join(p for p in (logradouro, numero) if p)
@@ -667,6 +947,15 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str) -> tuple[list
                 valor_total = _numero_br(campos.get("valor_total"))
             except ValueError:
                 erros.append("Volumes, peso ou valor total com número inválido.")
+            emb = emb_padrao
+            if empresas is not None:
+                # o Excel come o zero à esquerda de CNPJ digitado como número
+                emb = _so_digitos(_celula_texto(campos.get(COLUNA_EMPRESA[0])))
+                emb = emb.zfill(14) if emb else ""
+                if not emb:
+                    erros.append(f"Sem o CNPJ da empresa que envia (coluna \"{COLUNA_EMPRESA[1]}\").")
+                elif emb not in empresas:
+                    erros.append(f"O CNPJ da empresa ({formatar_documento(emb)}) não faz parte do seu acesso.")
             g = grupos[chave_grupo] = {
                 "chave_nfe": chave_planilha(emb, ref),
                 "origem": ORIGEM_PLANILHA,
@@ -675,7 +964,7 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str) -> tuple[list
                 "serie": "",
                 "emitida_em": "",
                 "emitente_cnpj": emb,
-                "emitente_nome": "",
+                "emitente_nome": (empresas or {}).get(emb, ""),
                 "destinatario_doc": doc,
                 "destinatario_nome": _celula_texto(campos.get("destinatario_nome"))[:120],
                 "destinatario_endereco": endereco[:200],
@@ -702,7 +991,12 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str) -> tuple[list
             if doc_linha and doc_linha != g["destinatario_doc"]:
                 erros_grupo.setdefault(chave_grupo, []).append(
                     f"linha {n}: destinatário diferente do da primeira linha do pedido {ref} -- use outra referência.")
-        g["itens_lista"].append(item)
+            if empresas is not None:
+                emb_linha = _so_digitos(_celula_texto(campos.get(COLUNA_EMPRESA[0])))
+                if emb_linha and emb_linha.zfill(14) != g["emitente_cnpj"]:
+                    erros_grupo.setdefault(chave_grupo, []).append(
+                        f"linha {n}: empresa diferente da primeira linha do pedido {ref} -- use outra referência.")
+        g["itens_lista"].extend(itens_linha)
         g["linhas"].append(n)
 
     pedidos = []
@@ -762,20 +1056,23 @@ def validar_skus(conn: sqlite3.Connection, pedido: dict, cfg: dict) -> tuple[lis
     return erros, avisos
 
 
-def gerar_modelo_planilha(nome_cliente: str = "") -> bytes:
+def gerar_modelo_planilha(nome_cliente: str = "", empresas: dict[str, str] | None = None) -> bytes:
     """Modelo .xlsx pra download: aba Pedidos (cabeçalho + 3 linhas de
-    exemplo = 2 pedidos) e aba Instruções."""
+    exemplo = 2 pedidos) e aba Instruções. `empresas` ({cnpj: nome}, login de
+    grupo): o modelo ganha a coluna "CNPJ da empresa" na frente e as
+    instruções listam os CNPJs do acesso."""
     import openpyxl
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
+    colunas = ([COLUNA_EMPRESA] if empresas else []) + COLUNAS_PLANILHA
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Pedidos"
     cab = Font(bold=True, color="FFFFFF")
     fundo_ob = PatternFill("solid", fgColor="0EA575")
     fundo_op = PatternFill("solid", fgColor="6B7280")
-    for j, (chave, rotulo, obrig, _ap, larg, _ex) in enumerate(COLUNAS_PLANILHA, start=1):
+    for j, (chave, rotulo, obrig, _ap, larg, _ex) in enumerate(colunas, start=1):
         c = ws.cell(row=1, column=j, value=rotulo)
         c.font, c.fill = cab, (fundo_ob if obrig else fundo_op)
         c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -783,20 +1080,22 @@ def gerar_modelo_planilha(nome_cliente: str = "") -> bytes:
     ws.row_dimensions[1].height = 34
     ws.freeze_panes = "A2"
     exemplos = [
-        {c[0]: c[5] for c in COLUNAS_PLANILHA},
+        {c[0]: c[5] for c in colunas},
         {"referencia": "PED-1001", "sku": "QE-0002", "quantidade": "4", "valor_unitario": "12,50"},
         {"referencia": "PED-1002", "numero_nf": "", "destinatario_doc": "123.456.789-09", "destinatario_nome": "Ana Souza",
          "cep": "04538-132", "logradouro": "Rua Joaquim Floriano", "numero": "100", "complemento": "Apto 31", "bairro": "Itaim Bibi",
          "cidade": "São Paulo", "uf": "SP", "telefone": "(11) 98888-7777", "email": "", "data_expedicao": "", "volumes": "1",
          "peso_kg": "2", "valor_total": "", "observacoes": "Portaria 24h", "sku": "QE-0010", "quantidade": "2", "valor_unitario": "30,00"},
     ]
+    if empresas:
+        exemplos[0][COLUNA_EMPRESA[0]] = exemplos[2][COLUNA_EMPRESA[0]] = formatar_documento(next(iter(empresas)))
     for i, ex in enumerate(exemplos, start=2):
-        for j, col in enumerate(COLUNAS_PLANILHA, start=1):
+        for j, col in enumerate(colunas, start=1):
             v = ex.get(col[0], "")
             if v != "":
                 ws.cell(row=i, column=j, value=v)
     for i in range(2, 2 + len(exemplos)):
-        for j in range(1, len(COLUNAS_PLANILHA) + 1):
+        for j in range(1, len(colunas) + 1):
             ws.cell(row=i, column=j).font = Font(italic=True, color="9CA3AF")
 
     wi = wb.create_sheet("Instruções")
@@ -817,6 +1116,11 @@ def gerar_modelo_planilha(nome_cliente: str = "") -> bytes:
         "Ao subir a planilha no portal, você vê uma prévia por pedido, confere o horário de recebimento de cada destinatário",
         "e confirma. Os pedidos entram na fila e são criados na Stokki automaticamente.",
     ]
+    if empresas:
+        texto += ["",
+                  f"Seu acesso tem {len(empresas)} empresas. Na coluna \"{COLUNA_EMPRESA[1]}\", informe na PRIMEIRA linha de cada pedido",
+                  "o CNPJ da empresa dona do pedido (com ou sem pontuação). A mesma planilha pode levar pedidos de várias empresas:"]
+        texto += [f"   {formatar_documento(c)}  ·  {n}" for c, n in empresas.items()]
     for i, t in enumerate(texto, start=1):
         c = wi.cell(row=i, column=1, value=t)
         if i == 1:
@@ -850,7 +1154,7 @@ def xlsx_pedido_stokki(itens: list[dict]) -> bytes:
 # Um token por arquivo: .xml (NF-e), .xlsx/.xls (planilha original) ou .json
 # (um pedido lido da planilha, já validado, apontando pro token da planilha).
 
-_EXT_TEMP = (".xml", ".xlsx", ".xls", ".xlsm", ".json")
+_EXT_TEMP = (".xml", ".xlsx", ".xls", ".xlsm", ".json", ".pdf")
 
 
 def guardar_temporario(conteudo: bytes, extensao: str = "xml") -> str:
@@ -1125,12 +1429,12 @@ def _identificar_area(servicos: list[dict], api_key: str | None):
 
 def _tipo_transportadora(nome: str, cnpj: str) -> str | None:
     """Tipo (ENTREGA/RETIRADA/TERCEIROS) da transportadora do XML na
-    BD_TRANSPORTADORAS; None se não há transportadora, é desconhecida ou
-    está em conflito na planilha."""
+    cadastro de transportadoras; None se não há transportadora, é desconhecida ou
+    está em conflito no cadastro."""
     if not nome and not cnpj:
         return None
     from regras.transportadoras import CatalogoTransportadoras
-    catalogo = CatalogoTransportadoras.carregar(_RAIZ / "dados" / "BD_TRANSPORTADORAS.xlsx")
+    catalogo = CatalogoTransportadoras.carregar_do_banco(DB_PATH)
     resultado = catalogo.resolver(nome, cnpj=cnpj)
     return None if resultado.conflito else resultado.tipo
 
@@ -1151,7 +1455,7 @@ def classificar_area_envio(nfe: dict, config: dict | None) -> str | None:
         if _tipo_transportadora(nfe.get("transportadora_nome") or "", nfe.get("transportadora_cnpj") or "") in ("TERCEIROS", "RETIRADA"):
             return None
     except Exception as e:
-        logger.warning(f"consulta a BD_TRANSPORTADORAS falhou ({e}); seguindo com a checagem de área da NF {nfe.get('numero_nf')}")
+        logger.warning(f"consulta ao cadastro de transportadoras falhou ({e}); seguindo com a checagem de área da NF {nfe.get('numero_nf')}")
     cidade_uf = f"{nfe.get('destinatario_municipio') or ''} - {nfe.get('destinatario_uf') or ''}".strip(" -")
     endereco = ", ".join(p for p in (nfe.get("destinatario_endereco"), cidade_uf, nfe.get("destinatario_cep")) if p)
     api_key = ((config or {}).get("google_maps", {}) or {}).get("api_key") or ""
@@ -1164,13 +1468,166 @@ def classificar_area_envio(nfe: dict, config: dict | None) -> str | None:
         return None
 
 
+def _regioes_dia_fixo():
+    """roteirizacao/regioes_dia_fixo.py (caminho pelo próprio arquivo: os
+    testes trocam _RAIZ por uma pasta temporária)."""
+    pasta = str(Path(__file__).resolve().parent.parent / "roteirizacao")
+    if pasta not in sys.path:
+        sys.path.insert(0, pasta)
+    import regioes_dia_fixo
+    return regioes_dia_fixo
+
+
+def _endereco_sintetico(nfe: dict) -> str:
+    """Endereço no formato da Vuupt ('..., Cidade - UF, CEP, Brasil'), que é o
+    que regioes_dia_fixo.extrair_cidade lê."""
+    cidade_uf = f"{nfe.get('destinatario_municipio') or ''} - {nfe.get('destinatario_uf') or ''}".strip(" -")
+    partes = [nfe.get("destinatario_endereco") or "S/N", cidade_uf, nfe.get("destinatario_cep")]
+    return ", ".join(p for p in partes if p) + ", Brasil"
+
+
+def avisos_fora_dia_fixo(itens: list[dict], config: dict | None = None) -> list[dict]:
+    """Itens do confirmar (mesmo formato de confirmar_envios) com data de
+    agendamento escolhida fora do dia de visita da região do destino (Hugo,
+    03/10 -- spec dias fixos v2, 5.2). Fica de fora: sem data, agendamento
+    pendente, data inválida ou passada, e quem já confirmou assim mesmo
+    (aceita_fora_dia_fixo). Relê o temporário, como confirmar_envios."""
+    rdf = _regioes_dia_fixo()
+    hoje = date.today()
+    avisos = []
+    for item in itens:
+        if item.get("aceita_fora_dia_fixo") or item.get("agendamento_pendente") or not item.get("agendamento_data"):
+            continue
+        try:
+            data = date.fromisoformat(str(item.get("agendamento_data")))
+        except ValueError:
+            continue
+        if data < hoje:
+            continue
+        caminho = _caminho_temporario(item.get("token", ""))
+        conteudo = caminho.read_bytes()
+        nfe = json.loads(conteudo.decode("utf-8")) if caminho.suffix == ".json" else ler_nfe(conteudo)
+        if (caminho.suffix != ".json" and endereco_entrega.entrega_ativa(config)
+                and item.get("entrega_escolha") in ("cliente", "ultima_entrega")):
+            try:
+                nfe = endereco_entrega.aplicar_entrega(nfe, endereco_entrega.montar_endereco(item.get("entrega_endereco") or {}))
+            except endereco_entrega.ErroEndereco:
+                continue  # o confirmar recusa com a mensagem certa
+        regra = rdf.regra_dia_fixo_do_servico({"address": _endereco_sintetico(nfe)})
+        if not regra or rdf.data_valida_na_regiao(regra, data):
+            continue
+        avisos.append({"token": item.get("token"), "rotulo": rotulo_envio(nfe),
+                       "destinatario_nome": nfe.get("destinatario_nome") or "",
+                       "data_br": data.strftime("%d/%m/%Y"), "regiao": regra.get("regiao") or regra["nome"],
+                       "dias": rdf.descricao_dias(regra)})
+    return avisos
+
+
+MSG_XD_AUSENTE = "Produto XD não encontrado no cadastro do embarcador na Stokki. A Fresh Log foi avisada."
+
+
+def fluxos_para_envio(conn: sqlite3.Connection, cnpj_embarcador: str) -> tuple[list[str], dict]:
+    """(fluxos que o embarcador pode usar agora, {"codigo", "erro"} do XD).
+    Cross sai da lista quando o XD não está no catálogo (Hugo, 25/10:
+    avisa cliente e atendimento em vez de mandar o pedido sem XD). Lista
+    vazia = o embarcador só tem Cross e o XD falta: nada pode ser enviado."""
+    from nucleo import fluxo_embarcador as fe
+    try:
+        f = fe.fluxos_do_embarcador(conn, cnpj=cnpj_embarcador)
+    except ValueError:
+        return ["armazenagem"], {"codigo": None, "erro": None}
+    disp = list(f["fluxos"])
+    if "cross" in disp and not f["codigo_xd"]:
+        disp.remove("cross")
+    return disp, {"codigo": f["codigo_xd"], "erro": f["erro_xd"]}
+
+
+def primeiro_aviso_xd_do_dia(conn: sqlite3.Connection, cnpj_embarcador: str, hoje: date | None = None) -> bool:
+    """True só na primeira vez do dia por embarcador: cada prévia do portal
+    detecta o XD ausente, mas o atendimento recebe um e-mail por dia (sem
+    isso, reenvios em série virariam e-mails em série). Faz commit."""
+    conn.execute("CREATE TABLE IF NOT EXISTS avisos_xd_ausente (cnpj TEXT NOT NULL, dia TEXT NOT NULL, "
+                 "PRIMARY KEY (cnpj, dia))")
+    cur = conn.execute("INSERT OR IGNORE INTO avisos_xd_ausente (cnpj, dia) VALUES (?, ?)",
+                       (_so_digitos(cnpj_embarcador), (hoje or date.today()).isoformat()))
+    conn.commit()
+    return cur.rowcount == 1
+
+
+def escolher_fluxo(item: dict, disponiveis: list[str], origem: str, rotulo: str = "") -> str:
+    """Fluxo do pedido (Hugo, 24/10: com mais de um fluxo, o embarcador
+    informa). Um fluxo só: é ele, sem perguntar. Pedido de planilha não tem
+    NF-e, então não pode ir em Cross (o Cross troca a NF depois)."""
+    disp = [f for f in FLUXOS if f in (disponiveis or [])] or ["armazenagem"]
+    if origem == ORIGEM_PLANILHA:
+        if str(item.get("fluxo") or "").strip() == "cross" or disp == ["cross"]:
+            raise ErroEnvio(f"{rotulo}: pedido de planilha não pode ir em Cross; envie o XML da NF-e.")
+        disp = [f for f in disp if f != "cross"]
+    if len(disp) == 1:
+        return disp[0]
+    fluxo = str(item.get("fluxo") or "").strip()
+    if fluxo not in disp:
+        nomes = [FLUXO_ROTULOS[f] for f in disp]
+        raise ErroEnvio(f"{rotulo}: informe o fluxo ({', '.join(nomes[:-1])} ou {nomes[-1]}).")
+    return fluxo
+
+
+def _resolver_entrega(conn: sqlite3.Connection, item: dict, nfe: dict, emb: str, sender_id: int | None,
+                      config: dict | None) -> dict:
+    """Endereço de entrega de um XML no confirmar (spec 2026-10-27): recalcula
+    o caso no servidor, valida o endereço pelo CEP e devolve o nfe com
+    _entrega_origem (fiscal|nota|cliente|ultima_entrega) e _entrega_json.
+    Chave desligada: só registra a origem, pra memória já se formar."""
+    rot = rotulo_envio(nfe)
+    if not endereco_entrega.entrega_ativa(config):
+        return {**nfe, "_entrega_origem": "nota" if nfe.get("endereco_fiscal") else "fiscal", "_entrega_json": None}
+    caso = endereco_entrega.classificar_entrega(conn, nfe, emb, sender_id)
+    escolha = item.get("entrega_escolha") or ""
+    if escolha not in ("", "fiscal", "cliente", "ultima_entrega"):
+        raise ErroEnvio(f"{rot}: escolha de endereço inválida.")
+    if caso["modo"] in ("nota", "terceiros", "retirada"):
+        if escolha not in ("", "fiscal"):
+            raise ErroEnvio(f"{rot}: este pedido não aceita troca de endereço.")
+        return {**nfe, "_entrega_origem": "nota" if caso["modo"] == "nota" else "fiscal", "_entrega_json": None}
+    if caso["modo"] == "sugestao" and not escolha:
+        raise ErroEnvio(f"{rot}: escolha onde entregar (no último pedido a entrega foi em outro endereço).")
+    if escolha == "ultima_entrega" and caso["modo"] != "sugestao":
+        raise ErroEnvio(f"{rot}: não há entrega anterior em outro endereço pra repetir.")
+    if escolha not in ("cliente", "ultima_entrega"):
+        return {**nfe, "_entrega_origem": "fiscal", "_entrega_json": None}
+    try:
+        end = endereco_entrega.montar_endereco(item.get("entrega_endereco") or {})
+    except endereco_entrega.ErroEndereco as e:
+        raise ErroEnvio(f"{rot}: {e}")
+    gravado = {**end, "documento": nfe["destinatario_doc"], "nome": nfe["destinatario_nome"]}
+    return {**endereco_entrega.aplicar_entrega(nfe, end), "_entrega_origem": escolha,
+            "_entrega_json": json.dumps(gravado, ensure_ascii=False)}
+
+
 def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list[dict], enviado_por: str,
-                     config: dict | None, regra_xml: str) -> list[dict]:
+                     config: dict | None, regra_xml: str, fluxos_disponiveis: list[str] | None = None,
+                     sender_id: int | None = None, por_empresa: dict[str, dict] | None = None) -> list[dict]:
     """Cada item: {token, horario_inicio?, horario_fim?, agendamento_data?,
     agendamento_hora_inicio?, agendamento_hora_fim?, agendamento_pendente?,
-    observacoes?}. Relê o XML temporário (nunca confia no que o navegador
-    mandou), revalida, grava o definitivo e cria a linha NA_FILA."""
-    emb = _so_digitos(cnpj_embarcador)
+    observacoes?, entrega_escolha?, entrega_endereco?}. Relê o XML temporário
+    (nunca confia no que o navegador mandou), revalida, grava o definitivo e
+    cria a linha NA_FILA. sender_id: da empresa do envio, pra memória do
+    endereço de entrega (_resolver_entrega).
+    por_empresa (login de grupo sem seletor, 12/11): {cnpj: {"regra_xml",
+    "fluxos", "sender_id"}} das empresas do login. A empresa de cada item é
+    o emitente do próprio temporário (XML ou pedido de planilha) e os três
+    parâmetros avulsos são ignorados; tudo é validado antes de gravar."""
+    def _contexto(cnpj: str) -> dict:
+        if por_empresa is None:
+            return {"regra_xml": regra_xml, "fluxos": fluxos_disponiveis, "sender_id": sender_id}
+        ctx = por_empresa.get(cnpj)
+        if ctx is None:
+            raise ErroEnvio(f"O CNPJ emitente ({formatar_documento(cnpj)}) não é de uma empresa do seu acesso.")
+        return ctx
+
+    emb_padrao = _so_digitos(cnpj_embarcador)
+    if por_empresa is None and fluxos_disponiveis is not None and not fluxos_disponiveis:
+        raise ErroEnvio(MSG_XD_AUSENTE)  # só Cross e o XD falta (fluxos_para_envio)
     criados = []
     lidos = []
     for item in itens:
@@ -1179,27 +1636,48 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
         if caminho.suffix == ".json":
             # pedido lido de uma planilha (gravado pelo servidor em analisar)
             nfe = json.loads(conteudo.decode("utf-8"))
-            if nfe.get("origem") != ORIGEM_PLANILHA or _so_digitos(nfe.get("emitente_cnpj")) != emb:
+            if nfe.get("origem") != ORIGEM_PLANILHA or (
+                    por_empresa is None and _so_digitos(nfe.get("emitente_cnpj")) != emb_padrao):
                 raise ErroEnvio("Pedido temporário inválido -- envie a planilha de novo.")
             if nfe.get("data_expedicao") and nfe["data_expedicao"] < date.today().isoformat():
                 nfe["data_expedicao"] = date.today().isoformat()
         else:
             nfe = ler_nfe(conteudo)
             nfe["origem"] = ORIGEM_XML
+        emb = emb_padrao if por_empresa is None else _so_digitos(nfe.get("emitente_cnpj"))
+        ctx = _contexto(emb)
+        if ctx["fluxos"] is not None and not ctx["fluxos"]:
+            raise ErroEnvio(f"{rotulo_envio(nfe)}: {MSG_XD_AUSENTE}")
         v = validar_item(conn, nfe, emb)
         if not v["ok"]:
             raise ErroEnvio(f"{rotulo_envio(nfe)}: " + " ".join(v["erros"]))
+        nfe["_fluxo"] = escolher_fluxo(item, ctx["fluxos"] or ["armazenagem"], nfe.get("origem") or ORIGEM_XML,
+                                       rotulo_envio(nfe))
+        # Transportadora escolhida na prévia: antes do endereço e da área, que
+        # dependem do tipo dela (retirada/redespacho não checam região).
+        if item.get("transportadora_id"):
+            if nfe.get("origem") != ORIGEM_XML:
+                raise ErroEnvio(f"{rotulo_envio(nfe)}: pedido de planilha não aceita troca de transportadora.")
+            try:
+                transp = transportadora_envio.resolver(conn, item["transportadora_id"])
+            except transportadora_envio.ErroTransportadora as e:
+                raise ErroEnvio(f"{rotulo_envio(nfe)}: {e}")
+            nfe = {**transportadora_envio.aplicar_no_nfe(nfe, transp), "_transp_json": transportadora_envio.gravar_json(transp)}
+        # Endereço de entrega escolhido na prévia (27/10): antes da área, pra
+        # área, dia fixo e gravação já usarem o endereço de entrega.
+        if nfe.get("origem") == ORIGEM_XML:
+            nfe = _resolver_entrega(conn, item, nfe, emb, ctx["sender_id"], config)
         # Área não atendida (Hugo, 23/09): classifica AQUI, antes de qualquer
         # escrita -- a geocodificação grava cache por outra conexão e travaria
         # ~5 s por NF se já houvesse transação de escrita aberta nesta.
         nfe["_bloqueio_motivo"] = classificar_area_envio(nfe, config)
-        lidos.append((item, caminho, conteudo, nfe, v["envio_existente"]))
+        lidos.append((item, caminho, conteudo, nfe, v["envio_existente"], emb, ctx))
 
-    dest_info = info_destinatarios(conn, emb, [x[3] for x in lidos], config)
+    dest_info = {e: info_destinatarios(conn, e, [x[3] for x in lidos if x[5] == e], config) for e in {x[5] for x in lidos}}
     hoje = date.today()
-    planilhas_movidas: dict[str, Path] = {}
-    for item, caminho, conteudo, nfe, existente in lidos:
-        d = dest_info.get(nfe["destinatario_doc"], {})
+    planilhas_movidas: dict[tuple[str, str], Path] = {}
+    for item, caminho, conteudo, nfe, existente, emb, ctx in lidos:
+        d = dest_info[emb].get(nfe["destinatario_doc"], {})
         ini = _hora_valida(item.get("horario_inicio")) or d.get("horario_inicio") or ""
         fim = _hora_valida(item.get("horario_fim")) or d.get("horario_fim") or ""
         if not ini or not fim:
@@ -1230,17 +1708,15 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
         if planilha:
             # a planilha original é guardada UMA vez por arquivo; cada pedido
             # aponta pra ela (xml_path) e leva os próprios itens em itens_json
+            # (login de grupo: uma cópia por empresa que tem pedido no arquivo;
+            # o temporário só sai no fim, depois da última cópia)
             tk = nfe.get("arquivo_token", "")
-            destino = planilhas_movidas.get(tk)
+            destino = planilhas_movidas.get((tk, emb))
             if destino is None:
                 origem_plan = _caminho_temporario(tk)
                 destino = _caminho_definitivo_planilha(emb, nfe.get("nome_arquivo") or origem_plan.name)
                 destino.write_bytes(origem_plan.read_bytes())
-                planilhas_movidas[tk] = destino
-                try:
-                    origem_plan.unlink()
-                except OSError:
-                    pass
+                planilhas_movidas[(tk, emb)] = destino
         else:
             destino = _caminho_definitivo(emb, nfe["chave_nfe"])
             destino.write_bytes(conteudo)
@@ -1257,14 +1733,15 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
             "destinatario_endereco": nfe["destinatario_endereco"], "destinatario_bairro": nfe["destinatario_bairro"],
             "destinatario_municipio": nfe["destinatario_municipio"], "destinatario_uf": nfe["destinatario_uf"],
             "destinatario_cep": nfe["destinatario_cep"], "destinatario_telefone": nfe["destinatario_telefone"],
+            "endereco_fiscal": nfe.get("endereco_fiscal") or None,
             "volumes": nfe["volumes"], "peso_kg": nfe["peso_kg"], "valor_nf": nfe["valor_nf"], "itens": nfe["itens"],
-            "xml_path": str(destino.relative_to(_RAIZ)), "regra_xml": None if planilha else regra_xml,
+            "xml_path": str(destino.relative_to(_RAIZ)), "regra_xml": None if planilha else ctx["regra_xml"],
             "status": STATUS_AGUARDANDO_LIBERACAO if motivo else STATUS_NA_FILA, "tentativas": 0,
             "bloqueio_motivo": motivo, "bloqueio_chamado_id": None,
             "erro": None, "resposta_stokki": None, "codigo_pedido": None, "horario_inicio": ini, "horario_fim": fim,
             "requer_agendamento": int(requer), "agendamento_data": ag_data, "agendamento_hora_inicio": ag_ini,
             "agendamento_hora_fim": ag_fim, "agendamento_pendente": pendente, "agendamento_aplicado_em": None,
-            "observacoes": obs, "enviado_por": enviado_por,
+            "observacoes": obs, "enviado_por": enviado_por, "fluxo": nfe["_fluxo"],
             "criado_em": agora, "atualizado_em": agora, "enviado_stokki_em": None, "criado_stokki_em": None,
             "origem": ORIGEM_PLANILHA if planilha else ORIGEM_XML,
             "referencia": nfe.get("referencia") if planilha else None,
@@ -1275,6 +1752,8 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
             }, ensure_ascii=False) if planilha else None,
             "data_expedicao": nfe.get("data_expedicao") if planilha else None,
             "linhas_planilha": ",".join(str(n) for n in nfe.get("linhas") or []) if planilha else None,
+            "endereco_entrega_origem": nfe.get("_entrega_origem"), "endereco_entrega_json": nfe.get("_entrega_json"),
+            "transportadora_json": nfe.get("_transp_json"),
         }
         if existente:
             sets = ", ".join(f"{k} = ?" for k in campos if k != "chave_nfe")
@@ -1285,10 +1764,15 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
             cols = ", ".join(campos)
             conn.execute(f"INSERT INTO portal_envios ({cols}) VALUES ({','.join('?' * len(campos))})", tuple(campos.values()))
             envio_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        criados.append({"id": envio_id, "numero_nf": nfe["numero_nf"], "referencia": nfe.get("referencia"),
+        criados.append({"id": envio_id, "token": item.get("token"), "cnpj_embarcador": emb, "numero_nf": nfe["numero_nf"], "referencia": nfe.get("referencia"),
                         "origem": campos["origem"], "destinatario_nome": nfe["destinatario_nome"],
                         "status": campos["status"], "bloqueio_motivo": motivo,
                         "destinatario_municipio": nfe["destinatario_municipio"], "destinatario_uf": nfe["destinatario_uf"]})
+    for tk, _emb in planilhas_movidas:
+        try:
+            _caminho_temporario(tk).unlink()
+        except (OSError, ErroEnvio):   # mesmo arquivo, segunda empresa: já saiu
+            pass
     conn.commit()
     return criados
 
@@ -1304,10 +1788,32 @@ def _dt_br(valor: str | None) -> str:
         return valor
 
 
+def _pode_reagendar(status: str, cancelamento_pedido: bool) -> bool:
+    """Botao Reagendar da tabela (_linha)."""
+    return status in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_DUPLICADO) and not cancelamento_pedido
+
+
+def _servidor_aceita_reagendar(status: str, cancelamento_pedido: bool) -> bool:
+    """Guarda do aplicar_acao: alem dos status do botao, aceita ERRO e AGUARDANDO_LIBERACAO
+    porque o card 'Precisa da sua atencao' (Definir data) posta reagendar neles."""
+    return status in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_DUPLICADO, STATUS_ERRO,
+                      STATUS_AGUARDANDO_LIBERACAO) and not cancelamento_pedido
+
+
 def _linha(r: sqlite3.Row, solicitacoes: dict[int, list]) -> dict:
     d = dict(r)
     pend = [s for s in solicitacoes.get(d["id"], []) if s["status"] == "PENDENTE"]
+    cancelamento_pedido = d["status"] == STATUS_CANCELANDO or any(s["tipo"] == "cancelar" for s in pend)
     d.setdefault("origem", ORIGEM_XML)
+    # Cancelamento solicitado (pedido ja criado na Stokki, a Fresh Log ainda
+    # vai cancelar): o portal para de cobrar agendamento e nao oferece
+    # reagendar -- a unica pendencia que fica e a do cancelamento (Hugo,
+    # 06/10, caso PS-39959: cobrou "Definir data" por 2 semanas depois do
+    # cliente pedir pra cancelar).
+    if cancelamento_pedido:
+        d["agendamento_pendente"] = 0
+    d["endereco_fiscal"] = d.get("endereco_fiscal") or ""
+    d["endereco_entrega_origem"] = d.get("endereco_entrega_origem") or ""
     d.update({
         "status_rotulo": ROTULOS_STATUS.get(d["status"], d["status"]),
         "criado_em_br": _dt_br(d["criado_em"]),
@@ -1325,10 +1831,13 @@ def _linha(r: sqlite3.Row, solicitacoes: dict[int, list]) -> dict:
         "bloqueio_texto": (f"Não atendemos a região de {d.get('destinatario_municipio') or '?'}/{d.get('destinatario_uf') or '?'}."
                            if d["status"] == STATUS_AGUARDANDO_LIBERACAO else ""),
         "bloqueio_chamado_id": d.get("bloqueio_chamado_id"),
-        "pode_cancelar": d["status"] in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_ERRO, STATUS_DUPLICADO, STATUS_AGUARDANDO_LIBERACAO) and not any(s["tipo"] == "cancelar" for s in pend),
+        "pode_cancelar": d["status"] in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_ERRO, STATUS_DUPLICADO, STATUS_AGUARDANDO_LIBERACAO,
+                                         STATUS_EM_ESPERA_CLIENTE) and not cancelamento_pedido,
+        "pode_retomar": d["status"] == STATUS_EM_ESPERA_CLIENTE and not cancelamento_pedido,
         "pode_em_espera": d["status"] in (STATUS_CRIADO, STATUS_DUPLICADO) and not any(s["tipo"] in ("em_espera", "cancelar") for s in pend),
-        "pode_reagendar": d["status"] in (STATUS_NA_FILA, STATUS_CRIADO, STATUS_DUPLICADO),
+        "pode_reagendar": _pode_reagendar(d["status"], cancelamento_pedido),
         "pode_reenviar": d["status"] in (STATUS_ERRO, STATUS_CANCELADO),
+        "pode_alterar_endereco": _pode_alterar_endereco(d),
     })
     d.pop("xml_path", None)
     d.pop("itens_json", None)
@@ -1339,7 +1848,7 @@ def listar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, dias: int = DI
     desde = (datetime.now() - timedelta(days=dias)).strftime("%Y-%m-%d 00:00:00")
     emb = _so_digitos(cnpj_embarcador)
     rows = conn.execute(
-        "SELECT * FROM portal_envios WHERE cnpj_embarcador = ? AND (criado_em >= ? OR status IN ('NA_FILA','ENVIANDO','AGUARDANDO_LIBERACAO')) "
+        "SELECT * FROM portal_envios WHERE cnpj_embarcador = ? AND (criado_em >= ? OR status IN ('NA_FILA','ENVIANDO','AGUARDANDO_LIBERACAO','EM_ESPERA_CLIENTE','RETOMANDO','CANCELANDO')) "
         "ORDER BY criado_em DESC, id DESC", (emb, desde)).fetchall()
     sol = {}
     for s in conn.execute("SELECT * FROM portal_solicitacoes WHERE cnpj_embarcador = ? AND status = 'PENDENTE'", (emb,)):
@@ -1347,12 +1856,24 @@ def listar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, dias: int = DI
     linhas = [_linha(r, sol) for r in rows]
     # Marca de envio dedicado (Hugo, 23/09): pedidos_dedicados mora no mesmo
     # dados.db; a checagem em sqlite_master cobre banco sem a tabela ainda.
-    dedicados = {}
+    # 03/10: casa também pelo código do pedido (a marcação automática de data
+    # fora do dia fixo não conhece o envio_id) e traz o motivo.
+    import pedidos_dedicados
+    por_envio: dict[int, dict] = {}
+    por_codigo: dict[str, dict] = {}
     if conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pedidos_dedicados'").fetchone():
-        dedicados = {r["envio_id"]: r["valor"] for r in conn.execute(
-            "SELECT envio_id, valor FROM pedidos_dedicados WHERE removido_em IS NULL AND envio_id IS NOT NULL")}
+        for r in conn.execute("SELECT envio_id, codigo_pedido, valor, marcado_por FROM pedidos_dedicados "
+                              "WHERE removido_em IS NULL"):
+            info = {"valor": r["valor"]}
+            if str(r["marcado_por"] or "").startswith(pedidos_dedicados.POR_FORA_DIA_FIXO):
+                info["motivo"] = MOTIVO_DEDICADO_FORA_DIA_FIXO
+            if r["envio_id"] is not None:
+                por_envio[r["envio_id"]] = info
+            if r["codigo_pedido"]:
+                por_codigo[r["codigo_pedido"]] = info
     for l in linhas:
-        l["dedicado"] = {"valor": dedicados[l["id"]]} if l["id"] in dedicados else None
+        codigo = pedidos_dedicados.normalizar_codigo(l.get("codigo_pedido")) if l.get("codigo_pedido") else None
+        l["dedicado"] = por_envio.get(l["id"]) or (por_codigo.get(codigo) if codigo else None)
     return linhas
 
 
@@ -1364,6 +1885,7 @@ def resumo_envios(envios: list[dict]) -> dict:
         "na_fila": sum(1 for e in envios if e["status"] in STATUS_ABERTOS),
         "criados": sum(1 for e in envios if e["status"] == STATUS_CRIADO),
         "erros": sum(1 for e in envios if e["status"] == STATUS_ERRO),
+        "em_espera": sum(1 for e in envios if e["status"] == STATUS_EM_ESPERA_CLIENTE),  # espera o Retomar do cliente
         "agendamento_pendente": sum(1 for e in envios if e.get("agendamento_pendente") and e["status"] != STATUS_CANCELADO),
         "solicitacoes_pendentes": sum(len(e["solicitacoes_pendentes"]) for e in envios),
     }
@@ -1377,6 +1899,14 @@ def buscar_envio(conn: sqlite3.Connection, envio_id: int, cnpj_embarcador: str) 
 
 def caminho_xml(envio: dict) -> Path:
     return _RAIZ / envio["xml_path"]
+
+
+def ler_nfe_do_envio(envio: dict) -> dict:
+    """ler_nfe do XML gravado, já com a transportadora que o embarcador
+    escolheu na prévia (o arquivo guardado é o original da nota)."""
+    nfe = ler_nfe(caminho_xml(envio).read_bytes())
+    transp = transportadora_envio.da_linha(envio)
+    return transportadora_envio.aplicar_no_nfe(nfe, transp) if transp else nfe
 
 
 # ── Ações do cliente (item 12) ─────────────────────────────────────────────────
@@ -1401,31 +1931,76 @@ def _remover_dedicado(conn: sqlite3.Connection, envio_id: int, por: str) -> None
         logger.warning(f"nao removeu dedicado do envio {envio_id} ao cancelar: {e}")
 
 
+def _validar_agendamento(envio: dict, dados: dict) -> tuple[date, str, str]:
+    """Validacao de data e janela do cliente (reagendar e retomar com agendamento)."""
+    try:
+        nova = date.fromisoformat(str(dados.get("data") or ""))
+    except ValueError:
+        raise ErroEnvio("Informe a nova data de entrega.")
+    if nova < date.today():
+        raise ErroEnvio("A nova data precisa ser a partir de hoje.")
+    if nova > date.today() + timedelta(days=DIAS_MAX_AGENDAMENTO):
+        raise ErroEnvio(f"A data precisa ser em até {DIAS_MAX_AGENDAMENTO} dias.")
+    ini = _hora_valida(dados.get("hora_inicio")) or envio.get("horario_inicio") or "08:00"
+    fim = _hora_valida(dados.get("hora_fim")) or envio.get("horario_fim") or "18:00"
+    if fim <= ini:
+        raise ErroEnvio("O horário final precisa ser depois do inicial.")
+    return nova, ini, fim
+
+
 def aplicar_acao(conn: sqlite3.Connection, envio: dict, tipo: str, dados: dict, por: str) -> dict:
     """Devolve {aplicado: bool, mensagem, precisa_operacao: bool}.
     - cancelar/reenviar antes de ir pra Stokki: resolve aqui mesmo.
     - o resto (pedido já criado na Stokki) vira solicitação PENDENTE pra
       operação (e-mail é disparado por quem chama), e o acompanhamento
       mostra a pendência."""
-    if tipo not in TIPOS_SOLICITACAO:
+    if tipo != "retomar" and tipo not in TIPOS_SOLICITACAO:
         raise ErroEnvio("Ação inválida.")
     st = envio["status"]
     agora = _agora()
+    if tipo == "retomar":
+        if st != STATUS_EM_ESPERA_CLIENTE:
+            raise ErroEnvio("Só um pedido em espera a seu pedido pode ser retomado.")
+        modo = dados.get("modo")
+        if modo not in MODOS_RETOMAR:
+            raise ErroEnvio("Escolha como retomar: próxima rota ou agendamento.")
+        data = ini = fim = None
+        if modo == "agendamento":
+            nova, ini, fim = _validar_agendamento(envio, dados)
+            data = nova.isoformat()
+        _garantir_colunas(conn, "portal_envios", COLUNAS_RETOMAR)
+        # WHERE status: o envio passado pode estar velho (cancelamento ou segundo clique no meio)
+        cur = conn.execute("UPDATE portal_envios SET status = ?, retomar_modo = ?, retomar_data = ?, retomar_hora_inicio = ?, "
+                           "retomar_hora_fim = ?, atualizado_em = ? WHERE id = ? AND status = ?",
+                           (STATUS_RETOMANDO, modo, data, ini, fim, agora, envio["id"], STATUS_EM_ESPERA_CLIENTE))
+        conn.commit()
+        if cur.rowcount == 0:
+            raise ErroEnvio("Esse pedido não está mais em espera -- atualize a página.")
+        return {"aplicado": False, "precisa_operacao": False, "em_andamento": True,
+                "mensagem": "Retomando… você verá aqui em instantes."}
     if tipo == "cancelar":
         if st == STATUS_ENVIANDO:
             raise ErroEnvio("Esse pedido está sendo enviado à Stokki agora -- tente de novo em alguns instantes.")
         if st == STATUS_CANCELADO:
             raise ErroEnvio("Esse pedido já está cancelado.")
+        if st == STATUS_CANCELANDO:
+            raise ErroEnvio("O cancelamento desse pedido já está em andamento.")
+        if st == STATUS_RETOMANDO:
+            raise ErroEnvio("Esse pedido está sendo retomado agora -- tente de novo em alguns instantes.")
         if st in (STATUS_NA_FILA, STATUS_ERRO, STATUS_AGUARDANDO_LIBERACAO):
             conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = ? WHERE id = ?", (STATUS_CANCELADO, agora, envio["id"]))
             _registrar_solicitacao(conn, envio, tipo, dados.get("motivo", ""), por, status="CONCLUIDA")
             _remover_dedicado(conn, envio["id"], por)
             conn.commit()
             return {"aplicado": True, "precisa_operacao": False, "mensagem": "Pedido cancelado -- não será enviado à Stokki."}
+        # Já criado na Stokki (CRIADO/DUPLICADO): o worker portal-cliente-envios
+        # cancela na Vuupt e na Stokki no próximo ciclo (06/10, spec do
+        # cancelamento). Se o motorista já saiu, ele devolve pra operação.
+        conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = ? WHERE id = ?", (STATUS_CANCELANDO, agora, envio["id"]))
         _registrar_solicitacao(conn, envio, tipo, dados.get("motivo", ""), por)
         conn.commit()
-        return {"aplicado": False, "precisa_operacao": True,
-                "mensagem": "Pedido de cancelamento registrado. A Fresh Log vai cancelar o pedido na Stokki e você verá aqui quando estiver feito."}
+        return {"aplicado": False, "precisa_operacao": False, "em_andamento": True,
+                "mensagem": "Cancelamento em andamento -- você verá aqui em instantes."}
 
     if tipo == "reenviar":
         if st not in (STATUS_ERRO, STATUS_CANCELADO):
@@ -1454,15 +2029,13 @@ def aplicar_acao(conn: sqlite3.Connection, envio: dict, tipo: str, dados: dict, 
         return {"aplicado": False, "precisa_operacao": True,
                 "mensagem": "Pedido de retirada da rota registrado. A Fresh Log vai colocar o pedido em espera e avisar aqui."}
 
-    # reagendar
-    try:
-        nova = date.fromisoformat(str(dados.get("data") or ""))
-    except ValueError:
-        raise ErroEnvio("Informe a nova data de entrega.")
-    if nova < date.today():
-        raise ErroEnvio("A nova data precisa ser a partir de hoje.")
-    ini = _hora_valida(dados.get("hora_inicio")) or envio.get("horario_inicio") or "08:00"
-    fim = _hora_valida(dados.get("hora_fim")) or envio.get("horario_fim") or "18:00"
+    # reagendar: o servidor aplica a mesma regra que a tela (nao basta esconder o botao)
+    cancelando = st == STATUS_CANCELANDO or conn.execute(
+        "SELECT 1 FROM portal_solicitacoes WHERE envio_id = ? AND tipo = 'cancelar' AND status = 'PENDENTE'",
+        (envio["id"],)).fetchone() is not None
+    if not _servidor_aceita_reagendar(st, cancelando):
+        raise ErroEnvio("Esse pedido não pode ser reagendado agora.")
+    nova, ini, fim = _validar_agendamento(envio, dados)
     conn.execute("""
         UPDATE portal_envios SET agendamento_data = ?, agendamento_hora_inicio = ?, agendamento_hora_fim = ?,
             agendamento_pendente = 0, requer_agendamento = 1, agendamento_aplicado_em = NULL, atualizado_em = ? WHERE id = ?
@@ -1487,6 +2060,120 @@ def aplicar_acao(conn: sqlite3.Connection, envio: dict, tipo: str, dados: dict, 
             "mensagem": f"Reagendamento pra {detalhe} registrado -- a Fresh Log aplica assim que o pedido estiver identificado."}
 
 
+def _pode_alterar_endereco(d: dict) -> bool:
+    """Botao 'Alterar endereco de entrega' do pedido barrado pela area (Hugo,
+    13/11). So XML (planilha nao leva <entrega>) e so nota sem <entrega> proprio."""
+    return (d["status"] == STATUS_AGUARDANDO_LIBERACAO and (d.get("origem") or ORIGEM_XML) == ORIGEM_XML
+            and (d.get("endereco_entrega_origem") in ("cliente", "ultima_entrega") or not d.get("endereco_fiscal")))
+
+
+class ForaDiaFixo(ErroEnvio):
+    """Data de agendamento fora do dia de visita da regiao do endereco novo;
+    .aviso leva regiao, dias e a proxima data de visita pra tela perguntar."""
+    def __init__(self, aviso: dict):
+        super().__init__(f"A data {aviso['data_br']} cai fora do dia de visita de {aviso['regiao']} ({aviso['dias']}).")
+        self.aviso = aviso
+
+
+def _agendamento_no_endereco_novo(envio: dict, novo: dict, dados: dict) -> str | None:
+    """Data de agendamento que fica no pedido depois da troca de endereco
+    (Hugo, 16/11: a regiao nova pode ter outro dia de visita). Mesma regra da
+    previa do envio (avisos_fora_dia_fixo): data fora do dia de visita levanta
+    ForaDiaFixo, e o cliente manda outra data (dados.agendamento_data) ou
+    confirma assim mesmo (dados.aceita_fora_dia_fixo -> envio dedicado). Sem
+    data, pendente ou data passada: nada a conferir."""
+    atual = envio.get("agendamento_data")
+    if envio.get("agendamento_pendente") or not atual:
+        return atual
+    if dados.get("agendamento_data"):
+        data = _validar_agendamento({}, {"data": dados["agendamento_data"], "hora_inicio": "08:00", "hora_fim": "18:00"})[0]
+    else:
+        try:
+            data = date.fromisoformat(str(atual))
+        except ValueError:
+            return atual
+        if data < date.today():
+            return atual
+    if not dados.get("aceita_fora_dia_fixo"):
+        rdf = _regioes_dia_fixo()
+        regra = rdf.regra_dia_fixo_do_servico({"address": _endereco_sintetico(novo)})
+        if regra and not rdf.data_valida_na_regiao(regra, data):
+            try:
+                sugestao = rdf.proxima_data_valida(regra, date.today()).isoformat()
+            except ValueError:
+                sugestao = ""
+            raise ForaDiaFixo({"data_br": data.strftime("%d/%m/%Y"), "regiao": regra.get("regiao") or regra["nome"],
+                               "dias": rdf.descricao_dias(regra), "sugestao": sugestao})
+    return data.isoformat()
+
+
+def alterar_endereco_bloqueado(conn: sqlite3.Connection, envio: dict, campos: dict, config: dict | None, por: str,
+                               dados: dict | None = None) -> dict:
+    """Cliente troca o endereco de entrega de um pedido AGUARDANDO_LIBERACAO
+    (Hugo, 13/11). Parte sempre do XML original, valida pelo CEP e reavalia a
+    area com o endereco novo: atendida -> NA_FILA; senao continua aguardando,
+    ja com o endereco novo pra equipe decidir. dados: agendamento_data e
+    aceita_fora_dia_fixo (ver _agendamento_no_endereco_novo)."""
+    if not _pode_alterar_endereco(envio):
+        raise ErroEnvio("Só um pedido aguardando liberação por região não atendida aceita troca de endereço por aqui.")
+    if not endereco_entrega.entrega_ativa(config):
+        raise ErroEnvio("A troca de endereço de entrega não está disponível. Fale com a equipe Fresh Log.")
+    try:
+        nfe = ler_nfe_do_envio(envio)
+    except OSError:
+        raise ErroEnvio("Não foi possível ler o XML deste pedido. Fale com a equipe Fresh Log.")
+    if nfe.get("endereco_fiscal"):
+        raise ErroEnvio("A nota já traz o local de entrega: este pedido não aceita troca de endereço.")
+    try:
+        end = endereco_entrega.montar_endereco(campos)
+    except endereco_entrega.ErroEndereco as e:
+        raise ErroEnvio(str(e))
+    novo = endereco_entrega.aplicar_entrega(nfe, end)
+    ag_data = _agendamento_no_endereco_novo(envio, novo, dados or {})
+    # antes de escrever: a geocodificacao grava cache por outra conexao (ver confirmar_envios)
+    motivo = classificar_area_envio(novo, config)
+    gravado = {**end, "documento": nfe["destinatario_doc"], "nome": nfe["destinatario_nome"]}
+    texto = endereco_entrega.linha_fiscal(novo)
+    if ag_data != envio.get("agendamento_data"):
+        texto += f" · entrega reagendada para {'/'.join(reversed(ag_data.split('-')))}"
+    elif ag_data and (dados or {}).get("aceita_fora_dia_fixo"):
+        texto += " · data mantida fora do dia de visita da região (envio dedicado)"
+    # WHERE status: a equipe pode ter liberado (ou o cliente cancelado) com o modal aberto
+    cur = conn.execute("""
+        UPDATE portal_envios SET destinatario_endereco = ?, destinatario_bairro = ?, destinatario_municipio = ?,
+            destinatario_uf = ?, destinatario_cep = ?, endereco_fiscal = ?, endereco_entrega_origem = 'cliente',
+            endereco_entrega_json = ?, agendamento_data = ?, bloqueio_motivo = ?, status = ?, atualizado_em = ?
+         WHERE id = ? AND status = ?
+    """, (novo["destinatario_endereco"], novo["destinatario_bairro"], novo["destinatario_municipio"], novo["destinatario_uf"],
+          novo["destinatario_cep"], novo["endereco_fiscal"], json.dumps(gravado, ensure_ascii=False), ag_data, motivo,
+          STATUS_AGUARDANDO_LIBERACAO if motivo else STATUS_NA_FILA, _agora(), envio["id"], STATUS_AGUARDANDO_LIBERACAO))
+    if cur.rowcount == 0:
+        conn.rollback()
+        raise ErroEnvio("Esse pedido não está mais aguardando liberação -- atualize a página.")
+    _registrar_solicitacao(conn, envio, "alterar_endereco", texto, por, status="CONCLUIDA")
+    conn.commit()
+    if motivo:
+        return {"aplicado": False, "precisa_operacao": False, "liberado": False, "endereco": texto,
+                "mensagem": f"Endereço alterado, mas {end['municipio']}/{end['uf']} também não é região atendida -- "
+                            f"o pedido continua aguardando liberação da Fresh Log."}
+    return {"aplicado": True, "precisa_operacao": False, "liberado": True, "endereco": texto,
+            "mensagem": "Endereço de entrega alterado -- a região é atendida e o pedido será enviado à Stokki em instantes."}
+
+
+def reenviar_erros(conn: sqlite3.Connection, cnpj_embarcador: str, por: str) -> dict:
+    """Reenvia de uma vez todos os envios com ERRO da empresa (Hugo, 02/10).
+    Passa pelo mesmo aplicar_acao do reenvio unitário: quem tinha bloqueio de
+    área volta pra liberação, o resto vai pra fila. Cancelados ficam de fora."""
+    rows = conn.execute("SELECT * FROM portal_envios WHERE cnpj_embarcador = ? AND status = ?",
+                        (_so_digitos(cnpj_embarcador), STATUS_ERRO)).fetchall()
+    contagem = {"na_fila": 0, "liberacao": 0}
+    for r in rows:
+        envio = dict(r)
+        aplicar_acao(conn, envio, "reenviar", {}, por)
+        contagem["liberacao" if envio.get("bloqueio_motivo") else "na_fila"] += 1
+    return contagem
+
+
 def registrar_agendamento_pedido(conn: sqlite3.Connection, envio: dict, por: str = "portal") -> bool:
     """Grava em agendamentos_pedido (status RESPONDIDO) pra
     atualizar_agendamentos_confirmados.py aplicar a data no VUUPT --
@@ -1506,12 +2193,14 @@ def registrar_agendamento_pedido(conn: sqlite3.Connection, envio: dict, por: str
         """, (envio["codigo_pedido"], envio.get("destinatario_doc") or "", envio.get("destinatario_nome"), envio["cnpj_embarcador"],
               envio.get("numero_nf"), data_br, envio.get("agendamento_hora_inicio"), envio.get("agendamento_hora_fim"),
               f"Definido pelo portal do cliente ({por})"))
-        conn.execute("UPDATE portal_envios SET agendamento_aplicado_em = ?, atualizado_em = ? WHERE id = ?",
-                     (_agora(), _agora(), envio["id"]))
+        # Pedido criado direto na Stokki (alteração de entrega pelo portal) não tem linha em portal_envios.
+        if envio.get("id"):
+            conn.execute("UPDATE portal_envios SET agendamento_aplicado_em = ?, atualizado_em = ? WHERE id = ?",
+                         (_agora(), _agora(), envio["id"]))
         conn.commit()
         return True
     except sqlite3.OperationalError as e:
-        logger.warning(f"[envios] agendamentos_pedido indisponível ({e}) -- agendamento do envio {envio['id']} fica só no portal.")
+        logger.warning(f"[envios] agendamentos_pedido indisponível ({e}) -- agendamento do envio {envio.get('id')} fica só no portal.")
         return False
 
 
@@ -1525,7 +2214,26 @@ def listar_solicitacoes_pendentes(conn: sqlite3.Connection, cnpj_embarcador: str
     return [dict(r) for r in conn.execute(sql + " ORDER BY s.criado_em", args)]
 
 
+def buscar_solicitacao_cancelamento(conn: sqlite3.Connection, envio_id: int) -> dict | None:
+    r = conn.execute("SELECT * FROM portal_solicitacoes WHERE envio_id = ? AND tipo = 'cancelar' AND status = 'PENDENTE' "
+                     "ORDER BY id DESC LIMIT 1", (envio_id,)).fetchone()
+    return dict(r) if r else None
+
+
 def concluir_solicitacao(conn: sqlite3.Connection, solicitacao_id: int, resposta: str, recusada: bool = False) -> None:
+    """Fecha a solicitação. Cancelamento concluído (não recusado) também
+    marca o envio como CANCELADO -- é a CLI da operação fechando o que o
+    worker devolveu pra ela (06/10)."""
+    s = conn.execute("SELECT envio_id, tipo FROM portal_solicitacoes WHERE id = ?", (solicitacao_id,)).fetchone()
     conn.execute("UPDATE portal_solicitacoes SET status = ?, resposta = ?, concluido_em = ? WHERE id = ?",
                  ("RECUSADA" if recusada else "CONCLUIDA", resposta, _agora(), solicitacao_id))
+    if s and s["tipo"] == "cancelar" and not recusada:
+        conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = ? WHERE id = ?",
+                     (STATUS_CANCELADO, _agora(), s["envio_id"]))
+        _remover_dedicado(conn, s["envio_id"], "conclusao")
+        try:
+            import pedidos_pausados_cliente as ppc
+            ppc.fechar_por_envio(conn, s["envio_id"], "cancelado", _agora())
+        except Exception as e:  # noqa: BLE001 -- a pausa nao pode travar o fechamento da solicitacao
+            logger.warning(f"nao fechou a pausa do envio {s['envio_id']} ao concluir cancelamento: {e}")
     conn.commit()

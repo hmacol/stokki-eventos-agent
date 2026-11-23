@@ -1,0 +1,165 @@
+{# Faixas de pendencia no topo de toda tela. Alimentada pelo evento
+   "contadores-atualizados" (disparado por _menu_lateral_script.html); sem polling proprio. #}
+<style>
+  #aviso-pendencias { display:block; }
+  #aviso-pendencias:empty { display:none; }
+  #aviso-pendencias .ap-faixa { display:flex; align-items:center; flex-wrap:wrap; gap:8px 10px; padding:8px 12px;
+    background:#fff4e5; border-bottom:2px solid #f0a020; color:#4a3000; font-size:14px; }
+  #aviso-pendencias .ap-faixa.vermelha { background:#fdecee; border-color:#e5484d; color:#5c0b10; }
+  #aviso-pendencias .ap-texto { flex:1 1 200px; min-width:0; }
+  #aviso-pendencias .ap-texto b { font-weight:700; }
+  #aviso-pendencias .ap-acoes { margin-left:auto; display:flex; gap:6px; }
+  #aviso-pendencias .ap-erro { flex-basis:100%; font-size:12px; color:#8a0f16; }
+  .ap-btn { border:1px solid transparent; border-radius:6px; padding:6px 12px; font-weight:600; font-size:13px;
+    cursor:pointer; min-height:32px; font-family:inherit; }
+  .ap-btn:focus-visible { outline:2px solid #1f6feb; outline-offset:2px; }
+  .ap-btn.ver { background:#1f6feb; color:#fff; }
+  .ap-btn.ign { background:transparent; color:#4a3000; border-color:#a8791c; }
+  .ap-faixa.vermelha .ap-btn.ign { color:#5c0b10; border-color:#c0393f; }
+  .ap-btn.perigo { background:#c4292f; color:#fff; }
+  .ap-btn.voltar { background:#fff; color:#222; border-color:#8a95a5; }
+  #aviso-pendencias .ap-mais { display:block; width:100%; text-align:center; padding:8px; background:#fff4e5;
+    border:0; border-bottom:2px solid #f0a020; color:#4a3000; font-size:13px; cursor:pointer; font-family:inherit; }
+  #ap-modal { position:fixed; inset:0; z-index:10000; background:rgba(0,0,0,.45); display:flex;
+    align-items:center; justify-content:center; padding:16px; }
+  #ap-modal[hidden] { display:none; }
+  #ap-modal .ap-caixa { background:#fff; color:#222; border-radius:10px; padding:16px; width:min(360px,100%);
+    box-shadow:0 8px 30px rgba(0,0,0,.25); }
+  #ap-modal h2 { margin:0 0 6px; font-size:16px; }
+  #ap-modal p { margin:0; font-size:14px; color:#444; }
+  #ap-modal .ap-botoes { display:flex; gap:8px; justify-content:flex-end; margin-top:14px; }
+</style>
+<div id="aviso-pendencias" role="region" aria-label="Pendências"></div>
+<div id="ap-modal" hidden>
+  <div class="ap-caixa" role="dialog" aria-modal="true" aria-labelledby="ap-titulo">
+    <h2 id="ap-titulo">Ignorar este aviso?</h2>
+    <p id="ap-corpo"></p>
+    <div class="ap-botoes">
+      <button type="button" class="ap-btn voltar" id="ap-voltar">Voltar</button>
+      <button type="button" class="ap-btn perigo" id="ap-confirma">Ignorar 30 min</button>
+    </div>
+  </div>
+</div>
+<script>
+(function() {
+  var cont = document.getElementById("aviso-pendencias");
+  var modal = document.getElementById("ap-modal");
+  var corpo = document.getElementById("ap-corpo");
+  var btnVoltar = document.getElementById("ap-voltar");
+  var btnConfirma = document.getElementById("ap-confirma");
+  var MAX = document.body.dataset.mobile ? 2 : 3;
+  var avisos = [];
+  var expandido = false;
+  var alvo = null;       // aviso em confirmacao
+  var foco = null;       // elemento que abriu o modal
+  var erros = {};        // chave -> mensagem de erro do POST
+
+  function caminho(url) {
+    try { return new URL(url, location.origin).pathname.replace(/\/+$/, "") || "/"; }
+    catch (e) { return ""; }
+  }
+
+  function el(tag, cls, txt) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (txt != null) e.textContent = txt;
+    return e;
+  }
+
+  function faixa(a) {
+    var f = el("div", "ap-faixa" + (a.vermelho ? " vermelha" : ""));
+    f.dataset.chave = a.chave;
+    var t = el("span", "ap-texto");
+    // a.texto ja comeca com o numero ("12 chamados ..."): so o numero vai em negrito
+    var m = /^(\d+)\s+(.*)$/.exec(a.texto || "");
+    if (m) {
+      t.appendChild(el("b", null, "⚠ " + m[1]));
+      t.appendChild(document.createTextNode(" " + m[2]));
+    } else {
+      t.appendChild(document.createTextNode("⚠ " + (a.texto || "")));
+    }
+    f.appendChild(t);
+    var ac = el("div", "ap-acoes");
+    var ver = el("button", "ap-btn ver", "Verificar");
+    ver.type = "button";
+    ver.addEventListener("click", function() { location.href = a.destino; });
+    var ign = el("button", "ap-btn ign", "Ignorar");
+    ign.type = "button";
+    ign.addEventListener("click", function() { abrirModal(a, ign); });
+    ac.appendChild(ver); ac.appendChild(ign);
+    f.appendChild(ac);
+    if (erros[a.chave]) f.appendChild(el("div", "ap-erro", erros[a.chave]));
+    return f;
+  }
+
+  function desenhar() {
+    var atual = caminho(location.pathname);
+    var lista = avisos.filter(function(a) { return caminho(a.destino) !== atual; });
+    lista.sort(function(x, y) { return (y.vermelho ? 1 : 0) - (x.vermelho ? 1 : 0); });
+    cont.textContent = "";
+    var visiveis = expandido ? lista : lista.slice(0, MAX);
+    visiveis.forEach(function(a) { cont.appendChild(faixa(a)); });
+    var resto = lista.length - MAX;
+    if (resto > 0) {
+      var b = el("button", "ap-mais", expandido ? "recolher" :
+        "+ " + resto + (resto === 1 ? " pendência" : " pendências") + " · ver todas");
+      b.type = "button";
+      b.setAttribute("aria-expanded", expandido ? "true" : "false");
+      b.addEventListener("click", function() { expandido = !expandido; desenhar(); });
+      cont.appendChild(b);
+    }
+  }
+
+  function abrirModal(a, origem) {
+    alvo = a; foco = origem;
+    corpo.textContent = a.qtd === 1
+      ? "O item continua esperando. O aviso volta em 30 min."
+      : "Os " + a.qtd + " itens continuam esperando. O aviso volta em 30 min.";
+    modal.hidden = false;
+    btnVoltar.focus();
+  }
+
+  function fechar() {
+    modal.hidden = true;
+    alvo = null;
+    if (foco && document.contains(foco)) foco.focus();
+  }
+
+  btnVoltar.addEventListener("click", fechar);
+  modal.addEventListener("click", function(e) { if (e.target === modal) fechar(); });
+  document.addEventListener("keydown", function(e) {
+    if (e.key === "Escape" && !modal.hidden) fechar();
+    if (e.key === "Tab" && !modal.hidden) {   // foco preso no modal
+      var proximo = e.shiftKey ? (document.activeElement === btnVoltar ? btnConfirma : btnVoltar)
+                               : (document.activeElement === btnConfirma ? btnVoltar : btnConfirma);
+      e.preventDefault(); proximo.focus();
+    }
+  });
+
+  btnConfirma.addEventListener("click", function() {
+    var a = alvo;
+    if (!a) return;
+    btnConfirma.disabled = true;
+    fetch(BASE_PATH + "/api/avisos/ignorar", {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chave: a.chave, qtd: a.qtd })
+    }).then(function(r) {
+      if (!r.ok) throw new Error("http " + r.status);
+      avisos = avisos.filter(function(x) { return x.chave !== a.chave; });
+      delete erros[a.chave];
+      foco = null; fechar(); desenhar();
+    }).catch(function() {
+      erros[a.chave] = "Não foi possível ignorar agora. Tente de novo.";
+      fechar(); desenhar();
+    }).then(function() { btnConfirma.disabled = false; });
+  });
+
+  document.addEventListener("contadores-atualizados", function(ev) {
+    var d = ev.detail;
+    if (!d || !Array.isArray(d.avisos)) return;
+    avisos = d.avisos.filter(function(a) { return a && a.chave && a.qtd > 0; });
+    desenhar();
+  });
+})();
+</script>

@@ -4,16 +4,19 @@ Leitura de BD_MOTORISTAS.xlsx: célula vazia não pode virar o texto "nan"
 (achado 14/09 -- e-mail "nan" em 24 de 28 motoristas).
     python -m unittest regras.test_preferencias_motoristas -v
 """
+import dataclasses
+import shutil
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from regras.preferencias_motoristas import CatalogoMotoristas, _construir_motorista  # noqa: E402
+from regras.preferencias_motoristas import CatalogoMotoristas, _construir_motorista, agent_ids_sem_app  # noqa: E402
 
 
 class TestLeituraPlanilha(unittest.TestCase):
@@ -89,6 +92,108 @@ class TestCelulaVaziaNaoViraNan(unittest.TestCase):
         self.assertEqual(m.tipo_veiculo, "FIORINO")
         self.assertEqual(m.dias_disponiveis, [])
         self.assertEqual(m.zonas_preferidas, [])
+
+
+class TestSemApp(unittest.TestCase):
+    def _planilha(self, tmp, com_coluna=True):
+        caminho = Path(tmp) / "m.xlsx"
+        linhas = [{"AGENT_ID_VUUPT": 1, "NOME_MOTORISTA": "Iphone", "ATIVO": "SIM"},
+                  {"AGENT_ID_VUUPT": 2, "NOME_MOTORISTA": "Android", "ATIVO": "SIM"}]
+        if com_coluna:
+            linhas[0]["SEM_APP"] = "SIM"
+            linhas[1]["SEM_APP"] = None
+        pd.DataFrame(linhas).to_excel(caminho, index=False)
+        return caminho
+
+    def test_coluna_sim_vira_sem_app(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            caminho = self._planilha(tmp)
+            por_id = {m.agent_id: m for m in CatalogoMotoristas.carregar(str(caminho), "").motoristas}
+            self.assertTrue(por_id[1].sem_app)
+            self.assertFalse(por_id[2].sem_app)
+            self.assertEqual(agent_ids_sem_app(caminho), {1})
+
+    def test_sem_coluna_ou_sem_planilha_e_vazio(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            self.assertEqual(agent_ids_sem_app(self._planilha(tmp, com_coluna=False)), set())
+            self.assertEqual(agent_ids_sem_app(Path(tmp) / "nao_existe.xlsx"), set())
+
+
+class TestPosicao(unittest.TestCase):
+    def test_vazio_ou_desconhecido_e_esporadico_e_fixo_ignora_caixa(self):
+        from regras.preferencias_motoristas import _construir_motorista
+        base = {"AGENT_ID_VUUPT": 1, "NOME_MOTORISTA": "A", "ATIVO": "SIM"}
+        self.assertEqual(_construir_motorista(base).posicao, "ESPORADICO")
+        self.assertEqual(_construir_motorista({**base, "POSICAO": float("nan")}).posicao, "ESPORADICO")
+        self.assertEqual(_construir_motorista({**base, "POSICAO": "qualquer"}).posicao, "ESPORADICO")
+        self.assertEqual(_construir_motorista({**base, "POSICAO": "fixo"}).posicao, "FIXO")
+        self.assertEqual(_construir_motorista({**base, "POSICAO": " Esporádico "}).posicao, "ESPORADICO")
+
+
+class TestCatalogoDoBanco(unittest.TestCase):
+    """CatalogoMotoristas.carregar le da tabela bd_motoristas quando o caminho
+    e o do espelho padrao e a tabela tem linhas; senao, comportamento antigo."""
+
+    def setUp(self):
+        from nucleo import banco
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.dir = Path(self._tmp.name)
+        p = mock.patch.object(banco, "DB_PATH", self.dir / "t.db")
+        p.start()
+        self.addCleanup(p.stop)
+        self.conn = banco.conectar()
+        self.addCleanup(self._tmp.cleanup)
+        self.addCleanup(self.conn.close)
+        self.planilha = self.dir / "fixture.xlsx"
+        pd.DataFrame([
+            {"AGENT_ID_VUUPT": 7, "VEHICLE_ID_VUUPT": 3, "NOME_MOTORISTA": "Ana", "ACEITA_VIAGENS": "SIM",
+             "DIAS_DISPONIVEIS": "SEGUNDA,TERCA", "MAX_ROTAS_DIA": 2, "ATIVO": "SIM", "ZONAS_PREFERIDAS": "ZONA SUL,ABCD",
+             "TELEFONE_MOTORISTA": 11999998888, "PLACA": "abc-1d23", "CPF_MOTORISTA": "09474142742",
+             "TIPO_VEICULO": "VUC", "APENAS_CARGA_SECA": "SIM", "SEM_APP": "SIM"},
+            {"AGENT_ID_VUUPT": 8, "NOME_MOTORISTA": "Beto", "ATIVO": "NAO"},
+        ]).to_excel(self.planilha, index=False)
+
+    def _espelho(self):
+        from regras import motoristas_banco
+        return motoristas_banco.caminho_espelho()
+
+    def test_carregar_do_banco_igual_planilha(self):
+        from regras import motoristas_banco
+        motoristas_banco.importar_planilha(self.conn, self.planilha)
+        da_planilha = CatalogoMotoristas.carregar(self.planilha)
+        do_banco = CatalogoMotoristas.carregar(self._espelho(), conn=self.conn)
+        self.assertEqual(da_planilha.fonte, "planilha")
+        self.assertEqual(do_banco.fonte, "banco")
+        self.assertEqual([dataclasses.asdict(m) for m in do_banco.motoristas],
+                         [dataclasses.asdict(m) for m in da_planilha.motoristas])
+        self.assertEqual(len(do_banco.motoristas), 2)
+
+    def test_tabela_vazia_le_planilha(self):
+        shutil.copy(self.planilha, self._espelho())
+        cat = CatalogoMotoristas.carregar(self._espelho(), conn=self.conn)
+        self.assertEqual(cat.fonte, "planilha")
+        self.assertEqual(len(cat.motoristas), 2)
+
+    def test_caminho_de_teste_nao_vai_pro_banco(self):
+        from regras import motoristas_banco
+        motoristas_banco.importar_planilha(self.conn, self.planilha)
+        cat = CatalogoMotoristas.carregar(self.planilha, conn=self.conn)
+        self.assertEqual(cat.fonte, "planilha")
+
+    def test_erro_no_banco_cai_na_planilha(self):
+        shutil.copy(self.planilha, self._espelho())
+        with mock.patch("nucleo.banco.conectar", side_effect=RuntimeError("banco fora")):
+            cat = CatalogoMotoristas.carregar(self._espelho())
+        self.assertEqual(cat.fonte, "planilha")
+        self.assertEqual(len(cat.motoristas), 2)
+
+    def test_agent_ids_sem_app_le_do_banco(self):
+        from regras import motoristas_banco
+        motoristas_banco.importar_planilha(self.conn, self.planilha)
+        self.assertEqual(agent_ids_sem_app(self._espelho()), {7})
+        self.conn.execute("UPDATE bd_motoristas SET SEM_APP = 'SIM', atualizado_em = '2999-01-01' WHERE AGENT_ID_VUUPT = 8")
+        self.conn.commit()
+        self.assertEqual(agent_ids_sem_app(self._espelho()), {7, 8})
 
 
 if __name__ == "__main__":

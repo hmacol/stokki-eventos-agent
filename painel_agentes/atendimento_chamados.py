@@ -30,7 +30,7 @@ import pedidos_dedicados  # noqa: E402  (raiz)
 
 logger = logging.getLogger("painel.atendimento")
 
-NIVEIS = ("total", "operador", "atendimento")
+NIVEIS = ("total", "operador", "logistica", "atendimento")
 
 # ── Liberacao de NFs bloqueadas por area nao atendida (Hugo, 23/09) ──────────
 # O chamado (area "envios") nasce no portal quando o cliente envia pedido pra
@@ -449,4 +449,20 @@ def registrar(app, *, requer_auth, exige_mesma_origem, carregar_config):
         p = ch.caminho_anexo(chamado_id, arquivo)
         if not p:
             abort(404)
-        return send_file(p, as_attachment=p.suffix.lower() not in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf"), max_age=0)
+        ext = p.suffix.lower()
+        # Áudio do motorista toca na própria conversa (<audio>); conditional=True aceita Range.
+        return send_file(p, as_attachment=ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf") and ext not in ch.EXTENSOES_AUDIO,
+                         mimetype=ch.MIME_AUDIO.get(ext), max_age=0, conditional=True)
+
+    # ── Grupos internos da equipe (Hugo, 19/10) ──────────────────────────────
+
+    def _buscar_chamado(chamado_id):
+        conn = ch.conectar()
+        try:
+            return ch.buscar_chamado(conn, chamado_id)
+        finally:
+            conn.close()
+
+    import grupos_equipe
+    grupos_equipe.registrar(app, requer_auth=requer_auth, exige_mesma_origem=exige_mesma_origem,
+                            niveis=NIVEIS, buscar_chamado=_buscar_chamado)

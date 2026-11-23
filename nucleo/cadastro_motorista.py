@@ -1,0 +1,639 @@
+# -*- coding: utf-8 -*-
+"""
+nucleo/cadastro_motorista.py
+
+Cadastro do motorista pelo app (Hugo, 08/10/2026):
+
+- "Meus dados": telefone, e-mail, chave PIX e placa valem na hora
+  (decisão do Hugo), com histórico em `motoristas_alteracoes`. Telefone,
+  e-mail e placa são espelhados na BD_MOTORISTAS.xlsx pela API (a planilha
+  continua mandando na roteirização).
+- Auto-cadastro (`motoristas_cadastros`): o motorista novo manda dados,
+  foto da CNH e do CRLV; o Hugo aprova no painel escolhendo o agente
+  Vuupt (criado à mão, como na tela /motoristas), o que grava a linha na
+  planilha e cria o login com PIN provisório (trocar_pin=1).
+
+Só regra e banco: a API (nucleo/api_motorista.py) e o painel chamam daqui.
+"""
+import hmac
+import logging
+import re
+import secrets
+import sqlite3
+import sys
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+_RAIZ = Path(__file__).parent.parent
+if str(_RAIZ / "roteirizacao") not in sys.path:
+    sys.path.append(str(_RAIZ / "roteirizacao"))
+
+from nucleo import auth_motorista as auth, banco  # noqa: E402
+from regras import motoristas_banco  # noqa: E402
+from regras.tipo_veiculo import tipo_por_codigo  # noqa: E402
+from zonas_sp import (  # noqa: E402
+    ABCD, CENTRO, COTIA_EMBU_TABOAO, GUARULHOS, OSASCO_BARUERI_ALPHAVILLE,
+    ZONA_LESTE, ZONA_NORTE, ZONA_OESTE, ZONA_SUL,
+)
+
+logger = logging.getLogger("nucleo.cadastro_motorista")
+
+STATUS_PENDENTE = "PENDENTE"
+STATUS_APROVADO = "APROVADO"
+STATUS_RECUSADO = "RECUSADO"
+STATUS_SUBSTITUIDO = "SUBSTITUIDO"   # pendente trocado por cadastro novo do mesmo CPF (link)
+ORIGEM_APP = "app"
+ORIGEM_LINK = "link"
+
+ZONAS = [ZONA_NORTE, ZONA_SUL, ZONA_LESTE, ZONA_OESTE, CENTRO, GUARULHOS, ABCD,
+         OSASCO_BARUERI_ALPHAVILLE, COTIA_EMBU_TABOAO]
+DIAS = ["SEGUNDA", "TERCA", "QUARTA", "QUINTA", "SEXTA", "SABADO", "DOMINGO"]
+DOCUMENTOS = ("cnh", "crlv", "selfie", "antt", "residencia")
+DOCUMENTOS_LINK = DOCUMENTOS
+EXTENSOES_DOCUMENTO = {"jpg", "jpeg", "png", "webp", "heic", "pdf"}
+POSICOES = ("FIXO", "ESPORADICO")
+CELULARES = ("ANDROID", "IPHONE")
+MAX_FOTO_BYTES = 10 * 1024 * 1024
+MAX_NOME = 120
+# Freio do POST /api/cadastro-link, contado no banco (coluna ip_origem).
+LIMITE_LINK_IP_HORA, LIMITE_LINK_DIA = 5, 40
+CAMPOS_EDITAVEIS = ("telefone", "email", "chave_pix", "placa")
+# PIN provisório da aprovação: sorteado por motorista (o painel mostra uma
+# vez e o Hugo manda no WhatsApp); o app obriga a troca no 1º login.
+# O lote de 08/10 usou 123456 por decisão do Hugo; aqui não há motivo pra
+# repetir um PIN conhecido.
+def sortear_pin() -> str:
+    return "".join(secrets.choice("0123456789") for _ in range(6))
+ROTULOS = {"telefone": "Telefone", "email": "E-mail", "chave_pix": "Chave PIX", "placa": "Placa"}
+
+
+class CadastroInvalido(Exception):
+    def __init__(self, mensagem: str, codigo: int = 400):
+        super().__init__(mensagem)
+        self.mensagem = mensagem
+        self.codigo = codigo
+
+
+def pasta_cadastros() -> Path:
+    return Path(banco.DB_PATH).parent / "cadastros_motoristas"
+
+
+# ── Validação dos campos ───────────────────────────────────────────────────────
+
+def validar_telefone(valor) -> str | None:
+    d = re.sub(r"\D", "", str(valor or ""))
+    if not d:
+        return None
+    if len(d) in (12, 13) and d.startswith("55"):
+        d = d[2:]
+    if len(d) not in (10, 11):
+        raise CadastroInvalido("Telefone precisa ter DDD + número (10 ou 11 dígitos).")
+    return d
+
+
+def validar_email(valor) -> str | None:
+    v = str(valor or "").strip().lower()
+    if not v:
+        return None
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", v) or len(v) > 120:
+        raise CadastroInvalido("E-mail inválido.")
+    return v
+
+
+def validar_placa(valor) -> str | None:
+    v = re.sub(r"[\s\-]", "", str(valor or "")).upper()
+    if not v:
+        return None
+    if not re.fullmatch(r"[A-Z]{3}\d[A-Z0-9]\d{2}", v):
+        raise CadastroInvalido("Placa inválida: use o formato ABC1234 ou ABC1D23.")
+    return v
+
+
+def validar_pix(valor) -> str | None:
+    v = str(valor or "").strip()
+    if not v:
+        return None
+    if len(v) > 120:
+        raise CadastroInvalido("Chave PIX longa demais.")
+    return v
+
+
+VALIDADORES = {"telefone": validar_telefone, "email": validar_email, "chave_pix": validar_pix, "placa": validar_placa}
+
+
+def _lista(valor, permitidos: list[str], rotulo: str) -> list[str]:
+    if isinstance(valor, str):
+        valor = [p for p in valor.split(",")]
+    itens = []
+    for v in valor or []:
+        v = str(v or "").strip().upper()
+        if not v:
+            continue
+        if v not in permitidos:
+            raise CadastroInvalido(f"{rotulo} não reconhecido: {v}.")
+        if v not in itens:
+            itens.append(v)
+    return itens
+
+
+# ── Meus dados (motorista já com login) ───────────────────────────────────────
+
+def _exigir_pin_pra_pix(conn: sqlite3.Connection, cpf: str, pin: object) -> None:
+    """Trocar a chave PIX redireciona pagamento: quem tem só o token (roubado)
+    não pode. Pede o PIN pela mesma trava de tentativas do login. Erro de PIN
+    vira 403 (não 401: o app trataria 401 como sessão caída) e 429 se travou;
+    nada é gravado."""
+    if not str(pin or "").strip():
+        raise CadastroInvalido("Pra trocar a chave PIX, digite o seu PIN.", 400)
+    try:
+        auth.autenticar(conn, cpf, str(pin))
+    except auth.AutenticacaoInvalida as e:
+        if e.codigo == 429:
+            raise CadastroInvalido(e.mensagem, 429)
+        raise CadastroInvalido("PIN incorreto.", 403)
+
+
+def atualizar_meus_dados(conn: sqlite3.Connection, cpf: str, dados: dict) -> tuple[dict, list[dict]]:
+    """Aplica só os campos presentes em `dados`. Devolve (motorista, mudanças);
+    cada mudança = {campo, rotulo, de, para}. Nada muda = lista vazia.
+    Trocar a chave PIX exige `pin_atual` em `dados` (vale pra tudo ou nada:
+    sem PIN certo nenhum campo do pedido é gravado)."""
+    m = auth.buscar_motorista(conn, cpf)
+    if not m:
+        raise CadastroInvalido("Motorista não encontrado.", 404)
+    mudancas = []
+    for campo in CAMPOS_EDITAVEIS:
+        if campo not in (dados or {}):
+            continue
+        novo = VALIDADORES[campo](dados[campo])
+        if novo != (m.get(campo) or None):
+            mudancas.append({"campo": campo, "rotulo": ROTULOS[campo], "de": m.get(campo) or None, "para": novo})
+    if not mudancas:
+        return m, []
+    if any(x["campo"] == "chave_pix" for x in mudancas):
+        _exigir_pin_pra_pix(conn, m["cpf"], (dados or {}).get("pin_atual"))
+    agora = banco.agora()
+    for mud in mudancas:
+        conn.execute(f"UPDATE motoristas SET {mud['campo']} = ?, atualizado_em = ? WHERE cpf = ?",
+                     (mud["para"], agora, m["cpf"]))
+        conn.execute("INSERT INTO motoristas_alteracoes (cpf, campo, valor_antigo, valor_novo, alterado_em) VALUES (?, ?, ?, ?, ?)",
+                     (m["cpf"], mud["campo"], mud["de"], mud["para"], agora))
+    conn.commit()
+    logger.info("motorista %s alterou %s", m["cpf"], ", ".join(x["campo"] for x in mudancas))
+    return auth.buscar_motorista(conn, cpf), mudancas
+
+
+def historico(conn: sqlite3.Connection, cpf: str, limite: int = 50) -> list[dict]:
+    rows = conn.execute("SELECT * FROM motoristas_alteracoes WHERE cpf = ? ORDER BY id DESC LIMIT ?",
+                        (auth.normalizar_cpf(cpf), limite)).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Auto-cadastro ─────────────────────────────────────────────────────────────
+
+def _montar(row) -> dict:
+    c = dict(row)
+    c["zonas"] = [z for z in (c.get("zonas") or "").split(",") if z]
+    c["dias"] = [d for d in (c.get("dias") or "").split(",") if d]
+    c["aceita_viagens"] = bool(c.get("aceita_viagens"))
+    c["dono_veiculo"] = bool(c.get("dono_veiculo", 1))
+    c["tem_cnh"] = bool(c.get("cnh_arquivo"))
+    c["tem_crlv"] = bool(c.get("crlv_arquivo"))
+    for t in DOCUMENTOS[2:]:
+        c[f"tem_{t}"] = bool(c.get(f"{t}_arquivo"))
+    c["completo"] = (all(c[f"tem_{t}"] for t in DOCUMENTOS_LINK) if c.get("origem") == ORIGEM_LINK
+                     else c["tem_cnh"] and c["tem_crlv"])
+    c.pop("chave_envio", None)
+    return c
+
+
+def buscar_cadastro(conn: sqlite3.Connection, cadastro_id: int) -> dict | None:
+    row = conn.execute("SELECT * FROM motoristas_cadastros WHERE id = ?", (cadastro_id,)).fetchone()
+    return _montar(row) if row else None
+
+
+def listar_pendentes(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute("SELECT * FROM motoristas_cadastros WHERE status = ? AND origem = ? ORDER BY id",
+                        (STATUS_PENDENTE, ORIGEM_APP)).fetchall()
+    return [_montar(r) for r in rows]
+
+
+def contar_pendentes(conn: sqlite3.Connection, so_completos: bool = True) -> int:
+    sql = "SELECT COUNT(*) FROM motoristas_cadastros WHERE status = ? AND origem = 'app'"
+    if so_completos:
+        sql += " AND cnh_arquivo IS NOT NULL AND crlv_arquivo IS NOT NULL"
+    return conn.execute(sql, (STATUS_PENDENTE,)).fetchone()[0]
+
+
+def criar_cadastro(conn: sqlite3.Connection, dados: dict) -> dict:
+    """Pedido de cadastro vindo do app (sem login). Devolve {id, chave_envio};
+    a chave autoriza só o envio dos documentos desse cadastro."""
+    dados = dados or {}
+    cpf = auth.normalizar_cpf(dados.get("cpf"))
+    if len(cpf) != 11:
+        raise CadastroInvalido("CPF precisa ter 11 dígitos.")
+    nome = re.sub(r"\s+", " ", str(dados.get("nome") or "")).strip()
+    if len(nome) < 5 or " " not in nome:
+        raise CadastroInvalido("Informe o nome completo.")
+    telefone = validar_telefone(dados.get("telefone"))
+    if not telefone:
+        raise CadastroInvalido("Telefone é obrigatório (é por ele que a Fresh Log manda o PIN).")
+    email = validar_email(dados.get("email"))
+    chave_pix = validar_pix(dados.get("chave_pix"))
+    if not chave_pix:
+        raise CadastroInvalido("Chave PIX é obrigatória.")
+    placa = validar_placa(dados.get("placa"))
+    if not placa:
+        raise CadastroInvalido("Placa é obrigatória.")
+    tipo_veiculo = str(dados.get("tipo_veiculo") or "").strip().upper()
+    if not tipo_veiculo or not tipo_por_codigo(tipo_veiculo):
+        raise CadastroInvalido("Escolha o tipo de veículo.")
+    zonas = _lista(dados.get("zonas"), ZONAS, "Zona")
+    if not zonas:
+        raise CadastroInvalido("Marque pelo menos uma zona que você atende.")
+    dias = _lista(dados.get("dias"), DIAS, "Dia")
+    if not dias:
+        raise CadastroInvalido("Marque pelo menos um dia da semana.")
+    aceita_viagens = bool(dados.get("aceita_viagens"))
+    dono_veiculo = bool(dados.get("dono_veiculo", True))
+
+    if auth.buscar_motorista(conn, cpf):
+        raise CadastroInvalido("Este CPF já tem cadastro. Entre com o seu PIN ou fale com a Fresh Log.", 409)
+    if conn.execute("SELECT 1 FROM motoristas_cadastros WHERE cpf = ? AND status = ?", (cpf, STATUS_PENDENTE)).fetchone():
+        raise CadastroInvalido("Já existe um cadastro em análise para este CPF. Aguarde o retorno da Fresh Log.", 409)
+
+    chave = secrets.token_urlsafe(24)
+    cur = conn.execute("""
+        INSERT INTO motoristas_cadastros (cpf, nome, telefone, email, chave_pix, placa, tipo_veiculo, zonas, dias,
+                                          aceita_viagens, dono_veiculo, chave_envio, status, criado_em)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (cpf, nome, telefone, email, chave_pix, placa, tipo_veiculo, ",".join(zonas), ",".join(dias),
+          int(aceita_viagens), int(dono_veiculo), chave, STATUS_PENDENTE, banco.agora()))
+    conn.commit()
+    logger.info("cadastro #%s criado pra %s (%s)", cur.lastrowid, nome, tipo_veiculo)
+    return {"id": cur.lastrowid, "chave_envio": chave}
+
+
+# ── Cadastro pelo link público ────────────────────────────────────────────────
+
+def cpf_valido(cpf) -> bool:
+    d = re.sub(r"\D", "", str(cpf or ""))
+    if len(d) != 11 or len(set(d)) == 1:
+        return False
+    for n in (9, 10):
+        soma = sum(int(d[i]) * (n + 1 - i) for i in range(n))
+        if int(d[n]) != (soma * 10 % 11) % 10:
+            return False
+    return True
+
+
+def _data_nascimento(valor) -> str:
+    v = str(valor or "").strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            d = datetime.strptime(v, fmt).date()
+            break
+        except ValueError:
+            continue
+    else:
+        raise CadastroInvalido("Data de nascimento inválida.")
+    hoje = date.today()
+    idade = hoje.year - d.year - ((hoje.month, hoje.day) < (d.month, d.day))
+    if d.year < 1900 or idade < 18:
+        raise CadastroInvalido("É preciso ter 18 anos ou mais para se cadastrar.")
+    return d.isoformat()
+
+
+def _escolha(valor, permitidos, rotulo: str) -> str:
+    v = str(valor or "").strip().upper()
+    if v not in permitidos:
+        raise CadastroInvalido(f"{rotulo}: escolha " + " ou ".join(permitidos).lower() + ".")
+    return v
+
+
+def _freio_link(conn: sqlite3.Connection, ip: str | None) -> None:
+    """Teto de cadastros do link contado no banco (restart não zera): 5 por IP
+    na última hora e 40 nas últimas 24 h. Chamar dentro do BEGIN IMMEDIATE
+    do INSERT, pra dois pedidos simultâneos não passarem juntos."""
+    agora = datetime.now()
+    hora = (agora - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+    dia = (agora - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    total = conn.execute("SELECT COUNT(*) FROM motoristas_cadastros WHERE origem = ? AND criado_em >= ?",
+                         (ORIGEM_LINK, dia)).fetchone()[0]
+    por_ip = conn.execute("SELECT COUNT(*) FROM motoristas_cadastros WHERE origem = ? AND ip_origem = ? AND criado_em >= ?",
+                          (ORIGEM_LINK, ip, hora)).fetchone()[0] if ip else 0
+    if por_ip >= LIMITE_LINK_IP_HORA or total >= LIMITE_LINK_DIA:
+        raise CadastroInvalido("Muitos pedidos de cadastro. Tente de novo mais tarde.", 429)
+
+
+def _validar_dados_pessoa_veiculo(dados: dict) -> dict:
+    """Campos comuns ao cadastro pelo link e à atualização de quem já é
+    motorista: pessoa, PIX e veículo (sem CPF, zonas, dias, posição e
+    celular). Devolve os valores já no formato das colunas de
+    motoristas_cadastros; levanta CadastroInvalido."""
+    dados = dados or {}
+    nome = re.sub(r"\s+", " ", str(dados.get("nome") or "")).strip()
+    if len(nome) < 5 or " " not in nome:
+        raise CadastroInvalido("Informe o nome completo.")
+    if len(nome) > MAX_NOME:
+        raise CadastroInvalido(f"Nome longo demais (até {MAX_NOME} caracteres).")
+    nascimento = _data_nascimento(dados.get("data_nascimento"))
+    telefone = validar_telefone(dados.get("telefone"))
+    if not telefone:
+        raise CadastroInvalido("Telefone é obrigatório.")
+    chave_pix = validar_pix(dados.get("chave_pix"))
+    if not chave_pix:
+        raise CadastroInvalido("Chave PIX é obrigatória.")
+    tipo_veiculo = str(dados.get("tipo_veiculo") or "").strip().upper()
+    if not tipo_veiculo or not tipo_por_codigo(tipo_veiculo):
+        raise CadastroInvalido("Escolha o tipo de veículo.")
+    placa = validar_placa(dados.get("placa"))
+    if not placa:
+        raise CadastroInvalido("Placa é obrigatória.")
+    modelo = re.sub(r"\s+", " ", str(dados.get("veiculo_modelo") or "")).strip()
+    if not modelo or len(modelo) > 60:
+        raise CadastroInvalido("Informe o modelo do veículo (até 60 caracteres).")
+    try:
+        ano = int(dados.get("veiculo_ano"))
+    except (TypeError, ValueError):
+        raise CadastroInvalido("Informe o ano do veículo.")
+    if not 1980 <= ano <= date.today().year + 1:
+        raise CadastroInvalido("Ano do veículo inválido.")
+    refrigerado = bool(dados.get("refrigerado"))
+    temp_min = None
+    if refrigerado:
+        try:
+            temp_min = float(str(dados.get("temp_min_c")).replace(",", "."))
+        except (TypeError, ValueError):
+            raise CadastroInvalido("Informe a menor temperatura que o veículo mantém.")
+        if not -30 <= temp_min <= 30:
+            raise CadastroInvalido("Temperatura mínima deve ficar entre -30 e 30 °C.")
+    return {"nome": nome, "data_nascimento": nascimento, "telefone": telefone, "chave_pix": chave_pix,
+            "tipo_veiculo": tipo_veiculo, "placa": placa, "veiculo_modelo": modelo, "veiculo_ano": ano,
+            "refrigerado": int(refrigerado), "temp_min_c": temp_min,
+            "emite_nf": int(bool(dados.get("emite_nf"))), "dono_veiculo": int(bool(dados.get("dono_veiculo", True)))}
+
+
+def criar_cadastro_link(conn: sqlite3.Connection, dados: dict, ip: str | None = None) -> dict:
+    """Cadastro vindo do link público (sem login). Devolve {id, chave_envio}.
+    Diferente do app: pendente anterior do mesmo CPF vira SUBSTITUIDO (o
+    motorista pode refazer o formulário) em vez de barrar. Só o cadastro
+    criado conta no freio (`ip` gravado em ip_origem)."""
+    dados = dados or {}
+    cpf = auth.normalizar_cpf(dados.get("cpf"))
+    if not cpf_valido(cpf):
+        raise CadastroInvalido("CPF inválido.")
+    v = _validar_dados_pessoa_veiculo(dados)
+    zonas = _lista(dados.get("zonas"), ZONAS, "Zona")
+    if not zonas:
+        raise CadastroInvalido("Marque pelo menos uma zona que você atende.")
+    dias = _lista(dados.get("dias"), DIAS, "Dia")
+    if not dias:
+        raise CadastroInvalido("Marque pelo menos um dia da semana.")
+    posicao = _escolha(dados.get("posicao"), POSICOES, "Posição")
+    celular = _escolha(dados.get("celular"), CELULARES, "Celular")
+
+    if (auth.buscar_motorista(conn, cpf) or motoristas_banco.por_cpf(conn, cpf)
+            or conn.execute("SELECT 1 FROM motoristas_cadastros WHERE cpf = ? AND status = ?",
+                            (cpf, STATUS_APROVADO)).fetchone()):
+        raise CadastroInvalido("Você já é motorista da Fresh Log. Entre no app com o seu PIN "
+                               "ou fale com a Fresh Log.", 409)
+
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        _freio_link(conn, ip)
+        conn.execute("UPDATE motoristas_cadastros SET status = ? WHERE cpf = ? AND status = ?",
+                     (STATUS_SUBSTITUIDO, cpf, STATUS_PENDENTE))
+        chave = secrets.token_urlsafe(24)
+        cur = conn.execute("""
+            INSERT INTO motoristas_cadastros (cpf, nome, telefone, chave_pix, placa, tipo_veiculo, zonas, dias,
+                                              aceita_viagens, dono_veiculo, chave_envio, status, criado_em, origem,
+                                              data_nascimento, emite_nf, posicao, celular, veiculo_modelo, veiculo_ano,
+                                              refrigerado, temp_min_c, ip_origem)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (cpf, v["nome"], v["telefone"], v["chave_pix"], v["placa"], v["tipo_veiculo"], ",".join(zonas),
+              ",".join(dias), v["dono_veiculo"], chave, STATUS_PENDENTE, banco.agora(), ORIGEM_LINK,
+              v["data_nascimento"], v["emite_nf"], posicao, celular, v["veiculo_modelo"], v["veiculo_ano"],
+              v["refrigerado"], v["temp_min_c"], ip))
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    logger.info("cadastro #%s (link) criado pra %s (%s)", cur.lastrowid, v["nome"], v["tipo_veiculo"])
+    return {"id": cur.lastrowid, "chave_envio": chave}
+
+
+def _por_chave(conn: sqlite3.Connection, cadastro_id: int, chave_envio: str):
+    row = conn.execute("SELECT * FROM motoristas_cadastros WHERE id = ?", (cadastro_id,)).fetchone()
+    if not row or not hmac.compare_digest(str(row["chave_envio"]), str(chave_envio or "")):
+        raise CadastroInvalido("Cadastro não encontrado.", 404)
+    return row
+
+
+def _so_link(row):
+    """Enviar/retomar é só do cadastro do link; o do app não passa por aqui."""
+    if row["origem"] != ORIGEM_LINK:
+        raise CadastroInvalido("Cadastro não encontrado.", 404)
+    return row
+
+
+def registrar_envio(conn: sqlite3.Connection, cadastro_id: int, chave_envio: str) -> tuple[dict, bool]:
+    """Botão "Enviar" do link: exige os 5 documentos, grava enviado_em e já
+    deixa APROVADO (revisado_por='link'). Devolve (cadastro, gravou): gravou
+    = esta chamada registrou o envio (só ela dispara o processamento);
+    chamar de novo devolve o cadastro sem mexer e gravou=False."""
+    row = _so_link(_por_chave(conn, cadastro_id, chave_envio))
+    if row["enviado_em"]:
+        return buscar_cadastro(conn, cadastro_id), False
+    if row["status"] != STATUS_PENDENTE:
+        raise CadastroInvalido("Este cadastro não está mais aberto para envio.", 409)
+    if not buscar_cadastro(conn, cadastro_id)["completo"]:
+        raise CadastroInvalido("Faltam documentos: envie os 5 antes de concluir.")
+    agora = banco.agora()
+    # condicional: dois "Enviar" simultâneos, só um grava
+    cur = conn.execute("UPDATE motoristas_cadastros SET enviado_em = ?, status = ?, revisado_em = ?, revisado_por = ? "
+                       "WHERE id = ? AND enviado_em IS NULL AND status = ?",
+                       (agora, STATUS_APROVADO, agora, ORIGEM_LINK, cadastro_id, STATUS_PENDENTE))
+    conn.commit()
+    return buscar_cadastro(conn, cadastro_id), cur.rowcount == 1
+
+
+def marcar_enviado(conn: sqlite3.Connection, cadastro_id: int, chave_envio: str) -> dict:
+    """registrar_envio sem o indicador (testes e chamadores antigos)."""
+    return registrar_envio(conn, cadastro_id, chave_envio)[0]
+
+
+def situacao_link(conn: sqlite3.Connection, cadastro_id: int, chave_envio: str) -> dict:
+    """O que a página do link precisa pra retomar: quais documentos já foram e
+    o status (SUBSTITUIDO/RECUSADO = encerrado, a página começa de novo)."""
+    c = _montar(_so_link(_por_chave(conn, cadastro_id, chave_envio)))
+    return {"id": c["id"], "primeiro_nome": (c["nome"] or "").split(" ")[0],
+            "documentos": {t: c[f"tem_{t}"] for t in DOCUMENTOS}, "enviado": bool(c.get("enviado_em")),
+            "status": c["status"], "resultado": _resultado_link(c)}
+
+
+def _resultado_link(c: dict) -> str | None:
+    """Tela final (Hugo, 02/11): "liberado" só quando entrou na bd_motoristas;
+    conflito ou etapa com erro = "em_avaliacao" (time da Fresh resolve);
+    enviado sem nada disso ainda = "processando"; não enviado = None."""
+    if not c.get("enviado_em"):
+        return None
+    if c.get("conflito_agent_id") and not c.get("conflito_resolvido"):
+        return "em_avaliacao"
+    if c.get("bd_motorista_id"):
+        return "liberado"
+    return "em_avaliacao" if c.get("ultimo_erro") else "processando"
+
+
+_MARCAS_HEIC = {b"heic", b"heix", b"mif1", b"msf1", b"hevc"}
+
+
+def tipo_do_arquivo(conteudo: bytes) -> str | None:
+    """Extensão pelos bytes do começo (JPEG, PNG, WEBP, PDF, HEIC) ou None."""
+    if conteudo[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if conteudo[:4] == b"\x89PNG":
+        return "png"
+    if conteudo[:4] == b"RIFF" and conteudo[8:12] == b"WEBP":
+        return "webp"
+    if conteudo[:4] == b"%PDF":
+        return "pdf"
+    if conteudo[4:8] == b"ftyp" and conteudo[8:12] in _MARCAS_HEIC:
+        return "heic"
+    return None
+
+
+def guardar_documento(conn: sqlite3.Connection, cadastro_id: int, chave_envio: str, tipo: str,
+                      nome_arquivo: str, conteudo: bytes) -> dict:
+    """Documento do cadastro (CNH, CRLV e, no link, selfie, ANTT e residência). A chave_envio é a prova de que é o mesmo
+    aparelho que criou o cadastro. Troca a foto se mandar de novo."""
+    row = conn.execute("SELECT * FROM motoristas_cadastros WHERE id = ?", (cadastro_id,)).fetchone()
+    if not row or not hmac.compare_digest(str(row["chave_envio"]), str(chave_envio or "")):
+        raise CadastroInvalido("Cadastro não encontrado.", 404)
+    if row["status"] != STATUS_PENDENTE:
+        raise CadastroInvalido("Este cadastro já foi avaliado.", 409)
+    tipo = str(tipo or "").lower()
+    if tipo not in DOCUMENTOS:
+        raise CadastroInvalido("Documento precisa ser um de: " + ", ".join(DOCUMENTOS) + ".")
+    ext = (Path(nome_arquivo or "").suffix.lstrip(".") or "jpg").lower()
+    if ext not in EXTENSOES_DOCUMENTO:
+        raise CadastroInvalido("Mande foto (JPG, PNG, HEIC) ou PDF.")
+    if not conteudo:
+        raise CadastroInvalido("Arquivo vazio.")
+    if len(conteudo) > MAX_FOTO_BYTES:
+        raise CadastroInvalido("Foto grande demais (máx. 10 MB).", 413)
+    # o nome segue o conteúdo (iPhone manda HEIC chamado .jpg); o que não é foto/PDF não entra
+    ext = tipo_do_arquivo(conteudo)
+    if not ext:
+        raise CadastroInvalido("Arquivo não parece uma foto ou PDF.")
+    pasta = pasta_cadastros() / str(cadastro_id)
+    pasta.mkdir(parents=True, exist_ok=True)
+    # um arquivo por tipo: o reenvio com outra extensão não deixa o antigo no disco
+    for antigo in pasta.glob(f"{tipo}.*"):
+        antigo.unlink()
+    nome = f"{tipo}.{ext}"
+    (pasta / nome).write_bytes(conteudo)
+    conn.execute(f"UPDATE motoristas_cadastros SET {tipo}_arquivo = ? WHERE id = ?", (nome, cadastro_id))
+    conn.commit()
+    return buscar_cadastro(conn, cadastro_id)
+
+
+def caminho_documento(conn: sqlite3.Connection, cadastro_id: int, tipo: str) -> Path | None:
+    if tipo not in DOCUMENTOS:
+        return None
+    c = buscar_cadastro(conn, cadastro_id)
+    nome = c and c.get(f"{tipo}_arquivo")
+    if not nome or "/" in nome or "\\" in nome:
+        return None
+    p = pasta_cadastros() / str(cadastro_id) / nome
+    return p if p.is_file() else None
+
+
+def marcar_avisado(conn: sqlite3.Connection, cadastro_id: int) -> None:
+    conn.execute("UPDATE motoristas_cadastros SET avisado_em = ? WHERE id = ? AND avisado_em IS NULL",
+                 (banco.agora(), cadastro_id))
+    conn.commit()
+
+
+def aprovar(conn: sqlite3.Connection, cadastro_id: int, config: dict, *, agent_id, zonas, dias, tipo_veiculo,
+            aceita_viagens: bool, revisado_por: str, pin_inicial: str | None = None,
+            gravar_planilha=None, dono_veiculo: bool | None = None) -> dict:
+    """Aprovação pelo painel: linha na BD_MOTORISTAS (regras/cadastro_motoristas)
+    + login no app com PIN provisório sorteado (devolvido UMA vez em `pin`).
+    `gravar_planilha` e `pin_inicial` só existem pros testes."""
+    pin_inicial = pin_inicial or sortear_pin()
+    c = buscar_cadastro(conn, cadastro_id)
+    if not c:
+        raise CadastroInvalido("Cadastro não encontrado.", 404)
+    if c["status"] != STATUS_PENDENTE:
+        raise CadastroInvalido("Este cadastro já foi avaliado.", 409)
+    if not c["completo"]:
+        raise CadastroInvalido("Faltam documentos (CNH e CRLV) -- peça ao motorista pra reenviar.")
+    try:
+        agent_id = int(agent_id)
+    except (TypeError, ValueError):
+        raise CadastroInvalido("Escolha o agente da Vuupt.")
+    zonas = _lista(zonas if zonas is not None else c["zonas"], ZONAS, "Zona")
+    dias = _lista(dias if dias is not None else c["dias"], DIAS, "Dia")
+    tipo_veiculo = str(tipo_veiculo or c["tipo_veiculo"] or "").upper()
+    if not zonas or not dias or not tipo_por_codigo(tipo_veiculo):
+        raise CadastroInvalido("Zonas, dias e tipo de veículo são obrigatórios.")
+    if auth.buscar_motorista(conn, c["cpf"]):
+        raise CadastroInvalido("Este CPF já tem login no app.", 409)
+
+    if gravar_planilha is None:
+        from regras.cadastro_motoristas import cadastrar_motorista
+        gravar_planilha = cadastrar_motorista
+    gravar_planilha(config, {
+        "agent_id": agent_id, "nome": c["nome"], "aceita_viagens": bool(aceita_viagens), "ativo": True,
+        "max_rotas_dia": 1, "dias_disponiveis": dias, "zonas_preferidas": zonas, "tipo_veiculo": tipo_veiculo,
+        "telefone": c["telefone"], "email": c["email"], "placa": c["placa"], "cpf": c["cpf"],
+    })
+    m = auth.criar_ou_atualizar_motorista(conn, c["cpf"], c["nome"], pin_inicial, agent_id=agent_id,
+                                          telefone=c["telefone"], email=c["email"], tipo_veiculo=tipo_veiculo,
+                                          trocar_pin=True)
+    agora = banco.agora()
+    dono = c["dono_veiculo"] if dono_veiculo is None else bool(dono_veiculo)
+    conn.execute("UPDATE motoristas SET chave_pix = ?, placa = ?, ve_financeiro = ?, atualizado_em = ? WHERE cpf = ?",
+                 (c["chave_pix"], c["placa"], int(dono), agora, c["cpf"]))
+    conn.execute("""UPDATE motoristas_cadastros SET status = ?, agent_id = ?, zonas = ?, dias = ?, tipo_veiculo = ?,
+                    aceita_viagens = ?, dono_veiculo = ?, revisado_em = ?, revisado_por = ? WHERE id = ?""",
+                 (STATUS_APROVADO, agent_id, ",".join(zonas), ",".join(dias), tipo_veiculo, int(bool(aceita_viagens)),
+                  int(dono), agora, revisado_por, cadastro_id))
+    conn.commit()
+    logger.info("cadastro #%s aprovado por %s: %s -> agent %s", cadastro_id, revisado_por, c["nome"], agent_id)
+    m = auth.buscar_motorista(conn, c["cpf"])
+    return {"cadastro": buscar_cadastro(conn, cadastro_id), "motorista": auth.publico(m), "pin": pin_inicial}
+
+
+def definir_ve_financeiro(conn: sqlite3.Connection, cpf: str, ve: bool) -> dict:
+    """Chave "Vê financeiro" da tela /motoristas (Hugo, 08/10): motorista que
+    dirige carro de outro não vê o extrato no app; pedágio continua."""
+    m = auth.buscar_motorista(conn, cpf)
+    if not m:
+        raise CadastroInvalido("Motorista sem login no app.", 404)
+    conn.execute("UPDATE motoristas SET ve_financeiro = ?, atualizado_em = ? WHERE cpf = ?",
+                 (int(bool(ve)), banco.agora(), m["cpf"]))
+    conn.commit()
+    return auth.buscar_motorista(conn, cpf)
+
+
+def logins_por_agent_id(conn: sqlite3.Connection) -> dict[int, dict]:
+    """Pra tela /motoristas cruzar a planilha com quem tem login no app."""
+    rows = conn.execute("SELECT cpf, agent_id, ve_financeiro, ultimo_login_em, trocar_pin FROM motoristas "
+                        "WHERE agent_id IS NOT NULL AND ativo = 1").fetchall()
+    return {int(r["agent_id"]): dict(r) for r in rows}
+
+
+def recusar(conn: sqlite3.Connection, cadastro_id: int, motivo: str, revisado_por: str) -> dict:
+    c = buscar_cadastro(conn, cadastro_id)
+    if not c:
+        raise CadastroInvalido("Cadastro não encontrado.", 404)
+    if c["status"] != STATUS_PENDENTE:
+        raise CadastroInvalido("Este cadastro já foi avaliado.", 409)
+    conn.execute("UPDATE motoristas_cadastros SET status = ?, motivo = ?, revisado_em = ?, revisado_por = ? WHERE id = ?",
+                 (STATUS_RECUSADO, (motivo or "").strip() or None, banco.agora(), revisado_por, cadastro_id))
+    conn.commit()
+    return buscar_cadastro(conn, cadastro_id)

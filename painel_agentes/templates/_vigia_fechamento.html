@@ -1,0 +1,120 @@
+<h1>Fechamento do batimento</h1>
+<p class="sub">Todo pedido lançado na Stokki desde 28/09 precisa ter destino final com documento. Aqui fica o que não fechou. Roda todo dia às 07h25.</p>
+{% if erro %}<p style="color:var(--erro);">Falha ao ler o batimento: {{ erro }}</p>{% endif %}
+
+{% set u = dados.ultima %}
+<div class="conta">
+  {% if u %}
+    <span class="numero">{{ u.lancados }}</span> lançados =
+    <strong>{{ u.destino }}</strong> com destino +
+    <strong>{{ u.em_andamento }}</strong> em andamento +
+    <strong>{{ u.divergencia }}</strong> em divergência
+    &nbsp;<span class="selo {{ 'ok' if u.fecha else 'erro' }}">{{ 'fecha' if u.fecha else 'NÃO fecha' }}</span>
+    <div class="suave" style="font-size:12px;margin-top:6px;">
+      Rodada de {{ u.rodada_em[:16] }}
+      {% if dados.atrasada %}<span class="selo erro">rodada atrasada</span>{% endif %}
+      {% set c = u.resumo.get('cobertura') or {} %}
+      {% if c.get('faixa') %} · faixa {{ c.faixa }}: {{ c.listados }} listados, {{ (c.importacao or [])|length }} em Importação, {{ (c.inexistentes or [])|length }} inexistentes{% endif %}
+    </div>
+  {% else %}
+    Nenhuma rodada do batimento ainda.
+  {% endif %}
+</div>
+
+<div class="cards">
+  {% for m in dados.por_motivo %}
+  <a class="card {% if m.real %}critico{% endif %} {% if filtros.motivo == m.motivo %}ativo{% endif %}"
+     href="{{ url_for('vigia_pedidos', aba='fechamento', motivo=m.motivo) }}">
+    <div class="rotulo">{{ m.rotulo }}</div>
+    <div class="numeros">{{ m.total }}</div>
+    <div class="suave" style="font-size:12px;">{{ 'pede ação' if m.real else 'cobrar comprovante' }}</div>
+  </a>
+  {% endfor %}
+</div>
+
+<form class="filtros" method="GET" action="{{ url_for('vigia_pedidos') }}">
+  <input type="hidden" name="aba" value="fechamento">
+  <div class="campo">
+    <label for="busca">Buscar</label>
+    <input type="text" id="busca" name="busca" value="{{ filtros.busca }}" placeholder="PS, embarcador, transportadora">
+  </div>
+  <div class="campo">
+    <label for="motivo">Motivo</label>
+    <select id="motivo" name="motivo">
+      <option value="">Todos</option>
+      {% for chave, rotulo in motivos %}
+      <option value="{{ chave }}" {% if filtros.motivo == chave %}selected{% endif %}>{{ rotulo }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <label class="campo check"><input type="checkbox" name="reais" value="1" {% if filtros.reais %}checked{% endif %}> Só as que pedem ação</label>
+  <label class="campo check"><input type="checkbox" name="tratadas" value="1" {% if filtros.tratadas %}checked{% endif %}> Incluir tratadas</label>
+  <div class="campo"><button type="submit" class="botao">Filtrar</button></div>
+  {% if filtros.busca or filtros.motivo or filtros.reais or filtros.tratadas %}
+  <div class="campo"><a class="botao" style="background:var(--texto-suave);" href="{{ url_for('vigia_pedidos', aba='fechamento') }}">Limpar</a></div>
+  {% endif %}
+</form>
+
+<div class="tabela-wrap">
+<table>
+  <thead>
+    <tr><th>Pedido</th><th>Motivo</th><th>Desde</th><th>Embarcador / transportadora</th><th>Evidências</th><th>Tratativa</th></tr>
+  </thead>
+  <tbody>
+    {% for l in dados.linhas %}
+    <tr class="{% if l.real and l.vencida and not l.tratada %}vencido{% endif %}">
+      <td class="mono"><a href="{{ url_for('historico_tratativas', busca=l.codigo) }}">#{{ l.codigo }}</a></td>
+      <td><span class="pilula {% if l.real %}vencido{% endif %}">{{ l.motivo_txt }}</span></td>
+      <td class="mono">{{ l.div_desde[:16] }}{% if l.real and l.vencida and not l.tratada %}<div class="suave">mais de 1 dia útil</div>{% endif %}</td>
+      <td>{{ l.embarcador or '—' }}<div class="suave">{{ l.transportadora or '' }}</div></td>
+      <td class="evid">{{ l.evidencias|join(' · ') }}</td>
+      <td>
+        {% if l.tratada %}
+          <div>{{ l.tratado_obs }}</div><div class="suave">{{ l.tratado_por }} · {{ l.tratado_em[:16] }}</div>
+        {% elif pode_tratar %}
+          <button type="button" class="botao btn-tratar" data-codigo="{{ l.codigo }}">Tratar</button>
+        {% else %}<span class="suave">—</span>{% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="suave">Nenhuma divergência nesse filtro.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+{% if dados.rodadas %}
+<h2 class="secao">Últimas rodadas</h2>
+<div class="tabela-wrap">
+<table>
+  <thead><tr><th>Rodada</th><th>Lançados</th><th>Destino</th><th>Em andamento</th><th>Divergência</th><th>Conta</th></tr></thead>
+  <tbody>
+    {% for r in dados.rodadas %}
+    <tr><td class="mono">{{ r.rodada_em[:16] }}</td><td>{{ r.lancados }}</td><td>{{ r.destino }}</td>
+        <td>{{ r.em_andamento }}</td><td>{{ r.divergencia }}</td>
+        <td><span class="selo {{ 'ok' if r.fecha else 'erro' }}">{{ 'fecha' if r.fecha else 'NÃO fecha' }}</span></td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+
+{% if pode_tratar %}
+<script>
+document.querySelectorAll('.btn-tratar').forEach(function (b) {
+  b.addEventListener('click', async function () {
+    var obs = prompt('O que foi feito com ' + b.dataset.codigo + '?');
+    if (obs === null || !obs.trim()) return;
+    b.disabled = true;
+    var r = await fetch('{{ url_for("api_batimento_tratar") }}', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({codigo: b.dataset.codigo, obs: obs.trim()})
+    });
+    if (r.ok) { location.reload(); return; }
+    var j = {}; try { j = await r.json(); } catch (e) {}
+    alert(j.erro || ('Falha ao tratar (' + r.status + ')'));
+    b.disabled = false;
+  });
+});
+</script>
+{% endif %}

@@ -5,6 +5,10 @@ confirmacao do cliente (nao 1 por NF), mensagem de sistema no chat, e-mail
 pro cliente e e-mail interno. Tudo redirecionado por
 portal_cliente.envios.forcar_destino (default hugo@) ate o Hugo liberar
 (forcar_destino: "" no config = envio real).
+
+Tela de Notificacoes (controle_notificacoes.py, tipo "area_nao_atendida"):
+vale POR CIMA do config SO no e-mail ao cliente. O e-mail interno (atendimento)
+e o aviso de "sem chamado" seguem o forcar_destino de sempre.
 """
 import html
 import logging
@@ -17,6 +21,7 @@ for _p in (_RAIZ, _AQUI):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
+from controle_notificacoes import acao_do_config, decidir  # noqa: E402
 from email_utils import enviar_email, envelope_html  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -81,7 +86,106 @@ def avisar_cancelamento(envio: dict, por: str) -> bool:
         return False
 
 
-def abrir_bloqueio(conn, cliente: dict, criados: list[dict], config: dict) -> int | None:
+def avisar_endereco_alterado(envio: dict, resultado: dict, por: str) -> bool:
+    """Cliente trocou o endereco de entrega de um envio bloqueado (Hugo, 13/11):
+    mensagem de sistema no chamado do bloqueio. Falha nao derruba a acao."""
+    chamado_id = envio.get("bloqueio_chamado_id")
+    if not chamado_id:
+        return False
+    try:
+        ch = _chamados()
+        conn_ch = ch.conectar()
+        try:
+            chamado = ch.buscar_chamado(conn_ch, chamado_id)
+            if not chamado:
+                return False
+            quem = "pela equipe Fresh Log" if str(por).startswith("equipe") else "pelo cliente"
+            fim = ("A região é atendida: o pedido segue para a Stokki." if resultado.get("liberado")
+                   else "A região também não é atendida: continua aguardando liberação.")
+            ch.mensagem_sistema(conn_ch, chamado, f"Endereço de entrega da NF {_rotulo(envio)} alterado {quem} pela aba Envios "
+                                                  f"para {resultado.get('endereco') or '?'}. {fim}")
+            return True
+        finally:
+            conn_ch.close()
+    except Exception as e:
+        logger.warning(f"bloqueio: nao registrou a troca de endereco no chamado {chamado_id}: {e}")
+        return False
+
+
+TIPOS_SEM_AREA = ("RETIRADA", "TERCEIROS")
+_ROTULO_TIPO = {"RETIRADA": "retirada no galpão", "TERCEIROS": "redespacho"}
+
+
+def liberar_por_transportadora(transp: dict | None, por: str, embarcador_cnpj: str | None = None) -> list[int]:
+    """Hugo 29/10 (caso NF 4447): a 1a NF de uma transportadora nova chega com
+    ela PENDENTE (sem tipo) e cai no bloqueio de area. Quando a tela
+    /transportadoras (ou o embarcador pelo link) a classifica como retirada ou
+    redespacho, as NFs bloqueadas cujo XML agora resolve pra esses tipos voltam
+    pra NA_FILA, com mensagem no chamado. Reavalia pelo catalogo (mesma regra
+    do classificar_area_envio), nao so pela transportadora salva. Nunca levanta:
+    o cadastro ja foi gravado. Devolve os ids liberados. `embarcador_cnpj`
+    (resposta pelo link publico): so solta as NFs desse embarcador."""
+    if not transp or transp.get("situacao") != "ATIVA" or transp.get("tipo") not in TIPOS_SEM_AREA:
+        return []
+    try:
+        return _liberar_por_transportadora(por, embarcador_cnpj)
+    except Exception:
+        logger.exception(f"bloqueio: falhou ao liberar NFs pela transportadora {transp.get('id')}")
+        return []
+
+
+def _liberar_por_transportadora(por: str, embarcador_cnpj: str | None) -> list[int]:
+    import envio_pedidos as ep
+    conn = ep.conectar()
+    try:
+        sql, params = "SELECT * FROM portal_envios WHERE status = ? AND (origem IS NULL OR origem = ?)", [STATUS_BLOQUEADO, ep.ORIGEM_XML]
+        if embarcador_cnpj is not None:
+            sql += " AND cnpj_embarcador = ?"
+            params.append(embarcador_cnpj)
+        bloqueados = [dict(r) for r in conn.execute(sql + " ORDER BY id", params)]
+        liberados = []
+        for envio in bloqueados:
+            try:
+                nfe = ep.ler_nfe_do_envio(envio)
+                tipo = ep._tipo_transportadora(nfe.get("transportadora_nome") or "", nfe.get("transportadora_cnpj") or "")
+            except Exception as e:
+                logger.warning(f"bloqueio: nao reavaliou a transportadora da NF {_rotulo(envio)}: {e}")
+                continue
+            if tipo not in TIPOS_SEM_AREA:
+                continue
+            cur = conn.execute("UPDATE portal_envios SET status = ?, atualizado_em = ? WHERE id = ? AND status = ?",
+                               (ep.STATUS_NA_FILA, ep._agora(), envio["id"], STATUS_BLOQUEADO))
+            conn.commit()
+            if cur.rowcount:
+                liberados.append(envio["id"])
+                logger.info(f"bloqueio: NF {_rotulo(envio)} liberada (transportadora {tipo}, por {por})")
+                _avisar_liberacao(envio, nfe.get("transportadora_nome") or "", tipo)
+        return liberados
+    finally:
+        conn.close()
+
+
+def _avisar_liberacao(envio: dict, transportadora: str, tipo: str) -> None:
+    """Sem o `por` na mensagem (revisao 29/10): o chat e do cliente desta NF, e
+    quem classificou pode ser outro embarcador respondendo pelo link."""
+    chamado_id = envio.get("bloqueio_chamado_id")
+    if not chamado_id:
+        return
+    try:
+        ch = _chamados()
+        conn_ch = ch.conectar()
+        try:
+            chamado = ch.buscar_chamado(conn_ch, chamado_id)
+            if chamado:
+                ch.mensagem_sistema(conn_ch, chamado, f"NF {_rotulo(envio)} liberada: a transportadora {transportadora} foi "
+                                                      f"cadastrada como {_ROTULO_TIPO[tipo]}. O pedido segue para a Stokki.")
+        finally:
+            conn_ch.close()
+    except Exception as e:
+        logger.warning(f"bloqueio: NF {_rotulo(envio)} liberada, mas sem mensagem no chamado {chamado_id}: {e}")
+
+
+def abrir_bloqueio(conn, cliente: dict, criados: list[dict], config: dict, db_path=None) -> int | None:
     """`conn` e a conexao de envio_pedidos (portal_envios). `cliente` =
     {cnpj, sender_id, nome}. Devolve o id do chamado ou None."""
     bloqueados = [c for c in criados if c.get("status") == STATUS_BLOQUEADO]
@@ -97,6 +201,7 @@ def abrir_bloqueio(conn, cliente: dict, criados: list[dict], config: dict) -> in
             chamado = ch.criar_chamado(conn_ch, cliente, ch.ORIGEM_SISTEMA, ch.STATUS_AGUARDANDO_FL,
                                        assunto="Envio para região não atendida", area=AREA_CHAMADO, pedido_ref=f"NF {nfs}")
             ch.mensagem_sistema(conn_ch, chamado, texto)
+            ch.whatsapp_para_atendimento(chamado, config)
             chamado_id = chamado["id"]
             emails_cliente = ch.emails_do_cliente(conn_ch, cliente.get("cnpj"))
         finally:
@@ -127,9 +232,14 @@ def abrir_bloqueio(conn, cliente: dict, criados: list[dict], config: dict) -> in
     forcar = forcar_destino(config)
     nome = html.escape(cliente.get("nome") or "")
     corpo_html = "<p>" + html.escape(texto).replace("\n", "</p><p>") + "</p>"
+    decisao = decidir("area_nao_atendida", cliente.get("cnpj") or None,
+                      fallback_acao=acao_do_config(True, forcar), fallback_piloto=forcar, db_path=db_path)
+    piloto = decisao.destino_piloto if decisao.acao == "PILOTO" else ""
     aviso = (f"<p style='background:#FFF4D6;padding:8px;border-radius:6px'>Redirecionado (piloto). Destino real: "
-             f"{html.escape(', '.join(emails_cliente) or '(cliente sem e-mail)')}</p>" if forcar else "")
-    destinos_cliente = [forcar] if forcar else emails_cliente
+             f"{html.escape(', '.join(emails_cliente) or '(cliente sem e-mail)')}</p>" if piloto else "")
+    destinos_cliente = [piloto] if piloto else (emails_cliente if decisao.acao == "ENVIAR" else [])
+    if decisao.acao == "NAO":
+        logger.info(f"bloqueio: e-mail ao cliente nao enviado pela tela ({decisao.motivo})")
     if destinos_cliente:
         enviar_email(destinos_cliente, f"[Fresh Log] Envio aguardando liberação · NF {nfs}",
                      envelope_html(f"<p>Olá, <b>{nome}</b>.</p>{corpo_html}<p><a href='{URL_PORTAL}'>Abrir o portal</a></p>{aviso}",

@@ -1,0 +1,9 @@
+[Unit]
+Description=Stokki Eventos - Vigia diario do fluxo de documentos (so leitura: rotas do dia x NF/boleto/arquivo, rodadas do processar_documentos)
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos/documentos_pedido
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/documentos_pedido/vigia_documentos.py

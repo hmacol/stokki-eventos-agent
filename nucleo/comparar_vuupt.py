@@ -20,6 +20,7 @@ e confere contra nucleo_rotas / nucleo_paradas / nucleo_pedidos:
   situacao_parada_diferente  situação esperada × situação gravada
   horario_parada_em_utc      completed_at gravado cru (UTC), sem converter pra hora local
   horario_parada_diferente   completed_at diferente por outro motivo
+                             (rota operada pelo app não entra: sai em `horario_do_app`, fora do placar)
   pedido_ausente             código da rota sem linha em nucleo_pedidos
   pedido_duplicado_codigo    o mesmo pedido gravado com e sem '#'
   status_pedido_diferente    status esperado pelo resultado da rota × nucleo_pedidos.status
@@ -83,6 +84,7 @@ def comparar_dia(dia: date, rotas_vuupt: list[dict], conn: sqlite3.Connection) -
     contagem = {"rotas": 0, "paradas": 0, "pedidos": 0}
     ids_vuupt = set()
     esperado_pedido: dict[str, str | None] = {}
+    horario_do_app: list[dict] = []
 
     for rota in rotas_vuupt:
         rid = rota.get("id")
@@ -129,8 +131,14 @@ def comparar_dia(dia: date, rotas_vuupt: list[dict], conn: sqlite3.Connection) -
             if bruto and not cancelada:
                 local = vuupt_para_local(bruto)
                 if p["completed_at"] != local:
+                    item = {**ref, "nucleo": p["completed_at"], "esperado": local}
+                    if n["operada_app"]:
+                        # A hora boa é a do app; a Vuupt carimba quando a ponte repetiu (segundos
+                        # ou, esperando foto, até ~30 min depois). Fica à vista, fora do placar.
+                        horario_do_app.append(item)
+                        continue
                     categoria = "horario_parada_em_utc" if p["completed_at"] == str(bruto) else "horario_parada_diferente"
-                    divergencias[categoria].append({**ref, "nucleo": p["completed_at"], "esperado": local})
+                    divergencias[categoria].append(item)
         for sid, p in paradas.items():
             if sid not in esperado and p["situacao"] != banco.PARADA_CANCELADA:
                 divergencias["parada_sobrando"].append({**base, "service_id": sid, "codigo": p["codigo"],
@@ -172,7 +180,8 @@ def comparar_dia(dia: date, rotas_vuupt: list[dict], conn: sqlite3.Connection) -
                                                             "esperado": status})
 
     return {"dia": dia.isoformat(), "contagem": contagem,
-            "divergencias": {c: divergencias.get(c, []) for c in CATEGORIAS}}
+            "divergencias": {c: divergencias.get(c, []) for c in CATEGORIAS},
+            "horario_do_app": horario_do_app}
 
 
 def resumir(resultados: list[dict], exemplos: int) -> str:
@@ -191,6 +200,9 @@ def resumir(resultados: list[dict], exemplos: int) -> str:
             linhas.append(f"  {c:28s} {len(itens):5d}")
             for i in itens[:exemplos]:
                 linhas.append(f"      ex: {json.dumps(i, ensure_ascii=False, default=str)[:220]}")
+    do_app = sum(len(r.get("horario_do_app", [])) for r in resultados)
+    if do_app:
+        linhas.append(f"  (fora do placar) horario_do_app {do_app:5d}  -- rota operada pelo app: vale a hora do app")
     linhas.append(f"TOTAL de divergências: {total_div}")
     return "\n".join(linhas)
 

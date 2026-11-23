@@ -121,6 +121,19 @@ class TestExtrairItensDoRecebimento(unittest.TestCase):
         self.assertEqual([i["sku"] for i in itens], ["SKU-B", "SKU-C"])
         self.assertEqual([i["linha"] for i in itens], [2, 3])
 
+    def test_quantidade_esperada_so_entra_quando_pedida_e_a_recebida_esta_vazia(self):
+        # 22/11: recebimento executado no nosso app ("Aguardando recebimento" na Stokki)
+        html = ("<table><thead><tr><th>NR.</th><th>ID</th><th>SKU</th><th>Nome</th><th>Localização</th><th>Quantidade</th>"
+                "<th>unidade</th><th>Valor Unitário</th><th>Quantidade total recebida</th><th>Obs</th></tr></thead><tbody>"
+                "<tr><td>1</td><td>#ITM-1</td><td>A</td><td>PA</td><td></td><td>120</td><td>UN</td><td>R$ 1</td><td></td><td></td></tr>"
+                "<tr><td>2</td><td>#ITM-2</td><td>B</td><td>PB</td><td></td><td>60</td><td>UN</td><td>R$ 1</td><td>48</td><td></td></tr>"
+                "<tr><td>3</td><td>#ITM-3</td><td>C</td><td>PC</td><td></td><td>0</td><td>UN</td><td>R$ 1</td><td></td><td></td></tr>"
+                "</tbody></table>")
+        self.assertEqual([(i["sku"], i["qtd_embalagem"]) for i in extrair_itens_do_recebimento(html)], [("B", 48.0)])
+        itens = extrair_itens_do_recebimento(html, usar_esperada=True)
+        self.assertEqual([(i["sku"], i["linha"], i["qtd_embalagem"], i.get("esperada", False)) for i in itens],
+                         [("A", 1, 120.0, True), ("B", 2, 48.0, False)])   # recebida vence; esperada zero fica fora
+
     def test_recebimento_sem_itens_devolve_lista_vazia(self):
         self.assertEqual(extrair_itens_do_recebimento("<html></html>"), [])
 
