@@ -77,6 +77,7 @@ TELAS = [
     ("atendimento", "Atendimento", "Clientes", [r"^/atendimento(/|$)", r"^/api/atendimento/"]),
     ("adesao_portal", "Adesão ao portal", "Clientes", [r"^/adesao-portal$"]),
     ("motoristas", "Motoristas", "Motoristas", [r"^/motoristas$", r"^/api/motoristas(/|$)"]),
+    ("adesao_motoristas", "Adesão ao app", "Motoristas", [r"^/adesao-motoristas$"]),
     ("pedagios", "Pedágios", "Motoristas", [r"^/financeiro/pedagios(/|$)", r"^/api/financeiro/pedagios/"]),
     ("compras_tela", "Compras", "", [r"^/compras$", r"^/api/compras(/|$)"]),
     ("pagamentos", "Pagamentos", "Motoristas", [r"^/financeiro/pagamentos(/|$)", r"^/api/financeiro/pagamentos(/|$)"]),

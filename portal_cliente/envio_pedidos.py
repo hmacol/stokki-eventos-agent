@@ -324,10 +324,23 @@ def _endereco_linha(el) -> str:
     return endereco
 
 
-def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
+def _recusar_dtd(conteudo: bytes, nome_arquivo: str = "") -> None:
+    """NF-e não usa DTD nem entidades. Recusar antes de parsear fecha XXE e expansão de entidades
+    (billion laughs) sem depender do expat do sistema nem de defusedxml. UTF-16 (que esconderia o
+    <!DOCTYPE> do teste em bytes) também não é NF-e: recusa."""
+    if conteudo[:2] in (b"\xff\xfe", b"\xfe\xff") or b"\x00" in conteudo[:64]:
+        raise ErroEnvio(f"{nome_arquivo or 'Arquivo'}: codificação de XML não aceita (a NF-e vem em UTF-8).")
+    baixo = conteudo.lower()
+    if b"<!doctype" in baixo or b"<!entity" in baixo:
+        raise ErroEnvio(f"{nome_arquivo or 'Arquivo'}: XML com DTD/entidades não é aceito (a NF-e não usa).")
+
+
+def ler_nfe(conteudo: bytes, nome_arquivo: str = "", permitir_entrada: bool = False) -> dict:
     """Extrai os campos que a máscara mostra/valida. Levanta ErroEnvio com
     mensagem pro usuário quando o arquivo não é uma NF-e (validação 1 do
-    item 9)."""
+    item 9). `permitir_entrada` (aba Pedidos de Entrada, 25/09): aceita
+    tpNF=0 também -- Envios continua recusando."""
+    _recusar_dtd(conteudo, nome_arquivo)
     try:
         root = ET.fromstring(conteudo)
     except ET.ParseError as e:
@@ -348,10 +361,28 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
         raise ErroEnvio(f"{nome_arquivo or 'Arquivo'}: NF-e sem destinatário (<dest>).")
     ender = dest.find("nfe:enderDest", NS)
     tipo_nf = _texto(ide, "nfe:tpNF")
-    if tipo_nf == "0":
+    if tipo_nf == "0" and not permitir_entrada:
         raise ErroEnvio(f"{nome_arquivo or 'Arquivo'}: NF-e de ENTRADA (tpNF=0) -- só notas de saída viram pedido de entrega.")
 
     dets = inf.findall("nfe:det", NS)
+    itens_lista = []
+    for i, det in enumerate(dets, start=1):
+        prod = det.find("nfe:prod", NS)
+        ean = _texto(prod, "nfe:cEAN")
+        try:
+            qtd = float(_texto(prod, "nfe:qCom") or 0)
+        except ValueError:
+            qtd = 0.0
+        try:
+            vu = float(_texto(prod, "nfe:vUnCom") or 0)
+        except ValueError:
+            vu = 0.0
+        itens_lista.append({
+            "linha": int(det.get("nItem") or i), "sku": _texto(prod, "nfe:cProd"),
+            "ean": _so_digitos(ean) if ean.upper() != "SEM GTIN" else "",
+            "descricao": _texto(prod, "nfe:xProd"), "quantidade": qtd,
+            "unidade": _texto(prod, "nfe:uCom"), "valor_unitario": vu,
+        })
     volumes = 0
     peso = 0.0
     for vol in inf.findall("nfe:transp/nfe:vol", NS):
@@ -424,6 +455,8 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
         "nome_arquivo": nome_arquivo or f"{chave}.xml",
         "transportadora_nome": _texto(transporta, "nfe:xNome"),
         "transportadora_cnpj": _so_digitos(_texto(transporta, "nfe:CNPJ") or _texto(transporta, "nfe:CPF")),
+        "tipo_nf": tipo_nf,
+        "itens_lista": itens_lista,
     }
 
 
@@ -996,6 +1029,31 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
     return pedidos, rejeitados
 
 
+def produtos_do_embarcador(conn: sqlite3.Connection, cfg: dict) -> list[sqlite3.Row] | None:
+    """Produtos ativos do embarcador no catálogo local (wms_produtos), com as
+    colunas sku, ean, dun, descricao, unidade, qtd_por_caixa (NULL pra coluna
+    que o banco não tenha). None = sem tabela, ou cfg sem client_id nem nome."""
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(wms_produtos)")}
+    except sqlite3.Error:
+        cols = set()
+    if not cols:
+        return None
+    cid = cfg.get("client_id")
+    nome = (cfg.get("nome") or "").strip()
+    cond, args = [], []
+    if cid:
+        cond.append("embarcador_id = ?")
+        args.append(int(cid))
+    if nome:
+        cond.append("LOWER(embarcador) = LOWER(?)")
+        args.append(nome)
+    if not cond:
+        return None
+    sel = ", ".join(c if c in cols else f"NULL AS {c}" for c in ("sku", "ean", "dun", "descricao", "unidade", "qtd_por_caixa"))
+    return conn.execute(f"SELECT {sel} FROM wms_produtos WHERE ativo = 1 AND ({' OR '.join(cond)})", args).fetchall()
+
+
 def validar_skus(conn: sqlite3.Connection, pedido: dict, cfg: dict) -> tuple[list[str], list[str]]:
     """Confere os SKUs no catálogo local do Stokki (wms_produtos, sincronizado
     pelo WMS). Se o catálogo tem produtos desse embarcador e o SKU não está
@@ -1007,18 +1065,9 @@ def validar_skus(conn: sqlite3.Connection, pedido: dict, cfg: dict) -> tuple[lis
         tem = None
     if not tem:
         return erros, ["Catálogo de produtos indisponível -- os SKUs serão conferidos pela Stokki."]
-    cid = cfg.get("client_id")
-    nome = (cfg.get("nome") or "").strip()
-    cond, args = [], []
-    if cid:
-        cond.append("embarcador_id = ?")
-        args.append(int(cid))
-    if nome:
-        cond.append("LOWER(embarcador) = LOWER(?)")
-        args.append(nome)
-    if not cond:
+    rows = produtos_do_embarcador(conn, cfg)
+    if rows is None:   # cfg sem client_id nem nome
         return erros, avisos
-    rows = conn.execute(f"SELECT sku, ean, dun, descricao FROM wms_produtos WHERE ativo = 1 AND ({' OR '.join(cond)})", args).fetchall()
     if not rows:
         return erros, ["Catálogo do seu embarcador ainda não sincronizado -- os SKUs serão conferidos pela Stokki."]
     conhecidos = {}

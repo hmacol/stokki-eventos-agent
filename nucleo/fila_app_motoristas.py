@@ -125,6 +125,8 @@ def lote_do_dia(conn, limite: int, agora: datetime | None = None) -> list[dict]:
         if estado and adotou(estado["app_versao"]):
             conn.execute("UPDATE motoristas_fila_app SET situacao = 'adotou' WHERE id = ?", (r["id"],))
             continue
+        if not estado:
+            continue   # sem conta/PIN (23/11): a mensagem pede o CPF e ele nao conseguiria entrar; segue 'pendente'
         pessoa = pessoas.get(r["cpf"])
         telefone = _telefone(conn, pessoa) if pessoa and pessoa["ativo"] else None
         if telefone and len(lote) < limite:

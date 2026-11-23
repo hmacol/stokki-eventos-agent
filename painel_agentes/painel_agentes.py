@@ -2151,6 +2151,19 @@ def adesao_portal():
                            dias_ativo=_adesao.DIAS_ATIVO, gerado_em=datetime.now().strftime("%d/%m %H:%M"))
 
 
+@app.route("/adesao-motoristas")
+@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
+def adesao_motoristas():
+    """Adesão dos motoristas ao app novo e leva de cada um (23/11, saída da Vuupt).
+    Só leitura; a página se recarrega a cada 2h."""
+    import adesao_motoristas as _adesao
+    linhas = _adesao.listar()
+    return render_template("adesao_motoristas.html", linhas=linhas, resumo=_adesao.resumo(linhas),
+                           levas=_adesao.resumo_levas(linhas), dias=_adesao.DIAS_RECENTE,
+                           versao_alvo=".".join(map(str, _adesao.VERSAO_ALVO)),
+                           gerado_em=datetime.now().strftime("%d/%m %H:%M"))
+
+
 _NIVEIS_EDITA_TRANSPORTADORAS = ("total", "operador", "logistica")
 
 
@@ -6856,6 +6869,12 @@ def api_wms_recebimento_encerrar_divergencia(recebimento_id):
             except Exception as e:  # noqa: BLE001 -- e-mail nunca derruba o encerramento
                 logging.getLogger(__name__).exception("Falha no relatório de faltas do recebimento %s", recebimento_id)
                 envio = {"enviado": False, "motivo": "erro_inesperado", "detalhe": str(e)}
+        try:
+            sys.path.insert(0, str(_RAIZ / "portal_cliente")) if str(_RAIZ / "portal_cliente") not in sys.path else None
+            import entradas as portal_entradas
+            portal_entradas.sincronizar_status(conn)   # nos dois desfechos (ENDERECADO e DIVERGENCIA)
+        except Exception:  # noqa: BLE001 -- o portal nunca derruba o encerramento
+            logging.getLogger(__name__).exception("sincronizar_status do portal falhou no recebimento %s", recebimento_id)
     finally:
         conn.close()
     return jsonify({"ok": True, "ja_encerrado": ja_encerrado, "recebimento": r["recebimento"],

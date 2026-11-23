@@ -186,6 +186,14 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                             Sem login: /login?proximo=aula e volta pros vídeos. Vídeos gerados por
                                             aula_equipe/gravar.py, servidos de dados/aula_equipe/ (aula.json)
  Envio de pedido (XML) pelo cliente ........ portal_cliente/envio_pedidos.py + enviar_stokki.py
+ Pedidos de Entrada (aba do portal, v2) .... portal_cliente/entradas.py + _entradas.html + enviar_entradas_stokki.py.
+                                             Cliente (ou equipe pelo /equipe) anuncia a NF de remessa (XML/planilha) com data
+                                             prevista; conferencia produto a produto TRAVA SKU fora do cadastro; o worker cria
+                                             o #PE na Stokki; o /wms recebe e o botao Encerrar leva o portal a Encerrado ou
+                                             Com divergencia (rota /api/wms/recebimentos/<id>/encerrar chama
+                                             entradas.sincronizar_status). So liga por cliente: gerenciar_clientes.py entradas
+                                             <cnpj> --ativar (portal_clientes_envio.entradas_ativo). Spec/plano v2:
+                                             docs/superpowers/specs/2026-11-02-pedidos-de-entrada-portal-v2-design.md
  Documentos (PDF) anexados ao pedido ....... portal_cliente/anexos_pedido.py (11/11): na prévia do envio (PDFs junto
                                              com os XMLs, o sistema sugere o pedido; ou "+ Anexar PDF" por pedido) e
                                              depois em "Documentos" na lista, até a rota sair. O usuário sempre marca
@@ -415,6 +423,8 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
 
  Daemons sem porta:
    portal-cliente-envios   -> portal_cliente/enviar_stokki.py --loop  (fila de pedidos p/ Stokki)
+   portal-cliente-entradas -> portal_cliente/enviar_entradas_stokki.py --loop (fila de Pedidos de Entrada p/ Stokki;
+                              Playwright no wizard incoming/xml/multiple; so na VPS, dentro de sessao_uso; ainda nao deployado)
    portal-cliente-chamados -> portal_cliente/chamados.py ler --loop   (IMAP dos chamados)
 
  Units: infra/*.service, painel_agentes/infra/, portal_cliente/infra/,
@@ -1741,6 +1751,11 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                               renomear}, GET .../envio-links/candidatos e POST .../envio-links (só total;
                               o envio responde 409 com a chave desligada). acesso_telas.TELAS já cobre
                               ^/api/motoristas.
+   /adesao-motoristas         adesao_motoristas.html + adesao_motoristas.py (23/11: adesão
+                              ao app novo; funil na ponte / usando / versão antiga / PIN
+                              sem entrar / sem login + leva de cada um; só leitura de
+                              bd_motoristas, motoristas, motoristas_fila_app, nucleo_rotas;
+                              ponte vem do config; total/operador/logistica/leitura)
    /financeiro/pedagios       pedagios.html
    /financeiro/pagamentos     pagamentos_pontuais.html (Adiantamento/Descarga/Frete avulso)
    /canhotos                  canhotos.html
@@ -1840,6 +1855,11 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            Cabeçalho com pares numerados (Sku1 | Quantidade1 | Sku2 ...,
                            planilha da Marchef): um pedido por linha, itens saem dos
                            pares preenchidos (_pares_de_itens), sem precisar indicar.
+ entradas.py               Aba Pedidos de Entrada: tabelas portal_entradas/portal_entrada_itens, leitura de XML/planilha,
+                           conferir_itens (SKU/EAN/DUN, caixas x unidades, trava de cadastro), situacao_rotulo da lista,
+                           conferencia do galpao por SKU (sobra/falta) e sincronizar_status (liga ao wms_recebimentos).
+ enviar_entradas_stokki.py Worker da fila de entradas (cria o #PE na Stokki pelo wizard; marca indeterminado em vez de erro
+                           quando nao ha resposta clara). Nunca rodar fora da VPS; parar o servico antes de --uma-vez.
  lotes_cliente.py          Lote indicado pelo cliente piloto do WMS (18/11): planilha de lotes
                            solta no envio e "Indicar lote" na prévia (XML). Grava em
                            wms_lotes_cliente; a separação usa (wms_separacao.lotes_indicados).
