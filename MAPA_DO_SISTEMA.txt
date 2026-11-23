@@ -146,6 +146,11 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              a fila Guardar leva à posição final). Rotas GET /api/wms/guarda/fila,
                                              GET /api/wms/guarda/item, POST /api/wms/guarda/guardar; ativar caixa
                                              com recebimento vai pra doca se o embarcador tem etapas.
+                                             Também POST /api/wms/produtos/<id>/temperatura (coluna
+                                             wms_produtos.temperatura; área tipo DOCA em wms.py); bootstrap do
+                                             wms traz etapas_ativo, doca, guarda_pendente. Telas no wms.html:
+                                             Conferir Recebimento sem posição, TELAS.guardar e TELAS.guardarItem.
+                                             Testes: test_wms_doca.py, test_wms_doca_tela.py.
  Separação/conferência/volumes do galpão .. painel_agentes/wms_separacao.py (17/11: ondas por embarcador, bipe de
                                              caixa, distribuição, conferência cega, falta, volumes; tabelas
                                              wms_ondas, wms_onda_pedidos, wms_separacao_itens, wms_conferencias,
