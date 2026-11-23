@@ -414,6 +414,49 @@ class TestGuardar(unittest.TestCase):
         self.assertEqual(str(ctx.exception), "Bipe a posição de destino, não a doca.")
         self.assertEqual(self.saldo(DOC), 10)
 
+    def test_temperatura_confirmada_fica_no_movimento_da_caixa(self):
+        wms.definir_temperatura_produto(self.conn, 1, "REFRIGERADO")
+        s = self.caixas(2)
+        # a primeira caixa cai entre o movimento e a caixa; o retry tem que aceitar a observacao com sufixo
+        real = cx._mudar_caixa
+        chamadas = []
+
+        def cai_na_primeira(*a, **kw):
+            chamadas.append(1)
+            if len(chamadas) == 1:
+                raise RuntimeError("queda")
+            return real(*a, **kw)
+
+        with mock.patch.object(cx, "_mudar_caixa", side_effect=cai_na_primeira):
+            with self.assertRaises(RuntimeError):
+                self.guardar(confirmar_temperatura=True)
+        r = self.guardar(confirmar_temperatura=True)
+        self.assertEqual(r["movidas"], s)
+        obs = [x[0] for x in self.conn.execute(
+            "SELECT observacao FROM wms_movimentos WHERE uuid LIKE 'g-u1-%' ORDER BY uuid")]
+        self.assertEqual(obs, [f"Caixa {x} · temperatura diferente confirmada" for x in s])
+        self.assertEqual([cx.obter_caixa(self.conn, x)["posicao"] for x in s], [DEST, DEST])
+        self.assertEqual(cx.divergencias(self.conn, 48), [])
+
+    def test_reserva_a_mais_que_ja_havia_na_doca_nao_vai_alem_do_movido(self):
+        self.entrada(36)
+        pid = self.pedido(30)
+        wms.registrar_movimento(self.conn, tipo="AJUSTE", produto_id=1, quantidade=20, lote="L1", validade=VAL,
+                                origem=DOC, observacao="avaria")   # doca 16 com 30 reservado: 14 a mais
+        r = self.guardar(quantidade=6)
+        self.assertEqual(r["reservas_levadas"], 1)
+        self.assertEqual([x[:2] for x in self.reservas(pid)], [(DEST, 6.0), (DOC, 24.0)])
+
+    def test_guarda_que_falha_sem_mover_nao_reaponta(self):
+        self.entrada(36)
+        pid = self.pedido(30)
+        wms.registrar_movimento(self.conn, tipo="AJUSTE", produto_id=1, quantidade=20, lote="L1", validade=VAL,
+                                origem=DOC, observacao="avaria")
+        with self.assertRaises(wms.ErroWMS):
+            self.guardar(quantidade=50)
+        self.assertEqual([x[:2] for x in self.reservas(pid)], [(DOC, 30.0)])
+        self.assertFalse(self.conn.in_transaction)
+
 class TestFilaGuarda(unittest.TestCase):
     setUp = TestGuardar.setUp
     entrada = TestGuardar.entrada

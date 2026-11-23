@@ -814,6 +814,14 @@ class TestRevisaoFinal(BaseCaixas):
         self.assertIn("reservada", str(ctx.exception))
         self.assertEqual(cx.obter_caixa(self.conn, s)["posicao"], self.POS)
 
+    def test_levar_reserva_fora_da_doca_e_ignorado(self):
+        s = self.ativar(1)[0]
+        self.pedido(1013, 6)
+        with self.assertRaises(wms.ErroWMS) as ctx:
+            cx.mover_caixa(self.conn, s, "C9-E2-N1", uuid="x" + "d" * 16, levar_reserva=True)
+        self.assertIn("reservada", str(ctx.exception))
+        self.assertEqual(cx.obter_caixa(self.conn, s)["posicao"], self.POS)
+
     def test_mover_ignora_reserva_de_outra_chave_e_consumida(self):
         s = self.ativar(1)[0]
         pid = self.pedido(1011, 6)

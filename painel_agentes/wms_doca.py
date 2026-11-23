@@ -139,11 +139,12 @@ def sugerir_posicoes(conn, produto_id: int, lote: str, validade: str | None, lim
 # os dois, repetir com o mesmo uuid acha os movimentos (duplicados) e so
 # completa a reserva.
 
-def _levar_reservas(conn, produto_id: int, lote: str, validade: str, destino: str) -> int:
+def _levar_reservas(conn, produto_id: int, lote: str, validade: str, destino: str, teto: float) -> int:
     """Reservas ATIVAS da chave na doca que passam do saldo que sobrou la vao para o
-    destino, por id crescente (a ultima e dividida). Reserva de item separado nunca vai:
-    a caixa dele nao sai da doca e a baixa tira dali. Devolve quantas linhas foram
-    reapontadas ou criadas."""
+    destino, por id crescente (a ultima e dividida), no maximo `teto` (o que a guarda
+    moveu): reserva a mais que ja havia na doca nao vai junto. Reserva de item separado
+    nunca vai: a caixa dele nao sai da doca e a baixa tira dali. Devolve quantas linhas
+    foram reapontadas ou criadas."""
     conn.execute("BEGIN IMMEDIATE")
     try:
         saldo = wms._saldo_atual(conn, DOCA_POSICAO, produto_id, lote, validade)
@@ -156,7 +157,7 @@ def _levar_reservas(conn, produto_id: int, lote: str, validade: str, destino: st
                 "AND etapa IN ('SEPARADA', 'DISTRIBUIDA', 'CONFERIDA')")}
         except sqlite3.OperationalError:   # banco sem a separacao
             presas = set()
-        excedente = round(sum(float(r["quantidade_un"]) for r in reservas) - saldo, 3)
+        excedente = round(min(sum(float(r["quantidade_un"]) for r in reservas) - saldo, teto), 3)
         ts, n = wms.agora(), 0
         for r in reservas:
             if excedente <= 0.0004:
@@ -211,6 +212,8 @@ def guardar(conn, *, produto_id: int, lote: str, validade: str | None, destino: 
     sufixo = ""
     if feitos:
         destino = feitos[0]["posicao_destino"]   # resposta perdida: vale o destino ja gravado
+        if any("temperatura diferente confirmada" in (m["observacao"] or "") for m in feitos):
+            sufixo = " · temperatura diferente confirmada"   # a decisao ja foi tomada na 1a chamada
     else:
         destino = wms.normalizar_codigo(destino)
         if e_doca(destino):
@@ -263,14 +266,18 @@ def guardar(conn, *, produto_id: int, lote: str, validade: str | None, destino: 
                 if s not in ja_caixas and wms_caixas.obter_caixa(conn, s)["posicao"] != DOCA_POSICAO:
                     raise ErroWMS(f"Caixa {s} saiu da doca durante a guarda.")
                 wms_caixas.mover_caixa(conn, s, destino, uuid=f"{prefixo}{s}", operador=operador,
-                                       levar_reserva=True)
+                                       levar_reserva=True, observacao_extra=sufixo)
                 movidas.append(s)
         elif not feitos:
             wms.registrar_movimento(conn, tipo="TRANSFERENCIA", produto_id=produto_id, quantidade=q, lote=lote,
                                     validade=validade, origem=DOCA_POSICAO, destino=destino, operador=operador,
                                     uuid=f"g-{uuid}", observacao="Guarda da doca" + sufixo)
     finally:
-        levadas = _levar_reservas(conn, produto_id, lote, val, destino)
+        # teto = tudo que esta guarda (este uuid, inclusive chamadas anteriores) ja tirou da doca
+        teto = float(conn.execute(
+            "SELECT COALESCE(SUM(quantidade), 0) FROM wms_movimentos WHERE uuid = ? OR substr(uuid, 1, ?) = ?",
+            (f"g-{uuid}", len(prefixo), prefixo)).fetchone()[0])
+        levadas = _levar_reservas(conn, produto_id, lote, val, destino, teto) if teto > 0.0004 else 0
 
     total = 0.0
     for u in ([f"{prefixo}{s}" for s in movidas] if com_caixa else [f"g-{uuid}"]):

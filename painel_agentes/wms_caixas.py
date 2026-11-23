@@ -397,10 +397,12 @@ def _prometido(conn, serial: str) -> float:
 
 
 def mover_caixa(conn, serial: str, destino: str, *, uuid: str, operador: dict | None = None,
-                levar_reserva: bool = False) -> dict:
+                levar_reserva: bool = False, observacao_extra: str = "") -> dict:
     """TRANSFERENCIA da caixa (leva o saldo junto). uuid do aparelho obrigatorio.
-    levar_reserva=True (so a guarda da doca, wms_doca.guardar): nao recusa caixa
-    reservada, porque quem chama reaponta a reserva para o destino logo depois."""
+    levar_reserva=True (so a guarda da doca, wms_doca.guardar): saindo da doca, nao
+    recusa caixa reservada, porque quem chama reaponta a reserva para o destino logo
+    depois; de qualquer outra posicao a trava vale. observacao_extra vai no fim da
+    observacao do movimento (ex.: " · temperatura diferente confirmada")."""
     uuid = str(uuid or "").strip()
     if not uuid:
         raise ErroWMS("uuid do aparelho obrigatorio para mover.")
@@ -435,7 +437,8 @@ def mover_caixa(conn, serial: str, destino: str, *, uuid: str, operador: dict | 
         if (ja["tipo"] != "TRANSFERENCIA" or ja["produto_id"] != caixa["produto_id"]
                 or ja["lote"] != caixa["lote"] or (ja["validade"] or None) != (caixa["validade"] or None)
                 or abs(float(ja["quantidade"]) - float(caixa["qtd_un"])) > 1e-9
-                or ja["observacao"] != f"Caixa {serial}"):
+                or (ja["observacao"] != f"Caixa {serial}"
+                    and not str(ja["observacao"] or "").startswith(f"Caixa {serial} "))):
             raise ErroWMS(f"uuid {uuid} ja foi usado por outro movimento; nao e desta caixa {serial}.")
         _mudar_caixa(conn, serial, de_situacoes=("EM_ESTOQUE", "ABERTA"), para=caixa["situacao"],
                      posicao=ja["posicao_destino"], evento_uuid=evento_uuid, movimento_uuid=uuid,
@@ -444,13 +447,16 @@ def mover_caixa(conn, serial: str, destino: str, *, uuid: str, operador: dict | 
         return {"caixa": _caixa_ou_erro(conn, serial), "duplicado": True, "movimento_uuid": uuid}
     if caixa["posicao"] == destino:
         raise ErroWMS(f"Caixa {serial} ja esta em {destino}.")
+    if levar_reserva:
+        import wms_doca  # lazy: wms_doca importa este modulo
+        levar_reserva = wms_doca.e_doca(caixa["posicao"])
     if not levar_reserva:
         _recusar_se_reservada(conn, caixa)
     origem = caixa["posicao"]
     wms.registrar_movimento(conn, tipo="TRANSFERENCIA", produto_id=caixa["produto_id"],
                             quantidade=caixa["qtd_un"], lote=caixa["lote"], validade=caixa["validade"],
                             origem=origem, destino=destino, operador=operador, uuid=uuid,
-                            observacao=f"Caixa {serial}")
+                            observacao=f"Caixa {serial}{observacao_extra}")
     _mudar_caixa(conn, serial, de_situacoes=("EM_ESTOQUE", "ABERTA"), para=caixa["situacao"],
                  posicao=destino, evento_uuid=evento_uuid, movimento_uuid=uuid, operador=operador,
                  observacao=f"Moveu de {origem} para {destino}")
