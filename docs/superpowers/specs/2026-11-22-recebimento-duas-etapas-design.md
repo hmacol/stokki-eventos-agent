@@ -191,7 +191,7 @@ Decisões do controlador da execução, tomadas a partir de achados de revisão.
 
 - **Uma chegada, um embarcador.** O checklist só junta recebimentos do mesmo embarcador. Caminhão com carga de dois clientes exige um checklist para cada um. Motivo: o PDF, o e-mail e a página de liberação mostram a chegada inteira; com dois embarcadores, um cliente veria a carga do outro.
 - **Faixa própria substitui a da classe.** A faixa de temperatura do produto, quando existe, vale no lugar da faixa padrão da classe (não é cruzada com ela). A medição só está dentro se couber na faixa de todos os produtos daquela classe na carga; produtos com faixas incompatíveis na mesma carga mandam qualquer medição para o escritório.
-- **A doca só recebe entrada pela conferência.** O servidor recusa lançar saldo na doca que não venha da conferência de um recebimento com a chegada liberada. O botão "Entrada" avulso, direto numa posição, continua livre.
+- **A doca só recebe entrada pela conferência.** O servidor recusa ENTRADA na doca que não venha da conferência de um recebimento com a chegada liberada, e a doca só esvazia pelo Guardar, pela separação ou por Saída. Ajuste, inventário e transferência com destino na doca continuam livres (uso do escritório). O botão "Entrada" avulso, direto numa posição, continua livre.
 - **Fotos e dados do checklist travam ao concluir.** Depois de concluído, não dá para acrescentar nem tirar foto.
 - **E-mail "sua carga chegou" sem retroativo.** O tipo de notificação próprio (`chegada_recebimento`, "Chegada do caminhão no galpão") nasce preso. Quando o Hugo ligar na tela Notificações, vale só para chegadas dali em diante; a rotina de pendentes olha só as últimas 48 horas. O cliente pode desligar essa notificação no portal; o pedido de liberação por temperatura vai mesmo assim.
 - **A guarda leva reserva só até o que ela moveu.** Reserva sobrando na doca por outro motivo não é levada junto.
@@ -200,6 +200,9 @@ Decisões do controlador da execução, tomadas a partir de achados de revisão.
 - **Volumes é texto livre** (ex.: "4 pallets").
 - **Fotos obrigatórias:** caminhão aberto e carga; termômetro quando há produto frio; avaria quando marcada. Placa e nota fiscal são opcionais.
 - **Carga com refrigerado e congelado:** uma medição para cada classe, uma foto de termômetro para as duas.
+- **Descartar rascunho.** Checklist ainda em rascunho (aberto por engano ou para a carga errada) pode ser descartado na própria tela: somem fotos, dados e o vínculo, e a carga volta para a lista do Receber. Checklist concluído não se descarta.
+- **Escritório pode encerrar recebimento que não veio ou foi recusado.** Sem chegada viva (nunca houve, ou a última foi "não recebida"), os níveis do escritório encerram o recebimento pelas regras de sempre (falta gera o relatório ao cliente). O galpão continua barrado.
+- **Recebimento já em conferência quando as etapas são ligadas segue sem checklist.** Se alguma linha já tem quantidade conferida e o recebimento nunca teve chegada, ele começou no fluxo antigo: fica fora da trava e aparece em Conferir Recebimento, não no Receber.
 
 ## Fica com quem implementar
 
