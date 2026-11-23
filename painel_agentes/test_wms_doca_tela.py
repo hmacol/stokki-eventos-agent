@@ -231,5 +231,25 @@ class Rotas(Base):
         self.assertEqual(r.status_code, 400)
 
 
+class ConferirRecebimentoNaTela(Base):
+    """Marcadores da tela Conferir Recebimento no HTML do /wms (nao ha harness de JS)."""
+
+    def html(self):
+        self.entrar("galpao")
+        return self.cliente.get("/wms").get_data(as_text=True)
+
+    def test_marcadores(self):
+        h = self.html()
+        for m in ("Registrar conferido", "Conferir Recebimento", "Encerrar conferência",
+                  "Pedir etiquetas de todas as linhas", "function rotuloPos",
+                  "Conferido, está na DOCA", "vão para a fila Guardar"):
+            self.assertIn(m, h)
+
+    def test_caminho_antigo_continua(self):
+        h = self.html()
+        for m in ("Registrar entrada", "Encerrar recebimento", "Entrada registrada em"):
+            self.assertIn(m, h)
+
+
 if __name__ == "__main__":
     unittest.main()

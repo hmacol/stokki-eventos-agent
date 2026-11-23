@@ -272,6 +272,7 @@
   const S = {
     operador: BOOT.operador, operadores: BOOT.operadores, areas: BOOT.areas, resumo: BOOT.resumo,
     produtosInfo: BOOT.produtos, podeAdministrar: BOOT.pode_administrar,
+    etapasAtivo: !!BOOT.etapas_ativo, doca: BOOT.doca || 'DOC1-P1', guardaPendente: BOOT.guarda_pendente || 0,
     tela: 'inicio', pilha: [], ctx: {}, aguardando: null, fila: carregarFila(), recusados: carregarRecusados(),
   };
   const TIPOS_AREA = { CONTAINER: 'Container', SECA: 'Seca', CAM_CONGELADA: 'Câmara congelada', CAM_REFRIGERADA: 'Câmara refrigerada' };
@@ -279,6 +280,8 @@
 
   // ── util ──────────────────────────────────────────────────────────────
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // Posição como o operador lê: a doca de espera aparece como DOCA, o resto é o próprio código.
+  function rotuloPos(codigo) { return codigo === S.doca ? 'DOCA' : codigo; }
   const num = (v) => { const n = Number(v); return Number.isInteger(n) ? String(n) : n.toLocaleString('pt-BR', { maximumFractionDigits: 3 }); };
   const dataBr = (iso) => iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : '';
   const horaBr = (ts) => ts ? ts.slice(11, 16) : '';
@@ -365,7 +368,7 @@
       <div class="dica">produto (EAN da embalagem ou DUN da caixa) · posição (QR da etiqueta)</div>
     </div>
     <div class="acoes">
-      <button class="primario" data-ir="receber" style="grid-column:1 / -1"><b>Receber</b><span id="ini-receber">entradas esperadas da Stokki</span></button>
+      <button class="primario" data-ir="receber" style="grid-column:1 / -1"><b>${S.etapasAtivo ? 'Conferir Recebimento' : 'Receber'}</b><span id="ini-receber">entradas esperadas da Stokki</span></button>
       <button class="primario" data-ir="mov" data-tipo="ENTRADA"><b>Entrada</b><span>produto chega na posição</span></button>
       <button data-ir="busca"><b>Consultar</b><span>onde está / o que tem</span></button>
       <button data-ir="mov" data-tipo="TRANSFERENCIA"><b>Mover</b><span>de uma posição a outra</span></button>
@@ -476,7 +479,7 @@
     <div class="total"><b>${unidadeTexto(p, p.total || 0)}</b><span>em ${saldos.length} ${saldos.length === 1 ? 'posição' : 'posições'} · ordenado por validade</span></div>
     <div class="lista">${saldos.map((s) => `
       <div class="item ${classeValidade(s.dias_para_vencer, s.validade)}" data-pos="${s.posicao}">
-        <div class="cod mono">${s.posicao}</div>
+        <div class="cod mono">${esc(rotuloPos(s.posicao))}</div>
         <div class="qtd">${num(s.quantidade)}<small>${esc(p.unidade)}</small></div>
         <div class="meta">${s.lote ? 'lote ' + esc(s.lote) + ' · ' : ''}${badgeValidade(s.dias_para_vencer, s.validade)} · ${esc(s.area_nome)}</div>
       </div>`).join('') || '<div class="vazio">Sem saldo endereçado.</div>'}</div>
@@ -487,7 +490,7 @@
       <button class="botao neutro" id="btn-movs">Movimentações</button>
     </div>
     ${S.podeAdministrar ? `<div class="cartao"><div class="rotulo">Regra do produto</div><label style="display:flex;gap:10px;align-items:center;font-size:14px"><input type="checkbox" id="chk-validade" ${p.controla_validade ? 'checked' : ''} style="width:22px;height:22px"> Validade obrigatória na entrada</label><label style="display:block;font-size:14px;margin-top:10px">Temperatura do produto <select id="sel-temperatura" style="font-size:14px;padding:6px">${[['', 'Não informada'], ['AMBIENTE', 'Ambiente'], ['REFRIGERADO', 'Refrigerado'], ['CONGELADO', 'Congelado']].map(([v, t]) => `<option value="${v}" ${(p.temperatura || '') === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label></div>` : ''}
-    ${(p.movimentos || []).length ? `<div class="cartao"><div class="rotulo">Últimos movimentos</div><table class="mov">${p.movimentos.slice(0, 8).map((m) => `<tr><td>${dataHoraBr(m.criado_em)}</td><td>${TIPOS_MOV[m.tipo] || m.tipo}</td><td class="mono">${m.posicao_origem ? esc(m.posicao_origem) + ' → ' : ''}${esc(m.posicao_destino || '—')}</td><td style="text-align:right">${num(m.quantidade)}</td><td>${esc((m.operador_nome || '').split(' ')[0])}</td></tr>`).join('')}</table></div>` : ''}`;
+    ${(p.movimentos || []).length ? `<div class="cartao"><div class="rotulo">Últimos movimentos</div><table class="mov">${p.movimentos.slice(0, 8).map((m) => `<tr><td>${dataHoraBr(m.criado_em)}</td><td>${TIPOS_MOV[m.tipo] || m.tipo}</td><td class="mono">${m.posicao_origem ? esc(rotuloPos(m.posicao_origem)) + ' → ' : ''}${esc(m.posicao_destino ? rotuloPos(m.posicao_destino) : '—')}</td><td style="text-align:right">${num(m.quantidade)}</td><td>${esc((m.operador_nome || '').split(' ')[0])}</td></tr>`).join('')}</table></div>` : ''}`;
   };
   TELAS_POS.produto = (ctx) => {
     const p = ctx.produto;
@@ -564,7 +567,7 @@
     </div>
     ${tipo !== 'ENTRADA' ? `
     <div class="campo"><label>De (origem)</label>
-      ${lotes.length ? `<div class="lista" style="margin:0">${lotes.map((l, i) => `<div class="item ${classeValidade(l.dias_para_vencer, l.validade)}" data-lote="${i}" style="${ctx.loteSel === i ? 'border-color:var(--acento);box-shadow:0 0 0 1px var(--acento)' : ''}"><div class="cod mono">${esc(l.posicao)}</div><div class="qtd">${num(l.quantidade)}<small>${esc(p ? p.unidade : '')}</small></div><div class="meta">${l.lote ? 'lote ' + esc(l.lote) + ' · ' : ''}${badgeValidade(l.dias_para_vencer, l.validade)}</div></div>`).join('')}</div>`
+      ${lotes.length ? `<div class="lista" style="margin:0">${lotes.map((l, i) => `<div class="item ${classeValidade(l.dias_para_vencer, l.validade)}" data-lote="${i}" style="${ctx.loteSel === i ? 'border-color:var(--acento);box-shadow:0 0 0 1px var(--acento)' : ''}"><div class="cod mono">${esc(rotuloPos(l.posicao))}</div><div class="qtd">${num(l.quantidade)}<small>${esc(p ? p.unidade : '')}</small></div><div class="meta">${l.lote ? 'lote ' + esc(l.lote) + ' · ' : ''}${badgeValidade(l.dias_para_vencer, l.validade)}</div></div>`).join('')}</div>`
                      : `<div class="com-botao"><input type="text" id="f-origem" class="mono ${ctx.origem ? '' : 'aguardando'}" value="${esc(ctx.origem || '')}" placeholder="Leia a etiqueta da posição" autocomplete="off"><button type="button" id="btn-cam-origem">📷</button></div>`}
     </div>` : ''}
     <div class="duas">
@@ -676,7 +679,7 @@
         <div class="item" data-pid="${m.produto_id}">
           <div class="cod">${TIPOS_MOV[m.tipo] || m.tipo} · ${esc(m.produto_descricao)}</div>
           <div class="qtd">${num(m.quantidade)}<small>${esc(m.produto_unidade || 'UN')}</small></div>
-          <div class="meta"><span class="mono">${m.posicao_origem ? esc(m.posicao_origem) + ' → ' : ''}${esc(m.posicao_destino || '—')}</span>${m.lote ? ' · lote ' + esc(m.lote) : ''}${m.validade ? ' · val. ' + dataBr(m.validade) : ''} · ${dataHoraBr(m.criado_em)} · ${esc(m.operador_nome || '?')}${m.observacao ? ' · ' + esc(m.observacao) : ''}</div>
+          <div class="meta"><span class="mono">${m.posicao_origem ? esc(rotuloPos(m.posicao_origem)) + ' → ' : ''}${esc(m.posicao_destino ? rotuloPos(m.posicao_destino) : '—')}</span>${m.lote ? ' · lote ' + esc(m.lote) : ''}${m.validade ? ' · val. ' + dataBr(m.validade) : ''} · ${dataHoraBr(m.criado_em)} · ${esc(m.operador_nome || '?')}${m.observacao ? ' · ' + esc(m.observacao) : ''}</div>
         </div>`).join('') || '<div class="vazio">Nenhum movimento ainda.</div>';
       el.querySelectorAll('[data-pid]').forEach((x) => x.addEventListener('click', () => abrirProduto(Number(x.dataset.pid))));
     } catch (e) { toast(e.message, true); }
@@ -750,7 +753,7 @@
 
   // Receber -- recebimentos esperados da Stokki (WMS fase 2, Task 8+10)
   TELAS.receber = () => `
-    <h1>Receber<small>entradas esperadas -- lote e validade você lê na caixa</small></h1>
+    <h1>${S.etapasAtivo ? 'Conferir Recebimento' : 'Receber'}<small>entradas esperadas -- lote e validade você lê na caixa</small></h1>
     <div class="lista" id="lista-receber"><div class="vazio">Carregando…</div></div>`;
   TELAS_POS.receber = async () => {
     const el = document.getElementById('lista-receber');
@@ -776,14 +779,16 @@
     return `
     <button class="voltar" id="btn-voltar">‹ Voltar</button>
     <h1>${esc(r.codigo)}<small>${esc((r.embarcador || '').split(' ').slice(0, 3).join(' '))} · ${itens.length} item(ns)</small></h1>
+    ${itens.filter((it) => it.produto_id && it.usa_caixas).length > 1 && r.estado === 'ESPERADO' ? '<div class="botoes"><button class="botao neutro" type="button" id="btn-pedir-todas">Pedir etiquetas de todas as linhas</button></div>' : ''}
     <div class="lista">${itens.map((it, i) => {
       const feito = it.produto_id && Number(it.qtd_enderecada || 0) >= Number(it.qtd_un || 0) - 0.001;
       const restante = Math.max(0, Math.round(((it.qtd_un || 0) - (it.qtd_enderecada || 0)) * 1000) / 1000);
       // Aberto = aceita entrada mesmo com a linha completa (sobra pede confirmação).
       const aberto = r.estado === 'ESPERADO';
+      const et = !!it.usa_etapas;   // embarcador com etapas: conferência lança na doca, sem campo Posição
       return `
       <div class="cartao ${feito ? 'ok' : (it.produto_id ? '' : 'erro')}" id="rec-card-${i}">
-        <div class="rotulo">Linha ${it.linha}${feito ? ' · <span class="badge badge-ok">endereçado</span>' : ''}</div>
+        <div class="rotulo">Linha ${it.linha}${feito ? ' · <span class="badge badge-ok">' + (et ? 'conferido' : 'endereçado') + '</span>' : ''}</div>
         <div class="valor">${esc(it.descricao)}</div>
         <div class="sub mono">SKU ${esc(it.sku || '-')}${it.produto_id ? '' : ' · sem produto no catálogo: ' + esc(it.motivo_pendencia)}</div>
         ${it.produto_id ? `<div class="sub" id="rec-prog-${i}">${progressoLinha(it)}</div>` : ''}
@@ -797,7 +802,7 @@
           <div class="campo"><label>&nbsp;</label><button class="botao neutro" type="button" data-pedir="${i}">Pedir etiquetas</button></div>
         </div>
         <div id="rec-pedido-${i}"></div>
-        <div class="campo"><label>Posição</label><div class="com-botao"><input type="text" id="rec-pos-${i}" placeholder="leia a etiqueta da posição" autocomplete="off" style="text-transform:uppercase"><button type="button" data-cam="${i}">📷</button></div></div>
+        ${et ? '' : `<div class="campo"><label>Posição</label><div class="com-botao"><input type="text" id="rec-pos-${i}" placeholder="leia a etiqueta da posição" autocomplete="off" style="text-transform:uppercase"><button type="button" data-cam="${i}">📷</button></div></div>`}
         <div class="campo"><label>Bipe das caixas</label><div class="com-botao"><input type="text" id="rec-cx-${i}" class="mono" inputmode="none" placeholder="bipe cada caixa" autocomplete="off"><button type="button" data-camcx="${i}">📷</button></div></div>
         <div id="rec-log-${i}" class="lista"></div>` : ''}
         ${it.produto_id && aberto && !it.usa_caixas ? `
@@ -807,21 +812,21 @@
         </div>
         <div class="duas-3">
           <div class="campo"><label>Quantidade (${esc(it.unidade || 'UN')})</label><input type="number" id="rec-qtd-${i}" inputmode="decimal" min="0" step="any" value="${restante}"></div>
-          <div class="campo"><label>Posição</label><div class="com-botao"><input type="text" id="rec-pos-${i}" placeholder="leia a etiqueta" autocomplete="off" style="text-transform:uppercase"><button type="button" data-cam="${i}">📷</button></div></div>
+          ${et ? '' : `<div class="campo"><label>Posição</label><div class="com-botao"><input type="text" id="rec-pos-${i}" placeholder="leia a etiqueta" autocomplete="off" style="text-transform:uppercase"><button type="button" data-cam="${i}">📷</button></div></div>`}
         </div>
         <div class="botoes linha">
           <button class="botao neutro" type="button" data-etiqueta="${i}">Imprimir etiqueta</button>
-          <button class="botao" type="button" data-confirmar="${i}">Registrar entrada</button>
+          <button class="botao" type="button" data-confirmar="${i}">${et ? 'Registrar conferido' : 'Registrar entrada'}</button>
         </div>` : ''}
       </div>`; }).join('') || '<div class="vazio">Recebimento sem itens.</div>'}</div>
-    ${r.estado === 'ESPERADO' ? '<div class="botoes"><button class="botao" type="button" id="btn-encerrar">Encerrar recebimento</button></div>' : ''}`;
+    ${r.estado === 'ESPERADO' ? '<div class="botoes"><button class="botao" type="button" id="btn-encerrar">' + (S.etapasAtivo ? 'Encerrar conferência' : 'Encerrar recebimento') + '</button></div>' : ''}`;
   };
   function progressoLinha(it) {
     const rec = Number(it.qtd_enderecada || 0); const anu = Number(it.qtd_un || 0); const un = esc(it.unidade || 'UN');
     const dif = Math.round((rec - anu) * 1000) / 1000;
     const marca = dif > 0 ? ' · <span class="badge badge-atencao">sobra ' + num(dif) + '</span>'
       : (dif < 0 ? ' · faltam ' + num(-dif) : ' · <span class="badge badge-ok">completo</span>');
-    return 'Recebido <b>' + num(rec) + '</b> de ' + num(anu) + ' ' + un + marca;
+    return (it.usa_etapas ? 'Conferido <b>' : 'Recebido <b>') + num(rec) + '</b> de ' + num(anu) + ' ' + un + marca;
   }
   // Depois de cada entrada: relê o recebimento e atualiza o "Recebido X de Y" sem perder o log dos bipes.
   async function atualizarProgresso(ctx) {
@@ -878,6 +883,7 @@
         </table>
       </div>
       ${res.faltas ? '<div class="cartao erro"><div class="sub">Há falta em ' + res.faltas + ' item(ns): ao confirmar, <b>o cliente recebe o relatório de faltas por e-mail</b>. O que já foi endereçado continua no estoque.</div></div>' : ''}
+      ${S.etapasAtivo ? '<div class="cartao"><div class="sub">Os ' + res.linhas.filter((l) => l.recebido > 0).length + ' itens conferidos vão para a fila Guardar.</div></div>' : ''}
       ${res.sem_cadastro ? '<div class="cartao"><div class="sub">' + res.sem_cadastro + ' linha(s) sem produto no catálogo: não contam como falta, ficam registradas como pendência.</div></div>' : ''}
       <div class="campo"><label>Observação${res.faltas ? ' (vai no e-mail do cliente)' : ''}</label>
         <input type="text" id="enc-obs" maxlength="300" placeholder="${res.divergente ? 'ex.: 2 caixas chegaram avariadas' : 'opcional'}"></div>
@@ -931,23 +937,43 @@
       const ped = g('rec-pedido-' + i); const st = estadoCx(i);
       if (ped && st.impressaoId) ped.innerHTML = '<div class="cartao ok"><div class="sub">Etiquetas na fila #' + esc(st.impressaoId) + ', retire no computador da impressão.</div></div>';
     };
+    // Um POST /caixas pra linha i; devolve false se o servidor recusou.
+    const pedirLinha = async (i, n) => {
+      const it = itens[i];
+      const r = await pedirEtiquetas({ produto_id: it.produto_id, lote: g('rec-lote-' + i).value.trim().toUpperCase(), validade: g('rec-val-' + i).value || null, quantidade: n });
+      if (!r) return false;
+      const st = estadoCx(i); st.seriais = r.seriais || []; st.impressaoId = r.impressao_id; st.ativadas = []; st.extras = []; st.log = [];
+      pintar(i);
+      return true;
+    };
     app.querySelectorAll('[data-pedir]').forEach((b) => b.addEventListener('click', async () => {
-      const i = Number(b.dataset.pedir); const it = itens[i];
+      const i = Number(b.dataset.pedir);
       const n = Number(g('rec-ncx-' + i).value);
       if (!(n >= 1 && n <= 200)) return toast('Informe de 1 a 200 caixas.', true);
       if (estadoCx(i).impressaoId && !confirm('Pedir mais ' + n + ' etiquetas?')) return;
       b.disabled = true;
-      const r = await pedirEtiquetas({ produto_id: it.produto_id, lote: g('rec-lote-' + i).value.trim().toUpperCase(), validade: g('rec-val-' + i).value || null, quantidade: n });
+      const ok = await pedirLinha(i, n);
       b.disabled = false;
-      if (!r) return;
-      const st = estadoCx(i); st.seriais = r.seriais || []; st.impressaoId = r.impressao_id; st.ativadas = []; st.extras = []; st.log = [];
-      pintar(i);
-      g('rec-cx-' + i).focus();
+      if (ok) g('rec-cx-' + i).focus();
     }));
+    const btnTodas = g('btn-pedir-todas');
+    if (btnTodas) btnTodas.addEventListener('click', async () => {
+      const feitas = []; const puladas = [];
+      btnTodas.disabled = true;
+      for (let i = 0; i < itens.length; i++) {
+        if (!g('rec-ncx-' + i)) continue;   // sem caixa serializada ou recebimento fechado
+        const n = Number(g('rec-ncx-' + i).value);
+        const lote = g('rec-lote-' + i).value.trim(); const val = g('rec-val-' + i).value;
+        if (!lote || !val || !(n >= 1 && n <= 200)) { puladas.push('linha ' + itens[i].linha); continue; }
+        if (await pedirLinha(i, n)) feitas.push(i); else puladas.push('linha ' + itens[i].linha);
+      }
+      btnTodas.disabled = false;
+      toast('Etiquetas pedidas para ' + feitas.length + ' linha(s)' + (puladas.length ? '. Puladas (incompletas): ' + puladas.join(', ') : ''), !feitas.length);
+    });
     const bipar = async (i, codigo) => {
       const it = itens[i]; const serial = serialDe(codigo);
       if (!serial) return toast('Isso não é etiqueta de caixa.', true);
-      const posicao = g('rec-pos-' + i).value.trim().toUpperCase().replace(/^POS:/, '');
+      const posicao = it.usa_etapas ? S.doca : g('rec-pos-' + i).value.trim().toUpperCase().replace(/^POS:/, '');
       if (!posicao) return toast('Leia a posição primeiro.', true);
       let res = await ativarCaixa(serial, posicao, { recebimento_id: ctx.recebimento.id, item_id: it.id });
       if (res.semOperador) return;
@@ -969,7 +995,7 @@
       const cx = g('rec-cx-' + i); if (!cx) return;
       pintar(i);
       cx.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); const v = cx.value.trim(); cx.value = ''; if (v) bipar(i, v); } });
-      const pos = g('rec-pos-' + i);
+      const pos = g('rec-pos-' + i); if (!pos) return;
       pos.addEventListener('change', () => { pos.value = pos.value.replace(/^pos:/i, '').toUpperCase(); });
     });
     app.querySelectorAll('[data-camcx]').forEach((b) => b.addEventListener('click', () => abrirCamera((c) => bipar(Number(b.dataset.camcx), c))));
@@ -1043,7 +1069,7 @@
     const lote = g('rec-lote-' + i).value.trim().toUpperCase();
     const validade = g('rec-val-' + i).value || null;
     const qtd = Number(String(g('rec-qtd-' + i).value).replace(',', '.'));
-    const posicao = g('rec-pos-' + i).value.trim().toUpperCase();
+    const posicao = it.usa_etapas ? S.doca : g('rec-pos-' + i).value.trim().toUpperCase();
     if (!(qtd > 0)) return toast('Informe a quantidade.', true);
     if (!posicao) return toast('Leia a etiqueta da posição.', true);
     const ja = Number(it.qtd_enderecada || 0); const depois = Math.round((ja + qtd) * 1000) / 1000;
@@ -1063,7 +1089,7 @@
         criado_em: new Date().toISOString().slice(0, 19).replace('T', ' '), operador: S.operador,
       } });
       await api('/recebimentos/' + r.id + '/itens/' + it.id + '/enderecar', { method: 'POST', body: { qtd, uuid: idMov } });
-      toast('Entrada registrada em ' + posicao);
+      toast(it.usa_etapas ? 'Conferido, está na DOCA' : 'Entrada registrada em ' + posicao);
       abrirRecebimento(r.id);
     } catch (e) {
       if (e.status === 409 && e.dados && e.dados.sem_operador) { S.operador = null; toast(e.message, true); ir('operador'); }
@@ -1211,7 +1237,7 @@
     <h1 class="mono">${esc(c.serial)}<small><span class="badge ${BADGE_CAIXA[c.situacao] || 'badge-neutro'}">${esc(SIT_CAIXA[c.situacao] || c.situacao)}</span></small></h1>
     <div class="cartao">
       <div class="info-linha"><span>Produto</span><b>${esc(p.descricao || '')}</b></div>
-      <div class="info-linha"><span>Posição</span><b class="mono">${esc(c.posicao || '—')}</b></div>
+      <div class="info-linha"><span>Posição</span><b class="mono">${esc(c.posicao ? rotuloPos(c.posicao) : '—')}</b></div>
       <div class="info-linha"><span>Lote</span><b>${esc(c.lote || '—')}</b></div>
       <div class="info-linha"><span>Validade</span><b>${c.validade ? esc(dataBr(c.validade)) : '—'}</b></div>
       <div class="info-linha"><span>Unidades na caixa</span><b>${esc(num(c.qtd_un || 0))}</b></div>
@@ -1327,7 +1353,7 @@
       <div class="item ${r.origem === 'MANUAL' ? 'perto' : ''} ${ctx.reservaSel === r.id ? 'escolhido' : ''}" data-res="${r.id}">
         <div class="cod">${esc(r.descricao)}</div>
         <div class="qtd">${num(r.quantidade_un)}<small>${esc(r.unidade)}</small></div>
-        <div class="meta">linha ${r.linha} · <span class="mono">${esc(r.posicao)}</span> · lote ${esc(r.lote || '-')}${r.validade ? ' · val. ' + dataBr(r.validade) : ''}${r.origem === 'MANUAL' ? ' · <span class="badge badge-atencao">trocado</span>' : ''}</div>
+        <div class="meta">linha ${r.linha} · <span class="mono">${esc(rotuloPos(r.posicao))}</span> · lote ${esc(r.lote || '-')}${r.validade ? ' · val. ' + dataBr(r.validade) : ''}${r.origem === 'MANUAL' ? ' · <span class="badge badge-atencao">trocado</span>' : ''}</div>
       </div>`).join('') || '<div class="vazio">Sem reserva ativa pra este pedido.</div>'}</div>`;
   };
   TELAS_POS.separacao = (ctx) => {
@@ -1524,7 +1550,7 @@
         ${d.caminhada.length ? `<h2 class="sep-titulo">Onde buscar (sugestão)</h2>
         <div class="lista">${d.caminhada.map((c) => `
           <div class="item" style="cursor:default">
-            <div class="cod mono">${esc(c.posicao)}</div>
+            <div class="cod mono">${esc(rotuloPos(c.posicao))}</div>
             <div class="qtd">${num(c.qtd_un)}<small>UN</small></div>
             <div class="meta">${esc(c.descricao)} · lote ${esc(c.lote || '-')}${c.validade ? ' · val. ' + dataBr(c.validade) : ''}</div>
           </div>`).join('')}</div>` : ''}
