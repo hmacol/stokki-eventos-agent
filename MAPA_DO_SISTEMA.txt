@@ -372,6 +372,10 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  2) Estação de Impressão: "Em espera" -> "Aguardando Transportador"
     (stokki/estacao_impressao.py, chamado por somente_impressao.py /
     executar_tudo.py).
+    Pedido Cross (Quatro Estrelas, 1 item XD) em "Aberto": stokki/conferir_cross.py
+    --de N --ate M [--confirmar] leva até "Aguardando Transportador" (separação por
+    lista com Recebimentofrio01 -> Estação de Conferência 1 -> SKU XD + Pular
+    Impressão). Manual, só na VPS como www-data; usa stokki/avancar_cross.py.
  3) pipeline.py lista os "Aguardando Transportador" e, desde 09/11, também os
     em aberto/separação/conferência de todos os embarcadores (Quatro Estrelas,
     Dourado e Padrão Puro entram em qualquer status, inclusive On hold), resolve endereço

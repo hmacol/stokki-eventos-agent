@@ -585,13 +585,49 @@
     const sub = { ENTRADA: 'produto chega na posição', TRANSFERENCIA: 'transferência entre posições', SAIDA: 'baixa por expedição, perda ou devolução' }[tipo];
     const temCaixa = p && p.qtd_por_caixa > 0;
     const lotes = ctx.lotes || [];
+    // Embarcador que opera por caixa: o saldo so anda com a caixa (a API recusa o movimento avulso).
+    const porCaixa = !!p && (BOOT.caixas_embarcadores || []).includes(Number(p.embarcador_id));
+    const caixas = ctx.caixas || [];
+    const cartaoProd = p ? `
+    <div class="campo">
+      <label>Produto</label>
+      <div class="cartao" style="margin:0"><div class="valor">${esc(p.descricao)}</div><div class="sub mono">${esc(p.ean || p.sku || '')}${p.embarcador ? ' · ' + esc(p.embarcador.split(' ').slice(0, 3).join(' ')) : ''}</div><button class="voltar" id="btn-trocar-prod">Trocar produto</button></div>
+    </div>` : '';
+    if (tipo === 'TRANSFERENCIA' && (porCaixa || caixas.length)) {
+      // Mover em lote (23/11): bipa as caixas, bipa o destino uma vez; cada caixa segue pelo mover dela.
+      return `
+    <button class="voltar" id="btn-voltar">‹ Voltar</button>
+    <h1>${titulo}<small>caixas de uma posição a outra</small></h1>
+    ${porCaixa ? cartaoProd : ''}
+    <div class="campo"><label>Caixas (${caixas.length})</label>
+      ${caixas.length ? `<div class="lista" style="margin:0 0 8px">${caixas.map((c, i) => `<div class="item" style="${c.erro ? 'border-color:var(--erro)' : ''}"><div class="cod mono">${esc(c.serial)}</div><div class="qtd"><button type="button" class="voltar" data-tirar="${i}">tirar</button></div><div class="meta">${esc(c.descricao)} · ${esc(num(c.qtd_un))} un · em ${esc(c.posicao)}${c.erro ? '<br><b style="color:var(--erro)">' + esc(c.erro) + '</b>' : ''}</div></div>`).join('')}</div>` : ''}
+      <div class="com-botao"><input type="text" id="f-caixa" class="mono aguardando" data-foco inputmode="none" placeholder="Leia a etiqueta da caixa" autocomplete="off" style="text-transform:uppercase"><button type="button" id="btn-cam-caixa">📷</button></div>
+      <div class="ajuda">${caixas.length ? 'Leia a próxima caixa, ou o destino quando acabar.' : 'Leia a etiqueta de cada caixa (código C…). Pode ser uma só ou várias.'}${porCaixa && lotes.length ? ' Tem caixa em: ' + esc([...new Set(lotes.map((l) => l.posicao))].join(', ')) + '.' : ''}</div>
+    </div>
+    <div class="campo"><label>Para (destino)</label>
+      <div class="com-botao"><input type="text" id="f-destino" class="mono ${ctx.destino ? '' : 'aguardando'}" value="${esc(ctx.destino || '')}" placeholder="Leia a etiqueta da posição" autocomplete="off" style="text-transform:uppercase"><button type="button" id="btn-cam-destino">📷</button></div>
+    </div>
+    <div class="botoes"><button class="botao" id="btn-mover-lote" ${caixas.length ? '' : 'disabled'}>${caixas.length > 1 ? 'Mover ' + caixas.length + ' caixas' : 'Mover caixa'}</button></div>`;
+    }
+    if (porCaixa) {
+      const oQue = { ENTRADA: 'A entrada dele é pela tela Receber.', SAIDA: 'A saída dele é pela separação do pedido. Para cancelar uma caixa, leia a etiqueta dela (código C…).' }[tipo];
+      return `
+    <button class="voltar" id="btn-voltar">‹ Voltar</button>
+    <h1>${titulo}<small>${sub}</small></h1>
+    ${cartaoProd}
+    <div class="cartao"><div class="rotulo">Produto controlado por caixa</div><div class="sub">${oQue}</div></div>
+    ${tipo !== 'ENTRADA' ? `
+    <div class="campo"><label>Etiqueta da caixa</label>
+      <div class="com-botao"><input type="text" id="f-caixa" class="mono aguardando" data-foco inputmode="none" placeholder="Leia a etiqueta da caixa" autocomplete="off" style="text-transform:uppercase"><button type="button" id="btn-cam-caixa">📷</button></div>
+    </div>` : ''}`;
+    }
     return `
     <button class="voltar" id="btn-voltar">‹ Voltar</button>
     <h1>${titulo}<small>${sub}</small></h1>
     <div class="campo">
       <label>Produto</label>
       ${p ? `<div class="cartao" style="margin:0"><div class="valor">${esc(p.descricao)}</div><div class="sub mono">${esc(p.ean || p.sku || '')}${p.embarcador ? ' · ' + esc(p.embarcador.split(' ').slice(0, 3).join(' ')) : ''} · ${esc(p.unidade)}${temCaixa ? ' · caixa de ' + num(p.qtd_por_caixa) : ''}</div><button class="voltar" id="btn-trocar-prod">Trocar produto</button></div>`
-           : `<div class="com-botao"><input type="text" id="f-produto" class="aguardando" data-foco inputmode="none" placeholder="Leia o EAN ou digite" autocomplete="off"><button type="button" id="btn-cam-prod">📷</button></div><div class="ajuda">Ou <button class="voltar" id="btn-buscar-prod">buscar pelo nome</button></div>`}
+           : `<div class="com-botao"><input type="text" id="f-produto" class="aguardando" data-foco inputmode="none" placeholder="Leia o EAN ou digite" autocomplete="off"><button type="button" id="btn-cam-prod">📷</button></div><div class="ajuda">Ou <button class="voltar" id="btn-buscar-prod">buscar pelo nome</button>${tipo === 'TRANSFERENCIA' && BOOT.caixas_ativo ? '. Produto com etiqueta de caixa: leia a etiqueta (código C…), uma ou várias.' : ''}</div>`}
     </div>
     ${tipo !== 'ENTRADA' ? `
     <div class="campo"><label>De (origem)</label>
@@ -620,15 +656,34 @@
     document.getElementById('btn-voltar').addEventListener('click', voltar);
     const g = (id) => document.getElementById(id);
     const setCtx = (extra) => Object.assign(S.ctx, extra);
-    if (!ctx.produto) {
+    if (!ctx.produto && g('f-produto')) {
       S.aguardando = 'produto';
       const f = g('f-produto');
       f.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); if (f.value.trim()) lerCodigo(f.value.trim()); } });
       f.addEventListener('focus', () => f.setAttribute('inputmode', 'text'));
       g('btn-cam-prod').addEventListener('click', () => abrirCamera((c) => lerCodigo(c)));
       g('btn-buscar-prod').addEventListener('click', () => ir('busca', { paraMov: true }));
-    } else {
+    } else if (g('btn-trocar-prod')) {
       g('btn-trocar-prod').addEventListener('click', () => { setCtx({ produto: null, lotes: [], loteSel: null }); render(); });
+    }
+    if (!g('btn-confirmar')) {   // produto controlado por caixa: etiqueta da caixa (lote no Mover)
+      const fc = g('f-caixa'); const lote = g('btn-mover-lote');
+      if (fc) {
+        const abrir = () => { const v = fc.value.trim(); if (!v) return; if (serialDe(v)) lerCodigo(v); else toast('Leia a etiqueta da caixa (código C…), não o código do produto.', true); };
+        fc.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); abrir(); } });
+        fc.addEventListener('focus', () => fc.setAttribute('inputmode', 'text'));
+        g('btn-cam-caixa').addEventListener('click', () => abrirCamera((c) => { fc.value = c; abrir(); }));
+      }
+      if (lote) {
+        const fd = g('f-destino');
+        const limpar = () => { fd.value = fd.value.trim().replace(/^pos:/i, '').toUpperCase(); setCtx({ destino: fd.value }); };
+        fd.addEventListener('change', limpar);
+        fd.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); limpar(); } });
+        g('btn-cam-destino').addEventListener('click', () => abrirCamera((c) => { fd.value = c; limpar(); }));
+        app.querySelectorAll('[data-tirar]').forEach((el) => el.addEventListener('click', () => { ctx.caixas.splice(Number(el.dataset.tirar), 1); render(); }));
+        lote.addEventListener('click', () => { limpar(); moverLote(); });
+      }
+      return;
     }
     app.querySelectorAll('[data-lote]').forEach((el) => el.addEventListener('click', () => {
       const l = ctx.lotes[Number(el.dataset.lote)];
@@ -654,6 +709,43 @@
     ['f-lote', 'f-validade', 'f-qtd', 'f-obs'].forEach((id) => { const el = g(id); if (el) el.addEventListener('change', () => setCtx({ lote: g('f-lote').value, validade: g('f-validade').value, quantidade: g('f-qtd').value })); });
     g('btn-confirmar').addEventListener('click', confirmarMovimento);
   };
+  async function movAddCaixa(serial) {
+    const ctx = S.ctx; ctx.caixas = ctx.caixas || [];
+    if (ctx.caixas.some((c) => c.serial === serial)) return toast('Caixa ' + serial + ' já está na lista.', true);
+    let c;
+    try { c = (await api('/caixas/' + encodeURIComponent(serial))).caixa; }
+    catch (e) { return toast(e.status === 404 ? 'Caixa ' + serial + ' não existe.' : e.message, true); }
+    if (!c.posicao || (c.situacao !== 'EM_ESTOQUE' && c.situacao !== 'ABERTA')) return toast('Caixa ' + serial + ' não está em estoque (' + (SIT_CAIXA[c.situacao] || c.situacao) + ').', true);
+    if (S.tela !== 'mov' || S.ctx !== ctx) return;
+    if (ctx.caixas.some((x) => x.serial === c.serial)) return;
+    ctx.caixas.push({ serial: c.serial, descricao: (c.produto || {}).descricao || '', posicao: c.posicao, qtd_un: c.qtd_un || 0 });
+    render(); toast('Caixa ' + c.serial + ' na lista (' + ctx.caixas.length + ')');
+  }
+  async function moverLote() {
+    const ctx = S.ctx; const destino = ctx.destino || '';
+    if (!(ctx.caixas || []).length) return toast('Leia a etiqueta de pelo menos uma caixa.', true);
+    if (!destino) return toast('Leia a etiqueta da posição de destino.', true);
+    if (!S.operador) { toast('Identifique o operador primeiro', true); return ir('operador'); }
+    const btn = document.getElementById('btn-mover-lote'); if (btn) btn.disabled = true;
+    let movidas = 0; const ficaram = [];
+    for (let i = 0; i < ctx.caixas.length; i++) {
+      const c = ctx.caixas[i];
+      // mesmo uuid enquanto o destino for o mesmo: repetir após erro 500 não duplica o movimento
+      if (!c.mover || c.mover.destino !== destino) c.mover = { destino, uuid: uuid() };
+      try {
+        await api('/caixas/' + encodeURIComponent(c.serial) + '/mover', { method: 'POST', body: { destino, uuid: c.mover.uuid } });
+        movidas++;
+      } catch (e) {
+        if (e.status === 409 && e.dados && e.dados.sem_operador) { ctx.caixas = ficaram.concat(ctx.caixas.slice(i)); S.operador = null; toast(e.message, true); return ir('operador'); }
+        if (!e.status) { ctx.caixas = ficaram.concat(ctx.caixas.slice(i)); render(); return toast((movidas ? movidas + ' movida(s). ' : '') + 'Sem rede: tente de novo quando a internet voltar.', true); }
+        c.erro = e.message; ficaram.push(c);
+      }
+    }
+    S.resumo.movimentos = (S.resumo.movimentos || 0) + movidas;
+    if (!ficaram.length) { toast(movidas + (movidas > 1 ? ' caixas movidas' : ' caixa movida') + ' para ' + destino); S.pilha = []; return abrirPosicao(destino, false); }
+    ctx.caixas = ficaram; render();
+    toast((movidas ? movidas + ' movida(s) para ' + destino + '. ' : '') + ficaram.length + ' não foi(ram): veja o motivo na lista.', true);
+  }
   async function confirmarMovimento() {
     const ctx = S.ctx; const g = (id) => document.getElementById(id);
     const erroEl = g('mov-erro'); erroEl.innerHTML = '';
@@ -2226,12 +2318,14 @@
         if (abertos.length === 1 && S.ctx.biparCx) return S.ctx.biparCx(abertos[0], codigo);
         return toast('Toque no campo de bipe do item', true);
       }
+      if (S.tela === 'mov' && S.ctx.tipo === 'TRANSFERENCIA') return movAddCaixa(serialDigitado);
       try { const rc = await api('/caixas/' + encodeURIComponent(serialDigitado)); return ir('caixa', { caixa: rc.caixa }); }
       catch (e) { return toast(e.status === 404 ? 'Caixa ' + serialDigitado + ' não existe.' : e.message, true); }
     }
     let r;
     try { r = await api('/ler?codigo=' + encodeURIComponent(codigo)); } catch (e) { return toast(e.message, true); }
     // caixa com serial (Consultar): cartão com Mover / Cancelar
+    if (r.tipo === 'caixa' && S.tela === 'mov' && S.ctx.tipo === 'TRANSFERENCIA') return movAddCaixa(r.caixa.serial);
     if (r.tipo === 'caixa') return ir('caixa', { caixa: r.caixa });
     if (r.tipo === 'caixa_inexistente') return toast('Caixa ' + r.serial + ' não existe.', true);
     if (S.tela === 'caixa' && r.tipo === 'posicao') {
