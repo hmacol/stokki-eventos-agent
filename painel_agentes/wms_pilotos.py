@@ -7,7 +7,7 @@ da Maria Dolores, cada piloto passa a dizer se opera por caixa:
 
     wms:
       pilotos:
-        - {id: 48, nome: "MARIA DOLORES", caixas: false}
+        - {id: 48, nome: "MARIA DOLORES", caixas: false, etapas: true}
         - {id: 22, nome: "MOMBAK", caixas: true}
 
 Sem a lista, valem as chaves antigas (um piloto so). Modulo de dados puro:
@@ -20,7 +20,7 @@ def _verdadeiro(valor) -> bool:
 
 
 def pilotos(config: dict) -> list[dict]:
-    """[{id: int, nome: str, caixas: bool}] na ordem do config, sem id repetido."""
+    """[{id: int, nome: str, caixas: bool, etapas: bool}] na ordem do config, sem id repetido."""
     wms = (config or {}).get("wms") or {}
     lista = wms.get("pilotos")
     if not isinstance(lista, list) or not lista:
@@ -39,9 +39,14 @@ def pilotos(config: dict) -> list[dict]:
             continue
         vistos.add(pid)
         saida.append({"id": pid, "nome": str(item.get("nome") or "").strip().upper(),
-                      "caixas": _verdadeiro(item.get("caixas", False))})
+                      "caixas": _verdadeiro(item.get("caixas", False)),
+                      "etapas": _verdadeiro(item.get("etapas", False))})
     return saida
 
 
 def ids_com_caixas(config: dict) -> set[int]:
     return {p["id"] for p in pilotos(config) if p["caixas"]}
+
+
+def ids_com_etapas(config: dict) -> set[int]:
+    return {p["id"] for p in pilotos(config) if p["etapas"]}
