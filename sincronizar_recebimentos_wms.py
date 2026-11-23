@@ -204,6 +204,20 @@ def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste:
     return res
 
 
+def _emails_da_chegada(config: dict) -> None:
+    """E-mails da chegada do caminhao (sua carga chegou, avisos ao escritorio), com conexao
+    propria. Nao usam a Stokki; e-mail nunca derruba a sincronizacao."""
+    try:
+        import wms_chegada_avisos  # tardio: puxa o PDF (PIL); falha de import nao derruba a rodada
+        conn = wms_pedidos.conectar()
+        try:
+            logger.info("E-mails da chegada: %s", wms_chegada_avisos.enviar_pendentes(conn, config))
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001
+        logger.exception("E-mails da chegada falharam (a sincronizacao segue)")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--modo-teste", action="store_true", help="nao grava nada, so mostra o que faria")
@@ -223,51 +237,48 @@ def main(argv=None) -> int:
     else:
         alvos = [(str(p["id"]), p["nome"]) for p in wms_pilotos.pilotos(config)]
 
-    # Trava cooperativa da sessao Stokki (sessao unica -- ver stokki/sessao_uso.py
-    # e sincronizar_pedidos_wms.py). Adquire ANTES de abrir a conexao com o
-    # banco ou a StokkiSession: se a trava nao vier, a rotina desiste sem
-    # tocar em nada. Vale tambem pro --modo-teste (ele le da Stokki de
-    # verdade, so pula a escrita).
-    if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=TRAVA_TTL_SEGUNDOS,
-                                esperar_segundos=TRAVA_ESPERA_SEGUNDOS, alternativa=True):
-        # Sai com 0: desistir por trava ocupada e operacao NORMAL, nao
-        # falha (o .service tem OnFailure=stokki-alerta-falha@%n, que
-        # alertava a cada rodada). Mesmo precedente de
-        # notificar_transportadoras.py e roteirizacao/documentacao_rota.py.
-        ocupante = sessao_uso.em_uso()
-        logger.warning("Stokki ocupada por '%s' -- desistindo desta rodada (proxima em 30 min).", ocupante)
-        return 0
-
-    erro = None
     try:
-        conn = wms_pedidos.conectar()
-        sess = StokkiSession(config)
+        # Trava cooperativa da sessao Stokki (sessao unica -- ver stokki/sessao_uso.py
+        # e sincronizar_pedidos_wms.py). Adquire ANTES de abrir a conexao com o
+        # banco ou a StokkiSession: se a trava nao vier, a rotina desiste sem
+        # tocar em nada. Vale tambem pro --modo-teste (ele le da Stokki de
+        # verdade, so pula a escrita).
+        if not sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=TRAVA_TTL_SEGUNDOS,
+                                    esperar_segundos=TRAVA_ESPERA_SEGUNDOS, alternativa=True):
+            # Sai com 0: desistir por trava ocupada e operacao NORMAL, nao
+            # falha (o .service tem OnFailure=stokki-alerta-falha@%n, que
+            # alertava a cada rodada). Mesmo precedente de
+            # notificar_transportadoras.py e roteirizacao/documentacao_rota.py.
+            ocupante = sessao_uso.em_uso()
+            logger.warning("Stokki ocupada por '%s' -- desistindo desta rodada (proxima em 30 min).", ocupante)
+            return 0
+
+        erro = None
         try:
-            for piloto_id, piloto_nome in alvos:
-                t0 = time.time()
-                try:
-                    res = rodar(conn, sess, piloto_nome, piloto_id, args.limite, args.modo_teste)
-                except Exception as e:  # noqa: BLE001 -- um piloto ruim nao impede o seguinte
-                    logger.exception("Piloto %s (#stkkc-%s) falhou", piloto_nome, piloto_id)
-                    conn.rollback()
-                    erro = erro or e
-                    continue
-                logger.info("Piloto %s (#stkkc-%s): %s (%.0fs)", piloto_nome, piloto_id, res, time.time() - t0)
-            # E-mails da chegada do caminhao (sua carga chegou, avisos ao escritorio): e-mail nunca
-            # derruba a sincronizacao.
-            if not args.modo_teste:
-                try:
-                    import wms_chegada_avisos  # tardio: puxa o PDF (PIL); falha de import nao derruba a rodada
-                    logger.info("E-mails da chegada: %s", wms_chegada_avisos.enviar_pendentes(conn, config))
-                except Exception:  # noqa: BLE001
-                    logger.exception("E-mails da chegada falharam (a sincronizacao segue)")
+            conn = wms_pedidos.conectar()
+            sess = StokkiSession(config)
+            try:
+                for piloto_id, piloto_nome in alvos:
+                    t0 = time.time()
+                    try:
+                        res = rodar(conn, sess, piloto_nome, piloto_id, args.limite, args.modo_teste)
+                    except Exception as e:  # noqa: BLE001 -- um piloto ruim nao impede o seguinte
+                        logger.exception("Piloto %s (#stkkc-%s) falhou", piloto_nome, piloto_id)
+                        conn.rollback()
+                        erro = erro or e
+                        continue
+                    logger.info("Piloto %s (#stkkc-%s): %s (%.0fs)", piloto_nome, piloto_id, res, time.time() - t0)
+            finally:
+                conn.close()
         finally:
-            conn.close()
+            sessao_uso.liberar(DONO_TRAVA)
+        if erro:
+            raise erro  # a rodada falha (OnFailure avisa), mas so depois de tentar todos
+        return 0
     finally:
-        sessao_uso.liberar(DONO_TRAVA)
-    if erro:
-        raise erro  # a rodada falha (OnFailure avisa), mas so depois de tentar todos
-    return 0
+        # Fora da trava: os e-mails saem mesmo com a Stokki ocupada ou a sessao falhando.
+        if not args.modo_teste:
+            _emails_da_chegada(config)
 
 
 if __name__ == "__main__":

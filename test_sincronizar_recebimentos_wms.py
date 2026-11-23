@@ -442,10 +442,12 @@ class TestTravaStokki(unittest.TestCase):
              mock.patch("stokki.sessao_uso.em_uso", return_value="outro-processo"), \
              mock.patch("stokki.sessao_uso.liberar") as liberar, \
              mock.patch("sincronizar_recebimentos_wms.wms_pedidos.conectar") as conectar, \
-             mock.patch("sincronizar_recebimentos_wms.StokkiSession") as sessao_cls:
+             mock.patch("sincronizar_recebimentos_wms.StokkiSession") as sessao_cls, \
+             mock.patch("sincronizar_recebimentos_wms._emails_da_chegada") as emails:
             codigo = mod.main(["--limite", "5"])
 
         self.assertEqual(codigo, 0)
+        emails.assert_called_once()  # a varredura de e-mails nao depende da Stokki (conexao propria)
         adquirir.assert_called_once_with(mod.DONO_TRAVA, ttl_segundos=mod.TRAVA_TTL_SEGUNDOS,
                                           esperar_segundos=mod.TRAVA_ESPERA_SEGUNDOS,
                                           alternativa=True)
@@ -458,10 +460,12 @@ class TestTravaStokki(unittest.TestCase):
              mock.patch("stokki.sessao_uso.em_uso", return_value="outro-processo"), \
              mock.patch("stokki.sessao_uso.liberar"), \
              mock.patch("sincronizar_recebimentos_wms.wms_pedidos.conectar") as conectar, \
-             mock.patch("sincronizar_recebimentos_wms.StokkiSession") as sessao_cls:
+             mock.patch("sincronizar_recebimentos_wms.StokkiSession") as sessao_cls, \
+             mock.patch("sincronizar_recebimentos_wms._emails_da_chegada") as emails:
             codigo = mod.main(["--modo-teste"])
 
         self.assertEqual(codigo, 0)  # desistir por trava ocupada nao e falha
+        emails.assert_not_called()
         conectar.assert_not_called()
         sessao_cls.assert_not_called()
 
@@ -470,7 +474,8 @@ class TestTravaStokki(unittest.TestCase):
              mock.patch("stokki.sessao_uso.liberar") as liberar, \
              mock.patch("sincronizar_recebimentos_wms.wms_pedidos.conectar") as conectar, \
              mock.patch("sincronizar_recebimentos_wms.StokkiSession"), \
-             mock.patch("sincronizar_recebimentos_wms.rodar", return_value={"lidos": 0}) as rodar_mock:
+             mock.patch("sincronizar_recebimentos_wms.rodar", return_value={"lidos": 0}) as rodar_mock, \
+             mock.patch("sincronizar_recebimentos_wms._emails_da_chegada"):
             conn_falso = mock.Mock()
             conectar.return_value = conn_falso
             codigo = mod.main(["--limite", "5"])
@@ -486,7 +491,8 @@ class TestTravaStokki(unittest.TestCase):
              mock.patch("stokki.sessao_uso.liberar") as liberar, \
              mock.patch("sincronizar_recebimentos_wms.wms_pedidos.conectar") as conectar, \
              mock.patch("sincronizar_recebimentos_wms.StokkiSession"), \
-             mock.patch("sincronizar_recebimentos_wms.rodar", side_effect=RuntimeError("bug")):
+             mock.patch("sincronizar_recebimentos_wms.rodar", side_effect=RuntimeError("bug")), \
+             mock.patch("sincronizar_recebimentos_wms._emails_da_chegada"):
             conectar.return_value = mock.Mock()
             with self.assertRaises(RuntimeError):
                 mod.main(["--limite", "5"])
@@ -500,7 +506,8 @@ class TestVariosPilotos(unittest.TestCase):
     CFG = {"wms": {"pilotos": [{"id": 48, "nome": "Maria Dolores"}, {"id": 22, "nome": "Mombak", "caixas": True}]}}
 
     def _main(self, argv, **rodar_kw):
-        with mock.patch("stokki.sessao_uso.adquirir", return_value=True),              mock.patch("stokki.sessao_uso.liberar") as liberar,              mock.patch("sincronizar_recebimentos_wms._carregar_config", return_value=self.CFG),              mock.patch("sincronizar_recebimentos_wms.wms_pedidos.conectar", return_value=mock.Mock()),              mock.patch("sincronizar_recebimentos_wms.StokkiSession"),              mock.patch("sincronizar_recebimentos_wms.rodar", **rodar_kw) as rodar_mock:
+        with mock.patch("stokki.sessao_uso.adquirir", return_value=True),              mock.patch("stokki.sessao_uso.liberar") as liberar,              mock.patch("sincronizar_recebimentos_wms._carregar_config", return_value=self.CFG),              mock.patch("sincronizar_recebimentos_wms.wms_pedidos.conectar", return_value=mock.Mock()),              mock.patch("sincronizar_recebimentos_wms.StokkiSession"),              mock.patch("sincronizar_recebimentos_wms.rodar", **rodar_kw) as rodar_mock, \
+             mock.patch("sincronizar_recebimentos_wms._emails_da_chegada"):
             try:
                 codigo = mod.main(argv)
             except RuntimeError as e:
@@ -558,6 +565,44 @@ class TestEmailsDaChegada(unittest.TestCase):
         codigo, env = self._main(["--modo-teste"])
         self.assertEqual(codigo, 0)
         env.assert_not_called()
+
+    def _main_com(self, argv, adquirir=True, sessao_kw=None):
+        """Como _main, mas com a trava e a sessao controladas; devolve (resultado, env, ordem dos eventos)."""
+        ordem = []
+        with mock.patch("stokki.sessao_uso.adquirir", return_value=adquirir), \
+             mock.patch("stokki.sessao_uso.em_uso", return_value="outro-processo"), \
+             mock.patch("stokki.sessao_uso.liberar", side_effect=lambda *a: ordem.append("liberar")), \
+             mock.patch("sincronizar_recebimentos_wms._carregar_config", return_value={"wms": {"pilotos": [
+                 {"id": 48, "nome": "Maria Dolores"}]}}), \
+             mock.patch("sincronizar_recebimentos_wms.wms_pedidos.conectar", return_value=mock.Mock()), \
+             mock.patch("sincronizar_recebimentos_wms.StokkiSession", **(sessao_kw or {})), \
+             mock.patch("sincronizar_recebimentos_wms.rodar", return_value={"lidos": 0}), \
+             mock.patch("wms_chegada_avisos.enviar_pendentes", return_value={},
+                        side_effect=lambda *a: ordem.append("emails") or {}) as env:
+            try:
+                resultado = mod.main(argv)
+            except RuntimeError as e:
+                resultado = e
+        return resultado, env, ordem
+
+    def test_emails_saem_depois_de_liberar_a_trava(self):
+        codigo, env, ordem = self._main_com([])
+        self.assertEqual((codigo, ordem), (0, ["liberar", "emails"]))
+        self.assertIsNot(env.call_args.args[0], None)   # conexao propria, aberta para a varredura
+
+    def test_trava_ocupada_ainda_manda_os_pendentes(self):
+        codigo, env, ordem = self._main_com([], adquirir=False)
+        self.assertEqual((codigo, ordem), (0, ["emails"]))
+
+    def test_falha_de_sessao_ainda_manda_os_pendentes(self):
+        erro, env, ordem = self._main_com([], sessao_kw={"side_effect": RuntimeError("login falhou")})
+        self.assertIsInstance(erro, RuntimeError)   # a rodada continua falhando (OnFailure avisa)
+        self.assertEqual(ordem, ["liberar", "emails"])
+
+    def test_modo_teste_nunca_manda_nem_com_trava_ocupada_ou_sessao_falhando(self):
+        for kw in ({"adquirir": False}, {"sessao_kw": {"side_effect": RuntimeError("login falhou")}}, {}):
+            _, env, _ = self._main_com(["--modo-teste"], **kw)
+            env.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()
