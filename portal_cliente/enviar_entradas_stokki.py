@@ -506,16 +506,19 @@ def _marcar(conn, entrada_id: int, **campos) -> None:
 
 
 def _falha_tecnica(conn, lote: list[dict], erro: str) -> list[dict]:
+    # `erro` é a exceção crua (Playwright, caminhos, seletores): vai só pro log. O que fica em
+    # stokki_erro aparece no portal do cliente e no e-mail (revisão de segurança 23/11, B3).
     definitivos = []
     for e in lote:
         tentativas = int(e.get("stokki_tentativas") or 0) + 1
+        logger.warning(f"entrada {e['id']} ({e.get('chave_nfe')}): falha técnica, tentativa {tentativas}: {erro}")
         if tentativas >= MAX_TENTATIVAS_TECNICAS:
-            _marcar(conn, e["id"], stokki_status=en.STOKKI_ERRO, stokki_tentativas=tentativas,
-                    stokki_erro=f"Falha ao criar na Stokki ({tentativas}x): {erro}"[:900])
-            definitivos.append({**e, "erro": erro})
+            texto = f"Não conseguimos criar na Stokki depois de {tentativas} tentativas. A Fresh Log foi avisada."
+            _marcar(conn, e["id"], stokki_status=en.STOKKI_ERRO, stokki_tentativas=tentativas, stokki_erro=texto)
+            definitivos.append({**e, "erro": texto})
         else:
             _marcar(conn, e["id"], stokki_status=en.STOKKI_NA_FILA, stokki_tentativas=tentativas,
-                    stokki_erro=f"Tentativa {tentativas} falhou, vai tentar de novo: {erro}"[:900])
+                    stokki_erro=f"Tentativa {tentativas} não concluiu; vamos tentar de novo.")
     conn.commit()
     return definitivos
 
@@ -619,7 +622,8 @@ def processar_lote(conn, cnpj: str, lote: list[dict], config: dict, simular: boo
                     prontos_xml.append(e)
                 arquivos[e["chave_nfe"]] = destino
             except Exception as ex:  # noqa: BLE001
-                _marcar(conn, e["id"], stokki_status=en.STOKKI_ERRO, stokki_erro=f"Falha ao preparar o arquivo: {ex}"[:900])
+                logger.error(f"entrada {e['id']}: falha ao preparar o arquivo: {type(ex).__name__}: {ex}")
+                _marcar(conn, e["id"], stokki_status=en.STOKKI_ERRO, stokki_erro="Não conseguimos preparar o arquivo desta entrada. A Fresh Log foi avisada.")
                 conn.commit()
                 resumo["erros"] += 1
         prontos = prontos_xml + prontos_plan

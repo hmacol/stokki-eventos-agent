@@ -907,6 +907,16 @@ class TestRotaAnalisar(BasePortal):
             s["v"] = "x"
         return tc
 
+    def test_arquivo_e_modelo_exigem_a_aba_ativa_e_funcionam_com_ela(self):
+        # revisão de segurança 23/11 (B5): as duas rotas também passam pelo guard da aba
+        tc = self._cliente_http()
+        self.assertEqual(tc.get("/api/entradas/modelo-planilha").status_code, 200)
+        entradas.definir_entradas_ativo(self.conn, CNPJ, False)
+        self.assertEqual(tc.get("/api/entradas/modelo-planilha").status_code, 403)
+        self.assertEqual(tc.get("/api/entradas/1/arquivo").status_code, 403)
+        entradas.definir_entradas_ativo(self.conn, CNPJ, True)
+        self.assertEqual(tc.get("/api/entradas/1/arquivo").status_code, 404)   # ativa, mas não existe: 404 como antes
+
     def test_upload_com_arquivos_demais_e_recusado_antes_de_guardar_qualquer_um(self):
         # revisão de segurança 23/11 (B4): sem teto, um ZIP/upload cheio de XMLs enche _temporarios
         import io

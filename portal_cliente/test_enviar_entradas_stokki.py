@@ -210,6 +210,27 @@ class TestWizardDublado(Base):
             self.assertEqual(e["stokki_tentativas"], tentativa)
             self.assertEqual(e["stokki_status"], "ERRO" if tentativa == 3 else "NA_FILA")
 
+    def test_falha_tecnica_nao_expoe_o_detalhe_ao_cliente_mas_loga(self):
+        # revisão de segurança 23/11 (B3): stokki_erro é mostrado no portal; exceção crua fica só no log
+        self._anunciar()
+        detalhe = "playwright caiu em /opt/stokki-eventos/venv selector #form-xyz"
+        for tentativa in (1, 2, 3):
+            with mock.patch.object(worker, "carregar_importador", return_value=(mock.Mock(), mock.Mock())), \
+                 mock.patch.object(worker, "_credenciais", return_value=("u", "s")), \
+                 mock.patch.object(worker.sessao_uso, "adquirir", return_value=True), \
+                 mock.patch.object(worker.sessao_uso, "liberar"), \
+                 mock.patch.object(worker, "_avisar_erros") as avisar, \
+                 mock.patch.object(worker, "executar_wizard_xml", side_effect=RuntimeError(detalhe)):
+                with self.assertLogs(level="ERROR") as logs:
+                    worker.processar_lote(self.conn, CNPJ, self._fila(), self.config)
+            erro = self.conn.execute("SELECT stokki_erro FROM portal_entradas").fetchone()[0]
+            for cru in ("playwright", "RuntimeError", "/opt/", "#form"):
+                self.assertNotIn(cru, erro, f"tentativa {tentativa}")
+            self.assertIn(detalhe, " ".join(logs.output))
+        for chamada in avisar.call_args_list:
+            for e in chamada.args[2]:
+                self.assertNotIn("playwright", e["erro"])
+
     def test_trava_ocupada_adia_sem_tocar(self):
         self._anunciar()
         with mock.patch.object(worker, "carregar_importador", return_value=(mock.Mock(), mock.Mock())), \

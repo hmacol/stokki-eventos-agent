@@ -1832,6 +1832,11 @@ def api_entradas_analisar():
 @app.route("/api/entradas/modelo-planilha")
 @requer_cliente
 def api_entradas_modelo_planilha():
+    conn = entradas_mod.conectar()
+    try:
+        _exige_entradas_ativas(conn)
+    finally:
+        conn.close()
     conteudo = entradas_mod.gerar_modelo_planilha_entrada(_empresa_envio()["nome"] or "")
     return send_file(io.BytesIO(conteudo), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                      as_attachment=True, download_name="modelo_entradas_freshlog.xlsx", max_age=0)
@@ -1899,6 +1904,7 @@ def api_entradas_cancelar(entrada_id):
 def api_entradas_arquivo(entrada_id):
     conn = entradas_mod.conectar()
     try:
+        _exige_entradas_ativas(conn)
         entrada = entradas_mod.buscar_entrada(conn, entrada_id, _empresa_envio()["cnpj"])
     finally:
         conn.close()
