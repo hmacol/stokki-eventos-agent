@@ -187,6 +187,14 @@ def conectar(caminho: Path | None = None) -> sqlite3.Connection:
         except sqlite3.OperationalError as e:
             if "duplicate column" not in str(e).lower():
                 raise
+    # Migração aditiva: faixa própria de temperatura (nula = usa a faixa padrão da classe).
+    for coluna in ("temp_min", "temp_max"):
+        if coluna not in cols:
+            try:
+                conn.execute(f"ALTER TABLE wms_produtos ADD COLUMN {coluna} REAL")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_wms_produtos_codigo_interno "
                  "ON wms_produtos(codigo_interno) WHERE codigo_interno IS NOT NULL")
     conn.commit()
@@ -550,12 +558,22 @@ def definir_controla_validade(conn, produto_id: int, controla: bool) -> dict:
     return obter_produto(conn, produto_id)
 
 
-def definir_temperatura_produto(conn, produto_id: int, temperatura: str) -> dict:
+def definir_temperatura_produto(conn, produto_id: int, temperatura: str,
+                                temp_min=None, temp_max=None) -> dict:
     temperatura = str(temperatura or "").strip().upper()
     if temperatura and temperatura not in TEMPERATURAS:
         raise ErroWMS("Temperatura inválida: use " + ", ".join(TEMPERATURAS) + " ou deixe em branco.")
-    conn.execute("UPDATE wms_produtos SET temperatura = ?, atualizado_em = ? WHERE id = ?",
-                 (temperatura, agora(), produto_id))
+    if (temp_min is None) != (temp_max is None):
+        raise ErroWMS("Informe a temperatura mínima e a máxima, ou nenhuma das duas.")
+    if temp_min is not None:
+        try:
+            temp_min, temp_max = float(temp_min), float(temp_max)
+        except (TypeError, ValueError):
+            raise ErroWMS("Temperatura mínima e máxima precisam ser números.")
+        if temp_min > temp_max:
+            raise ErroWMS("A temperatura mínima não pode ser maior que a máxima.")
+    conn.execute("UPDATE wms_produtos SET temperatura = ?, temp_min = ?, temp_max = ?, atualizado_em = ? WHERE id = ?",
+                 (temperatura, temp_min, temp_max, agora(), produto_id))
     conn.commit()
     return obter_produto(conn, produto_id)
 

@@ -6323,7 +6323,11 @@ def api_wms_produto_temperatura(produto_id):
     body = request.get_json(force=True) or {}
     conn = wms.conectar()
     try:
-        return jsonify({"ok": True, "produto": wms.definir_temperatura_produto(conn, produto_id, body.get("temperatura", ""))})
+        def _num(v):
+            return None if v is None or str(v).strip() == "" else str(v).strip().replace(",", ".")
+        return jsonify({"ok": True, "produto": wms.definir_temperatura_produto(
+            conn, produto_id, body.get("temperatura", ""),
+            temp_min=_num(body.get("temp_min")), temp_max=_num(body.get("temp_max")))})
     except wms.ErroWMS as e:
         return _wms_json_erro(e)
     finally:

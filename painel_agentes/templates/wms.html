@@ -499,7 +499,7 @@
       <button class="botao secundario" data-mov="SAIDA" ${saldos.length ? '' : 'disabled'}>Saída</button>
       <button class="botao neutro" id="btn-movs">Movimentações</button>
     </div>
-    ${S.podeAdministrar ? `<div class="cartao"><div class="rotulo">Regra do produto</div><label style="display:flex;gap:10px;align-items:center;font-size:14px"><input type="checkbox" id="chk-validade" ${p.controla_validade ? 'checked' : ''} style="width:22px;height:22px"> Validade obrigatória na entrada</label><label style="display:block;font-size:14px;margin-top:10px">Temperatura do produto <select id="sel-temperatura" style="font-size:14px;padding:6px">${[['', 'Não informada'], ['AMBIENTE', 'Ambiente'], ['REFRIGERADO', 'Refrigerado'], ['CONGELADO', 'Congelado']].map(([v, t]) => `<option value="${v}" ${(p.temperatura || '') === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label></div>` : ''}
+    ${S.podeAdministrar ? `<div class="cartao"><div class="rotulo">Regra do produto</div><label style="display:flex;gap:10px;align-items:center;font-size:14px"><input type="checkbox" id="chk-validade" ${p.controla_validade ? 'checked' : ''} style="width:22px;height:22px"> Validade obrigatória na entrada</label><label style="display:block;font-size:14px;margin-top:10px">Temperatura do produto <select id="sel-temperatura" style="font-size:14px;padding:6px">${[['', 'Não informada'], ['AMBIENTE', 'Ambiente'], ['REFRIGERADO', 'Refrigerado'], ['CONGELADO', 'Congelado']].map(([v, t]) => `<option value="${v}" ${(p.temperatura || '') === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label><div id="faixa-temp" style="margin-top:8px;font-size:14px;${['REFRIGERADO', 'CONGELADO'].includes(p.temperatura || '') ? '' : 'display:none'}">Faixa própria (opcional) <input id="inp-tmin" type="number" step="0.1" placeholder="Mín °C" value="${p.temp_min ?? ''}" style="width:80px;font-size:14px;padding:6px"> <input id="inp-tmax" type="number" step="0.1" placeholder="Máx °C" value="${p.temp_max ?? ''}" style="width:80px;font-size:14px;padding:6px"></div></div>` : ''}
     ${(p.movimentos || []).length ? `<div class="cartao"><div class="rotulo">Últimos movimentos</div><table class="mov">${p.movimentos.slice(0, 8).map((m) => `<tr><td>${dataHoraBr(m.criado_em)}</td><td>${TIPOS_MOV[m.tipo] || m.tipo}</td><td class="mono">${m.posicao_origem ? esc(rotuloPos(m.posicao_origem)) + ' → ' : ''}${esc(m.posicao_destino ? rotuloPos(m.posicao_destino) : '—')}</td><td style="text-align:right">${num(m.quantidade)}</td><td>${esc((m.operador_nome || '').split(' ')[0])}</td></tr>`).join('')}</table></div>` : ''}`;
   };
   TELAS_POS.produto = (ctx) => {
@@ -514,7 +514,15 @@
     const chk = document.getElementById('chk-validade');
     if (chk) chk.addEventListener('change', async () => { try { const r = await api('/produtos/' + p.id + '/controla-validade', { method: 'POST', body: { controla: chk.checked } }); p.controla_validade = r.produto.controla_validade; toast('Regra salva'); } catch (e) { toast(e.message, true); chk.checked = !chk.checked; } });
     const selTemp = document.getElementById('sel-temperatura');
-    if (selTemp) selTemp.addEventListener('change', async () => { try { const r = await api('/produtos/' + p.id + '/temperatura', { method: 'POST', body: { temperatura: selTemp.value } }); p.temperatura = r.produto.temperatura; toast('Temperatura salva'); } catch (e) { toast(e.message, true); selTemp.value = p.temperatura || ''; } });
+    if (selTemp) {
+      const inpMin = document.getElementById('inp-tmin'), inpMax = document.getElementById('inp-tmax'), boxFaixa = document.getElementById('faixa-temp');
+      const salvarTemp = async () => {
+        const frio = selTemp.value === 'REFRIGERADO' || selTemp.value === 'CONGELADO';
+        boxFaixa.style.display = frio ? '' : 'none';
+        try { const r = await api('/produtos/' + p.id + '/temperatura', { method: 'POST', body: { temperatura: selTemp.value, temp_min: frio ? inpMin.value : '', temp_max: frio ? inpMax.value : '' } }); p.temperatura = r.produto.temperatura; p.temp_min = r.produto.temp_min; p.temp_max = r.produto.temp_max; toast('Temperatura salva'); } catch (e) { toast(e.message, true); selTemp.value = p.temperatura || ''; inpMin.value = p.temp_min ?? ''; inpMax.value = p.temp_max ?? ''; boxFaixa.style.display = (p.temperatura === 'REFRIGERADO' || p.temperatura === 'CONGELADO') ? '' : 'none'; }
+      };
+      [selTemp, inpMin, inpMax].forEach((el) => el.addEventListener('change', salvarTemp));
+    }
   };
 
   // Posição
