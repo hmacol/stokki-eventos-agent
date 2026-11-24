@@ -60,6 +60,14 @@ class SessaoExpiradaError(Exception):
     """Lançada quando não é possível renovar a sessão após MAX_TENTATIVAS_RENOVACAO."""
 
 
+class RotaIndisponivelError(SessaoExpiradaError):
+    """A Stokki mandou a chamada pro login com a sessão válida: o problema é
+    a rota, não a sessão. Ela responde 302 -> /login pra qualquer endereço
+    que não existe -- em 24/11 tirou do ar .../outbound/table e as rotinas
+    relogaram 891 vezes no dia (55 na véspera) achando que a sessão caía.
+    Filha de SessaoExpiradaError pra quem já trata aquela continuar tratando."""
+
+
 # 28/10: com a conta já aberta em outro lugar, a Stokki para o login em
 # /login/active-session ("Encerrar a outra sessão e entrar"). Antes o login
 # novo derrubava a outra sessão sem perguntar. Decisão do Hugo (28/10): a
@@ -169,6 +177,12 @@ class StokkiSession:
             resp = self._session.request(metodo, url, timeout=30, **kwargs)
 
             if self._sessao_invalida(resp):
+                if self._sessao_viva():
+                    raise RotaIndisponivelError(
+                        f"A Stokki mandou {metodo} {urlparse(url).path} pro login "
+                        f"(status={resp.status_code}) com a sessão válida: a rota mudou ou saiu do ar, "
+                        f"ou a conta {self._conta} não tem acesso a ela. Logar de novo não resolve."
+                    )
                 logger.warning(
                     f"Sessão expirada detectada (status={resp.status_code}, "
                     f"url={resp.url}). Renovando... (tentativa {tentativa}/{MAX_TENTATIVAS_RENOVACAO})"
@@ -181,6 +195,16 @@ class StokkiSession:
         raise SessaoExpiradaError(
             f"Não foi possível renovar a sessão após {MAX_TENTATIVAS_RENOVACAO} tentativas."
         )
+
+    def _sessao_viva(self) -> bool:
+        """True se a sessão abre o painel sem ser mandada pro login. Sem
+        seguir o redirect: seguindo, o 302 pro login vira um 200 na tela de
+        login. Falha de rede conta como não viva (segue pro login, como antes)."""
+        try:
+            resp = self._session.get(f"{BASE_URL}/pt-br/administrator", timeout=15, allow_redirects=False)
+        except requests.RequestException:
+            return False
+        return resp.status_code == 200
 
     def _sessao_invalida(self, resp: requests.Response) -> bool:
         """Retorna True se a resposta indica sessão expirada/não autenticada."""

@@ -940,7 +940,10 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
  sessao_stokki_reserva.json).
 
  auth.py              StokkiSession(config): login, .get/.post, renova em
-                      401/403. SessaoExpiradaError.
+                      401/403. SessaoExpiradaError. Rota que a Stokki manda pro
+                      login com a sessão válida (ela faz isso com rota que não
+                      existe) = RotaIndisponivelError, sem relogar (24/11).
+                      Teste: stokki/test_auth_rota_indisponivel.py
  pedidos.py           Pedidos de saída: contar_pedidos, listar_pedidos,
                       iterar_todos_pedidos, obter_detalhe, extrair_itens_do_pedido,
                       listar_transportadoras, listar_embarcadores, parsers de linha.
