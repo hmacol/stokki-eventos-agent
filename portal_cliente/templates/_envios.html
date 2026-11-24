@@ -12,6 +12,16 @@
   .env-grade { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
   @media (max-width: 1280px) { .env-grade { grid-template-columns: minmax(0, 1fr); } }
   /* Tabela de envios (19/11): colunas com largura pensada pra caber sem cortar "Ações" */
+  /* Prévia do envio: título clicável ordena (A→Z, de novo Z→A); borda do título arrasta pra mudar a largura */
+  #previa-tabela th { position: relative; cursor: pointer; user-select: none; padding-right: 16px; }
+  #previa-tabela th select { cursor: default; }
+  #previa-tabela th .seta { margin-left: 4px; font-size: 9px; }
+  #previa-tabela th .grip { position: absolute; top: 0; right: 0; width: 8px; height: 100%; cursor: col-resize; }
+  #previa-tabela th .grip:hover, #previa-tabela th .grip.arrastando { background: var(--borda); }
+  #previa-tabela.fixa { table-layout: fixed; }
+  #previa-tabela.fixa td { overflow-wrap: anywhere; }
+  #previa-tabela.fixa td.nw { white-space: normal; }
+  #previa-tabela.fixa select, #previa-tabela.fixa input { max-width: 100%; }
   #env-tabela th, #env-tabela td { padding-left: 8px; padding-right: 8px; }
   #env-tabela td:nth-child(1) { white-space: normal; width: 84px; }
   #env-tabela td:nth-child(3) { min-width: 220px; }
@@ -580,7 +590,61 @@
     }).join('');
     $('btn-confirmar').disabled = !p.itens.length;
     $('btn-confirmar').textContent = p.itens.length ? `Confirmar envio de ${p.itens.length} pedido${p.itens.length > 1 ? 's' : ''}` : 'Nada a enviar';
+    ajustarColunasPrevia();
     renderAnexos();
+  }
+
+  // Colunas da prévia: largura e ordem ficam guardadas por título e sobrevivem ao redesenho
+  const colPrevia = { larg: {}, ord: null };
+  function ajustarColunasPrevia() {
+    const tb = $('previa-tabela'), tbody = tb.querySelector('tbody');
+    const ths = [...tb.querySelectorAll('thead th')];
+    ths.forEach(th => { th.dataset.k = th.firstChild.textContent.trim(); });
+    const aplicarLarg = () => {
+      tb.classList.add('fixa');
+      let soma = 0;
+      ths.forEach(th => { const w = colPrevia.larg[th.dataset.k]; th.style.boxSizing = 'border-box'; th.style.width = w + 'px'; soma += w; });
+      tb.style.width = soma + 'px';
+    };
+    if (ths.every(th => colPrevia.larg[th.dataset.k])) aplicarLarg();
+    else { colPrevia.larg = {}; tb.classList.remove('fixa'); tb.style.width = ''; }
+    const chave = (tr, n) => {
+      const c = tr.children[n].cloneNode(true);
+      c.querySelectorAll('select').forEach(s => s.replaceWith(s.value ? s.selectedOptions[0].textContent : ''));
+      return c.textContent.replace(/\s+/g, ' ').trim();
+    };
+    const num = s => s.replace(/[^\d,-]/g, '').replace(',', '.');
+    const ordenar = (n, dir) => {
+      const linhas = [...tbody.rows].map(tr => ({ tr, k: chave(tr, n) }));
+      const numerico = linhas.every(l => l.k === '—' || l.k === '' || /^(R\$\s?)?-?[\d.]+(,\d+)?(\s?kg)?$/.test(l.k));
+      linhas.sort((a, b) => {
+        if (numerico) return ((parseFloat(num(a.k)) || 0) - (parseFloat(num(b.k)) || 0)) * dir;
+        return a.k.localeCompare(b.k, 'pt-BR', { numeric: true, sensitivity: 'base' }) * dir;
+      });
+      linhas.forEach(l => tbody.appendChild(l.tr));
+      ths.forEach((th, j) => { const s = th.querySelector('.seta'); if (s) s.textContent = j === n ? (dir > 0 ? '▲' : '▼') : ''; });
+    };
+    ths.forEach((th, n) => {
+      const seta = document.createElement('span'); seta.className = 'seta'; th.appendChild(seta);
+      const grip = document.createElement('span'); grip.className = 'grip'; th.appendChild(grip);
+      th.addEventListener('click', e => {
+        if (e.target.closest('select, .grip')) return;
+        const dir = colPrevia.ord && colPrevia.ord.k === th.dataset.k && colPrevia.ord.dir === 1 ? -1 : 1;
+        colPrevia.ord = { k: th.dataset.k, dir };
+        ordenar(n, dir);
+      });
+      grip.addEventListener('click', e => e.stopPropagation());
+      grip.addEventListener('pointerdown', e => {
+        e.preventDefault(); e.stopPropagation();
+        if (!tb.classList.contains('fixa')) { ths.forEach(t => { colPrevia.larg[t.dataset.k] = t.offsetWidth; }); aplicarLarg(); }
+        const x0 = e.clientX, w0 = colPrevia.larg[th.dataset.k];
+        grip.setPointerCapture(e.pointerId); grip.classList.add('arrastando');
+        const mover = ev => { colPrevia.larg[th.dataset.k] = Math.max(48, w0 + ev.clientX - x0); aplicarLarg(); };
+        const soltar = () => { grip.classList.remove('arrastando'); grip.removeEventListener('pointermove', mover); grip.removeEventListener('pointerup', soltar); };
+        grip.addEventListener('pointermove', mover); grip.addEventListener('pointerup', soltar);
+      });
+    });
+    if (colPrevia.ord) { const n = ths.findIndex(th => th.dataset.k === colPrevia.ord.k); if (n >= 0) ordenar(n, colPrevia.ord.dir); }
   }
 
   // ── Documentos dos pedidos (PDF) -- 11/11, anexos_pedido.py ─────────────────
