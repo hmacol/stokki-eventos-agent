@@ -131,11 +131,29 @@ export function LancarPedagio({ rotas, rotaInicial, aoMudar }: { rotas: Rota[]; 
     setAviso('');
   };
 
-  const fotografar = async () => {
+  const escolherFoto = () => {
+    Alert.alert('Foto do recibo', 'De onde?', [
+      { text: 'Câmera', onPress: () => void fotografar('camera') },
+      { text: 'Galeria', onPress: () => void fotografar('galeria') },
+      { text: 'Cancelar', style: 'cancel' },
+    ]);
+  };
+
+  const fotografar = async (origem: 'camera' | 'galeria') => {
     if (!rota) return;
-    if (!conferirPermissao(await ImagePicker.requestCameraPermissionsAsync(), 'Câmera', 'Permita o uso da câmera pra fotografar o recibo.')) return;
-    const r = await ImagePicker.launchCameraAsync({ quality: 0.6, allowsEditing: false, exif: false });
+    let r: ImagePicker.ImagePickerResult;
+    if (origem === 'camera') {
+      if (!conferirPermissao(await ImagePicker.requestCameraPermissionsAsync(), 'Câmera', 'Permita o uso da câmera pra fotografar o recibo.')) return;
+      r = await ImagePicker.launchCameraAsync({ quality: 0.6, allowsEditing: false, exif: false });
+    } else {
+      r = await ImagePicker.launchImageLibraryAsync({ quality: 0.6, mediaTypes: ['images'], exif: false });
+    }
     if (r.canceled || !r.assets[0]) return;
+    // O servidor só aceita jpg/png/webp/heic; GIF/BMP da galeria seriam descartados no envio.
+    const formato = (r.assets[0].mimeType ?? '').toLowerCase();
+    if (formato && !/^image\/(jpe?g|png|webp|heic|heif)$/.test(formato)) {
+      return Alert.alert('Formato não aceito', 'Escolha uma foto JPG, PNG, WebP ou HEIC.');
+    }
     const uri = r.assets[0].uri;
     if (!validacaoAtiva || tipo !== 'PEDAGIO') return setFoto(uri);
 
@@ -309,11 +327,11 @@ export function LancarPedagio({ rotas, rotaInicial, aoMudar }: { rotas: Rota[]; 
                   {foto ? <Image source={{ uri: foto }} style={s.foto} /> : null}
                   {aviso ? <Text style={[s.sub, { color: cores.alerta, fontWeight: '600' }]}>{aviso}</Text> : null}
                   <Botao
-                    titulo={conferindo ? 'Conferindo a foto…' : foto ? 'Tirar outra foto' : '📷  Fotografar recibo'}
+                    titulo={conferindo ? 'Conferindo a foto…' : foto ? 'Trocar foto' : '📷  Foto do recibo'}
                     tipo={foto ? 'secundario' : 'primario'}
                     carregando={conferindo}
                     desabilitado={conferindo}
-                    onPress={() => void fotografar()}
+                    onPress={escolherFoto}
                     estilo={{ marginTop: 10 }}
                   />
                 </>
