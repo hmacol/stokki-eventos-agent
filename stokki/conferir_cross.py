@@ -164,12 +164,16 @@ def _fase3_conferir(page, pid: int) -> None:
     if PERFIL["conferencia"] not in corpo:
         raise Parar(f"cartao do cliente na conferencia nao bate com o perfil ({PERFIL['conferencia']})")
     skus = set(re.findall(r"SKU:\s*([A-Z0-9\-]+)", corpo))
-    if skus != {PERFIL["sku"]}:
-        raise Parar(f"SKUs na conferencia {sorted(skus)} != {{{PERFIL['sku']}}}")
     campo = page.get_by_placeholder(re.compile("c.digo do produto", re.I)).first
-    m = re.search(r"Quantidade embalada:\s*\d+\s*de\s*(\d+)", page.inner_text("body"))
-    total = int(m.group(1)) if m else 1
-    print(f"   item XD: {total} unidade(s) a embalar")
+    if not skus and re.search(r"\d+ ITE(M|NS) EMBALADO", corpo):
+        total = 0   # retomada: tudo ja embalado, falta so fechar (PS-44970)
+        print("   item XD ja embalado: so fechar a conferencia")
+    else:
+        if skus != {PERFIL["sku"]}:
+            raise Parar(f"SKUs na conferencia {sorted(skus)} != {{{PERFIL['sku']}}}")
+        m = re.search(r"Quantidade embalada:\s*\d+\s*de\s*(\d+)", page.inner_text("body"))
+        total = int(m.group(1)) if m else 1
+        print(f"   item XD: {total} unidade(s) a embalar")
     for _ in range(total):   # cada leitura do SKU embala 1 unidade; ao completar a Stokki abre o dialogo de impressao
         try:
             antes = page.evaluate(_JS_CONTADOR)
@@ -202,7 +206,10 @@ def _fase3_conferir(page, pid: int) -> None:
             if not clicou_fechar:
                 fb = page.get_by_role("button", name=re.compile("Fechar e Imprimir")).first
                 if fb.count() and fb.is_enabled():
-                    fb.click()
+                    try:
+                        fb.click(timeout=3000)
+                    except PlaywrightTimeout:
+                        continue   # o dialogo da DANFE abriu por cima do botao (PS-44970): a proxima volta trata
                     clicou_fechar = True
                     continue
             break
