@@ -449,6 +449,35 @@ def _ids_de_skills(skills) -> list[int]:
     return ids
 
 
+def servico_ja_no_pool(vuupt, servico_original: dict) -> dict | None:
+    """Serviço do mesmo pedido (o próprio, o original ou qualquer -R<n>) que
+    já está no pool (status not_assigned) na Vuupt, ou None. Duplicar nesse
+    caso criaria o pedido em dobro no pool."""
+    code_bruto = (servico_original.get("code") or "").lstrip("#")
+    m = _PADRAO_CODIGO_BASE.match(code_bruto)
+    base = m.group(0) if m else code_bruto
+    def no_pool(s):
+        # excluído na Vuupt pode voltar na busca ainda como not_assigned: morto
+        return bool(s) and s.get("status") == "not_assigned" and not s.get("deleted_at")
+
+    if no_pool(servico_original):
+        return servico_original
+    # Um -Rk que falta não encerra a busca (R1 apagado, R2 vivo): só para
+    # depois de 3 faltas seguidas -- mesma regra do reenvio da tela /pedidos.
+    faltas = 0
+    for cand in [base] + [f"#{base}-R{k}" for k in range(1, 21)]:
+        s = vuupt.buscar_servico_por_code(cand)
+        if not s:
+            faltas += 1
+            if faltas >= 3:
+                break
+            continue
+        faltas = 0
+        if no_pool(s):
+            return s
+    return None
+
+
 def duplicar_servico_por_insucesso(vuupt, servico_original: dict) -> dict | None:
     """
     Cria um NOVO serviço a partir de um insucesso de entrega, pra nova
@@ -480,6 +509,10 @@ def duplicar_servico_por_insucesso(vuupt, servico_original: dict) -> dict | None
     code_bruto = (servico_original.get("code") or "").lstrip("#")
     m = _PADRAO_CODIGO_BASE.match(code_bruto)
     code_original = m.group(0) if m else code_bruto
+    no_pool = servico_ja_no_pool(vuupt, servico_original)
+    if no_pool:
+        logger.warning(f"  {code_bruto}: já existe {no_pool.get('code')} no pool -- não duplica.")
+        return None
     sufixo = 1
     novo_code = f"#{code_original}-R{sufixo}"
     while vuupt.buscar_servico_por_code(novo_code):
@@ -693,7 +726,10 @@ def reentregar_insucessos_sem_resposta(vuupt_token: str, insucessos: list, modo_
                 continue
             novo = duplicar_servico_por_insucesso(vuupt, s)
             if not novo:
-                resultado["falhas"].append(code)
+                no_pool = servico_ja_no_pool(vuupt, s)
+                resultado["falhas"].append(
+                    f"{code} ({no_pool.get('code')} já está no pool)" if no_pool
+                    else f"{code} (a Vuupt não criou o serviço)")
                 continue
             try:
                 fingerprint_duplicacao_insucesso.marcar_duplicado(s["id"], novo.get("code", ""))
@@ -1620,7 +1656,11 @@ def main(horas: int = HORAS_PADRAO, modo_teste: bool = False, limite: int = 0,
                         texto=f"Reentrega agendada executada (novo código: {novo.get('code', '')}).",
                     )
                 else:
-                    fingerprint_duplicacao_agendada.marcar_falha(pendente["service_id"], "Falha ao criar o novo serviço")
+                    no_pool = servico_ja_no_pool(vuupt_para_agendadas, servico_original)
+                    fingerprint_duplicacao_agendada.marcar_falha(
+                        pendente["service_id"],
+                        f"Não duplicado: {no_pool.get('code')} já está no pool" if no_pool
+                        else "Falha ao criar o novo serviço")
 
         if not validados:
             logger.info("Nenhum pedido entregue pendente de expedicao. Nada a expedir.")

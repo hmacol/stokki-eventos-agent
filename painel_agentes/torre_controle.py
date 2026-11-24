@@ -279,6 +279,10 @@ def duplicar_pedido_manual(service_id: int, codigo: str,
     modulo = _expedir_pedidos_raiz()
     novo = modulo.duplicar_servico_por_insucesso(vuupt, servico_original)
     if not novo:
+        no_pool = getattr(modulo, "servico_ja_no_pool", lambda *_: None)(vuupt, servico_original)
+        if no_pool:
+            return {"ok": False, "no_pool": True,
+                    "erro": f"Não duplicado: {no_pool.get('code')} já está no pool."}
         return {"ok": False, "erro": "Falha ao criar a reentrega no VUUPT (ver log de expedição)."}
 
     novo_code = novo.get("code", "")

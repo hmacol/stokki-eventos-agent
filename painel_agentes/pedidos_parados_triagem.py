@@ -1053,6 +1053,9 @@ def duplicar(order_number: str, usuario: str) -> dict:
     modulo = _expedir_pedidos_raiz()
     novo = modulo.duplicar_servico_por_insucesso(vuupt, servico)
     if not novo:
+        no_pool = getattr(modulo, "servico_ja_no_pool", lambda *_: None)(vuupt, servico)
+        if no_pool:
+            raise ValueError(f"Não duplicado: {no_pool.get('code')} já está no pool.")
         _marcar_acao(order_number, "erro", "falha ao criar reentrega na Vuupt")
         raise RuntimeError("Falha ao criar a reentrega na Vuupt (ver log de expedição).")
 

@@ -4608,12 +4608,23 @@ def api_acompanhamento_cancelar_finalizacao(parada_id):
     usuario = session.get("usuario") or g.nivel_acesso
     try:
         token = (_carregar_config().get("vuupt_api") or {}).get("token", "")
+        expedir = torre_controle._expedir_pedidos_raiz()
+
+        def _duplicar(vuupt, original):
+            novo = expedir.duplicar_servico_por_insucesso(vuupt, original)
+            if not novo:
+                no_pool = expedir.servico_ja_no_pool(vuupt, original)
+                if no_pool:
+                    raise cancelar_finalizacao.Recusado(
+                        f"Não duplicado: {no_pool.get('code')} já está no pool. Nada foi alterado.")
+            return novo
+
         conn = nucleo_banco.conectar()
         try:
             r = cancelar_finalizacao.cancelar_finalizacao(
                 conn, parada_id, usuario, str(body.get("motivo") or ""),
                 vuupt=torre_controle.VuuptClient(token),
-                duplicar=torre_controle._expedir_pedidos_raiz().duplicar_servico_por_insucesso,
+                duplicar=_duplicar,
                 adicionar=lambda route_id, ids: edicao_rota.adicionar_pedidos(token, route_id, ids, position="end"),
                 rota_operavel=ponte_vuupt.rota_operavel,
                 ja_duplicado=lambda sid: (fp.buscar_novo_code(sid) or "outro serviço") if fp.ja_duplicado(sid) else None,
