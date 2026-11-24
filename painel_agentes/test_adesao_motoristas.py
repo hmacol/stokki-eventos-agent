@@ -28,13 +28,13 @@ class TestAdesaoMotoristas(unittest.TestCase):
         self.banco = Path(self._tmp.name) / "dados.db"
         c = sqlite3.connect(self.banco)
         c.executescript("""
-            CREATE TABLE bd_motoristas (NOME_MOTORISTA TEXT, AGENT_ID_VUUPT INTEGER, CPF_MOTORISTA TEXT,
+            CREATE TABLE bd_motoristas (id INTEGER PRIMARY KEY, NOME_MOTORISTA TEXT, AGENT_ID_VUUPT INTEGER, CPF_MOTORISTA TEXT,
                 ATIVO TEXT, POSICAO TEXT, SEM_APP TEXT);
             CREATE TABLE motoristas (cpf TEXT, ultimo_login_em TEXT, app_versao TEXT, plataforma TEXT);
             CREATE TABLE motoristas_fila_app (cpf TEXT, envios INTEGER, ultimo_envio_em TEXT, situacao TEXT);
             CREATE TABLE nucleo_rotas (agent_id INTEGER, data_rota TEXT, status TEXT, operada_app INTEGER);
         """)
-        c.executemany("INSERT INTO bd_motoristas VALUES (?,?,?,?,?,?)", [
+        c.executemany("INSERT INTO bd_motoristas (NOME_MOTORISTA, AGENT_ID_VUUPT, CPF_MOTORISTA, ATIVO, POSICAO, SEM_APP) VALUES (?,?,?,?,?,?)", [
             ("Na Ponte", 1, "111", "SIM", "FIXO", ""),
             ("Usando", 2, "222", "SIM", "FIXO", ""),
             ("Velho", 3, "333", "SIM", "FIXO", ""),
@@ -106,6 +106,26 @@ class TestTela(TestAdesaoMotoristas):
         self.assertIn("Na ponte", html)
         self.assertIn("Tem PIN, nunca entrou", html)
         self.assertIn("So Pin", html)
+        self.assertNotIn('class="botao-pin"', html)   # leitura não vê o botão do PIN
+
+    def test_total_ve_botao_de_criar_acesso_e_resetar_pin(self):
+        import importlib.util
+        from unittest import mock
+        spec = importlib.util.spec_from_file_location("painel_agentes_app", _AQUI / "painel_agentes.py")
+        painel = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = painel
+        spec.loader.exec_module(painel)
+        with mock.patch.object(adesao, "DB_PATH", self.banco), \
+                mock.patch.object(adesao, "agentes_da_ponte", return_value={1}):
+            painel.app.config["TESTING"] = True
+            cliente = painel.app.test_client()
+            with cliente.session_transaction() as sess:
+                sess["nivel_acesso"] = "total"
+                sess["usuario"] = "teste"
+            html = cliente.get("/adesao-motoristas").get_data(as_text=True)
+        self.assertIn(">Criar acesso ao app</button>", html)
+        self.assertIn(">Resetar PIN</button>", html)
+        self.assertRegex(html, r'data-url="[^"]*/api/motoristas/\d+/resetar-pin"')
 
 
 if __name__ == "__main__":

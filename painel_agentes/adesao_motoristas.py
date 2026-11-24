@@ -120,6 +120,7 @@ def listar(caminho=None, agora=None, ponte=None):
         else:
             plataforma = "—"
         linhas.append({
+            "id": b["id"], "tem_cpf": bool(cpf), "tem_login": conta is not None,
             "nome": nome, "posicao": posicao.title() or "—", "plataforma": plataforma,
             "situacao": situacao, "rotulo": ROTULOS[situacao], "leva": leva, "leva_rotulo": LEVAS[leva],
             "ultimo_login": (conta["ultimo_login_em"] or "")[:10] if conta else "",

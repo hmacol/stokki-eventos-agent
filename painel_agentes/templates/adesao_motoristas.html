@@ -23,6 +23,9 @@
             letter-spacing: 0.3px; text-transform: uppercase; white-space: nowrap; background: var(--teste-bg); color: var(--teste-texto); }
   .pilula.NA_PONTE, .pilula.USANDO { background: var(--ok-bg, #e6f4ea); color: var(--ok, #1e7e34); }
   .pilula.SEM_LOGIN { background: var(--erro-bg); color: var(--erro); }
+  .botao-pin { padding: 5px 10px; font-size: 12px; border: 1px solid var(--borda); border-radius: 6px; background: var(--fundo); color: var(--texto); cursor: pointer; white-space: nowrap; }
+  .botao-pin:disabled { opacity: 0.5; cursor: not-allowed; }
+  .pin-novo { font-size: 18px; letter-spacing: 3px; }
 </style>
 {% endblock %}
 
@@ -52,7 +55,7 @@
 <div class="tabela-wrap">
   <table>
     <thead><tr><th>Motorista</th><th>Leva</th><th>Situação</th><th>Plataforma</th><th>Último login</th><th>Versão</th>
-      <th class="num">Rotas ({{ dias }}d)</th><th class="num">Pelo app</th><th>Mensagem</th></tr></thead>
+      <th class="num">Rotas ({{ dias }}d)</th><th class="num">Pelo app</th><th>Mensagem</th>{% if pode_pin %}<th>Acesso</th>{% endif %}</tr></thead>
     <tbody>
     {% for m in linhas %}
       <tr>
@@ -65,6 +68,10 @@
         <td class="num">{{ m.rotas_recentes }}</td>
         <td class="num">{{ m.rotas_app }}</td>
         <td class="mono">{% if m.msg_envios %}{{ m.msg_envios }}x, {{ m.msg_ultimo }}{% elif m.msg_situacao %}na fila{% else %}—{% endif %}</td>
+        {% if pode_pin %}
+        <td><button type="button" class="botao-pin" data-nome="{{ m.nome }}" data-url="{{ url_for('api_motorista_resetar_pin', motorista_id=m.id) }}"
+                    {% if not m.tem_cpf %}disabled title="falta o CPF"{% endif %}>{{ "Resetar PIN" if m.tem_login else "Criar acesso ao app" }}</button></td>
+        {% endif %}
       </tr>
     {% endfor %}
     </tbody>
@@ -73,5 +80,33 @@
 
 <script>
   setTimeout(function () { window.location.reload(); }, 2 * 60 * 60 * 1000);
+
+  // Criar acesso / resetar PIN (só nível total): o PIN provisório aparece uma vez, no lugar do botão
+  document.querySelectorAll(".botao-pin").forEach(function (botao) {
+    botao.addEventListener("click", async function () {
+      const nome = botao.dataset.nome;
+      const criar = botao.textContent.trim() === "Criar acesso ao app";
+      if (!confirm(criar ? `Criar o acesso de ${nome} ao app com um PIN provisório?`
+                         : `Resetar o PIN de ${nome}? O PIN atual para de valer e as sessões do app caem.`)) return;
+      botao.disabled = true;
+      try {
+        const resp = await fetch(botao.dataset.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+        const r = await resp.json();
+        if (!resp.ok) throw new Error(r.erro || "falha");
+        const celula = botao.parentElement;
+        celula.textContent = "";
+        const pin = document.createElement("strong");
+        pin.className = "pin-novo";
+        pin.textContent = r.pin;
+        const nota = document.createElement("div");
+        nota.className = "nota";
+        nota.textContent = `CPF ${r.cpf} · PIN provisório, o app pede a troca. Anote agora: some ao recarregar.`;
+        celula.append(pin, nota);
+      } catch (e) {
+        alert(`Falha: ${e.message}`);
+        botao.disabled = false;
+      }
+    });
+  });
 </script>
 {% endblock %}

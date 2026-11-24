@@ -2161,6 +2161,7 @@ def adesao_motoristas():
     return render_template("adesao_motoristas.html", linhas=linhas, resumo=_adesao.resumo(linhas),
                            levas=_adesao.resumo_levas(linhas), dias=_adesao.DIAS_RECENTE,
                            versao_alvo=".".join(map(str, _adesao.VERSAO_ALVO)),
+                           pode_pin=g.nivel_acesso == "total",   # mesma trava da rota resetar-pin
                            gerado_em=datetime.now().strftime("%d/%m %H:%M"))
 
 

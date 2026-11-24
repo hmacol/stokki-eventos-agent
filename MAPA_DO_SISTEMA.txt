@@ -1755,7 +1755,9 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                               ao app novo; funil na ponte / usando / versão antiga / PIN
                               sem entrar / sem login + leva de cada um; só leitura de
                               bd_motoristas, motoristas, motoristas_fila_app, nucleo_rotas;
-                              ponte vem do config; total/operador/logistica/leitura)
+                              ponte vem do config; total/operador/logistica/leitura;
+                              nível total tem o botão Criar acesso ao app / Resetar PIN,
+                              que chama /api/motoristas/<id>/resetar-pin)
    /financeiro/pedagios       pedagios.html
    /financeiro/pagamentos     pagamentos_pontuais.html (Adiantamento/Descarga/Frete avulso)
    /canhotos                  canhotos.html
