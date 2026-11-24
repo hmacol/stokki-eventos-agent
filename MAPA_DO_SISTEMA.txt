@@ -237,7 +237,7 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              e, depois delas, pedido ao Atendimento pra criar o grupo do motorista);
                                              timer cadastro-motorista-link; ficha no painel /motoristas.
                                              Config: cadastro_motorista_link.{ativo, forcar_destino_whatsapp,
-                                             atendimento_whatsapp, link_app_vuupt, max_agentes_dia (padrão 10)} e
+                                             atendimento_whatsapp, link_app, link_pwa, max_agentes_dia (padrão 10)} e
                                              whatsapp_notificacoes.motoristas.teto_diario.
                                              Freios: POST /api/cadastro-link 5/IP/hora e 40/24 h contados no
                                              banco (motoristas_cadastros.ip_origem); documentos, situação e
@@ -1442,6 +1442,11 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            documento vira comprovante FACHADA (nao conta como
                            canhoto) e a foto gravada sai girada pra leitura.
  calibrar_nitidez.py       Calibra o limiar.
+ duplicidade_recibo.py     Despesa (nucleo_pedagios): dHash da foto (coluna hash_visual) e
+                           marca no painel /financeiro/pedagios recibo IDENTICO (sha256)
+                           ou PARECIDO com mesmo valor. So marca, nao barra. Coluna
+                           origem = CAMERA|GALERIA (app manda; galeria ganha selo no painel).
+                           Armadilha: capturado_em e a hora do envio, nao a da foto.
  marketplace_remoto.py     Cliente da página pública de ofertas.
 
  Lalamove
@@ -2561,8 +2566,11 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
    Entra na bd_motoristas sempre como
    ESPORADICO (a ficha mostra "Pediu: Fixo"; a equipe promove pelo Editar).
    Cadastro falso/teste: botão "Desfazer" (inativa a linha, libera o CPF e,
-   se pedido, apaga na Vuupt o agente/veículo que ELE criou). iPhone = sem app Vuupt (SEM_APP=SIM
-   e boas-vindas diferentes). Teste local: sempre Vuupt/WhatsApp falsos
+   se pedido, apaga na Vuupt o agente/veículo que ELE criou). iPhone = sem app Vuupt (SEM_APP=SIM).
+   Boas-vindas (24/11): cria o login do app próprio (CPF + PIN provisório sorteado, trocar_pin=1;
+   a cada retentativa sorteia outro; quem já logou não tem o PIN mexido) e manda só o app novo:
+   Android = APK app.freshhub.com.br/motorista/app.apk, iPhone = PWA motorista.freshhub.com.br.
+   O e-mail/senha da Vuupt não vai mais na mensagem (o agente segue criado por trás). Teste local: sempre Vuupt/WhatsApp falsos
    (--modo-teste do módulo usa ids falsos); nunca o token real.
  - Atualização cadastral dos motoristas (link pessoal, 16/11): tudo DESLIGADO e cada coisa com chave própria
    em atualizacao_motoristas (ausente = desligado, nada mais liga sozinho):
