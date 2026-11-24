@@ -214,8 +214,12 @@ class _SessaoNavegador:
     def __init__(self, page):
         self._page = page
 
+    # os mesmos cabeçalhos padrão da StokkiSession (stokki/auth.py): sem o
+    # X-Requested-With a listagem devolve a página HTML em vez do JSON
+    _AJAX = {"X-Requested-With": "XMLHttpRequest", "Accept": "application/json, text/javascript, */*; q=0.01"}
+
     def get(self, url, params=None, headers=None):
-        r = self._page.context.request.get(url, params=params or {}, headers=headers or {})
+        r = self._page.context.request.get(url, params=params or {}, headers={**self._AJAX, **(headers or {})})
 
         class _R:
             status_code = r.status
