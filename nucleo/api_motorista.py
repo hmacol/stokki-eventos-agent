@@ -46,7 +46,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
 from nucleo import (atualizacao_motorista as atualizacao, auth_motorista as auth, banco, carregamento,
-                    cadastro_motorista as cadastro, financeiro, operacao, ponte_vuupt, trajeto_rota, validacao_fotos)
+                    cadastro_motorista as cadastro, duplicidade_recibo, financeiro, operacao, ponte_vuupt, trajeto_rota, validacao_fotos)
 from nucleo.marketplace_remoto import ClienteMarketplace
 from nucleo.auth_motorista import AutenticacaoInvalida
 from nucleo.operacao import OperacaoInvalida
@@ -827,6 +827,7 @@ def criar_app(config: dict | None = None) -> Flask:
         resultado = operacao.registrar_pedagio(
             conn(), rota_id, agent_id(), uuid or sha, valor, caminho, sha, len(conteudo), capturado_em, caminho_gcs,
             validacao=validacao, tipo=tipo, descricao=descricao, parada_id=parada_id,
+            origem=request.form.get("origem"), hash_visual=duplicidade_recibo.hash_visual(conteudo),
         )
         return jsonify({**resultado, "gcs": caminho_gcs is not None, "pedagios": operacao.listar_pedagios(conn(), rota_id)}), 201
 

@@ -650,7 +650,9 @@ def garantir_esquema(conn: sqlite3.Connection):
     _migrar_colunas(conn, "nucleo_paradas", _COLUNAS_PARADAS_NOVAS)
     _migrar_colunas(conn, "nucleo_rotas", _COLUNAS_ROTAS_NOVAS)
     _migrar_colunas(conn, "nucleo_pedagios", [("tipo", "TEXT NOT NULL DEFAULT 'PEDAGIO'"), ("descricao", "TEXT"),
-                                              ("parada_id", "INTEGER")])
+                                              ("parada_id", "INTEGER"),
+                                              ("origem", "TEXT NOT NULL DEFAULT 'CAMERA'"), ("hash_visual", "TEXT")])
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_nucleo_pedagios_sha ON nucleo_pedagios(sha256)")
     # Checklist de carregamento arquivado quando a rota troca de motorista (revisao 22/11, M2)
     _migrar_colunas(conn, "nucleo_carregamentos", [("rota_id_original", "INTEGER"), ("substituido_em", "TEXT")])
     conn.execute("CREATE INDEX IF NOT EXISTS idx_motoristas_agent ON motoristas(agent_id)")

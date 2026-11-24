@@ -27,7 +27,7 @@ import math
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
-from nucleo import banco, nf_pedido, ofertas_rota_enviada, pedidos as nucleo_pedidos, ponte_vuupt, tempos, validacao_fotos
+from nucleo import banco, duplicidade_recibo, nf_pedido, ofertas_rota_enviada, pedidos as nucleo_pedidos, ponte_vuupt, tempos, validacao_fotos
 from nucleo.rotas import registrar_evento
 
 # Passos da parada no app (Hugo, 26/08): DESLOCAMENTO ("Iniciar deslocamento",
@@ -224,7 +224,8 @@ def registrar_pedagio(conn: sqlite3.Connection, rota_id: int, agent_id: int, uui
                       caminho_local: str | None, sha256: str | None, tamanho_bytes: int | None,
                       capturado_em: str | None, caminho_gcs: str | None = None,
                       validacao: dict | None = None, tipo: str | None = None, descricao: str | None = None,
-                      parada_id: int | str | None = None) -> dict:
+                      parada_id: int | str | None = None, origem: str | None = None,
+                      hash_visual: str | None = None) -> dict:
     """Um comprovante de pedágio da rota (o motorista pode mandar vários).
     Aceito em rota APP EM_ROTA ou CONCLUIDA (ele fecha a rota e depois
     fotografa os recibos, ou manda no caminho). Entra como PENDENTE; só
@@ -257,6 +258,7 @@ def registrar_pedagio(conn: sqlite3.Connection, rota_id: int, agent_id: int, uui
         raise OperacaoInvalida(f"Informe o pedido de referência ({banco.TIPOS_DESPESA[tipo]}).")
     if not uuid:
         raise OperacaoInvalida("Pedágio sem uuid.")
+    origem = "GALERIA" if str(origem or "").strip().upper() == "GALERIA" else "CAMERA"
     try:
         valor_f = round(float(str(valor).replace(",", ".")), 2)
     except (TypeError, ValueError):
@@ -268,13 +270,13 @@ def registrar_pedagio(conn: sqlite3.Connection, rota_id: int, agent_id: int, uui
         return {"id": ja["id"], "ja_registrado": True}
     cur = conn.execute("""
         INSERT INTO nucleo_pedagios (uuid, rota_id, agent_id, valor_informado, tipo, descricao, parada_id, caminho_local,
-                                     caminho_gcs, sha256, tamanho_bytes, capturado_em, status, dados_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     caminho_gcs, sha256, tamanho_bytes, capturado_em, status, dados_json, origem, hash_visual)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (uuid, rota_id, agent_id, valor_f, tipo, descricao, parada_id, caminho_local, caminho_gcs, sha256, tamanho_bytes,
           capturado_em, banco.PEDAGIO_PENDENTE,
-          _json({"validacao": validacao}) if validacao else None))
+          _json({"validacao": validacao}) if validacao else None, origem, hash_visual))
     registrar_evento(conn, "PEDAGIO", banco.ORIGEM_APP, capturado_em, rota_id=rota_id, agent_id=agent_id,
-                     dados={"pedagio_id": cur.lastrowid, "valor": valor_f, "tipo": tipo, "sha256": sha256})
+                     dados={"pedagio_id": cur.lastrowid, "valor": valor_f, "tipo": tipo, "sha256": sha256, "origem": origem})
     conn.commit()
     return {"id": cur.lastrowid, "ja_registrado": False}
 
@@ -373,6 +375,7 @@ def listar_pedagios_painel(conn: sqlite3.Connection, status: str | None = banco.
         # (nucleo/validacao_fotos.py) -- o painel mostra junto do valor.
         d["validacao"] = _ler_json(d.get("dados_json")).get("validacao") or {}
         saida.append(d)
+    duplicidade_recibo.marcar_duplicados(conn, saida)
     return saida
 
 

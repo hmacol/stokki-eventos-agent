@@ -82,6 +82,7 @@ export function LancarPedagio({ rotas, rotaInicial, aoMudar }: { rotas: Rota[]; 
   const [paradaId, setParadaId] = useState<number | null>(null);
   const [valor, setValor] = useState('');
   const [foto, setFoto] = useState<string | null>(null);
+  const [origemFoto, setOrigemFoto] = useState<'camera' | 'galeria'>('camera');
   const [naFila, setNaFila] = useState<Awaited<ReturnType<typeof fila.pedagiosNaFila>>>([]);
   const [ocupado, setOcupado] = useState(false);
   // Conferência automática do recibo (Hugo, 12/09) -- só roda se o
@@ -155,6 +156,7 @@ export function LancarPedagio({ rotas, rotaInicial, aoMudar }: { rotas: Rota[]; 
       return Alert.alert('Formato não aceito', 'Escolha uma foto JPG, PNG, WebP ou HEIC.');
     }
     const uri = r.assets[0].uri;
+    setOrigemFoto(origem);
     if (!validacaoAtiva || tipo !== 'PEDAGIO') return setFoto(uri);
 
     const tentativa = tentativas + 1;
@@ -195,7 +197,7 @@ export function LancarPedagio({ rotas, rotaInicial, aoMudar }: { rotas: Rota[]; 
     const agora = fila.agoraIso();
     await fila.enfileirar({
       uuid: fila.novoUuid(), tipo: 'PEDAGIO', rotaId: rota.id, uri: foto, valor: v, capturadoEm: agora, criadoEm: agora, tentativas: 0,
-      tipoDespesa: tipo, descricao: tipo === 'OUTROS' ? descricao.trim() : null, paradaId: exigePedido(tipo) ? paradaId : null,
+      origem: origemFoto, tipoDespesa: tipo, descricao: tipo === 'OUTROS' ? descricao.trim() : null, paradaId: exigePedido(tipo) ? paradaId : null,
     });
     limpar();
     await lerFila();
