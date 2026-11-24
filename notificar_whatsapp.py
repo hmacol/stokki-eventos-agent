@@ -611,17 +611,24 @@ def texto_cadastro_link_concluido(cadastro: dict, agora: datetime | None = None)
     return f"✅ Cadastro de {nome} concluído na Vuupt (agente {cadastro.get('agent_id')})"
 
 
-def texto_boas_vindas_motorista(primeiro_nome: str, email: str, senha: str, link_app: str, iphone: bool) -> str:
-    """Mensagem individual ao motorista novo (sem limite de 200). Android recebe
-    app + acesso; iPhone so o aviso de que a equipe chama (sem app da Vuupt)."""
+def texto_boas_vindas_motorista(primeiro_nome: str, cpf: str, pin: str | None, link_app: str, link_pwa: str,
+                                iphone: bool) -> str:
+    """Mensagem individual ao motorista novo (sem limite de 200), pro app proprio
+    da Fresh Log (login = CPF + PIN provisorio). Android baixa o APK; iPhone abre
+    o PWA no Safari. `pin` None = ja tem login em uso, nao se mexe no PIN dele."""
     nome = _uma_linha(primeiro_nome, 30) or "motorista"
     if iphone:
-        return (f"Olá, {nome}! Seu cadastro na Fresh Log foi aprovado. "
-                "Como seu celular é iPhone, a equipe vai te chamar pra explicar como funcionam as entregas.")
+        acesso = (f"Abra no Safari: {link_pwa}\n"
+                  "Depois toque em Compartilhar > Adicionar à Tela de Início, pra usar como app.")
+    else:
+        acesso = f"Baixe o app: {link_app}"
+    pin_linha = (f"PIN provisório: {pin} (o app pede pra você trocar no primeiro acesso)" if pin
+                 else "PIN: o mesmo que você já usa no app")
+    cpf_digitos = re.sub(r"\D", "", str(cpf or ""))
     return (f"Olá, {nome}! Seu cadastro na Fresh Log foi aprovado.\n"
-            f"Baixe o app: {link_app}\n"
-            f"E-mail: {email}\n"
-            f"Senha: {senha}\n"
+            f"{acesso}\n"
+            f"CPF: {cpf_digitos}\n"
+            f"{pin_linha}\n"
             "Qualquer dúvida, é só responder aqui.")
 
 
