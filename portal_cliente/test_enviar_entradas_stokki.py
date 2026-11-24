@@ -80,6 +80,19 @@ class SessaoQuebrada:
 _AVISAR_ERROS_REAL = worker._avisar_erros   # o setUp das outras classes troca por um no-op
 
 
+class TestSessaoNavegadorPedeJson(unittest.TestCase):
+    """24/11: sem X-Requested-With a Stokki devolve a pagina HTML no lugar do
+    JSON da listagem, e a pre-checagem do #PE ficava indeterminada pra sempre."""
+
+    def test_get_manda_os_cabecalhos_ajax_e_mantem_os_de_quem_chama(self):
+        page = mock.MagicMock()
+        worker._SessaoNavegador(page).get("https://x/table", params={"a": 1}, headers={"Referer": "https://x/"})
+        headers = page.context.request.get.call_args.kwargs["headers"]
+        self.assertEqual(headers["X-Requested-With"], "XMLHttpRequest")
+        self.assertIn("application/json", headers["Accept"])
+        self.assertEqual(headers["Referer"], "https://x/")
+
+
 class TestEmailDeErroEscapaHtml(unittest.TestCase):
     def test_rotulo_erro_e_nome_vao_escapados(self):
         # revisão de segurança 23/11 (M2): texto de XML/planilha/Stokki não pode virar HTML no e-mail
