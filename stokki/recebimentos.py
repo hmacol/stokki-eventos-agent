@@ -10,7 +10,7 @@ sondar de novo desta maquina -- login concorrente derruba a sessao da
 VPS e do agente-importacao-stokki):
 
 Endpoints:
-  GET /pt-br/administrator/inventory/incoming/table       -- listagem paginada (DataTables)
+  GET /pt-br/administrator/inventory/incoming/listing/table -- listagem paginada (24/11: ver stokki/listagem.py)
   GET /pt-br/administrator/inventory/incoming/show/{id}   -- detalhe completo
 
 Colunas do DataTable (nesta ordem, indices 0-11):
@@ -76,6 +76,7 @@ import time as _time
 
 from bs4 import BeautifulSoup
 
+from stokki import listagem
 from stokki.auth import StokkiSession
 
 logger = logging.getLogger(__name__)
@@ -142,16 +143,21 @@ def listar_recebimentos(
         "input_search": busca,
     }
     resp = sessao.get(
-        f"{BASE_URL}/pt-br/administrator/inventory/incoming/table",
+        # 24/11: a Stokki trocou incoming/table por incoming/listing/table (o
+        # antigo redireciona pro /login) e a linha virou JSON estruturado --
+        # ver stokki/listagem.py, que devolve a linha no formato de antes.
+        f"{BASE_URL}/pt-br/administrator/inventory/incoming/listing/table",
         params=params,
         headers={"Referer": f"{BASE_URL}/pt-br/administrator/inventory/incoming"},
     )
+    listagem.conferir_resposta(resp)
     resp.raise_for_status()
     try:
-        return resp.json()
+        dados = resp.json()
     except Exception:
         import json
-        return json.loads(resp.text)
+        dados = json.loads(resp.text)
+    return listagem.converter_resposta(dados)
 
 
 # ── Linha da listagem ──────────────────────────────────────────────────────────
