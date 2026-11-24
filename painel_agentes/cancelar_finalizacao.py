@@ -12,7 +12,9 @@ A Vuupt nao reabre servico concluido: o caminho de la e DUPLICAR o servico
      Torre e do fluxo de insucesso: codigo ganha -R1, -R2...);
   2. inclui o servico novo na MESMA rota da Vuupt;
   3. cria a parada nova no nucleo, limpa (PENDENTE): o motorista ve no nosso
-     app e refaz a baixa; a ponte repete no servico novo.
+     app e refaz a baixa; a ponte repete no servico novo. Rota feita no app
+     da Vuupt (liberado em 24/11): o servico novo aparece no app da Vuupt e
+     a sincronizacao atualiza a parada nova.
 
 A parada antiga NAO e mexida: fica com o resultado, os horarios e as fotos
 da primeira baixa (e o historico da tentativa), aqui e na Vuupt. Quem le a
@@ -20,8 +22,8 @@ Vuupt (Torre, portal, expedicao na Stokki) continua vendo o resultado antigo
 no codigo original -- cancelar a finalizacao nao desfaz e-mail ja enviado
 nem expedicao ja feita.
 
-Travas (decisoes do Hugo): so rota operada pelo nosso app, so com a rota em
-andamento, sempre com motivo, uma vez por baixa.
+Travas (decisoes do Hugo): so com a rota em andamento, sempre com motivo,
+uma vez por baixa. Vale pro nosso app e pro app da Vuupt (24/11).
 
 As chamadas a Vuupt entram por parametro (duplicar/adicionar) pra testar sem
 rede; quem liga as de verdade e a rota Flask em painel_agentes.py.
@@ -77,11 +79,10 @@ def canceladas(conn, rota_id: int) -> set:
 
 
 def cancelar_finalizacao(conn, parada_id: int, usuario: str, motivo: str, *, vuupt, duplicar, adicionar,
-                         rota_operavel, ja_duplicado, marcar_duplicado) -> dict:
+                         ja_duplicado, marcar_duplicado) -> dict:
     """
     duplicar(vuupt, servico_original) -> servico novo (dict com "code") ou None
     adicionar(route_id, [service_id]) -> {"ok", "erro"?, "falharam"}
-    rota_operavel(rota) -> bool (rota da Vuupt operada pelo nosso app)
     ja_duplicado(service_id) -> codigo novo se esse servico ja foi duplicado, senao None
     marcar_duplicado(service_id, novo_code)
     Levanta Recusado com a mensagem pra tela.
@@ -92,13 +93,11 @@ def cancelar_finalizacao(conn, parada_id: int, usuario: str, motivo: str, *, vuu
     p = conn.execute("SELECT * FROM nucleo_paradas WHERE id = ?", (parada_id,)).fetchone()
     if p is None:
         raise Recusado("Parada não encontrada.")
-    if p["situacao"] not in _FINALIZADAS:
-        raise Recusado("Essa parada ainda não foi finalizada.")
     rota = conn.execute("SELECT * FROM nucleo_rotas WHERE id = ?", (p["rota_id"],)).fetchone()
-    if rota["status"] != banco.ROTA_EM_ROTA:
+    if rota["status"] in (banco.ROTA_CONCLUIDA, banco.ROTA_CANCELADA):
         raise Recusado("Só dá pra cancelar a finalização com a rota em andamento.")
-    if not rota_operavel(rota) or not p["service_id"] or not rota["vuupt_route_id"]:
-        raise Recusado("Essa rota é feita no app da Vuupt: a baixa é corrigida por lá.")
+    if not p["service_id"] or not rota["vuupt_route_id"]:
+        raise Recusado("Essa parada não tem serviço numa rota da Vuupt: não dá pra cancelar a finalização por aqui.")
     feito = ja_duplicado(p["service_id"])
     if feito:
         raise Recusado(f"Esse pedido já foi duplicado antes ({normalizar_codigo(feito) or feito}): a nova baixa é nele.")
@@ -107,6 +106,12 @@ def cancelar_finalizacao(conn, parada_id: int, usuario: str, motivo: str, *, vuu
     original = (bruto.get("service", bruto) if isinstance(bruto, dict) else None) or None
     if not original:
         raise Recusado("A Vuupt não devolveu o serviço agora. Tente de novo em instantes.")
+    # Baixa pelo app da Vuupt (24/11): o nucleo so fica sabendo na sincronizacao (15-30 min),
+    # entao a baixa e a rota em andamento tambem valem pelo que a Vuupt diz ao vivo.
+    if p["situacao"] not in _FINALIZADAS and original.get("status") != "done":
+        raise Recusado("Essa parada ainda não foi finalizada.")
+    if rota["status"] != banco.ROTA_EM_ROTA and original.get("status") != "done":
+        raise Recusado("Só dá pra cancelar a finalização com a rota em andamento.")
     if int(original.get("route_id") or 0) != int(rota["vuupt_route_id"]):
         raise Recusado("Na Vuupt esse serviço está em outra rota: confira por lá antes de cancelar a finalização.")
 

@@ -464,7 +464,7 @@ class TestTela(_Base):
         cab = {"Origin": "http://localhost"}
         r = self.cliente.post("/api/torre/cancelar-finalizacao", json={"service_id": 999, "motivo": "engano total"}, headers=cab)
         self.assertEqual(r.status_code, 400)
-        self.assertIn("não tem baixa", r.get_json()["erro"])
+        self.assertIn("ainda não apareceu", r.get_json()["erro"])
         r = self.cliente.post("/api/torre/cancelar-finalizacao", json={"motivo": "engano total"}, headers=cab)
         self.assertEqual(r.status_code, 400)
         for nivel in ("leitura", "atendimento"):
@@ -477,16 +477,18 @@ class TestTela(_Base):
         rid = self.rota()
         pid = self.parada(rid, 1, f"{DIA} 08:30:00")
         from nucleo import ponte_vuupt
-        with mock.patch.object(ponte_vuupt, "rota_operavel", return_value=True):
-            self._logar("logistica")
-            d = self.cliente.get(f"/api/acompanhamento/rota/{rid}").get_json()
-            self.assertTrue(d["rota"]["pode_cancelar_finalizacao"])
-            self.assertEqual((d["paradas"][0]["parada_id"], d["paradas"][0]["finalizacao_cancelada"]), (pid, False))
-            self._logar("leitura")
-            self.assertFalse(self.cliente.get(f"/api/acompanhamento/rota/{rid}").get_json()["rota"]["pode_cancelar_finalizacao"])
-        with mock.patch.object(ponte_vuupt, "rota_operavel", return_value=False):
-            self._logar("logistica")
-            self.assertFalse(self.cliente.get(f"/api/acompanhamento/rota/{rid}").get_json()["rota"]["pode_cancelar_finalizacao"])
+        # vale pro nosso app e pro app da Vuupt (24/11): a ponte nao decide mais
+        for operavel in (True, False):
+            with mock.patch.object(ponte_vuupt, "rota_operavel", return_value=operavel):
+                self._logar("logistica")
+                d = self.cliente.get(f"/api/acompanhamento/rota/{rid}").get_json()
+                self.assertTrue(d["rota"]["pode_cancelar_finalizacao"])
+                self.assertEqual((d["paradas"][0]["parada_id"], d["paradas"][0]["finalizacao_cancelada"]), (pid, False))
+                self._logar("leitura")
+                self.assertFalse(self.cliente.get(f"/api/acompanhamento/rota/{rid}").get_json()["rota"]["pode_cancelar_finalizacao"])
+        concluida = self.rota(status="CONCLUIDA", nome="Rota 9")
+        self._logar("logistica")
+        self.assertFalse(self.cliente.get(f"/api/acompanhamento/rota/{concluida}").get_json()["rota"]["pode_cancelar_finalizacao"])
 
     def test_api_rota_inexistente_404(self):
         self._logar()

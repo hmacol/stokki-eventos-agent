@@ -1540,7 +1540,9 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            reabre servico, entao DUPLICA (duplicar_servico_por_insucesso, codigo
                            -R), inclui na mesma rota e cria a parada nova PENDENTE no nucleo pro
                            motorista refazer a baixa no nosso app. A parada antiga fica intacta
-                           (historico). So rota operada pela ponte, EM_ROTA, com motivo, 1 vez
+                           (historico). Rota do nosso app OU do app da Vuupt (24/11: a baixa vale
+                           pelo nucleo ou ao vivo na Vuupt, pro atraso da sincronizacao; la o
+                           servico novo aparece no app da Vuupt). Rota em andamento, com motivo, 1 vez
                            (fingerprint insucessos_duplicados + evento FINALIZACAO_CANCELADA).
                            Nao desfaz e-mail nem expedicao na Stokki. POST
                            /api/acompanhamento/parada/<id>/cancelar-finalizacao

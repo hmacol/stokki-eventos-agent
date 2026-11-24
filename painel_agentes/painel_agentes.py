@@ -4584,16 +4584,9 @@ def api_acompanhamento_rota(rota_id):
 
 
 def _acompanhamento_pode_cancelar(rota_id: int, status: str) -> bool:
-    """Botao so pra quem pode, com a rota em andamento e operada pelo nosso app."""
-    from nucleo import banco as nucleo_banco, ponte_vuupt
-    if g.nivel_acesso not in cancelar_finalizacao.NIVEIS or status != nucleo_banco.ROTA_EM_ROTA:
-        return False
-    conn = nucleo_banco.conectar()
-    try:
-        rota = conn.execute("SELECT * FROM nucleo_rotas WHERE id = ?", (rota_id,)).fetchone()
-    finally:
-        conn.close()
-    return bool(rota and ponte_vuupt.rota_operavel(rota))
+    """Botao so pra quem pode e com a rota em andamento (nosso app ou app da Vuupt, 24/11)."""
+    from nucleo import banco as nucleo_banco
+    return g.nivel_acesso in cancelar_finalizacao.NIVEIS and status == nucleo_banco.ROTA_EM_ROTA
 
 
 @app.route("/api/acompanhamento/parada/<int:parada_id>/cancelar-finalizacao", methods=["POST"])
@@ -4608,7 +4601,7 @@ def api_acompanhamento_cancelar_finalizacao(parada_id):
 def _cancelar_finalizacao_da_parada(parada_id, motivo, origem="ACOMPANHAMENTO"):
     """Corpo comum do cancelar-finalizacao (Acompanhamento, Torre e /pedidos): resposta Flask."""
     body = {"motivo": motivo}
-    from nucleo import banco as nucleo_banco, ponte_vuupt
+    from nucleo import banco as nucleo_banco
     import edicao_rota
     import fingerprint_duplicacao_insucesso as fp
     usuario = session.get("usuario") or g.nivel_acesso
@@ -4632,7 +4625,6 @@ def _cancelar_finalizacao_da_parada(parada_id, motivo, origem="ACOMPANHAMENTO"):
                 vuupt=torre_controle.VuuptClient(token),
                 duplicar=_duplicar,
                 adicionar=lambda route_id, ids: edicao_rota.adicionar_pedidos(token, route_id, ids, position="end"),
-                rota_operavel=ponte_vuupt.rota_operavel,
                 ja_duplicado=lambda sid: (fp.buscar_novo_code(sid) or "outro serviço") if fp.ja_duplicado(sid) else None,
                 marcar_duplicado=fp.marcar_duplicado)
             codigo = conn.execute("SELECT codigo FROM nucleo_paradas WHERE id = ?", (parada_id,)).fetchone()["codigo"]
@@ -4656,7 +4648,8 @@ def _cancelar_finalizacao_da_parada(parada_id, motivo, origem="ACOMPANHAMENTO"):
 
 def _cancelar_finalizacao_pelo_servico(origem):
     """Cancelar finalizacao pelo pedido (Torre e /pedidos, Hugo 24/11): JSON {service_id, motivo}.
-    Acha a baixa mais recente desse servico no nucleo e segue o mesmo caminho da /acompanhamento."""
+    Acha a parada mais recente desse servico no nucleo e segue o mesmo caminho da /acompanhamento
+    (a parada pode ainda nao estar finalizada no nucleo: o modulo confere a baixa ao vivo na Vuupt)."""
     body = request.get_json(silent=True) or {}
     try:
         service_id = int(body["service_id"])
@@ -4666,12 +4659,13 @@ def _cancelar_finalizacao_pelo_servico(origem):
     conn = nucleo_banco.conectar()
     try:
         parada = conn.execute(
-            "SELECT id FROM nucleo_paradas WHERE service_id = ? AND situacao IN (?, ?, ?) ORDER BY id DESC LIMIT 1",
-            (service_id, *cancelar_finalizacao._FINALIZADAS)).fetchone()
+            "SELECT id FROM nucleo_paradas WHERE service_id = ? AND situacao != ? ORDER BY id DESC LIMIT 1",
+            (service_id, nucleo_banco.PARADA_CANCELADA)).fetchone()
     finally:
         conn.close()
     if parada is None:
-        return jsonify({"erro": "Esse pedido não tem baixa registrada no acompanhamento (rota fora do nosso app?)."}), 400
+        return jsonify({"erro": "Esse pedido ainda não apareceu em nenhuma rota do acompanhamento "
+                                "(a rota sincroniza em até 30 min). Tente de novo em instantes."}), 400
     return _cancelar_finalizacao_da_parada(parada["id"], str(body.get("motivo") or ""), origem)
 
 
