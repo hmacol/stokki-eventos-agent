@@ -1545,6 +1545,10 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            Nao desfaz e-mail nem expedicao na Stokki. POST
                            /api/acompanhamento/parada/<id>/cancelar-finalizacao
                            (total/operador/logistica). Escreve na Vuupt: bloqueado na homologacao.
+                           Tambem na Torre (menu do chip entregue/insucesso) e na /pedidos (acao
+                           "Cancelar finalizacao", ENTREGUE/INSUCESSO): POST /api/torre/cancelar-finalizacao
+                           e /api/pedidos/acao/cancelar-finalizacao {service_id, motivo} -> acha a baixa
+                           mais recente do servico em nucleo_paradas e cai no mesmo modulo (24/11).
  motoristas.py             Tela de motoristas.
  pedidos_parados_triagem.py  Pedidos parados (24/10: registro e triagem no próprio
                            painel, sem Lovable). Aba Registrar grava em

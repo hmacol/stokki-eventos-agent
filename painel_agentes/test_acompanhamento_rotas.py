@@ -439,6 +439,40 @@ class TestTela(_Base):
         self.assertEqual(chamada.call_args.args[1:4], (pid, "teste", "baixou o pedido errado"))
         self.assertIn("PS-1-R1", tratativa.call_args.kwargs["texto"])
 
+    def test_cancelar_finalizacao_pelo_servico_na_torre_e_nos_pedidos(self):
+        """Torre e /pedidos mandam o service_id: acha a baixa mais recente e cai no mesmo modulo."""
+        self._logar("logistica")
+        rid = self.rota()
+        antiga = self.parada(rid, 1, f"{DIA} 08:30:00")
+        recente = self.parada(self.rota(nome="Rota 2"), 1, f"{DIA} 09:30:00")   # servico e unico por rota
+        self.conn.execute("UPDATE nucleo_paradas SET service_id = 555 WHERE id IN (?, ?)", (antiga, recente))
+        self.conn.commit()
+        for url, origem in (("/api/torre/cancelar-finalizacao", "TORRE"),
+                            ("/api/pedidos/acao/cancelar-finalizacao", "PEDIDOS")):
+            with self.subTest(url=url), mock.patch.object(
+                    painel_agentes.cancelar_finalizacao, "cancelar_finalizacao",
+                    return_value={"ok": True, "novo_codigo": "PS-2-R1", "nova_parada_id": 77}) as chamada, \
+                    mock.patch.object(painel_agentes.tratativas, "registrar_evento") as tratativa:
+                r = self.cliente.post(url, json={"service_id": 555, "motivo": "baixou a nota errada"},
+                                      headers={"Origin": "http://localhost"})
+                self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+                self.assertEqual(chamada.call_args.args[1:4], (recente, "teste", "baixou a nota errada"))
+                self.assertEqual(tratativa.call_args.args[1], origem)
+
+    def test_cancelar_finalizacao_pelo_servico_recusas(self):
+        self._logar("logistica")
+        cab = {"Origin": "http://localhost"}
+        r = self.cliente.post("/api/torre/cancelar-finalizacao", json={"service_id": 999, "motivo": "engano total"}, headers=cab)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("não tem baixa", r.get_json()["erro"])
+        r = self.cliente.post("/api/torre/cancelar-finalizacao", json={"motivo": "engano total"}, headers=cab)
+        self.assertEqual(r.status_code, 400)
+        for nivel in ("leitura", "atendimento"):
+            self._logar(nivel)
+            for url in ("/api/torre/cancelar-finalizacao", "/api/pedidos/acao/cancelar-finalizacao"):
+                r = self.cliente.post(url, json={"service_id": 1, "motivo": "engano total"}, headers=cab)
+                self.assertEqual(r.status_code, 403, f"{nivel} {url}")
+
     def test_detalhe_diz_se_pode_cancelar_finalizacao(self):
         rid = self.rota()
         pid = self.parada(rid, 1, f"{DIA} 08:30:00")

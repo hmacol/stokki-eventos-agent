@@ -765,6 +765,7 @@
   <hr>
   <button type="button" role="menuitem" data-acao="canhoto">Ver canhoto</button>
   <button type="button" role="menuitem" data-acao="baixa">Dar baixa na Vuupt</button>
+  <button type="button" role="menuitem" data-acao="cancelar_finalizacao">Cancelar finalização</button>
   <button type="button" role="menuitem" data-acao="expedir_stokki">Expedir na Stokki</button>
   <button type="button" role="menuitem" data-acao="trocar_canhoto">Trocar canhoto</button>
   <button type="button" role="menuitem" data-acao="documentos">Documentos por e-mail</button>
@@ -831,6 +832,13 @@
           <textarea id="baixa-texto-outro" maxlength="200" placeholder="De 5 a 200 caracteres"></textarea>
         </div>
       </div>
+      <div data-secao="cancelar_finalizacao" hidden>
+        <p class="subtitulo">Para baixa dada por engano pelo motorista: cria um serviço novo na Vuupt (código -R) na mesma rota e devolve a parada pendente, para ele refazer a baixa no app. A baixa antiga fica no histórico. Só vale com a rota em andamento e feita pelo app da Fresh Log.</p>
+        <div class="campo">
+          <label for="cancelar-final-motivo">Motivo</label>
+          <textarea id="cancelar-final-motivo" maxlength="300" placeholder="Ex.: motorista deu baixa na nota errada"></textarea>
+        </div>
+      </div>
       <div data-secao="expedir_stokki" hidden>
         <p class="subtitulo">Expede o pedido na Stokki agora e anexa o canhoto que existir. Se ele estiver preso numa Expedição Programada (OE), ela é finalizada; se a OE tiver outros pedidos, só este sai dela. Leva cerca de 1 minuto por pedido e espera a vez se outra rotina da Stokki estiver rodando.</p>
       </div>
@@ -871,6 +879,7 @@
   "agendar": url_for('api_pedidos_acao_agendar'),
   "checar_dia_fixo": url_for('api_pedidos_acao_checar_dia_fixo'),
   "baixa": url_for('api_pedidos_acao_marcar_entregue'),
+  "cancelar_finalizacao": url_for('api_pedidos_acao_cancelar_finalizacao'),
   "validar_lote_foto": url_for('api_pedidos_acao_validar_lote_foto'),
   "comprovantes": url_for('api_pedidos_acao_comprovantes'),
   "expedir_stokki": url_for('api_pedidos_acao_expedir_stokki'),
@@ -894,6 +903,7 @@
     endereco: { titulo: "Alterar endereço", confirmar: "Salvar endereço" },
     agendar: { titulo: "Agendar", confirmar: "Agendar" },
     baixa: { titulo: "Dar baixa na Vuupt", confirmar: "Dar baixa" },
+    cancelar_finalizacao: { titulo: "Cancelar finalização", confirmar: "Cancelar finalização" },
     expedir_stokki: { titulo: "Expedir na Stokki", confirmar: "Expedir" },
     canhoto: { titulo: "Canhotos do pedido", confirmar: "" },
     documentos: { titulo: "Documentos por e-mail", confirmar: "Enviar por e-mail" },
@@ -937,6 +947,10 @@
     const finalizado = FINAIS.indexOf(l.status) >= 0;
     if (acao === "reenvio") {
       return finalizado ? "" : `Reenvio só para pedido entregue, com insucesso ou cancelado (este está: ${rotuloStatus(l.status)}).`;
+    }
+    if (acao === "cancelar_finalizacao") {
+      return (l.status === "ENTREGUE" || l.status === "INSUCESSO") ? ""
+        : `Cancelar finalização só para pedido entregue ou com insucesso (este está: ${rotuloStatus(l.status)}).`;
     }
     if (acao === "baixa") {
       return l.status === "EM_ROTA" ? "" : `Dar baixa na Vuupt só para pedido em rota (este está: ${rotuloStatus(l.status)}).`;
@@ -1113,7 +1127,7 @@
   }
 
   function resetarCampos() {
-    ["reenvio-motivo", "stokki-motivo", "endereco-novo", "baixa-texto-outro"].forEach((id) => { $(id).value = ""; });
+    ["reenvio-motivo", "stokki-motivo", "endereco-novo", "baixa-texto-outro", "cancelar-final-motivo"].forEach((id) => { $(id).value = ""; });
     $("stokki-contador").textContent = "0 de no mínimo 15";
     $("agendar-data").value = amanha();
     $("agendar-inicio").value = "08:00";
@@ -1408,6 +1422,11 @@
       if (motivo.length < 5 || motivo.length > 200) return { erro: "Escreva o motivo do reenvio (5 a 200 caracteres)." };
       return { motivo };
     }
+    if (acao === "cancelar_finalizacao") {
+      const motivo = $("cancelar-final-motivo").value.trim();
+      if (motivo.length < 5) return { erro: "Escreva o motivo do cancelamento da finalização." };
+      return { motivo };
+    }
     if (acao === "cancelar_stokki") {
       const motivo = $("stokki-motivo").value.trim();
       if (motivo.length < 15) return { erro: "Informe o motivo do cancelamento (mínimo de 15 caracteres)." };
@@ -1457,6 +1476,10 @@
     if (acao === "cancelar_vuupt") {
       const d = await enviar(URLS.cancelar_vuupt, { service_id: sid });
       return { selo: d.ja_estava ? "Já estava cancelado" : "Cancelado agora", aviso: d.aviso, jaEstava: !!d.ja_estava };
+    }
+    if (acao === "cancelar_finalizacao") {
+      const d = await enviar(URLS.cancelar_finalizacao, { service_id: sid, motivo: p.motivo });
+      return { selo: `Finalização cancelada → ${String(d.novo_codigo || "").replace(/^#/, "")}` };
     }
     if (acao === "endereco") {
       await enviar(URLS.endereco, { service_id: sid, endereco: p.endereco });

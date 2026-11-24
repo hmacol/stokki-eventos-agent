@@ -4602,6 +4602,12 @@ def _acompanhamento_pode_cancelar(rota_id: int, status: str) -> bool:
 def api_acompanhamento_cancelar_finalizacao(parada_id):
     """Duplica o servico na Vuupt, poe na mesma rota e cria a parada nova pro motorista refazer a baixa."""
     body = request.get_json(silent=True) or {}
+    return _cancelar_finalizacao_da_parada(parada_id, str(body.get("motivo") or ""))
+
+
+def _cancelar_finalizacao_da_parada(parada_id, motivo, origem="ACOMPANHAMENTO"):
+    """Corpo comum do cancelar-finalizacao (Acompanhamento, Torre e /pedidos): resposta Flask."""
+    body = {"motivo": motivo}
     from nucleo import banco as nucleo_banco, ponte_vuupt
     import edicao_rota
     import fingerprint_duplicacao_insucesso as fp
@@ -4641,11 +4647,48 @@ def api_acompanhamento_cancelar_finalizacao(parada_id):
         return jsonify({"erro": "Falha inesperada; o erro ficou no log do painel."}), 500
     try:   # historico do pedido (best-effort: a parada nova ja existe)
         tratativas.registrar_evento(
-            codigo, "ACOMPANHAMENTO", "REENVIO_MANUAL",
+            codigo, origem, "REENVIO_MANUAL",
             texto=f"Finalização cancelada por {usuario}: {str(body.get('motivo') or '').strip()} → {r['novo_codigo']}")
     except Exception:
         logging.getLogger(__name__).exception("tratativa do cancelamento de finalizacao nao gravou")
     return jsonify(r)
+
+
+def _cancelar_finalizacao_pelo_servico(origem):
+    """Cancelar finalizacao pelo pedido (Torre e /pedidos, Hugo 24/11): JSON {service_id, motivo}.
+    Acha a baixa mais recente desse servico no nucleo e segue o mesmo caminho da /acompanhamento."""
+    body = request.get_json(silent=True) or {}
+    try:
+        service_id = int(body["service_id"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"erro": "service_id ausente ou inválido."}), 400
+    from nucleo import banco as nucleo_banco
+    conn = nucleo_banco.conectar()
+    try:
+        parada = conn.execute(
+            "SELECT id FROM nucleo_paradas WHERE service_id = ? AND situacao IN (?, ?, ?) ORDER BY id DESC LIMIT 1",
+            (service_id, *cancelar_finalizacao._FINALIZADAS)).fetchone()
+    finally:
+        conn.close()
+    if parada is None:
+        return jsonify({"erro": "Esse pedido não tem baixa registrada no acompanhamento (rota fora do nosso app?)."}), 400
+    return _cancelar_finalizacao_da_parada(parada["id"], str(body.get("motivo") or ""), origem)
+
+
+@app.route("/api/torre/cancelar-finalizacao", methods=["POST"])
+@requer_auth(niveis=cancelar_finalizacao.NIVEIS)
+@exige_mesma_origem
+def api_torre_cancelar_finalizacao():
+    """"Cancelar finalização" do chip da Torre (baixa por engano do motorista)."""
+    return _cancelar_finalizacao_pelo_servico("TORRE")
+
+
+@app.route("/api/pedidos/acao/cancelar-finalizacao", methods=["POST"])
+@requer_auth(niveis=cancelar_finalizacao.NIVEIS)
+@exige_mesma_origem
+def api_pedidos_acao_cancelar_finalizacao():
+    """"Cancelar finalização" da tela /pedidos (mesmo corpo e mesma regra da Torre)."""
+    return _cancelar_finalizacao_pelo_servico("PEDIDOS")
 
 
 @app.route("/financeiro/pedagios")
