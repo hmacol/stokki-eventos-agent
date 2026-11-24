@@ -334,6 +334,10 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  E-mail de resumo das rotinas .............. notificar_execucao_agente.py
  Preferências de e-mail do embarcador ...... preferencias_notificacao.py
  Trava de login da Stokki .................. stokki/sessao_uso.py
+ Listagem de pedidos/recebimentos da Stokki  stokki/pedidos.py (listar_pedidos) e stokki/recebimentos.py (listar_recebimentos);
+                                             24/11: a Stokki mudou o endereco (.../listing/table) e a linha virou JSON --
+                                             stokki/listagem.py devolve no formato antigo e explica o 422 (maximo 100 por
+                                             pagina; 'Sent'/'Canceled'/'all' nao listam mais). Teste: stokki/test_listagem.py
  Horários das rotinas ...................... infra/*.timer  (+ infra/sequencia_*.sh)
  Homologação (bancada do legado) ........... homologacao/ (guarda só com FRESH_AMBIENTE=homolog,
                                              pth_guarda.py, gerar_config.py, vps/*.sh) + infra/homolog/

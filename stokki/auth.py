@@ -15,7 +15,7 @@ Uso:
     from stokki.auth import StokkiSession
 
     sess = StokkiSession(config)
-    resp = sess.get("https://freshlog.stokki.com.br/pt-br/administrator/inventory/outbound/table",
+    resp = sess.get("https://freshlog.stokki.com.br/pt-br/administrator/inventory/outbound/listing/table",
                     params={"draw": 1, "start": 0, "length": 50})
 """
 import json
