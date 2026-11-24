@@ -399,7 +399,7 @@
     card.classList.remove('oculto');
     card.innerHTML = `<h3 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">Precisa da sua atenção (${pend.length + erros.length})${PODE_ENVIAR && erros.length >= 2 ? `<button type="button" class="botao-linha" style="margin-left:auto;" data-acao="reenviar-todos">Reenviar todos com erro (${erros.length})</button>` : ''}</h3>` +
       pend.map(x => `<div class="item"><span class="chip">Agendamento pendente</span><span><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)} só recebe com agendamento.</span>${PODE_ENVIAR ? `<button type="button" class="botao" style="padding:5px 12px;font-size:12px;margin-left:auto;" data-acao="reagendar" data-id="${x.id}">Definir data</button>` : ''}</div>`).join('') +
-      erros.map(x => `<div class="item"><span class="chip falha">Erro</span><span><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}: ${esc((x.erro || '').slice(0, 140))}</span>${PODE_ENVIAR ? `<button type="button" class="botao-linha" style="margin-left:auto;" data-acao="reenviar" data-id="${x.id}">Reenviar</button>` : ''}</div>`).join('');
+      erros.map(x => `<div class="item"><span class="chip falha">Erro</span><span><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}: ${esc((x.erro || '').slice(0, 140))}</span><span style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;">${PODE_ENVIAR && x.pode_cancelar ? `<button type="button" class="botao-linha perigo" data-acao="cancelar" data-id="${x.id}">Cancelar</button>` : ''}<button type="button" class="botao-linha" data-acao="atendimento">Falar com atendimento</button>${PODE_ENVIAR ? `<button type="button" class="botao-linha" data-acao="reenviar" data-id="${x.id}">Reenviar</button>` : ''}</span></div>`).join('');
   }
 
   // ── Upload → prévia ────────────────────────────────────────────────────────
@@ -1203,6 +1203,10 @@
   $('env-atualizar').addEventListener('click', () => carregar());
   secao.addEventListener('click', e => {
     const b = e.target.closest('[data-acao]'); if (!b) return;
+    if (b.dataset.acao === 'atendimento') {
+      if (window.atdAbrir) window.atdAbrir(); else location.href = `${BASE}/`;
+      return;
+    }
     // bloqueio de área (23/09): os dois botões abrem o chat no chamado do bloqueio;
     // "cotação" já manda a mensagem pronta
     if (b.dataset.acao === 'chat' || b.dataset.acao === 'cotacao') {
