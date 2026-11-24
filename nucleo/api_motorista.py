@@ -58,7 +58,7 @@ EXTENSOES_FOTO = {"jpg", "jpeg", "png", "webp", "heic"}
 TAMANHO_MAX_FOTO = 15 * 1024 * 1024
 
 # Aviso de APK novo no app (/api/app-versao). None = sem aviso; liga-se trocando por commit.
-APK_VERSAO_ATUAL: str | None = None
+APK_VERSAO_ATUAL: str | None = "1.2.0"
 APK_LINK = "https://app.freshhub.com.br/motorista/app.apk"
 
 
