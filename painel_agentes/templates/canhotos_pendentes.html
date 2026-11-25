@@ -34,16 +34,17 @@
   <div class="campo"><label for="desde">Entregue desde</label><input type="date" id="desde" name="desde" value="{{ filtros.desde }}"></div>
   <div class="campo"><label for="embarcador">Embarcador</label><input type="text" id="embarcador" name="embarcador" value="{{ filtros.embarcador }}"></div>
   <div class="campo"><label for="motorista">Motorista</label><input type="text" id="motorista" name="motorista" value="{{ filtros.motorista }}"></div>
-  <div class="campo"><label for="busca">Pedido</label><input type="text" id="busca" name="busca" value="{{ filtros.busca }}" placeholder="PS-..."></div>
+  <div class="campo"><label for="busca">Pedido</label><input type="text" id="busca" name="busca" value="{{ filtros.busca }}" placeholder="PS-... ou NF"></div>
   <div class="campo"><button type="submit" class="botao">Filtrar</button></div>
 </form>
 
 <div class="tabela-wrap"><table>
-  <thead><tr><th>Pedido</th><th>Entregue em</th><th>Motorista</th><th>Embarcador / destinatário</th><th>Canhoto</th><th>Status</th></tr></thead>
+  <thead><tr><th>Pedido</th><th>NF</th><th>Entregue em</th><th>Motorista</th><th>Embarcador / destinatário</th><th>Canhoto</th><th>Status</th></tr></thead>
   <tbody>
   {% for l in dados.linhas %}
     <tr data-codigo="{{ l.codigo }}">
       <td class="mono">{{ l.codigo }}</td>
+      <td class="mono">{{ l.nf or '—' }}</td>
       <td class="mono" {% if l.data_aproximada %}title="Sem rota no nosso registro: data aproximada (última atualização do pedido)"{% endif %}>{% if l.data_aproximada %}≈ {% endif %}{{ l.data_rota[8:10] }}/{{ l.data_rota[5:7] }}</td>
       <td>{{ l.motorista or '—' }}</td>
       <td>{{ l.embarcador or '—' }}<div class="suave">{{ l.destinatario or '' }}</div></td>
@@ -51,7 +52,7 @@
       <td class="status suave">pendente</td>
     </tr>
   {% else %}
-    <tr><td colspan="6" class="suave">Nenhum pedido pendente nesse filtro.</td></tr>
+    <tr><td colspan="7" class="suave">Nenhum pedido pendente nesse filtro.</td></tr>
   {% endfor %}
   </tbody>
 </table></div>

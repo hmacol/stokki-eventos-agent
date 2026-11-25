@@ -699,6 +699,23 @@
   </div>
 </div>
 
+{# "Cancelar finalização" do chip (Hugo, 24/11): baixa por engano do motorista. #}
+<div class="modal-overlay-excluir" id="modal-cancelar-final">
+  <div class="modal-excluir" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-cancelar-final">
+    <h2 id="titulo-modal-cancelar-final">Cancelar finalização</h2>
+    <p class="subtitulo" id="cancelar-final-codigo">—</p>
+    <p class="subtitulo">Cria um serviço novo na Vuupt (código -R) na mesma rota e devolve a parada pendente: o motorista refaz a baixa no app que estiver usando (o nosso ou o da Vuupt). A baixa antiga fica no histórico. Só vale com a rota em andamento.</p>
+    <div class="campo">
+      <label for="cancelar-final-motivo">Motivo</label>
+      <textarea id="cancelar-final-motivo" maxlength="300" placeholder="Ex.: motorista deu baixa na nota errada"></textarea>
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" onclick="fecharModalCancelarFinalizacao()">Voltar</button>
+      <button type="button" class="confirmar" onclick="confirmarCancelarFinalizacao(this)">Cancelar finalização</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay-excluir" id="modal-tratar">
   <div class="modal-excluir modal-tratar" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-tratar">
     <h2 id="titulo-modal-tratar">Marcar como tratada</h2>
@@ -734,6 +751,7 @@ const PODE_TRATAR = {{ pode_tratar | tojson }};
 const PODE_EXCLUIR_PEDIDO = {{ pode_excluir_pedido | tojson }};
 const URL_TORRE_EXCLUIR_PEDIDO = "{{ url_for('api_torre_excluir_pedido') }}";
 const URL_TORRE_MARCAR_ENTREGUE = "{{ url_for('api_torre_marcar_entregue') }}";
+const URL_TORRE_CANCELAR_FINALIZACAO = "{{ url_for('api_torre_cancelar_finalizacao') }}";
 const URL_TORRE_ENCERRAR_ROTA = "{{ url_for('api_torre_encerrar_rota') }}";
 
 // Rótulos/cores dos status de pedido -- MESMA ordem em que os
@@ -1113,15 +1131,17 @@ function chipsPedidosHtml(pedidos, rotaId) {
   if (!pedidos || !pedidos.length) return `<div class="chips-pedidos"></div>`;
   const partes = pedidos.map((p, i) => {
     const rotulo = ROTULO_SITUACAO_PEDIDO[p.situacao] || p.situacao;
-    const titulo = [p.codigo, p.titulo].filter(Boolean).join(" — ");
+    const titulo = [p.codigo ? `${p.codigo} · NF ${p.nf || "—"}` : "", p.titulo].filter(Boolean).join(" — ");
     // Só pendente/em rota pode ser excluído da rota por aqui (Hugo,
     // 25/08) -- já entregue/insucesso já aconteceu, não tem o que tirar.
-    const acionavel = PODE_EXCLUIR_PEDIDO && (p.situacao === "pendente" || p.situacao === "em_rota");
+    // Já entregue/insucesso só abre o menu pra "Cancelar finalização" (baixa por engano, 24/11).
+    const finalizadoChip = p.situacao === "entregue" || p.situacao === "insucesso";
+    const acionavel = PODE_EXCLUIR_PEDIDO && (p.situacao === "pendente" || p.situacao === "em_rota" || finalizadoChip);
     const tituloAttr = p.situacao === "excluido"
       ? `Excluído da rota — ${esc(p.motivo || "")}${p.observacao ? ": " + esc(p.observacao) : ""}`
       : `Parada ${p.ordem ?? (i + 1)} — ${esc(titulo)} (${rotulo})`;
     const chip = `<span class="chip-pedido ${p.situacao}${acionavel ? " acionavel" : ""}"` +
-      ` data-rota-id="${rotaId}" data-service-id="${p.service_id ?? ""}" data-codigo="${esc(p.codigo || "")}"` +
+      ` data-rota-id="${rotaId}" data-service-id="${p.service_id ?? ""}" data-codigo="${esc(p.codigo || "")}" data-nf="${esc(p.nf || "—")}"` +
       ` title="${tituloAttr}">${p.ordem ?? (i + 1)}</span>`;
     if (i === pedidos.length - 1) return chip;
     const finalizado = p.situacao === "entregue" || p.situacao === "insucesso";
@@ -1226,13 +1246,17 @@ function abrirMenuContextoChip(chip, x, y) {
   fecharMenuContextoChip();
   const menu = document.createElement("div");
   menu.className = "menu-contexto";
-  menu.innerHTML = '<button type="button" data-acao="entregue">Marcar entregue / sem sucesso</button>' +
-                   '<button type="button" data-acao="excluir">Excluir da Rota</button>';
+  const finalizado = chip.classList.contains("entregue") || chip.classList.contains("insucesso");
+  menu.innerHTML = finalizado
+    ? '<button type="button" data-acao="cancelar-finalizacao">Cancelar finalização</button>'
+    : '<button type="button" data-acao="entregue">Marcar entregue / sem sucesso</button>' +
+      '<button type="button" data-acao="excluir">Excluir da Rota</button>';
   menu.addEventListener("click", (e) => {
     const botao = e.target.closest("button");
     if (!botao) return;
     fecharMenuContextoChip();
     if (botao.dataset.acao === "entregue") abrirModalEntregue(chip);
+    else if (botao.dataset.acao === "cancelar-finalizacao") abrirModalCancelarFinalizacao(chip);
     else abrirModalExcluir(chip);
   });
   document.body.appendChild(menu);
@@ -1259,7 +1283,7 @@ document.addEventListener("scroll", fecharMenuContextoChip, true);
 
 function abrirModalExcluir(chip) {
   chipPendenteExclusao = chip;
-  document.getElementById("excluir-codigo").textContent = chip.dataset.codigo || `#${chip.dataset.serviceId}`;
+  document.getElementById("excluir-codigo").textContent = chip.dataset.codigo ? `${chip.dataset.codigo} · NF ${chip.dataset.nf || "—"}` : `#${chip.dataset.serviceId}`;
   document.getElementById("excluir-motivo").value = "";
   document.getElementById("excluir-observacao").value = "";
   document.getElementById("modal-excluir").classList.add("aberto");
@@ -1306,6 +1330,53 @@ async function confirmarExclusaoChip(botao) {
   }
 }
 
+// ── "Cancelar finalização" do chip (Hugo, 24/11): baixa por engano do motorista.
+// Duplica o serviço na Vuupt e devolve a parada pendente pro motorista refazer no app
+// (regras e recusas no servidor: cancelar_finalizacao.py). ──────────────────────────
+let chipPendenteCancelarFinal = null;
+
+function abrirModalCancelarFinalizacao(chip) {
+  chipPendenteCancelarFinal = chip;
+  document.getElementById("cancelar-final-codigo").textContent = chip.dataset.codigo ? `${chip.dataset.codigo} · NF ${chip.dataset.nf || "—"}` : `#${chip.dataset.serviceId}`;
+  document.getElementById("cancelar-final-motivo").value = "";
+  document.getElementById("modal-cancelar-final").classList.add("aberto");
+  document.getElementById("cancelar-final-motivo").focus();
+}
+
+function fecharModalCancelarFinalizacao() {
+  document.getElementById("modal-cancelar-final").classList.remove("aberto");
+  chipPendenteCancelarFinal = null;
+}
+
+document.getElementById("modal-cancelar-final").addEventListener("click", (e) => {
+  if (e.target.id === "modal-cancelar-final") fecharModalCancelarFinalizacao();
+});
+
+async function confirmarCancelarFinalizacao(botao) {
+  if (!chipPendenteCancelarFinal) return;
+  const motivo = document.getElementById("cancelar-final-motivo").value.trim();
+  if (motivo.length < 5) { alert("Escreva o motivo do cancelamento da finalização."); return; }
+  const original = botao.textContent;
+  botao.disabled = true;
+  botao.textContent = "Cancelando...";
+  try {
+    const resp = await fetch(URL_TORRE_CANCELAR_FINALIZACAO, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ service_id: Number(chipPendenteCancelarFinal.dataset.serviceId), motivo }),
+    });
+    const dados = await resp.json();
+    if (!resp.ok) throw new Error(dados.erro || "Falha ao cancelar a finalização.");
+    fecharModalCancelarFinalizacao();
+    alert(`Finalização cancelada. O motorista refaz a baixa no app (pedido novo ${dados.novo_codigo}).`);
+    carregarDados();
+  } catch (e) {
+    alert(`Falha ao cancelar a finalização: ${e.message}`);
+  } finally {
+    botao.disabled = false;
+    botao.textContent = original;
+  }
+}
+
 // ── "Marcar como entregue" do chip (Hugo, 08/10) -- mesmo mecanismo do
 // Excluir (menu de contexto -> modal -> POST), fechando o serviço na
 // VUUPT por API. ─────────────────────────────────────────────────────
@@ -1313,7 +1384,7 @@ let chipPendenteEntregue = null;
 
 function abrirModalEntregue(chip) {
   chipPendenteEntregue = chip;
-  document.getElementById("entregue-codigo").textContent = chip.dataset.codigo || `#${chip.dataset.serviceId}`;
+  document.getElementById("entregue-codigo").textContent = chip.dataset.codigo ? `${chip.dataset.codigo} · NF ${chip.dataset.nf || "—"}` : `#${chip.dataset.serviceId}`;
   document.getElementById("entregue-foto-canhoto").value = "";
   document.getElementById("entregue-foto-nota").value = "";
   document.getElementById("entregue-justificativa").value = "";
@@ -1958,12 +2029,12 @@ function renderMapa(d) {
   d.rotas.forEach(r => (r.paradas || []).forEach(p => {
     const cor = COR_SITUACAO[p.situacao] || "#8A8F98";
     const marcador = new google.maps.Marker({
-      position: { lat: p.lat, lng: p.lng }, map: mapa, title: p.codigo,
+      position: { lat: p.lat, lng: p.lng }, map: mapa, title: `${p.codigo} · NF ${p.nf || "—"}`,
       icon: { path: google.maps.SymbolPath.CIRCLE, scale: 6, fillColor: cor, fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
     });
     marcador.addListener("click", () => {
       infoWindow.setContent(`<div style="font:12px 'Segoe UI',sans-serif;max-width:260px;">
-        <strong>${esc(p.codigo)}</strong> · ${esc(ROTULO_SITUACAO[p.situacao] || p.situacao)}<br>
+        <strong>${esc(p.codigo)}</strong> · NF ${esc(p.nf || "—")} · ${esc(ROTULO_SITUACAO[p.situacao] || p.situacao)}<br>
         ${esc(p.titulo)}<br>
         <span style="color:#6B7280;">${esc(r.nome)}${r.motorista ? " · " + esc(r.motorista) : ""}</span>
       </div>`);

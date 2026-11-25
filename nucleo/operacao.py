@@ -27,7 +27,7 @@ import math
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
-from nucleo import banco, ofertas_rota_enviada, pedidos as nucleo_pedidos, ponte_vuupt, tempos, validacao_fotos
+from nucleo import banco, duplicidade_recibo, nf_pedido, ofertas_rota_enviada, pedidos as nucleo_pedidos, ponte_vuupt, tempos, validacao_fotos
 from nucleo.rotas import registrar_evento
 
 # Passos da parada no app (Hugo, 26/08): DESLOCAMENTO ("Iniciar deslocamento",
@@ -140,10 +140,11 @@ def listar_rotas_motorista(conn: sqlite3.Connection, agent_id: int | None, de: d
 
 def _estado_carregamento(conn: sqlite3.Connection, rota: sqlite3.Row) -> dict:
     """Checklist de carregamento: {exigido, feito}. Import lazy (carregamento importa operacao).
-    A config vem do mesmo config global da ponte (`ponte_vuupt.definir_config`)."""
+    A config vem do mesmo config global da ponte (`ponte_vuupt.definir_config`).
+    `feito` so com checklist do motorista ATUAL da rota: trocou o motorista, o novo faz o dele."""
     from nucleo import carregamento
     return {"exigido": carregamento.exigido(rota, carregamento.config_carregamento()),
-            "feito": carregamento.carregamento_da_rota(conn, rota["id"]) is not None}
+            "feito": carregamento.carregamento_do_motorista_atual(conn, rota) is not None}
 
 
 def montar_rota(conn: sqlite3.Connection, rota: sqlite3.Row) -> dict:
@@ -158,7 +159,8 @@ def montar_rota(conn: sqlite3.Connection, rota: sqlite3.Row) -> dict:
     d["liberada"] = True
     d["editavel"] = rota_editavel(rota)
     paradas = conn.execute("SELECT * FROM nucleo_paradas WHERE rota_id = ? ORDER BY ordem", (rota["id"],)).fetchall()
-    d["paradas"] = [montar_parada(conn, p) for p in paradas]
+    mapa_nf = nf_pedido.nf_por_codigo([p["codigo"] for p in paradas if p["codigo"]], conn)  # 1 busca por rota
+    d["paradas"] = [montar_parada(conn, p, mapa_nf) for p in paradas]
     d["pedagios"] = listar_pedagios(conn, rota["id"])
     # Confirmação (badge do Planejamento) quando a rota é da VUUPT
     d["carregamento"] = _estado_carregamento(conn, rota)
@@ -170,7 +172,7 @@ def montar_rota(conn: sqlite3.Connection, rota: sqlite3.Row) -> dict:
     return d
 
 
-def montar_parada(conn: sqlite3.Connection, p: sqlite3.Row) -> dict:
+def montar_parada(conn: sqlite3.Connection, p: sqlite3.Row, mapa_nf: dict | None = None) -> dict:
     d = dict(p)
     d.pop("dados_json", None)
     # Pedido: telefone/horário de atendimento vêm do espelho de pedidos quando existir
@@ -192,6 +194,10 @@ def montar_parada(conn: sqlite3.Connection, p: sqlite3.Row) -> dict:
     # vazia = pedido sem NF conhecida (Fruta Fina/placeholder da Stokki),
     # aí é um canhoto só, sem cobrança de número.
     d["nfs"] = validacao_fotos.nfs_do_pedido(conn, p["codigo"])
+    # NF(s) ao lado do PS ("111, 222"; "" = sem NF, o app mostra "—")
+    if mapa_nf is None:
+        mapa_nf = nf_pedido.nf_por_codigo([p["codigo"]], conn) if p["codigo"] else {}
+    d["nf"] = nf_pedido.nf_do_codigo(p["codigo"], mapa_nf) if p["codigo"] else ""
     return d
 
 
@@ -218,7 +224,8 @@ def registrar_pedagio(conn: sqlite3.Connection, rota_id: int, agent_id: int, uui
                       caminho_local: str | None, sha256: str | None, tamanho_bytes: int | None,
                       capturado_em: str | None, caminho_gcs: str | None = None,
                       validacao: dict | None = None, tipo: str | None = None, descricao: str | None = None,
-                      parada_id: int | str | None = None) -> dict:
+                      parada_id: int | str | None = None, origem: str | None = None,
+                      hash_visual: str | None = None) -> dict:
     """Um comprovante de pedágio da rota (o motorista pode mandar vários).
     Aceito em rota APP EM_ROTA ou CONCLUIDA (ele fecha a rota e depois
     fotografa os recibos, ou manda no caminho). Entra como PENDENTE; só
@@ -251,6 +258,7 @@ def registrar_pedagio(conn: sqlite3.Connection, rota_id: int, agent_id: int, uui
         raise OperacaoInvalida(f"Informe o pedido de referência ({banco.TIPOS_DESPESA[tipo]}).")
     if not uuid:
         raise OperacaoInvalida("Pedágio sem uuid.")
+    origem = "GALERIA" if str(origem or "").strip().upper() == "GALERIA" else "CAMERA"
     try:
         valor_f = round(float(str(valor).replace(",", ".")), 2)
     except (TypeError, ValueError):
@@ -262,13 +270,13 @@ def registrar_pedagio(conn: sqlite3.Connection, rota_id: int, agent_id: int, uui
         return {"id": ja["id"], "ja_registrado": True}
     cur = conn.execute("""
         INSERT INTO nucleo_pedagios (uuid, rota_id, agent_id, valor_informado, tipo, descricao, parada_id, caminho_local,
-                                     caminho_gcs, sha256, tamanho_bytes, capturado_em, status, dados_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     caminho_gcs, sha256, tamanho_bytes, capturado_em, status, dados_json, origem, hash_visual)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (uuid, rota_id, agent_id, valor_f, tipo, descricao, parada_id, caminho_local, caminho_gcs, sha256, tamanho_bytes,
           capturado_em, banco.PEDAGIO_PENDENTE,
-          _json({"validacao": validacao}) if validacao else None))
+          _json({"validacao": validacao}) if validacao else None, origem, hash_visual))
     registrar_evento(conn, "PEDAGIO", banco.ORIGEM_APP, capturado_em, rota_id=rota_id, agent_id=agent_id,
-                     dados={"pedagio_id": cur.lastrowid, "valor": valor_f, "tipo": tipo, "sha256": sha256})
+                     dados={"pedagio_id": cur.lastrowid, "valor": valor_f, "tipo": tipo, "sha256": sha256, "origem": origem})
     conn.commit()
     return {"id": cur.lastrowid, "ja_registrado": False}
 
@@ -367,6 +375,7 @@ def listar_pedagios_painel(conn: sqlite3.Connection, status: str | None = banco.
         # (nucleo/validacao_fotos.py) -- o painel mostra junto do valor.
         d["validacao"] = _ler_json(d.get("dados_json")).get("validacao") or {}
         saida.append(d)
+    duplicidade_recibo.marcar_duplicados(conn, saida)
     return saida
 
 

@@ -97,6 +97,8 @@ from portal_cliente import aula as aula_videos
 # dos clientes; a Torre entra como equipe pelo passe assinado (/torre/cotacao, 16/11).
 from portal_cliente import entrada_equipe
 import rascunhos_rota
+import nf_tela
+from nucleo import nf_pedido
 import torre_controle
 from nucleo import justificativas_sem_canhoto
 import tratativas
@@ -867,6 +869,10 @@ def api_solicitacoes_portal():
         "criado_em": _criado_em_curto(s.get("criado_em")),
         "detalhe": s.get("detalhes") or "",
     } for s in linhas]
+    nf_pedido.anotar_nf(itens, "codigo_pedido", "nf")   # NF que o envio nao guardou vem do pedido
+    for it in itens:
+        it["numero_nf"] = it["numero_nf"] or it.pop("nf")
+        it.pop("nf", None)
     return jsonify({"solicitacoes": itens})
 
 
@@ -1058,7 +1064,9 @@ def api_expedicao_consulta():
     """Veredito de UM pedido cruzando Vuupt e Stokki ao vivo -- ver
     consulta_expedicao.py. 400 código inválido, 503 Vuupt fora."""
     try:
-        return jsonify(consulta_expedicao.consultar(request.args.get("codigo", "")))
+        veredito = consulta_expedicao.consultar(request.args.get("codigo", ""))
+        nf_pedido.anotar_nf([veredito], "codigo", "nf")
+        return jsonify(veredito)
     except ValueError as e:
         return jsonify({"erro": str(e)}), 400
     except consulta_expedicao.ConsultaIndisponivel as e:
@@ -1112,6 +1120,12 @@ def _coletas_despachar(conn, coleta_id: int, codigos: list) -> dict:
     return {"ok": True, "execucao_id": r["execucao_id"], "na_fila": r["na_fila"]}
 
 
+def _coletas_com_nf(*listas_de_pedidos) -> None:
+    """Completa `nf` dos pedidos das folhas/grupos de coleta (a folha guarda a NF da hora
+    em que foi gerada; sem ela, vale a de nucleo/nf_pedido). UMA busca em lote."""
+    nf_tela.completar_nf([p for lista in listas_de_pedidos for p in lista])
+
+
 @app.route("/expedicao/coletas")
 @requer_auth(niveis=NIVEIS_COLETA_VER)
 def expedicao_coletas():
@@ -1127,6 +1141,8 @@ def expedicao_coletas():
         assinatura = coletas_regras.assinatura(conn)
     finally:
         conn.close()
+    _coletas_com_nf(*[c["pedidos"] for c in folhas], *[gr["pedidos"] for gr in lista["grupos"]],
+                    *[h.get("pedidos") or [] for h in historico])
     atrasada = not exemplo
     if ultima and not exemplo:
         atrasada = (datetime.now() - datetime.strptime(ultima, coletas_banco.FMT)).total_seconds() > 60 * _COLETA_LEITURA_ATRASADA_MIN
@@ -1148,6 +1164,7 @@ def expedicao_coleta_tela(coleta_id: int):
         abort(404)
     finally:
         conn.close()
+    _coletas_com_nf(c["pedidos"])
     return render_template("coletas_expedicao.html", foco=c, folhas=[c], grupos=[], sem_cadastro=[], historico=[],
                            ultima_leitura=None, leitura_atrasada=False, exemplo=_homolog_ativo(),
                            pode_agir=g.nivel_acesso in NIVEIS_COLETA_AGIR, max_pedidos=coletas_regras.MAX_PEDIDOS)
@@ -1534,6 +1551,7 @@ def historico_tratativas():
     }
     try:
         resultado = tratativas.buscar(filtros, pagina=pagina)
+        nf_pedido.anotar_nf(resultado["linhas"], "pedido_code", "nf")   # quando o historico nao guardou a NF
         erro = None
     except Exception as e:
         logging.getLogger(__name__).exception("Falha ao buscar histórico de tratativas")
@@ -1620,6 +1638,13 @@ def vigia_pedidos():
     }
     try:
         dados = vigia_consulta.listar(filtros["estado"], filtros["vencidos"], filtros["busca"])
+        # busca por NF (so digitos): soma os pedidos dessa NF ao que a busca por texto achou
+        por_nf = set(nf_tela.codigos_por_nf(filtros["busca"]))
+        if por_nf:
+            ja = {l["codigo"] for l in dados["linhas"]}
+            todas = vigia_consulta.listar(filtros["estado"], filtros["vencidos"], "")["linhas"]
+            dados["linhas"] += [l for l in todas if l["codigo"] not in ja and nf_pedido.codigo_base(l["codigo"]) in por_nf]
+        nf_pedido.anotar_nf(dados["linhas"], "codigo", "nf")
         erro = None
     except Exception as e:
         logging.getLogger(__name__).exception("Falha ao ler o vigia")
@@ -2032,6 +2057,7 @@ def ciencias_dedicado():
         conn.close()
     # link so daquele pedido e marcado com quem copiou: a resposta por ele nao se passa por do cliente
     origem = f"painel:{session.get('usuario') or 'equipe'}"
+    nf_pedido.anotar_nf(linhas, "codigo", "nf")
     for l in linhas:
         l["link"] = (link_ciencia.url(l["sender_id"], segredo, base, [l["id"]], origem)
                      if segredo and l["sender_id"] else "")
@@ -2061,7 +2087,8 @@ def api_ciencia_dedicado(ciencia_id):
                     "navegador": linha["respondido_navegador"] or ""}
     elif linha["situacao"] == cd.ENCERRADO:
         encerramento = {"motivo": linha["motivo_encerramento"], "em": linha["respondido_em"]}
-    return jsonify({"ciencia": {"codigo": linha["codigo"], "situacao": linha["situacao"]},
+    return jsonify({"ciencia": {"codigo": linha["codigo"], "nf": nf_pedido.anotar_nf([{"codigo": linha["codigo"]}])[0]["nf"],
+                                "situacao": linha["situacao"]},
                     "resposta": resposta, "encerramento": encerramento, "envios": envios})
 
 
@@ -2109,6 +2136,7 @@ def clientes_agenda():
     except Exception as e:
         logging.getLogger(__name__).exception("Falha ao listar clientes com agendamento")
         linhas, erro = [], str(e)
+    nf_pedido.anotar_nf([p for l in linhas for p in (l.get("pedidos") or []) if isinstance(p, dict)])
     pendentes = [l for l in linhas if l["situacao"] == marcar_clientes_agenda.PENDENTE]
     decididos = [l for l in linhas if l["situacao"] != marcar_clientes_agenda.PENDENTE][:50]
     # Atendimento (21/10, Hugo) so ve a fila: decidir continua total/logistica.
@@ -2125,6 +2153,20 @@ def adesao_portal():
     linhas = _adesao.listar()
     return render_template("adesao_portal.html", linhas=linhas, resumo=_adesao.resumo(linhas),
                            dias_ativo=_adesao.DIAS_ATIVO, gerado_em=datetime.now().strftime("%d/%m %H:%M"))
+
+
+@app.route("/adesao-motoristas")
+@requer_auth(niveis=("total", "operador", "logistica", "leitura"))
+def adesao_motoristas():
+    """Adesão dos motoristas ao app novo e leva de cada um (23/11, saída da Vuupt).
+    Só leitura; a página se recarrega a cada 2h."""
+    import adesao_motoristas as _adesao
+    linhas = _adesao.listar()
+    return render_template("adesao_motoristas.html", linhas=linhas, resumo=_adesao.resumo(linhas),
+                           levas=_adesao.resumo_levas(linhas), dias=_adesao.DIAS_RECENTE,
+                           versao_alvo=".".join(map(str, _adesao.VERSAO_ALVO)),
+                           pode_pin=g.nivel_acesso == "total",   # mesma trava da rota resetar-pin
+                           gerado_em=datetime.now().strftime("%d/%m %H:%M"))
 
 
 _NIVEIS_EDITA_TRANSPORTADORAS = ("total", "operador", "logistica")
@@ -4546,16 +4588,9 @@ def api_acompanhamento_rota(rota_id):
 
 
 def _acompanhamento_pode_cancelar(rota_id: int, status: str) -> bool:
-    """Botao so pra quem pode, com a rota em andamento e operada pelo nosso app."""
-    from nucleo import banco as nucleo_banco, ponte_vuupt
-    if g.nivel_acesso not in cancelar_finalizacao.NIVEIS or status != nucleo_banco.ROTA_EM_ROTA:
-        return False
-    conn = nucleo_banco.conectar()
-    try:
-        rota = conn.execute("SELECT * FROM nucleo_rotas WHERE id = ?", (rota_id,)).fetchone()
-    finally:
-        conn.close()
-    return bool(rota and ponte_vuupt.rota_operavel(rota))
+    """Botao so pra quem pode e com a rota em andamento (nosso app ou app da Vuupt, 24/11)."""
+    from nucleo import banco as nucleo_banco
+    return g.nivel_acesso in cancelar_finalizacao.NIVEIS and status == nucleo_banco.ROTA_EM_ROTA
 
 
 @app.route("/api/acompanhamento/parada/<int:parada_id>/cancelar-finalizacao", methods=["POST"])
@@ -4564,20 +4599,36 @@ def _acompanhamento_pode_cancelar(rota_id: int, status: str) -> bool:
 def api_acompanhamento_cancelar_finalizacao(parada_id):
     """Duplica o servico na Vuupt, poe na mesma rota e cria a parada nova pro motorista refazer a baixa."""
     body = request.get_json(silent=True) or {}
-    from nucleo import banco as nucleo_banco, ponte_vuupt
+    return _cancelar_finalizacao_da_parada(parada_id, str(body.get("motivo") or ""))
+
+
+def _cancelar_finalizacao_da_parada(parada_id, motivo, origem="ACOMPANHAMENTO"):
+    """Corpo comum do cancelar-finalizacao (Acompanhamento, Torre e /pedidos): resposta Flask."""
+    body = {"motivo": motivo}
+    from nucleo import banco as nucleo_banco
     import edicao_rota
     import fingerprint_duplicacao_insucesso as fp
     usuario = session.get("usuario") or g.nivel_acesso
     try:
         token = (_carregar_config().get("vuupt_api") or {}).get("token", "")
+        expedir = torre_controle._expedir_pedidos_raiz()
+
+        def _duplicar(vuupt, original):
+            novo = expedir.duplicar_servico_por_insucesso(vuupt, original)
+            if not novo:
+                no_pool = expedir.servico_ja_no_pool(vuupt, original)
+                if no_pool:
+                    raise cancelar_finalizacao.Recusado(
+                        f"Não duplicado: {no_pool.get('code')} já está no pool. Nada foi alterado.")
+            return novo
+
         conn = nucleo_banco.conectar()
         try:
             r = cancelar_finalizacao.cancelar_finalizacao(
                 conn, parada_id, usuario, str(body.get("motivo") or ""),
                 vuupt=torre_controle.VuuptClient(token),
-                duplicar=torre_controle._expedir_pedidos_raiz().duplicar_servico_por_insucesso,
+                duplicar=_duplicar,
                 adicionar=lambda route_id, ids: edicao_rota.adicionar_pedidos(token, route_id, ids, position="end"),
-                rota_operavel=ponte_vuupt.rota_operavel,
                 ja_duplicado=lambda sid: (fp.buscar_novo_code(sid) or "outro serviço") if fp.ja_duplicado(sid) else None,
                 marcar_duplicado=fp.marcar_duplicado)
             codigo = conn.execute("SELECT codigo FROM nucleo_paradas WHERE id = ?", (parada_id,)).fetchone()["codigo"]
@@ -4592,11 +4643,50 @@ def api_acompanhamento_cancelar_finalizacao(parada_id):
         return jsonify({"erro": "Falha inesperada; o erro ficou no log do painel."}), 500
     try:   # historico do pedido (best-effort: a parada nova ja existe)
         tratativas.registrar_evento(
-            codigo, "ACOMPANHAMENTO", "REENVIO_MANUAL",
+            codigo, origem, "REENVIO_MANUAL",
             texto=f"Finalização cancelada por {usuario}: {str(body.get('motivo') or '').strip()} → {r['novo_codigo']}")
     except Exception:
         logging.getLogger(__name__).exception("tratativa do cancelamento de finalizacao nao gravou")
     return jsonify(r)
+
+
+def _cancelar_finalizacao_pelo_servico(origem):
+    """Cancelar finalizacao pelo pedido (Torre e /pedidos, Hugo 24/11): JSON {service_id, motivo}.
+    Acha a parada mais recente desse servico no nucleo e segue o mesmo caminho da /acompanhamento
+    (a parada pode ainda nao estar finalizada no nucleo: o modulo confere a baixa ao vivo na Vuupt)."""
+    body = request.get_json(silent=True) or {}
+    try:
+        service_id = int(body["service_id"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"erro": "service_id ausente ou inválido."}), 400
+    from nucleo import banco as nucleo_banco
+    conn = nucleo_banco.conectar()
+    try:
+        parada = conn.execute(
+            "SELECT id FROM nucleo_paradas WHERE service_id = ? AND situacao != ? ORDER BY id DESC LIMIT 1",
+            (service_id, nucleo_banco.PARADA_CANCELADA)).fetchone()
+    finally:
+        conn.close()
+    if parada is None:
+        return jsonify({"erro": "Esse pedido ainda não apareceu em nenhuma rota do acompanhamento "
+                                "(a rota sincroniza em até 30 min). Tente de novo em instantes."}), 400
+    return _cancelar_finalizacao_da_parada(parada["id"], str(body.get("motivo") or ""), origem)
+
+
+@app.route("/api/torre/cancelar-finalizacao", methods=["POST"])
+@requer_auth(niveis=cancelar_finalizacao.NIVEIS)
+@exige_mesma_origem
+def api_torre_cancelar_finalizacao():
+    """"Cancelar finalização" do chip da Torre (baixa por engano do motorista)."""
+    return _cancelar_finalizacao_pelo_servico("TORRE")
+
+
+@app.route("/api/pedidos/acao/cancelar-finalizacao", methods=["POST"])
+@requer_auth(niveis=cancelar_finalizacao.NIVEIS)
+@exige_mesma_origem
+def api_pedidos_acao_cancelar_finalizacao():
+    """"Cancelar finalização" da tela /pedidos (mesmo corpo e mesma regra da Torre)."""
+    return _cancelar_finalizacao_pelo_servico("PEDIDOS")
 
 
 @app.route("/financeiro/pedagios")
@@ -4960,6 +5050,7 @@ def canhotos():
     conn = nucleo_banco.conectar()
     try:
         itens = nucleo_operacao.listar_comprovantes_painel(conn, resultado)
+        nf_pedido.anotar_nf(itens, "codigo", "nf", conn)
         contagem = {(r[0] or "PENDENTE"): r[1] for r in conn.execute(
             "SELECT resultado_validacao, COUNT(*) FROM nucleo_comprovantes GROUP BY resultado_validacao")}
     finally:
@@ -5047,6 +5138,13 @@ def consulta():
         if termo:
             # Busca manda na tela: ignora aba e filtros de listagem
             resultado = nucleo_consulta.buscar(termo, de=de, ate=ate, conn=conn)
+            # NF digitada (so digitos): junta os pedidos dessa NF, alem do que a busca ja achou
+            for cod in nf_tela.codigos_por_nf(termo, conn)[:30]:
+                extra = nucleo_consulta.buscar(cod, de=de, ate=ate, conn=conn)
+                vistos = {p["codigo"] for p in resultado["pedidos"]}
+                resultado["pedidos"] += [p for p in extra["pedidos"] if p["codigo"] not in vistos]
+                ids = {x["id"] for x in resultado["rotas"]}
+                resultado["rotas"] += [x for x in extra["rotas"] if x["id"] not in ids]
         elif aba == "pedidos":
             resultado = nucleo_consulta.listar_pedidos(de, ate, status=status, conn=conn)
             resultado["rotas"] = []
@@ -5054,6 +5152,7 @@ def consulta():
             resultado = nucleo_consulta.listar_rotas(de, ate, status=status, provedor=provedor,
                                                      agent_id=agent_id, conn=conn)
             resultado["pedidos"] = []
+        nf_pedido.anotar_nf(resultado.get("pedidos") or [], "codigo", "nf", conn)
     finally:
         conn.close()
 
@@ -5070,6 +5169,7 @@ def consulta_rota(rota_id):
     rota = nucleo_consulta.detalhar_rota(rota_id)
     if not rota:
         abort(404)
+    nf_pedido.anotar_nf(rota.get("paradas") or [], "codigo", "nf")
     return render_template("consulta_rota.html", rota=rota)
 
 
@@ -5080,6 +5180,7 @@ def consulta_pedido(codigo):
     detalhe = nucleo_consulta.detalhar_pedido(codigo)
     if not detalhe:
         abort(404)
+    nf_pedido.anotar_nf([detalhe], "codigo", "nf")
     # Retorno conferido no galpão (tela /retornos); leitura nunca derruba a consulta.
     try:
         conn_r = retornos.conectar()
@@ -5122,7 +5223,7 @@ def _pedido_celular(l: dict, formatar) -> dict:
         return (v or "")[11:16]
     return {
         "chave": f"{l.get('sender_id')}|{l.get('pedido_base')}",
-        "codigo": l.get("codigo") or "", "servico": l.get("codigo_servico") or "",
+        "codigo": l.get("codigo") or "", "nf": l.get("nf") or "", "servico": l.get("codigo_servico") or "",
         "status": l.get("status") or "", "status_txt": formatar("status", l.get("status")),
         "stokki": l.get("situacao_stokki") or "",   # só no Importado/cancelado antes da Vuupt (12/11)
         "destinatario": l.get("destinatario") or "", "embarcador": l.get("embarcador") or "",
@@ -5867,7 +5968,8 @@ def api_reagendar_pedido():
     except (KeyError, ValueError) as e:
         return jsonify({"erro": str(e)}), 400
 
-    resultado = reagendar_pedido(service_id, data, hora_inicio, hora_fim)
+    resultado = reagendar_pedido(service_id, data, hora_inicio, hora_fim,
+                                 manter_horarios=bool(body.get("manter_horarios")))
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400
     return jsonify({"ok": True})
@@ -5892,7 +5994,8 @@ def api_reagendar_pedidos():
         return jsonify({"erro": str(e)}), 400
 
     try:
-        resultado = reagendar_pedidos(itens, data, hora_inicio, hora_fim)
+        resultado = reagendar_pedidos(itens, data, hora_inicio, hora_fim,
+                                      manter_horarios=bool(body.get("manter_horarios")))
     except Exception as e:
         # rede de segurança: o loop em si já isola falha por item (ver
         # planejamento_rotas.reagendar_pedidos), isso é só pra nunca
@@ -7265,6 +7368,12 @@ def api_wms_recebimento_encerrar_divergencia(recebimento_id):
             except Exception as e:  # noqa: BLE001 -- e-mail nunca derruba o encerramento
                 logging.getLogger(__name__).exception("Falha no relatório de faltas do recebimento %s", recebimento_id)
                 envio = {"enviado": False, "motivo": "erro_inesperado", "detalhe": str(e)}
+        try:
+            sys.path.insert(0, str(_RAIZ / "portal_cliente")) if str(_RAIZ / "portal_cliente") not in sys.path else None
+            import entradas as portal_entradas
+            portal_entradas.sincronizar_status(conn)   # nos dois desfechos (ENDERECADO e DIVERGENCIA)
+        except Exception:  # noqa: BLE001 -- o portal nunca derruba o encerramento
+            logging.getLogger(__name__).exception("sincronizar_status do portal falhou no recebimento %s", recebimento_id)
     finally:
         conn.close()
     return jsonify({"ok": True, "ja_encerrado": ja_encerrado, "recebimento": r["recebimento"],

@@ -186,7 +186,7 @@ class TestTrajetoRota(unittest.TestCase):
     def test_app_versao_sem_login(self):
         r = self.cli.get("/api/app-versao")
         self.assertEqual(r.status_code, 200)
-        self.assertIsNone(r.get_json()["versao_atual"])
+        self.assertEqual(r.get_json()["versao_atual"], api_motorista.APK_VERSAO_ATUAL)
         self.assertEqual(r.get_json()["link"], api_motorista.APK_LINK)
 
 

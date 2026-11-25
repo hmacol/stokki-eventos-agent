@@ -289,7 +289,7 @@ class TestDetalhe(_Base):
         self.parada(r, 1, "2026-11-20 08:30:00", motivo="Cliente ausente", situacao="INSUCESSO")
         self.parada(r, 2, "2026-11-20 09:00:00")
         d = ar.detalhe_rota(self.conn, r, agora=AGORA)
-        self.assertEqual(d["ocorrencias"], [{"codigo": "PS-1", "destinatario": "Cliente 1", "motivo": "Cliente ausente"}])
+        self.assertEqual(d["ocorrencias"], [{"codigo": "PS-1", "nf": "", "destinatario": "Cliente 1", "motivo": "Cliente ausente"}])
         self.assertEqual(d["paradas"][0]["ocorrencia"], "Cliente ausente")
         self.assertIsNone(d["paradas"][1]["ocorrencia"])
 
@@ -439,20 +439,56 @@ class TestTela(_Base):
         self.assertEqual(chamada.call_args.args[1:4], (pid, "teste", "baixou o pedido errado"))
         self.assertIn("PS-1-R1", tratativa.call_args.kwargs["texto"])
 
+    def test_cancelar_finalizacao_pelo_servico_na_torre_e_nos_pedidos(self):
+        """Torre e /pedidos mandam o service_id: acha a baixa mais recente e cai no mesmo modulo."""
+        self._logar("logistica")
+        rid = self.rota()
+        antiga = self.parada(rid, 1, f"{DIA} 08:30:00")
+        recente = self.parada(self.rota(nome="Rota 2"), 1, f"{DIA} 09:30:00")   # servico e unico por rota
+        self.conn.execute("UPDATE nucleo_paradas SET service_id = 555 WHERE id IN (?, ?)", (antiga, recente))
+        self.conn.commit()
+        for url, origem in (("/api/torre/cancelar-finalizacao", "TORRE"),
+                            ("/api/pedidos/acao/cancelar-finalizacao", "PEDIDOS")):
+            with self.subTest(url=url), mock.patch.object(
+                    painel_agentes.cancelar_finalizacao, "cancelar_finalizacao",
+                    return_value={"ok": True, "novo_codigo": "PS-2-R1", "nova_parada_id": 77}) as chamada, \
+                    mock.patch.object(painel_agentes.tratativas, "registrar_evento") as tratativa:
+                r = self.cliente.post(url, json={"service_id": 555, "motivo": "baixou a nota errada"},
+                                      headers={"Origin": "http://localhost"})
+                self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+                self.assertEqual(chamada.call_args.args[1:4], (recente, "teste", "baixou a nota errada"))
+                self.assertEqual(tratativa.call_args.args[1], origem)
+
+    def test_cancelar_finalizacao_pelo_servico_recusas(self):
+        self._logar("logistica")
+        cab = {"Origin": "http://localhost"}
+        r = self.cliente.post("/api/torre/cancelar-finalizacao", json={"service_id": 999, "motivo": "engano total"}, headers=cab)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("ainda não apareceu", r.get_json()["erro"])
+        r = self.cliente.post("/api/torre/cancelar-finalizacao", json={"motivo": "engano total"}, headers=cab)
+        self.assertEqual(r.status_code, 400)
+        for nivel in ("leitura", "atendimento"):
+            self._logar(nivel)
+            for url in ("/api/torre/cancelar-finalizacao", "/api/pedidos/acao/cancelar-finalizacao"):
+                r = self.cliente.post(url, json={"service_id": 1, "motivo": "engano total"}, headers=cab)
+                self.assertEqual(r.status_code, 403, f"{nivel} {url}")
+
     def test_detalhe_diz_se_pode_cancelar_finalizacao(self):
         rid = self.rota()
         pid = self.parada(rid, 1, f"{DIA} 08:30:00")
         from nucleo import ponte_vuupt
-        with mock.patch.object(ponte_vuupt, "rota_operavel", return_value=True):
-            self._logar("logistica")
-            d = self.cliente.get(f"/api/acompanhamento/rota/{rid}").get_json()
-            self.assertTrue(d["rota"]["pode_cancelar_finalizacao"])
-            self.assertEqual((d["paradas"][0]["parada_id"], d["paradas"][0]["finalizacao_cancelada"]), (pid, False))
-            self._logar("leitura")
-            self.assertFalse(self.cliente.get(f"/api/acompanhamento/rota/{rid}").get_json()["rota"]["pode_cancelar_finalizacao"])
-        with mock.patch.object(ponte_vuupt, "rota_operavel", return_value=False):
-            self._logar("logistica")
-            self.assertFalse(self.cliente.get(f"/api/acompanhamento/rota/{rid}").get_json()["rota"]["pode_cancelar_finalizacao"])
+        # vale pro nosso app e pro app da Vuupt (24/11): a ponte nao decide mais
+        for operavel in (True, False):
+            with mock.patch.object(ponte_vuupt, "rota_operavel", return_value=operavel):
+                self._logar("logistica")
+                d = self.cliente.get(f"/api/acompanhamento/rota/{rid}").get_json()
+                self.assertTrue(d["rota"]["pode_cancelar_finalizacao"])
+                self.assertEqual((d["paradas"][0]["parada_id"], d["paradas"][0]["finalizacao_cancelada"]), (pid, False))
+                self._logar("leitura")
+                self.assertFalse(self.cliente.get(f"/api/acompanhamento/rota/{rid}").get_json()["rota"]["pode_cancelar_finalizacao"])
+        concluida = self.rota(status="CONCLUIDA", nome="Rota 9")
+        self._logar("logistica")
+        self.assertFalse(self.cliente.get(f"/api/acompanhamento/rota/{concluida}").get_json()["rota"]["pode_cancelar_finalizacao"])
 
     def test_api_rota_inexistente_404(self):
         self._logar()

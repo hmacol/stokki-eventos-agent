@@ -122,9 +122,12 @@ def _montar_conteudo(nome: str, itens: list[dict], iria_para: list[str] | None) 
 
 
 def _texto_whatsapp(item: dict) -> str:
+    from nucleo.nf_pedido import nf_do_codigo, nf_por_codigo
+    codigo = _codigo(item["servico"])
+    nf = nf_do_codigo(codigo, nf_por_codigo([codigo]))
     return notificar_whatsapp.texto_fora_dia_fixo(
-        _codigo(item["servico"]), item["data"], _regiao(item["regra"]), descricao_dias(item["regra"]),
-        None if item["valor_pendente"] else item["valor"])
+        codigo, item["data"], _regiao(item["regra"]), descricao_dias(item["regra"]),
+        None if item["valor_pendente"] else item["valor"], nf=nf)
 
 
 def avisar(itens: list[dict], config: dict, db_path=None, embarcadores: dict | None = None) -> dict:

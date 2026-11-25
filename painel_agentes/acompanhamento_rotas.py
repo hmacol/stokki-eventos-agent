@@ -200,6 +200,8 @@ def detalhe_rota(conn, rota_id: int, agora: datetime | None = None, com_despesas
             "reentrega": bool(_REENTREGA.search(p["codigo"] or "")),
         })
     # concluidas na ordem em que foram concluidas; depois as pendentes, na ordem planejada
+    from nucleo import nf_pedido
+    nf_pedido.anotar_nf(linhas, "codigo", "nf", conn)   # uma busca em lote; "" vira "—" na tela
     linhas.sort(key=lambda x: (0, x["concluida_em"], x["ordem"]) if x["concluida_em"] else (1, "", x["ordem"]))
     atraso = _atraso_rota(ciclos)
     saida = {
@@ -209,7 +211,7 @@ def detalhe_rota(conn, rota_id: int, agora: datetime | None = None, com_despesas
                  "atraso_s": atraso, "semaforo": semaforo(atraso), "atualizado_em": r["atualizado_em"]},
         "paradas": linhas,
         "posicao": _posicao(conn, rota_id, linhas, agora),
-        "ocorrencias": [{"codigo": x["codigo"], "destinatario": x["destinatario"], "motivo": x["ocorrencia"]}
+        "ocorrencias": [{"codigo": x["codigo"], "nf": x["nf"], "destinatario": x["destinatario"], "motivo": x["ocorrencia"]}
                         for x in linhas if x["ocorrencia"]],
     }
     if com_despesas:

@@ -52,7 +52,6 @@ class Base(unittest.TestCase):
         self.vuupt = VuuptFalsa()
         self.novo = {"id": 950, "code": "#PS-10-R1"}
         self.inclusao = {"ok": True, "falharam": []}
-        self.operavel = True
 
     def executar(self, parada_id=None, motivo="Motorista baixou o pedido errado", usuario="ana"):
         def duplicar(vuupt, original):
@@ -65,7 +64,7 @@ class Base(unittest.TestCase):
 
         return cf.cancelar_finalizacao(
             self.conn, parada_id or self.parada, usuario, motivo, vuupt=self.vuupt, duplicar=duplicar,
-            adicionar=adicionar, rota_operavel=lambda rota: self.operavel,
+            adicionar=adicionar,
             ja_duplicado=lambda sid: self.duplicados.get(sid),
             marcar_duplicado=lambda sid, code: self.duplicados.__setitem__(sid, code))
 
@@ -116,22 +115,44 @@ class TestCancelar(Base):
     def test_exige_motivo(self):
         self._recusa("motivo", motivo="  ok ")
 
+    def _pendente(self):
+        return self.conn.execute("SELECT id FROM nucleo_paradas WHERE codigo = 'PS-11'").fetchone()["id"]
+
     def test_parada_sem_resultado(self):
-        pendente = self.conn.execute("SELECT id FROM nucleo_paradas WHERE codigo = 'PS-11'").fetchone()["id"]
-        self._recusa("ainda não foi finalizada", parada_id=pendente)
+        self.vuupt.servico = {"id": 901, "code": "#PS-11", "route_id": 5000, "status": "on_route"}
+        self._recusa("ainda não foi finalizada", parada_id=self._pendente())
 
     def test_parada_inexistente(self):
         self._recusa("não encontrada", parada_id=9999)
 
     def test_so_com_a_rota_em_andamento(self):
-        for status in ("CONCLUIDA", "PLANEJADA", "ACEITA", "CANCELADA"):
+        for status in ("CONCLUIDA", "CANCELADA"):
             self.conn.execute("UPDATE nucleo_rotas SET status = ? WHERE id = ?", (status, self.rota))
             self.conn.commit()
             self._recusa("em andamento")
 
-    def test_so_rota_feita_no_nosso_app(self):
-        self.operavel = False
-        self._recusa("app da Vuupt")
+    def test_rota_nao_iniciada_recusa_se_a_vuupt_nao_diz_baixado(self):
+        self.vuupt.servico["status"] = "accepted"
+        for status in ("PLANEJADA", "ACEITA"):
+            self.conn.execute("UPDATE nucleo_rotas SET status = ? WHERE id = ?", (status, self.rota))
+            self.conn.commit()
+            self._recusa("em andamento")
+
+    def test_baixa_pelo_app_da_vuupt_que_o_nucleo_ainda_nao_viu(self):
+        """App da Vuupt: o nucleo so sincroniza em 15-30 min; a baixa ao vivo na Vuupt ja libera."""
+        self.conn.execute("UPDATE nucleo_rotas SET status = 'ACEITA' WHERE id = ?", (self.rota,))
+        self.conn.commit()
+        self.vuupt.servico = {"id": 901, "code": "#PS-11", "route_id": 5000, "status": "done"}
+        self.novo = {"id": 951, "code": "#PS-11-R1"}
+        r = self.executar(parada_id=self._pendente())
+        self.assertEqual(r["novo_codigo"], "PS-11-R1")
+        self.assertEqual(self.chamadas, [("duplicar", 901), ("adicionar", 5000, (951,))])
+        self.assertEqual(self.paradas()[-1]["situacao"], "PENDENTE")
+
+    def test_parada_sem_servico_na_vuupt(self):
+        self.conn.execute("UPDATE nucleo_rotas SET vuupt_route_id = NULL WHERE id = ?", (self.rota,))
+        self.conn.commit()
+        self._recusa("rota da Vuupt")
 
     def test_nao_cancela_duas_vezes(self):
         self.duplicados[900] = "#PS-10-R1"

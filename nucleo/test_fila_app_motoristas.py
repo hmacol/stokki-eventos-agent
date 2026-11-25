@@ -21,6 +21,7 @@ class FilaTest(unittest.TestCase):
                         _pessoa("DUDA TESTE", "4"), _pessoa("EVA SEM FONE", "5")]
         self.conn.execute("INSERT INTO motoristas VALUES ('1', NULL, '2026-11-10 08:00:00')")   # APK antigo
         self.conn.execute("INSERT INTO motoristas VALUES ('2', '1.2.0', '2026-11-20 08:00:00')")  # ja no novo
+        self.conn.execute("INSERT INTO motoristas VALUES ('3', NULL, NULL)")                      # PIN criado, nunca entrou
         p = mock.patch.object(fila.atu, "pessoas", side_effect=lambda c: self.pessoas)
         t = mock.patch.object(fila, "_telefone", side_effect=lambda c, pessoa: None if pessoa["cpf"] == "5" else "11999990000")
         p.start(); t.start()
@@ -31,6 +32,14 @@ class FilaTest(unittest.TestCase):
         self.assertEqual(sorted(r["novos"]), [("ANA SOUZA", "atualizar"), ("CARLA NOVA", "adotar")])
         self.assertEqual(r["fora"], [("EVA SEM FONE", "sem telefone")])
         self.assertEqual(fila.enfileirar(self.conn)["novos"], [])   # idempotente
+
+    def test_sem_conta_fica_pausado_ate_ter_pin(self):
+        self.pessoas.append(_pessoa("FABIO SEM PIN", "6"))
+        fila.enfileirar(self.conn)
+        self.assertNotIn("6", [d["cpf"] for d in fila.lote_do_dia(self.conn, 10)])
+        self.assertEqual(self.conn.execute("SELECT situacao FROM motoristas_fila_app WHERE cpf='6'").fetchone()[0], "pendente")
+        self.conn.execute("INSERT INTO motoristas VALUES ('6', NULL, NULL)")                      # conta criada
+        self.assertIn("6", [d["cpf"] for d in fila.lote_do_dia(self.conn, 10)])
 
     def test_lote_respeita_limite_e_adocao_tira_da_fila(self):
         fila.enfileirar(self.conn)

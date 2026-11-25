@@ -273,8 +273,9 @@ export async function confirmarCarregamento(rotaId: number, uri: string, carrega
 /** Pedágio / despesa da rota: valor + foto do recibo (Hugo, 11/09 e 14/09). Fica pendente até o painel aprovar.
  *  `extra`: tipo (sem = pedágio), descricao (Outros) e paradaId (Estacionamento/Descarga). */
 export async function enviarPedagio(rotaId: number, uri: string, valor: number, uuid: string, capturadoEm: string,
-  extra: { tipo?: TipoDespesa; descricao?: string | null; paradaId?: number | null } = {}) {
+  extra: { tipo?: TipoDespesa; descricao?: string | null; paradaId?: number | null; origem?: 'camera' | 'galeria' } = {}) {
   const campos: Record<string, string> = { valor: String(valor), uuid, capturado_em: capturadoEm };
+  if (extra.origem) campos.origem = extra.origem;
   if (extra.tipo) campos.tipo = extra.tipo;
   if (extra.descricao) campos.descricao = extra.descricao;
   if (extra.paradaId) campos.parada_id = String(extra.paradaId);

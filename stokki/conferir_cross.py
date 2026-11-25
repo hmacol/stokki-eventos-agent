@@ -20,8 +20,9 @@ Guardas (para se nao bater): cliente Quatro Estrelas na linha/na conferencia,
 quantidade de produtos = 1 e SKU na tela = o esperado.
 
 Rodar na VPS, como www-data (entra na fila da conta provider):
-    sudo -u www-data venv/bin/python stokki/conferir_cross.py --de 44697 --ate 44713            # so mostra o plano
-    sudo -u www-data venv/bin/python stokki/conferir_cross.py --de 44697 --ate 44713 --confirmar
+    sudo -u www-data venv/bin/python stokki/conferir_cross.py --cliente dourado --pedidos 44717 44755-44803            # so mostra o plano
+    sudo -u www-data venv/bin/python stokki/conferir_cross.py --cliente dourado --pedidos 44717 44755-44803 --confirmar
+Clientes (PERFIS): qe = Quatro Estrelas (XDQUATROESTRELAS), dourado = Laticinios Dourado (XDDOURADO).
 """
 import argparse
 import re
@@ -36,6 +37,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 import yaml  # noqa: E402
 from playwright.sync_api import Error as PlaywrightError  # noqa: E402
+from playwright.sync_api import TimeoutError as PlaywrightTimeout  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 from stokki import avancar_cross as ac  # noqa: E402
@@ -43,18 +45,30 @@ from stokki import estacao_impressao as ei  # noqa: E402
 from stokki.sessao_uso import na_vez_da_provider  # noqa: E402
 
 URL_CONFERENCIA = f"{ei.BASE_URL}/pt-br/provider/operation/order/packaging"
-SKU_XD = "XDQUATROESTRELAS"
-CLIENTE_LINHA = "COMERCIO DE CER"          # coluna Cliente na Selecao (truncada)
-CLIENTE_CONFERENCIA = "QUATRO ESTRELAS"    # cartao do cliente na conferencia
 FINAL = "Aguardando Transportador"
+# perfil por cliente Cross: SKU XD, texto da coluna Cliente na Selecao (truncada) e do cartao na conferencia
+PERFIS = {
+    "qe": {"sku": "XDQUATROESTRELAS", "linha": "COMERCIO DE CER", "conferencia": "QUATRO ESTRELAS"},
+    "dourado": {"sku": "XDDOURADO", "linha": "LATICINIOS DOUR", "conferencia": "DOURADO"},
+}
+PERFIL: dict = dict(PERFIS["qe"])   # main() troca conforme --cliente
 
 
 class Parar(Exception):
     pass
 
 
+# texto "Quantidade embalada: k de N" da tela de conferencia ('' quando some)
+_JS_CONTADOR = "() => (document.body.innerText.match(/Quantidade embalada:\\s*\\d+\\s*de\\s*\\d+/) || [''])[0]"
+
+
 def _situacao(page, pid: int) -> str:
-    return ac.situacao_do_pedido(page, pid)
+    """Situacao do pedido; no Dourado a pagina cola um rotulo depois dela ("Aberto Entrega Expressa")."""
+    s = ac.situacao_do_pedido(page, pid)
+    for conhecida in (FINAL, "Em separação", "Em Conferência", "Aberto"):
+        if s.startswith(conhecida):
+            return conhecida
+    return s
 
 
 def _abrir_conferencia(page, pid: int) -> None:
@@ -71,37 +85,64 @@ def _abrir_conferencia(page, pid: int) -> None:
         raise Parar("campo de busca da conferencia nao visivel")
     busca.fill(f"#PS-{pid}")
     busca.press("Enter")
-    page.wait_for_timeout(5000)
+    # segue assim que aparece o dialogo "finalizar separacao" ou a tela da conferencia
+    alvo = page.locator("#btn_picking_list:visible").or_(page.get_by_placeholder(re.compile("c.digo do produto", re.I)))
+    try:
+        alvo.first.wait_for(state="visible", timeout=15_000)
+    except PlaywrightTimeout:
+        pass   # os guardas de quem chamou dizem o que faltou
+    page.wait_for_timeout(500)
+
+
+def _checar_sku(page, pid: int) -> None:
+    """Antes de iniciar a separacao: o pedido so pode ter o SKU XD do perfil (nenhum outro XD).
+    Le a pagina do pedido que _situacao() acabou de abrir (nao recarrega)."""
+    xds = set(re.findall(r"XD[A-Z0-9\-]+", page.inner_text("body").upper()))
+    if xds != {PERFIL["sku"]}:
+        raise Parar(f"SKU XD na pagina do pedido {sorted(xds)} != {{{PERFIL['sku']}}}")
 
 
 def _fase1_separacao(page, pid: int) -> None:
-    ac.confirmar_global.update(abrir_operador=True, confirmar=True, operador=ac.OPERADOR_PADRAO)
     page.goto(ac.URL_PICKING, wait_until="domcontentloaded", timeout=45_000)
     ei._aguardar_pagina_acalmar(page)
     for seletor in ("#btn_option_order", "#btn_order"):
-        btn = page.locator(seletor)
-        if btn.count() and btn.first.is_visible():
-            btn.first.click()
-            page.wait_for_timeout(2000)
+        btn = page.locator(seletor).first
+        try:
+            btn.wait_for(state="visible", timeout=4000)
+            btn.click()
+        except PlaywrightTimeout:
+            pass
+    page.wait_for_timeout(500)
     campo = page.locator("input:visible:not([type=hidden]):not([type=checkbox])").first
     if not campo.count():
         raise Parar("campo do filtro de pedido unico nao encontrado")
     campo.fill(f"#PS-{pid}")
     campo.press("Enter")
-    page.wait_for_timeout(4000)
+    page.locator("tr", has_text=f"PS-{pid}").first.wait_for(state="visible", timeout=15_000)
     linhas = [tr for tr in page.locator("tr").all() if f"PS-{pid}" in (tr.inner_text() or "")]
     if len(linhas) != 1:
         raise Parar(f"filtro devolveu {len(linhas)} linha(s) para PS-{pid}")
     celulas = [" ".join(c.split()) for c in linhas[0].locator("td").all_inner_texts()]
     print("   linha da selecao:", celulas)
-    if CLIENTE_LINHA not in " ".join(celulas).upper():
-        raise Parar("cliente da linha nao e a Quatro Estrelas")
-    if "1" not in celulas[2:3]:
-        raise Parar(f"quantidade de produtos != 1 ({celulas[2:3]})")
+    if PERFIL["linha"] not in " ".join(celulas).upper():
+        raise Parar(f"cliente da linha nao bate com o perfil ({PERFIL['linha']})")
+    # a coluna "Quantidade de Produtos" e a quantidade do item XD (= volumes da NF), nao o numero de linhas;
+    # "um unico item" ja foi garantido por _checar_sku (so o XD do perfil na pagina do pedido)
     page.get_by_text("Selecionar Operador da Tarefa").first.click()
-    page.wait_for_timeout(2500)
-    if ac._iniciar_separacao_por_lista(page, pid) != 0:
-        raise Parar("iniciar separacao por lista nao levou a Em separacao")
+    seletor = page.locator('button[data-id="select_operator"]').first
+    seletor.wait_for(state="visible", timeout=15_000)
+    seletor.click()
+    opcao = page.locator(".dropdown-menu.show").get_by_text(ac.OPERADOR_PADRAO, exact=True)
+    opcao.first.wait_for(state="visible", timeout=5000)
+    if opcao.count() != 1:
+        raise Parar(f"operador '{ac.OPERADOR_PADRAO}' nao achado exatamente 1 vez ({opcao.count()})")
+    opcao.first.click()
+    page.keyboard.press("Escape")
+    page.wait_for_function("() => { const b = document.querySelector('#btn_next_operator'); return b && !b.disabled; }",
+                           timeout=5000)
+    page.locator("#btn_next_operator").first.click()
+    # sinal de sucesso da Stokki; a situacao e conferida em seguida por executar()
+    page.get_by_text("Separação iniciada!").first.wait_for(state="visible", timeout=45_000)
 
 
 def _fase2_finalizar_separacao(page, pid: int) -> None:
@@ -109,35 +150,66 @@ def _fase2_finalizar_separacao(page, pid: int) -> None:
     sim = page.locator("#btn_picking_list:visible")
     if sim.count() != 1:
         raise Parar("dialogo 'finalizar separacao por lista' nao apareceu")
-    sim.click()
-    page.wait_for_timeout(8000)
+    try:   # espera a resposta do envio em vez de 8 s fixos (sair da pagina antes cortaria o envio)
+        with page.expect_response(lambda r: r.request.method == "POST", timeout=20_000):
+            sim.click()
+    except PlaywrightTimeout:
+        pass   # nao vi o POST: ja esperei 20 s; a situacao lida a seguir decide
+    page.wait_for_timeout(1000)
 
 
 def _fase3_conferir(page, pid: int) -> None:
     _abrir_conferencia(page, pid)
     corpo = page.inner_text("body").upper()
-    if CLIENTE_CONFERENCIA not in corpo:
-        raise Parar("cartao do cliente na conferencia nao e Quatro Estrelas")
+    if PERFIL["conferencia"] not in corpo:
+        raise Parar(f"cartao do cliente na conferencia nao bate com o perfil ({PERFIL['conferencia']})")
     skus = set(re.findall(r"SKU:\s*([A-Z0-9\-]+)", corpo))
-    if skus != {SKU_XD}:
-        raise Parar(f"SKUs na conferencia {sorted(skus)} != {{{SKU_XD}}}")
     campo = page.get_by_placeholder(re.compile("c.digo do produto", re.I)).first
-    campo.fill(SKU_XD)
-    campo.press("Enter")
-    clicou_fechar = False
-    for _ in range(16):
-        page.wait_for_timeout(2500)
+    if not skus and re.search(r"\d+ ITE(M|NS) EMBALADO", corpo):
+        total = 0   # retomada: tudo ja embalado, falta so fechar (PS-44970)
+        print("   item XD ja embalado: so fechar a conferencia")
+    else:
+        if skus != {PERFIL["sku"]}:
+            raise Parar(f"SKUs na conferencia {sorted(skus)} != {{{PERFIL['sku']}}}")
+        m = re.search(r"Quantidade embalada:\s*\d+\s*de\s*(\d+)", page.inner_text("body"))
+        total = int(m.group(1)) if m else 1
+        print(f"   item XD: {total} unidade(s) a embalar")
+    for _ in range(total):   # cada leitura do SKU embala 1 unidade; ao completar a Stokki abre o dialogo de impressao
         try:
-            pular = page.locator(".modal.show button:visible", has_text="Pular Impressão")
+            antes = page.evaluate(_JS_CONTADOR)
+            campo.fill(PERFIL["sku"])
+            campo.press("Enter")
+            try:   # segue quando o contador muda ou o dialogo de impressao abre
+                page.wait_for_function(
+                    "(a) => document.querySelector('.modal.show') || (" + _JS_CONTADOR + ")() !== a",
+                    arg=antes, timeout=8000)
+            except PlaywrightTimeout:
+                pass
+            if page.locator(".modal.show").count():
+                break
+        except PlaywrightError as e:
+            if "navigation" in str(e) or "context was destroyed" in str(e):
+                break
+            raise
+    clicou_fechar = False
+    for _ in range(40):
+        page.wait_for_timeout(1000)
+        try:
+            pular =page.locator(".modal.show button:visible", has_text="Pular Impressão")
             if page.locator(".modal.show").count():
                 if pular.count():
                     pular.first.click()
                     continue
+                if "Finalizando embalagem" in page.locator(".modal.show").first.inner_text():
+                    continue   # passagem: a Stokki fecha a conferencia sozinha (visto no PS-44774, 8 unidades)
                 raise Parar("modal inesperado na conferencia: " + page.locator(".modal.show").first.inner_text()[:200].replace("\n", " "))
             if not clicou_fechar:
                 fb = page.get_by_role("button", name=re.compile("Fechar e Imprimir")).first
                 if fb.count() and fb.is_enabled():
-                    fb.click()
+                    try:
+                        fb.click(timeout=3000)
+                    except PlaywrightTimeout:
+                        continue   # o dialogo da DANFE abriu por cima do botao (PS-44970): a proxima volta trata
                     clicou_fechar = True
                     continue
             break
@@ -167,10 +239,18 @@ def executar(pids: list[int], confirmar: bool) -> int:
                     print(f"PARADO: situacao inesperada em PS-{pid}: {situacao}")
                     return 1
                 if not confirmar:
-                    print("   (sem --confirmar: nada enviado)")
+                    if situacao == "Aberto":
+                        try:
+                            _checar_sku(page, pid)
+                            print("   SKU ok; (sem --confirmar: nada enviado)")
+                        except Parar as e:
+                            print(f"   ATENCAO: {e}")
+                    else:
+                        print("   (sem --confirmar: nada enviado)")
                     continue
                 try:
                     if situacao == "Aberto":
+                        _checar_sku(page, pid)
                         _fase1_separacao(page, pid)
                         situacao = _situacao(page, pid)
                         print(f"   apos fase 1: {situacao}")
@@ -182,8 +262,8 @@ def executar(pids: list[int], confirmar: bool) -> int:
                         _fase3_conferir(page, pid)
                         situacao = _situacao(page, pid)
                         print(f"   apos fase 3: {situacao}")
-                except Parar as e:
-                    print(f"PARADO em PS-{pid}: {e}")
+                except (Parar, PlaywrightTimeout) as e:
+                    print(f"PARADO em PS-{pid}: {str(e)[:300]}")
                     print("print:", ac._print(page, f"{pid}_conferir_parado"))
                     return 1
                 if situacao != FINAL:
@@ -197,12 +277,17 @@ def executar(pids: list[int], confirmar: bool) -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Cross Quatro Estrelas: Aberto -> Aguardando Transportador.")
-    ap.add_argument("--de", type=int, required=True, help="id inicial (ex.: 44697)")
-    ap.add_argument("--ate", type=int, required=True, help="id final, inclusive")
+    ap = argparse.ArgumentParser(description="Cross: Aberto -> Aguardando Transportador.")
+    ap.add_argument("--cliente", choices=sorted(PERFIS), required=True)
+    ap.add_argument("--pedidos", nargs="+", required=True, help="ids (44717) ou faixas (44755-44803)")
     ap.add_argument("--confirmar", action="store_true", help="executa (sem isso so mostra a situacao)")
     a = ap.parse_args()
-    return executar(list(range(a.de, a.ate + 1)), a.confirmar)
+    PERFIL.update(PERFIS[a.cliente])
+    pids: list[int] = []
+    for tok in a.pedidos:
+        ini, _, fim = tok.replace("PS-", "").partition("-")
+        pids.extend(range(int(ini), int(fim or ini) + 1))
+    return executar(pids, a.confirmar)
 
 
 if __name__ == "__main__":

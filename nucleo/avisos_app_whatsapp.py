@@ -4,7 +4,8 @@ avisos_app_whatsapp.py
 
 Avisos por WhatsApp (privado) pro motorista que usa o app pelo NAVEGADOR (PWA, iPhone). O servidor nao manda
 push (nem pro Android); no iPhone o PWA nao recebe nada com o app fechado, entao o WhatsApp faz esse papel.
-Quem e "web": motoristas.plataforma = 'web' (o app informa no header X-App-Plataforma).
+Quem recebe (22/11, decisao do Hugo): todo motorista ativo que usa o nosso app, em qualquer plataforma (web, android, ios;
+motoristas.plataforma preenchida pelo header X-App-Plataforma). Ninguem tem push registrado, entao o WhatsApp avisa todos.
 
 Avisos (rotas de hoje e de amanha do motorista, e o chat de Ajuda):
   nova_rota       rota que o motorista ainda nao sabia que tinha
@@ -144,7 +145,7 @@ def _agora_str(agora: datetime) -> str:
 
 def _motoristas_web(conn) -> list[dict]:
     return [dict(r) for r in conn.execute(
-        "SELECT cpf, nome, telefone, agent_id FROM motoristas WHERE ativo = 1 AND plataforma = 'web' ORDER BY nome")]
+        "SELECT cpf, nome, telefone, agent_id FROM motoristas WHERE ativo = 1 AND COALESCE(plataforma, '') != '' ORDER BY nome")]
 
 
 def _rotas_do_motorista(conn, m: dict, hoje: date) -> list[dict]:

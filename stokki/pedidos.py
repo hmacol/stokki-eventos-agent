@@ -6,7 +6,7 @@ Leitura de pedidos de saída (outbound) via endpoints internos do Stokki.
 
 Endpoints usados (descobertos via investigação de tráfego de rede):
   GET /pt-br/outbound/count/{status}/all/.../all          — contagem por status
-  GET /pt-br/administrator/inventory/outbound/table       — listagem paginada
+  GET /pt-br/administrator/inventory/outbound/listing/table — listagem paginada (ver stokki/listagem.py)
   GET /pt-br/administrator/inventory/outbound/show/{id}   — detalhe completo
   GET /pt-br/administrator/inventory/outbound/carrier     — diretório de transportadoras
   GET /pt-br/administrator/inventory/outbound/select      — diretório de embarcadores
@@ -38,6 +38,7 @@ from typing import Iterator
 
 from bs4 import BeautifulSoup
 
+from stokki import listagem
 from stokki.auth import StokkiSession
 
 logger = logging.getLogger(__name__)
@@ -129,16 +130,21 @@ def listar_pedidos(
         "input_search": busca,
     }
     resp = sessao.get(
-        f"{BASE_URL}/pt-br/administrator/inventory/outbound/table",
+        # 24/11: a Stokki trocou outbound/table por outbound/listing/table (o
+        # antigo redireciona pro /login) e a linha virou JSON estruturado --
+        # ver stokki/listagem.py, que devolve a linha no formato de antes.
+        f"{BASE_URL}/pt-br/administrator/inventory/outbound/listing/table",
         params=params,
         headers={"Referer": f"{BASE_URL}/pt-br/administrator/inventory/outbound"},
     )
+    listagem.conferir_resposta(resp)
     resp.raise_for_status()
     try:
-        return resp.json()
+        dados = resp.json()
     except Exception:
         # O Content-Type é text/html mas o corpo é JSON — tenta parsear assim mesmo
-        return json.loads(resp.text)
+        dados = json.loads(resp.text)
+    return listagem.converter_resposta(dados)
 
 
 def iterar_todos_pedidos(

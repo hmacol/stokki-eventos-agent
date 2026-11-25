@@ -334,6 +334,8 @@ CREATE INDEX IF NOT EXISTS idx_nucleo_ofertas_rota_status ON nucleo_ofertas_rota
 -- Checklist de carregamento (nucleo/carregamento.py): uma linha por rota, com a
 -- foto do bau carregado; itens = paradas que o motorista desmarcou (nao carregou).
 -- carregamento_id e NULL ate o carregamento ser gravado: o item e achado por (rota_id, service_id).
+-- Rota trocou de motorista: o checklist do anterior e arquivado com rota_id = -id e a rota em
+-- rota_id_original + substituido_em (colunas de 22/11 em _migrar_colunas; rota_id segue UNIQUE).
 CREATE TABLE IF NOT EXISTS nucleo_carregamentos (
     id                      INTEGER PRIMARY KEY AUTOINCREMENT,
     rota_id                 INTEGER NOT NULL UNIQUE,
@@ -648,7 +650,11 @@ def garantir_esquema(conn: sqlite3.Connection):
     _migrar_colunas(conn, "nucleo_paradas", _COLUNAS_PARADAS_NOVAS)
     _migrar_colunas(conn, "nucleo_rotas", _COLUNAS_ROTAS_NOVAS)
     _migrar_colunas(conn, "nucleo_pedagios", [("tipo", "TEXT NOT NULL DEFAULT 'PEDAGIO'"), ("descricao", "TEXT"),
-                                              ("parada_id", "INTEGER")])
+                                              ("parada_id", "INTEGER"),
+                                              ("origem", "TEXT NOT NULL DEFAULT 'CAMERA'"), ("hash_visual", "TEXT")])
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_nucleo_pedagios_sha ON nucleo_pedagios(sha256)")
+    # Checklist de carregamento arquivado quando a rota troca de motorista (revisao 22/11, M2)
+    _migrar_colunas(conn, "nucleo_carregamentos", [("rota_id_original", "INTEGER"), ("substituido_em", "TEXT")])
     conn.execute("CREATE INDEX IF NOT EXISTS idx_motoristas_agent ON motoristas(agent_id)")
     # documentos_processados é de outro módulo (documentos_pedido/), mas o
     # núcleo lê a NF do pedido por codigo_pedido a cada parada montada

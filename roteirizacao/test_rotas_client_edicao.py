@@ -72,5 +72,45 @@ class TestRotasClientEdicao(unittest.TestCase):
         self.assertIsNone(json_enviado["agent_id"])
 
 
+class _Resp429:
+    ok = False
+    status_code = 429
+    reason = "Too Many Requests"
+    url = "x"
+    text = "{}"
+
+    def json(self):
+        return {"message": "Too Many Attempts."}
+
+
+class TestInterativo(unittest.TestCase):
+    """Checklist de carregamento (M1, revisao 22/11): 1 tentativa, timeout curto, sem dormir no 429."""
+
+    def test_interativo_429_uma_tentativa_sem_sleep(self):
+        casos = (("get", lambda: rotas_client.buscar_rota("tok", 7, include=["services"], interativo=True)),
+                 ("delete", lambda: rotas_client.remover_servico_da_rota("tok", 7, 1, interativo=True)),
+                 ("delete", lambda: rotas_client.cancelar_rota("tok", 7, "unassign", interativo=True)))
+        for metodo, chamar in casos:
+            falso = mock.Mock(return_value=_Resp429())
+            with mock.patch.object(requests, metodo, falso), mock.patch("time.sleep") as dormir:
+                with self.assertRaises(requests.exceptions.HTTPError) as cm:
+                    chamar()
+            dormir.assert_not_called()
+            falso.assert_called_once()
+            self.assertEqual(falso.call_args.kwargs["timeout"], (3, 7))      # conexao, leitura
+            self.assertEqual(cm.exception.response.status_code, 429)
+
+    def test_padrao_continua_com_retry_e_timeout_30(self):
+        for chamar in (lambda: rotas_client.buscar_rota("tok", 7, include=["services"]),
+                       lambda: rotas_client.remover_servico_da_rota("tok", 7, 1),
+                       lambda: rotas_client.cancelar_rota("tok", 7, "unassign")):
+            duble = _Duble({"route": {}})
+            with mock.patch.object(rotas_client, "chamar_com_retry", duble):
+                chamar()
+            self.assertEqual(len(duble.chamadas), 1)
+            self.assertEqual(duble.chamadas[0][2]["timeout"], 30)
+            self.assertNotIn("interativo", duble.chamadas[0][2])
+
+
 if __name__ == "__main__":
     unittest.main()

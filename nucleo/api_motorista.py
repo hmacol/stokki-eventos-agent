@@ -46,7 +46,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
 from nucleo import (atualizacao_motorista as atualizacao, auth_motorista as auth, banco, carregamento,
-                    cadastro_motorista as cadastro, financeiro, operacao, ponte_vuupt, trajeto_rota, validacao_fotos)
+                    cadastro_motorista as cadastro, duplicidade_recibo, financeiro, operacao, ponte_vuupt, trajeto_rota, validacao_fotos)
 from nucleo.marketplace_remoto import ClienteMarketplace
 from nucleo.auth_motorista import AutenticacaoInvalida
 from nucleo.operacao import OperacaoInvalida
@@ -58,7 +58,7 @@ EXTENSOES_FOTO = {"jpg", "jpeg", "png", "webp", "heic"}
 TAMANHO_MAX_FOTO = 15 * 1024 * 1024
 
 # Aviso de APK novo no app (/api/app-versao). None = sem aviso; liga-se trocando por commit.
-APK_VERSAO_ATUAL: str | None = None
+APK_VERSAO_ATUAL: str | None = "1.2.0"
 APK_LINK = "https://app.freshhub.com.br/motorista/app.apk"
 
 
@@ -675,10 +675,17 @@ def criar_app(config: dict | None = None) -> Flask:
     def confirmar_carregamento(rota_id):
         """Checklist de carregamento (multipart): arquivo (foto do bau), carregador, uuid,
         desmarcados (JSON [{parada_id, motivo, observacao}]), tentativa. Foto reprovada
-        trava (409 com o veredito, nada gravado) ate esgotar as tentativas."""
+        trava (409 com o veredito, nada gravado) ate esgotar as tentativas.
+        Um POST por rota de cada vez (o segundo leva 409 sem modelo nem Vuupt); o orcamento de
+        tempo da ida a Vuupt conta desde aqui (foto e modelo inclusos)."""
+        inicio = carregamento._relogio()
         rota = operacao.rota_do_motorista(conn(), rota_id, agent_id())
+        with carregamento.checklist_em_andamento(rota["id"]):
+            return _checklist_carregamento(rota, inicio)
+
+    def _checklist_carregamento(rota, inicio):
         uuid = (request.form.get("uuid") or "").strip()
-        ja = carregamento.carregamento_da_rota(conn(), rota["id"])
+        ja = carregamento.carregamento_do_motorista_atual(conn(), rota)   # de outro motorista nao vale
         if ja and uuid and ja["uuid"] == uuid:
             # reenvio do mesmo checklist (fila offline): nada de segunda foto em disco
             return jsonify({"ok": True, "carregamento": ja, "rota": operacao.montar_rota(conn(), rota)})
@@ -701,7 +708,8 @@ def criar_app(config: dict | None = None) -> Flask:
                 raise ValueError
         except ValueError:
             raise OperacaoInvalida("Campo 'desmarcados' deve ser uma lista JSON.")
-        carregamento._validar_desmarcados(conn(), rota["id"], desmarcados)   # 400/409 antes do modelo e da foto
+        pedidos = carregamento._validar_desmarcados(conn(), rota["id"], desmarcados)   # 400/409 antes do modelo
+        carregamento.conferir_teto(conn(), rota, agent_id(), pedidos)                   # 429 antes do modelo e da foto
         try:
             tentativa = int(request.form.get("tentativa") or 1)
         except ValueError:
@@ -721,7 +729,7 @@ def criar_app(config: dict | None = None) -> Flask:
         foto = {"caminho": caminho, "sha256": sha, "resultado": veredito.get("resultado"),
                 "ocupacao_pct": veredito.get("ocupacao_pct"), "revisao_humana": bool(veredito.get("revisao_humana"))}
         res = carregamento.confirmar(conn(), rota, agent_id(), carregador=request.form.get("carregador"), uuid=uuid,
-                                     desmarcados=desmarcados, foto=foto)
+                                     desmarcados=desmarcados, foto=foto, inicio=inicio)
         if not res["ok"]:
             erros = "; ".join(f"{f['codigo']}: {f['erro']}" for f in res["falhas"])
             return jsonify({**res, "erro": f"Não foi possível tirar da rota: {erros}"}), 409
@@ -819,6 +827,7 @@ def criar_app(config: dict | None = None) -> Flask:
         resultado = operacao.registrar_pedagio(
             conn(), rota_id, agent_id(), uuid or sha, valor, caminho, sha, len(conteudo), capturado_em, caminho_gcs,
             validacao=validacao, tipo=tipo, descricao=descricao, parada_id=parada_id,
+            origem=request.form.get("origem"), hash_visual=duplicidade_recibo.hash_visual(conteudo),
         )
         return jsonify({**resultado, "gcs": caminho_gcs is not None, "pedagios": operacao.listar_pedagios(conn(), rota_id)}), 201
 

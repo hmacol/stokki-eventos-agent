@@ -371,13 +371,21 @@ def texto_rotas_fracas(data_alvo, resumo: dict) -> str:
     return "\n".join(linhas)
 
 
+def _com_nf(codigo, nf) -> str:
+    """'PS-1 · NF 123'. nf None = quem chamou nao informou (texto antigo, sem NF);
+    "" = pedido sem NF ainda ('NF —'); varias ja vem 'a, b'."""
+    if nf is None:
+        return codigo
+    return f"{codigo} · NF {nf or '—'}"
+
+
 def texto_insucessos(insucessos: list, agora: datetime | None = None) -> str:
     """Cada item: {"codigo", "destinatario", "remetente", "motivo"}."""
     quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
     linhas = [f"⚠️ *Insucesso na entrega* · {quando}",
               _plural(len(insucessos), "pedido novo", "pedidos novos")]
     for item in insucessos[:MAX_INSUCESSOS]:
-        linha = _uma_linha(item.get("codigo"), 30).lstrip("#")
+        linha = _com_nf(_uma_linha(item.get("codigo"), 30).lstrip("#"), item.get("nf"))
         destinatario = _uma_linha(item.get("destinatario"), 60)
         remetente = _uma_linha(item.get("remetente"), 40)
         if destinatario:
@@ -443,7 +451,7 @@ def texto_alteracao_entrega(info: dict, agora: datetime | None = None) -> str:
     quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
     titulo = "⚠️ *Alteração de entrega parou no meio*" if info.get("falha") else "✏️ *Cliente alterou a entrega*"
     linhas = [f"{titulo} · {quando}",
-              f"Pedido {_uma_linha(info.get('codigo'), 20)} · {_uma_linha(info.get('empresa'), 30)}"]
+              f"Pedido {_com_nf(_uma_linha(info.get('codigo'), 20), info.get('nf'))} · {_uma_linha(info.get('empresa'), 30)}"]
     mudou = ", ".join(_uma_linha(m, 30) for m in info.get("mudancas") or [])
     if mudou:
         linhas.append(f"Mudou: {mudou}")
@@ -506,10 +514,11 @@ def texto_alerta_transportadora(transportadora: str, embarcador: str, n_pedidos:
     return texto
 
 
-def texto_fora_dia_fixo(codigo: str, data, regiao: str, dias: str, valor: float | None) -> str:
+def texto_fora_dia_fixo(codigo: str, data, regiao: str, dias: str, valor: float | None,
+                        nf: str | None = None) -> str:
     """Pro embarcador, ate MAX_MENSAGEM. Encurta tirando primeiro a regiao e
     os dias, depois o valor -- codigo, data e "envio dedicado" ficam sempre."""
-    codigo = str(codigo or "").lstrip("#")
+    codigo = _com_nf(str(codigo or "").lstrip("#"), nf)
     quando = data.strftime("%d/%m")
     if valor is None:
         preco = "valor a confirmar"
@@ -532,17 +541,25 @@ def texto_ciencia_dedicado(nome: str, pedidos: list[dict], link: str, lembrete: 
     visita que vao como entrega dedicada, com o link da pagina de ciencia. Cabe
     em MAX_MENSAGEM sem cortar o link: sai primeiro o nome, depois os codigos."""
     codigos = [str(p.get("codigo") or "").lstrip("#") for p in pedidos]
+    com_nf = [_com_nf(c, p.get("nf")) for c, p in zip(codigos, pedidos)]
     n = len(codigos)
     inicio = "Lembrete Fresh Log: " if lembrete else "Fresh Log: "
     fim = f"Confirme a ciência ou reagende: {link}"
-    if n == 1:
-        lista = f"o pedido {codigos[0]} vai como entrega dedicada"
-        resumo = "1 pedido seu vai como entrega dedicada."
-    else:
-        lista = f"os pedidos {', '.join(codigos)} vão como entrega dedicada"
-        resumo = f"{n} pedidos seus vão como entrega dedicada."
+    def _lista(cods):
+        if n == 1:
+            return (f"o pedido {cods[0]} vai como entrega dedicada",
+                    "1 pedido seu vai como entrega dedicada.")
+        return (f"os pedidos {', '.join(cods)} vão como entrega dedicada",
+                f"{n} pedidos seus vão como entrega dedicada.")
+    lista, resumo = _lista(codigos)
+    lista_nf, _ = _lista(com_nf)
     frase = lista[0].upper() + lista[1:]
+    frase_nf = lista_nf[0].upper() + lista_nf[1:]
+    # com NF primeiro; se estourar, volta ao texto de sempre (o PS nunca sai do texto)
     opcoes = [
+        f"{inicio}{_nome_simples(nome, 30)}, {lista_nf} (fora do dia de visita da região). {fim}",
+        f"{inicio}{frase_nf} (fora do dia de visita da região). {fim}",
+        f"{inicio}{frase_nf}. {fim}",
         f"{inicio}{_nome_simples(nome, 30)}, {lista} (fora do dia de visita da região). {fim}",
         f"{inicio}{frase} (fora do dia de visita da região). {fim}",
         f"{inicio}{frase}. {fim}",
@@ -594,17 +611,24 @@ def texto_cadastro_link_concluido(cadastro: dict, agora: datetime | None = None)
     return f"✅ Cadastro de {nome} concluído na Vuupt (agente {cadastro.get('agent_id')})"
 
 
-def texto_boas_vindas_motorista(primeiro_nome: str, email: str, senha: str, link_app: str, iphone: bool) -> str:
-    """Mensagem individual ao motorista novo (sem limite de 200). Android recebe
-    app + acesso; iPhone so o aviso de que a equipe chama (sem app da Vuupt)."""
+def texto_boas_vindas_motorista(primeiro_nome: str, cpf: str, pin: str | None, link_app: str, link_pwa: str,
+                                iphone: bool) -> str:
+    """Mensagem individual ao motorista novo (sem limite de 200), pro app proprio
+    da Fresh Log (login = CPF + PIN provisorio). Android baixa o APK; iPhone abre
+    o PWA no Safari. `pin` None = ja tem login em uso, nao se mexe no PIN dele."""
     nome = _uma_linha(primeiro_nome, 30) or "motorista"
     if iphone:
-        return (f"Olá, {nome}! Seu cadastro na Fresh Log foi aprovado. "
-                "Como seu celular é iPhone, a equipe vai te chamar pra explicar como funcionam as entregas.")
+        acesso = (f"Abra no Safari: {link_pwa}\n"
+                  "Depois toque em Compartilhar > Adicionar à Tela de Início, pra usar como app.")
+    else:
+        acesso = f"Baixe o app: {link_app}"
+    pin_linha = (f"PIN provisório: {pin} (o app pede pra você trocar no primeiro acesso)" if pin
+                 else "PIN: o mesmo que você já usa no app")
+    cpf_digitos = re.sub(r"\D", "", str(cpf or ""))
     return (f"Olá, {nome}! Seu cadastro na Fresh Log foi aprovado.\n"
-            f"Baixe o app: {link_app}\n"
-            f"E-mail: {email}\n"
-            f"Senha: {senha}\n"
+            f"{acesso}\n"
+            f"CPF: {cpf_digitos}\n"
+            f"{pin_linha}\n"
             "Qualquer dúvida, é só responder aqui.")
 
 

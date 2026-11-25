@@ -32,6 +32,14 @@ logger = logging.getLogger("painel.atendimento")
 
 NIVEIS = ("total", "operador", "logistica", "atendimento")
 
+
+def _parada_com_nf(parada):
+    """Parada citada pelo motorista com a NF ao lado do PS (nucleo/nf_pedido)."""
+    if not isinstance(parada, dict) or not parada.get("codigo"):
+        return parada
+    from nucleo import nf_pedido
+    return nf_pedido.anotar_nf([dict(parada)], "codigo", "nf")[0]
+
 # ── Liberacao de NFs bloqueadas por area nao atendida (Hugo, 23/09) ──────────
 # O chamado (area "envios") nasce no portal quando o cliente envia pedido pra
 # cidade que nao atendemos; a equipe decide aqui: liberar como dedicado (com
@@ -165,7 +173,7 @@ def registrar(app, *, requer_auth, exige_mesma_origem, carregar_config):
                           "chamados_30d": em30[0] or 0, "resolvidos_30d": em30[1] or 0},
             "rota": ctx.get("rota"),
             "paradas_pendentes": len(pendentes),
-            "parada": chamado.get("pedido_dados"),
+            "parada": _parada_com_nf(chamado.get("pedido_dados")),
             "extrato": ctx.get("extrato"),
             "tarifa": ctx.get("tarifa"),
             "outros": [{"id": r["id"], "assunto": r["assunto"], "status": r["status"],

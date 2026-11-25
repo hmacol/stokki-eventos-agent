@@ -113,7 +113,7 @@
     <tr>
       <td class="mono">{{ t.criado_em }}</td>
       <td class="mono">#{{ t.pedido_code }}</td>
-      <td class="mono">{{ t.numero_nfe or '—' }}</td>
+      <td class="mono">{{ t.numero_nfe or t.nf or '—' }}</td>
       <td>{{ t.embarcador or '—' }}</td>
       <td>{{ t.destinatario_nome or '—' }}</td>
       <td>{{ t.motivo_texto or '—' }}</td>

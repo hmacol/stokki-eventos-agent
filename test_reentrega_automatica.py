@@ -90,6 +90,24 @@ class TestDuplicarCopiaCaixas(unittest.TestCase):
         self.assertEqual(payload["skills"], [{"id": 11}])
         self.assertEqual(payload["code"], "#PS-100-R1")
 
+    def test_nao_duplica_se_reentrega_ja_esta_no_pool(self):
+        achados = {"PS-100": {"code": "PS-100", "status": "failed"},
+                   "#PS-100-R1": {"code": "#PS-100-R1", "status": "not_assigned"}}
+        vuupt = mock.Mock()
+        vuupt.buscar_servico_por_code.side_effect = lambda c: achados.get(c)
+        original = {"id": 1, "code": "#PS-100", "status": "failed"}
+        self.assertIsNone(ep.duplicar_servico_por_insucesso(vuupt, original))
+        vuupt.criar_servico.assert_not_called()
+
+    def test_pool_acha_r2_com_r1_apagado_e_ignora_excluido(self):
+        vuupt = mock.Mock()
+        original = {"id": 1, "code": "#PS-100", "status": "done"}
+        achados = {"#PS-100-R2": {"code": "#PS-100-R2", "status": "not_assigned"}}
+        vuupt.buscar_servico_por_code.side_effect = lambda c: achados.get(c)
+        self.assertEqual(ep.servico_ja_no_pool(vuupt, original)["code"], "#PS-100-R2")
+        achados["#PS-100-R2"]["deleted_at"] = "2026-11-20 10:00:00"
+        self.assertIsNone(ep.servico_ja_no_pool(vuupt, original))
+
 
 class TestReentregarOrquestracao(unittest.TestCase):
     def test_cria_so_quem_venceu_e_registra(self):

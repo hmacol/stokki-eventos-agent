@@ -103,6 +103,9 @@
  Tela de planejamento (HTML/JS) ............ painel_agentes/templates/planejamento_rotas.html
  Rascunhos de rota (tabelas) ............... painel_agentes/rascunhos_rota.py
  Torre de Controle ......................... painel_agentes/torre_controle.py
+ NF ao lado do PS (23/11) .................. nucleo/nf_pedido.py (fonte unica: documentos_pedido + apoio documentos_processados;
+                                             UMA busca em lote por tela) e painel_agentes/nf_tela.py (busca reversa NF->PS,
+                                             texto "PS-1 · NF 123"). Sem NF = traco; varias = virgula. Telas/e-mails do painel usam.
  Documentos por e-mail na /pedidos ......... painel_agentes/documentos_email.py (13/11): XML, DANFE e boleto(s) guardados
                                              de um ou varios pedidos num e-mail so, pro endereco digitado (envio REAL,
                                              sem forcar_destino); anexos XML_NF<n>/DANFE_NF<n>/BOLETO_NF<n>; lembra o
@@ -227,6 +230,14 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                             Sem login: /login?proximo=aula e volta pros vídeos. Vídeos gerados por
                                             aula_equipe/gravar.py, servidos de dados/aula_equipe/ (aula.json)
  Envio de pedido (XML) pelo cliente ........ portal_cliente/envio_pedidos.py + enviar_stokki.py
+ Pedidos de Entrada (aba do portal, v2) .... portal_cliente/entradas.py + _entradas.html + enviar_entradas_stokki.py.
+                                             Cliente (ou equipe pelo /equipe) anuncia a NF de remessa (XML/planilha) com data
+                                             prevista; conferencia produto a produto TRAVA SKU fora do cadastro; o worker cria
+                                             o #PE na Stokki; o /wms recebe e o botao Encerrar leva o portal a Encerrado ou
+                                             Com divergencia (rota /api/wms/recebimentos/<id>/encerrar chama
+                                             entradas.sincronizar_status). So liga por cliente: gerenciar_clientes.py entradas
+                                             <cnpj> --ativar (portal_clientes_envio.entradas_ativo). Spec/plano v2:
+                                             docs/superpowers/specs/2026-11-02-pedidos-de-entrada-portal-v2-design.md
  Documentos (PDF) anexados ao pedido ....... portal_cliente/anexos_pedido.py (11/11): na prévia do envio (PDFs junto
                                              com os XMLs, o sistema sugere o pedido; ou "+ Anexar PDF" por pedido) e
                                              depois em "Documentos" na lista, até a rota sair. O usuário sempre marca
@@ -270,7 +281,7 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              e, depois delas, pedido ao Atendimento pra criar o grupo do motorista);
                                              timer cadastro-motorista-link; ficha no painel /motoristas.
                                              Config: cadastro_motorista_link.{ativo, forcar_destino_whatsapp,
-                                             atendimento_whatsapp, link_app_vuupt, max_agentes_dia (padrão 10)} e
+                                             atendimento_whatsapp, link_app, link_pwa, max_agentes_dia (padrão 10)} e
                                              whatsapp_notificacoes.motoristas.teto_diario.
                                              Freios: POST /api/cadastro-link 5/IP/hora e 40/24 h contados no
                                              banco (motoristas_cadastros.ip_origem); documentos, situação e
@@ -367,6 +378,10 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  E-mail de resumo das rotinas .............. notificar_execucao_agente.py
  Preferências de e-mail do embarcador ...... preferencias_notificacao.py
  Trava de login da Stokki .................. stokki/sessao_uso.py
+ Listagem de pedidos/recebimentos da Stokki  stokki/pedidos.py (listar_pedidos) e stokki/recebimentos.py (listar_recebimentos);
+                                             24/11: a Stokki mudou o endereco (.../listing/table) e a linha virou JSON --
+                                             stokki/listagem.py devolve no formato antigo e explica o 422 (maximo 100 por
+                                             pagina; 'Sent'/'Canceled'/'all' nao listam mais). Teste: stokki/test_listagem.py
  Horários das rotinas ...................... infra/*.timer  (+ infra/sequencia_*.sh)
  Homologação (bancada do legado) ........... homologacao/ (guarda só com FRESH_AMBIENTE=homolog,
                                              pth_guarda.py, gerar_config.py, vps/*.sh) + infra/homolog/
@@ -382,10 +397,11 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  2) Estação de Impressão: "Em espera" -> "Aguardando Transportador"
     (stokki/estacao_impressao.py, chamado por somente_impressao.py /
     executar_tudo.py).
-    Pedido Cross (Quatro Estrelas, 1 item XD) em "Aberto": stokki/conferir_cross.py
-    --de N --ate M [--confirmar] leva até "Aguardando Transportador" (separação por
-    lista com Recebimentofrio01 -> Estação de Conferência 1 -> SKU XD + Pular
-    Impressão). Manual, só na VPS como www-data; usa stokki/avancar_cross.py.
+    Pedido Cross (1 item XD) em "Aberto": stokki/conferir_cross.py --cliente
+    qe|dourado --pedidos 44717 44755-44803 [--confirmar] leva até "Aguardando
+    Transportador" (separação por lista com Recebimentofrio01 -> Estação de
+    Conferência 1 -> SKU XD lido 1x por unidade + Pular Impressão). Manual, só na
+    VPS como www-data; usa stokki/avancar_cross.py. Cliente novo: PERFIS no script.
  3) pipeline.py lista os "Aguardando Transportador" e, desde 09/11, também os
     em aberto/separação/conferência de todos os embarcadores (Quatro Estrelas,
     Dourado e Padrão Puro entram em qualquer status, inclusive On hold), resolve endereço
@@ -455,6 +471,8 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
 
  Daemons sem porta:
    portal-cliente-envios   -> portal_cliente/enviar_stokki.py --loop  (fila de pedidos p/ Stokki)
+   portal-cliente-entradas -> portal_cliente/enviar_entradas_stokki.py --loop (fila de Pedidos de Entrada p/ Stokki;
+                              Playwright no wizard incoming/xml/multiple; so na VPS, dentro de sessao_uso; ainda nao deployado)
    portal-cliente-chamados -> portal_cliente/chamados.py ler --loop   (IMAP dos chamados)
 
  Units: infra/*.service, painel_agentes/infra/, portal_cliente/infra/,
@@ -583,6 +601,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                                              pro pool sozinho, só cancelando na mão)
  16:00                       sequencia-tarde                 infra/sequencia_tarde.sh (abaixo)
  18:00                       sequencia-incremento            infra/sequencia_incremento.sh (abaixo)
+ 18:06                       conferir-cross-diario           stokki/conferir_cross_diario.py --confirmar: Cross de todo embarcador
+                                                             com fluxo cross (menos Jersey Vale, 79) de Aberto
+                                                             a Aguardando Transportador; fila da provider
  20:00                       resumo-diario-embarcador        resumo_diario_embarcador.py --data hoje
  22:00 (DESATIVADO)          sequencia-noite                 infra/sequencia_noite.sh (abaixo). Timer
                                                              disabled na VPS, sem rodar desde pelo menos
@@ -620,6 +641,7 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  infra/sequencia_tarde.sh (16h desde 05/10, para no 1º erro):
    executar_tudo.py -> verificar_pedidos_duplicados_vuupt.py ->
    atualizar_agendamentos_confirmados.py -> marcar_clientes_agenda.py ->
+   roteirizacao/conferir_pool.py (falha não para) ->
    roteirizacao/criar_rotas_diarias.py --gerar-rascunho (antes do rascunho anda a
    data automatica de quem nao saiu) ->
    documentos_pedido/processar_documentos.py
@@ -967,7 +989,10 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
  sessao_stokki_reserva.json).
 
  auth.py              StokkiSession(config): login, .get/.post, renova em
-                      401/403. SessaoExpiradaError.
+                      401/403. SessaoExpiradaError. Rota que a Stokki manda pro
+                      login com a sessão válida (ela faz isso com rota que não
+                      existe) = RotaIndisponivelError, sem relogar (24/11).
+                      Teste: stokki/test_auth_rota_indisponivel.py
  pedidos.py           Pedidos de saída: contar_pedidos, listar_pedidos,
                       iterar_todos_pedidos, obter_detalhe, extrair_itens_do_pedido,
                       listar_transportadoras, listar_embarcadores, parsers de linha.
@@ -1240,6 +1265,12 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
                            retido (selo "Retornando — no carro de {motorista}" no pool) ate
                            a /retornos receber; pool, rascunho e incremento pulam. Chave =
                            service_id (codigo pode ser combinado). Marcar 2x mantem 1 ativo.
+ conferir_pool.py          Antes do rascunho (sequência da tarde): pedido do
+                           pool já entregue (Stokki Enviado + outro serviço
+                           entregue na Vuupt ou Lalamove COMPLETED) é
+                           cancelado na Vuupt e sai dos rascunhos abertos.
+                           Só Stokki Enviado/Cancelado e duplicado no pool
+                           = só aviso no WhatsApp. Log: dados/conferir_pool.log.
  reprocessar_rotas.py      Desfaz rotas sem motorista para reprocessar.
  fingerprint_rotas.py      Evita incluir o mesmo pedido duas vezes.
 
@@ -1274,6 +1305,9 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            /api/rotas/<id>/carregamento (api_motorista.py). Tabelas
                            nucleo_carregamentos (1 por rota: foto, carregador, uuid) e
                            nucleo_carregamento_itens (1 por parada: motivo, observação, removido_em).
+                           Checklist só vale pro motorista ATUAL da rota: trocou o motorista, o do
+                           anterior é arquivado (rota_id = -id, rota em rota_id_original +
+                           substituido_em, evento CARREGAMENTO_SUBSTITUIDO) e o novo refaz o dele.
                            nao_carregados_recentes() alimenta o selo "Não carregado" do pool
                            (planejamento_rotas.anotar_nao_carregados). Config
                            api_motorista.checklist_carregamento.{ativo, pilotos}: DESLIGADA por padrão.
@@ -1463,6 +1497,11 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            documento vira comprovante FACHADA (nao conta como
                            canhoto) e a foto gravada sai girada pra leitura.
  calibrar_nitidez.py       Calibra o limiar.
+ duplicidade_recibo.py     Despesa (nucleo_pedagios): dHash da foto (coluna hash_visual) e
+                           marca no painel /financeiro/pedagios recibo IDENTICO (sha256)
+                           ou PARECIDO com mesmo valor. So marca, nao barra. Coluna
+                           origem = CAMERA|GALERIA (app manda; galeria ganha selo no painel).
+                           Armadilha: capturado_em e a hora do envio, nao a da foto.
  marketplace_remoto.py     Cliente da página pública de ofertas.
 
  Lalamove
@@ -1568,11 +1607,17 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            reabre servico, entao DUPLICA (duplicar_servico_por_insucesso, codigo
                            -R), inclui na mesma rota e cria a parada nova PENDENTE no nucleo pro
                            motorista refazer a baixa no nosso app. A parada antiga fica intacta
-                           (historico). So rota operada pela ponte, EM_ROTA, com motivo, 1 vez
+                           (historico). Rota do nosso app OU do app da Vuupt (24/11: a baixa vale
+                           pelo nucleo ou ao vivo na Vuupt, pro atraso da sincronizacao; la o
+                           servico novo aparece no app da Vuupt). Rota em andamento, com motivo, 1 vez
                            (fingerprint insucessos_duplicados + evento FINALIZACAO_CANCELADA).
                            Nao desfaz e-mail nem expedicao na Stokki. POST
                            /api/acompanhamento/parada/<id>/cancelar-finalizacao
                            (total/operador/logistica). Escreve na Vuupt: bloqueado na homologacao.
+                           Tambem na Torre (menu do chip entregue/insucesso) e na /pedidos (acao
+                           "Cancelar finalizacao", ENTREGUE/INSUCESSO): POST /api/torre/cancelar-finalizacao
+                           e /api/pedidos/acao/cancelar-finalizacao {service_id, motivo} -> acha a baixa
+                           mais recente do servico em nucleo_paradas e cai no mesmo modulo (24/11).
  motoristas.py             Tela de motoristas.
  pedidos_parados_triagem.py  Pedidos parados (24/10: registro e triagem no próprio
                            painel, sem Lovable). Aba Registrar grava em
@@ -1779,6 +1824,13 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                               renomear}, GET .../envio-links/candidatos e POST .../envio-links (só total;
                               o envio responde 409 com a chave desligada). acesso_telas.TELAS já cobre
                               ^/api/motoristas.
+   /adesao-motoristas         adesao_motoristas.html + adesao_motoristas.py (23/11: adesão
+                              ao app novo; funil na ponte / usando / versão antiga / PIN
+                              sem entrar / sem login + leva de cada um; só leitura de
+                              bd_motoristas, motoristas, motoristas_fila_app, nucleo_rotas;
+                              ponte vem do config; total/operador/logistica/leitura;
+                              nível total tem o botão Criar acesso ao app / Resetar PIN,
+                              que chama /api/motoristas/<id>/resetar-pin)
    /financeiro/pedagios       pedagios.html
    /financeiro/pagamentos     pagamentos_pontuais.html (Adiantamento/Descarga/Frete avulso)
    /canhotos                  canhotos.html
@@ -1878,6 +1930,11 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            Cabeçalho com pares numerados (Sku1 | Quantidade1 | Sku2 ...,
                            planilha da Marchef): um pedido por linha, itens saem dos
                            pares preenchidos (_pares_de_itens), sem precisar indicar.
+ entradas.py               Aba Pedidos de Entrada: tabelas portal_entradas/portal_entrada_itens, leitura de XML/planilha,
+                           conferir_itens (SKU/EAN/DUN, caixas x unidades, trava de cadastro), situacao_rotulo da lista,
+                           conferencia do galpao por SKU (sobra/falta) e sincronizar_status (liga ao wms_recebimentos).
+ enviar_entradas_stokki.py Worker da fila de entradas (cria o #PE na Stokki pelo wizard; marca indeterminado em vez de erro
+                           quando nao ha resposta clara). Nunca rodar fora da VPS; parar o servico antes de --uma-vez.
  lotes_cliente.py          Lote indicado pelo cliente piloto do WMS (18/11): planilha de lotes
                            solta no envio e "Indicar lote" na prévia (XML). Grava em
                            wms_lotes_cliente; a separação usa (wms_separacao.lotes_indicados).
@@ -2405,7 +2462,13 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
    pedido). A remoção na Vuupt é síncrona e trava o "Iniciar rota" até todos os desmarcados
    saírem (o que já saiu fica em nucleo_carregamento_itens e a nova tentativa repete só os que
    faltam). O pedido desmarcado volta ao pool com o selo "Não carregado" por 2 dias; o selo
-   não bloqueia roterização (diferente de "Retornando").
+   não bloqueia roterização (diferente de "Retornando"). Revisão de segurança 22/11: a ida à
+   Vuupt é interativa (1 tentativa, timeout (3, 7) s, sem retry de 429; 429/timeout param o
+   laço), o orçamento é de 12 s contados desde o início do request (o app desiste em 20 s), a
+   rota ao vivo tem que ser do motorista que confirma, só 1 POST do checklist por rota de cada
+   vez (o 2º leva 409 "em andamento") e no máximo 5 POSTs com falha na Vuupt por (rota,
+   motorista) em 10 min (o 6º leva 429 sem chamar a Vuupt, só se ainda há parada a tirar;
+   contador e trava em memória do motorista-api, reiniciar o serviço zera).
  - Vuupt: created_at/start_at em UTC SEM fuso. Use nucleo/normalizacao.py.
  - Códigos de pedido variam (#PS-1, PS-1, #PS-1-R2): normalize antes de
    comparar (nucleo/normalizacao.normalizar_codigo; normalizar_order_number
@@ -2558,8 +2621,11 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
    Entra na bd_motoristas sempre como
    ESPORADICO (a ficha mostra "Pediu: Fixo"; a equipe promove pelo Editar).
    Cadastro falso/teste: botão "Desfazer" (inativa a linha, libera o CPF e,
-   se pedido, apaga na Vuupt o agente/veículo que ELE criou). iPhone = sem app Vuupt (SEM_APP=SIM
-   e boas-vindas diferentes). Teste local: sempre Vuupt/WhatsApp falsos
+   se pedido, apaga na Vuupt o agente/veículo que ELE criou). iPhone = sem app Vuupt (SEM_APP=SIM).
+   Boas-vindas (24/11): cria o login do app próprio (CPF + PIN provisório sorteado, trocar_pin=1;
+   a cada retentativa sorteia outro; quem já logou não tem o PIN mexido) e manda só o app novo:
+   Android = APK app.freshhub.com.br/motorista/app.apk, iPhone = PWA motorista.freshhub.com.br.
+   O e-mail/senha da Vuupt não vai mais na mensagem (o agente segue criado por trás). Teste local: sempre Vuupt/WhatsApp falsos
    (--modo-teste do módulo usa ids falsos); nunca o token real.
  - Atualização cadastral dos motoristas (link pessoal, 16/11): tudo DESLIGADO e cada coisa com chave própria
    em atualizacao_motoristas (ausente = desligado, nada mais liga sozinho):
