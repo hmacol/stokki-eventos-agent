@@ -345,6 +345,41 @@ CREATE TABLE IF NOT EXISTS nucleo_ofertas_rota_mensagens (
     UNIQUE (oferta_id, agent_id)
 );
 
+-- Checklist de carregamento (nucleo/carregamento.py): uma linha por rota, com a
+-- foto do bau carregado; itens = paradas que o motorista desmarcou (nao carregou).
+-- carregamento_id e NULL ate o carregamento ser gravado: o item e achado por (rota_id, service_id).
+-- Rota trocou de motorista: o checklist do anterior e arquivado com rota_id = -id e a rota em
+-- rota_id_original + substituido_em (colunas de 22/11 em _migrar_colunas; rota_id segue UNIQUE).
+CREATE TABLE IF NOT EXISTS nucleo_carregamentos (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    rota_id                 INTEGER NOT NULL UNIQUE,
+    agent_id                INTEGER,
+    uuid                    TEXT NOT NULL UNIQUE,
+    placa                   TEXT,
+    tipo_veiculo            TEXT,
+    carregador              TEXT,
+    foto_caminho            TEXT,
+    foto_sha256             TEXT,
+    resultado_foto          TEXT,
+    ocupacao_pct            REAL,
+    revisao_humana          INTEGER NOT NULL DEFAULT 0,
+    qtd_carregados          INTEGER NOT NULL DEFAULT 0,
+    qtd_desmarcados         INTEGER NOT NULL DEFAULT 0,
+    criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE TABLE IF NOT EXISTS nucleo_carregamento_itens (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    carregamento_id         INTEGER REFERENCES nucleo_carregamentos(id),
+    rota_id                 INTEGER NOT NULL,
+    service_id              INTEGER,
+    codigo                  TEXT,
+    motivo                  TEXT,
+    observacao              TEXT,
+    removido_em             TEXT,                           -- NULL = ainda nao saiu da Vuupt
+    criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_nucleo_carreg_itens_rota ON nucleo_carregamento_itens(rota_id, service_id);
+
 CREATE TABLE IF NOT EXISTS tarifas_motorista (
     tipo_veiculo            TEXT PRIMARY KEY,               -- FIORINO | VAN_HR | VUC | TRES_QUARTOS | TRUCK
     nome                    TEXT,
@@ -383,6 +418,8 @@ _COLUNAS_MOTORISTAS_NOVAS = [
     ("trocar_pin", "INTEGER NOT NULL DEFAULT 0"),      # 1 = PIN inicial/resetado: o app obriga a troca no próximo login
     ("chave_pix", "TEXT"),            # 08/10: o motorista edita no app (nucleo/cadastro_motorista.py)
     ("placa", "TEXT"),                # idem; espelhada na BD_MOTORISTAS.xlsx
+    ("plataforma", "TEXT"),           # 22/11: web | android | ios, informado pelo app (header X-App-Plataforma); web = PWA no iPhone, avisa por WhatsApp
+    ("app_versao", "TEXT"),           # 22/11: versao do APK que o app informa (header X-App-Versao); NULL = nunca informou (APK antigo)
     ("ve_financeiro", "INTEGER NOT NULL DEFAULT 1"),   # 0 = não é dono do carro: sem extrato no app (Hugo, 08/10)
 ]
 
@@ -628,7 +665,11 @@ def garantir_esquema(conn: sqlite3.Connection):
     _migrar_colunas(conn, "nucleo_paradas", _COLUNAS_PARADAS_NOVAS)
     _migrar_colunas(conn, "nucleo_rotas", _COLUNAS_ROTAS_NOVAS)
     _migrar_colunas(conn, "nucleo_pedagios", [("tipo", "TEXT NOT NULL DEFAULT 'PEDAGIO'"), ("descricao", "TEXT"),
-                                              ("parada_id", "INTEGER")])
+                                              ("parada_id", "INTEGER"),
+                                              ("origem", "TEXT NOT NULL DEFAULT 'CAMERA'"), ("hash_visual", "TEXT")])
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_nucleo_pedagios_sha ON nucleo_pedagios(sha256)")
+    # Checklist de carregamento arquivado quando a rota troca de motorista (revisao 22/11, M2)
+    _migrar_colunas(conn, "nucleo_carregamentos", [("rota_id_original", "INTEGER"), ("substituido_em", "TEXT")])
     conn.execute("CREATE INDEX IF NOT EXISTS idx_motoristas_agent ON motoristas(agent_id)")
     # documentos_processados é de outro módulo (documentos_pedido/), mas o
     # núcleo lê a NF do pedido por codigo_pedido a cada parada montada

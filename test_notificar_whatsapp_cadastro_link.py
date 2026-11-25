@@ -38,16 +38,22 @@ class TextosGrupo(unittest.TestCase):
 
 class BoasVindas(unittest.TestCase):
     def test_android_tem_acesso(self):
-        t = nw.texto_boas_vindas_motorista("Joao", "js@freshhub.com.br", "123456", "https://x/app.apk", False)
-        for parte in ("Joao", "js@freshhub.com.br", "123456", "https://x/app.apk"):
+        t = nw.texto_boas_vindas_motorista("Joao", "123.456.789-09", "482913", "https://x/app.apk", "https://x/pwa", False)
+        for parte in ("Joao", "CPF: 12345678909", "482913", "https://x/app.apk"):
             self.assertIn(parte, t)
+        self.assertNotIn("https://x/pwa", t)
 
-    def test_iphone_sem_senha_nem_link(self):
-        t = nw.texto_boas_vindas_motorista("Joao", "js@freshhub.com.br", "123456", "https://x/app.apk", True)
-        self.assertNotIn("123456", t)
+    def test_iphone_abre_o_pwa_no_safari(self):
+        t = nw.texto_boas_vindas_motorista("Joao", "12345678909", "482913", "https://x/app.apk", "https://x/pwa", True)
+        self.assertIn("https://x/pwa", t)
+        self.assertIn("482913", t)
+        self.assertIn("Safari", t)
         self.assertNotIn("https://x/app.apk", t)
-        self.assertNotIn("js@freshhub.com.br", t)
-        self.assertIn("a equipe vai te chamar", t)
+
+    def test_login_ja_em_uso_nao_mostra_pin(self):
+        t = nw.texto_boas_vindas_motorista("Joao", "12345678909", None, "https://x/app.apk", "https://x/pwa", False)
+        self.assertNotIn("provisório", t)
+        self.assertIn("o mesmo que você já usa", t)
 
     def test_forcar_destino_vai_pro_hugo_com_marca(self):
         config = {"whatsapp_notificacoes": {"ativo": True, "base_url": "http://x", "api_key": "k", "sessao": "s",

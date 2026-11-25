@@ -77,7 +77,7 @@ FILA_COLETA = [
     (92014, "Transportes Rápido Sul", "Laticínios Serra Azul", "Padaria Pão Quente", "48123", 9),
     (92020, "Cliente retira", "Hortifruti Vale Verde", "Restaurante Sabor da Vila", "31507", 4),
 ]
-SAEM_NA_COLETA = [92011, 92012, 92013]   # marcados na folha
+SAEM_NA_COLETA = [92011, 92012, 92013, 92014]   # marcados na folha
 NAO_SAIU = 92013                          # desmarcado no celular da doca
 
 
@@ -223,6 +223,33 @@ def foto_da_folha(img_folha: Image.Image, caminho: Path) -> Path:
     fundo = fundo.filter(ImageFilter.GaussianBlur(0.6))
     caminho.parent.mkdir(parents=True, exist_ok=True)
     fundo.save(caminho, "JPEG", quality=88)
+    return caminho
+
+
+def camera_no_qr(img_folha: Image.Image, caminho: Path) -> Path:
+    """O que a camera do celular ve ao apontar pro QR code da folha impressa:
+    o canto de cima da folha na mesa, com a mira amarela em volta do QR."""
+    from coletas import folha_pdf as fp
+    folha = img_folha.resize(fp.A4)
+    fundo = Image.new("RGB", (1700, 1100), (92, 74, 58))
+    d = ImageDraw.Draw(fundo)
+    for x in range(0, 1700, 9):   # veio da madeira
+        tom = 86 + (x * 7919) % 17
+        d.line([x, 0, x + 40, 1100], fill=(tom, tom - 16, tom - 30), width=5)
+    fundo.paste(folha.crop((0, 0, fp.A4[0], 900)), (120, 140))
+    qx, qy = 120 + fp.A4[0] - fp.MARGEM - fp.LADO_QR, 140 + 36   # canto do QR (folha_pdf.gerar)
+    cx, cy = qx + fp.LADO_QR // 2, qy + fp.LADO_QR // 2
+    w, h = 520, 650                                              # tela do celular (360 x 450)
+    tela = fundo.crop((cx - w // 2, cy - h // 3, cx + w // 2, cy - h // 3 + h)).resize((360, 450), Image.BICUBIC)
+    tela = tela.filter(ImageFilter.GaussianBlur(0.5))
+    d = ImageDraw.Draw(tela)
+    lado, mx, my = round(fp.LADO_QR * 360 / w) + 26, 180, round(450 / 3)
+    x0, y0, x1, y1, t = mx - lado // 2, my - lado // 2, mx + lado // 2, my + lado // 2, 22
+    for (ax, ay, bx, by) in ((x0, y0, x0 + t, y0), (x0, y0, x0, y0 + t), (x1 - t, y0, x1, y0), (x1, y0, x1, y0 + t),
+                             (x0, y1, x0 + t, y1), (x0, y1 - t, x0, y1), (x1 - t, y1, x1, y1), (x1, y1 - t, x1, y1)):
+        d.line([ax, ay, bx, by], fill=(255, 214, 10), width=4)
+    caminho.parent.mkdir(parents=True, exist_ok=True)
+    tela.save(caminho, "PNG")
     return caminho
 
 

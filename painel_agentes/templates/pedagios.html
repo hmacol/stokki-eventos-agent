@@ -258,6 +258,11 @@
           {% if p.observacao_revisao %}<div class="obs-revisao">{{ p.observacao_revisao }}</div>{% endif %}
           {# Conferência automática do recibo (nucleo/validacao_fotos.py).
              Só aparece quando a validação está ligada no config. #}
+          {# Foto da galeria e recibo repetido (nucleo/duplicidade_recibo.py): só marcam, quem aprova decide. #}
+          {% if p.origem == 'GALERIA' %}<div class="obs-revisao" title="O motorista anexou a foto da galeria do celular, não tirou na hora">🖼 Foto da galeria: confira a data e o local do recibo.</div>{% endif %}
+          {% for d in p.duplicados or [] %}
+            <div class="obs-revisao">⚠ {{ 'Recibo idêntico' if d.motivo == 'IDENTICO' else 'Recibo parecido, mesmo valor' }} ao lançamento #{{ d.id }} (rota {{ d.rota_id }}{% if d.motorista %}, {{ d.motorista }}{% endif %}).</div>
+          {% endfor %}
           {% set v = p.validacao or {} %}
           {% if v.resultado %}
             <div class="suave">

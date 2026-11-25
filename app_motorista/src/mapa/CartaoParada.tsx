@@ -2,25 +2,24 @@
 // (nunca arrastando o cartao pro lado: o arrastar e do Deslizar, regra do
 // Hugo de 26/08) e pelo toque no pino. Os passos sao os mesmos da lista da
 // tela da rota (app/rota/[id].tsx): iniciar deslocamento -> cheguei -> e so
-// depois Entregue / Nao entregue, que abrem a tela da parada com o resultado
-// ja escolhido (checklist, fotos e canhoto continuam la).
+// depois "Finalizar entrega", que abre a tela da parada pra escolher o
+// resultado (Entregue / Entregue parcial / Nao entregue / Reagendar; checklist,
+// fotos e canhoto continuam la).
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Deslizar } from '../deslizar';
 import { cores, situacaoCor, situacaoRotulo } from '../tema';
-import { nomeExibicao, partesEndereco, resumoJanela } from '../textos';
+import { codigoComNf, nomeExibicao, partesEndereco, resumoJanela } from '../textos';
 import { abrirNavegacao, ehPendente, emAndamento, rotaOperavel } from '../paradaPasso';
 import type { Parada, Rota } from '../tipos';
-
-export type FluxoBaixa = 'ENTREGUE' | 'NAO_ENTREGUE';
 
 /** Parada sem coordenada (nula ou 0,0) nao ganha pino. */
 export function temCoordenada(p: Parada): boolean {
   return p.latitude !== null && p.longitude !== null && !(p.latitude === 0 && p.longitude === 0);
 }
 
-export function CartaoParada({ parada: p, rota, total, indice, onAnterior, onProxima, onPasso, onBaixa }: {
+export function CartaoParada({ parada: p, rota, total, indice, onAnterior, onProxima, onPasso, onFinalizar }: {
   parada: Parada;
   rota: Rota;
   total: number;
@@ -29,7 +28,7 @@ export function CartaoParada({ parada: p, rota, total, indice, onAnterior, onPro
   onAnterior: () => void;
   onProxima: () => void;
   onPasso: (p: Parada, tipo: 'DESLOCAMENTO' | 'CHEGADA') => Promise<void>;
-  onBaixa: (p: Parada, fluxo: FluxoBaixa) => void;
+  onFinalizar: (p: Parada) => void;
 }) {
   const end = partesEndereco(p.endereco);
   const janela = resumoJanela(p, rota.data_rota, Date.now());
@@ -37,7 +36,7 @@ export function CartaoParada({ parada: p, rota, total, indice, onAnterior, onPro
   const temAnterior = indice > 0;
   const temProxima = indice < total - 1;
 
-  /** Mesmo controle da lista, so que no fim dois Deslizar em vez de "Finalizar entrega". */
+  /** Mesmo controle da lista, com o mesmo "Finalizar entrega" no fim. */
   const controle = () => {
     if (!rotaOperavel(rota) || !pendente) return null;
     const ativa = rota.paradas.find(emAndamento) ?? null;
@@ -53,12 +52,7 @@ export function CartaoParada({ parada: p, rota, total, indice, onAnterior, onPro
     if (p.situacao === 'EM_DESLOCAMENTO') {
       return <Deslizar key={`${p.id}-chegada`} titulo="Cheguei no local" icone="location" cor={cores.info} onConfirmar={() => onPasso(p, 'CHEGADA')} />;
     }
-    return (
-      <View style={{ gap: 10 }}>
-        <Deslizar key={`${p.id}-entregue`} titulo="Entregue" icone="checkmark-done" cor={cores.acento} onConfirmar={() => onBaixa(p, 'ENTREGUE')} />
-        <Deslizar key={`${p.id}-nao`} titulo="Não entregue" icone="close" cor={cores.perigo} onConfirmar={() => onBaixa(p, 'NAO_ENTREGUE')} />
-      </View>
-    );
+    return <Deslizar key={`${p.id}-finalizar`} titulo="Finalizar entrega" icone="checkmark-done" cor={cores.primaria} onConfirmar={() => onFinalizar(p)} />;
   };
 
   const acao = controle();
@@ -93,7 +87,7 @@ export function CartaoParada({ parada: p, rota, total, indice, onAnterior, onPro
         <View style={{ flex: 1 }}>
           <Text style={s.endereco} numberOfLines={2}>{end.completo ? `${end.rua}${end.bairro ? ` — ${end.bairro}` : ''}` : 'Endereço não informado'}</Text>
           <Text style={s.linha} numberOfLines={2}>
-            {[p.codigo, p.remetente_nome ? nomeExibicao({ destinatario_nome: p.remetente_nome }) : null, janela.texto].filter(Boolean).join(' · ')}
+            {[codigoComNf(p), p.remetente_nome ? nomeExibicao({ destinatario_nome: p.remetente_nome }) : null, janela.texto].filter(Boolean).join(' · ')}
           </Text>
         </View>
         {pendente ? (

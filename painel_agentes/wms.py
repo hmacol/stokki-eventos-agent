@@ -38,6 +38,7 @@ PREFIXO_QR_PRODUTO = "FL|"
 TEMPERATURAS = ("AMBIENTE", "REFRIGERADO", "CONGELADO")
 TIPOS_AREA = {
     "CONTAINER": ("Container", "AMBIENTE"),
+    "SECA": ("Seca", "AMBIENTE"),
     "CAM_CONGELADA": ("Câmara congelada", "CONGELADO"),
     "CAM_REFRIGERADA": ("Câmara refrigerada", "REFRIGERADO"),
 }

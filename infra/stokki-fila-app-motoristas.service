@@ -1,0 +1,9 @@
+[Unit]
+Description=Stokki Eventos - Fila de mensagens pra levar os motoristas ao app novo (lote do dia, privado do WhatsApp)
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python -m nucleo.fila_app_motoristas --real --limite 20 --pausa 45,180

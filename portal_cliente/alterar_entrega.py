@@ -422,7 +422,12 @@ def _avisar(deps: Dependencias, servico: dict, contexto: dict, codigo: str, rota
             mudancas: list | None = None) -> None:
     """Toda alteracao avisa a equipe (WhatsApp no grupo; Hugo, 12/11), inclusive a que parou no meio."""
     try:
-        deps.avisar_equipe({"codigo": codigo, "service_id": servico.get("id"), "rota_id": rota_id,
+        try:
+            from nucleo.nf_pedido import nf_do_codigo, nf_por_codigo
+            nf = nf_do_codigo(codigo, nf_por_codigo([codigo]))
+        except Exception:  # noqa: BLE001 -- NF e enfeite do aviso
+            nf = ""
+        deps.avisar_equipe({"codigo": codigo, "nf": nf, "service_id": servico.get("id"), "rota_id": rota_id,
                             "empresa": contexto.get("empresa_nome") or contexto["cnpj_embarcador"],
                             "cnpj_embarcador": contexto["cnpj_embarcador"], "por": contexto["por"],
                             "feito": list(feito), "falha": falha, "mudancas": list(mudancas or [])})
@@ -483,14 +488,16 @@ def dependencias_reais(config: dict, usuario: str) -> Dependencias:
         if not destino:
             return
         esc = lambda v: html.escape(str(v if v is not None else ""))  # noqa: E731
-        corpo = (f"<p><b>{esc(info['empresa'])}</b> alterou a entrega do pedido <b>{esc(info['codigo'])}</b> pelo portal "
+        import dados_cliente
+        ps_nf = dados_cliente.ps_e_nf(info["codigo"])
+        corpo = (f"<p><b>{esc(info['empresa'])}</b> alterou a entrega do pedido <b>{esc(ps_nf)}</b> pelo portal "
                  f"({esc(info['por'])}) e ele <b>saiu da rota #{esc(info['rota_id'])}</b>.</p>"
                  f"<p>Feito: {esc('; '.join(info['feito']) or 'nada')}.</p>")
         if info["falha"]:
             corpo += (f"<p><b>A alteração não terminou:</b> {esc(info['falha'])}. O pedido está fora da rota "
                       "e precisa ser conferido na Vuupt.</p>")
         html_email = envelope_html(corpo, rodape="Fresh Log · Portal do cliente · alteração de entrega", cor_acento="#F5A623")
-        enviar_email([destino], f"[Portal] Pedido saiu da rota · {info['codigo']} · {info['empresa']}", html_email, email_cfg)
+        enviar_email([destino], f"[Portal] Pedido saiu da rota · {ps_nf} · {info['empresa']}", html_email, email_cfg)
 
     return Dependencias(tirar_da_rota=tirar_da_rota, gravar_endereco=gravar_endereco, reagendar=reagendar,
                         atualizar_horario_contato=atualizar_horario_contato, geocodificar=geocodificar,

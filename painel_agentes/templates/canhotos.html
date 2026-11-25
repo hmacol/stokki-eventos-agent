@@ -56,7 +56,7 @@
         <div class="suave">{{ (c.capturado_em or c.enviado_em or '')[:16] }}</div>
       </td>
       <td>
-        <strong>{{ c.codigo or '—' }}</strong><br>
+        <strong>{{ c.codigo or '—' }}</strong>{% if c.codigo %} <span class="suave">· NF {{ c.nf or '—' }}</span>{% endif %}<br>
         <span class="suave">{{ c.destinatario_nome or '' }}</span>
         <div class="suave">{{ c.tipo }}</div>
       </td>

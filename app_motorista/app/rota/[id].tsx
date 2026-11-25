@@ -12,7 +12,7 @@
 // ações e o deslizar) e as outras viram linhas de uma altura que abrem no
 // toque. Com 14 paradas a rota inteira cabe em pouco mais de uma tela.
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Linking, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as api from '../../src/api';
@@ -21,9 +21,10 @@ import * as gps from '../../src/gps';
 import * as local from '../../src/local';
 import { carregarRotas } from '../../src/rotasStore';
 import { Deslizar } from '../../src/deslizar';
+import { CarregamentoRota } from '../../src/carregamentoRota';
 import { Botao, Cartao, Carregando } from '../../src/componentes';
 import { cores, formatarData, situacaoCor, situacaoRotulo, statusRotaRotulo } from '../../src/tema';
-import { horaDe, nomeExibicao, partesEndereco, resumoJanela } from '../../src/textos';
+import { codigoComNf, horaDe, nomeExibicao, partesEndereco, resumoJanela } from '../../src/textos';
 import { abrirNavegacao, ehPendente, emAndamento, ordenarParadas, paradaDaVez, registrarPasso, rotaOperavel } from '../../src/paradaPasso';
 import type { Parada, Rota } from '../../src/tipos';
 
@@ -47,7 +48,7 @@ function numeroWhatsapp(telefone: string | null | undefined): string | null {
 function abrirWhatsapp(p: Parada) {
   const numero = numeroWhatsapp(p.telefone);
   if (!numero) return;
-  const texto = encodeURIComponent(`Olá! Sou o motorista da Fresh Log e estou a caminho com a sua entrega (${p.codigo}).`);
+  const texto = encodeURIComponent(`Olá! Sou o motorista da Fresh Log e estou a caminho com a sua entrega (${p.codigo}${p.nf ? `, NF ${p.nf}` : ''}).`);
   Linking.openURL(`https://wa.me/${numero}?text=${texto}`).catch(() => Alert.alert('WhatsApp', 'Não foi possível abrir o WhatsApp neste aparelho.'));
 }
 
@@ -94,6 +95,17 @@ export default function DetalheRota() {
 
   if (!rota) return <Carregando />;
 
+  // Carregamento confirmado: a rota volta atualizada (o "Iniciar rota" aparece).
+  // Todas desmarcadas = rota cancelada pelo servidor: sai da tela.
+  const aoConfirmarCarregamento = (atualizada: Rota) => {
+    setRota(atualizada);
+    void carregar();          // atualiza o cache local: reabrir sem rede nao volta a pedir o carregamento
+    if (atualizada.status === 'CANCELADA') {
+      Alert.alert('Rota cancelada', 'Todas as paradas foram tiradas, então a rota foi cancelada.');
+      router.back();
+    }
+  };
+
   const pendentes = rota.paradas.filter(ehPendente);
   const ativa = rota.paradas.find(emAndamento) ?? null;       // a parada em andamento (no máximo uma)
   const feitas = rota.paradas.filter((p) => ['ENTREGUE', 'PARCIAL', 'INSUCESSO'].includes(p.situacao)).length;
@@ -107,7 +119,7 @@ export default function DetalheRota() {
   const depoisDesta = paradasOrdenadas.filter((p) => ehPendente(p) && p.id !== atual?.id);
   const jaFeitas = paradasOrdenadas.filter((p) => !ehPendente(p));
 
-  const acaoRota = async (acao: 'aceitar' | 'iniciar' | 'finalizar', status: Rota['status'], extra: Record<string, unknown> = {}) => {
+  const acaoRota = async (acao: 'aceitar' | 'iniciar' | 'finalizar', status: Rota['status'], extra: Record<string, unknown> = {}): Promise<boolean> => {
     setOcupado(true);
     try {
       const pos = await gps.posicaoAtual();
@@ -121,8 +133,10 @@ export default function DetalheRota() {
       if (acao === 'iniciar') await gps.iniciar(rota.id);
       if (acao === 'finalizar') await gps.parar();
       await carregar();
+      return true;
     } catch (e) {
       Alert.alert('Não deu', e instanceof api.ErroRede ? 'Sem conexão. Tente de novo com sinal.' : (e as Error).message);
+      return false;
     } finally {
       setOcupado(false);
     }
@@ -149,7 +163,16 @@ export default function DetalheRota() {
 
   const finalizar = () => {
     if (pendentes.length > 0) return Alert.alert('Ainda faltam paradas', `${pendentes.length} parada(s) sem resultado.`);
-    void acaoRota('finalizar', 'CONCLUIDA');
+    const concluir = async (lancarDespesas: boolean) => {
+      const ok = await acaoRota('finalizar', 'CONCLUIDA');
+      if (ok && lancarDespesas) router.push({ pathname: '/financeiro', params: { rota: String(rota.id) } });
+    };
+    // Rota operada pela Vuupt não aceita despesa pelo app: finaliza direto.
+    if (!rota.editavel) return void concluir(false);
+    Alert.alert('Teve despesa nesta rota?', 'Pedágio, estacionamento, descarga ou outra despesa pra reembolso. Dá pra lançar agora, com a foto do recibo.', [
+      { text: 'Não teve', onPress: () => void concluir(false) },
+      { text: 'Lançar despesas', onPress: () => void concluir(true) },
+    ]);
   };
 
   const cancelarPedagioEnviado = (pedagioId: number, valor: number) => {
@@ -279,6 +302,9 @@ export default function DetalheRota() {
             {p.codigo ? (
               <View><Text style={s.dadoRotulo}>Pedido</Text><Text style={s.dadoValor}>{p.codigo}</Text></View>
             ) : null}
+            {p.codigo ? (
+              <View><Text style={s.dadoRotulo}>NF</Text><Text style={s.dadoValor}>{(p.nf || '').trim() || '—'}</Text></View>
+            ) : null}
           </View>
 
           {avisosParada(p)}
@@ -314,7 +340,7 @@ export default function DetalheRota() {
           <View style={{ flex: 1 }}>
             <Text style={[s.linhaNome, final && s.linhaNomeFeita]} numberOfLines={1}>{nomeExibicao(p)}</Text>
             <Text style={s.linhaSub} numberOfLines={1}>
-              {[end.bairro, p.volume_caixas ? `${p.volume_caixas} cx` : ''].filter(Boolean).join(' · ') || (p.codigo ?? '')}
+              {[end.bairro, p.volume_caixas ? `${p.volume_caixas} cx` : ''].filter(Boolean).join(' · ') || codigoComNf(p)}
             </Text>
           </View>
           <View style={{ alignItems: 'flex-end' }}>
@@ -326,7 +352,7 @@ export default function DetalheRota() {
         {expandida ? (
           <View style={s.linhaAberta}>
             <Text style={s.linhaEndereco}>{end.completo || 'Endereço não informado'}</Text>
-            {p.remetente_nome ? <Text style={s.avisoParada}>Remetente: {nomeExibicao({ destinatario_nome: p.remetente_nome })}{p.codigo ? ` · ${p.codigo}` : ''}</Text> : null}
+            {p.remetente_nome ? <Text style={s.avisoParada}>Remetente: {nomeExibicao({ destinatario_nome: p.remetente_nome })}{p.codigo ? ` · ${codigoComNf(p)}` : ''}</Text> : null}
             {avisosParada(p)}
             {ehPendente(p) ? acoesContato(p) : null}
             {controle ? <View style={{ marginTop: 10 }}>{controle}</View> : null}
@@ -338,7 +364,7 @@ export default function DetalheRota() {
   };
 
   return (
-    <ScrollView style={s.tela} contentContainerStyle={{ padding: 16, paddingBottom: 48 }} refreshControl={<RefreshControl refreshing={false} onRefresh={carregar} />}>
+    <ScrollView style={s.tela} contentContainerStyle={{ padding: 16, paddingBottom: 48 }} keyboardShouldPersistTaps="handled" refreshControl={<RefreshControl refreshing={false} onRefresh={carregar} />}>
       {offline ? <Text style={s.aviso}>Sem conexão — trabalhando com a última versão salva.</Text> : null}
 
       <Cartao>
@@ -347,7 +373,7 @@ export default function DetalheRota() {
         <View style={s.barraFundo}><View style={[s.barra, { width: `${ativas.length ? (feitas / ativas.length) * 100 : 0}%` }]} /></View>
         <View style={s.resumoLinha}>
           <Text style={[s.sub, { flex: 1 }]}>{feitas} de {ativas.length} paradas com resultado{rota.km_estimado ? ` · ~${rota.km_estimado.toFixed(0)} km` : ''}</Text>
-          {rota.liberada !== false && rota.paradas.length > 0 ? (
+          {Platform.OS !== 'web' && rota.liberada !== false && rota.paradas.length > 0 ? (
             <Pressable style={({ pressed }) => [s.botaoMapa, pressed && { backgroundColor: cores.fundo }]}
               onPress={() => router.push(`/mapa/${rota.id}`)} accessibilityRole="button" accessibilityLabel="Ver a rota no mapa">
               <Ionicons name="map" size={17} color={cores.primaria} />
@@ -358,7 +384,7 @@ export default function DetalheRota() {
 
         {rota.status === 'PLANEJADA' && !recusando ? (
           <View style={{ marginTop: 14 }}>
-            <Deslizar titulo="Aceitar rota" icone="checkmark" onConfirmar={() => acaoRota('aceitar', 'ACEITA')} desabilitado={ocupado} />
+            <Deslizar titulo="Aceitar rota" icone="checkmark" onConfirmar={async () => { await acaoRota('aceitar', 'ACEITA'); }} desabilitado={ocupado} />
             <Pressable onPress={() => setRecusando(true)} style={{ marginTop: 10 }}><Text style={s.link}>Não posso fazer esta rota (recusar)</Text></Pressable>
           </View>
         ) : null}
@@ -371,9 +397,12 @@ export default function DetalheRota() {
             </View>
           </View>
         ) : null}
-        {rota.status === 'ACEITA' && rota.editavel ? (
+        {rota.status === 'ACEITA' && rota.editavel && rota.carregamento?.exigido && !rota.carregamento.feito ? (
+          // Checklist de carregamento: trava o "Iniciar rota" até o servidor registrar.
+          <CarregamentoRota rota={rota} aoConfirmar={aoConfirmarCarregamento} />
+        ) : rota.status === 'ACEITA' && rota.editavel ? (
           <View style={{ marginTop: 14 }}>
-            <Deslizar titulo="Iniciar rota" icone="play" onConfirmar={() => acaoRota('iniciar', 'EM_ROTA')} desabilitado={ocupado} />
+            <Deslizar titulo="Iniciar rota" icone="play" onConfirmar={async () => { await acaoRota('iniciar', 'EM_ROTA'); }} desabilitado={ocupado} />
           </View>
         ) : null}
         {operavel && pendentes.length === 0 ? (

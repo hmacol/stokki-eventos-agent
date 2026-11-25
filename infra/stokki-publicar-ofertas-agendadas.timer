@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-publicar-ofertas-agendadas.service a cada minuto (horario escolhido em Publicar para motoristas)
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+Persistent=false
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

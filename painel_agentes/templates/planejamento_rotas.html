@@ -544,6 +544,19 @@
     background: rgba(255,92,80,0.18);
     color: var(--erro-texto);
   }
+  /* Nao carregado (checklist de carregamento): so rotula, continua selecionavel */
+  .item-parada .badge-nao-carregado {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 100px;
+    margin-top: 3px;
+    background: rgba(255,92,80,0.18);
+    color: var(--erro-texto);
+  }
   #lista-pool .item-parada.retornando { cursor: default; opacity: 0.8; }
   /* status da parada na VUUPT no card da rota enviada (10/11): neutro
      enquanto o pedido pode sair da rota, em negrito quando já começou */
@@ -889,6 +902,7 @@
   body.cards-numeros .item-parada .badge-fora-area,
   body.cards-numeros .item-parada .badge-dedicado,
   body.cards-numeros .item-parada .badge-retornando,
+  body.cards-numeros .item-parada .badge-nao-carregado,
   body.cards-numeros .item-parada .badge-status-vuupt,
   body.cards-numeros .item-parada .janela,
   body.cards-numeros .item-parada .nf-pedido { display: none; }
@@ -2106,6 +2120,12 @@
       <input type="date" id="reagendar-data" style="width:100%;">
     </div>
     <div class="campo-reagendar">
+      <label style="display:flex; align-items:center; gap:6px; font-weight:600; cursor:pointer;">
+        <input type="checkbox" id="reagendar-manter-horarios"> Manter os horários do agendamento anterior
+      </label>
+      <p class="subtitulo" style="margin:4px 0 0;">Troca só a data; cada pedido fica com a própria janela. Sem agendamento anterior, usa a janela abaixo.</p>
+    </div>
+    <div class="campo-reagendar" id="reagendar-campo-janela">
       <label>Janela de horário</label>
       <div class="linha-horarios">
         <label for="reagendar-hora-inicio">Das</label>
@@ -3033,6 +3053,9 @@
     const partes = [];
     // Retornando (10/11): tirado de rota já iniciada, ainda no carro do
     // motorista -- só volta a ser roteirizável depois que /retornos receber
+    if (p.nao_carregado) {
+      partes.push(`<span class="badge-nao-carregado" title="${escaparHtml(p.nao_carregado.observacao || "")}">↺ Não carregado: ${escaparHtml(p.nao_carregado.motivo || "")}</span>`);
+    }
     if (p.retornando) {
       const motivo = p.retornando.motivo ? ` Motivo: ${p.retornando.motivo}.` : "";
       partes.push(`<span class="badge-retornando" title="Tirado de rota já iniciada: não entra em rota até o galpão receber em Retornos.${escaparHtml(motivo)}">↩ Retornando — no carro de ${escaparHtml(p.retornando.motorista_nome || "?")}</span>`);
@@ -3104,7 +3127,7 @@
       : "";
     // NF já casada (documentos_processados) -- Hugo, 14/08: mostrar
     // pra confirmar visualmente que achou o pedido certo ao buscar por NF
-    const nf = p.numero_nf ? ` <span class="nf-pedido">NF ${escaparHtml(p.numero_nf)}</span>` : "";
+    const nf = ` <span class="nf-pedido">NF ${escaparHtml(p.numero_nf || "—")}</span>`;
     // cancela o pedido de verdade na VUUPT (Hugo, 15/08) -- leitura não
     // recebe o botão (mesma trava dos demais controles de ação)
     let botaoCancelar = PODE_EDITAR
@@ -3550,7 +3573,9 @@
         ${(bloqueada || !PODE_EDITAR) ? "" : `
         <button type="button" class="botao-otimizar" data-rascunho-id="${rascunho.id}">Otimizar sequência</button>
         <button type="button" class="botao-inverter" data-rascunho-id="${rascunho.id}" title="Inverte a ordem de execução das paradas (roda de trás pra frente)">Inverter rota</button>
-        ${(!rascunho.agent_id && rascunho.paradas.length) ? `<button type="button" class="botao-publicar-oferta" data-rascunho-id="${rascunho.id}" title="Publica a rota (sem revelar endereços) pro grupo de motoristas elegível escolher">Publicar para motoristas</button>` : ""}
+        ${(rascunho.oferta_agendada_em && !rascunho.agent_id) ? `<span class="oferta-agendada-situacao">Publicação agendada às ${escaparHtml(rascunho.oferta_agendada_em.slice(11, 16))}</span><button type="button" class="botao-cancelar-agendamento-oferta perigo" data-rascunho-id="${rascunho.id}">Cancelar agendamento</button>` : ""}
+        ${rascunho.oferta_agendada_erro ? `<span class="oferta-agendada-situacao" style="color:var(--perigo,#b00020)">Agendamento não publicou: ${escaparHtml(rascunho.oferta_agendada_erro)}</span>` : ""}
+        ${rascunho.paradas.length ? `<button type="button" class="botao-publicar-oferta" data-rascunho-id="${rascunho.id}" ${rascunho.agent_id ? "hidden" : ""} title="Publica a rota (sem revelar endereços) pro grupo de motoristas elegível escolher. Você pode escolher um horário de hoje.">Publicar para motoristas</button>` : ""}
         <button type="button" class="botao-enviar" data-rascunho-id="${rascunho.id}">Confirmar e enviar</button>
         <button type="button" class="botao-descartar perigo" data-rascunho-id="${rascunho.id}">Descartar</button>`}
         ${(ofertada && PODE_EDITAR) ? `<button type="button" class="botao-despublicar-oferta perigo" data-rascunho-id="${rascunho.id}" title="Tira a rota do marketplace -- volta a ser rascunho editável (se ninguém já tiver escolhido)">Despublicar</button>` : ""}
@@ -4450,7 +4475,7 @@
         ? `<label class="check-retirada" title="Marcar pra expedir na Stokki (a pessoa veio buscar)">
              <input type="checkbox" data-codigo="${escaparHtml(p.codigo)}" aria-label="Marcar ${escaparHtml(p.codigo)} pra expedir" ${marcada ? "checked" : ""}></label>`
         : "";
-      const nf = p.numero_nf ? ` <span class="nf">NF ${escaparHtml(p.numero_nf)}</span>` : "";
+      const nf = ` <span class="nf">NF ${escaparHtml(p.numero_nf || "—")}</span>`;
       const destinatario = p.destinatario_nome ? `<br><span class="destinatario">${escaparHtml(p.destinatario_nome)}</span>` : "";
       const transportadora = p.transportadora ? `<br><span class="transportadora">retira: ${escaparHtml(p.transportadora)}</span>` : "";
       const caixas = p.volume_caixas ? ` · ${p.volume_caixas} cx` : "";
@@ -5912,6 +5937,21 @@
     // publica 1 rota pro marketplace de escolha aberta (Hugo, 22/08) --
     // recarrega a página no sucesso, mesmo padrão de confirmarEnvio/
     // cancelarRota (o card muda de status/controles disponíveis)
+    // Horário opcional (Hugo, 25/11): vazio = agora; HH:MM = hoje nessa hora (timer publica).
+    const hora = prompt("Publicar para motoristas.\n\nHorário de hoje pra publicar (HH:MM). Deixe em branco pra publicar agora:", "");
+    if (hora === null) return;
+    if (hora.trim()) {
+      botao.disabled = true;
+      try {
+        const r = await postJSON("/api/planejamento/agendar-oferta", { rascunho_id: rascunhoId, horario: hora.trim() });
+        if (!r.ok) { alert(`Não deu pra agendar: ${r.erro}`); botao.disabled = false; return; }
+        location.reload();
+      } catch (e) {
+        alert(`Não deu pra agendar: ${e.message}`);
+        botao.disabled = false;
+      }
+      return;
+    }
     const original = botao.textContent;
     botao.disabled = true;
     botao.textContent = "Publicando...";
@@ -6731,14 +6771,15 @@
   }
 
   async function salvarReagendamento(pendente, data, horaInicio, horaFim) {
+    const manter = document.getElementById("reagendar-manter-horarios").checked;
     if (pendente.itens) {
       const resp = await postJSON("/api/planejamento/reagendar-pedidos", {
-        itens: pendente.itens, data, hora_inicio: horaInicio, hora_fim: horaFim,
+        itens: pendente.itens, data, hora_inicio: horaInicio, hora_fim: horaFim, manter_horarios: manter,
       });
       return resp.falhas || [];
     }
     await postJSON("/api/planejamento/reagendar-pedido", {
-      service_id: pendente.serviceId, data, hora_inicio: horaInicio, hora_fim: horaFim,
+      service_id: pendente.serviceId, data, hora_inicio: horaInicio, hora_fim: horaFim, manter_horarios: manter,
     });
     return [];
   }
@@ -6896,7 +6937,7 @@
     if (!itens.length) { alert("Só pedidos com código podem ser marcados."); return; }
     dedicadoPendente = { itens };
     document.getElementById("dedicado-resumo").textContent = `${itens.length} pedido(s)`;
-    document.getElementById("dedicado-lista").innerHTML = itens.map(it => `<li>${escaparHtml(it.codigo)} · ${escaparHtml(it.remetente_nome || "")}</li>`).join("");
+    document.getElementById("dedicado-lista").innerHTML = itens.map(it => `<li>${escaparHtml(it.codigo)} · NF ${escaparHtml(it.numero_nf || "—")} · ${escaparHtml(it.remetente_nome || "")}</li>`).join("");
     document.getElementById("dedicado-valor").value = "";
     atualizarPreviaDedicado();
     document.getElementById("modal-dedicado").classList.add("aberto");
@@ -7257,6 +7298,9 @@
     }
     const selo = document.getElementById(`sem-carro-${r.id}`);
     if (selo) selo.innerHTML = seloSemCarroHtml(r);
+    // "Publicar para motoristas" só aparece enquanto a rota está sem motorista
+    const botaoOferta = document.querySelector(`.botao-publicar-oferta[data-rascunho-id="${r.id}"]`);
+    if (botaoOferta) botaoOferta.hidden = !!r.agent_id;
   }
 
   // carros do seletor: uma chamada só por carga da tela (o servidor guarda
@@ -8066,6 +8110,11 @@
         definirHorarioLalamove(Number(box.dataset.rascunhoId), "", box.querySelector(".lalamove-horario"));
       } else if (e.target.classList.contains("botao-publicar-oferta")) {
         publicarOferta(Number(e.target.dataset.rascunhoId), e.target);
+      } else if (e.target.classList.contains("botao-cancelar-agendamento-oferta")) {
+        e.target.disabled = true;
+        postJSON("/api/planejamento/agendar-oferta", { rascunho_id: Number(e.target.dataset.rascunhoId), horario: "" })
+          .then(() => location.reload())
+          .catch(err => { alert(`Não deu pra cancelar: ${err.message}`); e.target.disabled = false; });
       } else if (e.target.classList.contains("botao-despublicar-oferta")) {
         despublicarOferta(Number(e.target.dataset.rascunhoId), e.target);
       } else if (e.target.classList.contains("botao-fundir")) {
@@ -8194,6 +8243,9 @@
     });
     document.getElementById("botao-salvar-disponibilidade").addEventListener("click", (e) => salvarDisponibilidade(e.target));
     document.getElementById("botao-aplicar-periodo").addEventListener("click", (e) => aplicarPeriodoDisponibilidade(e.target));
+    document.getElementById("reagendar-manter-horarios").addEventListener("change", (e) => {
+      document.getElementById("reagendar-campo-janela").style.opacity = e.target.checked ? "0.5" : "1";
+    });
     document.getElementById("botao-cancelar-reagendar").addEventListener("click", () => {
       document.getElementById("modal-reagendar").classList.remove("aberto");
       reagendarPendente = null;

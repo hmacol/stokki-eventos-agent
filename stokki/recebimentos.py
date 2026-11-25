@@ -10,7 +10,7 @@ sondar de novo desta maquina -- login concorrente derruba a sessao da
 VPS e do agente-importacao-stokki):
 
 Endpoints:
-  GET /pt-br/administrator/inventory/incoming/table       -- listagem paginada (DataTables)
+  GET /pt-br/administrator/inventory/incoming/listing/table -- listagem paginada (24/11: ver stokki/listagem.py)
   GET /pt-br/administrator/inventory/incoming/show/{id}   -- detalhe completo
 
 Colunas do DataTable (nesta ordem, indices 0-11):
@@ -32,8 +32,15 @@ ARMADILHA -- a linha tem dois numeros diferentes no campo 'id':
     <a href="https://freshlog.stokki.com.br/.../incoming/show/2478">#PE-2478</a><br>
     <span class="text-muted">41099</span>
 O codigo e '#PE-2478', o id que abre o detalhe e 2478 (do href). O 41099
-e outro id interno que NAO serve -- incoming/show/41099 devolve 500.
-Extrair sempre do href (ou do '#PE-<n>'), nunca do numero solto.
+e a "Ref. do Pedido" (= numero da NF quando o #PE foi criado por XML,
+confirmado na sondagem de 25/09/2026) -- serve pra conciliar com o
+portal, mas NAO serve pra abrir o detalhe: incoming/show/41099 devolve
+500. Extrair o id sempre do href.
+
+Cabecalho do detalhe (duas tabelas <tr><th>rotulo</th><td>valor</td></tr>):
+  ID do Pedido | Ref. do Pedido | Tipo | Movimento | Cliente | unidade
+  Situacao | Chegada Prevista | Tipo de Acondicionamento | ... | NF-e | CT-e
+'NF-e:' traz a chave de 44 digitos num <a> pro portal da Fazenda.
 
 Estados vistos: "Recebido" e "Em transito". Um recebimento "Em transito"
 ainda nao tem tabela de itens nenhuma (mercadoria nao chegou) -- o parser
@@ -69,6 +76,7 @@ import time as _time
 
 from bs4 import BeautifulSoup
 
+from stokki import listagem
 from stokki.auth import StokkiSession
 
 logger = logging.getLogger(__name__)
@@ -135,16 +143,21 @@ def listar_recebimentos(
         "input_search": busca,
     }
     resp = sessao.get(
-        f"{BASE_URL}/pt-br/administrator/inventory/incoming/table",
+        # 24/11: a Stokki trocou incoming/table por incoming/listing/table (o
+        # antigo redireciona pro /login) e a linha virou JSON estruturado --
+        # ver stokki/listagem.py, que devolve a linha no formato de antes.
+        f"{BASE_URL}/pt-br/administrator/inventory/incoming/listing/table",
         params=params,
         headers={"Referer": f"{BASE_URL}/pt-br/administrator/inventory/incoming"},
     )
+    listagem.conferir_resposta(resp)
     resp.raise_for_status()
     try:
-        return resp.json()
+        dados = resp.json()
     except Exception:
         import json
-        return json.loads(resp.text)
+        dados = json.loads(resp.text)
+    return listagem.converter_resposta(dados)
 
 
 # ── Linha da listagem ──────────────────────────────────────────────────────────
@@ -191,7 +204,7 @@ def extrair_cabecalho_da_linha(linha) -> dict:
 
 # ── Detalhe de um recebimento ──────────────────────────────────────────────────
 
-def extrair_itens_do_recebimento(html: str) -> list[dict]:
+def extrair_itens_do_recebimento(html: str, usar_esperada: bool = False) -> list[dict]:
     """
     Itens do detalhe de um recebimento, sempre da tabela "NR | ID | SKU |
     Nome | Localizacao | Quantidade | unidade | Valor Unitario |
@@ -213,13 +226,19 @@ def extrair_itens_do_recebimento(html: str) -> list[dict]:
     itens legiveis -- vira erro pra quem chama).
 
     Nao ha coluna EAN nessa tabela -- ean_linha sempre vazio.
+
+    usar_esperada (22/11/2026, pedido do Hugo: o recebimento e executado no
+    NOSSO app, nao na Stokki): linha com "Quantidade total recebida" vazia
+    entra com a "Quantidade" esperada e `esperada=True`. Quem decide quando
+    isso vale e quem chama (sincronizar_recebimentos_wms: so "Aguardando
+    recebimento", a mercadoria ja chegou e a Stokki ainda nao conferiu).
     """
     soup = BeautifulSoup(html, "html.parser")
 
     tabela = _achar_tabela_por_cabecalho(soup, {"SKU", "QUANTIDADE TOTAL RECEBIDA"})
     if tabela is None:
         return []
-    return _itens_da_tabela_de_itens(tabela)
+    return _itens_da_tabela_de_itens(tabela, usar_esperada)
 
 
 def _achar_tabela_por_cabecalho(soup: BeautifulSoup, cabecalhos_obrigatorios: set):
@@ -232,7 +251,7 @@ def _achar_tabela_por_cabecalho(soup: BeautifulSoup, cabecalhos_obrigatorios: se
     return None
 
 
-def _itens_da_tabela_de_itens(tabela) -> list[dict]:
+def _itens_da_tabela_de_itens(tabela, usar_esperada: bool = False) -> list[dict]:
     """
     NR | ID | SKU | Nome | Localizacao | Quantidade | unidade | Valor
     Unitario | Quantidade total recebida | Obs. Le por indice de
@@ -247,13 +266,20 @@ def _itens_da_tabela_de_itens(tabela) -> list[dict]:
     indice = {}
     for i, th in enumerate(tabela.find_all("th")):
         nome = th.get_text(strip=True).upper()
-        if nome in ("SKU", "NOME", "QUANTIDADE TOTAL RECEBIDA") and nome not in indice:
+        if nome in ("SKU", "NOME", "QUANTIDADE", "UNIDADE", "QUANTIDADE TOTAL RECEBIDA") and nome not in indice:
             indice[nome] = i
     if "SKU" not in indice or "QUANTIDADE TOTAL RECEBIDA" not in indice:
         return []
 
     itens = []
     posicao = 0  # posicao real na tabela -- pular uma linha nao renumera as outras
+    def _numero(celula) -> float | None:
+        bruta = celula.get_text(" ", strip=True).replace(".", "").replace(",", ".")
+        try:
+            return float(bruta)
+        except ValueError:
+            return None
+
     for tr in tabela.find_all("tr"):
         celulas = tr.find_all("td")
         if len(celulas) <= max(indice.values()):
@@ -263,23 +289,84 @@ def _itens_da_tabela_de_itens(tabela) -> list[dict]:
         if not sku:
             continue  # linha de total ou celula vazia
         descricao = celulas[indice["NOME"]].get_text(" ", strip=True) if "NOME" in indice else ""
-        bruta = celulas[indice["QUANTIDADE TOTAL RECEBIDA"]].get_text(" ", strip=True).replace(".", "").replace(",", ".")
-        try:
-            quantidade = float(bruta)
-        except ValueError:
+        quantidade = _numero(celulas[indice["QUANTIDADE TOTAL RECEBIDA"]])
+        esperada = False
+        if quantidade is None and usar_esperada and "QUANTIDADE" in indice:
+            quantidade = _numero(celulas[indice["QUANTIDADE"]])
+            esperada = True
+        if quantidade is None or (esperada and quantidade <= 0):
             continue
-        itens.append({
+        item = {
             "linha": posicao,
             "sku": sku,
             "ean_linha": "",
             "descricao": descricao,
             "qtd_embalagem": quantidade,
-        })
+        }
+        if esperada:
+            item["esperada"] = True
+        if "UNIDADE" in indice:      # a Stokki diz em que unidade a quantidade esta ("UN", "CX"...)
+            item["unidade"] = celulas[indice["UNIDADE"]].get_text(" ", strip=True)
+        itens.append(item)
     return itens
 
 
-def ler_itens(sessao: StokkiSession, id_recebimento: int) -> list[dict]:
-    """GET no detalhe do recebimento + extrair_itens_do_recebimento."""
+def ler_itens(sessao: StokkiSession, id_recebimento: int, usar_esperada: bool = False) -> list[dict]:
+    """GET no detalhe (via ler_detalhe) + extrai apenas os itens."""
+    return ler_detalhe(sessao, id_recebimento, usar_esperada)["itens"]
+
+
+# ── Cabecalho do detalhe (chave NF-e e Ref. do Pedido) ────────────────────────
+
+def _valor_do_rotulo(soup: BeautifulSoup, rotulo: str) -> str:
+    """Valor do <td> ao lado do <th> cujo texto comeca com `rotulo`, nas
+    tabelas de cabecalho do detalhe. Acha pelo texto do rotulo, nunca por
+    posicao (mesma regra do resto do modulo)."""
+    alvo = rotulo.upper().rstrip(":")
+    for th in soup.find_all("th"):
+        texto = th.get_text(" ", strip=True).upper().rstrip(":")
+        if texto == alvo or texto.startswith(alvo):
+            td = th.find_next_sibling("td")
+            if td is not None:
+                return td.get_text(" ", strip=True)
+    return ""
+
+
+def _nao_informado(valor: str) -> bool:
+    return not valor or valor.strip().upper().replace("Ã", "A") in ("NAO INFORMADO", "-", "—")
+
+
+def extrair_chave_nfe(html: str) -> str:
+    """Chave de acesso (44 digitos) do campo 'NF-e:' do detalhe, ou ''."""
+    soup = BeautifulSoup(html, "html.parser")
+    digitos = re.sub(r"\D", "", _valor_do_rotulo(soup, "NF-e"))
+    return digitos if len(digitos) == 44 else ""
+
+
+def extrair_ref_pedido(html: str) -> str:
+    """'Ref. do Pedido:' do detalhe (= numero da NF quando criado por XML;
+    = po quando criado por Excel), ou '' quando 'Nao informado'."""
+    soup = BeautifulSoup(html, "html.parser")
+    valor = _valor_do_rotulo(soup, "Ref. do Pedido")
+    return "" if _nao_informado(valor) else valor.strip()
+
+
+def extrair_ref_da_linha(linha) -> str:
+    """O segundo numero do campo 'id' da listagem ('#PE-2478 ... 41099'):
+    e a Ref. do Pedido, nao um id. '' quando nao ha."""
+    html = str(linha.get("id", "")) if isinstance(linha, dict) else ""
+    texto = re.sub(r"<[^>]+>", " ", html)
+    texto = re.sub(r"#PE-\d+", " ", texto)
+    m = re.search(r"\S+", texto)
+    return m.group(0) if m else ""
+
+
+def ler_detalhe(sessao: StokkiSession, id_recebimento: int, usar_esperada: bool = False) -> dict:
+    """GET no detalhe UMA vez e devolve itens + chave NF-e + Ref. do Pedido
+    (o timer do WMS e o worker do portal precisam dos tres do mesmo HTML)."""
     resp = sessao.get(f"{BASE_URL}/pt-br/administrator/inventory/incoming/show/{id_recebimento}")
     resp.raise_for_status()
-    return extrair_itens_do_recebimento(resp.text)
+    html = resp.text
+    return {"itens": extrair_itens_do_recebimento(html, usar_esperada),
+            "chave_nfe": extrair_chave_nfe(html),
+            "ref_pedido": extrair_ref_pedido(html)}

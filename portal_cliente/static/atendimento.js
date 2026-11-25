@@ -300,6 +300,9 @@
 
   // Chamado por outra tela (aba Envios, bloqueio de área — Hugo 23/09):
   // abre o widget num chamado e, se vier texto, já manda como mensagem.
+  // Abre o chat sem chamado definido (botao "Falar com atendimento" do card de atencao).
+  window.atdAbrir = function () { abrir(true); };
+
   window.atdAbrirChamado = async function (chamadoId, textoPronto) {
     try {
       await abrirChamado(Number(chamadoId));

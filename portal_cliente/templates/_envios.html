@@ -12,12 +12,26 @@
   .env-grade { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
   @media (max-width: 1280px) { .env-grade { grid-template-columns: minmax(0, 1fr); } }
   /* Tabela de envios (19/11): colunas com largura pensada pra caber sem cortar "Ações" */
+  /* Prévia do envio: título clicável ordena (A→Z, de novo Z→A); borda do título arrasta pra mudar a largura */
+  #previa-tabela th, #env-tabela th, #tabela th { position: relative; cursor: pointer; user-select: none; padding-right: 16px; }
+  #previa-tabela th select, #env-tabela th select, #tabela th select { cursor: default; }
+  #previa-tabela th .seta, #env-tabela th .seta, #tabela th .seta { margin-left: 4px; font-size: 9px; }
+  #previa-tabela th .grip, #env-tabela th .grip, #tabela th .grip { position: absolute; top: 0; right: 0; width: 8px; height: 100%; cursor: col-resize; }
+  #previa-tabela th .grip:hover, #env-tabela th .grip:hover, #previa-tabela th .grip.arrastando, #env-tabela th .grip.arrastando, #tabela th .grip:hover, #tabela th .grip.arrastando { background: var(--borda); }
+  #previa-tabela.fixa, #env-tabela.fixa, #tabela.fixa { table-layout: fixed; }
+  #previa-tabela.fixa td, #env-tabela.fixa td, #tabela.fixa td { overflow-wrap: anywhere; }
+  #previa-tabela.fixa td.nw, #env-tabela.fixa td.nw, #tabela.fixa td.nw { white-space: normal; }
+  #previa-tabela.fixa select, #env-tabela.fixa select, #previa-tabela.fixa input, #env-tabela.fixa input, #tabela.fixa select, #tabela.fixa input { max-width: 100%; }
+  #env-tabela.fixa td { min-width: 0 !important; }
+  #tabela.fixa td { min-width: 0 !important; }
   #env-tabela th, #env-tabela td { padding-left: 8px; padding-right: 8px; }
-  #env-tabela td:nth-child(1) { white-space: normal; width: 84px; }
-  #env-tabela td:nth-child(3) { min-width: 220px; }
-  #env-tabela th:nth-child(4), #env-tabela td:nth-child(4) { width: 1%; }
-  #env-tabela td:nth-child(7) { white-space: normal; min-width: 96px; }
-  #env-tabela td:nth-child(8) { min-width: 170px; }
+  /* data-i = posição original da coluna (o botão Colunas muda a ordem e esconde colunas, então nth-child não serve) */
+  #env-tabela td[data-i="0"] { white-space: normal; width: 84px; }
+  #env-tabela td[data-i="2"] { min-width: 220px; }
+  #env-tabela th[data-i="3"], #env-tabela td[data-i="3"] { width: 1%; }
+  #env-tabela td[data-i="6"] { white-space: normal; min-width: 96px; }
+  #env-tabela td[data-i="7"] { min-width: 170px; }
+  th[hidden], td[hidden] { display: none !important; }
   #env-tabela .acoes-linha { max-width: 230px; }
   .zona { border: 2px dashed var(--borda); border-radius: 10px; padding: 26px 18px; text-align: center; color: var(--texto-suave); cursor: pointer; transition: border-color .15s, background .15s; }
   .zona:hover, .zona.sobre { border-color: var(--acento); background: var(--sucesso-bg); color: var(--texto); }
@@ -370,6 +384,8 @@
     const btLote = $('env-reenviar-todos');
     btLote.classList.toggle('oculto', !(PODE_ENVIAR && aba === 'erros' && nErros >= 2));
     btLote.textContent = `Reenviar todos (${nErros})`;
+    if (colEnvios.reordenar) colEnvios.reordenar();  // o tbody foi refeito: reaplica a ordem escolhida
+    if (typeof aplicarColunasEnvios === 'function') aplicarColunasEnvios();  // e as colunas do botão Colunas
   }
 
   function renderLateral() {
@@ -387,7 +403,7 @@
     card.classList.remove('oculto');
     card.innerHTML = `<h3 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">Precisa da sua atenção (${pend.length + erros.length})${PODE_ENVIAR && erros.length >= 2 ? `<button type="button" class="botao-linha" style="margin-left:auto;" data-acao="reenviar-todos">Reenviar todos com erro (${erros.length})</button>` : ''}</h3>` +
       pend.map(x => `<div class="item"><span class="chip">Agendamento pendente</span><span><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)} só recebe com agendamento.</span>${PODE_ENVIAR ? `<button type="button" class="botao" style="padding:5px 12px;font-size:12px;margin-left:auto;" data-acao="reagendar" data-id="${x.id}">Definir data</button>` : ''}</div>`).join('') +
-      erros.map(x => `<div class="item"><span class="chip falha">Erro</span><span><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}: ${esc((x.erro || '').slice(0, 140))}</span>${PODE_ENVIAR ? `<button type="button" class="botao-linha" style="margin-left:auto;" data-acao="reenviar" data-id="${x.id}">Reenviar</button>` : ''}</div>`).join('');
+      erros.map(x => `<div class="item"><span class="chip falha">Erro</span><span><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}: ${esc((x.erro || '').slice(0, 140))}</span><span style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;">${PODE_ENVIAR && x.pode_cancelar ? `<button type="button" class="botao-linha perigo" data-acao="cancelar" data-id="${x.id}">Cancelar</button>` : ''}<button type="button" class="botao-linha" data-acao="atendimento">Falar com atendimento</button>${PODE_ENVIAR ? `<button type="button" class="botao-linha" data-acao="reenviar" data-id="${x.id}">Reenviar</button>` : ''}</span></div>`).join('');
   }
 
   // ── Upload → prévia ────────────────────────────────────────────────────────
@@ -580,8 +596,150 @@
     }).join('');
     $('btn-confirmar').disabled = !p.itens.length;
     $('btn-confirmar').textContent = p.itens.length ? `Confirmar envio de ${p.itens.length} pedido${p.itens.length > 1 ? 's' : ''}` : 'Nada a enviar';
+    ajustarColunasPrevia();
     renderAnexos();
   }
+
+  // Colunas das tabelas (prévia e histórico): largura e ordem ficam guardadas por título e sobrevivem ao redesenho
+  const colPrevia = { larg: {}, ord: null }, colEnvios = { larg: {}, ord: null };
+  const ajustarColunasPrevia = () => ajustarColunas($('previa-tabela'), colPrevia);
+  function ajustarColunas(tb, col) {
+    const tbody = tb.querySelector('tbody');
+    const ths = [...tb.querySelectorAll('thead th')];
+    ths.forEach(th => { th.dataset.k = th.firstChild.textContent.trim(); });
+    const aplicarLarg = col.aplicarLarg = () => {
+      tb.classList.add('fixa');
+      let soma = 0;
+      ths.forEach(th => { const w = col.larg[th.dataset.k] || 120; th.style.boxSizing = 'border-box'; th.style.width = w + 'px'; if (!th.hidden) soma += w; });
+      tb.style.width = soma + 'px';
+    };
+    if (ths.every(th => col.larg[th.dataset.k])) aplicarLarg();
+    else { col.larg = {}; tb.classList.remove('fixa'); tb.style.width = ''; }
+    const chave = (tr, n) => {
+      const c = ([...tr.children].find(x => x.dataset.i == n) || tr.children[n]).cloneNode(true);  // data-i: a coluna pode ter mudado de lugar (seletorColunasPortal)
+      c.querySelectorAll('select').forEach(s => s.replaceWith(s.value ? s.selectedOptions[0].textContent : ''));
+      return c.textContent.replace(/\s+/g, ' ').trim();
+    };
+    const num = s => s.replace(/[^\d,-]/g, '').replace(',', '.');
+    const ordenar = (n, dir) => {
+      const linhas = [...tbody.rows].map(tr => ({ tr, k: chave(tr, n) }));
+      const numerico = linhas.every(l => l.k === '—' || l.k === '' || /^(R\$\s?)?-?[\d.]+(,\d+)?(\s?kg)?$/.test(l.k));
+      const data = linhas.every(l => /^\d\d\/\d\d\/\d{4}/.test(l.k));
+      if (data) linhas.forEach(l => { l.k = l.k.replace(/^(\d\d)\/(\d\d)\/(\d{4})/, '$3$2$1'); });
+      linhas.sort((a, b) => {
+        if (numerico) return ((parseFloat(num(a.k)) || 0) - (parseFloat(num(b.k)) || 0)) * dir;
+        return a.k.localeCompare(b.k, 'pt-BR', { numeric: true, sensitivity: 'base' }) * dir;
+      });
+      linhas.forEach(l => tbody.appendChild(l.tr));
+      ths.forEach((th, j) => { const s = th.querySelector('.seta'); if (s) s.textContent = j === n ? (dir > 0 ? '▲' : '▼') : ''; });
+    };
+    ths.forEach((th, n) => {
+      const seta = document.createElement('span'); seta.className = 'seta'; th.appendChild(seta);
+      const grip = document.createElement('span'); grip.className = 'grip'; th.appendChild(grip);
+      th.addEventListener('click', e => {
+        if (e.target.closest('select, .grip')) return;
+        const dir = col.ord && col.ord.k === th.dataset.k && col.ord.dir === 1 ? -1 : 1;
+        col.ord = { k: th.dataset.k, dir };
+        if (col.ordenarDados) col.ordenarDados(); else ordenar(n, dir);  // ordenarDados: tabela paginada, ordena os dados e redesenha
+      });
+      grip.addEventListener('click', e => e.stopPropagation());
+      grip.addEventListener('pointerdown', e => {
+        e.preventDefault(); e.stopPropagation();
+        if (!tb.classList.contains('fixa')) { ths.forEach(t => { col.larg[t.dataset.k] = t.offsetWidth; }); aplicarLarg(); }
+        const x0 = e.clientX, w0 = col.larg[th.dataset.k];
+        grip.setPointerCapture(e.pointerId); grip.classList.add('arrastando');
+        const mover = ev => { col.larg[th.dataset.k] = Math.max(48, w0 + ev.clientX - x0); aplicarLarg(); };
+        const soltar = () => { grip.classList.remove('arrastando'); grip.removeEventListener('pointermove', mover); grip.removeEventListener('pointerup', soltar); };
+        grip.addEventListener('pointermove', mover); grip.addEventListener('pointerup', soltar);
+      });
+    });
+    col.reordenar = () => { if (col.ord) { const n = ths.findIndex(th => th.dataset.k === col.ord.k); if (n >= 0) ordenar(n, col.ord.dir); } };
+    if (col.ordenarDados) {
+      const th = col.ord && ths.find(t => t.dataset.k === col.ord.k);
+      if (th) th.querySelector('.seta').textContent = col.ord.dir > 0 ? '▲' : '▼';
+    } else col.reordenar();
+  }
+  window.ajustarColunasPortal = ajustarColunas;  // a tabela de acompanhamento (acompanhamento.html) usa a mesma
+  ajustarColunas($('env-tabela'), colEnvios);
+
+  // Botão "Colunas" (o mesmo do acompanhamento) pras tabelas cujo cabeçalho é fixo no HTML:
+  // escolher quais colunas aparecem e em que ordem. Vale por título de coluna e fica salvo no navegador.
+  // Retorna "aplicar": chamar depois de cada redesenho do tbody.
+  window.seletorColunasPortal = function (tb, col) {
+    const ths0 = [...tb.querySelectorAll('thead th')];
+    const nomes = ths0.map(th => th.firstChild.textContent.trim());
+    ths0.forEach((th, i) => { th.dataset.i = i; });
+    const CHAVE = 'portal_colunas_' + tb.id + '_v1';
+    let visiveis = nomes.slice();
+    try {
+      const salvo = JSON.parse(localStorage.getItem(CHAVE) || 'null');
+      if (Array.isArray(salvo) && salvo.length && salvo.every(n => nomes.includes(n))) visiveis = salvo;
+    } catch (e) {}
+    const salvar = () => { try { localStorage.setItem(CHAVE, JSON.stringify(visiveis)); } catch (e) {} };
+    const aplicar = () => {
+      const ordem = visiveis.map(n => nomes.indexOf(n));
+      const resto = nomes.map((_, i) => i).filter(i => !ordem.includes(i));
+      tb.querySelectorAll('tr').forEach(tr => {
+        const cels = [...tr.children];
+        if (cels.length === 1) { cels[0].colSpan = ordem.length; return; }   // linha de detalhe
+        if (cels.length !== nomes.length) return;
+        const porI = {};
+        cels.forEach((c, k) => { if (c.dataset.i == null) c.dataset.i = k; porI[c.dataset.i] = c; });
+        ordem.concat(resto).forEach(i => { porI[i].hidden = !ordem.includes(i); tr.appendChild(porI[i]); });
+      });
+      if (col && col.aplicarLarg && tb.classList.contains('fixa')) col.aplicarLarg();
+    };
+    const CIMA = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>';
+    const BAIXO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+    const ferr = tb.closest('.card-tabela').querySelector('.ferramentas');
+    ferr.insertAdjacentHTML('beforeend', `
+      <button type="button" class="botao-linha" data-btn-colunas>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line><line x1="15" y1="3" x2="15" y2="21"></line></svg>
+        <span>Colunas</span>
+      </button>
+      <div class="popover" data-pop-colunas>
+        <div class="cabeca"><b>Colunas da tabela</b><span>use as setas pra reordenar</span></div>
+        <div class="grupo" data-vis></div>
+        <div class="grupo" data-disp></div>
+        <div class="pe"><a data-padrao>Restaurar padrão</a><button type="button" class="botao" data-fechar style="padding: 7px 14px; font-size: 12px;">Fechar</button></div>
+      </div>`);
+    const btn = ferr.querySelector('[data-btn-colunas]'), pop = ferr.querySelector('[data-pop-colunas]');
+    const nome = n => String(n).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const desenhar = () => {
+      pop.querySelector('[data-vis]').innerHTML = `<div class="rot">Visíveis (${visiveis.length})</div>` + visiveis.map((n, i) =>
+        `<div class="item"><label><input type="checkbox" checked data-col="${nome(n)}"><span>${nome(n)}</span></label>
+          <span class="mover"><button type="button" data-mover="${nome(n)}" data-dir="-1" ${i === 0 ? 'disabled' : ''} title="Subir">${CIMA}</button><button type="button" data-mover="${nome(n)}" data-dir="1" ${i === visiveis.length - 1 ? 'disabled' : ''} title="Descer">${BAIXO}</button></span></div>`).join('');
+      const resto = nomes.filter(n => !visiveis.includes(n));
+      pop.querySelector('[data-disp]').innerHTML = '<div class="rot">Disponíveis</div>' + (resto.length ? resto.map(n => `<div class="item disponivel"><label><input type="checkbox" data-col="${nome(n)}"><span>${nome(n)}</span></label></div>`).join('') : '<div class="item disponivel">Todas as colunas estão visíveis.</div>');
+    };
+    const abrir = ab => { pop.classList.toggle('aberto', ab); btn.classList.toggle('ativo', ab); if (ab) desenhar(); };
+    const mudou = () => { salvar(); desenhar(); aplicar(); };
+    btn.addEventListener('click', () => abrir(!pop.classList.contains('aberto')));
+    pop.querySelector('[data-fechar]').addEventListener('click', () => abrir(false));
+    pop.querySelector('[data-padrao]').addEventListener('click', () => { visiveis = nomes.slice(); mudou(); });
+    document.addEventListener('click', e => {
+      const caminho = e.composedPath();   // o clique no popover re-renderiza: e.target já pode estar fora do DOM
+      if (!caminho.includes(pop) && !caminho.includes(btn)) abrir(false);
+    });
+    pop.addEventListener('change', e => {
+      const n = e.target.dataset.col;
+      if (n == null) return;
+      if (e.target.checked) { if (!visiveis.includes(n)) visiveis.push(n); }
+      else { if (visiveis.length <= 1) { e.target.checked = true; return; } visiveis = visiveis.filter(x => x !== n); }
+      mudou();
+    });
+    pop.addEventListener('click', e => {
+      const b = e.target.closest('[data-mover]');
+      if (!b) return;
+      const i = visiveis.indexOf(b.dataset.mover), j = i + Number(b.dataset.dir);
+      if (i < 0 || j < 0 || j >= visiveis.length) return;
+      [visiveis[i], visiveis[j]] = [visiveis[j], visiveis[i]];
+      mudou();
+    });
+    aplicar();
+    return aplicar;
+  };
+  const aplicarColunasEnvios = window.seletorColunasPortal($('env-tabela'), colEnvios);
 
   // ── Documentos dos pedidos (PDF) -- 11/11, anexos_pedido.py ─────────────────
   // previa.anexos: [{token, nome, tipo, numero_nf, pedido (token do item ou
@@ -589,6 +747,8 @@
   // usuário, que marca a conferência antes de enviar (o confirmar recusa sem).
   const nfLimpa = v => String(v || '').replace(/\D/g, '').replace(/^0+/, '');
   const rotIt = it => it.rotulo || ('NF ' + it.numero_nf);
+  // rótulo que não é a NF (pedido de planilha): mostra a NF junto, traço se não houver
+  const nfExtra = x => (x.rotulo && x.rotulo.indexOf('NF') !== 0) ? ' · NF ' + (x.numero_nf ? esc(x.numero_nf) : '—') : '';
   // ped: o pedido onde o documento está. Em pedido de planilha, o XML da nota é o XML do pedido.
   const infoAnexo = (a, ped) => esc(a.tipo === 'XML da NF-e' && ped && ped.origem === 'planilha' ? 'XML do pedido' : a.tipo || 'Documento') + (a.numero_nf ? ' · NF ' + esc(a.numero_nf) : '');
   const diverge = (a, numeroNf) => a.numero_nf && numeroNf && nfLimpa(a.numero_nf) !== nfLimpa(numeroNf);
@@ -668,7 +828,7 @@
     if (!x) { fecharModal(); return; }
     const pode = PODE_ENVIAR && x.pode_anexar, atuais = x.anexos || [];
     modal(`<h3>Documentos do pedido</h3>
-      <p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}</p>
+      <p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}${nfExtra(x)}</p>
       <p>Os documentos em PDF anexados aqui saem impressos junto da nota fiscal na entrega. O XML da nota fica guardado no pedido e não é impresso.</p>
       <div class="anx-lista">${atuais.length ? atuais.map(a => `<div class="anx-solto"><a href="${BASE}/api/envios/${x.id}/anexos/${a.id}" target="_blank" rel="noopener" class="anx-nome">${esc(a.nome)}</a><span class="anx-info">${infoAnexo(a, x)}</span>${pode ? `<button type="button" class="anx-link" data-doc-remover="${a.id}">remover</button>` : ''}</div>`).join('') : '<div class="anx-info">Nenhum documento anexado ainda.</div>'}</div>
       ${docNovos.length ? `<div class="anx-lista"><b style="font-size:12.5px;">Pra anexar agora:</b>${docNovos.map(a => `<div class="anx ${diverge(a, x.numero_nf) ? 'diverge' : ''}"><span class="anx-nome">${esc(a.nome)}</span><span class="anx-info">${infoAnexo(a, x)}</span>${diverge(a, x.numero_nf) ? `<span class="anx-alerta">Atenção: o documento cita a NF ${esc(a.numero_nf)}, e este pedido é a NF ${esc(x.numero_nf)}.</span>` : ''}</div>`).join('')}
@@ -1059,7 +1219,7 @@
     if (tipo === 'alterar_endereco') { alterarEndereco(x); return; }
     if (tipo === 'xml') { window.open(`${BASE}/api/envios/${id}/xml`, '_blank'); return; }
     if (tipo === 'documentos') { docNovos = []; abrirDocumentos(x.id); return; }
-    const cab = `<p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}</p>`;
+    const cab = `<p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}${nfExtra(x)}</p>`;
     const textos = {
       cancelar: ['Cancelar pedido', x.status === 'NA_FILA' || x.status === 'ERRO' ? 'O pedido ainda não foi criado na Stokki — será cancelado na hora.' : 'O pedido já existe na Stokki. A Fresh Log vai cancelá-lo e você acompanha por aqui.'],
       em_espera: ['Tirar da rota', 'O pedido fica em espera (não sai pra entrega) até você pedir pra reenviar. A Fresh Log aplica e avisa aqui.'],
@@ -1130,6 +1290,10 @@
   $('env-atualizar').addEventListener('click', () => carregar());
   secao.addEventListener('click', e => {
     const b = e.target.closest('[data-acao]'); if (!b) return;
+    if (b.dataset.acao === 'atendimento') {
+      if (window.atdAbrir) window.atdAbrir(); else location.href = `${BASE}/`;
+      return;
+    }
     // bloqueio de área (23/09): os dois botões abrem o chat no chamado do bloqueio;
     // "cotação" já manda a mensagem pronta
     if (b.dataset.acao === 'chat' || b.dataset.acao === 'cotacao') {

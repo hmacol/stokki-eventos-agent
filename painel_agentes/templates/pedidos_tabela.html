@@ -164,6 +164,10 @@
   .modal-caixa .resumo .falha { color: var(--erro); }
   .modal-caixa ul.lista-canhotos { list-style: none; padding: 0; margin: 0; }
   .modal-caixa ul.lista-canhotos li { padding: 4px 0; font-size: 13px; }
+  /* documentos por e-mail: um por linha, com a caixa colada ao nome (no celular a linha quebrava entre a caixa e o nome) */
+  .modal-caixa label.doc-linha { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+  .modal-caixa label.doc-linha input { flex: none; margin: 0; }
+  .modal-caixa label.doc-linha a { overflow-wrap: anywhere; }
   .modal-caixa .acoes { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
   .modal-caixa .acoes button[hidden] { display: none; }
   .modal-caixa .acoes .botao.primario:hover { background: var(--acento); opacity: .88; }
@@ -312,7 +316,7 @@
     </div>
     <form class="pm-busca" id="pm-busca" method="get" action="{{ url_for('pedidos_tabela') }}" role="search"{% if not filtros.q %} hidden{% endif %}>
       {% for k, v in request.args.items() if k not in ('q', 'pagina') and v %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
-      <input type="search" name="q" value="{{ filtros.q }}" placeholder="Código, destinatário, CNPJ, motorista…" aria-label="Buscar pedido" enterkeyhint="search">
+      <input type="search" name="q" value="{{ filtros.q }}" placeholder="Código, NF, destinatário, CNPJ, motorista…" aria-label="Buscar pedido" enterkeyhint="search">
       <button type="submit" class="pm-texto-botao">Buscar</button>
     </form>
     <nav class="pm-abas" aria-label="Status">
@@ -339,7 +343,7 @@
           {%- elif l.status in ('IMPORTADO', 'COLETADO') %}{% set info = [l.situacao_stokki, (formatar('caixas', l.caixas) ~ ' cx') if l.caixas is not none else '', l.embarcador] %}
           {%- elif l.status == 'ABERTO' and l.agendamento %}{% set info = ['agendado ' ~ formatar('agendamento', l.agendamento)[:5] ~ ' ' ~ formatar('agendamento', l.agendamento)[11:]] %}
           {%- else %}{% set info = [(formatar('caixas', l.caixas) ~ ' cx') if l.caixas is not none else '', l.zona] %}{% endif %}
-          {%- set info = info|select|join(' · ') %}
+          {%- set info = (['NF ' ~ l.nf] + info)|select|join(' · ') %}
           <span class="pm-l2"><span class="pm-st st-{{ l.status }}">{{ formatar('status', l.status) or 'Sem status' }}</span>
             {% if info %}<span class="pm-info">· {{ info }}</span>{% else %}<span class="pm-info"></span>{% endif %}
             {% if l.historico|length > 1 %}<span class="pm-tent" title="{{ l.historico|length }} tentativas">{{ l.historico|length }}×</span>{% endif %}</span>
@@ -485,7 +489,7 @@
   <input type="hidden" name="direcao" value="{{ direcao }}">
   {% if filtros.documentos == 'boleto_atrasado' %}<input type="hidden" name="documentos" value="boleto_atrasado">{% endif %}
   <div class="linha-busca">
-    <input type="search" name="q" value="{{ filtros.q }}" placeholder="Buscar código, destinatário, CNPJ, endereço, embarcador, motorista…" aria-label="Busca livre">
+    <input type="search" name="q" value="{{ filtros.q }}" placeholder="Buscar código, NF, destinatário, CNPJ, endereço, embarcador, motorista…" aria-label="Busca livre">
     <button type="submit" class="botao primario">Filtrar</button>
   </div>
   <details class="mais-filtros" id="mais-filtros">
@@ -761,6 +765,7 @@
   <hr>
   <button type="button" role="menuitem" data-acao="canhoto">Ver canhoto</button>
   <button type="button" role="menuitem" data-acao="baixa">Dar baixa na Vuupt</button>
+  <button type="button" role="menuitem" data-acao="cancelar_finalizacao">Cancelar finalização</button>
   <button type="button" role="menuitem" data-acao="expedir_stokki">Expedir na Stokki</button>
   <button type="button" role="menuitem" data-acao="trocar_canhoto">Trocar canhoto</button>
   <button type="button" role="menuitem" data-acao="documentos">Documentos por e-mail</button>
@@ -827,6 +832,13 @@
           <textarea id="baixa-texto-outro" maxlength="200" placeholder="De 5 a 200 caracteres"></textarea>
         </div>
       </div>
+      <div data-secao="cancelar_finalizacao" hidden>
+        <p class="subtitulo">Para baixa dada por engano pelo motorista: cria um serviço novo na Vuupt (código -R) na mesma rota e devolve a parada pendente, para ele refazer a baixa no app que estiver usando (o nosso ou o da Vuupt). A baixa antiga fica no histórico. Só vale com a rota em andamento.</p>
+        <div class="campo">
+          <label for="cancelar-final-motivo">Motivo</label>
+          <textarea id="cancelar-final-motivo" maxlength="300" placeholder="Ex.: motorista deu baixa na nota errada"></textarea>
+        </div>
+      </div>
       <div data-secao="expedir_stokki" hidden>
         <p class="subtitulo">Expede o pedido na Stokki agora e anexa o canhoto que existir. Se ele estiver preso numa Expedição Programada (OE), ela é finalizada; se a OE tiver outros pedidos, só este sai dela. Leva cerca de 1 minuto por pedido e espera a vez se outra rotina da Stokki estiver rodando.</p>
       </div>
@@ -867,6 +879,7 @@
   "agendar": url_for('api_pedidos_acao_agendar'),
   "checar_dia_fixo": url_for('api_pedidos_acao_checar_dia_fixo'),
   "baixa": url_for('api_pedidos_acao_marcar_entregue'),
+  "cancelar_finalizacao": url_for('api_pedidos_acao_cancelar_finalizacao'),
   "validar_lote_foto": url_for('api_pedidos_acao_validar_lote_foto'),
   "comprovantes": url_for('api_pedidos_acao_comprovantes'),
   "expedir_stokki": url_for('api_pedidos_acao_expedir_stokki'),
@@ -890,6 +903,7 @@
     endereco: { titulo: "Alterar endereço", confirmar: "Salvar endereço" },
     agendar: { titulo: "Agendar", confirmar: "Agendar" },
     baixa: { titulo: "Dar baixa na Vuupt", confirmar: "Dar baixa" },
+    cancelar_finalizacao: { titulo: "Cancelar finalização", confirmar: "Cancelar finalização" },
     expedir_stokki: { titulo: "Expedir na Stokki", confirmar: "Expedir" },
     canhoto: { titulo: "Canhotos do pedido", confirmar: "" },
     documentos: { titulo: "Documentos por e-mail", confirmar: "Enviar por e-mail" },
@@ -933,6 +947,10 @@
     const finalizado = FINAIS.indexOf(l.status) >= 0;
     if (acao === "reenvio") {
       return finalizado ? "" : `Reenvio só para pedido entregue, com insucesso ou cancelado (este está: ${rotuloStatus(l.status)}).`;
+    }
+    if (acao === "cancelar_finalizacao") {
+      return (l.status === "ENTREGUE" || l.status === "INSUCESSO") ? ""
+        : `Cancelar finalização só para pedido entregue ou com insucesso (este está: ${rotuloStatus(l.status)}).`;
     }
     if (acao === "baixa") {
       return l.status === "EM_ROTA" ? "" : `Dar baixa na Vuupt só para pedido em rota (este está: ${rotuloStatus(l.status)}).`;
@@ -1109,7 +1127,7 @@
   }
 
   function resetarCampos() {
-    ["reenvio-motivo", "stokki-motivo", "endereco-novo", "baixa-texto-outro"].forEach((id) => { $(id).value = ""; });
+    ["reenvio-motivo", "stokki-motivo", "endereco-novo", "baixa-texto-outro", "cancelar-final-motivo"].forEach((id) => { $(id).value = ""; });
     $("stokki-contador").textContent = "0 de no mínimo 15";
     $("agendar-data").value = amanha();
     $("agendar-inicio").value = "08:00";
@@ -1178,11 +1196,11 @@
     d.pedidos.forEach((p) => {
       const item = document.createElement("li");
       const forte = document.createElement("strong");
-      forte.textContent = `${p.codigo}: `;
+      forte.textContent = `${p.codigo} · NF ${p.nf || "—"}: `;
       item.appendChild(forte);
-      p.arquivos.forEach((a, i) => {
-        if (i) item.appendChild(document.createTextNode(" · "));
+      p.arquivos.forEach((a) => {
         const rotulo = document.createElement("label");
+        rotulo.className = "doc-linha";
         const marca = document.createElement("input");
         marca.type = "checkbox";
         marca.className = "docs-sel";
@@ -1404,6 +1422,11 @@
       if (motivo.length < 5 || motivo.length > 200) return { erro: "Escreva o motivo do reenvio (5 a 200 caracteres)." };
       return { motivo };
     }
+    if (acao === "cancelar_finalizacao") {
+      const motivo = $("cancelar-final-motivo").value.trim();
+      if (motivo.length < 5) return { erro: "Escreva o motivo do cancelamento da finalização." };
+      return { motivo };
+    }
     if (acao === "cancelar_stokki") {
       const motivo = $("stokki-motivo").value.trim();
       if (motivo.length < 15) return { erro: "Informe o motivo do cancelamento (mínimo de 15 caracteres)." };
@@ -1453,6 +1476,10 @@
     if (acao === "cancelar_vuupt") {
       const d = await enviar(URLS.cancelar_vuupt, { service_id: sid });
       return { selo: d.ja_estava ? "Já estava cancelado" : "Cancelado agora", aviso: d.aviso, jaEstava: !!d.ja_estava };
+    }
+    if (acao === "cancelar_finalizacao") {
+      const d = await enviar(URLS.cancelar_finalizacao, { service_id: sid, motivo: p.motivo });
+      return { selo: `Finalização cancelada → ${String(d.novo_codigo || "").replace(/^#/, "")}` };
     }
     if (acao === "endereco") {
       await enviar(URLS.endereco, { service_id: sid, endereco: p.endereco });
@@ -1959,7 +1986,7 @@
   const ROTULO = { reenvio: "Criar reenvio", baixa: "Dar baixa na Vuupt", agendar: "Agendar" };
 
   function montarDetalhe(li, p) {
-    $("pm-det-cod").textContent = p.codigo;
+    $("pm-det-cod").textContent = `${p.codigo} · NF ${p.nf || "—"}`;
     const chip = $("pm-det-chip");
     chip.textContent = p.status_txt || "Sem status";
     chip.className = `pm-chip st-${p.status}`;

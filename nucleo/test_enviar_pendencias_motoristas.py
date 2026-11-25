@@ -66,6 +66,44 @@ class EnviarTest(unittest.TestCase):
         self.assertEqual([x["situacao"] for x in r], ["teto", "nao_tentado"])
 
 
+    def test_pausa_sorteada_entre_envios_e_nao_antes_do_primeiro(self):
+        conn = mock.MagicMock()
+        dest = [{"principal_id": i, "nome": f"N{i}", "telefone": "11988887777", "pendencias": PEND} for i in (1, 2, 3)]
+        pausas = []
+        with mock.patch.object(env.atu, "gerar_link", return_value={"id": 7, "token": "t", "expira_em": "2026-12-06 10:00:00"}), \
+             mock.patch.object(env.banco, "agora", return_value="agora"):
+            r = env.enviar(conn, {"atualizacao_motoristas": {"forcar_destino_whatsapp": ""}}, dest, "https://x",
+                           avisar=lambda *a, **k: ("enviado", False), pausa=(45, 180), dormir=pausas.append)
+        self.assertEqual([x["situacao"] for x in r], ["enviado"] * 3)
+        self.assertEqual(len(pausas), 2)
+        self.assertTrue(all(45 <= p <= 180 for p in pausas))
+
+
+class TetoDoLoteTest(unittest.TestCase):
+    def _conn(self, enviados_hoje, enviados_ontem=0, outra_origem=0):
+        import sqlite3
+        from datetime import datetime, timedelta
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE notificacoes_whatsapp (id INTEGER PRIMARY KEY, criado_em TEXT, origem TEXT, tipo TEXT, "
+                     "assinatura TEXT, situacao TEXT, motivo TEXT, id_mensagem TEXT)")
+        hoje, ontem = nw._iso(datetime.now()), nw._iso(datetime.now() - timedelta(days=1))
+        linhas = ([(hoje, nw.ORIGEM_MOTORISTA_ATUALIZACAO)] * enviados_hoje + [(ontem, nw.ORIGEM_MOTORISTA_ATUALIZACAO)] * enviados_ontem
+                  + [(hoje, nw.ORIGEM_CLIENTE)] * outra_origem)
+        conn.executemany("INSERT INTO notificacoes_whatsapp (criado_em, origem, tipo, assinatura, situacao) "
+                         "VALUES (?, ?, 'x', 'a', 'enviado')", linhas)
+        return conn
+
+    def test_soma_o_que_ja_saiu_hoje_ao_lote(self):
+        # 22/11: 15 ja enviados + lote de 5 -> precisa de 20, nao de 15
+        self.assertEqual(env.teto_do_lote(self._conn(15), {"teto_diario": 15}, 5), 20)
+
+    def test_dia_vazio_mantem_o_teto_do_config(self):
+        self.assertEqual(env.teto_do_lote(self._conn(0, enviados_ontem=30, outra_origem=9), {"teto_diario": 15}, 5), 15)
+
+    def test_lote_maior_que_o_teto(self):
+        self.assertEqual(env.teto_do_lote(self._conn(2), {}, 20), 22)
+
+
 class PrivadoTest(unittest.TestCase):
     def test_sem_chave_no_config_nao_envia(self):
         self.assertEqual(nw.avisar_motorista_pendencias_privado(1, "11988887777", "Ana", "oi", {}), ("desligado", False))

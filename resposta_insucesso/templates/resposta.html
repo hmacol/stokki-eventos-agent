@@ -83,6 +83,7 @@
           <td>{{ r.code }}</td>
           <td>
             {% if r.resultado == "reenviado" %}Reenvio confirmado
+            {% elif r.resultado == "disponivel" %}Pedido já disponível para a próxima rota
             {% elif r.resultado == "cancelado" %}Reenvio não será feito
             {% elif r.resultado == "reagendado" %}Reagendado{% if r.data %} para {{ r.data.strftime('%d/%m/%Y') }}{% if hora_pedida %} às {{ hora_pedida }}{% endif %}{% endif %}
             {% else %}Falha -- nossa equipe vai verificar

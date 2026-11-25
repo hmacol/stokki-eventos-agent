@@ -373,6 +373,14 @@ def sincronizar_pool_agora(config: dict | None = None) -> dict:
         _TRAVA_SINCRONIZACAO.release()
 
 
+def anotar_nao_carregados(pool: list[dict], conn) -> None:
+    """p["nao_carregado"] = {motivo, observacao, criado_em} | None. Tabela ausente -> tudo None."""
+    from nucleo import carregamento
+    achados = carregamento.nao_carregados_recentes(conn, [p.get("service_id") for p in pool])
+    for p in pool:
+        p["nao_carregado"] = achados.get(p.get("service_id"))
+
+
 def _simular_rascunho(paradas: list[dict], hora_saida: float | None = None) -> dict | None:
     """Linha do tempo (roteirizacao_dados.simular_horarios) das paradas
     de um rascunho, na ordem em que estão. None quando nenhuma parada
@@ -1073,6 +1081,16 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
                                 "criado_em": r.get("criado_em")} if r else None)
         marcar_pausados_cliente(pool, servicos_brutos)
         pool.sort(key=lambda p: p["codigo"])
+        # Nao carregado (checklist de carregamento): so rotula, nao bloqueia roterizacao
+        try:
+            from nucleo import banco as _banco_nucleo
+            _conn_nc = _banco_nucleo.conectar()
+            try:
+                anotar_nao_carregados(pool, _conn_nc)
+            finally:
+                _conn_nc.close()
+        except Exception as e:
+            logger.warning(f"Falha ao marcar nao carregado pro pool (tela segue sem o selo): {e}")
     # Situação na Stokki (Hugo, 19/10): bloco "Em separação na Stokki" do pool
     retrato_stokki, retrato_stokki_em = carregar_retrato_stokki()
     anotar_situacao_stokki(pool, retrato_stokki)
@@ -2074,7 +2092,30 @@ def _registrar_agendamento_equipe(service_ids: list[int], scheduled_start: str) 
         logger.warning(f"Não registrou a origem EQUIPE do reagendamento {service_ids}: {e}")
 
 
-def reagendar_pedido(service_id: int, data: str, hora_inicio: str, hora_fim: str) -> dict:
+def _janela_anterior(vuupt: VuuptClient, service_id: int) -> tuple[str, str] | None:
+    """Horários ("HH:MM", "HH:MM", hora local) do agendamento atual do
+    serviço na Vuupt, pra "manter os horários" ao trocar só a data. None se
+    o serviço não carrega ou não tem início e fim agendados (o chamador cai
+    na janela digitada no modal)."""
+    from nucleo.normalizacao import vuupt_para_local
+    try:
+        servico = vuupt.buscar_servico_por_id(int(service_id))
+    except Exception as e:
+        logger.warning(f"Manter horários: serviço {service_id} não carregou ({e}); usa a janela do modal.")
+        return None
+    if not servico:
+        return None
+    ini = vuupt_para_local(servico.get("scheduled_start"))
+    fim = vuupt_para_local(servico.get("scheduled_end"))
+    # vuupt_para_local devolve "YYYY-MM-DD HH:MM:SS" (ou o texto cru se não for data)
+    padrao = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}")
+    if not ini or not fim or not padrao.match(ini) or not padrao.match(fim):
+        return None
+    return ini[11:16], fim[11:16]
+
+
+def reagendar_pedido(service_id: int, data: str, hora_inicio: str, hora_fim: str,
+                     manter_horarios: bool = False) -> dict:
     """
     Agenda/reagenda um pedido na VUUPT (PUT /services/{id}, campos
     scheduled_start/scheduled_end) -- opção "Agendar / reagendar" do
@@ -2102,6 +2143,12 @@ def reagendar_pedido(service_id: int, data: str, hora_inicio: str, hora_fim: str
     config = _carregar_config()
     token = config.get("vuupt_api", {}).get("token", "")
     vuupt = VuuptClient(token)
+    if manter_horarios:
+        janela = _janela_anterior(vuupt, service_id)
+        if janela:
+            scheduled_start, scheduled_end, erro = _converter_janela_reagendamento(data, *janela)
+            if erro:
+                return {"ok": False, "erro": erro}
     try:
         vuupt.atualizar_servico(service_id, {
             "scheduled_start": scheduled_start,
@@ -2131,13 +2178,18 @@ def _converter_janela_reagendamento(data: str, hora_inicio: str, hora_fim: str) 
     return scheduled_start, scheduled_end, None
 
 
-def reagendar_pedidos(itens: list[dict], data: str, hora_inicio: str, hora_fim: str) -> dict:
+def reagendar_pedidos(itens: list[dict], data: str, hora_inicio: str, hora_fim: str,
+                      manter_horarios: bool = False) -> dict:
     """
     Versão em lote de reagendar_pedido -- aplica a MESMA janela de
     data/horário a todos os pedidos de `itens` (cada item:
     {"service_id": int}) -- botão "Agendar" da barra de seleção
     múltipla da tela de planejamento (Hugo, 20/08), tanto pra seleção
     do pool quanto pra seleção dentro de rotas.
+
+    `manter_horarios` (Hugo, 24/11): troca só a data e mantém, pra cada
+    pedido, a janela do agendamento anterior na Vuupt. Quem não tem
+    agendamento anterior usa a janela digitada (hora_inicio/hora_fim).
 
     Falha num pedido NÃO aborta os demais -- cada um é tentado
     independentemente. Retorna {"ok": True, "falhas": [{"service_id":
@@ -2159,10 +2211,17 @@ def reagendar_pedidos(itens: list[dict], data: str, hora_inicio: str, hora_fim: 
     ok_ids = []
     for item in itens:
         service_id = int(item["service_id"])
+        inicio_item, fim_item = scheduled_start, scheduled_end
         try:
+            if manter_horarios:
+                janela = _janela_anterior(vuupt, service_id)
+                if janela:
+                    inicio_item, fim_item, erro = _converter_janela_reagendamento(data, *janela)
+                    if erro:
+                        raise ValueError(erro)
             vuupt.atualizar_servico(service_id, {
-                "scheduled_start": scheduled_start,
-                "scheduled_end": scheduled_end,
+                "scheduled_start": inicio_item,
+                "scheduled_end": fim_item,
             })
             logger.info(f"Agendamento em lote: serviço {service_id} atualizado.")
             ok_ids.append(service_id)

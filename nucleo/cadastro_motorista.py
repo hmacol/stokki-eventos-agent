@@ -138,9 +138,26 @@ def _lista(valor, permitidos: list[str], rotulo: str) -> list[str]:
 
 # ── Meus dados (motorista já com login) ───────────────────────────────────────
 
+def _exigir_pin_pra_pix(conn: sqlite3.Connection, cpf: str, pin: object) -> None:
+    """Trocar a chave PIX redireciona pagamento: quem tem só o token (roubado)
+    não pode. Pede o PIN pela mesma trava de tentativas do login. Erro de PIN
+    vira 403 (não 401: o app trataria 401 como sessão caída) e 429 se travou;
+    nada é gravado."""
+    if not str(pin or "").strip():
+        raise CadastroInvalido("Pra trocar a chave PIX, digite o seu PIN.", 400)
+    try:
+        auth.autenticar(conn, cpf, str(pin))
+    except auth.AutenticacaoInvalida as e:
+        if e.codigo == 429:
+            raise CadastroInvalido(e.mensagem, 429)
+        raise CadastroInvalido("PIN incorreto.", 403)
+
+
 def atualizar_meus_dados(conn: sqlite3.Connection, cpf: str, dados: dict) -> tuple[dict, list[dict]]:
     """Aplica só os campos presentes em `dados`. Devolve (motorista, mudanças);
-    cada mudança = {campo, rotulo, de, para}. Nada muda = lista vazia."""
+    cada mudança = {campo, rotulo, de, para}. Nada muda = lista vazia.
+    Trocar a chave PIX exige `pin_atual` em `dados` (vale pra tudo ou nada:
+    sem PIN certo nenhum campo do pedido é gravado)."""
     m = auth.buscar_motorista(conn, cpf)
     if not m:
         raise CadastroInvalido("Motorista não encontrado.", 404)
@@ -153,6 +170,8 @@ def atualizar_meus_dados(conn: sqlite3.Connection, cpf: str, dados: dict) -> tup
             mudancas.append({"campo": campo, "rotulo": ROTULOS[campo], "de": m.get(campo) or None, "para": novo})
     if not mudancas:
         return m, []
+    if any(x["campo"] == "chave_pix" for x in mudancas):
+        _exigir_pin_pra_pix(conn, m["cpf"], (dados or {}).get("pin_atual"))
     agora = banco.agora()
     for mud in mudancas:
         conn.execute(f"UPDATE motoristas SET {mud['campo']} = ?, atualizado_em = ? WHERE cpf = ?",

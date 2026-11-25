@@ -177,6 +177,9 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
             # encerrado pelo sistema nao aparece: o motivo e interno
             respondidos = [r for r in cd.do_sender(conn, link.sender_id)
                            if r["id"] in link.ids and r["situacao"] in (cd.CIENTE, cd.REAGENDADO)]
+            from nucleo.nf_pedido import anotar_nf
+            anotar_nf(pendentes, conn=conn)
+            anotar_nf(respondidos, conn=conn)
         linhas = pendentes + respondidos
         cnpj = next((r["cnpj"] for r in linhas if r.get("cnpj")), None)
         return render_template("ciencia.html", token=token, pendentes=[_vista_pendente(p) for p in pendentes],
@@ -199,9 +202,9 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
             return None
         with closing(cd.conectar(db)) as conn:
             ciencia = cd.buscar(conn, ciencia_id) if ciencia_id in link.ids else None
+            codigo = dados.ps_e_nf(ciencia["codigo"], conn) if ciencia else ""
         if not ciencia or ciencia["sender_id"] != link.sender_id:
             return "Resposta recebida."
-        codigo = ciencia["codigo"]
         if resultado == "ciente" and ciencia["situacao"] == cd.CIENTE:
             return f"Pedido {codigo}: ciência registrada em nome de {ciencia['respondido_por']}. Obrigado!"
         if resultado == "reagendado" and ciencia["situacao"] == cd.REAGENDADO:
@@ -306,7 +309,7 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
                 return _ir(token, "ja_respondido")
             logger.info(f"ciencia {ciencia['codigo']}: CIENTE por {nome}")
             _postar_no_chat(conn, ciencia, f"{nome} confirmou ciência da entrega dedicada do pedido "
-                                           f"{ciencia['codigo']} em {agora:%d/%m %H:%M}.")
+                                           f"{dados.ps_e_nf(ciencia['codigo'], conn)} em {agora:%d/%m %H:%M}.")
         return _ir(token, "ciente", ciencia["id"])
 
     @app.route("/ciencia/<token>/reagendar", methods=["POST"])
@@ -360,12 +363,12 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
                 logger.exception(f"ciencia {ciencia['codigo']}: reagendado na Vuupt, mas o dedicado nao foi removido")
                 falhas.append("o dedicado não foi removido")
             logger.info(f"ciencia {ciencia['codigo']}: REAGENDADO para {data.isoformat()} por {nome}")
-            _postar_no_chat(conn, ciencia, f"{nome} reagendou o pedido {ciencia['codigo']} para "
+            _postar_no_chat(conn, ciencia, f"{nome} reagendou o pedido {dados.ps_e_nf(ciencia['codigo'], conn)} para "
                                            f"{data:%d/%m/%Y} (dia de visita da região) em {agora:%d/%m %H:%M}.")
             if falhas:
                 embarcador = " ".join(p for p in (_nome_embarcador(conn, ciencia["cnpj"]),
                                                   f"(CNPJ {ciencia['cnpj'] or '?'})") if p)
-                texto = (f"Ciência do dedicado: pedido {ciencia['codigo']} de {embarcador} reagendado pelo "
+                texto = (f"Ciência do dedicado: pedido {dados.ps_e_nf(ciencia['codigo'], conn)} de {embarcador} reagendado pelo "
                          f"embarcador para {data:%d/%m/%Y}: data alterada, mas {' e '.join(falhas)}. "
                          f"Conferir à mão.")
                 try:

@@ -128,7 +128,7 @@
     <div class="ordem">{{ p.ordem }}</div>
     <div class="parada-corpo">
       <div class="codigo">
-        {% if p.codigo %}<a href="{{ url_for('consulta_pedido', codigo=p.codigo) }}">{{ p.codigo }}</a>
+        {% if p.codigo %}<a href="{{ url_for('consulta_pedido', codigo=p.codigo) }}">{{ p.codigo }}</a> <span class="suave">· NF {{ p.nf or '—' }}</span>
         {% else %}—{% endif %}
         {{ chip_situacao(p.situacao) }}
       </div>

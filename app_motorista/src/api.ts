@@ -7,12 +7,17 @@
 //   repete a chamada. Falhou a renovação -> sessão cai (ouvintes avisados).
 // - Sem rede/timeout -> ErroRede (a fila offline usa isso pra decidir
 //   se guarda pra depois).
+import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as FileSystem from 'expo-file-system/legacy';
-import * as SecureStore from 'expo-secure-store';
+import * as segredo from './segredo';
+import { postarArquivo } from './envioArquivo';
 
-export const API_URL: string =
-  (Constants.expoConfig?.extra as { apiUrl?: string } | undefined)?.apiUrl ?? 'http://10.0.2.2:8073/api';
+// PWA (motorista.freshhub.com.br): a API responde no MESMO domínio, em /api. É o que mantém
+// o token do motorista numa origem só dele (sem painel/portal por perto).
+export const API_URL: string = Platform.OS === 'web'
+  ? `${window.location.origin}/api`
+  : (Constants.expoConfig?.extra as { apiUrl?: string } | undefined)?.apiUrl ?? 'http://10.0.2.2:8073/api';
 
 const CHAVE_ACESSO = 'motorista.acesso';
 const CHAVE_REFRESH = 'motorista.refresh';
@@ -20,9 +25,12 @@ const TIMEOUT_MS = 20000;
 
 export class ErroApi extends Error {
   status: number;
-  constructor(status: number, mensagem: string) {
+  /** Corpo JSON da resposta (ex.: falhas do carregamento), quando veio. */
+  dados: unknown;
+  constructor(status: number, mensagem: string, dados: unknown = null) {
     super(mensagem);
     this.status = status;
+    this.dados = dados;
   }
 }
 export class ErroRede extends Error {}
@@ -40,23 +48,23 @@ export function aoCairSessao(fn: () => void): () => void {
 }
 
 export async function carregarTokens(): Promise<boolean> {
-  acesso = await SecureStore.getItemAsync(CHAVE_ACESSO);
-  refresh = await SecureStore.getItemAsync(CHAVE_REFRESH);
+  acesso = await segredo.ler(CHAVE_ACESSO);
+  refresh = await segredo.ler(CHAVE_REFRESH);
   return !!acesso;
 }
 
 export async function guardarTokens(t: { acesso: string; refresh: string }) {
   acesso = t.acesso;
   refresh = t.refresh;
-  await SecureStore.setItemAsync(CHAVE_ACESSO, t.acesso);
-  await SecureStore.setItemAsync(CHAVE_REFRESH, t.refresh);
+  await segredo.gravar(CHAVE_ACESSO, t.acesso);
+  await segredo.gravar(CHAVE_REFRESH, t.refresh);
 }
 
 export async function limparTokens() {
   acesso = null;
   refresh = null;
-  await SecureStore.deleteItemAsync(CHAVE_ACESSO);
-  await SecureStore.deleteItemAsync(CHAVE_REFRESH);
+  await segredo.apagar(CHAVE_ACESSO);
+  await segredo.apagar(CHAVE_REFRESH);
 }
 
 export function temSessao(): boolean {
@@ -102,7 +110,8 @@ async function tentarRenovar(): Promise<boolean> {
 type Opcoes = { metodo?: 'GET' | 'POST' | 'PUT'; corpo?: unknown; semAuth?: boolean };
 
 export async function chamar<T>(caminho: string, op: Opcoes = {}, repetiu = false): Promise<T> {
-  const headers: Record<string, string> = {};
+  // X-App-Plataforma: 'web' (PWA) é avisado por WhatsApp, não por push (nucleo/avisos_app_whatsapp.py).
+  const headers: Record<string, string> = { 'X-App-Versao': Constants.expoConfig?.version ?? '', 'X-App-Plataforma': Platform.OS };
   if (!op.semAuth && acesso) headers.Authorization = `Bearer ${acesso}`;
   let body: BodyInit | undefined;
   if (op.corpo !== undefined) {
@@ -124,14 +133,14 @@ export async function chamar<T>(caminho: string, op: Opcoes = {}, repetiu = fals
   }
   if (!r.ok) {
     const msg = (dados as { erro?: string } | null)?.erro ?? `Erro ${r.status}`;
-    throw new ErroApi(r.status, msg);
+    throw new ErroApi(r.status, msg, dados);
   }
   return dados as T;
 }
 
 // ── chamadas de alto nível ────────────────────────────────────────────────
 
-import type { Ajuste, CadastroCriado, CadastroSituacao, Checklist, EstadoAtendimento, Extrato, MeusDados, Motorista, MudancaCadastro, NovoCadastro, Oferta, Pedagio, RespostaChamado, ResultadoValidacao, Rota, TipoDespesa, Trajeto } from './tipos';
+import type { Ajuste, CadastroCriado, Desmarcado, RespostaCarregamento, CadastroSituacao, Checklist, EstadoAtendimento, Extrato, MeusDados, Motorista, MudancaCadastro, NovoCadastro, Oferta, Pedagio, RespostaChamado, ResultadoValidacao, Rota, TipoDespesa, Trajeto } from './tipos';
 
 export async function login(cpf: string, pin: string): Promise<Motorista> {
   const r = await chamar<{ acesso: string; refresh: string; motorista: Motorista }>('/login', {
@@ -200,27 +209,15 @@ export const cancelarPedagio = (rotaId: number, pedagioId: number) =>
 // nativo lê o arquivo direto do disco, sem timeout de JS, e devolve o
 // status HTTP como qualquer chamada.
 async function enviarArquivo<T>(caminho: string, uri: string, campos: Record<string, string>, repetiu = false, campoArquivo = 'arquivo'): Promise<T> {
-  const info = await FileSystem.getInfoAsync(uri).catch((e) => {
-    throw new ErroRede(`leitura da foto: ${(e as Error).message}`);
-  });
-  if (!info.exists) {
-    // Foto sumiu do cache do aparelho: não adianta insistir (vira "recusado" na fila)
-    throw new ErroApi(410, 'A foto não está mais no aparelho -- registre de novo.');
-  }
-  const nome = uri.split('/').pop() ?? 'foto.jpg';
-  const ext = (nome.split('.').pop() ?? 'jpg').toLowerCase();
-  let r: FileSystem.FileSystemUploadResult;
+  let r: { status: number; body: string } | null;
   try {
-    r = await FileSystem.uploadAsync(`${API_URL}${caminho}`, uri, {
-      httpMethod: 'POST',
-      uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-      fieldName: campoArquivo,
-      mimeType: ext === 'png' ? 'image/png' : 'image/jpeg',
-      parameters: campos,
-      headers: acesso ? { Authorization: `Bearer ${acesso}` } : {},
-    });
+    r = await postarArquivo(`${API_URL}${caminho}`, uri, campoArquivo, campos, acesso ? { Authorization: `Bearer ${acesso}` } : {});
   } catch (e) {
     throw new ErroRede((e as Error).message || 'falha no envio da foto');
+  }
+  if (!r) {
+    // Foto sumiu do aparelho: não adianta insistir (vira "recusado" na fila)
+    throw new ErroApi(410, 'A foto não está mais no aparelho -- registre de novo.');
   }
   if (r.status === 401 && !repetiu) {
     if (await tentarRenovar()) return enviarArquivo<T>(caminho, uri, campos, true, campoArquivo);
@@ -235,7 +232,7 @@ async function enviarArquivo<T>(caminho: string, uri: string, campos: Record<str
   }
   if (r.status < 200 || r.status >= 300) {
     const msg = (dados as { erro?: string } | null)?.erro ?? `Erro ${r.status}`;
-    throw new ErroApi(r.status, msg);
+    throw new ErroApi(r.status, msg, dados);
   }
   return dados as T;
 }
@@ -252,7 +249,7 @@ export async function enviarComprovante(paradaId: number, uri: string, tipo: str
  * validação desligada no servidor volta NAO_VERIFICADO/pode_seguir. */
 export async function validarFoto(
   uri: string,
-  campos: { tipo: 'CANHOTO' | 'PEDAGIO'; paradaId?: number; rotaId?: number; nf?: string | null; valor?: number; tentativa: number },
+  campos: { tipo: 'CANHOTO' | 'PEDAGIO' | 'CARREGAMENTO'; paradaId?: number; rotaId?: number; nf?: string | null; valor?: number; tentativa: number },
 ): Promise<ResultadoValidacao> {
   return enviarArquivo<ResultadoValidacao>('/fotos/validar', uri, {
     tipo: campos.tipo,
@@ -264,11 +261,21 @@ export async function validarFoto(
   });
 }
 
+/** Checklist de carregamento (antes de iniciar a rota): foto do baú + quem carregou +
+ * pedidos desmarcados. NÃO usa a fila offline: tirar o pedido da Vuupt é síncrono, então
+ * precisa de rede. 409 vem como ErroApi com `dados` (falhas / veredito da foto). */
+export async function confirmarCarregamento(rotaId: number, uri: string, carregador: string, uuid: string, desmarcados: Desmarcado[], tentativa: number) {
+  return enviarArquivo<RespostaCarregamento>(`/rotas/${rotaId}/carregamento`, uri, {
+    carregador, uuid, desmarcados: JSON.stringify(desmarcados), tentativa: String(tentativa),
+  });
+}
+
 /** Pedágio / despesa da rota: valor + foto do recibo (Hugo, 11/09 e 14/09). Fica pendente até o painel aprovar.
  *  `extra`: tipo (sem = pedágio), descricao (Outros) e paradaId (Estacionamento/Descarga). */
 export async function enviarPedagio(rotaId: number, uri: string, valor: number, uuid: string, capturadoEm: string,
-  extra: { tipo?: TipoDespesa; descricao?: string | null; paradaId?: number | null } = {}) {
+  extra: { tipo?: TipoDespesa; descricao?: string | null; paradaId?: number | null; origem?: 'camera' | 'galeria' } = {}) {
   const campos: Record<string, string> = { valor: String(valor), uuid, capturado_em: capturadoEm };
+  if (extra.origem) campos.origem = extra.origem;
   if (extra.tipo) campos.tipo = extra.tipo;
   if (extra.descricao) campos.descricao = extra.descricao;
   if (extra.paradaId) campos.parada_id = String(extra.paradaId);
