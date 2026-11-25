@@ -4177,6 +4177,22 @@ def api_publicar_oferta():
     })
 
 
+@app.route("/api/planejamento/agendar-oferta", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_agendar_oferta():
+    """"Publicar para motoristas" com horário (Hugo, 25/11): HH:MM de HOJE; o timer
+    nucleo/publicar_ofertas_agendadas.py publica e avisa quando a hora chega.
+    horario vazio cancela o agendamento."""
+    body = request.get_json(force=True)
+    try:
+        quando = rascunhos_rota.agendar_oferta(int(body["rascunho_id"]), body.get("horario"))
+    except (KeyError, TypeError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True, "agendada_em": quando, "rascunho": _rascunho_ou_404(int(body["rascunho_id"]))})
+
+
 @app.route("/api/planejamento/publicar-ofertas-lote", methods=["POST"])
 @requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem

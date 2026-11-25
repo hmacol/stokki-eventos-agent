@@ -205,6 +205,13 @@ def _conectar() -> sqlite3.Connection:
     if "turno" not in colunas_rota:
         conn.execute("ALTER TABLE rascunhos_rota ADD COLUMN turno TEXT")
 
+    # Migração 25/11: "Publicar para motoristas" agendado (HH:MM de hoje, guardado
+    # como 'YYYY-MM-DD HH:MM'); o timer nucleo/publicar_ofertas_agendadas.py publica na hora.
+    if "oferta_agendada_em" not in colunas_rota:
+        conn.execute("ALTER TABLE rascunhos_rota ADD COLUMN oferta_agendada_em TEXT")
+    if "oferta_agendada_erro" not in colunas_rota:
+        conn.execute("ALTER TABLE rascunhos_rota ADD COLUMN oferta_agendada_erro TEXT")
+
     conn.commit()
     return conn
 
@@ -1572,6 +1579,63 @@ def definir_lalamove_horario(rascunho_id: int, horario: str | None) -> str | Non
         _tocar(conn, rascunho_id)
         conn.commit()
         return lancar_em
+    finally:
+        conn.close()
+
+
+def agendar_oferta(rascunho_id: int, horario: str | None, agora: datetime | None = None) -> str | None:
+    """Agenda o "Publicar para motoristas" pra HH:MM de HOJE (Hugo, 25/11: só hoje).
+    O timer nucleo/publicar_ofertas_agendadas.py publica quando a hora chega.
+    None/'' cancela. Devolve 'YYYY-MM-DD HH:MM' ou None."""
+    horario = (horario or "").strip()
+    if horario and not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", horario):
+        raise ValueError("Horário inválido -- use HH:MM.")
+    agora = agora or datetime.now()
+    quando = f"{agora.strftime('%Y-%m-%d')} {horario}" if horario else None
+    if quando and quando <= agora.strftime("%Y-%m-%d %H:%M"):
+        raise ValueError(f"{horario} de hoje já passou. Use o botão sem horário pra publicar agora.")
+    conn = _conectar()
+    try:
+        row = conn.execute("SELECT status, agent_id FROM rascunhos_rota WHERE id = ?", (rascunho_id,)).fetchone()
+        if not row:
+            raise ValueError("Rascunho não encontrado.")
+        if quando and row["status"] != STATUS_RASCUNHO:
+            raise ValueError(f"Rascunho não está em edição (status={row['status']}).")
+        if quando and row["agent_id"]:
+            raise ValueError("Rascunho já tem motorista definido -- desaloque antes de publicar.")
+        if quando and not conn.execute("SELECT 1 FROM rascunhos_parada WHERE rascunho_id = ? LIMIT 1", (rascunho_id,)).fetchone():
+            raise ValueError("Rascunho sem paradas -- nada pra publicar.")
+        conn.execute("UPDATE rascunhos_rota SET oferta_agendada_em = ?, oferta_agendada_erro = NULL WHERE id = ?",
+                     (quando, rascunho_id))
+        _tocar(conn, rascunho_id)
+        conn.commit()
+        return quando
+    finally:
+        conn.close()
+
+
+def listar_ofertas_agendadas_vencidas(ate: str | None = None) -> list[dict]:
+    """Rascunhos em edição cujo horário agendado de publicação já chegou ('YYYY-MM-DD HH:MM', local)."""
+    ate = ate or datetime.now().strftime("%Y-%m-%d %H:%M")
+    conn = _conectar()
+    try:
+        rows = conn.execute("""
+            SELECT * FROM rascunhos_rota
+            WHERE status = ? AND oferta_agendada_em IS NOT NULL AND oferta_agendada_em <= ?
+            ORDER BY oferta_agendada_em, id
+        """, (STATUS_RASCUNHO, ate)).fetchall()
+        return [_montar_rascunho(conn, r) for r in rows]
+    finally:
+        conn.close()
+
+
+def baixar_agendamento_oferta(rascunho_id: int, erro: str | None = None) -> None:
+    """Fecha o agendamento (publicou ou falhou). `erro` fica visível no card."""
+    conn = _conectar()
+    try:
+        conn.execute("UPDATE rascunhos_rota SET oferta_agendada_em = NULL, oferta_agendada_erro = ? WHERE id = ?",
+                     (erro, rascunho_id))
+        conn.commit()
     finally:
         conn.close()
 
