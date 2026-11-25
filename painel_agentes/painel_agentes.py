@@ -309,6 +309,9 @@ def requer_auth(f=None, *, niveis=("total",)):
             if nivel is None:
                 if request.path.startswith(f"{request.script_root}/api/"):
                     return jsonify({"erro": "Sessão expirada -- faça login de novo."}), 401
+                # QR code da folha de coleta (16/11, Hugo): o celular da doca entra e volta pra coleta
+                if request.endpoint == "expedicao_coleta_tela":
+                    return redirect(url_for("login", proximo=f"coleta{request.view_args['coleta_id']}"))
                 return redirect(url_for("login"))
             # "Derrubar todas as sessoes" (24/10, /acessos): sessao de rodada
             # anterior cai, de qualquer login.
@@ -537,6 +540,10 @@ def login():
             # Exceção: o link da aula (WhatsApp da equipe) volta pros vídeos.
             if request.args.get("proximo") == "aula":
                 return redirect(url_for("aula_equipe"))
+            # E o QR code da folha de coleta volta pra coleta (so o numero vem do link).
+            volta = re.fullmatch(r"coleta(\d{1,9})", request.args.get("proximo") or "")
+            if volta:
+                return redirect(url_for("expedicao_coleta_tela", coleta_id=int(volta[1])))
             # Todo acesso cai no Inicio (24/10, Hugo), nao na tela que a pessoa
             # tentava abrir. Galpao, expedicao e personalizado sem o Inicio
             # vao pra tela deles (_pagina_inicial).
@@ -4175,6 +4182,22 @@ def api_publicar_oferta():
         "elegiveis": [{"agent_id": m.agent_id, "nome": m.nome} for m in resultado["elegiveis"]],
         "aviso": aviso,
     })
+
+
+@app.route("/api/planejamento/agendar-oferta", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_agendar_oferta():
+    """"Publicar para motoristas" com horário (Hugo, 25/11): HH:MM de HOJE; o timer
+    nucleo/publicar_ofertas_agendadas.py publica e avisa quando a hora chega.
+    horario vazio cancela o agendamento."""
+    body = request.get_json(force=True)
+    try:
+        quando = rascunhos_rota.agendar_oferta(int(body["rascunho_id"]), body.get("horario"))
+    except (KeyError, TypeError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True, "agendada_em": quando, "rascunho": _rascunho_ou_404(int(body["rascunho_id"]))})
 
 
 @app.route("/api/planejamento/publicar-ofertas-lote", methods=["POST"])
