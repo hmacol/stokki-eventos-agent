@@ -557,6 +557,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                                              pro pool sozinho, só cancelando na mão)
  16:00                       sequencia-tarde                 infra/sequencia_tarde.sh (abaixo)
  18:00                       sequencia-incremento            infra/sequencia_incremento.sh (abaixo)
+ 18:06                       conferir-cross-diario           stokki/conferir_cross_diario.py --confirmar: Cross de todo embarcador
+                                                             com fluxo cross (menos Jersey Vale, 79) de Aberto
+                                                             a Aguardando Transportador; fila da provider
  20:00                       resumo-diario-embarcador        resumo_diario_embarcador.py --data hoje
  22:00 (DESATIVADO)          sequencia-noite                 infra/sequencia_noite.sh (abaixo). Timer
                                                              disabled na VPS, sem rodar desde pelo menos
