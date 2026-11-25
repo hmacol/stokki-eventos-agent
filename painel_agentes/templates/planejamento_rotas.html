@@ -3573,7 +3573,7 @@
         ${(bloqueada || !PODE_EDITAR) ? "" : `
         <button type="button" class="botao-otimizar" data-rascunho-id="${rascunho.id}">Otimizar sequência</button>
         <button type="button" class="botao-inverter" data-rascunho-id="${rascunho.id}" title="Inverte a ordem de execução das paradas (roda de trás pra frente)">Inverter rota</button>
-        ${(!rascunho.agent_id && rascunho.paradas.length) ? `<button type="button" class="botao-publicar-oferta" data-rascunho-id="${rascunho.id}" title="Publica a rota (sem revelar endereços) pro grupo de motoristas elegível escolher">Publicar para motoristas</button>` : ""}
+        ${rascunho.paradas.length ? `<button type="button" class="botao-publicar-oferta" data-rascunho-id="${rascunho.id}" ${rascunho.agent_id ? "hidden" : ""} title="Publica a rota (sem revelar endereços) pro grupo de motoristas elegível escolher">Publicar para motoristas</button>` : ""}
         <button type="button" class="botao-enviar" data-rascunho-id="${rascunho.id}">Confirmar e enviar</button>
         <button type="button" class="botao-descartar perigo" data-rascunho-id="${rascunho.id}">Descartar</button>`}
         ${(ofertada && PODE_EDITAR) ? `<button type="button" class="botao-despublicar-oferta perigo" data-rascunho-id="${rascunho.id}" title="Tira a rota do marketplace -- volta a ser rascunho editável (se ninguém já tiver escolhido)">Despublicar</button>` : ""}
@@ -7223,6 +7223,9 @@
     }
     const selo = document.getElementById(`sem-carro-${r.id}`);
     if (selo) selo.innerHTML = seloSemCarroHtml(r);
+    // "Publicar para motoristas" só aparece enquanto a rota está sem motorista
+    const botaoOferta = document.querySelector(`.botao-publicar-oferta[data-rascunho-id="${r.id}"]`);
+    if (botaoOferta) botaoOferta.hidden = !!r.agent_id;
   }
 
   // carros do seletor: uma chamada só por carga da tela (o servidor guarda
