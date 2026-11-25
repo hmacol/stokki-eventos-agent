@@ -24,7 +24,12 @@ config.yaml:
       aprovacao_ativa: false  # true = demanda nova espera aprovacao do nivel total
       grupo_id: ""            # vazio = grupo "Freshlog Adm/Financeiro/RH" achado pelo nome
 
-Tabela compras_demandas (dados.db).
+Cadastros (22/11): itens (nome + unidade) e areas (so o nome), listas que a tela
+oferece na demanda. Item e area da demanda tem de existir e estar ativos; quem tem a
+tela cadastra na hora, so o nivel total inativa/reativa. Demandas antigas (sem
+area, item em texto livre) continuam valendo.
+
+Tabelas compras_demandas, compras_itens e compras_areas (dados.db).
 """
 import logging
 import sqlite3
@@ -55,7 +60,7 @@ PRIORIDADE_PADRAO = "NORMAL"
 AVISO_SIMULADO = "simulado"
 AVISO_ENVIANDO = "enviando"
 
-LIMITES = {"item": 120, "quantidade": 40, "motivo": 300, "observacoes": 500, "fornecedor": 120,
+LIMITES = {"nome": 120, "unidade": 30, "area": 60, "item": 120, "quantidade": 40, "motivo": 300, "observacoes": 500, "fornecedor": 120,
            "compra_obs": 500, "motivo_recusa": 300, "motivo_cancelamento": 300}
 
 
@@ -97,6 +102,21 @@ CREATE TABLE IF NOT EXISTS compras_demandas (
     aviso_em            TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_compras_demandas_situacao ON compras_demandas(situacao);
+CREATE TABLE IF NOT EXISTS compras_itens (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    nome       TEXT NOT NULL,
+    unidade    TEXT,
+    ativo      INTEGER NOT NULL DEFAULT 1,
+    criado_por TEXT,
+    criado_em  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS compras_areas (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    nome       TEXT NOT NULL,
+    ativo      INTEGER NOT NULL DEFAULT 1,
+    criado_por TEXT,
+    criado_em  TEXT NOT NULL
+);
 """
 
 
@@ -104,6 +124,8 @@ def conectar(caminho=None) -> sqlite3.Connection:
     conn = sqlite3.connect(caminho or DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
+    if "area" not in {r[1] for r in conn.execute("PRAGMA table_info(compras_demandas)")}:
+        conn.execute("ALTER TABLE compras_demandas ADD COLUMN area TEXT")     # criada antes dos cadastros
     return conn
 
 
@@ -167,18 +189,82 @@ def _exigir(conn, demanda_id: int, permitidas: tuple, erro: str) -> dict:
     return d
 
 
+# ── Cadastros de itens e areas ────────────────────────────────────────────────
+
+_TABELAS = {"itens": "compras_itens", "areas": "compras_areas"}
+
+
+def _chave(nome) -> str:
+    return _so_letras(nome)        # sem acento, maiuscula nem pontuacao: "Fita  Larga" = "fita larga"
+
+
+def _existente(conn, tabela: str, nome: str) -> dict | None:
+    alvo = _chave(nome)
+    return next((dict(r) for r in conn.execute(f"SELECT * FROM {tabela}") if _chave(r["nome"]) == alvo), None)
+
+
+def _cadastrar(conn, tabela: str, nome: str, unidade, usuario: str, rotulo: str) -> int:
+    if _existente(conn, tabela, nome):
+        ja = _existente(conn, tabela, nome)
+        raise ErroCompra(f"{rotulo.capitalize()} já cadastrado" + ("" if ja["ativo"] else " (está inativo: reative)") + ".")
+    if tabela == "compras_itens":
+        cur = conn.execute("INSERT INTO compras_itens (nome, unidade, criado_por, criado_em) VALUES (?,?,?,?)",
+                           (nome, unidade or None, usuario, _agora()))
+    else:
+        cur = conn.execute("INSERT INTO compras_areas (nome, criado_por, criado_em) VALUES (?,?,?)",
+                           (nome, usuario, _agora()))
+    conn.commit()
+    return cur.lastrowid
+
+
+def cadastrar_item(conn, dados: dict, usuario: str) -> int:
+    nome = _campo({"nome": dados.get("nome")}, "nome", "o nome do item", True)
+    unidade = _campo({"unidade": dados.get("unidade")}, "unidade", "a unidade", False)
+    return _cadastrar(conn, "compras_itens", nome, unidade, usuario, "item")
+
+
+def cadastrar_area(conn, dados: dict, usuario: str) -> int:
+    nome = _campo({"area": dados.get("nome")}, "area", "o nome da área", True)
+    return _cadastrar(conn, "compras_areas", nome, None, usuario, "área")
+
+
+def definir_ativo(conn, cadastro: str, registro_id: int, ativo: bool) -> None:
+    tabela = _TABELAS[cadastro]
+    if not conn.execute(f"SELECT 1 FROM {tabela} WHERE id = ?", (registro_id,)).fetchone():
+        raise ErroCompra("Cadastro não encontrado.")
+    conn.execute(f"UPDATE {tabela} SET ativo = ? WHERE id = ?", (1 if ativo else 0, registro_id))
+    conn.commit()
+
+
+def listar_cadastro(conn, cadastro: str, so_ativos: bool = False) -> list[dict]:
+    filtro = "WHERE ativo = 1" if so_ativos else ""
+    rows = conn.execute(f"SELECT * FROM {_TABELAS[cadastro]} {filtro} ORDER BY ativo DESC, nome COLLATE NOCASE")
+    return [dict(r) for r in rows]
+
+
+def _do_cadastro(conn, tabela: str, nome, rotulo: str) -> dict:
+    nome = " ".join(str(nome or "").split())
+    if not nome:
+        raise ErroCompra(f"Escolha {'o' if rotulo == 'item' else 'a'} {rotulo}.")
+    achado = _existente(conn, tabela, nome)
+    if not achado or not achado["ativo"]:
+        raise ErroCompra(f"{rotulo.capitalize()} \"{nome}\" não está na lista: escolha um cadastrado ou cadastre.")
+    return achado
+
+
 def criar(conn, dados: dict, usuario: str, config: dict | None = None) -> int:
     prioridade = str(dados.get("prioridade") or PRIORIDADE_PADRAO).upper()
     if prioridade not in PRIORIDADES:
         raise ErroCompra("Prioridade inválida.")
-    item = _campo(dados, "item", "o item", True)
+    area = _do_cadastro(conn, "compras_areas", dados.get("area"), "área")["nome"]
+    item = _do_cadastro(conn, "compras_itens", dados.get("item"), "item")["nome"]
     quantidade = _campo(dados, "quantidade", "a quantidade", True)
     motivo = _campo(dados, "motivo", "o motivo", True)
     observacoes = _campo(dados, "observacoes", "as observações", False)
     situacao = AGUARDANDO_APROVACAO if config_compras(config)["aprovacao_ativa"] else PENDENTE
-    cur = conn.execute("INSERT INTO compras_demandas (item, quantidade, motivo, observacoes, prioridade, situacao, "
-                       "criado_por, criado_em) VALUES (?,?,?,?,?,?,?,?)",
-                       (item, quantidade, motivo, observacoes or None, prioridade, situacao, usuario, _agora()))
+    cur = conn.execute("INSERT INTO compras_demandas (item, area, quantidade, motivo, observacoes, prioridade, situacao, "
+                       "criado_por, criado_em) VALUES (?,?,?,?,?,?,?,?,?)",
+                       (item, area, quantidade, motivo, observacoes or None, prioridade, situacao, usuario, _agora()))
     conn.commit()
     return cur.lastrowid
 
@@ -253,6 +339,8 @@ def _data_br(iso: str | None) -> str:
 def _pedido(d: dict) -> list[str]:
     linhas = [f"Item: {d['item']}", f"Quantidade: {d['quantidade']}", f"Motivo: {d['motivo']}",
               f"Prioridade: {PRIORIDADES[d['prioridade']]}"]
+    if d.get("area"):
+        linhas.insert(0, f"Área: {d['area']}")
     if d.get("observacoes"):
         linhas.append(f"Obs.: {d['observacoes']}")
     return linhas
