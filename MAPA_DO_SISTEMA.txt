@@ -303,6 +303,10 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              DESLIGADOS por padrao: compras.ativo (envio, desligado = so previa na
                                              tela) e compras.aprovacao_ativa (fluxo de aprovacao: demanda nasce
                                              AGUARDANDO_APROVACAO e so o nivel total aprova/recusa).
+                                             Cadastros (22/11): itens (nome+unidade) e areas (nome) na propria tela; item e
+                                             area da demanda saem da lista (area obrigatoria); quem tem a tela cadastra,
+                                             so o total de verdade inativa/reativa (nao vale o total "emprestado" pela
+                                             lista de telas do /acessos, nem pra aprovar).
  Justificativas sem canhoto ................ nucleo/justificativas_sem_canhoto.py: lista fixa de justificativas (codigo -> rotulo) e validar()
                                               usada pela API da Torre/Planejamento e pela tela /baixa-sem-app (checklist Vuupt pelas telas).
  Baixa de motorista sem app (iPhone) ....... nucleo/baixa_sem_app.py: item "aguardando baixa" na Torre,
@@ -1630,7 +1634,7 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            saiu tem "Reenviar aviso". Testes: test_pagamentos_pontuais.py.
  compras.py                Demandas de compra (19/11): PENDENTE -> COMPRADA | CANCELADA; com
                            aprovacao ligada: AGUARDANDO_APROVACAO -> PENDENTE | RECUSADA. Tabela
-                           compras_demandas. Aviso (criacao, aprovacao, recusa, compra, cancelamento) por
+                           compras_demandas (+ compras_itens, compras_areas, coluna area). Aviso (criacao, aprovacao, recusa, compra, cancelamento) por
                            notificar_whatsapp.despachar em thread (origem 'compras', cai no teto interno
                            padrao: se ligar o envio, dar balde proprio como o pagamento_pontual). Config:
                            compras.{ativo, aprovacao_ativa, grupo_id}. Testes: test_compras.py.

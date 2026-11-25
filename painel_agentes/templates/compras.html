@@ -13,7 +13,7 @@
   .grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 14px; }
   .campo { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
   .campo.largo { grid-column: 1 / -1; }
-  .campo label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--texto-suave); }
+  .campo label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--texto-suave); }
   .campo input, .campo select, .campo textarea { padding: 0 10px; height: 36px; border: 1px solid var(--borda); border-radius: 7px; background: var(--fundo); color: var(--texto); font-size: 13.5px; font-family: inherit; width: 100%; box-sizing: border-box; }
   .campo textarea { height: 58px; padding: 8px 10px; resize: vertical; }
   .campo input:focus, .campo select:focus, .campo textarea:focus { outline: none; border-color: var(--acento); box-shadow: 0 0 0 3px color-mix(in srgb, var(--acento) 22%, transparent); }
@@ -36,7 +36,7 @@
   .item .topo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .item .numero { font-weight: 800; font-variant-numeric: tabular-nums; }
   .item .nome { font-weight: 700; font-size: 14.5px; }
-  .chip { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; padding: 2px 8px; border-radius: 100px; background: var(--nunca-bg); color: var(--texto-suave); }
+  .chip { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; padding: 2px 8px; border-radius: 100px; background: var(--nunca-bg); color: var(--texto-suave); }
   .chip.urgente { background: var(--erro); color: #fff; }
   .chip.alta { background: var(--interrompido-bg); color: var(--interrompido-texto); }
   .chip.comprada { background: var(--sucesso-bg); color: var(--sucesso); }
@@ -54,6 +54,18 @@
   .painel-acao[hidden] { display: none; }
   .aviso-whats summary { cursor: pointer; color: var(--texto-suave); font-size: 12px; width: fit-content; }
   .aviso-whats pre { white-space: pre-wrap; font-family: inherit; font-size: 12.5px; background: var(--fundo); border: 1px solid var(--borda); border-radius: 8px; padding: 10px 12px; margin: 8px 0 0; max-width: 560px; color: var(--texto); }
+  .link-novo { align-self: flex-start; background: none; border: none; padding: 0; color: var(--acento); font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .link-novo:hover { text-decoration: underline; }
+  .novo { grid-column: 1 / -1; border: 1px dashed var(--borda); border-radius: 10px; padding: 12px; }
+  .novo[hidden] { display: none; }
+  .novo .grade { margin-bottom: 10px; }
+  .cadastros { background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px; padding: 12px 16px; margin: 0 0 18px; }
+  .cadastros summary { cursor: pointer; font-size: 14px; font-weight: 700; }
+  .cadastros h3 { font-size: 12.5px; margin: 14px 0 6px; }
+  .cadastros ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .cadastros li { display: flex; align-items: center; gap: 8px; font-size: 13px; flex-wrap: wrap; }
+  .cadastros li.inativo .rotulo-cad { color: var(--texto-suave); text-decoration: line-through; }
+  .cadastros li button { height: 26px; padding: 0 10px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid var(--borda); background: transparent; color: var(--texto); font-family: inherit; }
   .vazio { padding: 40px 20px; text-align: center; color: var(--texto-suave); font-size: 13px; background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; }
 </style>
 {% endblock %}
@@ -76,7 +88,21 @@
 <form class="lancar" id="form-nova" novalidate>
   <h2>Nova demanda de compra</h2>
   <div class="grade">
-    <div class="campo" id="c-item"><label for="f-item">Item</label><input type="text" id="f-item" name="item" maxlength="120" autocomplete="off"></div>
+    <div class="campo" id="c-area"><label for="f-area">Área</label>
+      <select id="f-area" name="area"><option value="">Escolha a área…</option>{% for a in cad_areas if a.ativo %}<option value="{{ a.nome }}">{{ a.nome }}</option>{% endfor %}</select>
+      <button type="button" class="link-novo" data-novo="area">+ Nova área</button></div>
+    <div class="campo" id="c-item"><label for="f-item">Item</label>
+      <select id="f-item" name="item"><option value="">Escolha o item…</option>{% for i in cad_itens if i.ativo %}<option value="{{ i.nome }}" data-unidade="{{ i.unidade or '' }}">{{ i.nome }}{% if i.unidade %} ({{ i.unidade }}){% endif %}</option>{% endfor %}</select>
+      <button type="button" class="link-novo" data-novo="item">+ Novo item</button></div>
+    <div class="novo" hidden data-novo-painel="area">
+      <div class="grade"><div class="campo"><label>Nome da nova área</label><input type="text" name="nome" maxlength="60" autocomplete="off"></div></div>
+      <button type="button" class="botao-principal" data-cadastrar="area">Cadastrar área</button> <span class="erro-form" role="alert"></span>
+    </div>
+    <div class="novo" hidden data-novo-painel="item">
+      <div class="grade"><div class="campo"><label>Nome do novo item</label><input type="text" name="nome" maxlength="120" autocomplete="off"></div>
+        <div class="campo"><label>Unidade (opcional)</label><input type="text" name="unidade" maxlength="30" placeholder="Ex.: caixa, rolo, unidade" autocomplete="off"></div></div>
+      <button type="button" class="botao-principal" data-cadastrar="item">Cadastrar item</button> <span class="erro-form" role="alert"></span>
+    </div>
     <div class="campo" id="c-quantidade"><label for="f-quantidade">Quantidade</label><input type="text" id="f-quantidade" name="quantidade" maxlength="40" placeholder="Ex.: 10 caixas" autocomplete="off"></div>
     <div class="campo" id="c-prioridade"><label for="f-prioridade">Prioridade</label>
       <select id="f-prioridade" name="prioridade">{% for k, v in c.PRIORIDADES.items() %}<option value="{{ k }}"{% if k == c.PRIORIDADE_PADRAO %} selected{% endif %}>{{ v }}</option>{% endfor %}</select></div>
@@ -85,6 +111,21 @@
   </div>
   <div class="rodape-form"><button type="submit" class="botao-principal" id="btn-criar">Registrar demanda</button><span class="erro-form" id="erro-form" role="alert"></span></div>
 </form>
+
+<details class="cadastros">
+  <summary>Cadastros: itens e áreas</summary>
+  {% for titulo, chave, lista in [('Áreas', 'areas', cad_areas), ('Itens', 'itens', cad_itens)] %}
+  <h3>{{ titulo }}</h3>
+  {% if not lista %}<div class="detalhes">Nada cadastrado ainda: use "+ {{ 'Nova área' if chave == 'areas' else 'Novo item' }}" no formulário.</div>{% endif %}
+  <ul>
+    {% for r in lista %}
+    <li class="{{ '' if r.ativo else 'inativo' }}"><span class="rotulo-cad">{{ r.nome }}{% if r.unidade %} ({{ r.unidade }}){% endif %}</span>
+      {% if not r.ativo %}<span class="chip">Inativo</span>{% endif %}
+      {% if pode_aprovar %}<button type="button" data-cad="{{ chave }}" data-id="{{ r.id }}" data-ativo="{{ 0 if r.ativo else 1 }}">{{ 'Inativar' if r.ativo else 'Reativar' }}</button>{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% endfor %}
+</details>
 
 <nav class="abas" aria-label="Situação">
   {% for chave, rotulo in [('PENDENTE', 'Pendentes')] + ([('AGUARDANDO_APROVACAO', 'Aguardando aprovação')] if aprovacao_ligada or contagem['AGUARDANDO_APROVACAO'] else []) + [('COMPRADA', 'Compradas'), ('RECUSADA', 'Recusadas'), ('CANCELADA', 'Canceladas'), ('TODAS', 'Todas')] %}
@@ -101,6 +142,7 @@
     <div class="topo">
       <span class="numero">#{{ d.id }}</span>
       <span class="nome">{{ d.item }} — {{ d.quantidade }}</span>
+      {% if d.area %}<span class="chip">{{ d.area }}</span>{% endif %}
       <span class="chip {{ d.prioridade|lower }}">{{ c.PRIORIDADES[d.prioridade] }}</span>
       <span class="chip {{ d.situacao|lower }}">{{ c.SITUACOES[d.situacao] }}</span>
     </div>
@@ -171,6 +213,37 @@
     if (!ok) { erro.textContent = j.erro || "Não deu pra registrar."; b.disabled = false; return; }
     location.href = `${URL_TELA}?situacao=${j.demanda.situacao}#d${j.id}`;
   });
+
+  // cadastrar item/area na hora: entra na lista e ja fica escolhido
+  document.querySelectorAll("[data-novo]").forEach(b => b.addEventListener("click", () => {
+    const painel = document.querySelector(`[data-novo-painel="${b.dataset.novo}"]`);
+    painel.hidden = !painel.hidden;
+  }));
+  document.querySelectorAll("[data-cadastrar]").forEach(b => b.addEventListener("click", async () => {
+    const tipo = b.dataset.cadastrar, painel = b.closest(".novo"), erro = painel.querySelector(".erro-form");
+    const corpo = {};
+    painel.querySelectorAll("input").forEach(i => { corpo[i.name] = i.value; });
+    erro.textContent = ""; b.disabled = true;
+    const { ok, j } = await enviar(`${URL_API}/${tipo === "item" ? "itens" : "areas"}`, corpo);
+    b.disabled = false;
+    if (!ok) { erro.textContent = j.erro || "Não deu pra cadastrar."; return; }
+    const nome = corpo.nome.trim().replace(/\s+/g, " "), sel = document.getElementById(tipo === "item" ? "f-item" : "f-area");
+    const op = new Option(nome + (corpo.unidade && corpo.unidade.trim() ? ` (${corpo.unidade.trim()})` : ""), nome, true, true);
+    op.dataset.unidade = (corpo.unidade || "").trim();
+    sel.add(op); sel.value = nome; sel.dispatchEvent(new Event("change"));
+    painel.querySelectorAll("input").forEach(i => { i.value = ""; });
+    painel.hidden = true;
+  }));
+  document.getElementById("f-item").addEventListener("change", (ev) => {
+    const un = ev.target.selectedOptions[0] && ev.target.selectedOptions[0].dataset.unidade;
+    document.getElementById("f-quantidade").placeholder = un ? `Ex.: 10 ${un}` : "Ex.: 10 caixas";
+  });
+  document.querySelectorAll("[data-cad]").forEach(b => b.addEventListener("click", async () => {
+    b.disabled = true;
+    const { ok, j } = await enviar(`${URL_API}/${b.dataset.cad}/${b.dataset.id}/ativo`, { ativo: b.dataset.ativo === "1" });
+    if (!ok) { alert(j.erro || "Não deu certo."); b.disabled = false; return; }
+    location.reload();
+  }));
 
   document.querySelectorAll(".item").forEach(item => {
     const id = item.dataset.id, erro = item.querySelector(".erro-linha");

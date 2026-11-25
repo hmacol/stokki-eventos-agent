@@ -4943,7 +4943,10 @@ def _usuario_compras() -> str:
 
 
 def _pode_aprovar_compras() -> bool:
-    return g.nivel_acesso == "total"
+    # Login com lista de telas personalizada vira "total" dentro das telas liberadas
+    # (requer_auth), entao o nivel sozinho nao basta: aprovar e so de quem e total de
+    # verdade, sem lista personalizada.
+    return g.nivel_acesso == "total" and g.get("telas_liberadas") is None
 
 
 @app.route("/compras")
@@ -4962,7 +4965,13 @@ def compras_tela():
     for d in itens:
         d["pode_reenviar"] = compras.pode_reenviar(d)
     cfg = compras.config_compras(config)
+    conn = compras.conectar()
+    try:
+        cad_itens, cad_areas = compras.listar_cadastro(conn, "itens"), compras.listar_cadastro(conn, "areas")
+    finally:
+        conn.close()
     return render_template("compras.html", itens=itens, situacao=situacao, contagem=contagem, c=compras,
+                           cad_itens=cad_itens, cad_areas=cad_areas,
                            envio_ligado=cfg["ativo"], aprovacao_ligada=cfg["aprovacao_ativa"],
                            pode_aprovar=_pode_aprovar_compras(), hoje=date.today().isoformat())
 
@@ -4998,6 +5007,45 @@ def api_compras_criar():
         return jsonify({"erro": str(e)}), 400
     finally:
         conn.close()
+
+
+def _cadastro_compra(func):
+    conn = compras.conectar()
+    try:
+        novo_id = func(conn)
+        return jsonify({"ok": True, "id": novo_id})
+    except compras.ErroCompra as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/compras/itens", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COMPRAS)
+@exige_mesma_origem
+def api_compras_item_novo():
+    dados = request.get_json(silent=True) or {}
+    return _cadastro_compra(lambda conn: compras.cadastrar_item(conn, dados, _usuario_compras()))
+
+
+@app.route("/api/compras/areas", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COMPRAS)
+@exige_mesma_origem
+def api_compras_area_nova():
+    dados = request.get_json(silent=True) or {}
+    return _cadastro_compra(lambda conn: compras.cadastrar_area(conn, dados, _usuario_compras()))
+
+
+@app.route("/api/compras/<cadastro>/<int:registro_id>/ativo", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COMPRAS)
+@exige_mesma_origem
+def api_compras_cadastro_ativo(cadastro, registro_id):
+    if cadastro not in ("itens", "areas"):
+        return jsonify({"erro": "Cadastro inválido."}), 404
+    if not _pode_aprovar_compras():            # so o total de verdade inativa/reativa
+        return jsonify({"erro": "Só o nível total inativa ou reativa cadastros."}), 403
+    ativo = bool((request.get_json(silent=True) or {}).get("ativo"))
+    return _cadastro_compra(lambda conn: (compras.definir_ativo(conn, cadastro, registro_id, ativo), registro_id)[1])
 
 
 @app.route("/api/compras/<int:demanda_id>/aprovar", methods=["POST"])

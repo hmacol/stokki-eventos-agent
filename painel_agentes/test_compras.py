@@ -25,7 +25,7 @@ ORIGEM = {"Origin": "http://localhost"}
 CFG_DESLIGADO = {"painel_agentes": {"usuario": "u_teste", "senha": "s_teste"}}
 CFG_APROVACAO = {**CFG_DESLIGADO, "compras": {"aprovacao_ativa": True}}
 CFG_LIGADO = {**CFG_DESLIGADO, "compras": {"ativo": True}}
-PEDIDO = {"item": "Fita larga", "quantidade": "10 rolos", "motivo": "Acabando no expedição", "prioridade": "NORMAL"}
+PEDIDO = {"item": "Fita larga", "area": "Expedição", "quantidade": "10 rolos", "motivo": "Acabando no expedição", "prioridade": "NORMAL"}
 
 
 class Base(unittest.TestCase):
@@ -39,8 +39,13 @@ class Base(unittest.TestCase):
             self.addCleanup(p.stop)
         self.conn = cp.conectar()
         self.addCleanup(self.conn.close)
+        cp.cadastrar_area(self.conn, {"nome": "Expedição"}, "Hugo")
+        cp.cadastrar_item(self.conn, {"nome": "Fita larga", "unidade": "rolo"}, "Hugo")
 
     def criar(self, config=None, **kw):
+        nome = kw.get("item")
+        if nome and not cp._existente(self.conn, "compras_itens", nome) and len(nome) <= 120:
+            cp.cadastrar_item(self.conn, {"nome": nome}, "Hugo")          # item novo dos testes de ordenacao
         return cp.criar(self.conn, {**PEDIDO, **kw}, "Valeria", config)
 
 
@@ -91,6 +96,48 @@ class TestRegras(Base):
         self.assertEqual(cp.obter(self.conn, i)["situacao"], cp.CANCELADA)
         with self.assertRaises(cp.ErroCompra):
             cp.marcar_comprada(self.conn, i, {"data_compra": "2026-11-19"}, "Vivian")
+
+
+class TestCadastros(Base):
+    def test_item_e_area_precisam_estar_no_cadastro(self):
+        for extra in ({"item": "Caneta"}, {"area": "RH"}, {"item": ""}, {"area": ""}):
+            with self.assertRaises(cp.ErroCompra, msg=str(extra)):
+                cp.criar(self.conn, {**PEDIDO, **extra}, "Valeria")
+        cp.cadastrar_item(self.conn, {"nome": "Caneta", "unidade": "caixa"}, "Valeria")
+        cp.cadastrar_area(self.conn, {"nome": "RH"}, "Valeria")
+        d = cp.obter(self.conn, cp.criar(self.conn, {**PEDIDO, "item": "caneta", "area": "rh"}, "Valeria"))
+        self.assertEqual((d["item"], d["area"]), ("Caneta", "RH"))       # guarda o nome cadastrado
+
+    def test_duplicado_ignora_acento_caixa_e_espaco(self):
+        with self.assertRaises(cp.ErroCompra):
+            cp.cadastrar_area(self.conn, {"nome": " expedicao "}, "Valeria")
+        with self.assertRaises(cp.ErroCompra):
+            cp.cadastrar_item(self.conn, {"nome": "FITA  LARGA"}, "Valeria")
+        with self.assertRaises(cp.ErroCompra):
+            cp.cadastrar_item(self.conn, {"nome": ""}, "Valeria")
+
+    def test_inativo_some_da_lista_e_nao_aceita_demanda_nova(self):
+        item = cp.listar_cadastro(self.conn, "itens")[0]["id"]
+        cp.definir_ativo(self.conn, "itens", item, False)
+        self.assertEqual(cp.listar_cadastro(self.conn, "itens", so_ativos=True), [])
+        with self.assertRaises(cp.ErroCompra):
+            cp.criar(self.conn, PEDIDO, "Valeria")
+        with self.assertRaises(cp.ErroCompra) as ctx:                      # cadastrar de novo pede reativar
+            cp.cadastrar_item(self.conn, {"nome": "Fita larga"}, "Valeria")
+        self.assertIn("reative", str(ctx.exception))
+        cp.definir_ativo(self.conn, "itens", item, True)
+        cp.criar(self.conn, PEDIDO, "Valeria")
+
+    def test_demanda_antiga_sem_area_continua_valendo(self):
+        self.conn.execute("INSERT INTO compras_demandas (item, quantidade, motivo, prioridade, situacao, criado_por, criado_em) "
+                          "VALUES ('Papel', '2', 'falta', 'NORMAL', 'PENDENTE', 'x', '2026-11-19 10:00:00')")
+        self.conn.commit()
+        cp.marcar_comprada(self.conn, 1, {"data_compra": "2026-11-20"}, "Vivian")
+        self.assertIsNone(cp.obter(self.conn, 1)["area"])
+        self.assertNotIn("Área:", cp.TEXTOS["compra"](cp.obter(self.conn, 1)))
+
+    def test_aviso_leva_a_area(self):
+        self.assertIn("Área: Expedição", cp.TEXTOS["criacao"](cp.obter(self.conn, self.criar())))
 
 
 class TestAprovacao(Base):
@@ -205,12 +252,44 @@ class TestTela(Base):
                               json={"data_compra": "2026-11-19", "fornecedor": "Kalunga", "valor": "50"})
         self.assertEqual(r.get_json()["demanda"]["situacao"], "COMPRADA")
         self.assertIn("Kalunga", self.cliente.get("/compras?situacao=COMPRADA").get_data(as_text=True))
-        self.assertNotIn("Fita larga", self.cliente.get("/compras").get_data(as_text=True))
+        self.assertNotIn('id="d%d"' % j["id"], self.cliente.get("/compras").get_data(as_text=True))   # saiu das pendentes
 
     def test_validacao_e_origem(self):
         self.logar()
         self.assertEqual(self.cliente.post("/api/compras", json={"item": "x"}, headers=ORIGEM).status_code, 400)
         self.assertEqual(self.cliente.post("/api/compras", json=PEDIDO).status_code, 403)
+
+    def test_cadastros_pela_api(self):
+        self.logar()
+        r = self.cliente.post("/api/compras/areas", json={"nome": "Escritório"}, headers=ORIGEM)
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertEqual(self.cliente.post("/api/compras/areas", json={"nome": "escritorio"}, headers=ORIGEM).status_code, 400)
+        r = self.cliente.post("/api/compras/itens", json={"nome": "Toner", "unidade": "unidade"}, headers=ORIGEM)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.cliente.post("/api/compras/itens", json={"nome": "Outro"}).status_code, 403)   # sem Origin
+        html = self.cliente.get("/compras").get_data(as_text=True)
+        self.assertIn("Escritório", html)
+        self.assertIn("Toner", html)
+        i = self.cliente.post("/api/compras", headers=ORIGEM,
+                              json={**PEDIDO, "item": "Toner", "area": "Escritório"}).get_json()["demanda"]
+        self.assertEqual((i["item"], i["area"]), ("Toner", "Escritório"))
+        self.assertEqual(self.cliente.post("/api/compras/lixo/1/ativo", json={"ativo": False}, headers=ORIGEM).status_code, 404)
+
+    def test_inativar_cadastro_so_o_total_de_verdade(self):
+        self.logar()
+        area = cp.listar_cadastro(self.conn, "areas")[0]["id"]
+        r = self.cliente.post(f"/api/compras/areas/{area}/ativo", json={"ativo": False}, headers=ORIGEM)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(cp.listar_cadastro(self.conn, "areas")[0]["ativo"], 0)
+        conta = {"ativo": True, "nivel": "operador", "telas": ["compras_tela"], "trocar_senha": False,
+                 "nome": "Vivian", "usuario": "vivian"}
+        with mock.patch.object(acesso_telas, "conta", return_value=conta), \
+                mock.patch.object(painel_agentes, "_sessao_na_versao", return_value=True):
+            self.logar("operador", "vivian")
+            self.assertEqual(self.cliente.post("/api/compras/areas", json={"nome": "Nova"}, headers=ORIGEM).status_code, 200)
+            r = self.cliente.post(f"/api/compras/areas/{area}/ativo", json={"ativo": True}, headers=ORIGEM)
+            self.assertEqual(r.status_code, 403)                            # cadastra, mas nao reativa
+        self.assertEqual(self.conn.execute("SELECT ativo FROM compras_areas WHERE id = ?", (area,)).fetchone()[0], 0)
 
     def test_aprovar_e_recusar_so_pelo_total(self):
         self.cfg = CFG_APROVACAO
@@ -224,6 +303,21 @@ class TestTela(Base):
         r = self.cliente.post(f"/api/compras/{i}/aprovar", headers=ORIGEM)
         self.assertEqual(r.get_json()["demanda"]["situacao"], "PENDENTE")
         self.assertEqual(r.get_json()["demanda"]["aprovado_por"], "hugo")
+
+    def test_login_com_tela_personalizada_nao_aprova(self):
+        # Vivian: nivel operador com a tela Compras liberada em /acessos vira "total" dentro da tela
+        self.cfg = CFG_APROVACAO
+        self.logar()
+        i = self.cliente.post("/api/compras", json=PEDIDO, headers=ORIGEM).get_json()["id"]
+        conta = {"ativo": True, "nivel": "operador", "telas": ["compras_tela"], "trocar_senha": False,
+                 "nome": "Vivian", "usuario": "vivian"}
+        with mock.patch.object(acesso_telas, "conta", return_value=conta),                 mock.patch.object(painel_agentes, "_sessao_na_versao", return_value=True):
+            self.logar("operador", "vivian")
+            self.assertEqual(self.cliente.get("/compras").status_code, 200)
+            self.assertEqual(self.cliente.post(f"/api/compras/{i}/aprovar", headers=ORIGEM).status_code, 403)
+            self.assertEqual(self.cliente.post(f"/api/compras/{i}/recusar", json={"motivo": "x"},
+                                               headers=ORIGEM).status_code, 403)
+        self.assertEqual(cp.obter(self.conn, i)["situacao"], cp.AGUARDANDO_APROVACAO)
 
     def test_tela_liberada_por_acesso_personalizado(self):
         # Vivian: login nominal de nivel operador com a tela "Compras" liberada em /acessos
