@@ -183,6 +183,8 @@
     return `<tr class="ent-detalhe"><td colspan="7">${itens}${conf}${x.observacoes ? `<div style="margin-top:6px;font-size:12px;color:var(--texto-suave)">Obs.: ${esc(x.observacoes)}</div>` : ''}</td></tr>`;
   }
 
+  const aplicarColunasEntradas = window.seletorColunasPortal($('ent-tabela'));  // botão Colunas (definido em _envios.html)
+
   function renderTabela() {
     const lista = filtradas();
     $('ent-tabela').querySelector('tbody').innerHTML = lista.map(x => `<tr>
@@ -200,6 +202,7 @@
     if (!lista.length) { vazio.classList.remove('oculto'); vazio.textContent = busca ? 'Nada bate com a busca.' : (dados.entradas.length ? 'Nenhuma entrada nessa situação.' : 'Você ainda não anunciou nenhuma mercadoria por aqui.'); }
     else vazio.classList.add('oculto');
     $('ent-contagem').textContent = lista.length ? `${lista.length} entrada${lista.length > 1 ? 's' : ''}` : '';
+    aplicarColunasEntradas();
   }
 
   // ── Upload → prévia → confirmar ────────────────────────────────────────────

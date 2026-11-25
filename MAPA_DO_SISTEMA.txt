@@ -584,6 +584,8 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                                              no galpão + vivo no núcleo: cancela na Vuupt só no
                                                              pool; em rota só e-mail interno)
  a cada minuto               lancar-lalamove                 nucleo/lancar_lalamove_programados.py
+ a cada minuto               publicar-ofertas-agendadas      painel_agentes/publicar_ofertas_agendadas.py (Publicar para motoristas com
+                                                             horario de hoje; coluna rascunhos_rota.oferta_agendada_em; falha em oferta_agendada_erro)
  a cada 15 min               wms-reservar-pedidos            sincronizar_pedidos_wms.py
  xx:09 e xx:39               wms-recebimentos                sincronizar_recebimentos_wms.py
  xx:07 e xx:37               wms-sincronizar-produtos        sincronizar_produtos_stokki.py
@@ -1675,7 +1677,8 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
    /expedicao                 expedicao.html
    /expedicao/coletas         coletas_expedicao.html (+ /api/expedicao/coletas/...: folha,
                               estado (a lista recarrega quando outro aparelho confirma),
-                              /expedicao/coletas/<id> = tela de UMA coleta, destino do QR;
+                              /expedicao/coletas/<id> = tela de UMA coleta, destino do QR
+                              (sem login: /login?proximo=coleta<id> e volta pra coleta, 16/11);
                               <id>/confirmar|cancelar|tentar-de-novo|retirar|andamento;
                               <id>/folha.pdf e <id>/foto). Ver: total, operador, leitura,
                               atendimento, logistica, expedicao, galpao. Agir: total,

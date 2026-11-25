@@ -23,7 +23,7 @@ from aula_portal.ambiente import (MARCA_CONFIG, TABELA_MARCA, AmbienteRecusado, 
 
 ESTADOS = ("retornos", "coletas")
 PORTA_PADRAO = 8098
-USUARIOS = {"galpao": "galpao", "expedicao": "expedicao"}   # nivel -> login fixo do config ficticio
+USUARIOS = {"galpao": "galpao", "expedicao": "doca"}   # nivel -> login fixo do config ficticio
 
 __all__ = ["AmbienteRecusado", "escrever_config", "semear_banco", "subir_painel", "parar_painel", "SENHA"]
 
