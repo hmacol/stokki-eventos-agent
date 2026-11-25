@@ -1,0 +1,9 @@
+[Unit]
+Description=Stokki Eventos - Reenvio das pendencias cadastrais aos motoristas (a cada 2 dias, privado do WhatsApp)
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python -m nucleo.enviar_pendencias_motoristas --real --recorrente --pausa 45,150

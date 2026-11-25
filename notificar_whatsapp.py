@@ -1429,9 +1429,11 @@ _ROTULO_DOCUMENTO_PENDENTE = {"cnh": "CNH", "crlv": "documento do veículo (CRLV
 _ROTULO_CAMPO_PENDENTE = {"PIX": "chave PIX", "nascimento": "data de nascimento"}
 
 
-def texto_pendencias_motorista(primeiro_nome: str, documentos: list, campos: list, link: str, expira) -> str:
+def texto_pendencias_motorista(primeiro_nome: str, documentos: list, campos: list, link: str, expira,
+                               bloqueio=None) -> str:
     """Mensagem pessoal com o que falta no cadastro do motorista e o link pessoal de atualizacao.
-    `documentos`/`campos` vem de atualizacao_motorista.pendencias. `expira`: date ou datetime."""
+    `documentos`/`campos` vem de atualizacao_motorista.pendencias. `expira`: date ou datetime.
+    `bloqueio` (date): da 4a mensagem da rotina, avisa que o cadastro pra recebimento e bloqueado a partir dessa data."""
     linhas = [f"Olá, {primeiro_nome}! Aqui é a Fresh Log. Seu cadastro de motorista está com pendências:"]
     if documentos:
         linhas.append("• Documentos: " + ", ".join(_ROTULO_DOCUMENTO_PENDENTE.get(d, d) for d in documentos))
@@ -1439,7 +1441,32 @@ def texto_pendencias_motorista(primeiro_nome: str, documentos: list, campos: lis
         linhas.append("• Dados: " + ", ".join(_ROTULO_CAMPO_PENDENTE.get(c, c) for c in campos))
     linhas.append(f"Preencha pelo link (uns 5 minutos, com os documentos em mãos): {link}")
     linhas.append(f"O link vale até {expira:%d/%m}.")
+    if bloqueio:
+        linhas.append(f"⚠️ Atenção: se o cadastro não for atualizado, o seu cadastro para recebimento de rotas "
+                      f"será bloqueado a partir de {bloqueio:%d/%m}.")
     return "\n".join(linhas)
+
+
+def texto_hugo_pendencias_motoristas(casos: list, bloqueio) -> str:
+    """Resumo pro Hugo: quem recebeu hoje a mensagem que avisa o bloqueio (casos: nome + tentativa)."""
+    linhas = [f"Motoristas com cadastro pendente que receberam hoje o aviso de bloqueio (a partir de {bloqueio:%d/%m}):"]
+    linhas += [f"• {c['nome']} ({c['tentativa']}ª mensagem)" for c in casos]
+    return "\n".join(linhas)
+
+
+def avisar_hugo_pendencias_motoristas(casos: list, bloqueio, config: dict, modo_teste: bool = False, **kw) -> str:
+    """Avisa o Hugo (grupo so com ele, whatsapp_notificacoes.grupo_resumo_email_id; sem o grupo, desligado)."""
+    try:
+        grupo = _cfg(config).get("grupo_resumo_email_id")
+        if not grupo:
+            return "desligado"
+        return despachar(config, "pendencias_motoristas_aviso", "pendencias_motoristas_bloqueio",
+                         texto_hugo_pendencias_motoristas(casos, bloqueio),
+                         f"pendencias_motoristas_bloqueio:{bloqueio.isoformat()}", modo_teste=modo_teste,
+                         grupo_id=grupo, **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
 
 
 def avisar_motorista_pendencias_privado(link_id: int, telefone: str, nome: str, texto: str, config: dict,

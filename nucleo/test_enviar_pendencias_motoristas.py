@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import unittest
-from datetime import date
+from datetime import date, datetime
 from unittest import mock
 
 import notificar_whatsapp as nw
@@ -34,7 +34,8 @@ class SelecionarTest(unittest.TestCase):
         with mock.patch.object(env.atu, "pessoas", return_value=pessoas), \
              mock.patch.object(env.atu, "pendencias", return_value=PEND), \
              mock.patch.object(env.atu, "link_em_aberto", side_effect=lambda c, pid: (aberto or {}).get(pid)), \
-             mock.patch.object(env.atu, "ficha_vigente", return_value=None):
+             mock.patch.object(env.atu, "ficha_vigente", return_value=None), \
+             mock.patch.object(env, "historico", return_value=(0, None)):
             return env.selecionar(None)
 
     def test_separa_quem_recebe_de_quem_fica_de_fora(self):
@@ -47,6 +48,72 @@ class SelecionarTest(unittest.TestCase):
         self.assertEqual({d["principal_id"]: d["motivo"] for d in fora},
                          {2: "cadastro de teste/virtual", 3: "sem CPF", 4: "sem telefone",
                           5: "ja tem link em aberto", 7: "cadastro de teste/virtual"})
+
+
+class RecorrenteTest(unittest.TestCase):
+    AGORA = datetime(2026, 11, 25, 8, 30)
+
+    def _rodar(self, hist, aberto=None, recorrente=True):
+        pessoas = [_pessoa(i, f"Motorista {i}") for i in hist]
+        with mock.patch.object(env.atu, "pessoas", return_value=pessoas), \
+             mock.patch.object(env.atu, "pendencias", return_value=PEND), \
+             mock.patch.object(env.atu, "link_em_aberto", side_effect=lambda c, pid: (aberto or {}).get(pid)), \
+             mock.patch.object(env.atu, "ficha_vigente", return_value=None), \
+             mock.patch.object(env, "historico", side_effect=lambda c, pid: hist[pid]):
+            return env.selecionar(None, recorrente=recorrente, agora=self.AGORA)
+
+    def test_reenvia_depois_de_2_dias_com_link_em_aberto_e_conta_a_tentativa(self):
+        hist = {1: (1, datetime(2026, 11, 23, 8, 25)),     # 2 dias: volta, 2a mensagem
+                2: (1, datetime(2026, 11, 24, 8, 25)),     # 1 dia: espera
+                3: (0, None),                              # nunca recebeu: 1a mensagem
+                4: (3, datetime(2026, 11, 20, 8, 25))}     # 4a mensagem
+        recebem, fora = self._rodar(hist, aberto={1: {"id": 1}, 4: {"id": 4}})
+        self.assertEqual({d["principal_id"]: d["tentativa"] for d in recebem}, {1: 2, 3: 1, 4: 4})
+        self.assertEqual([(d["principal_id"], d["motivo"]) for d in fora],
+                         [(2, "mensagem enviada ha menos de 2 dias")])
+
+    def test_quem_abriu_o_link_ha_pouco_nao_perde_o_rascunho(self):
+        hist = {1: (1, datetime(2026, 11, 22, 8, 25))}
+        recebem, fora = self._rodar(hist, aberto={1: {"id": 1, "aberto_em": "2026-11-24 20:00:00"}})
+        self.assertEqual(recebem, [])
+        self.assertEqual(fora[0]["motivo"], "esta preenchendo (abriu o link ha pouco)")
+
+    def test_sem_recorrente_continua_pulando_quem_tem_link_em_aberto(self):
+        recebem, fora = self._rodar({1: (1, datetime(2026, 11, 1))}, aberto={1: {"id": 1}}, recorrente=False)
+        self.assertEqual((recebem, fora[0]["motivo"]), ([], "ja tem link em aberto"))
+
+    def test_texto_so_avisa_bloqueio_da_4a_mensagem_em_diante(self):
+        sem = nw.texto_pendencias_motorista("Ana", ["cnh"], [], "L", date(2026, 12, 8))
+        com = nw.texto_pendencias_motorista("Ana", ["cnh"], [], "L", date(2026, 12, 8), bloqueio=date(2026, 11, 28))
+        self.assertNotIn("bloqueado", sem)
+        self.assertIn("bloqueado a partir de 28/11", com)
+
+    def test_enviar_passa_bloqueio_so_na_4a_e_registra_a_tentativa(self):
+        textos = []
+        dest = [{"principal_id": i, "nome": f"N{i}", "telefone": "11988887777", "pendencias": PEND, "tentativa": t}
+                for i, t in ((1, 3), (2, 4))]
+        with mock.patch.object(env.atu, "gerar_link", return_value={"id": 7, "token": "t", "expira_em": "2026-12-06 10:00:00"}), \
+             mock.patch.object(env.banco, "agora", return_value="agora"):
+            r = env.enviar(mock.MagicMock(), {"atualizacao_motoristas": {"forcar_destino_whatsapp": ""}}, dest, "https://x",
+                           avisar=lambda lid, tel, nome, texto, cfg: (textos.append(texto), ("enviado", False))[1])
+        self.assertNotIn("bloqueado", textos[0])
+        self.assertIn("bloqueado", textos[1])
+        self.assertEqual([x["tentativa"] for x in r], [3, 4])
+
+    def test_avisa_o_hugo_so_dos_enviados_com_aviso_de_bloqueio(self):
+        res = [{"principal_id": 1, "nome": "A", "situacao": "enviado", "tentativa": 3},
+               {"principal_id": 2, "nome": "B", "situacao": "enviado", "tentativa": 4},
+               {"principal_id": 3, "nome": "C", "situacao": "teto", "tentativa": 5}]
+        chamadas = []
+        env.avisar_hugo({}, res, avisar=lambda casos, bloqueio, cfg: chamadas.append(casos))
+        self.assertEqual([c["nome"] for c in chamadas[0]], ["B"])
+        env.avisar_hugo({}, res[:1], avisar=lambda *a: chamadas.append("nao devia"))
+        self.assertEqual(len(chamadas), 1)
+
+    def test_texto_pro_hugo_lista_os_casos(self):
+        t = nw.texto_hugo_pendencias_motoristas([{"nome": "B", "tentativa": 4}], date(2026, 11, 28))
+        self.assertIn("a partir de 28/11", t)
+        self.assertIn("• B (4ª mensagem)", t)
 
 
 class EnviarTest(unittest.TestCase):
