@@ -103,6 +103,56 @@ class BoasVindas(unittest.TestCase):
             self.assertEqual(nw.avisar_motorista_boas_vindas(7, "11998765432", "oi", config), "indeterminado")
 
 
+class OfertaRotaMotorista(unittest.TestCase):
+    """Mensagem particular da rota ofertada (Hugo, 21/11): piloto, envio real e teto proprio."""
+    BASE = {"ativo": True, "base_url": "http://x", "api_key": "k", "sessao": "s", "grupo_id": "g@g.us"}
+
+    def _cfg(self, **rota_sem_aceite):
+        return {"whatsapp_notificacoes": dict(self.BASE), "api_motorista": {"rota_sem_aceite": rota_sem_aceite}}
+
+    def test_piloto_vai_pro_numero_do_config_com_marca(self):
+        with mock.patch.object(nw.integracao_openwa, "numero_existe", return_value=True),                 mock.patch.object(nw, "despachar", return_value="enviado") as d:
+            r = nw.avisar_motorista_oferta(3, 4343, "(11) 99876-5432", "oi", self._cfg(forcar_destino_whatsapp="5511999990000"))
+        self.assertEqual(r, "enviado")
+        self.assertEqual(d.call_args.kwargs["grupo_id"], "5511999990000@c.us")
+        self.assertTrue(d.call_args.args[3].startswith("[teste → +5511998765432]"))
+        self.assertEqual(d.call_args.args[1], nw.ORIGEM_OFERTA_MOTORISTA)
+        self.assertEqual(d.call_args.args[4], "oferta_rota:3:4343")
+
+    def test_vazio_manda_pro_motorista(self):
+        with mock.patch.object(nw.integracao_openwa, "numero_existe", return_value=True),                 mock.patch.object(nw, "despachar", return_value="enviado") as d:
+            nw.avisar_motorista_oferta(3, 4343, "11998765432", "oi", self._cfg(forcar_destino_whatsapp=""))
+        self.assertEqual(d.call_args.kwargs["grupo_id"], "5511998765432@c.us")
+        self.assertEqual(d.call_args.args[3], "oi")
+
+    def test_chave_ausente_vale_o_dos_clientes_e_sem_nenhum_nao_manda(self):
+        config = self._cfg()
+        with mock.patch.object(nw.integracao_openwa, "numero_existe", return_value=True),                 mock.patch.object(nw, "despachar", return_value="enviado") as d:
+            self.assertEqual(nw.avisar_motorista_oferta(3, 4343, "11998765432", "oi", config), "desligado")
+            d.assert_not_called()
+            config["whatsapp_notificacoes"]["clientes"] = {"forcar_destino": "5511900000000"}
+            self.assertEqual(nw.avisar_motorista_oferta(3, 4343, "11998765432", "oi", config), "enviado")
+        self.assertEqual(d.call_args.kwargs["grupo_id"], "5511900000000@c.us")
+
+    def test_sem_telefone_e_numero_sem_whatsapp(self):
+        config = self._cfg(forcar_destino_whatsapp="")
+        self.assertEqual(nw.avisar_motorista_oferta(3, 4343, "", "oi", config), "desligado")
+        with mock.patch.object(nw.integracao_openwa, "numero_existe", return_value=False):
+            self.assertEqual(nw.avisar_motorista_oferta(3, 4343, "11998765432", "oi", config), "numero_sem_whatsapp")
+
+    def test_teto_proprio_de_60_que_nao_gasta_o_dos_outros(self):
+        self.assertEqual(nw._teto(self.BASE, nw.ORIGEM_OFERTA_MOTORISTA, self._cfg()), 60)
+        self.assertEqual(nw._teto(self.BASE, nw.ORIGEM_OFERTA_MOTORISTA, self._cfg(teto_mensagens=5)), 5)
+        conn = sqlite3.connect(":memory:")
+        conn.execute(nw._SCHEMA)
+        agora = datetime(2026, 11, 21, 10, 0)
+        for origem in [nw.ORIGEM_OFERTA_MOTORISTA] * 3 + [nw.ORIGEM_MOTORISTA, "pipeline"]:
+            nw._registrar(conn, agora, origem, "t", None, "enviado", None)
+        self.assertEqual(nw._enviados_hoje(conn, agora, nw.ORIGEM_OFERTA_MOTORISTA), 3)
+        self.assertEqual(nw._enviados_hoje(conn, agora, nw.ORIGEM_MOTORISTA), 1)
+        self.assertEqual(nw._enviados_hoje(conn, agora, "pipeline"), 1)
+
+
 class PedidoGrupo(unittest.TestCase):
     BASE = {"ativo": True, "base_url": "http://x", "api_key": "k", "sessao": "s", "grupo_id": "g@g.us"}
 

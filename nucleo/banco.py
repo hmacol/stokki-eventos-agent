@@ -309,7 +309,7 @@ CREATE TABLE IF NOT EXISTS nucleo_ponte_vuupt (
 CREATE INDEX IF NOT EXISTS idx_nucleo_ponte_status ON nucleo_ponte_vuupt(status, id);
 CREATE INDEX IF NOT EXISTS idx_nucleo_ponte_rota ON nucleo_ponte_vuupt(rota_id, status);
 
--- Rota enviada que o motorista recusou ou nao aceitou ate o prazo (17/11):
+-- Rota enviada que o motorista recusou ou que a equipe ofertou (17/11; sem prazo desde 21/11):
 -- fica aberta pros outros escolherem no app (nucleo/ofertas_rota_enviada.py).
 -- Uma linha por rota, pra sempre: rota que ja foi ofertada nao e ofertada de novo.
 CREATE TABLE IF NOT EXISTS nucleo_ofertas_rota (
@@ -317,8 +317,8 @@ CREATE TABLE IF NOT EXISTS nucleo_ofertas_rota (
     rota_id                 INTEGER NOT NULL UNIQUE,
     data_rota               TEXT NOT NULL,
     agent_original          INTEGER,
-    motivo                  TEXT NOT NULL,                  -- RECUSA | PRAZO
-    status                  TEXT NOT NULL DEFAULT 'ABERTA', -- ABERTA | ESCOLHIDA | APLICADA | RETIRADA
+    motivo                  TEXT NOT NULL,                  -- RECUSA | EQUIPE (PRAZO so no historico)
+    status                  TEXT NOT NULL DEFAULT 'ABERTA', -- AGENDADA | ABERTA | ESCOLHIDA | APLICADA | RETIRADA
     elegiveis_json          TEXT,                           -- [agent_id, ...] que podem ver/escolher
     resumo_json             TEXT,
     escolhido_por           INTEGER,
@@ -326,10 +326,24 @@ CREATE TABLE IF NOT EXISTS nucleo_ofertas_rota (
     aviso_grupo_em          TEXT,                           -- aviso de rota disponivel ja tentado
     aviso_escolha_em        TEXT,                           -- aviso a equipe de que alguem escolheu
     motivo_retirada         TEXT,
+    publicar_em             TEXT,                           -- AGENDADA: hora em que vira ABERTA
     criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     atualizado_em           TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_nucleo_ofertas_rota_status ON nucleo_ofertas_rota(status, data_rota);
+
+-- Mensagem particular da rota ofertada (21/11): uma linha por oferta e motorista.
+-- A hora da primeira linha de cada etapa e a abertura da etapa.
+CREATE TABLE IF NOT EXISTS nucleo_ofertas_rota_mensagens (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    oferta_id               INTEGER NOT NULL,
+    agent_id                INTEGER NOT NULL,
+    etapa                   TEXT NOT NULL,                  -- PERTO_DO_FIM | FIXO | ESPORADICO
+    situacao                TEXT NOT NULL,                  -- enviado | sem_telefone | numero_sem_whatsapp | falhou | indeterminado
+    tentativas              INTEGER NOT NULL DEFAULT 1,     -- falhou/indeterminado: tenta de novo ate 3
+    criado_em               TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    UNIQUE (oferta_id, agent_id)
+);
 
 CREATE TABLE IF NOT EXISTS tarifas_motorista (
     tipo_veiculo            TEXT PRIMARY KEY,               -- FIORINO | VAN_HR | VUC | TRES_QUARTOS | TRUCK
@@ -600,6 +614,7 @@ def garantir_esquema(conn: sqlite3.Connection):
     conn.executescript(_DDL_BD_MOTORISTAS)
     conn.executescript(_DDL_ATUALIZACAO_MOTORISTA)
     _migrar_colunas(conn, "motoristas", _COLUNAS_MOTORISTAS_NOVAS)
+    _migrar_colunas(conn, "nucleo_ofertas_rota", [("ofertada_por", "TEXT"), ("recusados_json", "TEXT"), ("publicar_em", "TEXT")])
     _migrar_colunas(conn, "bd_motoristas", [("POSICAO", "TEXT")])   # FIXO | ESPORADICO
     # Tabela de 08/10 já existia na VPS quando dono_veiculo entrou no DDL:
     # CREATE IF NOT EXISTS não acrescenta coluna.

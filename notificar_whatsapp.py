@@ -142,6 +142,10 @@ TETO_MOTORISTAS_PADRAO = 20
 # teto proprio (pagamentos_pontuais.teto_diario, chave de topo), nao gasta o dos alertas
 ORIGEM_PAGAMENTO = "pagamento_pontual"
 TETO_PAGAMENTO_PADRAO = 30
+# rota ofertada, mensagem particular ao motorista (nucleo/ofertas_rota_enviada.py, Hugo 21/11):
+# teto proprio (api_motorista.rota_sem_aceite.teto_mensagens), nao gasta o dos outros avisos
+ORIGEM_OFERTA_MOTORISTA = "oferta_rota_motorista"
+TETO_OFERTA_MOTORISTA_PADRAO = 60
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS notificacoes_whatsapp (
@@ -684,13 +688,14 @@ def _enviados_hoje(conn, agora: datetime, origem: str) -> int:
         filtro, args = "origem = ?", (ORIGEM_CLIENTE,)
     elif origem == ORIGEM_MOTORISTA:
         filtro, args = "origem = ?", (ORIGEM_MOTORISTA,)
-    elif origem in ORIGENS_ATUALIZACAO or origem == ORIGEM_PAGAMENTO:
+    elif origem in ORIGENS_ATUALIZACAO or origem in (ORIGEM_PAGAMENTO, ORIGEM_OFERTA_MOTORISTA):
         filtro, args = "origem = ?", (origem,)
     elif origem in ORIGENS_PILOTO:
         filtro, args = f"origem IN ({marcas})", ORIGENS_PILOTO
     else:
-        filtro, args = (f"origem NOT IN (?, ?, ?, ?, ?) AND origem NOT IN ({marcas})",
-                        (ORIGEM_CLIENTE, ORIGEM_MOTORISTA, *ORIGENS_ATUALIZACAO, ORIGEM_PAGAMENTO, *ORIGENS_PILOTO))
+        filtro, args = (f"origem NOT IN (?, ?, ?, ?, ?, ?) AND origem NOT IN ({marcas})",
+                        (ORIGEM_CLIENTE, ORIGEM_MOTORISTA, *ORIGENS_ATUALIZACAO, ORIGEM_PAGAMENTO,
+                         ORIGEM_OFERTA_MOTORISTA, *ORIGENS_PILOTO))
     return conn.execute(
         f"SELECT COUNT(*) FROM notificacoes_whatsapp WHERE situacao = 'enviado' AND criado_em >= ? "
         f"AND {filtro}", (inicio_do_dia, *args)).fetchone()[0]
@@ -707,6 +712,9 @@ def _teto(cfg: dict, origem: str, config: dict | None = None) -> int:
         return _inteiro((config or {}).get("atualizacao_motoristas") or {}, "teto_diario", TETO_ATUALIZACAO_PADRAO)
     if origem == ORIGEM_PAGAMENTO:
         return _inteiro((config or {}).get("pagamentos_pontuais") or {}, "teto_diario", TETO_PAGAMENTO_PADRAO)
+    if origem == ORIGEM_OFERTA_MOTORISTA:
+        return _inteiro(((config or {}).get("api_motorista") or {}).get("rota_sem_aceite") or {}, "teto_mensagens",
+                        TETO_OFERTA_MOTORISTA_PADRAO)
     if origem in ORIGENS_PILOTO:
         return _inteiro(cfg.get("clientes") or {}, "teto_piloto", TETO_PILOTO_PADRAO)
     return _inteiro(cfg, "teto_diario", 20)
@@ -1343,6 +1351,43 @@ def avisar_motorista_boas_vindas(cadastro_id: int, telefone: str, texto: str, co
                 logger.info(f"WhatsApp nao enviado (motorista {cadastro_id}): numero sem WhatsApp.")
                 return "numero_sem_whatsapp"
         return despachar(config, ORIGEM_MOTORISTA, "boas_vindas", texto, f"cadastro_link:{cadastro_id}:boas_vindas",
+                         modo_teste=modo_teste, grupo_id=f"{destino}@c.us", **kw)
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou"
+
+
+def avisar_motorista_oferta(oferta_id: int, agent_id: int, telefone: str, texto: str, config: dict,
+                            modo_teste: bool = False, **kw) -> str:
+    """Rota ofertada, mensagem particular ao motorista (uma por oferta e motorista:
+    assinatura oferta_rota:<oferta>:<agente>). Mesma trava do boas-vindas, com a chave
+    api_motorista.rota_sem_aceite.forcar_destino_whatsapp: numero = piloto (so pra la,
+    destino real na 1a linha); "" = envio real; ausente = clientes.forcar_destino, e
+    sem ele devolve "desligado" (esquecer a chave nao libera o envio)."""
+    try:
+        telefone = re.sub(r"\D", "", str(telefone or ""))
+        if not telefone or not gateway_clientes_ok(config):
+            return "desligado"
+        if len(telefone) in (10, 11):
+            telefone = "55" + telefone
+        cfg_oferta = ((config or {}).get("api_motorista") or {}).get("rota_sem_aceite") or {}
+        if "forcar_destino_whatsapp" in cfg_oferta:
+            destino = re.sub(r"\D", "", str(cfg_oferta["forcar_destino_whatsapp"] or ""))
+        else:
+            destino = re.sub(r"\D", "", str(_cfg_clientes(config).get("forcar_destino") or ""))
+            if not destino:
+                return "desligado"
+        if destino:
+            texto = f"[teste → +{telefone}]\n{texto}"
+        else:
+            destino = telefone
+        if not modo_teste:
+            existe = integracao_openwa.numero_existe(_cfg(config), destino)
+            if existe is None:
+                return "indeterminado"
+            if not existe:
+                return "numero_sem_whatsapp"
+        return despachar(config, ORIGEM_OFERTA_MOTORISTA, "rota_disponivel", texto, f"oferta_rota:{oferta_id}:{agent_id}",
                          modo_teste=modo_teste, grupo_id=f"{destino}@c.us", **kw)
     except Exception as exc:
         logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
