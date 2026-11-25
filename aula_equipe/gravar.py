@@ -45,7 +45,7 @@ FORMATOS = {   # viewport (pixel da pagina), escala do video, onde a legenda fic
     "paisagem": {"viewport": (1024, 576), "escala": 1.25, "legenda_baixo": None},
 }
 ACOES = ("ir", "clicar", "digitar", "preencher", "escolher", "arquivo", "esperar", "rolar", "destacar", "cartao",
-         "fechar_cartao", "pausa", "js", "py", "celular", "computador", "assinar")
+         "fechar_cartao", "pausa", "js", "py", "celular", "computador", "assinar", "sair")
 
 
 def tracos_assinatura(x: float, y: float, largura: float, altura: float) -> list[list[tuple[float, float]]]:
@@ -201,6 +201,8 @@ class _Executor:
             p.evaluate(args[0])
         elif tipo == "py":
             args[0]()
+        elif tipo == "sair":          # o celular da doca comeca sem login (o cookie e o mesmo do computador)
+            p.context.clear_cookies()
         else:
             raise ValueError(f"acao desconhecida: {acao}")
 

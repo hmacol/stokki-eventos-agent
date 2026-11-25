@@ -8,6 +8,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 from datetime import date, datetime
 from pathlib import Path
 
@@ -106,6 +107,17 @@ class TestRoteiros(unittest.TestCase):
         self.assertIn(("clicar", f".saiu[value='{dados.NAO_SAIU}']"), acoes)
         self.assertTrue(any(a[0] == "arquivo" and a[1] == ".c-foto" for a in acoes))
 
+    def test_coletas_tem_todos_os_passos_inclusive_os_do_celular(self):
+        # Hugo, 16/11: QR + login no celular, foto com a camera, cancelar folha, erro na Stokki e acompanhamento
+        texto, acoes = self._texto(roteiro.VIDEOS[1])
+        alvos = [a[1] for a in acoes if len(a) > 1 and isinstance(a[1], str)]
+        self.assertIn(("sair",), acoes)                              # o celular comeca sem login
+        for sel in ("#cam-abrir", "#usuario", "#senha", "#cam-disparar", "[data-acao='cancelar']",
+                    "[data-acao='tentar']", "[data-acao='retirar']", ".andamento"):
+            self.assertTrue(any(sel in a for a in alvos), sel)
+        for trecho in ("qr code", "login", "câmera", "cancelar folha", "tentar de novo", "tirar da coleta", "stokki"):
+            self.assertIn(trecho, texto.lower(), trecho)
+
 
 class TestPecas(unittest.TestCase):
 
@@ -138,20 +150,50 @@ class TestPecas(unittest.TestCase):
                     s.connect(("127.0.0.1", 9))
             self.assertIn("127.0.0.1', 9", log.read_text(encoding="utf-8"))
 
-    def test_coleta_confirmada_vira_expedida_sem_robo(self):
+    def _coleta_confirmada(self, ids):
         from coletas import banco, regras
+        servidor._despachos.clear()   # cada teste e uma gravacao nova (o painel sobe do zero)
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         banco.garantir_esquema(conn)
-        conn.execute("INSERT INTO expedicao_coletas_fila (id_stokki, codigo, transportadora, retirada, visto_primeiro_em, "
-                     "visto_ultimo_em) VALUES (1, 'PS-1', 'T', 1, ?, ?)", (datetime.now().strftime(banco.FMT),) * 2)
-        coleta = regras.gerar_folha(conn, [1], "u")
-        codigos = regras.confirmar(conn, coleta, [1], "Nome", "ABC1D23", "foto.jpg", "u")
-        self.assertEqual(servidor._despachar_simulado(conn, coleta, codigos), {"ok": True})
+        agora = datetime.now().strftime(banco.FMT)
+        for i in ids:
+            conn.execute("INSERT INTO expedicao_coletas_fila (id_stokki, codigo, transportadora, retirada, visto_primeiro_em, "
+                         "visto_ultimo_em) VALUES (?, ?, 'T', 1, ?, ?)", (i, f"PS-{i}", agora, agora))
+        coleta = regras.gerar_folha(conn, ids, "u")
+        return conn, coleta, regras.confirmar(conn, coleta, ids, "Nome", "ABC1D23", "foto.jpg", "u")
+
+    def _andamento(self, conn, coleta):
+        from coletas import regras
         c = regras.coleta(conn, coleta)
-        self.assertEqual(c["status"], "CONCLUIDA")
-        self.assertFalse(c["simulada"])   # sem o "(simulada)" da homologacao na tela
-        self.assertEqual([p["estado"] for p in c["pedidos"]], ["EXPEDIDO"])
+        r = servidor._andamento_roteirizado({"id": c["execucao_id"]}, c["token"], None)
+        if r["estado"] == "fim":
+            regras.aplicar_resultados(conn, coleta, r["resultados"])
+        return r["estado"], {p["codigo"]: p["estado"] for p in regras.coleta(conn, coleta)["pedidos"]}
+
+    def test_expedicao_roteirizada_mostra_falha_tentar_de_novo_e_cancelado(self):
+        from coletas import regras
+        conn, coleta, codigos = self._coleta_confirmada(servidor.FALHAS_DO_VIDEO["ids"])
+        with mock.patch.object(servidor, "ESPERA_EXPEDICAO_S", 0):
+            self.assertEqual(servidor._despachar_roteirizado(conn, coleta, codigos)["ok"], True)
+            self.assertEqual(regras.coleta(conn, coleta)["status"], "CONFIRMADA")   # fica "expedindo" ate o andamento
+            estado, pedidos = self._andamento(conn, coleta)
+            self.assertEqual(estado, "fim")
+            self.assertEqual(sorted(pedidos.values()), ["EXPEDIDO", "FALHOU", "FALHOU"])
+            servidor._despachar_roteirizado(conn, coleta, regras.tentar_de_novo(conn, coleta))
+            _, pedidos = self._andamento(conn, coleta)
+        self.assertEqual(pedidos[f"PS-{servidor.FALHAS_DO_VIDEO['cancelado']}"], "FALHOU")   # sai pelo "Tirar da coleta"
+        self.assertEqual(sorted(pedidos.values()), ["EXPEDIDO", "EXPEDIDO", "FALHOU"])
+        regras.retirar_pedido(conn, coleta, servidor.FALHAS_DO_VIDEO["cancelado"], "u")
+        self.assertEqual(regras.coleta(conn, coleta)["status"], "CONCLUIDA")
+        na_lista = {p["id_stokki"] for g in regras.a_coletar(conn)["grupos"] for p in g["pedidos"]}
+        self.assertNotIn(servidor.FALHAS_DO_VIDEO["cancelado"], na_lista)   # cancelado sumiu da listagem da Stokki
+        self.assertFalse(regras.coleta(conn, coleta)["simulada"])   # sem o "(simulada)" da homologacao na tela
+
+    def test_expedicao_roteirizada_espera_antes_de_terminar(self):
+        conn, coleta, codigos = self._coleta_confirmada(servidor.FALHAS_DO_VIDEO["ids"])
+        servidor._despachar_roteirizado(conn, coleta, codigos)
+        self.assertEqual(self._andamento(conn, coleta)[0], "rodando")   # a tela mostra "Expedindo na Stokki..."
 
 
 if __name__ == "__main__":

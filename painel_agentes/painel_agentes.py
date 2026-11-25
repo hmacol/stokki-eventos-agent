@@ -297,6 +297,9 @@ def requer_auth(f=None, *, niveis=("total",)):
             if nivel is None:
                 if request.path.startswith(f"{request.script_root}/api/"):
                     return jsonify({"erro": "Sessão expirada -- faça login de novo."}), 401
+                # QR code da folha de coleta (16/11, Hugo): o celular da doca entra e volta pra coleta
+                if request.endpoint == "expedicao_coleta_tela":
+                    return redirect(url_for("login", proximo=f"coleta{request.view_args['coleta_id']}"))
                 return redirect(url_for("login"))
             # "Derrubar todas as sessoes" (24/10, /acessos): sessao de rodada
             # anterior cai, de qualquer login.
@@ -525,6 +528,10 @@ def login():
             # Exceção: o link da aula (WhatsApp da equipe) volta pros vídeos.
             if request.args.get("proximo") == "aula":
                 return redirect(url_for("aula_equipe"))
+            # E o QR code da folha de coleta volta pra coleta (so o numero vem do link).
+            volta = re.fullmatch(r"coleta(\d{1,9})", request.args.get("proximo") or "")
+            if volta:
+                return redirect(url_for("expedicao_coleta_tela", coleta_id=int(volta[1])))
             # Todo acesso cai no Inicio (24/10, Hugo), nao na tela que a pessoa
             # tentava abrir. Galpao, expedicao e personalizado sem o Inicio
             # vao pra tela deles (_pagina_inicial).
