@@ -12,7 +12,7 @@
 // ações e o deslizar) e as outras viram linhas de uma altura que abrem no
 // toque. Com 14 paradas a rota inteira cabe em pouco mais de uma tela.
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Linking, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as api from '../../src/api';
@@ -21,12 +21,13 @@ import * as gps from '../../src/gps';
 import * as local from '../../src/local';
 import { carregarRotas } from '../../src/rotasStore';
 import { Deslizar } from '../../src/deslizar';
+import { CarregamentoRota } from '../../src/carregamentoRota';
 import { Botao, Cartao, Carregando } from '../../src/componentes';
 import { cores, formatarData, situacaoCor, situacaoRotulo, statusRotaRotulo } from '../../src/tema';
-import { horaDe, nomeExibicao, partesEndereco, resumoJanela } from '../../src/textos';
-import type { Parada, Rota, SituacaoParada } from '../../src/tipos';
+import { codigoComNf, horaDe, nomeExibicao, partesEndereco, resumoJanela } from '../../src/textos';
+import { abrirNavegacao, ehPendente, emAndamento, ordenarParadas, paradaDaVez, registrarPasso, rotaOperavel } from '../../src/paradaPasso';
+import type { Parada, Rota } from '../../src/tipos';
 
-const FINAIS: SituacaoParada[] = ['ENTREGUE', 'PARCIAL', 'INSUCESSO', 'CANCELADA'];
 // Rótulo da etapa no alto do cartão da vez -- o motorista lê isto antes do nome.
 const ETAPA_ROTULO: Record<string, string> = { PENDENTE: 'Próxima parada', EM_DESLOCAMENTO: 'A caminho', EM_ROTA: 'No local' };
 // Faixa da janela: neutra com folga, âmbar faltando 2h, vermelha depois de fechar.
@@ -36,18 +37,6 @@ const TOM_JANELA = {
   perigo: { fundo: cores.perigoBg, forte: cores.perigo, suave: cores.perigo, icone: cores.perigo },
   ausente: { fundo: cores.fundo, forte: cores.textoSuave, suave: cores.textoSuave, icone: cores.textoSuave },
 };
-const ehPendente = (p: Parada) => !FINAIS.includes(p.situacao);
-const emAndamento = (p: Parada) => p.situacao === 'EM_DESLOCAMENTO' || p.situacao === 'EM_ROTA';
-
-function abrirNavegacao(p: Parada) {
-  const destino = p.latitude !== null && p.longitude !== null ? `${p.latitude},${p.longitude}` : encodeURIComponent(p.endereco ?? '');
-  Alert.alert('Navegar até a parada', undefined, [
-    { text: 'Google Maps', onPress: () => void Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${destino}&travelmode=driving`) },
-    { text: 'Waze', onPress: () => void Linking.openURL(p.latitude !== null ? `https://waze.com/ul?ll=${destino}&navigate=yes` : `https://waze.com/ul?q=${destino}&navigate=yes`) },
-    { text: 'Cancelar', style: 'cancel' },
-  ]);
-}
-
 // WhatsApp exige só dígitos com DDI. Telefone cadastrado costuma vir como
 // "(11) 91234-5678" ou "11912345678"; sem DDI a gente assume Brasil (55).
 function numeroWhatsapp(telefone: string | null | undefined): string | null {
@@ -59,7 +48,7 @@ function numeroWhatsapp(telefone: string | null | undefined): string | null {
 function abrirWhatsapp(p: Parada) {
   const numero = numeroWhatsapp(p.telefone);
   if (!numero) return;
-  const texto = encodeURIComponent(`Olá! Sou o motorista da Fresh Log e estou a caminho com a sua entrega (${p.codigo}).`);
+  const texto = encodeURIComponent(`Olá! Sou o motorista da Fresh Log e estou a caminho com a sua entrega (${p.codigo}${p.nf ? `, NF ${p.nf}` : ''}).`);
   Linking.openURL(`https://wa.me/${numero}?text=${texto}`).catch(() => Alert.alert('WhatsApp', 'Não foi possível abrir o WhatsApp neste aparelho.'));
 }
 
@@ -106,30 +95,31 @@ export default function DetalheRota() {
 
   if (!rota) return <Carregando />;
 
+  // Carregamento confirmado: a rota volta atualizada (o "Iniciar rota" aparece).
+  // Todas desmarcadas = rota cancelada pelo servidor: sai da tela.
+  const aoConfirmarCarregamento = (atualizada: Rota) => {
+    setRota(atualizada);
+    void carregar();          // atualiza o cache local: reabrir sem rede nao volta a pedir o carregamento
+    if (atualizada.status === 'CANCELADA') {
+      Alert.alert('Rota cancelada', 'Todas as paradas foram tiradas, então a rota foi cancelada.');
+      router.back();
+    }
+  };
+
   const pendentes = rota.paradas.filter(ehPendente);
   const ativa = rota.paradas.find(emAndamento) ?? null;       // a parada em andamento (no máximo uma)
   const feitas = rota.paradas.filter((p) => ['ENTREGUE', 'PARCIAL', 'INSUCESSO'].includes(p.situacao)).length;
   const ativas = rota.paradas.filter((p) => p.situacao !== 'CANCELADA');
-  const operavel = rota.editavel && rota.status === 'EM_ROTA';
+  const operavel = rotaOperavel(rota);
 
-  // Ordem de exibição: sequência da rota, com as reagendadas "depois das
-  // outras" no fim e as reagendadas com horário no fim ordenadas por horário.
-  const paradasOrdenadas = [...rota.paradas].sort((a, b) => {
-    const ka = a.reagendado_para && ehPendente(a) ? (a.reagendado_para === 'FIM' ? 2 : 1) : 0;
-    const kb = b.reagendado_para && ehPendente(b) ? (b.reagendado_para === 'FIM' ? 2 : 1) : 0;
-    if (ka !== kb) return ka - kb;
-    if (ka === 1) return (a.reagendado_para ?? '').localeCompare(b.reagendado_para ?? '');
-    return a.ordem - b.ordem;
-  });
-
-  // A parada da vez: a que está em andamento ou, se nenhuma estiver, a
-  // primeira pendente da ordem. Só faz sentido com a rota em andamento --
-  // rota por aceitar ou já concluída vira lista compacta pura.
-  const atual = operavel ? ativa ?? paradasOrdenadas.find(ehPendente) ?? null : null;
+  // Ordem de exibição e parada da vez (rota por aceitar ou já concluída vira
+  // lista compacta pura): ver src/paradaPasso.ts.
+  const paradasOrdenadas = ordenarParadas(rota.paradas);
+  const atual = paradaDaVez(rota);
   const depoisDesta = paradasOrdenadas.filter((p) => ehPendente(p) && p.id !== atual?.id);
   const jaFeitas = paradasOrdenadas.filter((p) => !ehPendente(p));
 
-  const acaoRota = async (acao: 'aceitar' | 'iniciar' | 'finalizar', status: Rota['status'], extra: Record<string, unknown> = {}) => {
+  const acaoRota = async (acao: 'aceitar' | 'iniciar' | 'finalizar', status: Rota['status'], extra: Record<string, unknown> = {}): Promise<boolean> => {
     setOcupado(true);
     try {
       const pos = await gps.posicaoAtual();
@@ -143,8 +133,10 @@ export default function DetalheRota() {
       if (acao === 'iniciar') await gps.iniciar(rota.id);
       if (acao === 'finalizar') await gps.parar();
       await carregar();
+      return true;
     } catch (e) {
       Alert.alert('Não deu', e instanceof api.ErroRede ? 'Sem conexão. Tente de novo com sinal.' : (e as Error).message);
+      return false;
     } finally {
       setOcupado(false);
     }
@@ -165,18 +157,22 @@ export default function DetalheRota() {
   };
 
   const passoParada = async (p: Parada, tipo: 'DESLOCAMENTO' | 'CHEGADA') => {
-    const pos = await gps.posicaoAtual();
-    await local.marcarParada(p.id, tipo === 'DESLOCAMENTO' ? 'EM_DESLOCAMENTO' : 'EM_ROTA');
-    await fila.enfileirar({
-      uuid: fila.novoUuid(), tipo: 'EVENTO_PARADA', paradaId: p.id, criadoEm: fila.agoraIso(), tentativas: 0,
-      corpo: { tipo, ocorrido_em: fila.agoraIso(), ...pos },
-    });
+    await registrarPasso(p, tipo);
     await carregar();
   };
 
   const finalizar = () => {
     if (pendentes.length > 0) return Alert.alert('Ainda faltam paradas', `${pendentes.length} parada(s) sem resultado.`);
-    void acaoRota('finalizar', 'CONCLUIDA');
+    const concluir = async (lancarDespesas: boolean) => {
+      const ok = await acaoRota('finalizar', 'CONCLUIDA');
+      if (ok && lancarDespesas) router.push({ pathname: '/financeiro', params: { rota: String(rota.id) } });
+    };
+    // Rota operada pela Vuupt não aceita despesa pelo app: finaliza direto.
+    if (!rota.editavel) return void concluir(false);
+    Alert.alert('Teve despesa nesta rota?', 'Pedágio, estacionamento, descarga ou outra despesa pra reembolso. Dá pra lançar agora, com a foto do recibo.', [
+      { text: 'Não teve', onPress: () => void concluir(false) },
+      { text: 'Lançar despesas', onPress: () => void concluir(true) },
+    ]);
   };
 
   const cancelarPedagioEnviado = (pedagioId: number, valor: number) => {
@@ -306,6 +302,9 @@ export default function DetalheRota() {
             {p.codigo ? (
               <View><Text style={s.dadoRotulo}>Pedido</Text><Text style={s.dadoValor}>{p.codigo}</Text></View>
             ) : null}
+            {p.codigo ? (
+              <View><Text style={s.dadoRotulo}>NF</Text><Text style={s.dadoValor}>{(p.nf || '').trim() || '—'}</Text></View>
+            ) : null}
           </View>
 
           {avisosParada(p)}
@@ -341,7 +340,7 @@ export default function DetalheRota() {
           <View style={{ flex: 1 }}>
             <Text style={[s.linhaNome, final && s.linhaNomeFeita]} numberOfLines={1}>{nomeExibicao(p)}</Text>
             <Text style={s.linhaSub} numberOfLines={1}>
-              {[end.bairro, p.volume_caixas ? `${p.volume_caixas} cx` : ''].filter(Boolean).join(' · ') || (p.codigo ?? '')}
+              {[end.bairro, p.volume_caixas ? `${p.volume_caixas} cx` : ''].filter(Boolean).join(' · ') || codigoComNf(p)}
             </Text>
           </View>
           <View style={{ alignItems: 'flex-end' }}>
@@ -353,7 +352,7 @@ export default function DetalheRota() {
         {expandida ? (
           <View style={s.linhaAberta}>
             <Text style={s.linhaEndereco}>{end.completo || 'Endereço não informado'}</Text>
-            {p.remetente_nome ? <Text style={s.avisoParada}>Remetente: {nomeExibicao({ destinatario_nome: p.remetente_nome })}{p.codigo ? ` · ${p.codigo}` : ''}</Text> : null}
+            {p.remetente_nome ? <Text style={s.avisoParada}>Remetente: {nomeExibicao({ destinatario_nome: p.remetente_nome })}{p.codigo ? ` · ${codigoComNf(p)}` : ''}</Text> : null}
             {avisosParada(p)}
             {ehPendente(p) ? acoesContato(p) : null}
             {controle ? <View style={{ marginTop: 10 }}>{controle}</View> : null}
@@ -365,18 +364,27 @@ export default function DetalheRota() {
   };
 
   return (
-    <ScrollView style={s.tela} contentContainerStyle={{ padding: 16, paddingBottom: 48 }} refreshControl={<RefreshControl refreshing={false} onRefresh={carregar} />}>
+    <ScrollView style={s.tela} contentContainerStyle={{ padding: 16, paddingBottom: 48 }} keyboardShouldPersistTaps="handled" refreshControl={<RefreshControl refreshing={false} onRefresh={carregar} />}>
       {offline ? <Text style={s.aviso}>Sem conexão — trabalhando com a última versão salva.</Text> : null}
 
       <Cartao>
         <Text style={s.nome}>{rota.nome ?? `Rota #${rota.id}`}</Text>
         <Text style={s.sub}>{formatarData(rota.data_rota)}{rota.start_at ? ` · saída ${rota.start_at.slice(11, 16)}` : ''} · {statusRotaRotulo[rota.status]}</Text>
         <View style={s.barraFundo}><View style={[s.barra, { width: `${ativas.length ? (feitas / ativas.length) * 100 : 0}%` }]} /></View>
-        <Text style={s.sub}>{feitas} de {ativas.length} paradas com resultado{rota.km_estimado ? ` · ~${rota.km_estimado.toFixed(0)} km` : ''}</Text>
+        <View style={s.resumoLinha}>
+          <Text style={[s.sub, { flex: 1 }]}>{feitas} de {ativas.length} paradas com resultado{rota.km_estimado ? ` · ~${rota.km_estimado.toFixed(0)} km` : ''}</Text>
+          {Platform.OS !== 'web' && rota.liberada !== false && rota.paradas.length > 0 ? (
+            <Pressable style={({ pressed }) => [s.botaoMapa, pressed && { backgroundColor: cores.fundo }]}
+              onPress={() => router.push(`/mapa/${rota.id}`)} accessibilityRole="button" accessibilityLabel="Ver a rota no mapa">
+              <Ionicons name="map" size={17} color={cores.primaria} />
+              <Text style={s.botaoMapaTexto}>Mapa</Text>
+            </Pressable>
+          ) : null}
+        </View>
 
         {rota.status === 'PLANEJADA' && !recusando ? (
           <View style={{ marginTop: 14 }}>
-            <Deslizar titulo="Aceitar rota" icone="checkmark" onConfirmar={() => acaoRota('aceitar', 'ACEITA')} desabilitado={ocupado} />
+            <Deslizar titulo="Aceitar rota" icone="checkmark" onConfirmar={async () => { await acaoRota('aceitar', 'ACEITA'); }} desabilitado={ocupado} />
             <Pressable onPress={() => setRecusando(true)} style={{ marginTop: 10 }}><Text style={s.link}>Não posso fazer esta rota (recusar)</Text></Pressable>
           </View>
         ) : null}
@@ -389,9 +397,12 @@ export default function DetalheRota() {
             </View>
           </View>
         ) : null}
-        {rota.status === 'ACEITA' && rota.editavel ? (
+        {rota.status === 'ACEITA' && rota.editavel && rota.carregamento?.exigido && !rota.carregamento.feito ? (
+          // Checklist de carregamento: trava o "Iniciar rota" até o servidor registrar.
+          <CarregamentoRota rota={rota} aoConfirmar={aoConfirmarCarregamento} />
+        ) : rota.status === 'ACEITA' && rota.editavel ? (
           <View style={{ marginTop: 14 }}>
-            <Deslizar titulo="Iniciar rota" icone="play" onConfirmar={() => acaoRota('iniciar', 'EM_ROTA')} desabilitado={ocupado} />
+            <Deslizar titulo="Iniciar rota" icone="play" onConfirmar={async () => { await acaoRota('iniciar', 'EM_ROTA'); }} desabilitado={ocupado} />
           </View>
         ) : null}
         {operavel && pendentes.length === 0 ? (
@@ -412,7 +423,7 @@ export default function DetalheRota() {
           <Text style={s.atalhoPedagioTexto}>
             Pedágio e despesas desta rota{(rota.pedagios ?? []).filter((p) => p.status !== 'CANCELADO').length ? ` · ${(rota.pedagios ?? []).filter((p) => p.status !== 'CANCELADO').length} lançado(s)` : ''}
           </Text>
-          <Text style={s.atalhoPedagioLink}>Lançar no Financeiro ›</Text>
+          <Text style={s.atalhoPedagioLink}>Lançar ›</Text>
         </Pressable>
       ) : null}
 
@@ -445,6 +456,9 @@ const s = StyleSheet.create({
   barraFundo: { height: 8, backgroundColor: cores.borda, borderRadius: 4, marginTop: 10, overflow: 'hidden' },
   barra: { height: 8, backgroundColor: cores.acento },
   vuupt: { color: cores.info, marginTop: 10 },
+  resumoLinha: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  botaoMapa: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 40, paddingHorizontal: 14, marginTop: 4, borderRadius: 10, borderWidth: 1, borderColor: cores.borda },
+  botaoMapaTexto: { fontSize: 14, fontWeight: '700', color: cores.primaria },
   campo: { backgroundColor: '#fff', borderWidth: 1, borderColor: cores.borda, borderRadius: 10, padding: 12, minHeight: 60, color: cores.texto },
   atalhoPedagio: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: cores.cartao, borderWidth: 1, borderColor: cores.borda, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 12 },
   atalhoPedagioTexto: { flex: 1, color: cores.texto, fontWeight: '600', fontSize: 14 },

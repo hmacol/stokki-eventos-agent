@@ -375,6 +375,16 @@ class VuuptClient:
         self._acao_servico(service_id, "check-out", data=data)
         return checklist_id
 
+    def avancar_como_agente(self, service_id: int, alvo: str, status_atual: str = "") -> None:
+        """Parte do ciclo de concluir_como_agente: leva o serviço até `alvo`
+        (accepted | on_route | arrived), pulando o que já foi feito. Usado
+        pela ponte do app próprio (nucleo/ponte_vuupt.py)."""
+        ordem = ["assigned", "accepted", "on_route", "arrived"]
+        acoes = {"accepted": "accept", "on_route": "start", "arrived": "check-in"}
+        pos_atual = ordem.index(status_atual) if status_atual in ordem else 0
+        for pos in range(pos_atual + 1, ordem.index(alvo) + 1):
+            self._acao_servico(service_id, acoes[ordem[pos]])
+
     def listar_servicos_do_agente(self, agent_id: int, statuses: tuple[str, ...] = ("assigned", "accepted", "on_route", "arrived")) -> list[dict]:
         """Serviços atribuídos ao agente que ainda não terminaram (1 chamada por status)."""
         encontrados: list[dict] = []

@@ -74,6 +74,32 @@ _SQL_TEM_CANHOTO = (
     " AND cp.tipo IN ('CANHOTO', 'ASSINATURA')))")
 
 
+# Fila "Boleto atrasado" (Hugo, 16/11): o boleto do pedido só entrou no sistema
+# DEPOIS de a rota sair, então não foi no romaneio com o motorista. Sai da fila
+# quando alguém manda pelo "Documentos por e-mail" (pedidos_documentos_envios).
+# Medido em produção: 11 pedidos em 14 dias. Limite: processado_em é regravado
+# quando o documento é reprocessado, então pode dar falso positivo raro.
+BOLETO_ATRASADO = "boleto_atrasado"
+_SQL_BOLETO_ATRASADO = (
+    "(base.rota_iniciada_em IS NOT NULL AND (SELECT MIN(d.processado_em) FROM documentos_processados d"
+    " WHERE d.status = 'ENVIADO' AND d.tipo = 'Boleto' AND d.codigo_pedido = base.pedido_base)"
+    " > base.rota_iniciada_em{enviado})")
+_SQL_JA_ENVIADO = (
+    " AND NOT EXISTS (SELECT 1 FROM pedidos_documentos_envios v WHERE v.ok = 1 AND"
+    " (v.codigos LIKE '%\"' || base.pedido_base || '\"%' OR v.codigos LIKE '%\"' || base.pedido_base || '-%'))")
+
+
+def _sql_boleto_atrasado(conn: sqlite3.Connection) -> str:
+    """Só usa as tabelas que existem: sem documentos_processados ninguém entra
+    na fila; sem a de envios (nasce no 1º envio) ninguém saiu dela ainda."""
+    tabelas = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN "
+        "('documentos_processados', 'pedidos_documentos_envios')")}
+    if "documentos_processados" not in tabelas:
+        return "0"
+    return _SQL_BOLETO_ATRASADO.format(enviado=_SQL_JA_ENVIADO if "pedidos_documentos_envios" in tabelas else "")
+
+
 @dataclass(frozen=True)
 class Coluna:
     chave: str
@@ -86,6 +112,9 @@ class Coluna:
 COLUNAS = [
     Coluna("data", "Data", "data_referencia", True, "data"),
     Coluna("codigo", "Código", "pedido_base", True),
+    # NF: o valor sai de nucleo/nf_pedido (uma busca em lote por tela, ver _anotar_nf);
+    # o filtro da coluna e a busca livre usam _sql_nf (EXISTS), nao esta coluna.
+    Coluna("nf", "NF", "NULL", True),
     Coluna("codigo_servico", "Código do serviço", "codigo"),
     Coluna("referencia", "Referência", _SQL_REFERENCIA, True),
     Coluna("status", "Status", "status", True, "status"),
@@ -147,6 +176,7 @@ WITH ult AS (
            p.arrived_at AS chegada, p.completed_at AS conclusao, p.motivo_texto AS motivo,
            p.tentativas AS tentativas, r.id AS rota_id, r.nome AS rota_nome, r.data_rota AS data_rota,
            r.agent_id AS agent_id, r.motorista_nome AS motorista, r.tipo_veiculo AS tipo_veiculo,
+           r.iniciada_em AS rota_iniciada_em,
            ROW_NUMBER() OVER (PARTITION BY p.codigo ORDER BY r.data_rota DESC, p.id DESC) AS n
     FROM nucleo_paradas p JOIN nucleo_rotas r ON r.id = p.rota_id
     WHERE p.codigo IS NOT NULL
@@ -334,6 +364,34 @@ def _periodo_sql(filtros: dict) -> tuple[str, list]:
     return f"{sql_data} BETWEEN ? AND ?", [inicio, fim]
 
 
+def _sql_nf(conn: sqlite3.Connection | None) -> str:
+    """Condicao "a NF do pedido contem ?" (mesmas fontes de nucleo/nf_pedido).
+    Sem conn ou sem as tabelas, devolve "0" (nao acha)."""
+    if conn is None:
+        return "0"
+    tabelas = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN "
+        "('documentos_pedido', 'documentos_processados')")}
+    partes = []
+    if "documentos_pedido" in tabelas:
+        partes.append("EXISTS (SELECT 1 FROM documentos_pedido dn WHERE dn.tipo_doc = 'nf' "
+                      "AND dn.status IN ('casado', 'baixado') "
+                      "AND dn.id_pedido IN (pedido_base, '#' || pedido_base) AND dn.numero_nf LIKE ?)")
+    if "documentos_processados" in tabelas:
+        partes.append("EXISTS (SELECT 1 FROM documentos_processados dp WHERE dp.status = 'ENVIADO' "
+                      "AND dp.tipo = 'Nota Fiscal' "
+                      "AND dp.codigo_pedido IN (pedido_base, '#' || pedido_base) AND dp.numero_nf LIKE ?)")
+    return "(" + " OR ".join(partes) + ")" if partes else "0"
+
+
+def _anotar_nf(linhas: list, conn: sqlite3.Connection) -> None:
+    """Poe a NF (ou "") em cada linha, com UMA busca em lote."""
+    from nucleo import nf_pedido
+    nf_pedido.anotar_nf(linhas, "pedido_base", "nf", conn)
+    for l in linhas:
+        l["nf"] = l["nf"] or nf_pedido.SEM_NF
+
+
 def _termo_coluna(termo: str) -> str:
     """O banco guarda data em ISO; quem filtra digita 09/11 ou 09/11/2026."""
     m = _RE_DATA_BR.match(termo)
@@ -343,10 +401,11 @@ def _termo_coluna(termo: str) -> str:
     return f"{ano}-{mes}-{dia}" if ano else f"-{mes}-{dia}"
 
 
-def _where(filtros: dict) -> tuple[str, list]:
+def _where(filtros: dict, conn: sqlite3.Connection | None = None) -> tuple[str, list]:
     """Monta o WHERE a partir do dicionário de filtros da tela. Chaves:
     de, ate, data_tipo, status, fluxo, sender_id, agent_id, zona, canhoto
-    (com | sem), q e colunas = {chave_da_coluna: texto}."""
+    (com | sem), documentos (boleto_atrasado; precisa do conn), q e
+    colunas = {chave_da_coluna: texto}."""
     sql_periodo, params = _periodo_sql(filtros)
     partes = [sql_periodo]
 
@@ -376,6 +435,8 @@ def _where(filtros: dict) -> tuple[str, list]:
         # Só entregue (Hugo, 11/11), e checklist sem informação (NULL) fica
         # fora, como na /canhotos-pendentes.
         partes.append(f"status = 'ENTREGUE' AND qtd_checklists = 0 AND NOT {_SQL_TEM_CANHOTO}")
+    if (filtros.get("documentos") or "").lower() == BOLETO_ATRASADO and conn is not None:
+        partes.append(_sql_boleto_atrasado(conn))
 
     q = (filtros.get("q") or "").strip().lstrip("#").strip()
     if q:
@@ -390,11 +451,19 @@ def _where(filtros: dict) -> tuple[str, list]:
         for alvo in alvos:
             ou += [f"{c} LIKE ?" for c in campos]
             params += [alvo] * len(campos)
+        sql_nf = _sql_nf(conn)
+        if sql_nf != "0":
+            ou.append(sql_nf)
+            params += [f"%{q}%"] * sql_nf.count("?")
         partes.append("(" + " OR ".join(ou) + ")")
 
     for chave, termo in (filtros.get("colunas") or {}).items():
         coluna, termo = POR_CHAVE.get(chave), (termo or "").strip()
-        if coluna and termo:
+        if coluna and termo and chave == "nf":
+            sql_nf = _sql_nf(conn)
+            partes.append(sql_nf)
+            params += [f"%{termo}%"] * sql_nf.count("?")
+        elif coluna and termo:
             partes.append(f"CAST(({coluna.sql}) AS TEXT) LIKE ?")
             params.append(f"%{_termo_coluna(termo)}%")
     return " WHERE " + " AND ".join(partes), params
@@ -404,7 +473,7 @@ def _consulta(filtros: dict, conn: sqlite3.Connection) -> tuple[str, str, list]:
     """(CTEs até `base`, WHERE, parâmetros) pros filtros da tela. O período
     entra duas vezes: no `alvo` (quem participa do agrupamento) e no WHERE
     (a linha principal do pedido)."""
-    where, params = _where(filtros)
+    where, params = _where(filtros, conn)
     sql_periodo, params_periodo = _periodo_sql(filtros)
     return (_SQL_BASE.replace("__PERIODO__", sql_periodo).replace("__NORM__", _norm(conn)), where,
             params_periodo + params)
@@ -449,6 +518,7 @@ def listar(filtros: dict, pagina: int = 1, por_pagina: int = POR_PAGINA, ordem: 
         hist = tentativas([(l["sender_id"], l["pedido_base"]) for l in linhas], conn)
         for l in linhas:
             l["historico"] = hist.get((l["sender_id"], l["pedido_base"]), [])
+        _anotar_nf(linhas, conn)
         return {"linhas": linhas, "total": total, "total_caixas": caixas,
                 "pagina": pagina, "paginas": paginas, "periodo": {"de": inicio, "ate": fim},
                 "fora_do_periodo": fora}
@@ -480,16 +550,18 @@ def contar_por_status(filtros: dict, conn: sqlite3.Connection | None = None) -> 
 
 def contar_filas(filtros: dict, conn: sqlite3.Connection | None = None) -> dict:
     """Filas do topo da tela no computador (Hugo, 11/11): quantos pedidos por
-    status e quantos entregues sem canhoto, com os filtros da tela MENOS status
-    e canhoto (a fila é quem escolhe os dois). Uma consulta só."""
+    status, quantos entregues sem canhoto e quantos com boleto atrasado (16/11),
+    com os filtros da tela MENOS status, canhoto e documentos (a fila é quem
+    escolhe os três). Uma consulta só."""
     fechar = conn is None
     conn = conn or banco.conectar()
     try:
         canhotos_manuais.garantir_tabela(conn)
-        base, where, params = _consulta({**filtros, "status": "", "canhoto": ""}, conn)
+        base, where, params = _consulta({**filtros, "status": "", "canhoto": "", "documentos": ""}, conn)
         rows = conn.execute(
             f"{base} SELECT status, COUNT(*) n, COALESCE(SUM(CASE WHEN status = 'ENTREGUE' "
-            f"AND qtd_checklists = 0 AND NOT {_SQL_TEM_CANHOTO} THEN 1 ELSE 0 END), 0) sc "
+            f"AND qtd_checklists = 0 AND NOT {_SQL_TEM_CANHOTO} THEN 1 ELSE 0 END), 0) sc, "
+            f"COALESCE(SUM(CASE WHEN {_sql_boleto_atrasado(conn)} THEN 1 ELSE 0 END), 0) ba "
             f"FROM base{where} GROUP BY status", params).fetchall()
     finally:
         if fechar:
@@ -500,6 +572,7 @@ def contar_filas(filtros: dict, conn: sqlite3.Connection | None = None) -> dict:
             saida[r["status"]] = r["n"]
     saida["total"] = sum(r["n"] for r in rows)
     saida["sem_canhoto"] = sum(r["sc"] for r in rows)
+    saida[BOLETO_ATRASADO] = sum(r["ba"] for r in rows)
     return saida
 
 
@@ -598,6 +671,8 @@ def exportar_csv(filtros: dict, chaves: list[str] | None = None, ordem: str | No
         base, where, params = _consulta(filtros, conn)
         rows = conn.execute(f"{base} {_select()}{where}{_order_by(ordem, direcao)}", params).fetchall()
         hist = tentativas([(r["sender_id"], r["pedido_base"]) for r in rows], conn)
+        rows = [dict(r) for r in rows]
+        _anotar_nf(rows, conn)
     finally:
         if fechar:
             conn.close()

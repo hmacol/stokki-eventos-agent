@@ -18,11 +18,17 @@ Estrutura do PDF (ajuste do Hugo, 11/08: sem páginas separadoras entre
 os documentos):
   1. CAPA com logo Freshlog, em PAISAGEM (pedido do Hugo, 13/08):
      tabela com 1 linha por pedido na ordem de visita (pedido + nº da
-     NF, embarcador, cliente, endereço de entrega, volumes, peso e
-     status NF/BOL com check/x). Volumes e peso bruto vêm da DANFE
-     local do pedido; sem DANFE, os volumes caem pro dimension_3 do
-     VUUPT dividido pelo fator_ponderado do embarcador (o dimension_3
-     é o volume PONDERADO, não a contagem real) e o peso fica "—".
+     NF, embarcador, cliente, endereço de entrega, caixas, peso e
+     status NF/BOL com check/x). CAIXAS é o que o galpão CONFERIU na
+     Stokki (tabela volumes_conferidos, lida às 03h50 por
+     atualizar_volumes_conferidos.py -- Hugo, 16/11); pedido ainda não
+     lido cai na DANFE e, sem ela, no dimension_3 do VUUPT dividido
+     pelo fator_ponderado (o dimension_3 é a caixa NORMALIZADA, não a
+     contagem real), marcado com * (não conferido). O cabeçalho mostra
+     o total real de caixas. A lotação (soma do dimension_3 ÷
+     capacidade do tipo de veículo do motorista, regras/tipo_veiculo)
+     é interna: sai só no log, aviso acima de 100%. Peso bruto vem da
+     DANFE.
   2. Documentos emendados direto: NFs e depois boletos, pedido a pedido;
      por último os outros documentos que o cliente anexou ao pedido no
      portal (11/11, portal_cliente/anexos_pedido.py).
@@ -102,6 +108,8 @@ from regras_documentos import boleto_esperado as _boleto_esperado
 from notificar_execucao_agente import notificar_execucao
 from regras.preferencias_motoristas import CatalogoMotoristas
 from regras.transportadoras import CatalogoTransportadoras, PontoRedespacho
+from regras.tipo_veiculo import tipo_por_codigo
+import atualizar_volumes_conferidos as volumes_conferidos
 
 PASTA_ROMANEIOS = _RAIZ_LOCAL / "dados" / "romaneios"
 DB_PATH = _RAIZ_PROJETO / "dados" / "dados.db"
@@ -527,6 +535,46 @@ def _volumes_fallback(servico: dict, fator: float) -> int | None:
     return max(1, round(vol / (fator or 1.0)))
 
 
+def _volumes_do_pedido(codigo: str, conferidos: dict) -> tuple[bool, int | None, bool]:
+    """(tem leitura, volumes, conferido) a partir da tabela
+    volumes_conferidos (rotina das 03h50). Servico com varios pedidos no
+    mesmo code soma; so vale se TODOS foram lidos. 'conferido' = todos
+    vieram da conferencia do galpao (senao e o numero da NF-e)."""
+    ids = volumes_conferidos.ids_do_codigo(codigo)
+    if not ids or any(i not in conferidos for i in ids):
+        return False, None, False
+    lidos = [conferidos[i] for i in ids]
+    if any(v is None for v, _f in lidos):
+        return True, None, False
+    return True, sum(v for v, _f in lidos), all(f == "conferencia" for _v, f in lidos)
+
+
+def _caixas_normalizadas(servico: dict) -> int:
+    """dimension_3 da Vuupt: a caixa normalizada que a roteirizacao usa
+    (mesma leitura de roteirizacao_dados.extrair_volume_caixas)."""
+    try:
+        return max(1, int(float(servico.get("dimension_3"))))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _tipo_veiculo_da_rota(rota: dict):
+    """TipoVeiculo do motorista da rota (cadastro de motoristas), ou None
+    sem motorista / sem cadastro -- a capa sai sem o percentual."""
+    agent_id = rota.get("agent_id")
+    if not agent_id:
+        return None
+    try:
+        cfg = _carregar_config().get("motoristas", {})
+        catalogo = CatalogoMotoristas.carregar(cfg.get("planilha", ""), cfg.get("json_fallback", ""))
+        for m in catalogo.motoristas:
+            if m.agent_id == agent_id:
+                return tipo_por_codigo(m.tipo_veiculo)
+    except Exception as e:
+        logger.warning(f"Falha ao achar o veiculo do motorista {agent_id}: {e}")
+    return None
+
+
 def _endereco_entrega(servico: dict) -> str:
     """Endereço do serviço VUUPT sem o rabo ', CEP, Brasil' -- na capa
     o que importa é rua/número/bairro/cidade, e a coluna é disputada."""
@@ -667,7 +715,7 @@ def _tabela_header_capa(draw: ImageDraw.ImageDraw, y: int) -> int:
     draw.text((_COL_EMB, meio), "EMBARCADOR", font=f, fill="white", anchor="lm")
     draw.text((_COL_CLI, meio), "CLIENTE", font=f, fill="white", anchor="lm")
     draw.text((_COL_END, meio), "ENDEREÇO DE ENTREGA", font=f, fill="white", anchor="lm")
-    draw.text((_COL_VOL_CX, meio), "VOL", font=f, fill="white", anchor="mm")
+    draw.text((_COL_VOL_CX, meio), "CAIXAS", font=f, fill="white", anchor="mm")
     draw.text((_COL_PESO_CX, meio), "PESO (KG)", font=f, fill="white", anchor="mm")
     draw.text((_COL_NF_CX, meio), "NF", font=f, fill="white", anchor="mm")
     draw.text((_COL_BOL_CX, meio), "BOL", font=f, fill="white", anchor="mm")
@@ -679,7 +727,7 @@ def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
                transportadoras: list[str] | None = None) -> list[Image.Image]:
     """Capa em PAISAGEM: identidade Freshlog + resumo da rota + tabela
     com 1 linha por pedido (ordem de visita) mostrando embarcador,
-    cliente, endereço de entrega, volumes, peso e status de NF/boleto."""
+    cliente, endereço de entrega, caixas, peso e status de NF/boleto."""
     data_br = data_alvo.strftime("%d/%m/%Y")
     dia_semana = DIAS_SEMANA_PT[data_alvo.weekday()]
     nome_rota = rota.get("name") or f"Rota {rota.get('id')}"
@@ -692,7 +740,12 @@ def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
         draw.text((x, y + 18), rotulo, font=_fonte(20), fill=CINZA_TXT, anchor=anchor)
         draw.text((x, y + 56), valor, font=_fonte(30, True), fill=NAVY, anchor=anchor)
     _info(MARGEM, "DATA", f"{dia_semana}, {data_br}")
-    _info(760, "MOTORISTA", _truncar(draw, nome_motorista, _fonte(30, True), 540))
+    _info(540, "MOTORISTA", _truncar(draw, nome_motorista, _fonte(30, True), 340))
+    # Total REAL de caixas (o que sobe no carro). A lotação do carro NÃO
+    # aparece aqui: é informação interna (Hugo, 16/11), vai só pro log.
+    total_caixas = _somar_volumes(itens)
+    _info(910, "CAIXAS", total_caixas.replace(" (parcial)", "") + " caixas"
+          + (" (parcial)" if "(parcial)" in total_caixas else ""))
     _info(A4_PAISAGEM[0] - MARGEM, "PEDIDOS", str(len(itens)), anchor="rs")
     avisos = []
     if tem_canhoteira:
@@ -740,8 +793,10 @@ def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
                   font=fonte_txt, fill=NAVY, anchor="lm")
         draw.text((_COL_END, meio), _truncar(draw, item["endereco"], fonte_end, _LARG_END),
                   font=fonte_end, fill=NAVY, anchor="lm")
-        draw.text((_COL_VOL_CX, meio), str(item["volumes"]) if item["volumes"] else "—",
-                  font=fonte_txt, fill=NAVY, anchor="mm")
+        texto_vol = "—"
+        if item["volumes"]:
+            texto_vol = str(item["volumes"]) + ("" if item.get("volumes_conferidos", True) else "*")
+        draw.text((_COL_VOL_CX, meio), texto_vol, font=fonte_txt, fill=NAVY, anchor="mm")
         draw.text((_COL_PESO_CX, meio), _fmt_peso(item["peso"]),
                   font=fonte_txt, fill=NAVY, anchor="mm")
         if item.get("nf_dispensada"):
@@ -753,6 +808,13 @@ def gerar_capa(rota: dict, itens: list[dict], nome_motorista: str,
         else:
             _marca(draw, _COL_BOL_CX, meio, item["tem_boleto"])
         y += altura_linha
+
+    # Avisos da contagem de caixas, no pé da última página da capa.
+    notas = ["Alguns clientes são faturados por peso: para eles a contagem de caixas não é base de cobrança."]
+    if any(i["volumes"] and not i.get("volumes_conferidos", True) for i in itens):
+        notas.insert(0, "* quantidade ainda não conferida pelo galpão (número da nota fiscal ou estimativa).")
+    for n, nota in enumerate(reversed(notas)):
+        draw.text((MARGEM, A4_PAISAGEM[1] - 88 - 24 * n), nota, font=_fonte(18), fill=CINZA_TXT, anchor="lm")
 
     _rodape(img, draw)
     return paginas
@@ -1081,6 +1143,8 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
     # a capa precisa do status de tudo antes de qualquer página.
     itens: list[dict] = []
     total = len(servicos)
+    conferidos = volumes_conferidos.carregar(
+        {i for s in servicos for i in volumes_conferidos.ids_do_codigo(s.get("code") or "")}, DB_PATH)
     for posicao, s in enumerate(servicos, start=1):
         codigo = (s.get("code") or "").lstrip("#")
         titulo_limpo = _limpar_titulo(codigo, s.get("title"))
@@ -1097,12 +1161,17 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
         veio_de_pedido_venda = bool(nfs) and all(
             row.get("tipo") == "Pedido de Venda" for row, _r in nfs)
 
-        # Volumes e peso bruto: DANFE primeiro (contagem real); sem NF
-        # legível, volumes caem pro dimension_3 despoderado e o peso
-        # fica sem valor ("—" na capa).
-        volumes, peso = _qtd_peso_do_pedido(nfs)
-        if volumes is None:
-            volumes = _volumes_fallback(s, fatores.get(sender_id, 1.0))
+        # Caixas: o que o galpão CONFERIU na Stokki (tabela
+        # volumes_conferidos, rotina das 03h50 -- Hugo, 16/11). Pedido que
+        # a rotina ainda não leu cai no que valia antes (DANFE; sem NF
+        # legível, dimension_3 despoderado) e sai marcado como não
+        # conferido. Peso bruto continua vindo da DANFE.
+        volumes_nf, peso = _qtd_peso_do_pedido(nfs)
+        lido, volumes, conferido = _volumes_do_pedido(codigo, conferidos)
+        if not lido:
+            volumes = volumes_nf
+            if volumes is None:
+                volumes = _volumes_fallback(s, fatores.get(sender_id, 1.0))
 
         itens.append({
             "posicao": posicao, "codigo": codigo,
@@ -1112,6 +1181,7 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
             # bruto (com CEP): é o que o batimento de transportadora usa
             "endereco_vuupt": str(s.get("address") or ""),
             "volumes": volumes, "peso": peso,
+            "volumes_conferidos": conferido,
             "nfs": ", ".join(n for n in numeros_nf if n),
             "veio_de_pedido_venda": veio_de_pedido_venda,
             "tem_nf": bool(nfs), "tem_boleto": bool(boletos),
@@ -1134,6 +1204,17 @@ def montar_pdf_rota(rota: dict, servicos: list[dict], docs_por_pedido: dict,
     # si leva o nome completo da planilha. Mesma chave do fingerprint da
     # notificação de transportadoras.
     nomes_transportadoras = [nome_curto_transportadora(p) for p, _e in grupos_transportadora]
+
+    # Lotação do carro (caixa normalizada ÷ capacidade do tipo de veículo):
+    # uso interno, só no log -- o motorista não vê (Hugo, 16/11).
+    tipo_veiculo = _tipo_veiculo_da_rota(rota)
+    if tipo_veiculo and tipo_veiculo.volume_maximo_cx:
+        normalizadas = sum(_caixas_normalizadas(s) for s in servicos)
+        pct = round(100 * normalizadas / tipo_veiculo.volume_maximo_cx)
+        (logger.warning if normalizadas > tipo_veiculo.volume_maximo_cx else logger.info)(
+            f"  lotacao {rota.get('name') or rota.get('id')}: {normalizadas} caixas normalizadas / "
+            f"{tipo_veiculo.volume_maximo_cx} ({tipo_veiculo.codigo}) = {pct}%"
+            + (" -- ACIMA DA CAPACIDADE" if normalizadas > tipo_veiculo.volume_maximo_cx else ""))
 
     # Capa
     for pagina in _paginas_pillow(

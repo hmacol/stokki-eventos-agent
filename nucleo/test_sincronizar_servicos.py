@@ -163,6 +163,33 @@ class TestRetiradaEReentrega(_Base):
                                             recreated_order_origin_id=5801)], self.conn)
         self.assertIsNone(self._pedido("PS-800")["reentrega_de_codigo"])
 
+    def test_reentrega_com_o_mesmo_codigo_preserva_a_falha_anterior(self):
+        """Bug de 29/09 (PS-40151, PS-40168): a Vuupt recria o serviço com o
+        MESMO código depois do insucesso. A linha de nucleo_pedidos passava a
+        ser do serviço novo e a tentativa que falhou sumia -- o núcleo contava
+        1 serviço onde a Vuupt conta 2."""
+        sinc.sincronizar_servicos([_servico(service_id=5901, code="#PS-900", status="done",
+                                            status_done="failed", route_id=100)], self.conn)
+        sinc.sincronizar_servicos([_servico(service_id=5902, code="#PS-900", status="done",
+                                            status_done="success", route_id=200,
+                                            recreated_order_origin_id=5901)], self.conn)
+        servicos = {r["vuupt_service_id"]: r for r in self.conn.execute(
+            "SELECT * FROM nucleo_servicos WHERE codigo = 'PS-900'")}
+        self.assertEqual(set(servicos), {5901, 5902}, "a Vuupt tem 2 serviços do PS-900; o núcleo tem que ter os 2")
+        self.assertEqual((servicos[5901]["status"], servicos[5901]["vuupt_route_id"]), ("INSUCESSO", 100))
+        self.assertEqual((servicos[5902]["status"], servicos[5902]["vuupt_route_id"]), ("ENTREGUE", 200))
+        self.assertEqual(servicos[5902]["reentrega_de_service_id"], 5901)
+        # nucleo_pedidos continua sendo o estado atual do pedido (portal, painel, pool leem dali).
+        self.assertEqual((self._pedido("PS-900")["vuupt_service_id"], self._pedido("PS-900")["status"]),
+                         (5902, "ENTREGUE"))
+
+    def test_servico_tirado_da_rota_perde_a_rota_em_nucleo_servicos(self):
+        sinc.sincronizar_servicos([_servico(service_id=5951, code="#PS-950", status="assigned",
+                                            route_id=100, driver_id=7)], self.conn)
+        sinc.sincronizar_servicos([_servico(service_id=5951, code="#PS-950")], self.conn)
+        s = self.conn.execute("SELECT * FROM nucleo_servicos WHERE vuupt_service_id = 5951").fetchone()
+        self.assertEqual((s["status"], s["vuupt_route_id"], s["driver_id"]), ("ABERTO", None, None))
+
     def test_reentrega_de_pedido_que_o_nucleo_nao_conhece_nao_quebra(self):
         sinc.sincronizar_servicos([_servico(code="#PS-400-R1", recreated_order_origin_id=999)], self.conn)
         self.assertIsNone(self._pedido("PS-400-R1")["reentrega_de_codigo"])
@@ -354,6 +381,20 @@ class TestMarcarEmRotaNoEnvio(_Base):
             self.assertEqual((p["status"], p["status_provedor"], p["vuupt_route_id"]), ("EM_ROTA", "assigned", 777))
         self.assertEqual(self._pedido("PS-30")["status"], "ENTREGUE")
         self.assertEqual(pedidos.marcar_em_rota_por_service_ids([], 777, self.conn), 0)
+
+    def test_tirado_da_rota_volta_aberto_sem_ir_na_vuupt(self):
+        """Editar rota enviada (10/11): inverso do envio, so pra quem estava EM_ROTA."""
+        sinc.sincronizar_servicos([_servico(service_id=1, code="#PS-10"), _servico(service_id=2, code="#PS-20"),
+                                   _servico(service_id=3, code="#PS-30", status="done", status_done="success")],
+                                  self.conn)
+        pedidos.marcar_em_rota_por_service_ids([1, 2], 777, self.conn)
+        n = pedidos.marcar_aberto_por_service_ids([1, 3, None], self.conn)
+        self.assertEqual(n, 1)
+        p = self._pedido("PS-10")
+        self.assertEqual((p["status"], p["status_provedor"], p["vuupt_route_id"]), ("ABERTO", "not_assigned", None))
+        self.assertEqual(self._pedido("PS-20")["status"], "EM_ROTA")
+        self.assertEqual(self._pedido("PS-30")["status"], "ENTREGUE")
+        self.assertEqual(pedidos.marcar_aberto_por_service_ids([], self.conn), 0)
 
 
 class TestExecutar(_Base):

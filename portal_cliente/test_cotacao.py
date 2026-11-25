@@ -180,6 +180,31 @@ def test_ler_lista_xlsx_e_csv():
         ct.ler_lista("numero;x\n1;2\n".encode(), "a.csv")
 
 
+def test_ler_lista_com_tetos_contra_planilha_bomba():
+    """19/11: arquivo pequeno declarando 16 mil colunas e milhares de linhas esgotava a memória."""
+    import openpyxl, io, time
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["CEP", "Número"])
+    ws.append(["01310-100", 1578])
+    ws.cell(row=3, column=16000, value=" ")
+    buf = io.BytesIO(); wb.save(buf)
+    t = time.time()
+    assert ct.ler_lista(buf.getvalue(), "lista.xlsx") == [{"cep": "01310-100", "numero": "1578"}]
+    assert time.time() - t < 5
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["CEP", "Número"])
+    ws.cell(row=100000, column=1, value="01310-100")
+    buf = io.BytesIO(); wb.save(buf)
+    with pytest.raises(ct.ErroCotacao, match="no máximo 500 linhas"):
+        ct.ler_lista(buf.getvalue(), "lista.xlsx")
+    with pytest.raises(ct.ErroCotacao, match="no máximo 500 linhas"):
+        ct.ler_lista(("cep;numero\n" + "01310-100;1\n" * 600).encode(), "lista.csv")
+    with pytest.raises(ct.ErroCotacao, match="2 MB"):
+        ct.ler_lista(b"cep;numero\n" + b"x" * (3 * 1024 * 1024), "lista.csv")
+    with pytest.raises(ct.ErroCotacao, match="Não consegui ler"):
+        ct.ler_lista(b"nao e planilha", "lista.xlsx")
+
+
 def test_modelo_lista_abre():
     import openpyxl, io
     ws = openpyxl.load_workbook(io.BytesIO(ct.modelo_lista())).active

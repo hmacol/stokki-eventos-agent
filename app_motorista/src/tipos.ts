@@ -18,7 +18,7 @@ export type Motorista = {
 };
 
 /** Campos que o motorista edita em "Meus dados" (valem na hora, Hugo 08/10). */
-export type MeusDados = { telefone?: string; email?: string; chave_pix?: string; placa?: string };
+export type MeusDados = { telefone?: string; email?: string; chave_pix?: string; placa?: string; /** exigido pela API só quando a chave PIX muda */ pin_atual?: string };
 export type MudancaCadastro = { campo: string; rotulo: string; de: string | null; para: string | null };
 
 /** Pedido de cadastro de motorista novo (sem login) e o que a API devolve. */
@@ -50,6 +50,8 @@ export type ResultadoValidacao = {
   nf_confere?: boolean | null;
   avisos?: string[];
   valor_lido?: number | null;
+  /** Só no tipo CARREGAMENTO: quanto do baú parece ocupado (0-100). */
+  ocupacao_pct?: number | null;
 };
 
 export type Parada = {
@@ -57,6 +59,7 @@ export type Parada = {
   rota_id: number;
   ordem: number;
   codigo: string | null;
+  nf?: string;            // NF(s) do pedido ("111, 222"); vazio/ausente = sem NF (API antiga nao manda)
   titulo: string | null;
   destinatario_nome: string | null;
   endereco: string | null;
@@ -112,6 +115,8 @@ export type Rota = {
   nome: string | null;
   provedor: 'VUUPT' | 'APP';
   editavel: boolean;
+  /** false = rota de dia futuro: o servidor so avisa que ela existe; abre as 00h do dia. */
+  liberada?: boolean;
   status: StatusRota;
   start_at: string | null;
   km_estimado: number | null;
@@ -126,6 +131,25 @@ export type Rota = {
   confirmacao: { status: string; respondido_em: string | null; motivo_recusa: string | null } | null;
   paradas: Parada[];
   pedagios?: Pedagio[];
+  /** Checklist de carregamento: exigido=true e feito=false trava o "Iniciar rota". */
+  carregamento?: { exigido: boolean; feito: boolean };
+};
+
+// Checklist de carregamento (POST /rotas/<id>/carregamento, nucleo/carregamento.py).
+export type MotivoDesmarcar = 'Não coube' | 'Não Encontrado' | 'Outros';
+export type Desmarcado = { parada_id: number; motivo: MotivoDesmarcar; observacao: string };
+export type RespostaCarregamento = { ok: true; carregamento: Record<string, unknown>; rota: Rota };
+/** Corpo do 409 quando a Vuupt não tirou algum pedido da rota. */
+export type FalhaCarregamento = { parada_id: number; codigo: string; erro: string };
+
+// Trajeto da rota pelas ruas (GET /rotas/<id>/trajeto, nucleo/trajeto_rota.py):
+// pontos [lat, lng] da base ate a base, na ordem planejada. LINHA_RETA = o
+// servidor nao conseguiu o Google e ligou as paradas em reta.
+export type Trajeto = {
+  pontos: [number, number][];
+  fonte: 'GOOGLE_ROUTES' | 'LINHA_RETA';
+  assinatura: string;
+  base: [number, number];
 };
 
 export type CampoChecklist = {
@@ -199,6 +223,7 @@ export type PedidoOpcao = {
   ordem: number;
   nome: string;
   codigo: string;
+  nf?: string;
   bairro: string;
   caixas: number | null;
   situacao: string;

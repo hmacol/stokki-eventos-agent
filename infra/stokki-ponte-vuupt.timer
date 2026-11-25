@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-ponte-vuupt.service 30 s depois de cada rodada terminar
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

@@ -720,7 +720,10 @@ def registros_hoje(usuario: str) -> dict:
             continue
         vistos.add(r["order_number"])
         ontem_sem_hoje.append(item(r))
-    return {"hoje": [item(r) for r in de_hoje], "ontem_sem_hoje": ontem_sem_hoje}
+    hoje_itens = [item(r) for r in de_hoje]
+    _anotar_nf(hoje_itens)
+    _anotar_nf(ontem_sem_hoje)
+    return {"hoje": hoje_itens, "ontem_sem_hoje": ontem_sem_hoje}
 
 
 def _data_local(texto: str) -> date:
@@ -858,6 +861,19 @@ def _base_externa_com_cache() -> dict:
 
 # ── Leitura ────────────────────────────────────────────────────────────────────
 
+def _anotar_nf(itens: list[dict]) -> None:
+    """Poe `nf` em cada item (UMA busca em lote). O registro pode ter sido feito pelo
+    PS ou pela propria NF: quem veio pela NF mostra a propria NF."""
+    from nucleo import nf_pedido
+    ps = []
+    for i in itens:
+        if re.match(r"^#?PS-", str(i["order_number"]), re.I):
+            ps.append(i)
+        else:
+            i["nf"] = str(i["order_number"])
+    nf_pedido.anotar_nf(ps, "order_number", "nf")
+
+
 def listar_com_classificacao() -> list[dict]:
     """
     Une os registros de pedido parado (aba Registrar, tabela
@@ -956,6 +972,7 @@ def listar_com_classificacao() -> list[dict]:
             "acao_detalhe": local.get("acao_detalhe"),
         })
 
+    _anotar_nf(resultado)
     # revisão urgente no topo; depois mais dias parado primeiro
     resultado.sort(key=lambda r: (r["revisao_urgente"], r["dias_parado"]), reverse=True)
     return resultado
@@ -1036,6 +1053,9 @@ def duplicar(order_number: str, usuario: str) -> dict:
     modulo = _expedir_pedidos_raiz()
     novo = modulo.duplicar_servico_por_insucesso(vuupt, servico)
     if not novo:
+        no_pool = getattr(modulo, "servico_ja_no_pool", lambda *_: None)(vuupt, servico)
+        if no_pool:
+            raise ValueError(f"Não duplicado: {no_pool.get('code')} já está no pool.")
         _marcar_acao(order_number, "erro", "falha ao criar reentrega na Vuupt")
         raise RuntimeError("Falha ao criar a reentrega na Vuupt (ver log de expedição).")
 
@@ -1128,12 +1148,16 @@ def notificar_cliente_retira(order_number: str, usuario: str) -> dict:
     codigo = embarcador["codigo"]
     nome   = embarcador["nome"]
     emails = embarcador["emails"]
+    # NF ao lado do PS: o registro pode ter vindo pelo PS (a NF sai do banco) ou pela propria NF
+    from nucleo import nf_pedido
+    nf = (nf_pedido.nf_do_codigo(codigo, nf_pedido.nf_por_codigo([codigo])) if re.match(r"^#?PS-", str(codigo), re.I)
+          else str(order_number)) or nf_pedido.SEM_NF
 
     conteudo = f"""
     <h2 style="margin:0 0 4px;font-size:20px;color:{email_utils.COR_TEXTO};">Pedido aguardando retirada</h2>
     <p style="margin:0 0 24px;font-size:14px;color:{email_utils.COR_TEXTO_SUAVE};">
       Olá, <strong>{html.escape(nome)}</strong>!<br><br>
-      O pedido <strong>{html.escape(codigo)}</strong> está marcado como
+      O pedido <strong>{html.escape(codigo)}</strong> (NF {html.escape(nf)}) está marcado como
       <strong>retirada pelo cliente</strong> e ainda não foi coletado.
       Por favor, oriente o cliente a providenciar a retirada o quanto antes
       para que possamos dar continuidade à expedição.
@@ -1146,7 +1170,7 @@ def notificar_cliente_retira(order_number: str, usuario: str) -> dict:
         rodape="Freshlog Logística -- aviso automático de pedido aguardando retirada.",
         cor_acento=email_utils.COR_DESTAQUE,
     )
-    assunto = f"[Freshlog] Pedido {codigo} aguardando retirada"
+    assunto = f"[Freshlog] Pedido {codigo} · NF {nf} aguardando retirada"
 
     config_email = _carregar_config().get("email", {})
     if not email_utils.enviar_email(emails, assunto, corpo, config_email):

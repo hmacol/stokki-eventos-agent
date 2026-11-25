@@ -108,7 +108,7 @@ class TestMontar(unittest.TestCase):
         "pedidos_parados": ("total", "operador", "logistica", "leitura", "atendimento"),
         "torre": ("total", "operador", "logistica", "leitura", "atendimento"),
         "planejamento": ("total", "operador", "logistica", "leitura", "atendimento"),
-        "vigia_pedidos": ("total", "operador", "leitura"),
+        "vigia_pedidos": ("total", "operador", "leitura", "logistica", "atendimento"),
         "historico": ("total",),
         "wms_estoque": ("total", "operador", "leitura"),
         "wms": ("total", "operador", "galpao"),

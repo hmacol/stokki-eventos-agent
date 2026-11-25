@@ -31,16 +31,20 @@ _RAIZ = Path(__file__).resolve().parent.parent
 if str(_RAIZ) not in sys.path:
     sys.path.insert(0, str(_RAIZ))
 
-from nucleo import banco  # noqa: E402
-from nucleo.cadastro_motorista import ORIGEM_LINK, STATUS_RECUSADO, CadastroInvalido, buscar_cadastro  # noqa: E402
+from nucleo import auth_motorista as auth, banco  # noqa: E402
+from nucleo.cadastro_motorista import (  # noqa: E402
+    ORIGEM_LINK, STATUS_RECUSADO, CadastroInvalido, buscar_cadastro, sortear_pin,
+)
 from nucleo.vuupt_agentes import (  # noqa: E402
     ErroVuupt, VuuptAgentes, base_operacional_mais_comum, gerar_email, mesmo_telefone,
 )
 from regras import motoristas_banco  # noqa: E402
+from regras.tipo_veiculo import tipo_por_codigo  # noqa: E402
 
 logger = logging.getLogger("nucleo.cadastro_motorista_link")
 
-LINK_APP_VUUPT = "https://play.google.com/store/apps/details?id=com.vuupt.vuuptdriver"
+LINK_APP = "https://app.freshhub.com.br/motorista/app.apk"
+LINK_PWA = "https://motorista.freshhub.com.br"
 ORIGEM_GRUPO = "cadastro_motorista"
 TRAVA_MINUTOS = 10
 MAX_TENTATIVAS = 20
@@ -52,6 +56,7 @@ MAX_AGENTES_DIA = 10
 MSG_LIMITE_AGENTES = "limite diário de agentes novos atingido"
 # nao_enviado = canal em pausa ou teto do dia: o motorista ainda não recebeu o login
 BOAS_VINDAS_DE_NOVO = ("falhou", "indeterminado", "nao_enviado")
+PEDIDO_GRUPO_DE_NOVO = ("falhou", "nao_enviado")
 AVISO_GRUPO_DE_NOVO = ("falhou", "nao_enviado")
 # Quem vem pelo link entra como esporádico; o "Fixo" pedido fica em
 # motoristas_cadastros.posicao e a equipe promove pelo Editar (decisão de 02/11).
@@ -90,6 +95,11 @@ def _avisar_motorista_padrao(cadastro_id, telefone, texto, config, modo_teste=Fa
     import notificar_whatsapp
     return notificar_whatsapp.avisar_motorista_boas_vindas(cadastro_id, telefone, texto, config,
                                                            modo_teste=modo_teste)
+
+
+def _avisar_atendimento_padrao(cadastro_id, texto, config, modo_teste=False):
+    import notificar_whatsapp
+    return notificar_whatsapp.avisar_atendimento_pedido_grupo(cadastro_id, texto, config, modo_teste=modo_teste)
 
 
 def _gravar(conn, cadastro_id: int, **campos) -> None:
@@ -253,7 +263,8 @@ def _tabela(conn, config: dict, c: dict) -> None:
 # ── Processamento ─────────────────────────────────────────────────────────────
 
 def processar(conn: sqlite3.Connection, config: dict, cadastro_id: int, *, vuupt=None, avisar_grupo=None,
-              avisar_motorista=None, agora: datetime | None = None, forcar: bool = False) -> dict:
+              avisar_motorista=None, avisar_atendimento=None, agora: datetime | None = None,
+              forcar: bool = False) -> dict:
     """Leva um cadastro enviado até o fim (ou até onde der). Devolve
     {"situacao": concluido | pendente | conflito | ocupado | ignorado, "erro": str | None}.
     `ignorado` = não é do link, não foi enviado ou já concluiu (nada é feito);
@@ -273,7 +284,8 @@ def processar(conn: sqlite3.Connection, config: dict, cadastro_id: int, *, vuupt
         return {"situacao": "ocupado", "erro": None}
     try:
         return _processar(conn, config, cadastro_id, vuupt or VuuptAgentes(config["vuupt_api"]["token"]),
-                          avisar_grupo or _avisar_grupo_padrao, avisar_motorista or _avisar_motorista_padrao, agora)
+                          avisar_grupo or _avisar_grupo_padrao, avisar_motorista or _avisar_motorista_padrao,
+                          avisar_atendimento or _avisar_atendimento_padrao, agora)
     finally:
         # só solta a própria trava (outra rodada pode ter assumido a vencida)
         conn.execute("UPDATE motoristas_cadastros SET processando_em = NULL WHERE id = ? AND processando_em = ?",
@@ -303,7 +315,37 @@ def _registrar_conflito(conn, cadastro_id: int, dono: int, tipo: str) -> None:
     _gravar(conn, cadastro_id, conflito_agent_id=dono, conflito_resolvido=0, conflito_tipo=tipo)
 
 
-def _processar(conn, config, cadastro_id, vuupt, avisar_grupo, avisar_motorista, agora) -> dict:
+def _boas_vindas_ja_enviadas(conn, cadastro_id: int) -> bool:
+    """O envio das boas-vindas deste cadastro consta como 'enviado' no registro do WhatsApp (qualquer
+    origem de boas-vindas, piloto ou real)."""
+    try:
+        return conn.execute(
+            "SELECT 1 FROM notificacoes_whatsapp WHERE origem LIKE 'motorista_boas_vindas%' AND assinatura = ? "
+            "AND situacao = 'enviado' LIMIT 1", (f"cadastro_link:{cadastro_id}:boas_vindas",)).fetchone() is not None
+    except sqlite3.OperationalError:   # tabela só nasce no primeiro envio
+        return False
+
+
+def _login_app(conn, c) -> str | None:
+    """Cria o login do app próprio com PIN provisório sorteado (trocar_pin=1) e devolve o
+    PIN. Cada nova tentativa de boas-vindas sorteia outro (o hash não permite reler). Quem
+    já entrou no app não tem o PIN mexido: devolve None."""
+    cpf = auth.normalizar_cpf(c["cpf"])
+    existente = auth.buscar_motorista(conn, cpf)
+    if existente and existente.get("ultimo_login_em"):
+        return None
+    pin = sortear_pin()
+    auth.criar_ou_atualizar_motorista(conn, cpf, c["nome"], pin, agent_id=c["agent_id"], vehicle_id=c.get("vehicle_id"),
+                                      telefone=c["telefone"], email=c.get("email"), tipo_veiculo=c["tipo_veiculo"],
+                                      trocar_pin=True)
+    # mesmo critério da aprovação pelo painel: PIX, placa e quem vê o extrato
+    conn.execute("UPDATE motoristas SET chave_pix = ?, placa = ?, ve_financeiro = ? WHERE cpf = ?",
+                 (c.get("chave_pix"), c.get("placa"), int(bool(c.get("dono_veiculo"))), cpf))
+    conn.commit()
+    return pin
+
+
+def _processar(conn, config, cadastro_id, vuupt, avisar_grupo, avisar_motorista, avisar_atendimento, agora) -> dict:
     import notificar_whatsapp as nw
     c = buscar_cadastro(conn, cadastro_id)
     if _ignorar(c):   # concluído por outra rodada entre a leitura e a trava
@@ -370,15 +412,31 @@ def _processar(conn, config, cadastro_id, vuupt, avisar_grupo, avisar_motorista,
         return {"situacao": situacao, "erro": erro}
 
     bv = c["boas_vindas_situacao"]
+    if (not bv or bv in BOAS_VINDAS_DE_NOVO) and _boas_vindas_ja_enviadas(conn, cadastro_id):
+        # a mensagem saiu, mas o processo caiu antes de gravar: sortear outro PIN invalidaria o que o motorista recebeu
+        bv = "enviado"
+        _gravar(conn, cadastro_id, boas_vindas_situacao=bv)
     if not bv or bv in BOAS_VINDAS_DE_NOVO:
-        digitos = c["vuupt_senha_digitos"] or 6
-        link_app = (config.get("cadastro_motorista_link") or {}).get("link_app_vuupt") or LINK_APP_VUUPT
-        texto = nw.texto_boas_vindas_motorista(c["nome"].split(" ")[0], c["vuupt_email"], c["cpf"][:digitos],
-                                               link_app, cad_texto["iphone"])
+        cfg_link = config.get("cadastro_motorista_link") or {}
+        # login do app próprio (CPF + PIN provisório); o agente da Vuupt segue criado por trás
+        pin = _login_app(conn, c)
+        texto = nw.texto_boas_vindas_motorista(c["nome"].split(" ")[0], c["cpf"], pin,
+                                               cfg_link.get("link_app") or LINK_APP,
+                                               cfg_link.get("link_pwa") or LINK_PWA, cad_texto["iphone"])
         bv = avisar_motorista(cadastro_id, c["telefone"], texto, config)
         _gravar(conn, cadastro_id, boas_vindas_situacao=bv)
         if bv in BOAS_VINDAS_DE_NOVO:
             return _pendente(conn, cadastro_id, f"boas-vindas: {bv}")
+    pg = c.get("pedido_grupo_situacao")
+    if bv == "enviado" and (not pg or pg in PEDIDO_GRUPO_DE_NOVO):
+        # o sistema nao cria o grupo (risco de banimento): pede ao Atendimento, ja com o nome certo
+        tipo = tipo_por_codigo(c["tipo_veiculo"])
+        texto = nw.texto_pedido_grupo_motorista(c["nome"], c["telefone"], tipo.nome if tipo else c["tipo_veiculo"],
+                                                c.get("refrigerado"))
+        pg = avisar_atendimento(cadastro_id, texto, config)
+        _gravar(conn, cadastro_id, pedido_grupo_situacao=pg)
+        if pg in PEDIDO_GRUPO_DE_NOVO:
+            return _pendente(conn, cadastro_id, f"pedido de grupo: {pg}")
     if aviso in AVISO_GRUPO_DE_NOVO:
         # canal em pausa, teto do dia ou gateway fora: sem isso o aviso se perderia ao concluir
         return _pendente(conn, cadastro_id, f"aviso do grupo: {aviso}")
@@ -494,6 +552,15 @@ def desfazer_cadastro_link(conn: sqlite3.Connection, config: dict, cadastro_id: 
         if re.sub(r"\D", "", str(linha.get("CPF_MOTORISTA") or "")) == c["cpf"]:
             motoristas_banco.liberar_cpf(conn, linha["id"], origem)
         _espelhar(conn)
+    # login do app criado nas boas-vindas: sai junto, senão o CPF não volta a poder se cadastrar.
+    # Quem já entrou no app fica (não é cadastro falso).
+    # Só o login deste cadastro (mesmo agente) e só na primeira vez: repetir o desfazer de um cadastro
+    # antigo não pode apagar o login de quem se recadastrou depois.
+    login = auth.buscar_motorista(conn, c["cpf"])
+    if (login and not login.get("ultimo_login_em") and c.get("agent_id")
+            and login.get("agent_id") == c["agent_id"] and c["status"] != STATUS_RECUSADO):
+        conn.execute("DELETE FROM motoristas WHERE cpf = ?", (login["cpf"],))
+        conn.commit()
     apagados, erros = [], []
     if apagar_na_vuupt and (c.get("vehicle_criado") or c.get("agente_criado")):
         vuupt = vuupt or VuuptAgentes(config["vuupt_api"]["token"])

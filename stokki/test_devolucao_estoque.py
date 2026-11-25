@@ -230,6 +230,9 @@ def _json(nome):
     return json.loads(_texto(nome))
 
 
+SHOW_OUTRO_EMBARCADOR = _texto("show_43101.html").replace("#stkkc-100", "#stkkc-7")   # sem destino fixo
+
+
 class _Stokki:
     """Sessao falsa: responde por trecho da URL (e por produto/mes nas tabelas) e guarda os GETs."""
     def __init__(self, show=None, movimentos=None, origem=None, enderecos=None):
@@ -396,20 +399,31 @@ class TestPlano(unittest.TestCase):
         self.assertEqual(p["status"], "MOVER")
         self.assertEqual(p["itens"][0]["destinos"], [("FABENNE-1", 4)])   # Virtual nunca e destino
 
+    def test_fabenne_vai_sempre_pra_fabenne_1(self):
+        # origem da separacao e maior saldo apontando outro endereco: a Fabenne (#stkkc-100) ignora os dois
+        origem = _sem_devolucoes(_json("origem_2278_2026_11.json"))
+        origem = json.loads(json.dumps(origem).replace("FABENNE-1", "MANIOCA-1"))
+        enderecos = _texto("enderecos_2278.html").replace("FABENNE-1", "MANIOCA-1")
+        s = self._sem_devolucao(origem={(2278, 11): origem, (2278, 10): origem}, enderecos=enderecos)
+        p = de.montar_plano(s, 43101, AGORA)
+        self.assertEqual(p["status"], "MOVER")
+        self.assertEqual(p["itens"][0]["destinos"], [("FABENNE-1", 4)])
+        self.assertEqual(s.urls("/moviment/addressing/2278/1"), [])   # nem le o saldo
+
     def test_regra_3_so_quando_precisa(self):
         so_virtual = _texto("enderecos_2278.html").replace("FABENNE-1", "Falta")
-        s = self._sem_devolucao(origem={}, enderecos=so_virtual)
+        s = self._sem_devolucao(origem={}, enderecos=so_virtual, show=SHOW_OUTRO_EMBARCADOR)
         linhas = [{"endereco": "CONG1-1", "product_id": 9, "estoque": 7, "comprometido": 0, "disponivel": 7},
                   {"endereco": "CONG1-1", "product_id": 8, "estoque": 1, "comprometido": 0, "disponivel": 1},
                   {"endereco": "Virtual", "product_id": 9, "estoque": 50, "comprometido": 50, "disponivel": 0}]
         with mock.patch("stokki.ajuste_estoque.saldo_por_endereco", return_value=linhas) as m:
             p = de.montar_plano(s, 43101, AGORA)
-        m.assert_called_once_with(s, 100)
+        m.assert_called_once_with(s, 7)
         self.assertEqual(p["itens"][0]["destinos"], [("CONG1-1", 4)])
 
     def test_sem_nenhum_destino_vira_duvida_com_motivo(self):
         so_virtual = _texto("enderecos_2278.html").replace("FABENNE-1", "Falta")
-        s = self._sem_devolucao(origem={}, enderecos=so_virtual)
+        s = self._sem_devolucao(origem={}, enderecos=so_virtual, show=SHOW_OUTRO_EMBARCADOR)
         with mock.patch("stokki.ajuste_estoque.saldo_por_endereco", return_value=[]):
             p = de.montar_plano(s, 43101, AGORA)
         self.assertEqual(p["status"], "DUVIDA")

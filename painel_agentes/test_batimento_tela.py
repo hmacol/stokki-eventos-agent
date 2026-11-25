@@ -92,11 +92,15 @@ class TestAbaFechamento(unittest.TestCase):
         self._logar("leitura")
         self.assertIn("rodada atrasada", self.cliente.get("/vigia?aba=fechamento").get_data(as_text=True))
 
-    def test_aba_padrao_continua_sendo_pedidos_abertos(self):
+    def test_aba_padrao_e_nao_entregues_e_a_lista_antiga_fica_em_abertos(self):
+        # 21/11: a padrão passou a ser a lista de ação (test_vigia_acao_tela); a de antes é ?aba=abertos
         self._logar("leitura")
         r = self.cliente.get("/vigia")
         self.assertEqual(r.status_code, 200)
-        self.assertIn("Vigia de pedidos abertos", r.get_data(as_text=True))
+        self.assertIn("Pedidos não entregues: o que fazer", r.get_data(as_text=True))
+        r = self.cliente.get("/vigia?aba=abertos")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Todos os pedidos abertos", r.get_data(as_text=True))
 
 
 class TestTorreBatimento(unittest.TestCase):

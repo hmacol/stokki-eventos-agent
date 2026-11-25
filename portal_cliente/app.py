@@ -47,17 +47,21 @@ import yaml
 from flask import (Flask, Response, abort, g, jsonify, redirect, render_template, request, send_file,
                    send_from_directory, session, url_for)
 from jinja2 import ChoiceLoader, FileSystemLoader
+from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 import auth_cliente as auth
 import dados_cliente as dados
 import envio_pedidos as envios
 import anexos_pedido
+import lotes_cliente
 import cotacao
 import entrada_equipe
 import endereco_entrega
+import transportadora_envio
 import alterar_entrega
 import cancelamento
+import entradas as entradas_mod
 from email_utils import enviar_email, envelope_html
 import preferencias_notificacao as preferencias
 import cadastro_embarcador as cad_emb
@@ -177,7 +181,8 @@ def _carregar_cliente():
             return redirect(url_for("completar_cadastro"))
 
 
-_LIVRES_ANTES_DA_TROCA = {"trocar_pin", "sair", "static", "saude", "regioes", "regioes_logo", "aula", "aula_arquivo"}
+_LIVRES_ANTES_DA_TROCA = {"trocar_pin", "sair", "static", "saude", "regioes", "regioes_logo", "aula", "aula_arquivo",
+                          "ciencia_pagina", "ciencia_ciente", "ciencia_reagendar"}  # link publico da ciencia do dedicado
 _LIVRES_ANTES_DO_CADASTRO = _LIVRES_ANTES_DA_TROCA | {"completar_cadastro"}
 
 
@@ -665,9 +670,21 @@ def _empresas_com_envio() -> list[dict]:
 @requer_cliente
 def inicio():
     aba = request.args.get("aba") or "acompanhamento"
+    conn = envios.conectar()
+    try:   # embarcador piloto do WMS: a tela de envio explica a indicação de lote (18/11)
+        lotes_ativo = any(lotes_cliente.embarcador_wms(conn, e["cnpj"], _CONFIG) is not None for e in g.cliente["empresas"])
+    finally:
+        conn.close()
+    conn = entradas_mod.conectar()
+    try:
+        entradas_ativo = entradas_mod.entradas_ativas_para(conn, [e["cnpj"] for e in g.cliente["empresas"]])
+    finally:
+        conn.close()
+    abas = ("acompanhamento", "envios") + (("entradas",) if entradas_ativo else ())
     return render_template("acompanhamento.html", data_inicial=_data_da_query().isoformat(),
-                           empresas_envio=_empresas_com_envio(),
-                           hoje=date.today().isoformat(), aba_inicial=aba if aba in ("acompanhamento", "envios") else "acompanhamento",
+                           empresas_envio=_empresas_com_envio(), lotes_ativo=lotes_ativo,
+                           hoje=date.today().isoformat(), aba_inicial=aba if aba in abas else "acompanhamento",
+                           entradas_ativo=entradas_ativo,
                            pode_enviar=not (g.get("equipe") and g.equipe.get("nivel") not in _NIVEIS_EQUIPE_ENVIA))
 
 
@@ -764,7 +781,8 @@ def api_canhoto(service_id):
                                texto="O motorista ainda não enviou a foto do canhoto deste pedido, "
                                      "ou ela ainda está sendo processada. Tente de novo mais tarde.",
                                voltar=url_for("inicio")), 404
-    pdf = dados.baixar_canhoto_pdf(token, checklist_id, servico.get("code") or str(service_id))
+    pdf = dados.comprovante_proprio(servico, _CONFIG) or \
+        dados.baixar_canhoto_pdf(token, checklist_id, servico.get("code") or str(service_id))
     if not pdf:
         return render_template("mensagem.html", titulo="Comprovante indisponível",
                                texto="Não conseguimos gerar o comprovante agora. Tente de novo em alguns minutos.",
@@ -780,13 +798,7 @@ _FORA_DA_AREA = f"Esse endereço fica fora da área atendida. {alterar_entrega.C
 
 def _mapa_horarios() -> dict:
     """Horário padrão de recebimento da planilha BD_CLIENTES (como o envio de pedidos)."""
-    try:
-        from regras.complexidade_entrega import carregar_horarios
-        caminho = (_CONFIG.get("complexidade_entrega") or {}).get("planilha", "")
-        return carregar_horarios(caminho) if caminho else {}
-    except Exception as e:  # noqa: BLE001 -- sem a planilha vale o ajuste manual / padrão
-        logger.warning(f"alteracao: horarios da planilha indisponiveis: {e}")
-        return {}
+    return alterar_entrega.mapa_horarios(_CONFIG)
 
 
 def _servico_alteravel(service_id: int) -> tuple[dict, dict]:
@@ -803,12 +815,7 @@ def _servico_alteravel(service_id: int) -> tuple[dict, dict]:
 
 
 def _avaliar_alteracao(conn, servico: dict) -> alterar_entrega.Avaliacao:
-    from pedidos_dedicados import codigos_do_servico
-    codigos = codigos_do_servico(servico)
-    servicos, rotas = cancelamento.servicos_do_pedido(conn, dados.codigo_base(codigos[0])) if codigos else ([], {})
-    status_nucleo = next((s.get("status") for s in servicos if s.get("vuupt_service_id") == servico.get("id")), None)
-    lalamove = int((_CONFIG.get("lalamove") or {}).get("agent_id_vuupt") or 0)
-    return alterar_entrega.avaliar(servico, rotas, status_nucleo, lalamove)
+    return alterar_entrega.avaliar_no_nucleo(conn, servico, _CONFIG)
 
 
 def _destinatario(servico: dict) -> tuple[str, str]:
@@ -1131,6 +1138,16 @@ def api_envios_analisar():
     itens, rejeitados, vistos = [], [], set()
     anexos = []  # PDFs do lote: documentos dos pedidos (anexos_pedido.py, 11/11)
     n_planilhas = 0
+    # Colunas da planilha indicadas na tela (16/11): {arquivo: {"linha", "colunas"}}.
+    # `indicar=1`: o cliente pediu pra indicar mesmo que os nomes sejam conhecidos.
+    try:
+        colunas_indicadas = json.loads(request.form.get("colunas") or "{}")
+    except ValueError:
+        colunas_indicadas = {}
+    if not isinstance(colunas_indicadas, dict):
+        colunas_indicadas = {}
+    pedir_indicacao = request.form.get("indicar") == "1"
+    indicar = []  # planilhas esperando o cliente dizer as colunas
     entrega_ativa = endereco_entrega.entrega_ativa(_CONFIG)
     conn = envios.conectar()
     try:
@@ -1144,10 +1161,13 @@ def api_envios_analisar():
             if cnpj not in ctxs:
                 fl, xd_ = envios.fluxos_para_envio(conn, cnpj)
                 ctxs[cnpj] = {"cfg": envios.config_stokki_cliente(conn, cnpj, _CONFIG), "fluxos": fl, "xd": xd_,
-                              "nome": ((grupo or {}).get(cnpj) or _empresa_envio())["nome"]}
+                              "nome": ((grupo or {}).get(cnpj) or _empresa_envio())["nome"],
+                              # embarcador piloto do WMS: pode indicar lote (lotes_cliente.py, 18/11)
+                              "emb_lotes": lotes_cliente.embarcador_wms(conn, cnpj, _CONFIG)}
             return ctxs[cnpj]
 
         cfg = ctx(padrao)["cfg"]
+        lotes_planilhas = []   # planilhas de lotes do cliente lidas e gravadas neste envio
         for f in arquivos:
             try:
                 partes = envios.expandir_upload(f.filename or "", f.read())
@@ -1164,18 +1184,44 @@ def api_envios_analisar():
                     except envios.ErroEnvio as e:
                         rejeitados.append({"arquivo": nome, "erro": str(e)})
                     continue
+                if envios.e_planilha(nome, conteudo) and ctx(padrao)["emb_lotes"] is not None:
+                    # Planilha de lotes do cliente (18/11): grava na hora; casa com o pedido pela NF
+                    try:
+                        lido = lotes_cliente.ler_planilha_de_lotes(nome, conteudo)
+                        if lido is not None:
+                            lotes_planilhas.append(lotes_cliente.importar_planilha(
+                                conn, ctx(padrao)["emb_lotes"], lido, nome, _quem_envia()))
+                            logger.info(f"analisar planilha de lotes cnpj={padrao} arquivo={nome!r} "
+                                        f"indicacoes={lotes_planilhas[-1]['gravadas']}")
+                            continue
+                    except lotes_cliente.ErroLote as e:
+                        rejeitados.append({"arquivo": nome, "erro": f"Planilha de lotes: {e}"})
+                        continue
                 if envios.e_planilha(nome, conteudo):
                     # Planilha no modelo Fresh Log (09/09): vários pedidos por
                     # arquivo; cada pedido vira um item da prévia com token
                     # próprio (JSON temporário) apontando pra planilha original.
                     n_planilhas += 1
+                    indicado = colunas_indicadas.get(nome)
+                    mapa_usado: dict = {}
+                    avisos_plan: list = []   # coluna de item alterada: lê, avisa e não trava (17/11)
                     try:
-                        pedidos, rej = envios.ler_planilha(conteudo, nome, padrao,
-                                                           {c: e["nome"] for c, e in grupo.items()} if grupo else None)
+                        pedidos, rej = envios.ler_planilha(
+                            conteudo, nome, padrao, {c: e["nome"] for c, e in grupo.items()} if grupo else None,
+                            guardado=envios.carregar_mapa_planilha(conn, g.cliente["cnpj"]),
+                            indicado=indicado if isinstance(indicado, dict) else None,
+                            pedir_indicacao=pedir_indicacao, mapa_usado=mapa_usado, avisos=avisos_plan)
+                    except envios.ColunasPorIndicar as e:
+                        indicar.append(e.dados)
+                        continue
                     except envios.ErroEnvio as e:
                         rejeitados.append({"arquivo": nome, "erro": str(e)})
                         continue
+                    if mapa_usado:   # lida com as colunas indicadas: valem pras próximas planilhas deste login
+                        envios.guardar_mapa_planilha(conn, g.cliente["cnpj"], mapa_usado, _quem_envia())
                     rejeitados.extend(rej)
+                    if avisos_plan:
+                        logger.info(f"analisar planilha alterada cnpj={g.cliente['cnpj']} arquivo={nome!r}: {' '.join(avisos_plan)!r}")
                     token_plan = envios.guardar_temporario(conteudo, Path(nome).suffix.lstrip(".") or "xlsx")
                     for ped in pedidos:
                         rotulo = f"Pedido {ped['referencia']}"
@@ -1191,7 +1237,7 @@ def api_envios_analisar():
                             continue
                         token = envios.guardar_temporario_pedido(ped, token_plan)
                         item = {k: v_ for k, v_ in ped.items() if k not in ("emitente_cnpj",)}
-                        item.update({"token": token, "avisos": v["avisos"] + avisos_sku, "rotulo": rotulo,
+                        item.update({"token": token, "avisos": avisos_plan + v["avisos"] + avisos_sku, "rotulo": rotulo,
                                      "empresa_cnpj": emp, "empresa": ctx(emp)["nome"] if grupo else "",
                                      "destinatario_doc_formatado": envios.formatar_documento(ped["destinatario_doc"])})
                         itens.append(item)
@@ -1217,7 +1263,8 @@ def api_envios_analisar():
                 item = {k: v_ for k, v_ in nfe.items() if k not in ("emitente_cnpj",)}
                 item.update({"token": token, "avisos": v["avisos"], "rotulo": f"NF {nfe['numero_nf']}",
                              "empresa_cnpj": emp, "empresa": ctx(emp)["nome"] if grupo else "",
-                             "destinatario_doc_formatado": envios.formatar_documento(nfe["destinatario_doc"])})
+                             "destinatario_doc_formatado": envios.formatar_documento(nfe["destinatario_doc"]),
+                             "lotes_ativo": ctx(emp)["emb_lotes"] is not None and bool(nfe.get("produtos"))})
                 itens.append(item)
         if entrega_ativa:
             _casos_de_entrega(conn, itens)
@@ -1238,6 +1285,18 @@ def api_envios_analisar():
                      and envios.primeiro_aviso_xd_do_dia(conn, c)]
         for it in itens:
             it["fluxos"] = ctx(it["empresa_cnpj"])["fluxos"]
+        # Lotes que a Fresh Log tem em estoque, de sugestão no "Indicar lote" (só pra piloto do WMS)
+        for cnpj in usadas:
+            emb_lotes = ctx(cnpj)["emb_lotes"]
+            com_lote = [it for it in itens if it["empresa_cnpj"] == cnpj and it.get("lotes_ativo")]
+            if emb_lotes is None or not com_lote:
+                continue
+            estoque = lotes_cliente.lotes_em_estoque(conn, emb_lotes, {p["sku"] for it in com_lote for p in it["produtos"]})
+            for it in com_lote:
+                it["lotes_estoque"] = {p["sku"].upper(): estoque[p["sku"].upper()] for p in it["produtos"]
+                                       if p["sku"].upper() in estoque}
+        # Transportadoras do cadastro, pro embarcador corrigir a da nota (só XML)
+        transportadoras = transportadora_envio.opcoes(conn) if any(it.get("origem") == envios.ORIGEM_XML for it in itens) else []
     except envios.ErroEnvio as e:
         return _json_erro_envio(e)
     finally:
@@ -1255,10 +1314,14 @@ def api_envios_analisar():
     _sugerir_pedidos(anexos, [{**it, "chave": it["token"]} for it in itens])
     logger.info(f"analisar cnpj={','.join(usadas)} por={_quem_envia()} validos={len(itens)} rejeitados={len(rejeitados)} "
                 f"planilhas={n_planilhas} anexos={len(anexos)}")
+    for r in rejeitados[:20]:   # o motivo fica no log: em 17/11 só deu pra saber baixando a planilha
+        logger.info(f"analisar rejeitado arquivo={r.get('arquivo')!r} {str(r.get('rotulo') or '')[:80]!r}: {str(r.get('erro'))[:300]!r}")
     return jsonify({"itens": itens, "rejeitados": rejeitados, "destinatarios": destinatarios, "anexos": anexos,
+                    "indicar": indicar, "lotes_planilhas": lotes_planilhas,
                     "regra_xml": cfg["regra_xml"], "regra_xml_rotulo": envios.REGRAS_XML.get(cfg["regra_xml"], ""),
                     "envio_ativo": cfg["envio_ativo"], "hoje": date.today().isoformat(), "entrega_ativa": entrega_ativa,
-                    "fluxos_disponiveis": fluxos_disp, "fluxo_rotulos": envios.FLUXO_ROTULOS, "xd": xd})
+                    "fluxos_disponiveis": fluxos_disp, "fluxo_rotulos": envios.FLUXO_ROTULOS, "xd": xd,
+                    "transportadoras": transportadoras})
 
 
 def _casos_de_entrega(conn, itens: list[dict]) -> None:
@@ -1331,16 +1394,16 @@ def _sugerir_pedidos(anexos: list[dict], pedidos: list[dict]) -> None:
 @requer_cliente
 @exige_mesma_origem
 def api_envios_anexos_ler():
-    """So PDFs: le cada um, guarda no temporario e sugere o pedido entre os
+    """PDFs (ou o XML da NF-e): le cada um, guarda no temporario e sugere o pedido entre os
     que a tela mandou em `pedidos` (JSON [{chave, numero_nf, destinatario_doc,
     referencia}]) -- os da previa ou um pedido ja enviado. Nada e anexado
     aqui; quem anexa e o confirmar (previa) ou POST /api/envios/<id>/anexos."""
     _exige_pode_enviar()
     arquivos = request.files.getlist("arquivos")
     if not arquivos:
-        return jsonify({"erro": "Selecione pelo menos um PDF."}), 400
+        return jsonify({"erro": "Selecione pelo menos um arquivo."}), 400
     if len(arquivos) > anexos_pedido.MAX_PDFS_POR_ENVIO:
-        return jsonify({"erro": f"Envie no máximo {anexos_pedido.MAX_PDFS_POR_ENVIO} PDFs por vez."}), 400
+        return jsonify({"erro": f"Envie no máximo {anexos_pedido.MAX_PDFS_POR_ENVIO} arquivos por vez."}), 400
     try:
         pedidos = [p for p in json.loads(request.form.get("pedidos") or "[]") if isinstance(p, dict) and p.get("chave")]
     except ValueError:
@@ -1403,7 +1466,10 @@ def api_envios_anexo_baixar(envio_id, anexo_id):
         conn.close()
     if not anexo or not anexos_pedido.caminho(anexo).is_file():
         abort(404)
-    resposta = send_file(anexos_pedido.caminho(anexo), mimetype="application/pdf", download_name=anexo["nome_original"], max_age=0)
+    # XML sempre como download: aberto na pagina, um XML enviado pelo cliente poderia rodar script.
+    xml = anexo["tipo"] == anexos_pedido.TIPO_XML
+    resposta = send_file(anexos_pedido.caminho(anexo), mimetype="application/xml" if xml else "application/pdf",
+                         as_attachment=xml, download_name=anexo["nome_original"], max_age=0)
     resposta.headers["X-Content-Type-Options"] = "nosniff"
     return resposta
 
@@ -1446,7 +1512,20 @@ def api_envios_confirmar():
                         for it in itens if isinstance(it, dict) and isinstance(it.get("anexos"), list) and it["anexos"]}
     if anexos_por_token and corpo.get("anexos_conferidos") is not True:
         return jsonify({"erro": "Confirme que cada documento está no pedido correto antes de enviar."}), 400
+    # Lote marcado na prévia (18/11): item["lotes"] = {SKU: lote}. O formato do lote é conferido
+    # ANTES de gravar o envio; o produto, depois, contra o XML gravado (lotes_cliente.py).
+    lotes_por_token = {}
+    for it in itens:
+        if not (isinstance(it, dict) and isinstance(it.get("lotes"), dict) and it["lotes"]):
+            continue
+        if len(it["lotes"]) > lotes_cliente.MAX_LOTES_POR_NOTA:
+            return jsonify({"erro": "Lotes demais para uma nota."}), 400
+        try:
+            lotes_por_token[it.get("token")] = {str(k)[:60]: lotes_cliente.normalizar_lote(v) for k, v in it["lotes"].items()}
+        except lotes_cliente.ErroLote as e:
+            return jsonify({"erro": str(e)}), 400
     anexos_falhas = []
+    lotes_gravados, lotes_avisos = 0, []
     conn = envios.conectar()
     try:
         anexos_pedido.validar_tokens([a.get("token", "") for lista in anexos_por_token.values() for a in lista],
@@ -1469,6 +1548,26 @@ def api_envios_confirmar():
             fluxos_disp, _xd = envios.fluxos_para_envio(conn, _empresa_envio()['cnpj'])
             criados = envios.confirmar_envios(conn, _empresa_envio()['cnpj'], itens, _quem_envia(), _CONFIG, cfg["regra_xml"],
                                               fluxos_disponiveis=fluxos_disp, sender_id=_empresa_envio().get("sender_id"))
+        # Lotes marcados na prévia: os pedidos já estão gravados, falha vira aviso
+        for c in criados:
+            marcados = lotes_por_token.get(c.get("token"))
+            if not marcados or c.get("origem") != envios.ORIGEM_XML:
+                continue
+            try:
+                envio = envios.buscar_envio(conn, c["id"], c.get("cnpj_embarcador") or _empresa_envio()['cnpj'])
+                emb_lotes = lotes_cliente.embarcador_wms(conn, envio["cnpj_embarcador"], _CONFIG)
+                if emb_lotes is None:
+                    continue
+                produtos = envios.ler_nfe(envios.caminho_xml(envio).read_bytes())["produtos"]
+                r_lotes = lotes_cliente.gravar_lotes_da_nota(conn, emb_lotes, envio["numero_nf"], marcados, produtos, _quem_envia())
+                lotes_gravados += r_lotes["gravados"]
+                lotes_avisos += r_lotes["avisos"]
+            except lotes_cliente.ErroLote as e:
+                lotes_avisos.append(str(e))
+            except Exception:
+                conn.rollback()
+                logger.exception(f"lotes do envio {c['id']} falharam")
+                lotes_avisos.append(f"NF {c.get('numero_nf')}: o lote indicado não foi gravado. Fale com a Fresh Log.")
         # Os pedidos ja estao gravados: documento que falhar nao derruba o envio,
         # vira aviso (o cliente anexa de novo pela lista).
         for c in criados:
@@ -1514,7 +1613,12 @@ def api_envios_confirmar():
                     f"A criação na Stokki pode levar alguns instantes -- acompanhe o status na lista abaixo.")
     if anexos_falhas:
         mensagem += " Atenção: " + " ".join(anexos_falhas) + " Anexe de novo pela lista abaixo (Documentos)."
-    return jsonify({"ok": True, "criados": criados, "bloqueados": bloqueados, "mensagem": mensagem, "anexos_falhas": anexos_falhas})
+    if lotes_gravados:
+        mensagem += f" Lote indicado em {lotes_gravados} produto{'s' if lotes_gravados > 1 else ''}."
+    if lotes_avisos:
+        mensagem += " Lotes: " + " ".join(lotes_avisos)
+    return jsonify({"ok": True, "criados": criados, "bloqueados": bloqueados, "mensagem": mensagem, "anexos_falhas": anexos_falhas,
+                    "lotes_gravados": lotes_gravados, "lotes_avisos": lotes_avisos})
 
 
 @app.route("/api/envios/reenviar-erros", methods=["POST"])
@@ -1635,6 +1739,187 @@ def api_envios_xml(envio_id):
     return send_file(caminho, mimetype="application/xml", as_attachment=True, download_name=f"{envio['chave_nfe']}.xml", max_age=0)
 
 
+# ── Pedidos de Entrada (25/09) ─────────────────────────────────────────────────
+
+def _exige_entradas_ativas(conn) -> None:
+    if not entradas_mod.config_entradas_cliente(conn, _empresa_envio()["cnpj"])["entradas_ativo"]:
+        abort(Response(jsonify({"erro": "A aba Pedidos de Entrada não está liberada pra esta empresa."}).get_data(),
+                       status=403, mimetype="application/json"))
+
+
+@app.route("/api/entradas")
+@requer_cliente
+def api_entradas_listar():
+    conn = entradas_mod.conectar()
+    try:
+        _exige_entradas_ativas(conn)
+        lista = entradas_mod.listar_entradas(conn, _empresa_envio()["cnpj"])
+    finally:
+        conn.close()
+    return jsonify({"entradas": lista, "resumo": entradas_mod.resumo_entradas(lista), "dias": entradas_mod.DIAS_LISTAGEM,
+                    "hoje": date.today().isoformat(), "atualizado_em": datetime.now().strftime("%H:%M")})
+
+
+@app.route("/api/entradas/analisar", methods=["POST"])
+@requer_cliente
+@exige_mesma_origem
+def api_entradas_analisar():
+    """Recebe .xml/.zip/.xlsx, lê cada NF-e de remessa ou remessa da
+    planilha, valida e devolve a prévia. Nada entra na fila ainda."""
+    _exige_pode_enviar()
+    arquivos = request.files.getlist("arquivos")
+    if not arquivos:
+        return jsonify({"erro": "Selecione pelo menos um arquivo: XML da NF-e de remessa (ou ZIP) ou planilha .xlsx no modelo Fresh Log de entrada."}), 400
+    itens, rejeitados, vistos = [], [], set()
+    conn = entradas_mod.conectar()
+    try:
+        _exige_entradas_ativas(conn)
+        cnpj = _empresa_envio()["cnpj"]
+        # Abre tudo primeiro e confere o teto ANTES de guardar qualquer temporário (revisão 23/11, B4):
+        # sem isso um ZIP cheio de XMLs enche _temporarios (limpeza só a cada ciclo do worker).
+        expandidos, total_arquivos, total_bytes = [], 0, 0
+        for f in arquivos:
+            try:
+                partes = envios.expandir_upload(f.filename or "", f.read())
+            except envios.ErroEnvio as e:
+                rejeitados.append({"arquivo": f.filename or "arquivo", "erro": str(e)})
+                continue
+            total_arquivos += len(partes)
+            total_bytes += sum(len(c) for _, c in partes)
+            if total_arquivos > entradas_mod.MAX_ARQUIVOS_UPLOAD or total_bytes > entradas_mod.MAX_BYTES_UPLOAD:
+                return jsonify({"erro": f"Muitos arquivos de uma vez (máximo {entradas_mod.MAX_ARQUIVOS_UPLOAD} arquivos "
+                                        f"e {entradas_mod.MAX_BYTES_UPLOAD // (1024 * 1024)} MB). Envie em partes."}), 400
+            expandidos.append(partes)
+        for partes in expandidos:
+            for nome, conteudo in partes:
+                if envios.e_planilha(nome, conteudo):
+                    try:
+                        remessas, rej = entradas_mod.ler_planilha_entrada(conteudo, nome, cnpj)
+                    except envios.ErroEnvio as e:
+                        rejeitados.append({"arquivo": nome, "erro": str(e)})
+                        continue
+                    rejeitados.extend(rej)
+                    token_plan = envios.guardar_temporario(conteudo, Path(nome).suffix.lstrip(".") or "xlsx")
+                    lidos = [(entradas_mod.rotulo_entrada(r), r, lambda r=r: envios.guardar_temporario_pedido(r, token_plan)) for r in remessas]
+                else:
+                    try:
+                        nfe = entradas_mod.ler_nfe_entrada(conteudo, nome)
+                    except envios.ErroEnvio as e:
+                        rejeitados.append({"arquivo": nome, "erro": str(e)})
+                        continue
+                    lidos = [(entradas_mod.rotulo_entrada(nfe), nfe, lambda c=conteudo: envios.guardar_temporario(c))]
+                for rotulo, item, guardar in lidos:
+                    if item["chave_nfe"] in vistos:
+                        rejeitados.append({"arquivo": nome, "rotulo": rotulo, "erro": "Repetida dentro do mesmo envio."})
+                        continue
+                    vistos.add(item["chave_nfe"])
+                    v = entradas_mod.validar_entrada(conn, item, cnpj, _CONFIG, _outras_empresas_envio())
+                    if not v["ok"]:
+                        rejeitados.append({"arquivo": nome, "rotulo": rotulo, "erro": " ".join(v["erros"]),
+                                           "conferencia": v["conferencia"]})
+                        continue
+                    previa = {k: x for k, x in item.items() if k not in ("emitente_cnpj",)}
+                    previa.update({"token": guardar(), "avisos": v["avisos"], "rotulo": rotulo, "conferencia": v["conferencia"]})
+                    itens.append(previa)
+    except envios.ErroEnvio as e:
+        return _json_erro_envio(e)
+    finally:
+        conn.close()
+    logger.info(f"entradas.analisar cnpj={_empresa_envio()['cnpj']} por={_quem_envia()} validos={len(itens)} rejeitados={len(rejeitados)}")
+    return jsonify({"itens": itens, "rejeitados": rejeitados, "hoje": date.today().isoformat()})
+
+
+@app.route("/api/entradas/modelo-planilha")
+@requer_cliente
+def api_entradas_modelo_planilha():
+    conn = entradas_mod.conectar()
+    try:
+        _exige_entradas_ativas(conn)
+    finally:
+        conn.close()
+    conteudo = entradas_mod.gerar_modelo_planilha_entrada(_empresa_envio()["nome"] or "")
+    return send_file(io.BytesIO(conteudo), mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                     as_attachment=True, download_name="modelo_entradas_freshlog.xlsx", max_age=0)
+
+
+@app.route("/api/entradas/confirmar", methods=["POST"])
+@requer_cliente
+@exige_mesma_origem
+def api_entradas_confirmar():
+    _exige_pode_enviar()
+    corpo = request.get_json(silent=True) or {}
+    itens = corpo.get("itens") or []
+    if not isinstance(itens, list) or not itens:
+        return jsonify({"erro": "Nenhuma remessa pra confirmar."}), 400
+    if len(itens) > 200:
+        return jsonify({"erro": "Anuncie no máximo 200 notas por vez."}), 400
+    conn = entradas_mod.conectar()
+    try:
+        _exige_entradas_ativas(conn)
+        criados = entradas_mod.confirmar_entradas(conn, _empresa_envio()["cnpj"], itens, _quem_envia(), _CONFIG)
+    except envios.ErroEnvio as e:
+        return _json_erro_envio(e)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("confirmar_entradas falhou")
+        return jsonify({"erro": f"Não foi possível registrar as entradas ({type(e).__name__})."}), 500
+    finally:
+        conn.close()
+    n = len(criados)
+    logger.info(f"entradas.confirmar cnpj={_empresa_envio()['cnpj']} por={_quem_envia()} n={n}")
+    return jsonify({"ok": True, "criados": criados,
+                    "mensagem": f"{n} entrada{'s' if n > 1 else ''} anunciada{'s' if n > 1 else ''}. "
+                                f"O recebimento é criado na Stokki em instantes -- acompanhe o status na lista."})
+
+
+@app.route("/api/entradas/<int:entrada_id>/cancelar", methods=["POST"])
+@requer_cliente
+@exige_mesma_origem
+def api_entradas_cancelar(entrada_id):
+    _exige_pode_enviar()
+    conn = entradas_mod.conectar()
+    try:
+        _exige_entradas_ativas(conn)
+        entrada = entradas_mod.buscar_entrada(conn, entrada_id, _empresa_envio()["cnpj"])
+        if not entrada:
+            return jsonify({"erro": "Entrada não encontrada."}), 404
+        emp = _empresa_envio()
+        corpo = request.get_json(silent=True) or {}
+        motivo = (corpo.get("motivo") or "")[:300]
+        # CNPJ do LOGIN (g.cliente), como bloqueio_area: o chat busca o chamado pelo CNPJ logado
+        r = entradas_mod.cancelar_entrada(conn, entrada, _quem_envia(),
+                                          {"cnpj": g.cliente["cnpj"], "sender_id": emp.get("sender_id"), "nome": emp.get("nome")}, _CONFIG,
+                                          motivo=motivo)
+    except envios.ErroEnvio as e:
+        return _json_erro_envio(e)
+    finally:
+        conn.close()
+    logger.info(f"entradas.cancelar cnpj={_empresa_envio()['cnpj']} entrada={entrada_id} por={_quem_envia()} -> {r}")
+    return jsonify({"ok": True, **r})
+
+
+@app.route("/api/entradas/<int:entrada_id>/arquivo")
+@requer_cliente
+def api_entradas_arquivo(entrada_id):
+    conn = entradas_mod.conectar()
+    try:
+        _exige_entradas_ativas(conn)
+        entrada = entradas_mod.buscar_entrada(conn, entrada_id, _empresa_envio()["cnpj"])
+    finally:
+        conn.close()
+    if not entrada:
+        abort(404)
+    caminho = entradas_mod.caminho_arquivo(entrada)
+    if not caminho.is_file():
+        abort(404)
+    if entrada["origem"] == envios.ORIGEM_PLANILHA:
+        tipos = {".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xls": "application/vnd.ms-excel"}
+        return send_file(caminho, mimetype=tipos.get(caminho.suffix.lower(), "application/octet-stream"), as_attachment=True,
+                         download_name=caminho.name.split("_", 3)[-1] if caminho.name.count("_") >= 3 else caminho.name, max_age=0)
+    return send_file(caminho, mimetype="application/xml", as_attachment=True, download_name=f"{entrada['chave_nfe']}.xml", max_age=0)
+
+
 @app.route("/api/destinatarios", methods=["POST"])
 @requer_cliente
 @exige_mesma_origem
@@ -1724,6 +2009,10 @@ consulta_transportadora_web.registrar(app, config=_CONFIG, secret=_SECRET)
 # ── Link público do canhoto (e-mail de resumo diário), 17/09 -- link_canhoto.py ──
 import link_canhoto
 link_canhoto.registrar(app, config=_CONFIG, secret=_SECRET)
+
+# ── Link público da ciência do dedicado fora do dia fixo, 17/11 -- link_ciencia.py ──
+import link_ciencia
+link_ciencia.registrar(app, config=_CONFIG, secret=_SECRET)
 
 
 @app.errorhandler(404)

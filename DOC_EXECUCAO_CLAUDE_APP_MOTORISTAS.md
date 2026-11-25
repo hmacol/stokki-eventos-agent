@@ -244,7 +244,8 @@ testado; **desligado por padrão** — o Hugo não quer o custo agora.
 api_motorista:
   validacao_fotos:
     ativo: true                 # padrão false -- tudo se comporta como hoje
-    modelo: claude-haiku-4-5    # decisão do Hugo; Sonnet 5 custa 2x
+    modelo: claude-haiku-5-5    # padrão desde 20/11 (era haiku-4-5, que errava NF)
+    esforco: low                # o haiku-4-5 nunca recebe effort
     nitidez_minima: 40
     max_tentativas: 2
     exigir_nf: true
@@ -282,14 +283,47 @@ Depois de `max_tentativas` o servidor devolve `pode_seguir=true` e o app
 oferece "Não consigo melhorar" — a foto segue marcada pra revisão
 humana. Sem sinal, ou com a validação desligada, **nunca trava**.
 
-**Custo** (imagem reduzida a 1600 px ≈ 2.200 tokens + 600 de instrução +
-150 de resposta; ~4.000 fotos/mês estimadas a partir de 3.620 paradas em
-30 dias, 1,3 foto/parada e 15% de repetição):
+**Regras do Hugo de 20/11** (depois do teste com as 66 fotos reais de
+canhoto do app, nov/2026):
+
+- **Canhoteira da FreshLog vale como canhoto.** A folha junta várias
+  entregas, então a conferência é pela **linha do PS da parada**: a linha
+  tem que aparecer na foto e ter recebedor ou assinatura. NF não é
+  cobrada (a folha sai com "NF —"). Folha cortada sem cabeçalho também
+  conta: qualquer linha "PS-xxx" lida aciona essa regra. A mesma foto
+  serve a várias paradas — a decisão é refeita por parada a partir da
+  leitura guardada (`redecidir_canhoto`), sem pagar o modelo de novo.
+- **Fachada / portão / carga não vale.** A foto é gravada como
+  comprovante **FACHADA** (não conta como canhoto em nenhum lugar: telas,
+  expedição, ponte da Vuupt) e o app pede outra foto — **sem** o "não
+  consigo melhorar", nem depois das tentativas. Chegou pela fila (sem
+  sinal na hora)? Grava como FACHADA e a parada segue sem canhoto.
+- **Foto em pé.** A leitura diz em que sentido corre o texto
+  (`sentido_do_texto`) e a foto **gravada** sai girada. Como o modelo
+  troca direita por esquerda em ~4% das fotos (aí a foto sai de cabeça
+  pra baixo), a foto já girada volta pro modelo com uma pergunta só
+  ("em pé ou de cabeça pra baixo?") e, se invertida, ganha meia volta.
+  Resultado medido: 66 de 66 em pé (sem a conferência: 63-64 de 66).
+  O `sha256` gravado continua o do arquivo original.
+- A conferência continua **na hora da foto**, com o motorista no
+  cliente (o app manda pra `/api/fotos/validar` logo que a câmera fecha).
+  Nenhuma mudança no app: não precisa de OTA.
+
+**Teste de 20/11 (66 fotos reais, prod, só leitura):** Haiku 4.5
+reprovou 40 (23 eram canhotos bons com NF lida errada); Haiku 5.5 com as
+regras novas reprovou 14 — 11 fachadas/carga, 2 desfocadas de verdade e 1
+minuta de transportadora sem NF legível. O modelo barato oscila entre
+rodadas nos casos de fronteira (folha cortada, foto tremida): por isso a
+regra da canhoteira olha as linhas PS e não só o rótulo do documento.
+
+**Custo** medido no teste de 20/11 (≈ 6.300 tokens de entrada e 500 de
+saída por foto, contando a conferência do giro em ~55% delas; ~2.400
+fotos/mês = ~2.000 entregas + reenvios):
 
 | Modelo | Por foto | Por mês |
 |---|---|---|
-| Haiku 4.5 (escolhido) | US$ 0,0036 | ~US$ 14 (R$ 78) |
-| Sonnet 5 | US$ 0,0071 | ~US$ 28 (R$ 153) |
+| Haiku 5.5, esforço low (padrão) | US$ 0,0009 | ~US$ 2,10 |
+| Haiku 4.5 (antigo; sem regras de 20/11) | US$ 0,0030 | ~US$ 7 |
 
 Trocar de modelo é uma linha do config. **O resultado é guardado por
 `sha256`** (`nucleo_validacoes_foto`): a foto conferida no ato e depois
@@ -306,7 +340,8 @@ enviada pela fila **não paga o modelo duas vezes**.
 | Tela "Canhotos" (fila da revisão humana) + badge no menu | `painel_agentes/templates/canhotos.html`, `painel_agentes.py`, `contadores_menu.py` |
 | Veredito do recibo na tela de Pedágios | `painel_agentes/templates/pedagios.html` |
 | App: bloco por NF, conferência na captura, "não consigo melhorar" | `app_motorista/app/parada/[id].tsx`, `app/rota/[id].tsx`, `src/api.ts`, `src/tipos.ts`, `src/fila.ts` |
-| Testes (40, sem rede e sem custo) | `nucleo/test_validacao_fotos.py` |
+| Testes (60, sem rede e sem custo) | `nucleo/test_validacao_fotos.py` |
+| Tipo FACHADA; a ponte da Vuupt não conta FACHADA como foto enviada | `nucleo/operacao.py`, `nucleo/ponte_vuupt.py` |
 
 **Antes de ligar:** (1) rodar `calibrar_nitidez.py` com fotos do app;
 (2) OTA do app (a tela precisa do bloco por NF e do botão de conferir);
@@ -603,3 +638,25 @@ abaixo de 30 s é confirmação em lote da VUUPT). `--recalcular` faz o backfill
   "Dono do veículo" pré-marcado pela resposta dele. Também: olho pra ver o
   PIN (`src/campoPin.tsx`, OTA a8105ca2) e player/miniatura no
   /atendimento (commit 47f57b9).
+- **16/11 — Ponte app próprio → Vuupt: rota da Vuupt operável pelo
+  nosso app.** Hugo (12/11): retomar o app e pôr no ar até 16/11,
+  "replicando tudo o que acontece nele para a Vuupt, depois desconectar".
+  Desenho: a rota continua nascendo na Vuupt (provedor VUUPT); com
+  `api_motorista.ponte_vuupt` (`ativo` + `agentes: [...]` ou `todos`) ela
+  sai `editavel` no app. Aceite, deslocamento, chegada e resultado gravam
+  no núcleo e entram na fila `nucleo_ponte_vuupt` na mesma transação;
+  `nucleo/ponte_vuupt.py` (timer `stokki-ponte-vuupt`, 30 s) repete na
+  Vuupt pelos comandos de agente, com o canhoto no checklist (campo
+  15086). `nucleo_rotas.operada_app = 1` faz o sync não sobrescrever
+  resultado/horário do app. Escolhas: PARCIAL vai como sucesso; foto que
+  não chega em 30 min conclui sem checklist lá; vários canhotos viram uma
+  imagem (até 6, nunca amplia); 10 falhas = item DESISTIU e o unit falha
+  (alerta); ação desiste se a rota trocou de motorista ou o serviço saiu
+  dela. Prova real em 16/11 com o agente TESTE (rota 5472713: entrega com
+  checklist 38051230 e insucesso com motivo 5431). PR #29 (`dfa6d3e`),
+  DEPLOYADO e ligado pra Vinícius (47084), Clayson (42642), Renato Forte
+  (48907) e Erick (47424); Caio (46454, 2º carro do Erick) fica de fora
+  até decidir login e financeiro. OTA `f40a8f9f` (runtime 1.1.1).
+  **Em aberto:** a rota fica `assigned` na Vuupt mesmo com tudo fechado:
+  no piloto fecha-se à mão (`.claude/scripts/vuupt_fechar_rotas.py`);
+  envio de foto pelo celular ainda sem uso em campo; 1ª rota real em 17/11.

@@ -18,7 +18,8 @@ from unittest import mock
 _RAIZ = Path(__file__).parent.parent
 sys.path.insert(0, str(_RAIZ))
 
-from nucleo import banco, cadastro_motorista as cad, cadastro_motorista_link as proc  # noqa: E402
+from nucleo import auth_motorista as auth, banco, cadastro_motorista as cad, cadastro_motorista_link as proc  # noqa: E402
+import notificar_whatsapp as nw  # noqa: E402
 from nucleo.vuupt_agentes import ErroVuupt  # noqa: E402
 from regras import motoristas_banco  # noqa: E402
 
@@ -129,6 +130,7 @@ class TestProcessador(unittest.TestCase):
         self.vuupt = VuuptFalsa(veiculos=[{"id": 1, "license_plate": "XYZ9A99", "operational_base_id": 77}])
         self.grupo = mock.Mock(return_value="enviado")
         self.motorista = mock.Mock(return_value="enviado")
+        self.atendimento = mock.Mock(return_value="enviado")
 
     def tearDown(self):
         self.conn.close()
@@ -144,11 +146,11 @@ class TestProcessador(unittest.TestCase):
 
     def _processar(self, cid, agora=AGORA):
         return proc.processar(self.conn, CONFIG, cid, vuupt=self.vuupt, avisar_grupo=self.grupo,
-                              avisar_motorista=self.motorista, agora=agora)
+                              avisar_motorista=self.motorista, avisar_atendimento=self.atendimento, agora=agora)
 
     def _retentar(self, agora=AGORA):
         return proc.retentar(self.conn, CONFIG, vuupt=self.vuupt, avisar_grupo=self.grupo,
-                             avisar_motorista=self.motorista, agora=agora)
+                             avisar_motorista=self.motorista, avisar_atendimento=self.atendimento, agora=agora)
 
     def _linha(self, cid):
         return dict(self.conn.execute("SELECT * FROM motoristas_cadastros WHERE id = ?", (cid,)).fetchone())
@@ -202,8 +204,13 @@ class TestProcessador(unittest.TestCase):
         self.assertEqual(self.grupo.call_args.args[3], f"cadastro_link:{cid}:inicio")
         self.assertEqual(self.motorista.call_count, 1)
         texto_mot = self.motorista.call_args.args[2]
-        self.assertIn("jps@freshhub.com.br", texto_mot)
-        self.assertIn(CPF[:6], texto_mot)
+        self.assertIn("CPF: " + CPF, texto_mot)
+        self.assertIn(proc.LINK_APP, texto_mot)
+        self.assertNotIn("jps@freshhub.com.br", texto_mot)   # login da Vuupt não vai mais na mensagem
+        login = auth.buscar_motorista(self.conn, CPF)
+        self.assertEqual((login["agent_id"], login["trocar_pin"], login["ve_financeiro"]), (l["agent_id"], 1, 1))
+        pin = texto_mot.split("PIN provisório: ")[1][:6]
+        self.assertEqual(auth.autenticar(self.conn, CPF, pin)["cpf"], CPF)   # o PIN da mensagem entra
         self.assertEqual(l["boas_vindas_situacao"], "enviado")
 
     def test_duas_chamadas_um_agente(self):
@@ -339,7 +346,7 @@ class TestProcessador(unittest.TestCase):
         self.assertEqual(self._processar(cid)["situacao"], "concluido")
         self.assertEqual([p["senha"] for p in self.vuupt.posts_agente], [CPF[:6], CPF[:8]])
         self.assertEqual(self._linha(cid)["vuupt_senha_digitos"], 8)
-        self.assertIn(f"Senha: {CPF[:8]}", self.motorista.call_args.args[2])
+        self.assertNotIn(CPF[:8], self.motorista.call_args.args[2].replace("CPF: " + CPF, ""))
 
     def test_conflito_telefone(self):
         self.vuupt.agentes.append({"id": 321, "name": "Fulano", "email": "f@x.com", "phone_number": "+5511998765432"})
@@ -578,7 +585,8 @@ class TestProcessador(unittest.TestCase):
         self.assertEqual(self._processar(cid)["situacao"], "concluido")
         m = self._tabela(self._linha(cid)["agent_id"])[0]
         self.assertEqual(m["SEM_APP"], "SIM")
-        self.assertIn("iPhone", self.motorista.call_args.args[2])
+        self.assertIn(proc.LINK_PWA, self.motorista.call_args.args[2])
+        self.assertNotIn(proc.LINK_APP, self.motorista.call_args.args[2])
         self.assertIn("iPhone", self._textos_grupo()[0][1])
 
     def test_refrigerado_nao_e_apenas_seco(self):
@@ -595,6 +603,36 @@ class TestProcessador(unittest.TestCase):
         self.assertEqual(len(self._tabela(5001)), 1)
         self.assertEqual(self._linha(cid)["bd_motorista_id"], existente)
 
+    def test_pedido_de_grupo_sai_depois_das_boas_vindas(self):
+        cid = self._enviado(refrigerado=True, temp_min_c=2)
+        self.assertEqual(self._processar(cid)["situacao"], "concluido")
+        self.assertEqual(self.atendimento.call_count, 1)
+        self.assertEqual(self.atendimento.call_args.args[0], cid)
+        texto = self.atendimento.call_args.args[1]
+        self.assertIn("Nome do grupo: FRESH + João Santos - Fiorino (Refrigerado)", texto)
+        self.assertIn("https://wa.me/5511998765432", texto)
+        self.assertEqual(self._linha(cid)["pedido_grupo_situacao"], "enviado")
+
+    def test_pedido_de_grupo_falhou_retenta_sem_repetir_boas_vindas(self):
+        self.atendimento.side_effect = ["falhou", "enviado"]
+        cid = self._enviado()
+        r = self._processar(cid)
+        self.assertEqual((r["situacao"], r["erro"]), ("pendente", "pedido de grupo: falhou"))
+        self.assertEqual([x["situacao"] for x in self._retentar()], ["concluido"])
+        self.assertEqual(self.atendimento.call_count, 2)
+        self.assertEqual(self.motorista.call_count, 1)
+
+    def test_pedido_de_grupo_desligado_conclui(self):
+        self.atendimento.return_value = "desligado"
+        cid = self._enviado()
+        self.assertEqual(self._processar(cid)["situacao"], "concluido")
+
+    def test_sem_boas_vindas_enviadas_nao_pede_grupo(self):
+        self.motorista.return_value = "numero_sem_whatsapp"
+        cid = self._enviado()
+        self.assertEqual(self._processar(cid)["situacao"], "concluido")
+        self.atendimento.assert_not_called()
+
     def test_boas_vindas_falhou_retenta(self):
         self.motorista.side_effect = ["falhou", "enviado"]
         cid = self._enviado()
@@ -605,6 +643,38 @@ class TestProcessador(unittest.TestCase):
         self.assertEqual([x["situacao"] for x in self._retentar()], ["concluido"])
         self.assertEqual(self.motorista.call_count, 2)
         self.assertEqual(self.grupo.call_count, 1)
+
+    def _pin_da_mensagem(self, chamada=-1):
+        return self.motorista.call_args_list[chamada].args[2].split("PIN provisório: ")[1][:6]
+
+    def test_boas_vindas_retentadas_sorteiam_pin_novo_e_so_o_ultimo_vale(self):
+        self.motorista.side_effect = ["falhou", "enviado"]
+        cid = self._enviado()
+        self._processar(cid)
+        pin1 = self._pin_da_mensagem()
+        self._retentar()
+        pin2 = self._pin_da_mensagem()
+        self.assertNotEqual(pin1, pin2)
+        self.assertEqual(auth.autenticar(self.conn, CPF, pin2)["cpf"], CPF)
+        with self.assertRaises(Exception):
+            auth.autenticar(self.conn, CPF, pin1)
+
+    def test_mensagem_ja_enviada_mas_nao_gravada_nao_troca_o_pin(self):
+        cid = self._enviado()
+        self._processar(cid)
+        pin = self._pin_da_mensagem()
+        # o processo caiu antes de gravar: a situação some, mas o registro do WhatsApp diz que saiu
+        self.conn.execute(nw._SCHEMA)
+        self.conn.execute("INSERT INTO notificacoes_whatsapp (criado_em, origem, tipo, assinatura, situacao) "
+                          "VALUES (?, 'motorista_boas_vindas', 'boas_vindas', ?, 'enviado')",
+                          (banco.agora(), f"cadastro_link:{cid}:boas_vindas"))
+        self.conn.execute("UPDATE motoristas_cadastros SET boas_vindas_situacao = NULL, concluido_em = NULL "
+                          "WHERE id = ?", (cid,))
+        self.conn.commit()
+        self.assertEqual(self._processar(cid, AGORA + timedelta(minutes=20))["situacao"], "concluido")
+        self.assertEqual(self.motorista.call_count, 1)   # não mandou outra mensagem
+        self.assertEqual(self._linha(cid)["boas_vindas_situacao"], "enviado")
+        self.assertEqual(auth.autenticar(self.conn, CPF, pin)["cpf"], CPF)   # o PIN recebido segue valendo
 
     def test_boas_vindas_nao_enviado_retenta(self):
         self.motorista.side_effect = ["nao_enviado", "enviado"]
@@ -727,6 +797,37 @@ class TestProcessador(unittest.TestCase):
         # o CPF volta a poder se cadastrar
         novo = cad.criar_cadastro_link(self.conn, _dados())
         self.assertIsNotNone(novo["id"])
+
+    def test_desfazer_apaga_o_login_do_app_que_o_cadastro_criou(self):
+        cid = self._enviado()
+        self._processar(cid)
+        self.assertIsNotNone(auth.buscar_motorista(self.conn, CPF))
+        self._desfazer(cid, False)
+        self.assertIsNone(auth.buscar_motorista(self.conn, CPF))
+
+    def test_desfazer_mantem_login_de_quem_ja_entrou_no_app(self):
+        cid = self._enviado()
+        self._processar(cid)
+        self.conn.execute("UPDATE motoristas SET ultimo_login_em = ? WHERE cpf = ?", (banco.agora(), CPF))
+        self.conn.commit()
+        self._desfazer(cid, False)
+        self.assertIsNotNone(auth.buscar_motorista(self.conn, CPF))
+
+    def test_desfazer_repetido_nao_apaga_login_de_quem_se_recadastrou(self):
+        cid = self._enviado()
+        self._processar(cid)
+        self._desfazer(cid, False)
+        # o motorista se recadastrou (outro cadastro, outro agente) e ainda não entrou no app
+        auth.criar_ou_atualizar_motorista(self.conn, CPF, "João", "482913", agent_id=99999, trocar_pin=True)
+        self._desfazer(cid, True)   # a equipe repete o desfazer do cadastro antigo
+        self.assertEqual(auth.buscar_motorista(self.conn, CPF)["agent_id"], 99999)
+
+    def test_desfazer_nao_apaga_login_de_outro_agente_mesmo_na_1a_vez(self):
+        cid = self._enviado()
+        self._processar(cid)
+        auth.criar_ou_atualizar_motorista(self.conn, CPF, "João", "482913", agent_id=99999)   # outro agente
+        self._desfazer(cid, False)
+        self.assertEqual(auth.buscar_motorista(self.conn, CPF)["agent_id"], 99999)
 
     def test_desfazer_apaga_na_vuupt_o_que_criou(self):
         cid = self._enviado()

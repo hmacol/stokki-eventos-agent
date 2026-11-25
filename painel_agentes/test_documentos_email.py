@@ -5,6 +5,7 @@ e-mail o XML, a DANFE e o boleto (Hugo, 13/11).
 
     py -3.11 -m unittest test_documentos_email   (de dentro de painel_agentes/)
 """
+import json
 import sqlite3
 import sys
 import tempfile
@@ -218,6 +219,42 @@ class TestEnviar(_Base):
         mesmo = {"codigo": "PS-30", "destinatario": "MERCADO BOM LTDA"}
         self.assertEqual(de.lembrados(self.conn, self.ITENS + [mesmo]), ["financeiro@cliente.com.br"])
 
+    def test_envia_so_os_documentos_marcados_com_os_nomes_da_conferencia(self):
+        self.doc("h1", "Nota Fiscal", "PS-10", nf="42")
+        self.doc("h2", "Boleto", "PS-10", nf="42", parcela=1)
+        self.doc("h3", "Boleto", "PS-10", nf="42", parcela=2)
+        r = self.enviar(self.ITENS, refs=["h3"])
+        self.assertEqual(r["arquivos"], 1)
+        self.assertEqual(self.enviados[0]["anexos"], [("h3.pdf", "BOLETO_NF42_2.pdf")])
+        self.assertEqual(json.loads(self.conn.execute("SELECT arquivos FROM pedidos_documentos_envios").fetchone()[0]),
+                         ["BOLETO_NF42_2.pdf"])
+        for refs in ([], ["inexistente"]):
+            with self.assertRaises(de.ErroDocumentos):
+                self.enviar(self.ITENS, refs=refs)
+        self.assertEqual(len(self.enviados), 1)
+
+    def _pedido_com_cnpj(self, codigo, cnpj):
+        self.conn.execute("CREATE TABLE IF NOT EXISTS nucleo_pedidos (codigo TEXT PRIMARY KEY, destinatario_codigo TEXT)")
+        self.conn.execute("INSERT INTO nucleo_pedidos VALUES (?, ?)", (codigo, cnpj))
+        self.conn.commit()
+
+    def test_email_fica_lembrado_pelo_cnpj_mesmo_com_nome_e_pedido_diferentes(self):
+        self.doc("h1", "Nota Fiscal", "PS-10", nf="42")
+        self._pedido_com_cnpj("PS-10", "12.345.678/0001-90")
+        self._pedido_com_cnpj("PS-20", "12345678000190")
+        self._pedido_com_cnpj("PS-30", "98.765.432/0001-10")
+        de.garantir_tabelas(self.conn)
+        self.enviar(self.ITENS)
+        self.assertEqual(self.conn.execute("SELECT 1 FROM pedidos_documentos_destinos WHERE chave = 'C:12345678000190'").fetchone()[0], 1)
+        # outro pedido, nome escrito diferente, mesmo CNPJ
+        self.assertEqual(de.lembrados(self.conn, [{"codigo": "PS-20", "destinatario": "Razao Social Nova"}]),
+                         ["financeiro@cliente.com.br"])
+        # reentrega acha o CNPJ pelo PS original
+        self._pedido_com_cnpj("PS-10-R2", None)
+        self.assertEqual(de.lembrados(self.conn, [{"codigo": "PS-10-R2", "destinatario": ""}]), ["financeiro@cliente.com.br"])
+        # CNPJ diferente nao herda
+        self.assertEqual(de.lembrados(self.conn, [{"codigo": "PS-30", "destinatario": "Outro"}]), [])
+
     def test_divide_em_mais_de_um_email_quando_passa_do_tamanho(self):
         for i in range(3):
             self.doc(f"h{i}", "Nota Fiscal", f"PS-{10 + i}", nf=str(i + 1), tamanho=600)
@@ -286,6 +323,16 @@ class TestRotas(_Base):
         r = self.cliente.post("/api/pedidos/documentos/enviar", json={**self.corpo, "emails": "fin@cliente.com"}, headers=ORIGEM)
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
         self.assertEqual(self.enviados[0]["para"], ["fin@cliente.com"])
+        self.assertEqual(len(self.enviados[0]["anexos"]), 2)
+        r = self.cliente.post("/api/pedidos/documentos/enviar", json={**self.corpo, "emails": "fin@cliente.com", "refs": ["h2"]},
+                              headers=ORIGEM)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(self.enviados[1]["anexos"], [("h2.pdf", "BOLETO_NF42.pdf")])
+        for refs in ("h2", [], [1]):
+            r = self.cliente.post("/api/pedidos/documentos/enviar", json={**self.corpo, "emails": "fin@cliente.com", "refs": refs},
+                                  headers=ORIGEM)
+            self.assertEqual(r.status_code, 400, refs)
+        self.assertEqual(len(self.enviados), 2)
         r = self.cliente.post("/api/pedidos/documentos/conferir", json=self.corpo, headers=ORIGEM)
         self.assertEqual(r.get_json()["emails_lembrados"], ["fin@cliente.com"])
         conn = sqlite3.connect(self.db)

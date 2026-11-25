@@ -80,7 +80,7 @@
   <input type="hidden" name="aba" value="{{ aba }}">
   <div class="linha-busca">
     <input type="search" name="q" value="{{ filtros.q }}" autofocus
-           placeholder="Código do pedido (PS-12345), nº da rota, placa, motorista, destinatário ou endereço">
+           placeholder="Código do pedido (PS-12345), NF, nº da rota, placa, motorista, destinatário ou endereço">
     <button type="submit">Buscar</button>
   </div>
   <div class="linha-filtros">
@@ -143,13 +143,14 @@
 <p class="titulo-secao">Pedidos ({{ r.pedidos|length }})</p>
 <table class="tabela-consulta">
   <thead>
-    <tr><th>Pedido</th><th>Destinatário</th><th>Embarcador</th><th>Data</th><th>Situação</th></tr>
+    <tr><th>Pedido</th><th>NF</th><th>Destinatário</th><th>Embarcador</th><th>Data</th><th>Situação</th></tr>
   </thead>
   <tbody>
     {% for p in r.pedidos %}
     <tr>
       <td><a class="link-linha" href="{{ url_for('consulta_pedido', codigo=p.codigo) }}">{{ p.codigo }}</a>
           {% if p.caixas %}<div class="suave num">{{ p.caixas }} cx</div>{% endif %}</td>
+      <td class="num">{{ p.nf or '—' }}</td>
       <td>{{ p.destinatario_nome or '—' }}<div class="suave">{{ p.endereco or '' }}</div></td>
       <td>{{ p.remetente_nome or '—' }}</td>
       <td class="num">{{ p.data_referencia or (p.criado_em or '')[:10] }}

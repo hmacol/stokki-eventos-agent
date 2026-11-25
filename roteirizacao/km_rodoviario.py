@@ -161,6 +161,10 @@ FIELD_MASK_PEDAGIO = ("routes.distanceMeters,routes.legs.distanceMeters,"
                       "routes.travelAdvisory.tollInfo,routes.legs.travelAdvisory.tollInfo")
 
 
+# Desenho do trajeto pras ruas (mapa do app do motorista): só a polyline.
+FIELD_MASK_POLYLINE = "routes.polyline.encodedPolyline"
+
+
 @dataclass(frozen=True)
 class ResultadoTrajeto:
     km_total: float             # km_ida + km_volta
@@ -269,3 +273,62 @@ def calcular_trajeto(origem: tuple[float, float] | None, paradas: list[tuple[flo
     pontos = [tuple(origem)] + [tuple(p) for p in paradas] + ([tuple(origem)] if voltar else [])
     pernas = [distancia_km(*pontos[i], *pontos[i + 1]) for i in range(len(pontos) - 1)]
     return _montar_trajeto(pernas, voltar, None, FONTE_HAVERSINE)
+
+
+def decodificar_polyline(codificada: str) -> list[tuple[float, float]]:
+    """Algoritmo "Encoded Polyline" do Google (precisão 5) -> [(lat, lng), ...]."""
+    pontos: list[tuple[float, float]] = []
+    i, lat, lng = 0, 0, 0
+    while i < len(codificada):
+        for eixo in (0, 1):
+            deslocamento, resultado = 0, 0
+            while True:
+                b = ord(codificada[i]) - 63
+                i += 1
+                resultado |= (b & 0x1F) << deslocamento
+                deslocamento += 5
+                if b < 0x20:
+                    break
+            delta = ~(resultado >> 1) if resultado & 1 else resultado >> 1
+            if eixo == 0:
+                lat += delta
+            else:
+                lng += delta
+        pontos.append((lat / 1e5, lng / 1e5))
+    return pontos
+
+
+def tracar_google(pontos: list[tuple[float, float]], api_key: str,
+                  timeout: float = TIMEOUT_S) -> list[tuple[float, float]]:
+    """Desenho (lat, lng) do trajeto passando pelos `pontos` na ordem; o
+    chamador já põe origem e destino (o CD) nas pontas. Mesmo particionamento
+    de calcular_km_google; a emenda entre trechos não repete ponto. Levanta em falha."""
+    if not api_key:
+        raise ValueError("Sem api_key do Google.")
+    if len(pontos) < 2:
+        raise ValueError("Preciso de ao menos 2 pontos pra traçar.")
+    pontos = [tuple(p) for p in pontos]
+    desenho: list[tuple[float, float]] = []
+    i = 0
+    while i < len(pontos) - 1:
+        fim = min(i + MAX_INTERMEDIARIAS_POR_CHAMADA + 1, len(pontos) - 1)
+        corpo = {
+            "origin": _ponto(*pontos[i]),
+            "destination": _ponto(*pontos[fim]),
+            "intermediates": [_ponto(*c) for c in pontos[i + 1:fim]],
+            "travelMode": "DRIVE",
+            "routingPreference": "TRAFFIC_UNAWARE",
+            "units": "METRIC",
+            "languageCode": "pt-BR",
+        }
+        dados = _post_com_mascara(corpo, api_key, timeout, FIELD_MASK_POLYLINE)
+        rotas = dados.get("routes") or []
+        if not rotas:
+            raise ValueError(f"Routes API sem rota na resposta: {str(dados)[:200]}")
+        codificada = (rotas[0].get("polyline") or {}).get("encodedPolyline")
+        if not codificada:
+            raise ValueError("Routes API sem polyline na resposta.")
+        trecho = decodificar_polyline(codificada)
+        desenho.extend(trecho if not desenho else trecho[1:])
+        i = fim
+    return desenho

@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { AppState } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { AppState, Platform, View } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as Notifications from 'expo-notifications';
@@ -8,7 +8,11 @@ import Constants from 'expo-constants';
 import { ProvedorSessao, useSessao } from '../src/sessao';
 import * as api from '../src/api';
 import * as fila from '../src/fila';
+import * as rascunho from '../src/rascunhoParada';
 import { cores } from '../src/tema';
+import { AvisoVersao } from '../src/avisoVersao';
+import { AlertaHost } from '../src/alertaHost';
+import { GuiaInstalacao } from '../src/guiaInstalacao';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: false }),
@@ -16,6 +20,7 @@ Notifications.setNotificationHandler({
 
 async function registrarPush() {
   try {
+    if (Platform.OS === 'web') return; // PWA: aviso vai por WhatsApp, não por push
     if (!Device.isDevice) return;
     const { status } = await Notifications.requestPermissionsAsync();
     if (status !== 'granted') return;
@@ -44,6 +49,17 @@ function Guarda() {
     else if (motorista && emLogin) router.replace('/(tabs)/rotas');
   }, [pronto, motorista, segments, router]);
 
+  // O Android fechou o app com a câmera aberta na parada: ao reabrir,
+  // volta pra parada (uma vez por abertura) em vez de largar na lista.
+  const retomou = useRef(false);
+  useEffect(() => {
+    if (retomou.current || !motorista || motorista.trocar_pin || segments[0] !== '(tabs)') return;
+    retomou.current = true;
+    void rascunho.ler().then((r) => {
+      if (r?.cameraAberta) router.push(`/parada/${r.paradaId}?rota=${r.rotaId}`);
+    });
+  }, [motorista, segments, router]);
+
   useEffect(() => {
     // Com PIN provisório a API responde 403 em tudo: fila e push esperam a troca.
     if (!motorista || motorista.trocar_pin) return;
@@ -60,6 +76,8 @@ function Guarda() {
   }, [motorista]);
 
   return (
+    <View style={{ flex: 1 }}>
+      <AvisoVersao />
     <Stack screenOptions={{ headerStyle: { backgroundColor: cores.primaria }, headerTintColor: '#fff', headerTitleStyle: { fontWeight: '700' } }}>
       <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="login" options={{ headerShown: false }} />
@@ -69,7 +87,9 @@ function Guarda() {
       <Stack.Screen name="cadastro" options={{ headerShown: false }} />
       <Stack.Screen name="rota/[id]" options={{ title: 'Rota' }} />
       <Stack.Screen name="parada/[id]" options={{ title: 'Parada' }} />
+      <Stack.Screen name="mapa/[id]" options={{ title: 'Mapa da rota' }} />
     </Stack>
+    </View>
   );
 }
 
@@ -78,6 +98,8 @@ export default function Layout() {
     <ProvedorSessao>
       <StatusBar style="light" />
       <Guarda />
+      <AlertaHost />
+      <GuiaInstalacao />
     </ProvedorSessao>
   );
 }

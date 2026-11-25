@@ -34,6 +34,7 @@ import auth_cliente  # noqa: E402  (portal_cliente/auth_cliente.py)
 import chamados as ch  # noqa: E402  (portal_cliente/chamados.py)
 import controle_notificacoes as cn  # noqa: E402  (raiz)
 import grupos_equipe  # noqa: E402
+from nucleo.nf_pedido import SEM_NF  # noqa: E402
 
 logger = logging.getLogger("painel.aviso_rota_cancelada")
 
@@ -55,16 +56,23 @@ def agrupar_por_embarcador(paradas: list[dict]) -> list[dict]:
     for p in paradas:
         chave = p.get("sender_id") or f"sem:{p.get('remetente_nome') or ''}"
         g = grupos.setdefault(chave, {"sender_id": p.get("sender_id"),
-                                      "nome": p.get("remetente_nome") or "sem embarcador", "codigos": []})
+                                      "nome": p.get("remetente_nome") or "sem embarcador", "codigos": [],
+                                      "nfs": {}})
         if p.get("codigo") and p["codigo"] not in g["codigos"]:
             g["codigos"].append(p["codigo"])
+            g["nfs"][p["codigo"]] = p.get("numero_nf") or p.get("nf") or ""
     return list(grupos.values())
 
 
-def texto_embarcador(rascunho: dict, motivo: str, codigos: list[str]) -> str:
+def _com_nf(codigos: list[str], nfs: dict | None) -> list[str]:
+    """["PS-1 · NF 123", "PS-2 · NF —"]: a NF ao lado do PS em todo texto do aviso."""
+    return [f"{c} · NF {(nfs or {}).get(c) or SEM_NF}" for c in codigos]
+
+
+def texto_embarcador(rascunho: dict, motivo: str, codigos: list[str], nfs: dict | None = None) -> str:
     plural = len(codigos) > 1
     return (f"A rota de entrega de {_data_br(rascunho.get('data_alvo'))} foi cancelada: {motivo}.\n"
-            f"{'Pedidos afetados' if plural else 'Pedido afetado'}: {', '.join(codigos)}.\n"
+            f"{'Pedidos afetados' if plural else 'Pedido afetado'}: {', '.join(_com_nf(codigos, nfs))}.\n"
             f"Nossa equipe está reprogramando a entrega e retorna por aqui com a nova previsão.")
 
 
@@ -76,7 +84,7 @@ def texto_grupo(rascunho: dict, motivo: str, por: str, embarcadores: list[dict])
               f"Cancelada por {por}",
               f"{n} pedido(s) · {len(embarcadores)} embarcador(es):"]
     for e in embarcadores:
-        linhas.append(f"{e['nome']} ({len(e['codigos'])}): {', '.join(e['codigos'])} · {e['aviso']}")
+        linhas.append(f"{e['nome']} ({len(e['codigos'])}): {', '.join(_com_nf(e['codigos'], e.get('nfs')))} · {e['aviso']}")
     for e in embarcadores:
         if e.get("previa"):
             linhas.append(f"\nPrévia para {e['nome']}:\n{e['previa']}")
@@ -99,7 +107,7 @@ def _avisar_embarcador(conn_ch, rascunho: dict, motivo: str, emb: dict, config: 
     forcar = ch.cfg_chamados(config).get("forcar_destino") or ""
     decisao = cn.decidir(TIPO_NOTIFICACAO, cliente["cnpj"], fallback_acao=cn.acao_do_config(True, forcar),
                          fallback_piloto=forcar, db_path=db_path)
-    texto = texto_embarcador(rascunho, motivo, emb["codigos"])
+    texto = texto_embarcador(rascunho, motivo, emb["codigos"], emb.get("nfs"))
     if decisao.acao == "NAO":
         return f"NÃO avisado ({decisao.motivo})"
     if decisao.acao == "PILOTO":
@@ -124,7 +132,15 @@ def _postar_grupo(texto: str, db_path) -> None:
 def avisar(rascunho: dict, motivo: str, por: str, config: dict, db_path=None) -> dict:
     """Chamar so depois do cancelamento ter dado certo. Devolve
     {"grupo": bool, "embarcadores": [{nome, codigos, aviso}]}."""
-    embarcadores = [e for e in agrupar_por_embarcador(rascunho.get("paradas") or []) if e["codigos"]]
+    paradas = [dict(p) for p in rascunho.get("paradas") or []]
+    try:   # parada sem NF guardada: vale a de nucleo/nf_pedido (uma busca em lote)
+        from nucleo import nf_pedido
+        mapa = nf_pedido.nf_por_codigo([p.get("codigo") for p in paradas])
+        for p in paradas:
+            p["numero_nf"] = p.get("numero_nf") or nf_pedido.nf_do_codigo(p.get("codigo"), mapa)
+    except Exception as erro:  # noqa: BLE001
+        logger.warning("rota %s: NF dos pedidos indisponivel: %s", rascunho.get("id"), erro)
+    embarcadores = [e for e in agrupar_por_embarcador(paradas) if e["codigos"]]
     try:
         conn_ch = ch.conectar()
         try:

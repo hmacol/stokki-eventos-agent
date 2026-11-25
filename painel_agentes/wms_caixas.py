@@ -21,7 +21,11 @@ import wms_fila_impressao
 import wms_pedidos
 from wms import ErroWMS
 
-SITUACOES_CAIXA = ("IMPRESSA", "EM_ESTOQUE", "ABERTA", "EXPEDIDA", "CANCELADA")
+# SEPARADA/DISTRIBUIDA/CONFERIDA/DEVOLVIDA (17/11, wms_separacao.py): a caixa saiu da prateleira
+# pra um pedido mas continua no saldo da posicao ate a baixa da expedicao.
+SITUACOES_CAIXA = ("IMPRESSA", "EM_ESTOQUE", "ABERTA", "SEPARADA", "DISTRIBUIDA", "CONFERIDA", "DEVOLVIDA",
+                   "EXPEDIDA", "CANCELADA")
+NO_SALDO = ("EM_ESTOQUE", "ABERTA", "SEPARADA", "DISTRIBUIDA", "CONFERIDA", "DEVOLVIDA")
 MAX_CAIXAS = 200
 MAX_QTD_UN = 100000
 
@@ -189,8 +193,11 @@ def obter_caixa(conn, serial: str) -> dict | None:
     return d
 
 
-def produto_usa_caixas(produto: dict, piloto_id: int) -> bool:
-    return produto.get("embarcador_id") == piloto_id
+def produto_usa_caixas(produto: dict, embarcadores) -> bool:
+    """embarcadores: id ou colecao de ids dos pilotos que operam por caixa (wms_pilotos.ids_com_caixas)."""
+    if isinstance(embarcadores, int):
+        embarcadores = (embarcadores,)
+    return produto.get("embarcador_id") in embarcadores
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +384,18 @@ def _recusar_se_reservada(conn, caixa: dict) -> None:
         raise ErroWMS(f"Caixa reservada para {pedidos}: separe ou troque a reserva antes de mover.")
 
 
+def _prometido(conn, serial: str) -> float:
+    """Unidades desta caixa ja separadas pra algum pedido e ainda nao baixadas (wms_separacao.py).
+    Banco sem a tabela da separacao: zero."""
+    try:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(qtd_un), 0) FROM wms_separacao_itens WHERE serial = ? "
+            "AND etapa IN ('SEPARADA', 'DISTRIBUIDA', 'CONFERIDA')", (serial,)).fetchone()
+    except sqlite3.OperationalError:
+        return 0.0
+    return round(float(row[0] or 0), 3)
+
+
 def mover_caixa(conn, serial: str, destino: str, *, uuid: str, operador: dict | None = None) -> dict:
     """TRANSFERENCIA da caixa (leva o saldo junto). uuid do aparelho obrigatorio."""
     uuid = str(uuid or "").strip()
@@ -391,8 +410,22 @@ def mover_caixa(conn, serial: str, destino: str, *, uuid: str, operador: dict | 
     if conn.execute("SELECT 1 FROM wms_caixa_eventos WHERE uuid = ?", (evento_uuid,)).fetchone():
         # Reenvio de um mover ja concluido: nada a fazer.
         return {"caixa": caixa, "duplicado": True, "movimento_uuid": uuid}
+    if caixa["situacao"] == "DEVOLVIDA":
+        # Caixa que voltou de um pedido (17/11, C13 da spec): bipar a posicao onde foi guardada
+        # devolve ela ao estoque. Ela nunca saiu do saldo da posicao antiga, entao guardar no
+        # mesmo lugar nao gera movimento; em outro lugar, segue como transferencia normal.
+        _mudar_caixa(conn, serial, de_situacoes=("DEVOLVIDA",), para="EM_ESTOQUE", posicao=None,
+                     evento_uuid=f"cx-{serial}-guardar-{uuid}", movimento_uuid=None, operador=operador,
+                     observacao="Devolvida guardada", manter_posicao=True)
+        caixa = _caixa_ou_erro(conn, serial)
+        if caixa["posicao"] == destino:
+            return {"caixa": caixa, "duplicado": False, "movimento_uuid": None}
     if caixa["situacao"] not in ("EM_ESTOQUE", "ABERTA"):
         raise ErroWMS(f"Caixa {serial} esta {caixa['situacao']} e nao pode ser movida.")
+    # Parte da caixa ja foi separada pra um pedido (17/11): a baixa dele vai tirar o saldo
+    # DESTA posicao; mover agora deixaria saldo e caixa em lugares diferentes.
+    if _prometido(conn, serial) > 0.0004:
+        raise ErroWMS(f"Caixa {serial} tem unidades separadas para pedido: so pode ser movida depois da baixa.")
     ja = conn.execute("SELECT * FROM wms_movimentos WHERE uuid = ?", (uuid,)).fetchone()
     if ja:
         # Movimento ja gravado (queda antes de atualizar a caixa). So vale se for desta caixa.
@@ -498,8 +531,22 @@ def consumir_caixas(conn, *, posicao: str, produto_id: int, lote: str, validade:
     for c in caixas:
         if falta <= 0.0004:
             break
-        q = round(float(c["qtd_un"]), 3)
-        if q <= falta + 0.0004:
+        # o que ja foi separado desta caixa pra OUTRO pedido nao e desta baixa (17/11)
+        prometido = _prometido(conn, c["serial"])
+        q = round(float(c["qtd_un"]) - prometido, 3)
+        if q <= 0.0004:
+            continue
+        if q <= falta + 0.0004 and prometido > 0.0004:
+            cur = conn.execute("UPDATE wms_caixas SET situacao = 'ABERTA', qtd_un = ?, atualizado_em = ? "
+                               "WHERE serial = ? AND situacao = ? AND qtd_un = ?",
+                               (prometido, ts, c["serial"], c["situacao"], c["qtd_un"]))
+            if cur.rowcount != 1:
+                _log_corrida(c["serial"], movimento_uuid)
+                continue
+            para, obs = "ABERTA", f"Baixa da expedicao: {q:g} UN (ficam {prometido:g} UN separadas pra pedido)"
+            aberta = c["serial"]
+            falta = round(falta - q, 3)
+        elif q <= falta + 0.0004:
             cur = conn.execute("UPDATE wms_caixas SET situacao = 'EXPEDIDA', atualizado_em = ? "
                                "WHERE serial = ? AND situacao = ? AND qtd_un = ?",
                                (ts, c["serial"], c["situacao"], c["qtd_un"]))
@@ -512,7 +559,7 @@ def consumir_caixas(conn, *, posicao: str, produto_id: int, lote: str, validade:
         else:
             cur = conn.execute("UPDATE wms_caixas SET situacao = 'ABERTA', qtd_un = ?, atualizado_em = ? "
                                "WHERE serial = ? AND situacao = ? AND qtd_un = ?",
-                               (round(q - falta, 3), ts, c["serial"], c["situacao"], c["qtd_un"]))
+                               (round(q + prometido - falta, 3), ts, c["serial"], c["situacao"], c["qtd_un"]))
             if cur.rowcount != 1:
                 _log_corrida(c["serial"], movimento_uuid)
                 continue
@@ -542,8 +589,8 @@ def divergencias(conn, embarcador_id: int) -> list[dict]:
     for r in conn.execute(
             "SELECT c.posicao, c.produto_id, p.sku, c.lote, c.validade, SUM(c.qtd_un) AS q "
             "FROM wms_caixas c JOIN wms_produtos p ON p.id = c.produto_id "
-            "WHERE p.embarcador_id = ? AND c.situacao IN ('EM_ESTOQUE', 'ABERTA') "
-            "GROUP BY c.posicao, c.produto_id, c.lote, c.validade", (embarcador_id,)):
+            f"WHERE p.embarcador_id = ? AND c.situacao IN ({','.join('?' * len(NO_SALDO))}) "
+            "GROUP BY c.posicao, c.produto_id, c.lote, c.validade", (embarcador_id, *NO_SALDO)):
         k = (r["posicao"], r["produto_id"], r["lote"] or "", r["validade"] or "")
         d = chaves.setdefault(k, {"sku": r["sku"], "saldo": 0.0, "caixas": 0.0})
         d["caixas"] += float(r["q"] or 0)

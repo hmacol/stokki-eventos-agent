@@ -15,14 +15,29 @@ Tabelas do vigia em dados/dados.db:
                         e quando o prazo vence.
   vigia_historico       Cada estado que um pedido já teve (desde/até) --
                         base pra medir quanto tempo pedido fica parado.
+  vigia_decisoes        O "Tratar" da tela /vigia (Hugo, 21/11): o que a
+                        equipe decidiu pra um pedido, até quando, e quem. O
+                        pedido some da fila de ação até essa data e volta
+                        sozinho como "decisão vencida". Uma linha por pedido
+                        (a última decisão); o histórico vai pra tratativas.
 """
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent.parent / "dados" / "dados.db"
 FMT = "%Y-%m-%d %H:%M:%S"
 AUSENCIAS_PRA_FECHAR = 2
+
+# Decisões do "Tratar" (chave -> rótulo). "outro" exige texto.
+OPCOES_DECISAO = {
+    "nova_data": "Nova data marcada",
+    "aguardando_embarcador": "Aguardando o embarcador",
+    "confirmado_motorista": "Confirmado com o motorista",
+    "cancelar_devolver": "Vai ser cancelado/devolvido",
+    "outro": "Outro (escrever)",
+}
+DIAS_MAX_DECISAO = 60
 
 
 def conectar(db_path: Path | None = None) -> sqlite3.Connection:
@@ -74,6 +89,15 @@ def garantir_esquema(conn: sqlite3.Connection) -> None:
             ate     TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_vigia_historico_codigo ON vigia_historico(codigo);
+        CREATE TABLE IF NOT EXISTS vigia_decisoes (
+            codigo      TEXT PRIMARY KEY,
+            estado      TEXT NOT NULL,          -- estado do vigia quando decidiu: mudou de estado, a decisão não vale mais
+            decisao     TEXT NOT NULL,          -- chave de OPCOES_DECISAO
+            observacao  TEXT,
+            ate         TEXT NOT NULL,          -- AAAA-MM-DD: até quando o pedido some da fila de ação
+            por         TEXT NOT NULL,
+            em          TEXT NOT NULL
+        );
     """)
     colunas = {r[1] for r in conn.execute("PRAGMA table_info(vigia_stokki_abertos)")}
     if "ausencias" not in colunas:
@@ -134,6 +158,43 @@ def registrar_listagem_stokki(itens: list[dict], completa: bool, agora: datetime
     finally:
         if fechar:
             conn.close()
+
+
+def registrar_decisao(conn: sqlite3.Connection, codigo: str, estado: str, decisao: str, ate: date,
+                      observacao: str, por: str, hoje: date | None = None,
+                      agora: datetime | None = None) -> None:
+    """Grava (ou troca) a decisão do pedido. ValueError com a mensagem pra tela."""
+    hoje = hoje or date.today()
+    codigo = normalizar(codigo)
+    if not codigo:
+        raise ValueError("Pedido não informado.")
+    if decisao not in OPCOES_DECISAO:
+        raise ValueError("Escolha o que foi decidido.")
+    observacao = (observacao or "").strip()
+    if decisao == "outro" and len(observacao) < 5:
+        raise ValueError("Em \"Outro\", escreva o que foi decidido.")
+    if ate < hoje:
+        raise ValueError("A data de retorno não pode ser no passado.")
+    if (ate - hoje).days > DIAS_MAX_DECISAO:
+        raise ValueError(f"A data de retorno pode ser de no máximo {DIAS_MAX_DECISAO} dias.")
+    if not conn.execute("SELECT 1 FROM vigia_pedidos WHERE codigo = ? AND estado = ?",
+                        (codigo, estado)).fetchone():
+        raise ValueError("Esse pedido mudou de situação: atualize a tela.")
+    conn.execute("""
+        INSERT INTO vigia_decisoes (codigo, estado, decisao, observacao, ate, por, em)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(codigo) DO UPDATE SET
+            estado = excluded.estado, decisao = excluded.decisao, observacao = excluded.observacao,
+            ate = excluded.ate, por = excluded.por, em = excluded.em
+    """, (codigo, estado, decisao, observacao[:300], ate.isoformat(), por,
+          (agora or datetime.now()).strftime(FMT)))
+    conn.commit()
+
+
+def desfazer_decisao(conn: sqlite3.Connection, codigo: str) -> bool:
+    cur = conn.execute("DELETE FROM vigia_decisoes WHERE codigo = ?", (normalizar(codigo),))
+    conn.commit()
+    return cur.rowcount > 0
 
 
 def ultima_listagem_completa(conn: sqlite3.Connection) -> str | None:

@@ -96,7 +96,7 @@
       {% for p in c.pedidos %}
       <li><label><input type="checkbox" class="saiu" value="{{ p.id_stokki }}" checked {{ 'disabled' if not pode_agir }}>
         <span class="cod">{{ p.codigo }}</span>
-        <span class="det">{{ emb(p.embarcador) }}{% if p.destinatario %} · {{ p.destinatario }}{% endif %}{% if p.nf %} · NF {{ p.nf }}{% endif %}{% if p.unidades is not none %} · {{ p.unidades }} un.{% endif %}</span></label></li>
+        <span class="det">{{ emb(p.embarcador) }}{% if p.destinatario %} · {{ p.destinatario }}{% endif %} · NF {{ p.nf or '—' }}{% if p.unidades is not none %} · {{ p.unidades }} un.{% endif %}</span></label></li>
       {% endfor %}
     </ul>
     {% if pode_agir %}
@@ -127,7 +127,7 @@
     <ul class="lista-ped">
       {% for p in c.pedidos %}
       <li data-ped="{{ p.id_stokki }}"><span class="cod">{{ p.codigo }}</span>
-        <span class="det">{{ emb(p.embarcador) }}</span>
+        <span class="det">{{ emb(p.embarcador) }} · NF {{ p.nf or '—' }}</span>
         <span class="estado {{ p.estado }}">{{ ROTULO.get(p.estado, p.estado) }}</span>
         {% if p.estado == 'FALHOU' %}<span class="msg">{{ p.mensagem }}</span>
           {% if pode_agir %}<button type="button" class="bt sec mini" data-acao="retirar" data-id="{{ p.id_stokki }}">Tirar da coleta</button>{% endif %}{% endif %}
@@ -163,7 +163,7 @@
       {% for p in gr.pedidos %}
       <li><label>{% if pode_agir %}<input type="checkbox" class="vai" value="{{ p.id_stokki }}">{% endif %}
         <span class="cod">{{ p.codigo }}</span>
-        <span class="det">{{ emb(p.embarcador) }}{% if p.destinatario %} · {{ p.destinatario }}{% endif %}{% if p.nf %} · NF {{ p.nf }}{% endif %}{% if p.unidades is not none %} · {{ p.unidades }} un.{% endif %} · desde {{ dh(p.desde) }}</span></label></li>
+        <span class="det">{{ emb(p.embarcador) }}{% if p.destinatario %} · {{ p.destinatario }}{% endif %} · NF {{ p.nf or '—' }}{% if p.unidades is not none %} · {{ p.unidades }} un.{% endif %} · desde {{ dh(p.desde) }}</span></label></li>
       {% endfor %}
     </ul>
     <div class="rodape-cartao"><span class="erro" hidden></span></div>

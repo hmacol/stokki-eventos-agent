@@ -59,7 +59,18 @@ export default function Rotas() {
           <View style={{ marginBottom: 8 }}>
             <Text style={s.secao}>{sec.titulo}</Text>
             {sec.itens.length === 0 ? <Text style={s.nada}>Nenhuma rota.</Text> : null}
-            {sec.itens.map((r) => (
+            {sec.itens.map((r) => r.liberada === false ? (
+              <Cartao key={r.id}>
+                <View style={s.cabecalho}>
+                  <Text style={s.nome} numberOfLines={1}>Rota confirmada</Text>
+                  <Etiqueta texto="Libera às 00h" cor={cores.info} />
+                </View>
+                <Text style={s.detalhe}>
+                  Você tem rota neste dia{r.start_at ? ` · saída ${r.start_at.slice(11, 16)}` : ''}.
+                  As paradas aparecem aqui a partir da meia-noite.
+                </Text>
+              </Cartao>
+            ) : (
               <Pressable key={r.id} onPress={() => router.push(`/rota/${r.id}`)}>
                 <Cartao>
                   <View style={s.cabecalho}>
@@ -70,7 +81,7 @@ export default function Rotas() {
                     {r.total_paradas} parada(s) · {r.entregues} entregue(s) · {r.insucessos} insucesso(s)
                     {r.start_at ? ` · saída ${r.start_at.slice(11, 16)}` : ''}
                   </Text>
-                  {r.provedor === 'VUUPT' ? <Text style={s.vuupt}>Operada pelo app da VUUPT — aqui só consulta e aceite.</Text> : null}
+                  {!r.editavel ? <Text style={s.vuupt}>Operada pelo app da VUUPT — aqui só consulta e aceite.</Text> : null}
                   {r.status === 'PLANEJADA' ? <Text style={s.chamada}>Toque para aceitar ou recusar →</Text> : null}
                 </Cartao>
               </Pressable>

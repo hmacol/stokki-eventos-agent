@@ -151,6 +151,20 @@ def buscar_nf_no_banco(conn: sqlite3.Connection, codigo: str) -> str:
         return ""
 
 
+def canhoto_pdf(servico: dict | None, config: dict, pasta: Path, reserva) -> Path | None:
+    """Anexo do e-mail: o comprovante proprio (comprovante_entrega/, 17/11).
+    Se a foto nao baixar ou a geracao falhar, vale o PDF da Vuupt (`reserva`)."""
+    if servico:
+        try:
+            from comprovante_entrega import gerar_comprovante
+            pdf = gerar_comprovante.salvar_com_foto(servico, config, pasta)
+            if pdf:
+                return pdf
+        except Exception:
+            logger.exception(f"Comprovante proprio de {servico.get('code')} falhou -- usando o PDF da Vuupt.")
+    return reserva()
+
+
 # ── Núcleo ─────────────────────────────────────────────────────────────────────
 
 def _ordem_modo_teste(servicos: list[dict]) -> list[dict]:
@@ -332,12 +346,15 @@ def main(modo_teste: bool, limite: int, pedido: str | None) -> int:
     else:
         servicos = vuupt_entregas.buscar_concluidos(token, agora, horas=cfg.max_atraso_horas)
 
+    por_checklist = {regras.checklist_id_com_foto(s): s for s in servicos}
     conn = fp.conectar()
     try:
         c = processar(
             servicos, embarcadores=aplicar_preferencias(carregar_embarcadores(conn), fp.DB_PATH), cfg=cfg, agora=agora, conn=conn,
             enviar=lambda to, assunto, corpo, **kw: enviar_email(to, assunto, corpo, config_email, **kw),
-            baixar_canhoto=lambda checklist_id, codigo: vuupt_entregas.baixar_canhoto_pdf(token, checklist_id, codigo),
+            baixar_canhoto=lambda checklist_id, codigo: canhoto_pdf(
+                por_checklist.get(checklist_id), config, vuupt_entregas.CANHOTOS_DIR,
+                reserva=lambda: vuupt_entregas.baixar_canhoto_pdf(token, checklist_id, codigo)),
             buscar_nf=lambda codigo: buscar_nf_no_banco(conn, codigo),
             portal_url=portal_url,
             # O e-mail de insucesso com botoes obedece a chave-mestra; so

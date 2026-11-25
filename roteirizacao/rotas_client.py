@@ -33,6 +33,12 @@ logger = logging.getLogger(__name__)
 
 API_BASE = "https://api.vuupt.com/api/v1"
 
+# Caminho interativo (checklist de carregamento do app: o motorista espera a
+# resposta numa das 4 threads do motorista-api; revisao de seguranca 22/11, M1):
+# 1 tentativa e timeout curto, sem os 3+6+12+24+48 s do retry de 429.
+# (conexao, leitura): pior caso ~10 s por chamada.
+TIMEOUT_INTERATIVO = (3, 7)
+
 # Captura o código COM sufixo de reentrega/canhoto (PS-1-R1, PS-1-C1):
 # antes só pegava "PS-\d+", a reentrega PS-1-R1 não casava com nenhum
 # serviço do sublote e a rota inteira caía em erro (28/09) -- justamente
@@ -50,6 +56,14 @@ def _partes_codigo(code) -> set[str]:
 
 def _headers(token: str) -> dict:
     return {"Accept": "application/json", "Authorization": f"Bearer {token}"}
+
+
+def _chamar(func, *args, interativo: bool = False, **kwargs):
+    """interativo=False: chamar_com_retry como sempre. True: chamada unica com timeout curto
+    (429 volta na hora pra quem chama)."""
+    if interativo:
+        return func(*args, **{**kwargs, "timeout": TIMEOUT_INTERATIVO})
+    return chamar_com_retry(func, *args, **kwargs)
 
 
 def _verificar_resposta(resp):
@@ -170,13 +184,15 @@ def criar_rota_removendo_conflitos(token: str, nome_rota: str, start_at: str,
                     f"removidos até agora: {codigos_removidos}")
 
 
-def buscar_rota(token: str, route_id: int, include: list[str] | None = None) -> dict:
+def buscar_rota(token: str, route_id: int, include: list[str] | None = None, interativo: bool = False) -> dict:
     """GET /routes/{id}. `include` pode ter: activities, agent, services,
-    vehicle, startLocationBase, endLocationBase, sourceRoute, polyline."""
+    vehicle, startLocationBase, endLocationBase, sourceRoute, polyline.
+    `interativo`: ver _chamar."""
     params = {}
     if include:
         params["include"] = ",".join(include)
-    resp = chamar_com_retry(requests.get, f"{API_BASE}/routes/{route_id}", headers=_headers(token), params=params, timeout=30)
+    resp = _chamar(requests.get, f"{API_BASE}/routes/{route_id}", headers=_headers(token), params=params, timeout=30,
+                   interativo=interativo)
     _verificar_resposta(resp)
     return resp.json()
 
@@ -258,6 +274,27 @@ def adicionar_atividades(token: str, route_id: int, service_ids: list[int],
     return resp.json()
 
 
+def remover_servico_da_rota(token: str, route_id: int, service_id: int, interativo: bool = False) -> dict:
+    """DELETE /routes/{id}/services/{service_id} -- tira um servico da rota
+    sem mexer nos outros (aceito pela Vuupt mesmo com a rota em andamento;
+    o servico volta ao pool). Devolve o JSON da resposta. `interativo`: ver _chamar."""
+    resp = _chamar(requests.delete, f"{API_BASE}/routes/{route_id}/services/{service_id}",
+                   headers=_headers(token), timeout=30, interativo=interativo)
+    _verificar_resposta(resp)
+    return resp.json()
+
+
+def atualizar_motorista_veiculo(token: str, route_id: int, agent_id: int | None,
+                                vehicle_id: int | None) -> dict:
+    """PUT /routes/{id} so com agent_id/vehicle_id, SEM 'activities' (assim as
+    paradas e a ordem ficam intactas). None vai como null."""
+    payload = {"agent_id": agent_id, "vehicle_id": vehicle_id}
+    resp = chamar_com_retry(requests.put, f"{API_BASE}/routes/{route_id}", json=payload,
+                            headers=_headers(token), timeout=30)
+    _verificar_resposta(resp)
+    return resp.json()["route"]
+
+
 def finalizar_rota(token: str, route_id: int) -> dict | None:
     """PUT /routes/{id}/finish (comando do app, fora da doc). Pela conta so
     fecha rota "started"; rota nao iniciada da 409 "orders.cannot_update"
@@ -267,16 +304,35 @@ def finalizar_rota(token: str, route_id: int) -> dict | None:
     return resp.json() if resp.text else None
 
 
-def cancelar_rota(token: str, route_id: int, services_action: str = "keep") -> dict | None:
+def comando_rota(token: str, route_id: int, acao: str) -> None:
+    """PUT /routes/{id}/accept | start (comandos do app, fora da doc). So
+    funcionam quando o agente da rota e o dono do token (403 nos outros)."""
+    resp = chamar_com_retry(requests.put, f"{API_BASE}/routes/{route_id}/{acao}", headers=_headers(token), timeout=30)
+    _verificar_resposta(resp)
+
+
+def trocar_agente_rota(token: str, route_id: int, agent_id: int, vehicle_id: int | None = None) -> None:
+    """PUT /routes/{id} {"agent_id"}: troca o motorista sem mexer nas paradas.
+    Aceita ate com a rota "started"; rota "finished" nao troca mais.
+    vehicle_id (opcional) vai junto, pra devolver a rota com o mesmo veiculo."""
+    corpo = {"agent_id": agent_id, **({"vehicle_id": vehicle_id} if vehicle_id else {})}
+    resp = chamar_com_retry(requests.put, f"{API_BASE}/routes/{route_id}", json=corpo,
+                            headers=_headers(token), timeout=30)
+    _verificar_resposta(resp)
+
+
+def cancelar_rota(token: str, route_id: int, services_action: str = "keep",
+                  interativo: bool = False) -> dict | None:
     """DELETE /routes/{id}/cancel. services_action: "keep" (mantém status
     dos serviços), "unassign" (desatribui), "cancel" (cancela os
-    serviços também)."""
-    resp = chamar_com_retry(
+    serviços também). `interativo`: ver _chamar."""
+    resp = _chamar(
         requests.delete,
         f"{API_BASE}/routes/{route_id}/cancel",
         headers={**_headers(token), "Content-Type": "application/x-www-form-urlencoded"},
         data={"services_action": services_action},
         timeout=30,
+        interativo=interativo,
     )
     _verificar_resposta(resp)
     return resp.json() if resp.text else None

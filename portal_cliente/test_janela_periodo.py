@@ -189,5 +189,39 @@ class CacheRotasTest(_JanelaBase):
         self.assertEqual(self.buscas[-1], (HOJE - timedelta(days=13), HOJE))
 
 
+class HorariosDaVuuptEmUtcTest(unittest.TestCase):
+    """scheduled_start/completed_at também vêm em UTC sem fuso (18/11,
+    PS-44612: agendado pra 00:00 de SP aparecia "Agendado qui 19/11 · 03:00")."""
+
+    def _sem_rota(self, scheduled_start):
+        vuupt = mock.Mock()
+        vuupt.listar_servicos.return_value = [{**_servico("#PS-44612", status="not_assigned"),
+                                               "scheduled_start": scheduled_start}]
+        with mock.patch.object(dc, "nf_por_codigo", return_value={}):
+            return dc._coletar_sem_rota(vuupt, REMETENTE, HOJE, {})
+
+    def test_agendado_meia_noite_de_sp_nao_mostra_03h(self):
+        _, futuros = self._sem_rota("2026-09-23 03:00:00")
+        self.assertEqual(futuros[0]["detalhe"], "Agendado qua 23/09")
+
+    def test_agendado_com_hora_mostra_hora_local(self):
+        _, futuros = self._sem_rota("2026-09-23 11:00:00")
+        self.assertEqual(futuros[0]["detalhe"], "Agendado qua 23/09 · 08:00")
+
+    def test_agendado_22h_de_sp_fica_no_proprio_dia(self):
+        # 22:00 de 22/09 em SP chega como 01:00 de 23/09.
+        _, futuros = self._sem_rota("2026-09-23 01:00:00")
+        self.assertEqual(futuros[0]["agendado_para"], "2026-09-22")
+
+    def test_hora_com_offset_continua_respeitada(self):
+        self.assertEqual(dc._hora("2026-09-08T10:42:00-03:00"), "10:42")
+
+    def test_entregue_mostra_hora_local(self):
+        rota = _rota(7, HOJE, servicos=[_servico("#PS-1", completed_at="2026-09-21 20:23:42")])
+        linhas = dc.linhas_das_rotas([rota], REMETENTE, {}, {})
+        self.assertEqual(linhas[0]["detalhe"], "Entregue 17:23")
+        self.assertEqual(linhas[0]["concluido_em"], "17:23")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,12 @@
+[Unit]
+Description=Stokki Eventos - Ponte nucleo -> Vuupt (repete na Vuupt o que o motorista fez no app proprio)
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+# Saida 2 = algum item desistiu depois de todas as tentativas: e pra alguem
+# olhar (python nucleo/ponte_vuupt.py --situacao), por isso NAO entra em
+# SuccessExitStatus e dispara o alerta de falha.
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/nucleo/ponte_vuupt.py

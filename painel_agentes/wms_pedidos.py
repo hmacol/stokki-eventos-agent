@@ -129,15 +129,39 @@ CREATE TABLE IF NOT EXISTS wms_recebimento_enderecamentos (
 # precisa do ALTER TABLE -- feito uma vez por conexao, e barato.
 _COLUNAS_NOVAS = {
     "wms_pedidos": {"motivo_cancelamento": "TEXT NOT NULL DEFAULT ''",
-                    "saldo_negativo": "TEXT NOT NULL DEFAULT ''"},
+                    "saldo_negativo": "TEXT NOT NULL DEFAULT ''",
+                    # 17/11 (separacao no nosso sistema): de qual tabela da Stokki os itens
+                    # vieram ('' = Produto|EAN|Quantidade, 'PEDIDO' = #example1), a data de
+                    # expedicao lancada, a data de entrega ja ajustada pelo dia da regiao e
+                    # o destino (onda por data de entrega e etiqueta de volume).
+                    "fonte_itens": "TEXT NOT NULL DEFAULT ''",
+                    "data_expedicao": "TEXT NOT NULL DEFAULT ''",
+                    "data_entrega_calc": "TEXT NOT NULL DEFAULT ''",
+                    "regiao_dia_fixo": "TEXT NOT NULL DEFAULT ''",
+                    "destinatario": "TEXT NOT NULL DEFAULT ''",
+                    "endereco_destino": "TEXT NOT NULL DEFAULT ''",
+                    "cidade": "TEXT NOT NULL DEFAULT ''",
+                    "uf": "TEXT NOT NULL DEFAULT ''",
+                    "nf": "TEXT NOT NULL DEFAULT ''",   # numero da NF-e (etiqueta de volume, 17/11)
+                    # separacao no nosso sistema (wms_separacao.py): etapa do pedido, onda e
+                    # o id do embarcador (a onda e por embarcador)
+                    "embarcador_id": "TEXT NOT NULL DEFAULT ''",
+                    "execucao": "TEXT NOT NULL DEFAULT ''",
+                    "onda_id": "INTEGER"},
     "wms_pedido_itens": {"falta_un": "REAL NOT NULL DEFAULT 0",
                          "removido_em": "TEXT NOT NULL DEFAULT ''"},
     "wms_recebimentos": {"stkkc_id": "TEXT NOT NULL DEFAULT ''",
                          "observacao_divergencia": "TEXT NOT NULL DEFAULT ''",
                          "encerrado_em": "TEXT NOT NULL DEFAULT ''",
-                         "encerrado_por": "TEXT NOT NULL DEFAULT ''"},
+                         "encerrado_por": "TEXT NOT NULL DEFAULT ''",
+                         "portal_entrada_id": "INTEGER",
+                         "data_prevista": "TEXT NOT NULL DEFAULT ''"},
     "wms_recebimento_itens": {"falta_un": "REAL NOT NULL DEFAULT 0"},
 }
+
+
+_CAMPOS_OPCIONAIS_PEDIDO = ("embarcador_id", "fonte_itens", "data_expedicao", "data_entrega_calc", "regiao_dia_fixo",
+                            "destinatario", "endereco_destino", "cidade", "uf", "nf")
 
 
 def _migrar(conn) -> None:
@@ -179,10 +203,40 @@ def resolver_item(conn, item: dict) -> dict:
     sku = str(item.get("sku") or "").strip()
     qtd = float(item.get("qtd_embalagem") or 0)
 
+    # Linha da tabela #example1 (pedido aberto, 17/11): uma linha por SKU, ja na
+    # unidade do produto e sem EAN. So o SKU decide, dentro do embarcador do pedido
+    # (SKU repete entre embarcadores).
+    if item.get("unidade_do_produto"):
+        sql, args = "SELECT * FROM wms_produtos WHERE ativo = 1 AND sku = ? COLLATE NOCASE", [sku]
+        if item.get("embarcador_id"):
+            sql += " AND embarcador_id = ?"
+            args.append(int(item["embarcador_id"]))
+        rows = conn.execute(sql, args).fetchall() if sku else []
+        if len(rows) == 1:
+            return {"produto_id": rows[0]["id"], "qtd_un": qtd, "motivo_pendencia": ""}
+        if len(rows) > 1:
+            return {"produto_id": None, "qtd_un": None,
+                    "motivo_pendencia": f"SKU {sku} esta em {len(rows)} produtos ativos"}
+        return {"produto_id": None, "qtd_un": None,
+                "motivo_pendencia": f"Produto nao encontrado no catalogo (SKU {sku or '-'}, EAN -)"}
+
+    # Com o embarcador do pedido (18/11), o codigo e procurado so entre os produtos DELE: o
+    # mesmo EAN curto ("004") aparece em produtos de embarcadores diferentes e travava a linha.
+    emb = int(item["embarcador_id"]) if item.get("embarcador_id") else None
+
+    def _buscar(coluna: str, valor: str, colate: str = "") -> list:
+        """Primeiro so no embarcador do pedido; nada ali (produto sem embarcador no cadastro),
+        busca como antes. O filtro so desempata, nunca perde produto."""
+        sql = f"SELECT * FROM wms_produtos WHERE ativo = 1 AND {coluna} = ?{colate}"
+        if emb is not None:
+            rows = conn.execute(sql + " AND embarcador_id = ?", (valor, emb)).fetchall()
+            if rows:
+                return rows
+        return conn.execute(sql, (valor,)).fetchall()
+
     if ean:
         for coluna, fator_caixa in (("dun", True), ("ean", False)):
-            rows = conn.execute(
-                f"SELECT * FROM wms_produtos WHERE ativo = 1 AND {coluna} = ?", (ean,)).fetchall()
+            rows = _buscar(coluna, ean)
             if len(rows) == 1:
                 p = rows[0]
                 por_caixa = float(p["qtd_por_caixa"] or 1)
@@ -194,8 +248,7 @@ def resolver_item(conn, item: dict) -> dict:
                         "motivo_pendencia": f"EAN {ean} esta em {len(rows)} produtos ativos"}
 
     if sku:
-        rows = conn.execute(
-            "SELECT * FROM wms_produtos WHERE ativo = 1 AND sku = ? COLLATE NOCASE", (sku,)).fetchall()
+        rows = _buscar("sku", sku, " COLLATE NOCASE")
         if len(rows) == 1:
             p = rows[0]
             por_caixa = float(p["qtd_por_caixa"] or 1)
@@ -314,9 +367,18 @@ def registrar_pedido(conn, pedido: dict, itens: list[dict]) -> int:
              pedido.get("situacao", ""), agora, agora))
         pedido_id = cur.lastrowid
 
+    # Campos opcionais (17/11): so grava o que quem chamou mandou, pra releitura sem
+    # o dado nao apagar o que ja estava la.
+    for campo in _CAMPOS_OPCIONAIS_PEDIDO:
+        if campo in pedido:
+            conn.execute(f"UPDATE wms_pedidos SET {campo} = ? WHERE id = ?",
+                         (str(pedido[campo] or ""), pedido_id))
+
     linhas_novas = [int(item["linha"]) for item in itens]
 
     for item in itens:
+        if pedido.get("embarcador_id"):
+            item = {**item, "embarcador_id": pedido["embarcador_id"]}
         r = resolver_item(conn, item)
         conn.execute("""
             INSERT INTO wms_pedido_itens (pedido_id, linha, sku, ean_linha, descricao, qtd_embalagem,
@@ -392,6 +454,10 @@ def reservar_pedido(conn, pedido_id: int) -> dict:
     criadas = 0
     pedido = conn.execute("SELECT * FROM wms_pedidos WHERE id = ?", (pedido_id,)).fetchone()
     if pedido and pedido["estado_reserva"] in ("BAIXADO", "CANCELADO"):
+        return {"estado": pedido["estado_reserva"], "reservas": 0, "pendencias": [], "ignorado": True}
+    # Pedido ja conferido/embalado no nosso sistema (17/11): as reservas dele sao o que foi
+    # bipado. Re-reservar aqui traria de volta o que o escritorio liberou como parcial.
+    if pedido and (dict(pedido).get("execucao") or "") in ("CONFERIDO", "EMBALADO"):
         return {"estado": pedido["estado_reserva"], "reservas": 0, "pendencias": [], "ignorado": True}
     itens = conn.execute(
         "SELECT * FROM wms_pedido_itens WHERE pedido_id = ? AND removido_em = '' ORDER BY linha",
@@ -469,6 +535,13 @@ def cancelar_reservas(conn, pedido_id: int, motivo: str = "") -> int:
     conn.execute(
         "UPDATE wms_pedidos SET estado_reserva = 'CANCELADO', motivo_cancelamento = ?, atualizado_em = ? "
         "WHERE id = ?", (str(motivo or "")[:300], agora, pedido_id))
+    # O que ja estava separado pro pedido vira DEVOLVIDA e ele sai da onda (17/11). Falha aqui
+    # nao pode impedir o cancelamento da reserva.
+    try:
+        import wms_separacao
+        wms_separacao.ao_cancelar_pedido(conn, pedido_id)
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger(__name__).warning("ao_cancelar_pedido falhou (pedido %s): %s", pedido_id, e)
     return cur.rowcount
 
 
@@ -555,6 +628,12 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
         import wms_caixas
         wms_caixas.garantir_tabelas(conn)
         conn.commit()
+        try:  # banco que nunca abriu a separacao (17/11): cria as tabelas antes do laco
+            import wms_separacao
+            wms_separacao.garantir_tabelas(conn)
+        except Exception as e_sep:  # noqa: BLE001 -- a baixa segue pela ordem antiga
+            conn.rollback()
+            logging.getLogger(__name__).warning("garantir_tabelas da separacao falhou: %s", e_sep)
     except Exception as e_tab:  # noqa: BLE001
         conn.rollback()
         wms_caixas = None
@@ -615,9 +694,25 @@ def baixar_por_expedicao(conn, codigo_ps: str, operador: dict | None = None) -> 
                 # BEGIN IMMEDIATE: leitura e escrita das caixas na mesma
                 # transacao (sem corrida com outra baixa ou com cancelar).
                 conn.execute("BEGIN IMMEDIATE")
-                wms_caixas.consumir_caixas(
-                    conn, posicao=r["posicao"], produto_id=r["produto_id"], lote=r["lote"],
-                    validade=r["validade"], qtd_un=r["quantidade_un"], movimento_uuid=mov["uuid"])
+                # Primeiro o que foi separado PARA este pedido naquela chave (17/11); o que
+                # sobrar (pedido que nao passou pela nossa separacao) segue a ordem antiga.
+                resto = r["quantidade_un"]
+                if not mov.get("duplicado"):
+                    try:
+                        import wms_separacao
+                        resto = wms_separacao.consumir_do_pedido(
+                            conn, pedido_id=pedido["id"], reserva_id=r["id"], qtd_un=r["quantidade_un"],
+                            movimento_uuid=mov["uuid"])
+                    except Exception as e_sep:  # noqa: BLE001 -- sem a separacao, vale a ordem antiga
+                        conn.rollback()
+                        conn.execute("BEGIN IMMEDIATE")
+                        resto = r["quantidade_un"]
+                        logging.getLogger(__name__).warning(
+                            "consumir_do_pedido falhou (%s, reserva %s): %s", uuid, r["id"], e_sep)
+                if resto > 0.0004:
+                    wms_caixas.consumir_caixas(
+                        conn, posicao=r["posicao"], produto_id=r["produto_id"], lote=r["lote"],
+                        validade=r["validade"], qtd_un=resto, movimento_uuid=mov["uuid"])
                 conn.commit()
             except Exception as e_cx:  # noqa: BLE001
                 conn.rollback()
@@ -732,6 +827,27 @@ def reservas_antigas(conn, dias: int = RESERVA_ANTIGA_DIAS, limite: int = 50) ->
     return out
 
 
+def _item_em_un(conn, item: dict, stkkc_id) -> dict:
+    """
+    Linha de recebimento sem EAN nao diz se a quantidade e caixa ou unidade, e o resolver_item
+    nao chuta. Mas a tabela da Stokki tem a coluna "unidade": quando ela diz UN e o produto
+    (unico, do proprio embarcador) tambem e cadastrado em UN, a quantidade JA e em unidades
+    (22/11/2026). Qualquer outro caso (CX, sem unidade, sem embarcador) segue a regra antiga.
+    """
+    if str(item.get("unidade") or "").strip().upper() != "UN" or not stkkc_id or not item.get("sku"):
+        return item
+    try:
+        emb = int(stkkc_id)
+    except (TypeError, ValueError):
+        return item
+    rows = conn.execute(
+        "SELECT unidade FROM wms_produtos WHERE ativo = 1 AND sku = ? COLLATE NOCASE AND embarcador_id = ?",
+        (str(item["sku"]).strip(), emb)).fetchall()
+    if len(rows) == 1 and str(rows[0]["unidade"] or "").strip().upper() == "UN":
+        return {**item, "unidade_do_produto": True, "embarcador_id": emb}
+    return item
+
+
 def registrar_recebimento(conn, recebimento: dict, itens: list[dict]) -> int:
     """
     Cria ou atualiza o espelho de um recebimento (entrada esperada) e as
@@ -778,7 +894,7 @@ def registrar_recebimento(conn, recebimento: dict, itens: list[dict]) -> int:
         recebimento_id = cur.lastrowid
 
     for item in itens:
-        r = resolver_item(conn, item)
+        r = resolver_item(conn, _item_em_un(conn, item, recebimento.get("stkkc_id")))
         conn.execute("""
             INSERT INTO wms_recebimento_itens (recebimento_id, linha, sku, ean_linha, descricao,
                                                qtd_embalagem, qtd_un, produto_id, motivo_pendencia)

@@ -32,8 +32,29 @@ PILOTO_NOME = "MARIA DOLORES"
 # Entrada | Fabricacao | Validade | Quantidade), que o parser IGNORA de
 # proposito (decisao do Hugo, 23/09/2026: sem pre-preenchimento vindo da
 # Stokki), e a de itens (NR | ID | SKU | Nome | ... | Quantidade total
-# recebida | Obs), a unica que extrair_itens_do_recebimento le.
+# recebida | Obs), a unica que extrair_itens_do_recebimento le. As duas
+# tabelas de cabecalho (ID do Pedido/Ref. do Pedido/... e Situacao/NF-e/...)
+# vem da fixture da Tarefa 1 (stokki/fixtures/recebimento_detalhe_cabecalho.html),
+# chave 35260912345678000195550010000412211000000017 e Ref. do Pedido 41221.
 _HTML_ITENS = """
+<table>
+  <tr><th>ID do Pedido:</th><td>#PE-2497</td></tr>
+  <tr><th>Ref. do Pedido:</th><td>41221</td></tr>
+  <tr><th>Tipo:</th><td><span>Entrada</span></td></tr>
+  <tr><th>Movimento:</th><td><span>Remessa</span></td></tr>
+  <tr><th>Cliente:</th><td>EMBARCADOR TESTE LTDA (#stkkc-48)</td></tr>
+  <tr><th>unidade:</th><td>Freshlog - São Paulo, SP</td></tr>
+</table>
+<table>
+  <tr><th>Situação:</th><td><span><i></i>Recebido</span></td></tr>
+  <tr><th>Chegada Prevista:</th><td>24/09/2026</td></tr>
+  <tr><th>Tipo de Acondicionamento:</th><td> Carga Solta (Caixas)</td></tr>
+  <tr><th> Número de paletes: <i title="Número estimado de paletes."></i> </th><td> Não informado </td></tr>
+  <tr><th> Número de caixas: <i title="Número estimado de caixas."></i> </th><td> Não informado </td></tr>
+  <tr><th>Tipo de Transporte:</th><td>Fracionado (LTL)</td></tr>
+  <tr><th>NF-e:</th><td> <a href="http://www.nfe.fazenda.gov.br/portal/consultaRecaptcha.aspx?tipoConsulta=completa&amp;nfe=35260912345678000195550010000412211000000017" target="_blank"> 35260912345678000195550010000412211000000017 </a> </td></tr>
+  <tr><th>CT-e:</th><td> Não informado </td></tr>
+</table>
 <table class="table">
   <thead>
     <tr><th>Produto</th><th>Lote</th><th>Entrada</th><th>Fabricação</th><th>Validade</th><th>Quantidade</th></tr>
@@ -296,6 +317,20 @@ class TestRodar(BaseRotina):
         self.assertEqual(n, 0)
         self.assertFalse(any("/show/" in url for url, _ in sess.chamadas))
 
+    def test_modo_teste_nao_sincroniza_status_do_portal(self):
+        # --modo-teste e pra nao gravar nada -- inclusive nao mexer no
+        # portal_entradas.status via sincronizar_status (que nao e
+        # wms_movimentos/wms_saldos, mas tambem nao pode escrever em modo
+        # teste do timer).
+        linhas = [_linha(2490, PILOTO_ID)]
+        sess = SessaoFalsa(linhas, {"2490": _HTML_ITENS})
+
+        with mock.patch.object(mod.portal_entradas, "sincronizar_status") as sinc:
+            res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=True)
+
+        sinc.assert_not_called()
+        self.assertEqual(res["status_portal"], 0)
+
     def test_rodada_repetida_sobre_recebimento_inalterado_nao_duplica_item(self):
         linhas = [_linha(2482, PILOTO_ID)]
         sess = SessaoFalsa(linhas, {"2482": _HTML_ITENS})
@@ -319,6 +354,44 @@ class TestRodar(BaseRotina):
         self.assertEqual(res["gravados"], 0)
         recebimento = self.conn.execute("SELECT * FROM wms_recebimentos WHERE id_stokki = 2483").fetchone()
         self.assertIsNone(recebimento)
+
+    def test_aguardando_recebimento_entra_com_a_quantidade_esperada(self):
+        # 22/11 (PE-2659 da OIE): a mercadoria chegou e quem recebe e o NOSSO app. A Stokki
+        # ainda nao tem "Quantidade total recebida"; a entrada esperada nasce da "Quantidade".
+        sem_recebida = _HTML_ITENS.replace("<td>4</td><td></td>\n    </tr>\n  </tbody>\n</table>\n\"\"\"", "") \
+            .replace("<td>4</td><td></td>", "<td></td><td></td>")
+        self.assertNotEqual(sem_recebida, _HTML_ITENS)
+        for situacao, gravados in (("Aguardando recebimento", 1), ("Em transito", 0), ("Recebimento iniciado", 0)):
+            with self.subTest(situacao=situacao):
+                self.conn.execute("DELETE FROM wms_recebimento_itens")
+                self.conn.execute("DELETE FROM wms_recebimentos")
+                self.conn.commit()
+                sess = SessaoFalsa([_linha(2659, PILOTO_ID, situacao=situacao)], {"2659": sem_recebida})
+                res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+                self.assertEqual(res["gravados"], gravados)
+                qtds = [r[0] for r in self.conn.execute("SELECT qtd_embalagem FROM wms_recebimento_itens").fetchall()]
+                self.assertEqual(qtds, [4.0] if gravados else [])
+
+    def test_item_em_un_de_produto_em_un_ja_vem_em_unidades(self):
+        # 22/11: recebimento nao traz EAN; a coluna "unidade" da Stokki resolve o caso UN x UN
+        for pid, sku, unidade in ((50, "TST-UN", "UN"), (51, "TST-CX", "CX")):
+            self.conn.execute(
+                "INSERT INTO wms_produtos (id, stokki_id, sku, descricao, embarcador, embarcador_id, qtd_por_caixa, "
+                "unidade, atualizado_em) VALUES (?, ?, ?, 'P', 'E', ?, 12, ?, '2026-09-21 10:00:00')",
+                (pid, 9000 + pid, sku, PILOTO_ID, unidade))
+        self.conn.commit()
+        itens = [{"linha": 1, "sku": "TST-UN", "ean_linha": "", "descricao": "", "qtd_embalagem": 120.0, "unidade": "UN"},
+                 {"linha": 2, "sku": "TST-CX", "ean_linha": "", "descricao": "", "qtd_embalagem": 5.0, "unidade": "UN"},
+                 {"linha": 3, "sku": "TST-UN", "ean_linha": "", "descricao": "", "qtd_embalagem": 7.0, "unidade": "CX"},
+                 {"linha": 4, "sku": "TST-UN", "ean_linha": "", "descricao": "", "qtd_embalagem": 9.0}]
+        rid = wms_pedidos.registrar_recebimento(self.conn, {"id_stokki": 7001, "codigo": "#PE-7001", "stkkc_id": PILOTO_ID}, itens)
+        self.conn.commit()
+        linhas = self.conn.execute("SELECT linha, produto_id, qtd_un, motivo_pendencia <> '' FROM wms_recebimento_itens "
+                                   "WHERE recebimento_id = ? ORDER BY linha", (rid,)).fetchall()
+        self.assertEqual([tuple(l) for l in linhas], [(1, 50, 120.0, 0), (2, 51, None, 1), (3, 50, None, 1), (4, 50, None, 1)])
+        # sem o embarcador no recebimento, nada muda
+        rid2 = wms_pedidos.registrar_recebimento(self.conn, {"id_stokki": 7002, "codigo": "#PE-7002"}, itens[:1])
+        self.assertIsNone(self.conn.execute("SELECT qtd_un FROM wms_recebimento_itens WHERE recebimento_id = ?", (rid2,)).fetchone()[0])
 
     def test_recebido_sem_tabela_de_itens_conta_como_erro_mas_nao_derruba_a_rodada(self):
         # sem a tabela de itens na pagina (formato mudou/pagina quebrada
@@ -388,6 +461,41 @@ class TestRodar(BaseRotina):
         self.assertEqual(res["gravados"], 0)
         self.assertFalse(any("/show/" in url for url, _ in sess2.chamadas))
 
+    def test_amarra_entrada_do_portal_e_propaga_status(self):
+        import entradas
+        entradas.garantir_tabelas(self.conn)
+        self.conn.execute("CREATE TABLE IF NOT EXISTS interno (cnpj_embarcador TEXT, stkkc_id INTEGER)")
+        self.conn.execute("INSERT INTO interno VALUES ('12345678000195', 48)")
+        self.conn.execute("INSERT INTO portal_entradas (cnpj_embarcador, origem, chave_nfe, numero_nf, data_prevista, arquivo_path, status, "
+                          "stokki_status, criado_em, atualizado_em) VALUES ('12345678000195', 'xml', "
+                          "'35260912345678000195550010000412211000000017', '41221', '2026-09-26', 'x', 'ANUNCIADO', 'CRIADO', "
+                          "'2026-09-25 10:00:00', '2026-09-25 10:00:00')")
+        self.conn.commit()
+        sess = SessaoFalsa([_linha(2497, PILOTO_ID, situacao="Recebido")], {"2497": _HTML_ITENS})
+
+        res = mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+
+        self.assertEqual(res["gravados"], 1)
+        self.assertEqual(res["amarrados"], 1)
+        rec = self.conn.execute("SELECT * FROM wms_recebimentos WHERE id_stokki = 2497").fetchone()
+        self.assertEqual(rec["portal_entrada_id"], 1)
+        self.assertEqual(rec["data_prevista"], "2026-09-26")
+        e = self.conn.execute("SELECT * FROM portal_entradas WHERE id = 1").fetchone()
+        self.assertEqual((e["wms_recebimento_id"], e["stokki_id"], e["stokki_codigo"], e["status"]), (rec["id"], 2497, "#PE-2497", "CHEGOU"))
+        # so UM GET no detalhe: itens, chave e ref vem do mesmo HTML
+        self.assertEqual(sum(1 for url, _ in sess.chamadas if "/show/" in url), 1)
+
+    def test_recebimento_cancelado_nao_e_relido(self):
+        linhas = [_linha(2489, PILOTO_ID)]
+        sess = SessaoFalsa(linhas, {"2489": _HTML_ITENS})
+        mod.rodar(self.conn, sess, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+        self.conn.execute("UPDATE wms_recebimentos SET estado = 'CANCELADO' WHERE id_stokki = 2489")
+        self.conn.commit()
+        sess2 = SessaoFalsa(linhas, {"2489": _HTML_ITENS})
+        res = mod.rodar(self.conn, sess2, PILOTO_NOME, PILOTO_ID, limite=50, modo_teste=False)
+        self.assertEqual(res["ja_fechados"], 1)
+        self.assertFalse(any("/show/" in url for url, _ in sess2.chamadas))
+
 
 class TestTravaStokki(unittest.TestCase):
     """Mesma trava cooperativa de sincronizar_pedidos_wms.py -- a sessao
@@ -455,6 +563,34 @@ class TestTravaStokki(unittest.TestCase):
 
         liberar.assert_called_once_with(mod.DONO_TRAVA)
 
+
+class TestVariosPilotos(unittest.TestCase):
+    """17/11: wms.pilotos no config -- a rodada passa por todos, um por vez, na mesma trava."""
+
+    CFG = {"wms": {"pilotos": [{"id": 48, "nome": "Maria Dolores"}, {"id": 22, "nome": "Mombak", "caixas": True}]}}
+
+    def _main(self, argv, **rodar_kw):
+        with mock.patch("stokki.sessao_uso.adquirir", return_value=True),              mock.patch("stokki.sessao_uso.liberar") as liberar,              mock.patch("sincronizar_recebimentos_wms._carregar_config", return_value=self.CFG),              mock.patch("sincronizar_recebimentos_wms.wms_pedidos.conectar", return_value=mock.Mock()),              mock.patch("sincronizar_recebimentos_wms.StokkiSession"),              mock.patch("sincronizar_recebimentos_wms.rodar", **rodar_kw) as rodar_mock:
+            try:
+                codigo = mod.main(argv)
+            except RuntimeError as e:
+                codigo = e
+        liberar.assert_called_once_with(mod.DONO_TRAVA)
+        return codigo, [(c.args[3], c.args[2]) for c in rodar_mock.call_args_list]
+
+    def test_roda_um_por_piloto_na_ordem_do_config(self):
+        codigo, chamadas = self._main(["--limite", "5"], return_value={"lidos": 0})
+        self.assertEqual(codigo, 0)
+        self.assertEqual(chamadas, [("48", "MARIA DOLORES"), ("22", "MOMBAK")])
+
+    def test_embarcador_id_na_linha_de_comando_roda_so_aquele(self):
+        codigo, chamadas = self._main(["--embarcador-id", "22", "--embarcador", "mombak"], return_value={})
+        self.assertEqual((codigo, chamadas), (0, [("22", "MOMBAK")]))
+
+    def test_piloto_que_falha_nao_impede_o_seguinte_e_a_rodada_falha_no_fim(self):
+        codigo, chamadas = self._main([], side_effect=[RuntimeError("bug"), {"lidos": 0}])
+        self.assertIsInstance(codigo, RuntimeError)
+        self.assertEqual(len(chamadas), 2)
 
 if __name__ == "__main__":
     unittest.main()

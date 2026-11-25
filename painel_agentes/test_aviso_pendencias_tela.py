@@ -43,6 +43,7 @@ class _Base(unittest.TestCase):
             mock.patch.object(avisos_pendencias, "DB_PATH", Path(self._tmp.name) / "avisos.db"),
             mock.patch.object(painel_agentes.contadores_menu, "contadores", return_value={}),
             mock.patch.object(avisos_pendencias, "montar", return_value=[dict(AVISO)]),
+            mock.patch.object(avisos_pendencias, "ATIVO", True),
         ):
             alvo.start()
             self.addCleanup(alvo.stop)
@@ -72,6 +73,13 @@ class TestAvisosNoContadores(_Base):
         self.assertEqual([a["chave"] for a in d["avisos"]], ["torre"])
         self.assertEqual(set(d["avisos"][0]), {"chave", "texto", "qtd", "destino", "vermelho"})
         self.assertEqual(d["avisos"][0]["destino"], "/torre")
+
+    def test_desligado_nao_traz_aviso(self):
+        self._logar()
+        with mock.patch.object(avisos_pendencias, "ATIVO", False):
+            d = self.cliente.get("/api/sidebar/contadores").get_json()
+        self.assertEqual(d["avisos"], [])
+        self.assertEqual(d["contadores"], {})
 
     def test_batimento_destino_leva_a_aba(self):
         self._logar()

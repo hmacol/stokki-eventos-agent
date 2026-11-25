@@ -48,6 +48,7 @@ PERMITIDOS = {
     "nucleo/comparar_vuupt.py",             # 15/09: compara os dois lados; some quando a Vuupt sair
     "nucleo/comparar_pool.py",              # 24/09: sombra do pool (Entrega 1); some na virada
     "nucleo/exportar_historico_vuupt.py",   # 16/09: tira o historico da Vuupt pro nosso bucket (Etapa 1)
+    "nucleo/ponte_vuupt.py",                # 12/11: a ponte nucleo -> Vuupt do app proprio (Hugo, 12/09); morre na virada
     "nucleo/relatorios_financeiro.py",      # 16/09: --atualizar-cadastros puxa usuario/veiculo (nome e placa)
     "nucleo/sincronizar_servicos_vuupt.py",  # 16/09: espelha o pedido fora da rota (pool, retirada, reentrega)
     "nucleo/sincronizar_vuupt.py",          # a ponte Vuupt -> núcleo (morre na virada)
@@ -81,8 +82,10 @@ PERMITIDOS = {
     "roteirizacao/incrementar_rotas.py",
     "roteirizacao/otimizacao_client.py",
     "roteirizacao/reprocessar_rotas.py",
+    "roteirizacao/edicao_rota.py",  # 10/11: editar rota viva (status ao vivo, DELETE/PUT/POST na rota); o núcleo não grava rota
     "roteirizacao/rotas_client.py",
     "roteirizacao/test_conflito_rota.py",  # 28/09: teste do rotas_client (mocka criar_rota)
+    "roteirizacao/test_rotas_client_edicao.py",  # 10/11: teste do rotas_client (remover servico, trocar motorista/carro)
     # roteirizacao/roteirizacao_dados.py saiu da lista: só cita a Vuupt em
     # comentário, recebe o serviço pronto de quem chamou (não é acoplamento).
     "roteirizacao/roteirizar.py",

@@ -34,10 +34,15 @@ class TestPrazos(unittest.TestCase):
         self.assertEqual(r.prazo(r.ROTA_PASSADA, desde), desde)
         self.assertIsNone(r.prazo(r.AGENDADO, desde))
 
-    def test_rascunho_vence_19h_do_dia_util_anterior(self):
+    def test_rascunho_vence_05h30_do_dia_da_rota(self):
+        # Hugo, 21/11: as rotas saem de madrugada; 19h da véspera alarmava toda noite.
         segunda = date(2026, 10, 5)
         self.assertEqual(r.prazo(r.EM_RASCUNHO, datetime(2026, 10, 2, 18, 0), data_rascunho=segunda),
-                         datetime(2026, 10, 2, 19, 0))
+                         datetime(2026, 10, 5, 5, 30))
+        self.assertIsNone(r.prazo(r.EM_RASCUNHO, datetime(2026, 10, 2, 18, 0)))
+
+    def test_retirada_no_galpao_nao_tem_prazo(self):
+        self.assertIsNone(r.prazo(r.AGUARDANDO_RETIRADA, datetime(2026, 10, 2, 18, 0)))
 
     def test_pedido_segurado_vence_na_vespera_do_prazo_final(self):
         desde = datetime(2026, 9, 28, 9, 0)
@@ -77,6 +82,13 @@ class TestClassificar(unittest.TestCase):
         self.assertIn("aguardando_redespacho", motivo)
         self.assertIsNone(r.classificar({"status_nucleo": None, "aberto_stokki": False}, HOJE))
 
+    def test_retirada_no_galpao_nao_e_sem_servico(self):
+        est, motivo = r.classificar({"status_nucleo": None, "aberto_stokki": True,
+                                     "acao_pipeline": "ignorado_retirada",
+                                     "obs_pipeline": "Retirada no galpão via J3 FLEX"}, HOJE)
+        self.assertEqual(est, r.AGUARDANDO_RETIRADA)
+        self.assertIn("J3 FLEX", motivo)
+
     def test_pool_rascunho_agendamento(self):
         base = {"status_nucleo": "ABERTO"}
         self.assertEqual(r.classificar(base, HOJE)[0], r.NO_POOL)
@@ -110,6 +122,31 @@ class TestClassificar(unittest.TestCase):
 
     def test_entregue_some(self):
         self.assertIsNone(r.classificar({"status_nucleo": "ENTREGUE", "aberto_stokki": True}, HOJE))
+
+
+class TestAcaoEDono(unittest.TestCase):
+    def test_cada_estado_tem_acao_e_dono(self):
+        for estado in list(r.ORDEM) + [r.ENTREGUE_NAO_EXPEDIDO]:
+            acao, dono = r.acao_e_dono(estado)
+            self.assertTrue(acao, estado)
+            self.assertIn(dono, (r.LOGISTICA, r.ATENDIMENTO, r.EXPEDICAO), estado)
+
+    def test_dono_fixo_por_situacao(self):
+        self.assertEqual(r.acao_e_dono(r.ROTA_PASSADA)[1], r.LOGISTICA)
+        self.assertEqual(r.acao_e_dono(r.NO_POOL)[1], r.LOGISTICA)
+        self.assertEqual(r.acao_e_dono(r.RECUSADO)[1], r.ATENDIMENTO)
+        self.assertEqual(r.acao_e_dono(r.AGUARDANDO_CLIENTE)[1], r.ATENDIMENTO)
+        self.assertEqual(r.acao_e_dono(r.ENTREGUE_NAO_EXPEDIDO)[1], r.EXPEDICAO)
+
+    def test_insucesso_depende_do_motivo(self):
+        self.assertEqual(r.acao_e_dono(r.INSUCESSO, "Não coletado")[1], r.LOGISTICA)
+        self.assertEqual(r.acao_e_dono(r.INSUCESSO, "Problema fiscal")[1], r.ATENDIMENTO)
+        self.assertEqual(r.acao_e_dono(r.INSUCESSO, None)[1], r.ATENDIMENTO)
+
+    def test_sem_servico_depende_da_acao_do_pipeline(self):
+        self.assertEqual(r.acao_e_dono(r.SEM_SERVICO, "pulado_cancelado_vuupt -- Serviço CANCELADO")[1],
+                         r.ATENDIMENTO)
+        self.assertEqual(r.acao_e_dono(r.SEM_SERVICO, "erro -- endereço")[1], r.LOGISTICA)
 
 
 if __name__ == "__main__":
