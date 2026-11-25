@@ -94,6 +94,29 @@
   table.hist td.num { text-align: right; white-space: nowrap; }
   table.hist .acoes { display: flex; gap: 6px; white-space: nowrap; }
   .oculto { display: none !important; }
+  /* Botão Colunas (seletorColunasPortal, _colunas_tabela.html) */
+  .ferramentas { display: flex; justify-content: flex-end; padding: 6px 18px 0; position: relative; }
+  .botao-linha.ativo { border-color: var(--acento); color: var(--acento); }
+  th[hidden], td[hidden] { display: none !important; }
+  .popover { position: absolute; right: 18px; top: 40px; width: 320px; max-width: calc(100vw - 40px); background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,0.18); z-index: 5; display: none; flex-direction: column; }
+  .popover.aberto { display: flex; }
+  .popover .cabeca { padding: 12px 16px 8px; border-bottom: 1px solid var(--borda); display: flex; align-items: baseline; justify-content: space-between; }
+  .popover .cabeca b { font-size: 13px; }
+  .popover .cabeca span { font-size: 11.5px; color: var(--texto-suave); }
+  .popover .grupo { padding: 8px 16px; display: flex; flex-direction: column; }
+  .popover .grupo + .grupo { border-top: 1px dashed var(--borda); }
+  .popover .grupo .rot { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; color: var(--texto-suave); padding: 4px 0; }
+  .popover .item { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12.5px; }
+  .popover .item label { display: flex; align-items: center; gap: 10px; flex: 1; cursor: pointer; }
+  .popover .item input { width: 16px; height: 16px; accent-color: var(--acento); margin: 0; }
+  .popover .item .mover { display: inline-flex; gap: 2px; }
+  .popover .item .mover button { border: 1px solid var(--borda); background: none; color: var(--texto-suave); border-radius: 4px; width: 22px; height: 22px; cursor: pointer; padding: 0; display: flex; align-items: center; justify-content: center; }
+  .popover .item .mover button:hover { color: var(--texto); border-color: var(--texto-suave); }
+  .popover .item .mover button:disabled { opacity: 0.3; cursor: default; }
+  .popover .item .mover svg { width: 12px; height: 12px; }
+  .popover .item.disponivel { color: var(--texto-suave); }
+  .popover .pe { padding: 10px 16px; border-top: 1px solid var(--borda); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .popover .pe a { font-size: 12px; font-weight: 600; cursor: pointer; }
   .girando { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 100px; animation: gira .7s linear infinite; }
   @keyframes gira { to { transform: rotate(360deg); } }
 </style>
@@ -204,9 +227,10 @@
 
   <div class="card card-tabela" id="card-historico">
     <h3>Cotações anteriores</h3>
+    <div class="ferramentas"></div>
     <div class="rolagem">
-      <table class="hist">
-        <thead><tr><th>Nº</th><th>Data</th><th>Veículo</th><th>Carga</th><th>Entregas</th><th class="num">Km</th><th class="num">Total</th><th>Situação</th><th></th></tr></thead>
+      <table class="hist" id="hist-tabela">
+        <thead><tr><th>Nº</th><th>Data</th><th>Veículo</th><th>Carga</th><th>Entregas</th><th class="num">Km</th><th class="num">Total</th><th>Situação</th><th>Ações</th></tr></thead>
         <tbody id="hist-corpo"><tr><td colspan="9" class="vazio">Carregando…</td></tr></tbody>
       </table>
     </div>
@@ -214,6 +238,7 @@
 </main>
 {% endblock %}
 {% block script_extra %}
+{% include "_colunas_tabela.html" %}
 {# depois do motor (_tour.html, incluído pelo base no fim do body) #}
 {% include "_tour_cotacao.html" %}
 <script>
@@ -419,6 +444,7 @@
   });
 
   // ── Histórico ─────────────────────────────────────────────────────────
+  const aplicarColunasHist = window.seletorColunasPortal(document.querySelector('table.hist'));
   async function carregarHistorico() {
     try {
       const r = await fetch(`${BASE}/api/cotacao/historico`, { credentials: 'same-origin' });
@@ -439,6 +465,7 @@
           <td class="acoes">${r ? `<button type="button" class="botao-linha" data-ver="${c.id}">Ver</button><a class="botao-linha" href="${esc(c.url_pdf)}" target="_blank" style="text-decoration:none;">PDF</a>` : ''}</td>
         </tr>`;
       }).join('');
+      aplicarColunasHist();
     } catch (e) { $('hist-corpo').innerHTML = '<tr><td colspan="9" class="vazio">Não foi possível carregar o histórico.</td></tr>'; }
   }
   $('hist-corpo').addEventListener('click', async e => {
