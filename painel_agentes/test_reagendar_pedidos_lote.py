@@ -82,6 +82,31 @@ class ReagendarPedidosLoteTestCase(unittest.TestCase):
         ], any_order=True)
         self.assertEqual(self.mock_vuupt.atualizar_servico.call_count, 3)
 
+    # -- manter os horários do agendamento anterior (24/11) ---------------
+
+    def test_manter_horarios_troca_so_a_data_e_preserva_a_janela_de_cada_pedido(self):
+        # Vuupt devolve UTC sem fuso: 11:00-15:00Z = 08:00-12:00 local; 13:00-21:00Z = 10:00-18:00
+        servicos = {
+            111: {"scheduled_start": "2026-08-20 11:00:00", "scheduled_end": "2026-08-20 15:00:00"},
+            222: {"scheduled_start": "2026-08-21 13:00:00", "scheduled_end": "2026-08-21 21:00:00"},
+            333: {},  # sem agendamento anterior: cai na janela do modal
+        }
+        self.mock_vuupt.buscar_servico_por_id.side_effect = lambda sid: servicos[sid]
+
+        resultado = planejamento_rotas.reagendar_pedidos(
+            self.itens, "2026-08-25", "09:00", "17:00", manter_horarios=True)
+
+        self.assertEqual(resultado, {"ok": True, "falhas": []})
+        self.mock_vuupt.atualizar_servico.assert_has_calls([
+            mock.call(111, {"scheduled_start": "2026-08-25T08:00:00-03:00", "scheduled_end": "2026-08-25T12:00:00-03:00"}),
+            mock.call(222, {"scheduled_start": "2026-08-25T10:00:00-03:00", "scheduled_end": "2026-08-25T18:00:00-03:00"}),
+            mock.call(333, {"scheduled_start": "2026-08-25T09:00:00-03:00", "scheduled_end": "2026-08-25T17:00:00-03:00"}),
+        ], any_order=True)
+
+    def test_sem_manter_horarios_nao_consulta_a_vuupt(self):
+        planejamento_rotas.reagendar_pedidos(self.itens, "2026-08-25", "08:00", "18:00")
+        self.mock_vuupt.buscar_servico_por_id.assert_not_called()
+
     # -- falha isolada não aborta os demais -------------------------------
 
     def test_falha_em_um_item_nao_aborta_os_demais(self):

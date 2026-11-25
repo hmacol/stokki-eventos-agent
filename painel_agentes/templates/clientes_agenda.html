@@ -50,7 +50,7 @@
         <td class="mono">{{ c.documento_formatado }}</td>
         <td>
           <ul class="pedidos">
-            {% for p in c.pedidos %}<li>{{ p.codigo }} · {{ p.data }} · {{ p.origem }}</li>{% endfor %}
+            {% for p in c.pedidos %}<li>{{ p.codigo }} · NF {{ p.nf or '—' }} · {{ p.data }} · {{ p.origem }}</li>{% endfor %}
           </ul>
         </td>
         <td class="mono">{{ c.tratado_em or '' }}</td>

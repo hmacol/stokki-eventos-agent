@@ -74,7 +74,7 @@
 
   function mostrar(r) {
     const card = el("div", "veredito " + r.veredito);
-    card.appendChild(el("div", "codigo", r.codigo));
+    card.appendChild(el("div", "codigo", r.codigo + " · NF " + (r.nf || "—")));
     card.appendChild(el("div", "titulo", r.titulo));
     card.appendChild(el("div", "contexto", r.contexto));
     if (r.divergencia) card.appendChild(el("div", "faixa divergencia", "⚠ Divergência: " + r.divergencia + ". Avise o responsável."));

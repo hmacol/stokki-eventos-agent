@@ -4,6 +4,7 @@ Tela /ciencias-dedicado (equipe acompanha a ciencia do dedicado fora do dia fixo
 
     py -3.11 -m unittest test_ciencias_dedicado_tela   (de dentro de painel_agentes/)
 """
+import re
 import sqlite3
 import sys
 import tempfile
@@ -135,19 +136,23 @@ class TestCienciasDedicadoTela(unittest.TestCase):
         self._logar("operador")
         d = self.cliente.get(f"/api/ciencias-dedicado/{self.ids['PS-2']}").get_json()
         self.assertEqual(d["ciencia"]["situacao"], "CIENTE")
-        self.assertEqual(d["resposta"], {"por": "Maria", "em": "2026-11-17 10:00:00",
-                                         "ip": "1.2.3.4", "data_nova": None})
+        self.assertEqual(d["resposta"], {"por": "Maria", "em": "2026-11-17 10:00:00", "ip": "1.2.3.4",
+                                         "data_nova": None, "origem": "", "navegador": ""})
         self.assertIsNone(d["encerramento"])
 
     def test_api_reagendado_traz_data_nova(self):
         conn = cd.conectar(self.db)
-        cd.responder(conn, self.ids["PS-1"], cd.REAGENDADO, "Joao", "9.9.9.9", AGORA, date(2026, 11, 24))
+        cd.responder(conn, self.ids["PS-1"], cd.REAGENDADO, "Joao", "9.9.9.9", AGORA, date(2026, 11, 24),
+                     origem="painel:joana", navegador="Firefox")
         conn.close()
         self._logar("operador")
         d = self.cliente.get(f"/api/ciencias-dedicado/{self.ids['PS-1']}").get_json()
         self.assertEqual(d["resposta"]["por"], "Joao")
         self.assertEqual(d["resposta"]["ip"], "9.9.9.9")
         self.assertEqual(d["resposta"]["data_nova"], "2026-11-24")
+        # de qual link veio: resposta por link copiado do painel nao se passa por resposta do cliente
+        self.assertEqual(d["resposta"]["origem"], "pelo link copiado do painel por joana")
+        self.assertEqual(d["resposta"]["navegador"], "Firefox")
 
     def test_api_encerrado_nao_tem_resposta_do_embarcador(self):
         self._logar("operador")
@@ -171,12 +176,21 @@ class TestCienciasDedicadoTela(unittest.TestCase):
         self.assertTrue(acesso_telas.caminho_liberado("/api/ciencias-dedicado/7", ["ciencias_dedicado"]))
         self.assertEqual(len(caminhos), 2)
 
-    def test_link_copiado_e_o_do_embarcador_da_linha(self):
+    def test_link_copiado_e_so_do_pedido_da_linha_e_marca_quem_copiou(self):
         self._logar("total")
         html = self.cliente.get("/ciencias-dedicado").get_data(as_text=True)
-        self.assertIn(f'data-link="{link_ciencia.url(101, SEGREDO, URL_BASE)}"', html)
-        self.assertIn(f'data-link="{link_ciencia.url(102, SEGREDO, URL_BASE)}"', html)
-        self.assertNotEqual(link_ciencia.url(101, SEGREDO, URL_BASE), link_ciencia.url(102, SEGREDO, URL_BASE))
+        tokens = re.findall(r'data-link="' + re.escape(URL_BASE) + r'/ciencia/([\w.-]+)"', html)
+        lidos = {(l.sender_id, l.ids, l.origem) for l in (link_ciencia.ler(t, SEGREDO) for t in tokens)}
+        self.assertEqual(lidos, {(101, frozenset({self.ids["PS-1"]}), "painel:teste"),
+                                 (102, frozenset({self.ids["PS-2"]}), "painel:teste"),
+                                 (103, frozenset({self.ids["PS-3"]}), "painel:teste")})
+
+    def test_rotulo_da_origem(self):
+        import ciencias_dedicado as tela
+        self.assertEqual(tela.rotulo_origem("email"), "pelo link do e-mail")
+        self.assertEqual(tela.rotulo_origem("equipe"), "pelo link do alerta da equipe")
+        self.assertEqual(tela.rotulo_origem("painel:joana"), "pelo link copiado do painel por joana")
+        self.assertEqual(tela.rotulo_origem(None), "")
 
 
 if __name__ == "__main__":

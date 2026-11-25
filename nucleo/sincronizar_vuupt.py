@@ -264,6 +264,15 @@ def _sincronizar_rota(ctx: _Contexto, rota: dict, stats: dict):
         elif situacao == banco.PARADA_INSUCESSO:
             insucessos += 1
         if preserva_app:
+            # nucleo_servicos (20/11): o serviço da rota do app também conta, com o resultado do app.
+            if s.get("code"):
+                nucleo_pedidos.registrar_servico(
+                    conn, service_id, s["code"],
+                    {"vuupt_route_id": vuupt_route_id,
+                     "reentrega_de_service_id": s.get("recreated_order_origin_id"),
+                     "criado_em_provedor": vuupt_para_local(s.get("created_at")),
+                     "concluido_em": anterior["completed_at"]},
+                    status=_SITUACAO_PARA_PEDIDO.get(situacao))
             continue
         completed_at = vuupt_para_local(s.get("completed_at"))
         if completed_at and (completed_max is None or completed_at > completed_max):

@@ -26,7 +26,7 @@ SENDER = 5
 NUMERO = "5511988887777"
 CONFIG = {"portal_cliente": {"secret_key": "segredo", "url_base": "https://portal.teste/cliente"},
           "ciencia_dedicado": {"ativo": True}}
-LINK = link_ciencia.url(SENDER, "segredo", "https://portal.teste/cliente")
+LINK = link_ciencia.url(SENDER, "segredo", "https://portal.teste/cliente", [1], "email")
 _RE_LINK = re.compile(r"https://portal\.teste/cliente/ciencia/([\w.-]+)")
 
 
@@ -110,11 +110,17 @@ class _Base(unittest.TestCase):
         return ncd.enviar_embarcador(self.conn, SENDER, pendentes, self.emb, config, falsos.canais(), agora,
                                      db_path=self.db)
 
-    def assertLinkDoEmbarcador(self, texto):
+    def assertLinkDoEmbarcador(self, texto, origem=None, ids=None):
+        """Link do embarcador; com `origem`/`ids`, confere tambem o canal e os pedidos que ele cobre."""
         tokens = _RE_LINK.findall(texto)
         self.assertTrue(tokens, "texto sem o link da ciencia")
         for token in tokens:
-            self.assertEqual(link_ciencia.ler(token, "segredo"), SENDER)
+            link = link_ciencia.ler(token, "segredo")
+            self.assertEqual(link.sender_id, SENDER)
+            if origem:
+                self.assertEqual(link.origem, origem)
+            if ids is not None:
+                self.assertEqual(link.ids, frozenset(ids))
 
     def _envios(self, cid, campos=("canal", "resultado", "motivo", "rodada")):
         return [tuple(e[c] for c in campos) for e in cd.envios(self.conn, cid)]
@@ -124,8 +130,7 @@ class TestRodada(_Base):
     def test_um_email_por_embarcador_com_todos_os_pedidos_e_link(self):
         self._tela("LIGADO")
         self._numero()
-        self._abrir("#PS-1", 10)
-        self._abrir("#PS-2", 11, valor=None, valor_pendente=True)
+        ids = [self._abrir("#PS-1", 10), self._abrir("#PS-2", 11, valor=None, valor_pendente=True)]
         f = CanaisFalsos()
         res = self._rodada(f)
         self.assertEqual(res, {"email": 1, "whatsapp": 1, "chat": 1, "nao_enviado": 0})
@@ -136,11 +141,12 @@ class TestRodada(_Base):
         for trecho in ("PS-1", "PS-2", "Padaria do Ze", "Campinas", "20/11/2026", "Terças e Quintas",
                        "R$ 250,00", "a confirmar", "Responder"):
             self.assertIn(trecho, html)
-        self.assertLinkDoEmbarcador(html)
+        # um link por canal (a resposta grava de qual veio), cobrindo so os pedidos da mensagem
+        self.assertLinkDoEmbarcador(html, "email", ids)
         self.assertEqual(len(f.whats), 1)
-        self.assertLinkDoEmbarcador(f.whats[0][2])
+        self.assertLinkDoEmbarcador(f.whats[0][2], "whatsapp", ids)
         self.assertEqual(len(f.abertos), 1)
-        self.assertLinkDoEmbarcador(f.abertos[0][3])
+        self.assertLinkDoEmbarcador(f.abertos[0][3], "chat", ids)
         self.assertIn("PS-2", f.abertos[0][3])
 
     def test_email_sai_mesmo_com_preferencia_desligada(self):
@@ -234,6 +240,9 @@ class TestRodada(_Base):
         self.assertIn("a@emb.com", html)
         _, telefone, _, destino_forcado = f.whats[0]
         self.assertEqual((telefone, destino_forcado), (NUMERO, "5511977776666"))
+        # a copia que vai pro piloto leva link de piloto (a pagina simula por ele, mesmo apos virar ENVIAR)
+        self.assertLinkDoEmbarcador(html, "email-piloto", [cid])
+        self.assertLinkDoEmbarcador(f.whats[0][2], "whatsapp-piloto", [cid])
         self.assertEqual((f.abertos, f.mensagens), ([], []))
         self.assertEqual(sorted(self._envios(cid)), [("chat", "piloto", "", 0), ("email", "piloto", "", 0),
                                                      ("whatsapp", "piloto", "", 0)])
@@ -299,6 +308,7 @@ class TestRodada(_Base):
         self.assertEqual(len(f.alertas), 1)
         self.assertIn("PS-1", f.alertas[0])
         self.assertIn("Emb Teste", f.alertas[0])
+        self.assertLinkDoEmbarcador(f.alertas[0], "equipe", [cid])
         self._rodada(f, AGORA + timedelta(hours=4))
         self.assertEqual(len(f.alertas), 1)
         self.assertIn(("email", "nao_enviado", "sem_canal", 1), self._envios(cid))
@@ -546,7 +556,7 @@ class TestWhatsappCiencia(unittest.TestCase):
 
     def test_texto_cabe_e_leva_o_link(self):
         pedidos = [{"codigo": f"PS-4031{i}"} for i in range(6)]
-        link = link_ciencia.url(123456, "segredo", "https://app.freshhub.com.br/cliente")
+        link = link_ciencia.url(123456, "segredo", "https://app.freshhub.com.br/cliente", [1, 2, 3], "whatsapp")
         for lembrete in (False, True):
             t = nw.texto_ciencia_dedicado("Embarcador de Nome Bem Comprido Ltda", pedidos, link, lembrete)
             self.assertLessEqual(len(t), nw.MAX_MENSAGEM)

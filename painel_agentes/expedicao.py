@@ -341,6 +341,10 @@ def listar_rotas_do_dia(data_alvo: date) -> list[dict]:
     for rota_id in _rota_ids_com_exclusao_no_dia(data_alvo) - ids_do_dia:
         rotas.append(_montar_card_rota_cancelada(token, data_alvo, rota_id, motorista_por_agent_id))
 
+    # NF ao lado do PS em cada chip (UMA busca em lote pro dia inteiro)
+    from nucleo import nf_pedido
+    nf_pedido.anotar_nf([p for r in rotas for p in r.get("pedidos_chip") or []], "codigo", "nf")
+
     rotas.sort(key=lambda r: (r["inicio"], _chave_ordem_natural(r["nome"])))
     return rotas
 

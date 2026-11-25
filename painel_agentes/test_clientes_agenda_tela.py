@@ -83,7 +83,7 @@ class TestTelaClientesAgenda(unittest.TestCase):
         html = resp.get_data(as_text=True)
         self.assertIn("VERO PANE", html)
         self.assertIn("49.749.452/0001-60", html)
-        self.assertIn("PS-1 · 30/09/2026 · portal ou e-mail", html)
+        self.assertIn("PS-1 · NF — · 30/09/2026 · portal ou e-mail", html)
         self.assertIn('data-acao="autorizar"', html)
 
     def test_outros_niveis_nao_entram(self):

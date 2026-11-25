@@ -1,0 +1,388 @@
+{
+ "atualizado_em": "2026-11-24",
+ "itens": [
+  {
+   "id": "master",
+   "g": "prio",
+   "t": "Limpar a master local",
+   "tag": [
+    "Risco",
+    "red"
+   ],
+   "meta": "7 arquivos modificados que não são da sessão, 10 commits atrás do origin.",
+   "ref": "master (backup: backup-master-local-24-11)",
+   "fin": "A master local tem 7 arquivos modificados e está 10 commits atrás do origin/master. Veja o git diff de cada um e me diga de qual trabalho é (cadastro_motorista_link, enviar_stokki, notificar_whatsapp, MAPA). Salve o que for único num ramo próprio, sem commit na master. Depois proponha igualar ao origin com merge --ff-only e espere meu OK antes de executar."
+  },
+  {
+   "id": "batimento",
+   "g": "prio",
+   "t": "Conflito aberto em wt_batimento_pool",
+   "tag": [
+    "Risco",
+    "red"
+   ],
+   "meta": "MAPA_DO_SISTEMA.txt está em UU (merge em andamento) e há arquivos em stage.",
+   "ref": "C:/wt_batimento_pool (ramo batimento-pool, 1 à frente, 946 atrás)",
+   "fin": "No worktree C:/wt_batimento_pool há um merge em andamento com conflito em MAPA_DO_SISTEMA.txt. Mostre os trechos em conflito e resolva mantendo as duas versões quando forem entradas diferentes. Não abandone o merge sem me avisar. Rode py_compile e os testes do batimento depois. Não faça commit até eu pedir."
+  },
+  {
+   "id": "pin",
+   "g": "prio",
+   "t": "PIN padrão 123456 no portal",
+   "tag": [
+    "Risco alto",
+    "red"
+   ],
+   "meta": "Revisão de segurança marcou A1 como ALTO e mais 3 MÉDIOS. Falta o WhatsApp da troca de PIN.",
+   "ref": "pin-seguro",
+   "mem": "project_revisao_seguranca_portal_api.md e project_portal_pin_padrao_troca.md",
+   "fin": "Leia as duas notas de memória e o ramo pin-seguro. Liste o que da revisão de segurança (A1 ALTO e os 3 MÉDIOS) já está corrigido e o que falta. Implemente o que falta começando pelo A1, com testes. O WhatsApp da troca de PIN depende de decisão minha: pergunte antes. Sem deploy até eu pedir."
+  },
+  {
+   "id": "exportador",
+   "g": "prio",
+   "t": "Arquivo solto do exportador Vuupt na VPS",
+   "tag": [
+    "Atrapalha deploy",
+    "amber"
+   ],
+   "meta": "Pode travar o próximo git pull na VPS.",
+   "ref": "/opt/stokki-eventos (VPS)",
+   "mem": "project_exportador_vuupt_completo_22_11.md",
+   "fin": "Na VPS, em modo leitura, descubra qual é o arquivo solto do exportador Vuupt (git status em /opt/stokki-eventos). Confirme se o conteúdo já está no repositório. Se estiver, proponha apagar; se não, proponha commitar. Não apague nada sem meu OK."
+  },
+  {
+   "id": "transp",
+   "g": "prio",
+   "t": "Consulta de transportadoras: 2 MÉDIOS",
+   "tag": [
+    "Antes de ligar",
+    "amber"
+   ],
+   "meta": "A consulta está DESLIGADA por causa desses dois pontos.",
+   "ref": "transportadoras-banco",
+   "mem": "project_transportadoras_banco_consulta.md",
+   "fin": "Leia a nota project_transportadoras_banco_consulta e o ramo transportadoras-banco. Identifique os 2 achados MÉDIOS que impedem ligar a consulta, corrija com testes e diga o que falta para eu poder ligar. Não ligue a flag."
+  },
+  {
+   "id": "assistente",
+   "g": "sujo",
+   "t": "assistente-atendimento",
+   "tag": [
+    "Sem commit",
+    "amber"
+   ],
+   "meta": "Pasta assistente_atendimento/ nova e 7 arquivos modificados. 3 ações esperam captura.",
+   "ref": ".claude/worktrees/assistente-atendimento",
+   "mem": "project_assistente_atendimento_chat.md",
+   "fin": "No worktree assistente-atendimento há trabalho sem commit. Leia a nota de memória, rode py_compile e os testes do que foi alterado e me dê um resumo do que está pronto e do que falta (as 3 ações que esperam captura). Não commite."
+  },
+  {
+   "id": "divulgacao",
+   "g": "sujo",
+   "t": "divulgacao-rotas",
+   "tag": [
+    "No ar, sem commit",
+    "red"
+   ],
+   "meta": "Redesenho da oferta de rotas, 8+ arquivos. A feature está LIGADA.",
+   "ref": ".claude/worktrees/divulgacao-rotas",
+   "mem": "project_rota_sem_aceite_oferta.md",
+   "fin": "O worktree divulgacao-rotas tem o redesenho da oferta de rotas sem commit e a feature está ligada. Rode py_compile e os testes de nucleo/test_ofertas_rota_enviada.py, revise o diff e me diga se está seguro commitar. Prepare a mensagem de commit mas só commite quando eu pedir."
+  },
+  {
+   "id": "cobranca",
+   "g": "sujo",
+   "t": "cobranca-portal",
+   "tag": [
+    "Sem commit",
+    "amber"
+   ],
+   "meta": "Módulo novo cobranca_portal.py com testes, mais ajustes em adesão e painel.",
+   "ref": ".claude/worktrees/cobranca-portal",
+   "fin": "No worktree cobranca-portal rode py_compile e os testes (painel_agentes/test_cobranca_portal.py, de dentro de painel_agentes/). Explique em poucas linhas o que a cobrança do portal faz, o que falta e se a rota nova entrou em acesso_telas.TELAS. Não commite."
+  },
+  {
+   "id": "compras",
+   "g": "sujo",
+   "t": "demanda-compras (tela Compras)",
+   "tag": [
+    "Sem commit",
+    "amber"
+   ],
+   "meta": "Faltam criar logins e testar.",
+   "ref": ".claude/worktrees/demanda-compras",
+   "mem": "project_compras_demandas.md",
+   "fin": "No worktree demanda-compras rode os testes de painel_agentes/test_compras.py. Teste a tela em outra porta (8099). Liste o que falta para entregar e quais logins precisam ser criados. Não crie login sem meu OK."
+  },
+  {
+   "id": "coletas",
+   "g": "sujo",
+   "t": "aula-equipe-coletas",
+   "tag": [
+    "Sem commit",
+    "amber"
+   ],
+   "meta": "Vídeo de Coletas e QR.",
+   "ref": ".claude/worktrees/aula-equipe-coletas",
+   "mem": "project_aula_equipe_videos.md",
+   "fin": "No worktree aula-equipe-coletas rode py_compile e os testes de aula_equipe. Diga o que falta para o vídeo de Coletas ficar pronto e se algo depende de mim."
+  },
+  {
+   "id": "otarota",
+   "g": "sujo",
+   "t": "ota-rota-libera-00h",
+   "tag": [
+    "Sem commit",
+    "amber"
+   ],
+   "meta": "4 arquivos do app motorista (parada, api, fila, rascunho).",
+   "ref": ".claude/worktrees/ota-rota-libera-00h",
+   "fin": "No worktree ota-rota-libera-00h há 4 arquivos do app_motorista alterados sem commit. Mostre o diff, diga o objetivo da mudança e se já está coberta em outro ramo (rota-libera-00h, app-parada-rascunho-foto). Rode a checagem de tipos do app. Não publique OTA."
+  },
+  {
+   "id": "pendencias",
+   "g": "sujo",
+   "t": "pendencias-reenvio-2dias",
+   "tag": [
+    "Sem commit",
+    "amber"
+   ],
+   "meta": "Timer e service novos mais ajustes em enviar_pendencias_motoristas.",
+   "ref": ".claude/worktrees/pendencias-reenvio-2dias",
+   "fin": "No worktree pendencias-reenvio-2dias rode os testes de nucleo/test_enviar_pendencias_motoristas.py. Antes de qualquer deploy, rode --modo-teste. Lembre que --modo-teste pode mandar e-mail real: confirme o forcar_destino. Liste os passos de deploy do timer novo e espere meu OK."
+  },
+  {
+   "id": "semsucesso",
+   "g": "sujo",
+   "t": "sem-sucesso-painel",
+   "tag": [
+    "Sem commit",
+    "amber"
+   ],
+   "meta": "Torre de controle: marcar entregue e sem sucesso. Falta prova real.",
+   "ref": ".claude/worktrees/sem-sucesso-painel",
+   "mem": "project_marcar_entregue_painel.md",
+   "fin": "No worktree sem-sucesso-painel rode painel_agentes/test_torre_marcar_entregue.py (de dentro de painel_agentes/). Veja o diff de torre_controle.py e diga se é continuação do que já foi deployado. Proponha a prova real, sem executar na produção."
+  },
+  {
+   "id": "endereco",
+   "g": "sujo",
+   "t": "endereco-entrega e endereco-bloqueio-area",
+   "tag": [
+    "Sem merge",
+    "amber"
+   ],
+   "meta": "Endereço do XML no portal e bloqueio de área. Dois worktrees com arquivos sobrepostos.",
+   "ref": "endereco-entrega-xml e endereco-bloqueio-area",
+   "mem": "project_endereco_entrega_xml_portal.md",
+   "fin": "Compare os worktrees endereco-entrega e endereco-bloqueio-area: os dois mexem em portal_cliente/envio_pedidos.py e _envios.html. Diga se um depende do outro, rode os testes de cada um e proponha a ordem de merge. Não faça merge."
+  },
+  {
+   "id": "acomp",
+   "g": "sujo",
+   "t": "acompanhamento-rotas e controle-pedidos-sla",
+   "tag": [
+    "Sem commit",
+    "amber"
+   ],
+   "meta": "Tela /acompanhamento e controle de não entregues.",
+   "ref": "acompanhamento-rotas e controle-pedidos-sla",
+   "mem": "project_acompanhamento_rotas_tela.md e project_controle_nao_entregues_vigia.md",
+   "fin": "Leia as duas notas e os dois ramos. Para cada um, diga o estado real (o que roda, o que falta) e se vale continuar. Rode os testes existentes. Não commite."
+  },
+  {
+   "id": "pwa",
+   "g": "cont",
+   "t": "PWA do motorista no iPhone real",
+   "tag": [
+    "Teste meu",
+    "green"
+   ],
+   "meta": "No ar. Falta teste no iPhone, tour, piloto e eu revogar o token Expo.",
+   "ref": "pwa-motorista-iphone",
+   "mem": "project_pwa_motorista_iphone.md",
+   "fin": "Prepare um roteiro curto de teste do PWA do motorista no iPhone (instalar, login, rota, baixa, foto), com o que olhar em cada passo. Liste também como eu revogo o token Expo. Não altere nada."
+  },
+  {
+   "id": "despesas",
+   "g": "cont",
+   "t": "Pergunta de despesas ao finalizar rota",
+   "tag": [
+    "Teste meu",
+    "green"
+   ],
+   "meta": "Falta teste no celular real. Foto da galeria e recibo repetido entraram em 24/11.",
+   "ref": "master",
+   "mem": "project_pergunta_despesas_finalizar_rota.md",
+   "fin": "Monte um roteiro de teste no celular real para a pergunta de despesas ao finalizar a rota, incluindo foto da galeria e recibo repetido (commits de 24/11). Diga o que olhar no painel de aprovação."
+  },
+  {
+   "id": "fila",
+   "g": "cont",
+   "t": "Fila de mensagens do app: 1º envio real",
+   "tag": [
+    "Conferir 23/11",
+    "amber"
+   ],
+   "meta": "Conferir o primeiro envio real.",
+   "ref": "fila-app-motoristas",
+   "mem": "project_fila_app_motoristas.md",
+   "fin": "Use a skill conferir-rodada: confira na VPS se o primeiro envio real da fila de mensagens do app dos motoristas aconteceu (logs e tabela). Só leitura. Resuma em poucas linhas."
+  },
+  {
+   "id": "mapa",
+   "g": "cont",
+   "t": "Mapa da rota no app",
+   "tag": [
+    "Teste meu",
+    "green"
+   ],
+   "meta": "Liberado em 24/11. Falta ver a faixa de versão nova num celular com 1.1.1.",
+   "ref": "mapa-rota-app",
+   "mem": "project_mapa_rota_app_motorista.md",
+   "fin": "Diga exatamente o que eu devo ver num celular com a versão 1.1.1 e como confirmar que o aviso de versão aparece. Só leitura."
+  },
+  {
+   "id": "homolog",
+   "g": "cont",
+   "t": "Homologação do painel e portal",
+   "tag": [
+    "Teste meu",
+    "green"
+   ],
+   "meta": "No ar. Falta eu testar no celular.",
+   "ref": "homologacao",
+   "mem": "project_homologacao_legado.md",
+   "fin": "Use a skill homologar: confirme que homolog.freshhub.com.br/painel/ e /cliente/ estão no ar e me dê o roteiro de teste no celular. Não recopie dados."
+  },
+  {
+   "id": "cancnot",
+   "g": "cont",
+   "t": "Cancelar e notificar / editar rota enviada",
+   "tag": [
+    "Piloto",
+    "green"
+   ],
+   "meta": "Em piloto. Falta meu teste.",
+   "ref": "cancelar-notificar e editar-rota-enviada",
+   "mem": "project_cancelar_notificar_rota.md e project_editar_rota_enviada.md",
+   "fin": "Leia as duas notas. Mostre onde cada função está no painel e me dê um roteiro de teste com uma rota de teste, sem notificar cliente real (forcar_destino)."
+  },
+  {
+   "id": "recebimento",
+   "g": "cont",
+   "t": "Recebimento em 3 etapas",
+   "tag": [
+    "Decisão minha",
+    "amber"
+   ],
+   "meta": "Worktree sem push. Decidir PR ou homologação.",
+   "ref": "recebimento-etapas",
+   "mem": "project_recebimento_tres_etapas.md",
+   "fin": "Leia a nota e o ramo recebimento-etapas. Resuma o que foi feito, o que falta e compare duas opções: abrir PR direto ou subir para homologação primeiro. Recomende uma. Não dê push."
+  },
+  {
+   "id": "redesign",
+   "g": "cont",
+   "t": "Redesign do planejamento: A, B ou C",
+   "tag": [
+    "Decisão minha",
+    "amber"
+   ],
+   "meta": "Três direções esperando escolha.",
+   "ref": "-",
+   "mem": "project_redesign_planejamento_3_direcoes.md",
+   "fin": "Leia a nota e me mostre as 3 direções lado a lado, com uma recomendação e o custo de cada uma. Depois que eu escolher, só aí implemente."
+  },
+  {
+   "id": "saida",
+   "g": "cont",
+   "t": "Saída da Vuupt: prontidão e plano",
+   "tag": [
+    "Decisão minha",
+    "amber"
+   ],
+   "meta": "Esperam minha decisão.",
+   "ref": "-",
+   "mem": "project_saida_vuupt_prontidao_corte.md",
+   "fin": "Leia a nota e o painel de Saída da Vuupt. Resuma o que bloqueia o corte e quais decisões são minhas, em uma lista curta ordenada por impacto."
+  },
+  {
+   "id": "pedidosentrada",
+   "g": "cont",
+   "t": "Aba Pedidos de Entrada no portal",
+   "tag": [
+    "Aprovar spec",
+    "amber"
+   ],
+   "meta": "Spec v2 esperando aprovação.",
+   "ref": "pedidos-entrada",
+   "mem": "project_pedidos_entrada_portal.md",
+   "fin": "Leia a spec v2 em docs/superpowers/specs e docs/revisoes/2026-11-23-pedidos-entrada-v2.md. Resuma em 10 linhas o que será feito e as perguntas em aberto para eu aprovar. Não implemente."
+  },
+  {
+   "id": "cnae",
+   "g": "cont",
+   "t": "Categoria do destinatário pelo CNAE",
+   "tag": [
+    "Decisão minha",
+    "amber"
+   ],
+   "meta": "Carga feita, nada lê ainda.",
+   "ref": "-",
+   "mem": "project_categoria_cliente_cnae.md",
+   "fin": "Leia a nota. Proponha 2 ou 3 usos concretos da categoria (relatório, regra de roteirização, aviso) com custo de cada um e espere minha escolha."
+  },
+  {
+   "id": "limpos",
+   "g": "enc",
+   "t": "Worktrees limpos de ramos antigos (lote)",
+   "tag": [
+    "Encerrar",
+    "gray"
+   ],
+   "meta": "aviso-24h, aviso-pendencias, agendamento-*, alteracao-automatica, galpao-3d*, galpao-conf-longa, menu-*, osrm-ortools e outros.",
+   "ref": "lote",
+   "enc": "Para cada worktree em .claude/worktrees sem alteração, rode git branch --merged origin/master e confira se o ramo tem commits que não estão no origin. Monte uma tabela com: worktree, mergeado (sim/não), commits únicos, última data. Para os mergeados e limpos, proponha os comandos git worktree remove e git branch -d, e espere meu OK antes de executar. Os com commits únicos, liste à parte."
+  },
+  {
+   "id": "scratch",
+   "g": "enc",
+   "t": "wt_deploy, wt_deploy2 e wt2 (scratchpad)",
+   "tag": [
+    "Encerrar",
+    "gray"
+   ],
+   "meta": "Worktrees detached HEAD de deploys antigos.",
+   "ref": "Temp/claude/.../scratchpad",
+   "enc": "Verifique se os worktrees detached em Temp/claude/*/scratchpad (wt_deploy, wt_deploy2, wt2) têm alterações sem commit. Se não tiverem, proponha git worktree remove. Lembre que a guarda bloqueia Remove-Item: use [IO.Directory]::Delete se precisar. Espere meu OK."
+  },
+  {
+   "id": "entregues",
+   "g": "enc",
+   "t": "Entregues e provados",
+   "tag": [
+    "Encerrar",
+    "gray"
+   ],
+   "meta": "PWA no ar, Tela Demandas, Rotas fracas v2, PS errado por NF repetida.",
+   "ref": "-",
+   "mem": "concluidos_indice.md",
+   "enc": "Para cada item que a memória marca como entregue e provado (Tela Demandas, Rotas fracas v2, PS errado por NF repetida), confirme na VPS em leitura que está de pé, mova a nota para concluidos_indice.md e atualize o MEMORY.md. Não mexa em código."
+  },
+  {
+   "id": "paradas",
+   "g": "enc",
+   "t": "Central WhatsApp (Evolution) e BD_Motoristas",
+   "tag": [
+    "Parado",
+    "gray"
+   ],
+   "meta": "Central parada, rotina desativada. Não retomar.",
+   "ref": "-",
+   "mem": "project_atendimento_unificado.md e project_bd_motoristas_sync_routine.md",
+   "enc": "Confirme que a Central WhatsApp (Evolution) e a rotina mensal BD_Motoristas continuam desligadas na VPS (systemctl list-timers). Se já não há nada ativo, deixe as notas como arquivadas no MEMORY.md."
+  }
+ ]
+}

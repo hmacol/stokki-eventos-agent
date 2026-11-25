@@ -63,7 +63,7 @@ class _Sessao:
 
     def get(self, url, params=None, headers=None, **kw):
         self.gets.append((url, params))
-        if url.endswith("/outbound/table"):
+        if url.endswith("/outbound/listing/table"):
             atual = self.linhas.pop(0) if len(self.linhas) > 1 else self.linhas[0]
             return _Resp(200, json.dumps({"aaData": atual}))
         if "/xml/nfe/" in url:

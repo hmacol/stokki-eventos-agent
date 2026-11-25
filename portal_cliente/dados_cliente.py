@@ -218,29 +218,27 @@ def _conectar() -> sqlite3.Connection:
 
 
 def nf_por_codigo(codigos_base: set[str]) -> dict[str, str]:
-    """Mesma query de painel_agentes/rascunhos_rota.carregar_nf_por_codigo_pedido."""
+    """{codigo base: "111, 222"}. Delega a nucleo.nf_pedido (fonte unica de NF
+    por PS, usada em todas as telas)."""
     if not codigos_base:
         return {}
     try:
-        conn = _conectar()
-        try:
-            resultado: dict[str, set[str]] = {}
-            lista = sorted(codigos_base)
-            for i in range(0, len(lista), 900):
-                lote = lista[i:i + 900]
-                marc = ",".join("?" * len(lote))
-                for row in conn.execute(
-                        f"SELECT codigo_pedido, numero_nf FROM documentos_processados "
-                        f"WHERE status='ENVIADO' AND tipo='Nota Fiscal' AND numero_nf IS NOT NULL "
-                        f"AND codigo_pedido IN ({marc})", lote):
-                    if row["numero_nf"]:
-                        resultado.setdefault(row["codigo_pedido"], set()).add(str(row["numero_nf"]))
-            return {c: ", ".join(sorted(v)) for c, v in resultado.items()}
-        finally:
-            conn.close()
+        from nucleo.nf_pedido import nf_por_codigo as _nf
+        return _nf(list(codigos_base))
     except Exception as e:
         logger.warning(f"[portal] NF por código falhou: {e}")
         return {}
+
+
+def ps_e_nf(codigo, conn=None) -> str:
+    """'PS-1 · NF 123' (sem NF: 'PS-1 · NF —'; varias: 'NF 1, 2') para textos de
+    e-mail/mensagem. Falha de banco nunca quebra: cai no traco."""
+    try:
+        from nucleo.nf_pedido import SEM_NF, nf_do_codigo, nf_por_codigo as _nf
+        nf = nf_do_codigo(codigo, _nf([codigo], conn)) or SEM_NF
+    except Exception:  # noqa: BLE001
+        nf = "—"
+    return f"{codigo} · NF {nf}"
 
 
 def cancelados_na_stokki(codigos_base: set[str]) -> set[str]:
@@ -470,6 +468,11 @@ def _coletar_atencao(sender_id) -> list[dict]:
         if codigo not in g["codigos"]:  # reentrega repete o code do original
             g["codigos"].append(codigo)
         g["service_ids"].append(r["service_id"])
+    # NF de cada PS do grupo (a tela mostra "PS · NF")
+    from nucleo.nf_pedido import nf_do_codigo
+    mapa = nf_por_codigo({c for g in grupos.values() for c in g["codigos"]})
+    for g in grupos.values():
+        g["nfs"] = {c: nf_do_codigo(c, mapa) for c in g["codigos"]}
     return list(grupos.values())
 
 

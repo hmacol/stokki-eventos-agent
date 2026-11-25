@@ -128,11 +128,15 @@ class PaginaCiencia(unittest.TestCase):
         cn.definir_estado(conn, "ciencia_dedicado", "LIGADO", "teste")
         conn.close()
 
-    def _url(self, sender_id=101, acao=""):
-        return f"/ciencia/{link_ciencia.gerar(sender_id, SEGREDO)}" + (f"/{acao}" if acao else "")
+    def _url(self, sender_id=101, acao="", ids=None, origem="email"):
+        """Sem `ids`, o link cobre todas as ciencias ja abertas (a de outro sender cai na checagem do sender)."""
+        if ids is None:
+            ids = [r[0] for r in self.conn.execute("SELECT id FROM ciencias_dedicado")] or [999999]
+        return f"/ciencia/{link_ciencia.gerar(sender_id, SEGREDO, ids, origem)}" + (f"/{acao}" if acao else "")
 
-    def _post(self, tc, acao, form, sender_id=101):
-        return tc.post(self._url(sender_id, acao), data=form, environ_base={"REMOTE_ADDR": IP})
+    def _post(self, tc, acao, form, sender_id=101, ids=None, origem="email", headers=None):
+        return tc.post(self._url(sender_id, acao, ids, origem), data=form, headers=headers or {},
+                       environ_base={"REMOTE_ADDR": IP})
 
     def _dedicado_ativo(self, sid=1001) -> bool:
         conn = pedidos_dedicados.conectar(self.db)
@@ -145,14 +149,33 @@ class PaginaCiencia(unittest.TestCase):
     def _datas(self):
         return link_ciencia.datas_de_visita(self.regra, date.today())
 
+    def _nfs(self):
+        self.conn.executescript(
+            "CREATE TABLE documentos_pedido (id_pedido, tipo_doc, status, numero_nf);"
+            "CREATE TABLE documentos_processados (codigo_pedido, tipo, status, numero_nf);"
+            "INSERT INTO documentos_pedido VALUES ('PS-1','nf','casado','777'),"
+            "('PS-2','nf','casado','888'),('PS-2','nf','casado','889');")
+        self.conn.commit()
+
+    def test_pagina_mostra_ps_e_nf(self):
+        self._nfs()
+        self._ciencia()                                   # PS-1: uma NF
+        respondido = self._ciencia(sid=1002, code="#PS-2")  # duas NFs
+        self._ciencia(sid=1003, code="#PS-4")             # sem NF
+        cd.responder(self.conn, respondido, cd.CIENTE, "Joana Lima", IP, datetime.now())
+        corpo = self._cliente().get(self._url(101)).get_data(as_text=True)
+        self.assertIn("PS-1 · NF 777", corpo)
+        self.assertIn("PS-4 · NF —", corpo)
+        self.assertIn("PS-2 · NF 888, 889", corpo)
+
     # ── token e lista ─────────────────────────────────────────────────────────
 
     def test_token_invalido_ou_expirado_da_404_sem_listar_pedido(self):
         self._ciencia()
         tc = self._cliente()
         with mock.patch("time.time", return_value=time.time() - 31 * 86400):
-            vencido = link_ciencia.gerar(101, SEGREDO)
-        for token in ("lixo", vencido, link_ciencia.gerar(101, "outro-segredo")):
+            vencido = link_ciencia.gerar(101, SEGREDO, [1], "email")
+        for token in ("lixo", vencido, link_ciencia.gerar(101, "outro-segredo", [1], "email")):
             r = tc.get(f"/ciencia/{token}")
             self.assertEqual(r.status_code, 404, token)
             corpo = r.get_data(as_text=True)
@@ -473,18 +496,102 @@ class PaginaCiencia(unittest.TestCase):
         self.assertNotIn("data em dia de visita", corpo)
         self.assertNotIn("Encerrado", corpo)
 
-    def test_reagendar_com_resposta_concorrente_avisa_no_log_e_tira_o_dedicado(self):
+    def test_reagendar_com_ciencia_encerrada_no_meio_alerta_a_equipe_e_tira_o_dedicado(self):
+        # a Vuupt ja mudou a data e a ciencia nao estava mais PENDENTE: o registro diverge, a equipe confere
         self._tela_ligada()
         cid = self._ciencia()
         tc = self._cliente()
         data = self._datas()[0]
         with mock.patch.object(cd, "responder", return_value=False), \
-                self.assertLogs("portal_cliente.link_ciencia", level="WARNING") as logs:
+                self.assertLogs("portal_cliente.link_ciencia", level="ERROR") as logs:
             r = self._post(tc, "reagendar", {"ciencia_id": str(cid), "nome": "Maria", "data": data.isoformat()})
-        self.assertTrue(any("WARNING" in linha and "PS-1" in linha for linha in logs.output), logs.output)
+        self.assertTrue(any("ERROR" in linha and "PS-1" in linha for linha in logs.output), logs.output)
         self.assertEqual(r.status_code, 303)
-        self.assertNotIn("simulado", tc.get(r.headers["Location"]).get_data(as_text=True))
+        self.assertIn("Nossa equipe vai concluir o ajuste", tc.get(r.headers["Location"]).get_data(as_text=True))
+        self.assertEqual(len(self.alertas), 1)
+        self.assertIn("a resposta não foi gravada", self.alertas[0])
         self.assertFalse(self._dedicado_ativo())
+
+    # ── revisao de seguranca 19/11 ────────────────────────────────────────────
+
+    def test_link_so_alcanca_as_ciencias_que_cobre(self):
+        self._tela_ligada()
+        antiga = self._ciencia()
+        nova = self._ciencia(sid=1002, code="#PS-2")   # aberta depois do link sair
+        tc = self._cliente()
+        corpo = tc.get(self._url(ids=[antiga])).get_data(as_text=True)
+        self.assertIn("PS-1", corpo)
+        self.assertNotIn("PS-2", corpo)
+        for acao, form in (("ciente", {"ciencia_id": str(nova), "nome": "Maria"}),
+                           ("reagendar", {"ciencia_id": str(nova), "nome": "Maria",
+                                          "data": self._datas()[0].isoformat()})):
+            r = self._post(tc, acao, form, ids=[antiga])
+            self.assertIn("r=ja_respondido", r.headers["Location"])
+        self.assertEqual(cd.buscar(self.conn, nova)["situacao"], cd.PENDENTE)
+        self.assertEqual((self.deps.chamadas, self.buscas), ([], []))
+        # o aviso pos-POST tambem nao fala de ciencia fora do link
+        self.assertNotIn("PS-2", tc.get(self._url(ids=[antiga]) + f"?r=ciente&c={nova}").get_data(as_text=True))
+
+    def test_resposta_grava_de_qual_link_veio_e_o_navegador(self):
+        self._tela_ligada()
+        ciente, reagendado = self._ciencia(), self._ciencia(sid=1002, code="#PS-2")
+        tc = self._cliente()
+        self._post(tc, "ciente", {"ciencia_id": str(ciente), "nome": "Maria"}, origem="whatsapp",
+                   headers={"User-Agent": "Celular X" + "y" * 400})
+        self._post(tc, "reagendar", {"ciencia_id": str(reagendado), "nome": "Joana",
+                                     "data": self._datas()[0].isoformat()}, origem="painel:joana")
+        linha = cd.buscar(self.conn, ciente)
+        self.assertEqual(linha["respondido_origem"], "whatsapp")
+        self.assertTrue(linha["respondido_navegador"].startswith("Celular X"))
+        self.assertEqual(len(linha["respondido_navegador"]), 300)
+        linha = cd.buscar(self.conn, reagendado)
+        self.assertEqual((linha["situacao"], linha["respondido_origem"]), (cd.REAGENDADO, "painel:joana"))
+
+    def test_resposta_em_andamento_trava_a_outra(self):
+        # reagendar esperando a Vuupt: o ciente (ou outra aba) nao grava por cima nem chama a Vuupt de novo
+        self._tela_ligada()
+        cid = self._ciencia()
+        self.assertTrue(cd.reivindicar_resposta(self.conn, cid, datetime.now()))
+        tc = self._cliente()
+        for acao, form in (("ciente", {"ciencia_id": str(cid), "nome": "Pedro"}),
+                           ("reagendar", {"ciencia_id": str(cid), "nome": "Pedro",
+                                          "data": self._datas()[0].isoformat()})):
+            r = self._post(tc, acao, form)
+            self.assertIn("r=em_andamento", r.headers["Location"])
+            self.assertIn("está sendo registrada agora", tc.get(r.headers["Location"]).get_data(as_text=True))
+        self.assertEqual(cd.buscar(self.conn, cid)["situacao"], cd.PENDENTE)
+        self.assertEqual((self.deps.chamadas, self.buscas), ([], []))
+
+    def test_link_de_copia_de_piloto_simula_mesmo_com_o_embarcador_em_envio_real(self):
+        self._tela_ligada()   # embarcador ja em ENVIAR: o link do cliente age, a copia que foi pro piloto nao
+        cid = self._ciencia()
+        tc = self._cliente()
+        for origem in ("email-piloto", "whatsapp-piloto"):
+            self.assertIn("Modo piloto", tc.get(self._url(origem=origem)).get_data(as_text=True))
+            r = self._post(tc, "ciente", {"ciencia_id": str(cid), "nome": "Hugo"}, origem=origem)
+            self.assertIn("ciência simulada", tc.get(r.headers["Location"]).get_data(as_text=True))
+            r = self._post(tc, "reagendar", {"ciencia_id": str(cid), "nome": "Hugo",
+                                             "data": self._datas()[0].isoformat()}, origem=origem)
+            self.assertIn("simulado", tc.get(r.headers["Location"]).get_data(as_text=True))
+        self.assertEqual(cd.buscar(self.conn, cid)["situacao"], cd.PENDENTE)
+        self.assertEqual((self.deps.chamadas, self.buscas), ([], []))
+
+    def test_cliente_teste_age_de_verdade_tambem_pelo_link_de_piloto(self):
+        cid = self._ciencia(cnpj="00.000.000/0001-91")
+        self._post(self._cliente(), "ciente", {"ciencia_id": str(cid), "nome": "Hugo"}, origem="email-piloto")
+        self.assertEqual(cd.buscar(self.conn, cid)["situacao"], cd.CIENTE)
+
+    def test_reagendar_recusado_solta_a_trava(self):
+        self._tela_ligada()
+        cid = self._ciencia()
+        self.servicos[1001]["status"] = "on_route"
+        tc = self._cliente()
+        r = self._post(tc, "reagendar", {"ciencia_id": str(cid), "nome": "Maria",
+                                         "data": self._datas()[0].isoformat()})
+        self.assertEqual(r.status_code, 409)
+        self.assertIsNone(cd.buscar(self.conn, cid)["processando_desde"])
+        self._post(tc, "ciente", {"ciencia_id": str(cid), "nome": "Maria"})
+        self.assertEqual(cd.buscar(self.conn, cid)["situacao"], cd.CIENTE)
 
     def test_ids_que_nao_sao_inteiro_positivo_pequeno_nao_tocam_o_banco(self):
         self._tela_ligada()

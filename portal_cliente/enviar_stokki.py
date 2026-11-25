@@ -777,7 +777,9 @@ def _codigo_em_documentos(conn, envio: dict) -> str | None:
     dest = re.sub(r"\D", "", envio.get("destinatario_doc") or "")
     candidatos = {r["codigo_pedido"] for r in linhas if dest and r["dest"] == dest}
     if not candidatos:
-        candidatos = {r["codigo_pedido"] for r in linhas}
+        # Contraparte preenchida e diferente do destinatario = outro pedido
+        # (PS-39753, 24/11); so vale a linha com contraparte vazia.
+        candidatos = {r["codigo_pedido"] for r in linhas if not (dest and r["dest"])}
     if len(candidatos) == 1:
         return candidatos.pop()
     logger.warning(f"envio {envio['id']}: NF {envio['numero_nf']} aponta pra {len(candidatos)} pedidos "

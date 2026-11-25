@@ -43,7 +43,7 @@
   ('Entregas', '<path d="M2.5 6h9v7.5h-9z"/><path d="M11.5 8.5h3l2.5 2.5v2.5h-5.5z"/><circle cx="6" cy="14.5" r="1.5"/><circle cx="14" cy="14.5" r="1.5"/>', [
     {'rota': 'torre', 'rotulo': 'Torre de Controle', 'titulo': 'Torre de Controle', 'niveis': NIVEIS_ROTAS + ('atendimento', 'logistica'), 'badge': 'torre',
      'icone': '<path d="M10 8v9M10 8a2 2 0 100-4 2 2 0 000 4z"/><path d="M6.5 6.5a5 5 0 000 7M13.5 6.5a5 5 0 010 7"/><path d="M4 4a8 8 0 000 12M16 4a8 8 0 010 12"/>'},
-    {'rota': 'vigia_pedidos', 'rotulo': 'Vigia', 'titulo': 'Vigia de pedidos abertos (estado, idade e prazo)', 'niveis': NIVEIS_ROTAS, 'badge': none,
+    {'rota': 'vigia_pedidos', 'rotulo': 'Vigia', 'titulo': 'Vigia: pedidos não entregues e o que fazer com cada um', 'niveis': NIVEIS_ROTAS + ('atendimento', 'logistica'), 'badge': none,
      'icone': '<circle cx="10" cy="10" r="6.5"/><path d="M10 6.2V10l2.6 1.8"/>'},
     {'rota': 'pedidos_tabela', 'rotulo': 'Pedidos', 'titulo': 'Todos os pedidos em tabela (estilo Serviços da Vuupt)', 'niveis': NIVEIS_ROTAS + ('atendimento', 'logistica'), 'badge': none,
      'icone': '<rect x="3.5" y="4" width="13" height="12" rx="1.5"/><path d="M3.5 8h13M3.5 12h13M8 4v12"/>'},
@@ -63,6 +63,8 @@
      'icone': '<circle cx="4.5" cy="15.5" r="1.6"/><circle cx="15.5" cy="4.5" r="1.6"/><path d="M4.5 13.9c0-3 1-4 3-5.5s3-2.5 3-4.9" stroke-dasharray="2.3 2.3"/>'},
     {'rota': 'mapa_rotas', 'rotulo': 'Mapa', 'titulo': 'Mapa de Rotas', 'niveis': NIVEIS_ROTAS, 'badge': none,
      'icone': '<path d="M10 17.5S4 12.6 4 8.2a6 6 0 1112 0c0 4.4-6 9.3-6 9.3z"/><circle cx="10" cy="8.2" r="2.1"/>'},
+    {'rota': 'acompanhamento', 'rotulo': 'Acompanhamento', 'titulo': 'Acompanhamento detalhado das rotas: tempo por parada, ocorrências, despesas e posição do motorista', 'niveis': NIVEIS_ROTAS + ('atendimento', 'logistica'), 'badge': none,
+     'icone': '<circle cx="10" cy="10" r="6.5"/><path d="M10 6.2V10l2.6 1.8"/>'},
     {'rota': 'laboratorio_rotas', 'rotulo': 'Laboratório', 'titulo': 'Laboratório de Roteirização', 'niveis': NIVEIS_ROTAS, 'badge': none,
      'icone': '<path d="M8 3h4M8.5 3v4.2L4.8 14a1.8 1.8 0 001.6 2.6h7.2a1.8 1.8 0 001.6-2.6L11.5 7.2V3"/><path d="M6.8 12h6.4"/>'},
   ]),
@@ -103,6 +105,8 @@
   ('Motoristas', '<circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="1.8"/><path d="M3.8 9h4.5M11.7 9h4.5M10 11.8v4.5"/>', [
     {'rota': 'motoristas', 'rotulo': 'Motoristas', 'titulo': 'Motoristas (cadastros do app esperando aprovação)', 'niveis': NIVEIS_ROTAS + ('logistica',), 'badge': 'motoristas',
      'icone': '<circle cx="10" cy="6.5" r="3"/><path d="M3.5 17c1-3.5 3.8-5.5 6.5-5.5s5.5 2 6.5 5.5"/>'},
+    {'rota': 'adesao_motoristas', 'rotulo': 'Adesão ao app', 'titulo': 'Motoristas que já operam pelo app novo, quem falta entrar e a leva de cada um', 'niveis': NIVEIS_ROTAS + ('logistica',), 'badge': none,
+     'icone': '<rect x="6" y="2.5" width="8" height="15" rx="1.5"/><path d="M8.5 14.5h3"/><path d="M8 8.2l1.5 1.5L12.2 7"/>'},
     {'rota': 'pedagios', 'rotulo': 'Pedágios', 'titulo': 'Pedágios (app de motoristas)', 'niveis': NIVEIS_ROTAS + ('logistica',), 'badge': 'pedagios',
      'icone': '<rect x="3" y="5" width="14" height="10" rx="1.5"/><path d="M3 8.5h14"/><path d="M6.5 12h3"/>'},
     {'rota': 'pagamentos', 'rotulo': 'Pagamentos', 'titulo': 'Pagamentos pontuais: pedir Adiantamento ou Descarga ao financeiro', 'niveis': ('total', 'atendimento', 'logistica'), 'badge': none,

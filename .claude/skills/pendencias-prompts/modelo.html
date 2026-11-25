@@ -1,0 +1,252 @@
+<title>Prompts de Pendências</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: barra fixa com modo + filtros, lista de cartões; cada cartão traz o prompt pronto para copiar */
+:root{
+  --bg:#f5f6f4; --surface:#ffffff; --fg:#1b2220; --muted:#5d6a66; --line:#dde2df;
+  --accent:#0f6b5c; --accent-fg:#ffffff; --code-bg:#eef1ef;
+  --red:#b3261e; --red-bg:#fbe9e7; --amber:#8a5a00; --amber-bg:#fff1d6; --green:#1d6b3a; --green-bg:#e3f3e8; --gray-bg:#e7eae8;
+  --sans:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif; --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#121715; --surface:#1a211f; --fg:#e6ebe8; --muted:#94a29d; --line:#2b3532;
+  --accent:#3fb59f; --accent-fg:#0b1512; --code-bg:#0f1513;
+  --red:#ff9a90; --red-bg:#3a1d1a; --amber:#f0c56a; --amber-bg:#35290e; --green:#7fd49b; --green-bg:#16301e; --gray-bg:#262e2c; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#121715; --surface:#1a211f; --fg:#e6ebe8; --muted:#94a29d; --line:#2b3532;
+  --accent:#3fb59f; --accent-fg:#0b1512; --code-bg:#0f1513;
+  --red:#ff9a90; --red-bg:#3a1d1a; --amber:#f0c56a; --amber-bg:#35290e; --green:#7fd49b; --green-bg:#16301e; --gray-bg:#262e2c; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:15px;line-height:1.5;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0 48px}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:var(--bg);z-index:10}
+.wrap{max-width:900px;margin:0 auto}
+header{padding:28px 0 16px}
+h1{font-size:1.6rem;margin:0 0 4px;letter-spacing:-.01em;text-wrap:balance}
+.sub{color:var(--muted);margin:0;max-width:65ch}
+.bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);padding:12px 0;border-bottom:1px solid var(--line);display:grid;gap:10px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.lbl{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);min-width:64px}
+.seg,.chips{display:flex;flex-wrap:wrap;gap:6px}
+button{font:inherit;color:var(--fg);cursor:pointer}
+.opt{border:1px solid var(--line);background:var(--surface);padding:6px 12px;border-radius:6px;font-size:.88rem}
+.opt[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.opt:focus-visible,.copy:focus-visible,summary:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.prog{margin-left:auto;font-size:.85rem;color:var(--muted);font-variant-numeric:tabular-nums}
+.regras{display:flex;gap:8px;align-items:center;font-size:.85rem;color:var(--muted)}
+h2{font-size:.78rem;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin:28px 0 10px;font-weight:600}
+.list{display:grid;gap:12px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 16px;min-width:0}
+.card.feito{opacity:.55}
+.top{display:flex;gap:10px;align-items:flex-start}
+.top input{margin-top:5px;width:16px;height:16px;accent-color:var(--accent);flex:none}
+.tt{flex:1;min-width:0}
+.tt b{font-weight:600}
+.meta{color:var(--muted);font-size:.85rem;margin:2px 0 0}
+.tag{font-size:.7rem;font-weight:600;padding:2px 8px;border-radius:99px;white-space:nowrap;flex:none}
+.t-red{background:var(--red-bg);color:var(--red)} .t-amber{background:var(--amber-bg);color:var(--amber)}
+.t-green{background:var(--green-bg);color:var(--green)} .t-gray{background:var(--gray-bg);color:var(--muted)}
+.prompt{position:relative;margin-top:10px}
+pre{margin:0;background:var(--code-bg);border:1px solid var(--line);border-radius:6px;padding:10px 12px;padding-right:84px;
+  font-family:var(--mono);font-size:.78rem;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;min-width:0}
+.copy{position:absolute;top:8px;right:8px;border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:4px 10px;font-size:.8rem}
+.copy.ok{background:var(--green-bg);color:var(--green);border-color:var(--green)}
+.vazio{color:var(--muted);padding:20px 0}
+.jn{border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:5px 12px;font-size:.78rem;flex:none}
+.jn[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.jn:focus-visible,.mini:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mini{border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:4px 10px;font-size:.82rem}
+.mini.main{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.mini[disabled]{opacity:.45;cursor:default}
+.combo{margin-top:14px;border:1px solid var(--accent);border-radius:8px;padding:12px 14px;background:var(--surface)}
+.combo h3{margin:0 0 8px;font-size:.9rem}
+.card.sel{border-color:var(--accent)}
+@media (max-width:520px){.lbl{min-width:100%}.prog{margin-left:0}pre{padding-right:12px;padding-top:40px}}
+</style>
+
+<div class="wrap">
+<header>
+  <h1>Prompts de Pendências</h1>
+  <p class="sub" id="situacao"></p>
+  <p style="margin:10px 0 0"><button class="mini main" id="atualizar" title="Copia o prompt que pede a uma sessão para reler tudo e republicar esta página">Atualizar situação</button></p>
+  <p class="sub">Uma pendência por cartão. Escolha o que a sessão nova deve fazer, copie o prompt e cole numa sessão do Claude Code aberta em c:\agente_stokki_eventos.</p>
+</header>
+
+<div class="bar">
+  <div class="row"><span class="lbl">Modo</span>
+    <div class="seg" id="modos"></div>
+  </div>
+  <div class="row"><span class="lbl">Grupo</span>
+    <div class="chips" id="grupos"></div>
+    <span class="prog" id="prog"></span>
+  </div>
+  <div class="row"><span class="lbl">Juntar</span>
+    <button class="mini" id="selGrupo">Selecionar os visíveis</button>
+    <button class="mini" id="limpar">Limpar seleção</button>
+    <button class="mini main" id="copiarCombo" disabled>Copiar combinado (0)</button>
+  </div>
+  <label class="regras"><input type="checkbox" id="regras" checked> Incluir regras do projeto no fim do prompt</label>
+</div>
+<div class="combo" id="combo" hidden>
+  <h3 id="comboTit"></h3>
+  <div class="prompt"><pre id="comboPre"></pre><button class="copy" id="comboCopy">Copiar</button></div>
+</div>
+
+<div id="lista"></div>
+</div>
+
+<script>
+const MODOS = [
+  {k:'finalizar', n:'Finalizar', d:'Fecha o que falta'},
+  {k:'atualizar', n:'Só atualizar', d:'Sem código: confere e atualiza memória e mapa'},
+  {k:'encerrar',  n:'Encerrar',  d:'Confere se está tudo salvo e propõe remover'}
+];
+const GRUPOS = [
+  {k:'todos', n:'Todos'},
+  {k:'prio', n:'Prioridade'},
+  {k:'sujo', n:'Código sem commit'},
+  {k:'cont', n:'Continuar'},
+  {k:'enc',  n:'Encerrar'}
+];
+
+/* ref = ramo ou worktree; mem = arquivo de memória; fin = o que fazer no modo Finalizar */
+let ITENS = [], ATUALIZADO = "";
+
+const TAGCLASS = {red:'t-red', amber:'t-amber', green:'t-green', gray:'t-gray'};
+const REGRAS = 'Regras: responda em português; não faça commit, push nem deploy sem eu pedir; faça git status antes de editar e git add só dos seus arquivos; não reverta alterações de outras sessões; use py -3.11; teste o painel em outra porta (8099); nada que mande mensagem real a cliente ou motorista sem meu OK.';
+
+let modo = 'finalizar', grupo = 'todos', feitos = {};
+try { feitos = JSON.parse(localStorage.getItem('pp_feitos') || '{}'); } catch (e) {}
+function salvar(){ try { localStorage.setItem('pp_feitos', JSON.stringify(feitos)); } catch (e) {} }
+
+let sel = new Set();
+const BASE = 'Projeto agente_stokki_eventos. Leia CLAUDE.md e MAPA_DO_SISTEMA.txt antes de começar.';
+function refs(it){
+  const r = [];
+  if (it.mem) r.push('Memória: ' + it.mem + '.');
+  if (it.ref && it.ref !== '-') r.push('Ramo/worktree: ' + it.ref + '.');
+  return r;
+}
+function corpoDe(it){
+  if (modo === 'finalizar') return it.fin || it.enc;
+  if (modo === 'atualizar')
+    return 'Tarefa: ' + it.t + '. Não mexa em código. Confira o estado real (git, e a VPS só em leitura) e atualize apenas a nota de memória e o MAPA_DO_SISTEMA.txt se algo mudou. Termine me dizendo o que estava desatualizado e o que corrigiu.';
+  return 'Tarefa: ' + it.t + '. Confira se tudo já está salvo: o ramo está mergeado em origin/master (git branch --merged), não há alteração sem commit, não há nada só local. Se estiver tudo salvo, proponha os comandos para remover worktree e ramo e espere meu OK antes de executar. Depois marque a nota de memória como concluída no MEMORY.md.';
+}
+function montarCombo(){
+  const its = ITENS.filter(i => sel.has(i.id));
+  let p = BASE + '\n\nSão ' + its.length + ' tarefas. Faça uma de cada vez, na ordem. Ao fim de cada uma, me dê um resumo de 2 linhas e siga para a próxima. Se uma depender de decisão minha, pule, anote o motivo e continue.';
+  its.forEach((it, n) => {
+    p += '\n\n' + (n + 1) + ') ' + it.t + '\n' + refs(it).join(' ') + (refs(it).length ? '\n' : '') + corpoDe(it);
+  });
+  if (document.getElementById('regras').checked) p += '\n\n' + REGRAS;
+  return p;
+}
+function montar(it){
+  const ctx = [BASE].concat(refs(it));
+  let corpo;
+  if (modo === 'finalizar') corpo = it.fin || it.enc;
+  else if (modo === 'atualizar')
+    corpo = 'Tarefa: ' + it.t + '. Não mexa em código. Confira o estado real (git, e a VPS só em leitura) e atualize apenas a nota de memória e o MAPA_DO_SISTEMA.txt se algo mudou. Termine me dizendo o que estava desatualizado e o que corrigiu.';
+  else
+    corpo = 'Tarefa: ' + it.t + '. Confira se tudo já está salvo: o ramo está mergeado em origin/master (git branch --merged), não há alteração sem commit, não há nada só local. Se estiver tudo salvo, proponha os comandos para remover worktree e ramo e espere meu OK antes de executar. Depois marque a nota de memória como concluída no MEMORY.md.';
+  let p = ctx.join(' ') + '\n\n' + corpo;
+  if (document.getElementById('regras').checked) p += '\n\n' + REGRAS;
+  return p;
+}
+
+function desenhar(){
+  const modosEl = document.getElementById('modos');
+  modosEl.innerHTML = '';
+  MODOS.forEach(m => {
+    const b = document.createElement('button');
+    b.className = 'opt'; b.textContent = m.n; b.title = m.d;
+    b.setAttribute('aria-pressed', m.k === modo);
+    b.onclick = () => { modo = m.k; desenhar(); };
+    modosEl.appendChild(b);
+  });
+  const gEl = document.getElementById('grupos');
+  gEl.innerHTML = '';
+  GRUPOS.forEach(g => {
+    const b = document.createElement('button');
+    b.className = 'opt'; b.textContent = g.n;
+    b.setAttribute('aria-pressed', g.k === grupo);
+    b.onclick = () => { grupo = g.k; desenhar(); };
+    gEl.appendChild(b);
+  });
+  const total = ITENS.length, f = ITENS.filter(i => feitos[i.id]).length;
+  document.getElementById('prog').textContent = f + ' de ' + total + ' marcadas como feitas';
+
+  const L = document.getElementById('lista'); L.innerHTML = '';
+  const nomes = {prio:'Prioridade', sujo:'Código sem commit', cont:'Continuar', enc:'Encerrar'};
+  ['prio','sujo','cont','enc'].forEach(gk => {
+    if (grupo !== 'todos' && grupo !== gk) return;
+    const itens = ITENS.filter(i => i.g === gk);
+    const h = document.createElement('h2'); h.textContent = nomes[gk] + ' (' + itens.length + ')'; L.appendChild(h);
+    const lst = document.createElement('div'); lst.className = 'list';
+    itens.forEach(it => {
+      const c = document.createElement('div'); c.className = 'card' + (feitos[it.id] ? ' feito' : '');
+      const top = document.createElement('div'); top.className = 'top';
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.id = 'f_' + it.id; cb.checked = !!feitos[it.id];
+      cb.title = 'Marcar como feito';
+      cb.onchange = () => { feitos[it.id] = cb.checked; salvar(); desenhar(); };
+      const tt = document.createElement('div'); tt.className = 'tt';
+      const b = document.createElement('b'); b.textContent = it.t;
+      const m = document.createElement('p'); m.className = 'meta'; m.textContent = it.meta;
+      tt.append(b, m);
+      const tg = document.createElement('span'); tg.className = 'tag ' + TAGCLASS[it.tag[1]]; tg.textContent = it.tag[0];
+      const jn = document.createElement('button'); jn.className = 'jn'; jn.textContent = sel.has(it.id) ? 'Juntado' : 'Juntar';
+      jn.setAttribute('aria-pressed', sel.has(it.id));
+      jn.onclick = () => { sel.has(it.id) ? sel.delete(it.id) : sel.add(it.id); desenhar(); };
+      if (sel.has(it.id)) c.classList.add('sel');
+      top.append(cb, tt, tg, jn);
+      const pr = document.createElement('div'); pr.className = 'prompt';
+      const pre = document.createElement('pre'); pre.textContent = montar(it);
+      const cp = document.createElement('button'); cp.className = 'copy'; cp.textContent = 'Copiar';
+      cp.onclick = () => copiar(pre, cp);
+      pr.append(pre, cp);
+      c.append(top, pr); lst.appendChild(c);
+    });
+    L.appendChild(lst);
+  });
+  const n = sel.size, cb2 = document.getElementById('copiarCombo'), combo = document.getElementById('combo');
+  cb2.textContent = 'Copiar combinado (' + n + ')'; cb2.disabled = n === 0;
+  combo.hidden = n === 0;
+  if (n) {
+    document.getElementById('comboTit').textContent = 'Prompt combinado: ' + n + (n === 1 ? ' tarefa' : ' tarefas');
+    document.getElementById('comboPre').textContent = montarCombo();
+  }
+}
+
+function copiar(pre, btn){
+  const antes = btn.textContent;
+  const ok = () => { btn.textContent = 'Copiado'; btn.classList.add('ok'); setTimeout(() => { btn.textContent = antes; btn.classList.remove('ok'); }, 1500); };
+  const sel = () => { const r = document.createRange(); r.selectNodeContents(pre); const s = getSelection(); s.removeAllRanges(); s.addRange(r); btn.textContent = 'Selecionado: Ctrl+C'; };
+  try { navigator.clipboard.writeText(pre.textContent).then(ok, sel); } catch (e) { sel(); }
+}
+
+document.getElementById('regras').onchange = desenhar;
+document.getElementById('selGrupo').onclick = () => {
+  ITENS.filter(i => grupo === 'todos' || i.g === grupo).forEach(i => sel.add(i.id)); desenhar();
+};
+document.getElementById('limpar').onclick = () => { sel.clear(); desenhar(); };
+document.getElementById('copiarCombo').onclick = () => copiar(document.getElementById('comboPre'), document.getElementById('copiarCombo'));
+document.getElementById('comboCopy').onclick = () => copiar(document.getElementById('comboPre'), document.getElementById('comboCopy'));
+const URL_ARTEFATO = 'https://claude.ai/artifact/TTuMrL21GM9noRRUZKJTMW';
+document.getElementById('atualizar').onclick = () => {
+  const pre = document.createElement('pre'); pre.hidden = true;
+  pre.textContent = 'Projeto agente_stokki_eventos. Use a skill pendencias-prompts para atualizar a situação: releia worktrees, ramos, git status, a memória e o que mudou na VPS (só leitura), atualize pendencias.json e republique o artefato em ' + URL_ARTEFATO + '. Não faça commit, push, deploy nem remova worktree. No fim, me diga o que entrou, saiu ou mudou de grupo.';
+  document.body.appendChild(pre);
+  const btn = document.getElementById('atualizar'); const antes = btn.textContent;
+  copiar(pre, btn);
+  setTimeout(() => { pre.remove(); btn.textContent = antes; }, 1600);
+};
+fetch('pendencias.json').then(r => r.json()).then(d => {
+  ITENS = d.itens || []; ATUALIZADO = d.atualizado_em || '';
+  document.getElementById('situacao').textContent = 'Situação de ' + ATUALIZADO.split('-').reverse().join('/') + ' · ' + ITENS.length + ' pendências';
+  desenhar();
+}).catch(() => {
+  document.getElementById('lista').innerHTML = '<p class="vazio">Não foi possível carregar pendencias.json.</p>';
+});
+</script>

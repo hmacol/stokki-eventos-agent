@@ -10,7 +10,7 @@ import json
 import sys
 import tempfile
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -35,9 +35,9 @@ def _servico(service_id, status="assigned"):
             "latitude": -23.5, "longitude": -46.6, "sender_id": 11, "dimension_3": 3}
 
 
-def _rota_vuupt(servicos, agent_id=ORIGINAL, status="assigned"):
+def _rota_vuupt(servicos, agent_id=ORIGINAL, status="assigned", assigned_at=None):
     return {"id": ROTA_VUUPT, "name": "Planejamento - #13", "status": status, "agent_id": agent_id, "vehicle_id": 7,
-            "start_at": f"{HOJE.isoformat()} 09:00:00", "services": {"data": servicos}}
+            "start_at": f"{HOJE.isoformat()} 09:00:00", "assigned_at": assigned_at, "services": {"data": servicos}}
 
 
 def _as(hora: str) -> datetime:
@@ -63,6 +63,10 @@ class TestOfertasRotaEnviada(unittest.TestCase):
         sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(self.servicos)], conn)
         conn.commit()
         self.rota_id = conn.execute("SELECT id FROM nucleo_rotas WHERE vuupt_route_id = ?", (ROTA_VUUPT,)).fetchone()["id"]
+        # rota da madrugada: enviada na vespera
+        conn.execute("UPDATE nucleo_rotas SET criado_em = ? WHERE id = ?",
+                     (f"{(HOJE - timedelta(days=1)).isoformat()} 22:00:00", self.rota_id))
+        conn.commit()
         conn.close()
         self.enviados = []
 
@@ -124,6 +128,21 @@ class TestOfertasRotaEnviada(unittest.TestCase):
         self.assertEqual(self._oferta()["motivo"], "PRAZO")
         self.assertEqual(self._rodar("05:32")["publicadas"], 0)          # uma oferta por rota
         self.assertEqual([e["tipo"] for e in self.enviados], ["rota_disponivel"])   # um aviso so
+
+    def test_rota_enviada_depois_das_0530_so_vira_oferta_se_recusar(self):
+        # caso real 19/11: Planejamento #21 enviado direto ao motorista 14h14, ofertado 14h16
+        self._sql("UPDATE nucleo_rotas SET criado_em = ? WHERE id = ?", (f"{HOJE.isoformat()} 14:14:47", self.rota_id))
+        self.assertEqual(self._rodar("14:16")["publicadas"], 0)
+        self.assertEqual(self._rodar("18:00")["publicadas"], 0)
+        self.cli.post(f"/api/rotas/{self.rota_id}/recusar", json={"motivo": "nao consigo"}, headers=self._h(ORIGINAL))
+        self.assertEqual(self._rodar("18:02")["publicadas"], 1)
+        self.assertEqual(self._oferta()["motivo"], "RECUSA")
+
+    def test_troca_de_motorista_depois_das_0530_vale_o_assigned_at_da_vuupt(self):
+        self._sync(assigned_at=f"{HOJE.isoformat()} 12:00:00")   # UTC = 09h00 local
+        self.assertEqual(self._rodar("09:05")["publicadas"], 0)
+        self._sync(assigned_at=f"{HOJE.isoformat()} 08:00:00")   # UTC = 05h00 local
+        self.assertEqual(self._rodar("09:05")["publicadas"], 1)
 
     def test_aceite_no_app_ou_na_vuupt_nao_publica(self):
         self.cli.post(f"/api/rotas/{self.rota_id}/aceitar", json={}, headers=self._h(ORIGINAL))

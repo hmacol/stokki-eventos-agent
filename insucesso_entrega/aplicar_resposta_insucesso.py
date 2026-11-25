@@ -167,7 +167,7 @@ def _reagendar_reentrega(pendente: dict, nova_data: date, hora_pedida: str,
     """
     import fingerprint_duplicacao_insucesso
     import fingerprint_duplicacao_agendada
-    from expedir_pedidos import duplicar_servico_por_insucesso
+    from expedir_pedidos import duplicar_servico_por_insucesso, servico_ja_no_pool
 
     service_id = pendente["service_id"]
     code = pendente.get("code") or str(service_id)
@@ -205,7 +205,11 @@ def _reagendar_reentrega(pendente: dict, nova_data: date, hora_pedida: str,
 
     novo = duplicar_servico_por_insucesso(vuupt, servico_original)
     if not novo:
-        return None
+        # Já existe serviço desse pedido no pool: a data pedida vai nele.
+        novo = servico_ja_no_pool(vuupt, servico_original)
+        if not novo:
+            return None
+        logger.info(f"  {code}: não duplicado, {novo.get('code')} já está no pool -- agenda nele.")
     if fingerprint_duplicacao_agendada.cancelar_agendamento(service_id):
         logger.info(f"  {code}: duplicação agendada cancelada (substituída pela data pedida).")
     fingerprint_duplicacao_insucesso.marcar_duplicado(service_id, novo.get("code", ""))
@@ -380,7 +384,7 @@ def aplicar_decisao(sender_id, failed_reason_id, acao: str, nova_data: date | No
     quando acao == "reagendar" (já validados pelo chamador: data ISO >=
     hoje, hora no formato "HH:MM").
 
-    Retorna [{"code", "resultado": "reenviado"|"cancelado"|"reagendado"|
+    Retorna [{"code", "resultado": "reenviado"|"disponivel"|"cancelado"|"reagendado"|
     "falha", "data": date|None}] -- lista vazia quando não havia nada
     pendente pro grupo (já resolvido antes) ou quando a trava não foi
     conseguida (outro clique aplicando o mesmo grupo agora).
@@ -406,7 +410,7 @@ def _aplicar_decisao_travado(sender_id, failed_reason_id, acao: str, nova_data: 
     if not pendentes:
         return []
 
-    from expedir_pedidos import duplicar_servico_por_insucesso
+    from expedir_pedidos import duplicar_servico_por_insucesso, servico_ja_no_pool
     import fingerprint_duplicacao_insucesso
     import fingerprint_duplicacao_agendada
 
@@ -445,6 +449,7 @@ def _aplicar_decisao_travado(sender_id, failed_reason_id, acao: str, nova_data: 
             # agora (a checagem abaixo só evita duplicar de novo se este
             # mesmo grupo for aplicado duas vezes).
             ok = True
+            disponivel = False
             if (p.get("code")
                     and not fingerprint_duplicacao_insucesso.ja_duplicado(p["service_id"])
                     and not fingerprint_duplicacao_agendada.ja_agendado(p["service_id"])):
@@ -460,11 +465,27 @@ def _aplicar_decisao_travado(sender_id, failed_reason_id, acao: str, nova_data: 
                             texto=f"Reenvio confirmado pelo embarcador (novo código: {novo.get('code', '')}).",
                         )
                     else:
-                        ok = False
+                        # Já existe serviço desse pedido no pool: pro embarcador
+                        # está tudo certo (Hugo, 24/11) -- "disponivel", sem
+                        # falar de bloqueio. Marca duplicado pra sair da fila.
+                        no_pool = servico_ja_no_pool(vuupt, servico_original)
+                        if no_pool:
+                            disponivel = True
+                            fingerprint_duplicacao_insucesso.marcar_duplicado(p["service_id"], no_pool.get("code", ""))
+                            tratativas.registrar_evento(
+                                p["code"], "INSUCESSO_ENTREGA", "REENVIO_AUTOMATICO",
+                                service_id=p.get("service_id"), motivo_id=failed_reason_id,
+                                motivo_texto=motivo_texto,
+                                texto=f"Reenvio confirmado pelo embarcador: não duplicado, "
+                                      f"{no_pool.get('code', '')} já está no pool.",
+                            )
+                        else:
+                            ok = False
                 else:
                     logger.warning(f"  Não achei o serviço {p['code']} no VUUPT pra duplicar — pulando.")
                     ok = False
-            resultados.append({"code": code, "resultado": "reenviado" if ok else "falha", "data": None})
+            resultados.append({"code": code, "data": None,
+                               "resultado": "disponivel" if disponivel else "reenviado" if ok else "falha"})
 
     if acao == "cancelar":
         _notificar_atendimento_cancelamento(cfg_email, motivo_texto, itens_cancelamento,

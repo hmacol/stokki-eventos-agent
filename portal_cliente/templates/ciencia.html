@@ -43,7 +43,7 @@ ou escolha um dia de visita da região.</p>
 
 {% for p in pendentes %}
 <section class="pedido">
-  <h2>Pedido {{ p.codigo }}</h2>
+  <h2>Pedido {{ p.codigo }} · NF {{ p.nf or '—' }}</h2>
   <dl class="dados">
     <dt>Destinatário</dt><dd>{{ p.destinatario or '-' }}</dd>
     <dt>Cidade</dt><dd>{{ p.cidade or '-' }}</dd>
@@ -89,7 +89,7 @@ ou escolha um dia de visita da região.</p>
 <h2 class="secao">Respondidos nos últimos 30 dias</h2>
 <ul class="lista respondidos">
   {% for r in respondidos %}
-  <li><b>{{ r.codigo }}</b> · {{ r.rotulo }}
+  <li><b>{{ r.codigo }} · NF {{ r.nf or '—' }}</b> · {{ r.rotulo }}
     <span class="quando">{% if r.quem %}por {{ r.quem }}{% if r.quando %}, {% endif %}{% endif %}{% if r.quando %}em {{ r.quando }}{% endif %}</span></li>
   {% endfor %}
 </ul>

@@ -133,6 +133,13 @@ ORIGEM_MOTORISTA_ATUALIZACAO = "motorista_atualizacao"
 ORIGEM_MOTORISTA_ATUALIZACAO_PILOTO = "motorista_atualizacao_piloto"
 ORIGENS_ATUALIZACAO = (ORIGEM_MOTORISTA_ATUALIZACAO, ORIGEM_MOTORISTA_ATUALIZACAO_PILOTO)
 TETO_ATUALIZACAO_PADRAO = 15
+# Avisos de rota/chat ao motorista que usa o app pelo navegador (PWA, iPhone): origem e teto PROPRIOS
+# (rota nova nao pode ficar sem aviso porque a campanha de atualizacao gastou a cota). Trava:
+# avisos_app_motoristas.forcar_destino_whatsapp (ausente = desligado, numero = piloto, "" = real).
+ORIGEM_AVISO_APP = "motorista_aviso_app"
+ORIGEM_AVISO_APP_PILOTO = "motorista_aviso_app_piloto"
+ORIGENS_AVISO_APP = (ORIGEM_AVISO_APP, ORIGEM_AVISO_APP_PILOTO)
+TETO_AVISO_APP_PADRAO = 40
 ORIGENS_PILOTO = (ORIGEM_CLIENTE_PILOTO, ORIGEM_CADASTRO_PILOTO, ORIGEM_TRANSPORTADORA_PILOTO,
                   ORIGEM_FORA_DIA_FIXO_PILOTO)
 TETO_PILOTO_PADRAO = 20
@@ -221,6 +228,7 @@ NOMES_DAS_TAREFAS = {
     "notificar-transportadoras": "Aviso às transportadoras",
     "nucleo-sincronizar-servicos": "Atualização dos pedidos fora de rota",
     "nucleo-sincronizar-vuupt": "Atualização das rotas no app dos motoristas",
+    "avisos-app-whatsapp": "Avisos de rota e chat por WhatsApp ao motorista do iPhone",
     "ofertar-rotas-sem-aceite": "Oferta aos motoristas da rota que ficou sem aceite",
     "pipeline-horario": "Importação de pedidos de hora em hora",
     "ponte-vuupt": "Envio pra Vuupt do que o motorista fez no app",
@@ -363,13 +371,21 @@ def texto_rotas_fracas(data_alvo, resumo: dict) -> str:
     return "\n".join(linhas)
 
 
+def _com_nf(codigo, nf) -> str:
+    """'PS-1 · NF 123'. nf None = quem chamou nao informou (texto antigo, sem NF);
+    "" = pedido sem NF ainda ('NF —'); varias ja vem 'a, b'."""
+    if nf is None:
+        return codigo
+    return f"{codigo} · NF {nf or '—'}"
+
+
 def texto_insucessos(insucessos: list, agora: datetime | None = None) -> str:
     """Cada item: {"codigo", "destinatario", "remetente", "motivo"}."""
     quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
     linhas = [f"⚠️ *Insucesso na entrega* · {quando}",
               _plural(len(insucessos), "pedido novo", "pedidos novos")]
     for item in insucessos[:MAX_INSUCESSOS]:
-        linha = _uma_linha(item.get("codigo"), 30).lstrip("#")
+        linha = _com_nf(_uma_linha(item.get("codigo"), 30).lstrip("#"), item.get("nf"))
         destinatario = _uma_linha(item.get("destinatario"), 60)
         remetente = _uma_linha(item.get("remetente"), 40)
         if destinatario:
@@ -435,7 +451,7 @@ def texto_alteracao_entrega(info: dict, agora: datetime | None = None) -> str:
     quando = (agora or datetime.now()).strftime("%d/%m %H:%M")
     titulo = "⚠️ *Alteração de entrega parou no meio*" if info.get("falha") else "✏️ *Cliente alterou a entrega*"
     linhas = [f"{titulo} · {quando}",
-              f"Pedido {_uma_linha(info.get('codigo'), 20)} · {_uma_linha(info.get('empresa'), 30)}"]
+              f"Pedido {_com_nf(_uma_linha(info.get('codigo'), 20), info.get('nf'))} · {_uma_linha(info.get('empresa'), 30)}"]
     mudou = ", ".join(_uma_linha(m, 30) for m in info.get("mudancas") or [])
     if mudou:
         linhas.append(f"Mudou: {mudou}")
@@ -498,10 +514,11 @@ def texto_alerta_transportadora(transportadora: str, embarcador: str, n_pedidos:
     return texto
 
 
-def texto_fora_dia_fixo(codigo: str, data, regiao: str, dias: str, valor: float | None) -> str:
+def texto_fora_dia_fixo(codigo: str, data, regiao: str, dias: str, valor: float | None,
+                        nf: str | None = None) -> str:
     """Pro embarcador, ate MAX_MENSAGEM. Encurta tirando primeiro a regiao e
     os dias, depois o valor -- codigo, data e "envio dedicado" ficam sempre."""
-    codigo = str(codigo or "").lstrip("#")
+    codigo = _com_nf(str(codigo or "").lstrip("#"), nf)
     quando = data.strftime("%d/%m")
     if valor is None:
         preco = "valor a confirmar"
@@ -524,17 +541,25 @@ def texto_ciencia_dedicado(nome: str, pedidos: list[dict], link: str, lembrete: 
     visita que vao como entrega dedicada, com o link da pagina de ciencia. Cabe
     em MAX_MENSAGEM sem cortar o link: sai primeiro o nome, depois os codigos."""
     codigos = [str(p.get("codigo") or "").lstrip("#") for p in pedidos]
+    com_nf = [_com_nf(c, p.get("nf")) for c, p in zip(codigos, pedidos)]
     n = len(codigos)
     inicio = "Lembrete Fresh Log: " if lembrete else "Fresh Log: "
     fim = f"Confirme a ciência ou reagende: {link}"
-    if n == 1:
-        lista = f"o pedido {codigos[0]} vai como entrega dedicada"
-        resumo = "1 pedido seu vai como entrega dedicada."
-    else:
-        lista = f"os pedidos {', '.join(codigos)} vão como entrega dedicada"
-        resumo = f"{n} pedidos seus vão como entrega dedicada."
+    def _lista(cods):
+        if n == 1:
+            return (f"o pedido {cods[0]} vai como entrega dedicada",
+                    "1 pedido seu vai como entrega dedicada.")
+        return (f"os pedidos {', '.join(cods)} vão como entrega dedicada",
+                f"{n} pedidos seus vão como entrega dedicada.")
+    lista, resumo = _lista(codigos)
+    lista_nf, _ = _lista(com_nf)
     frase = lista[0].upper() + lista[1:]
+    frase_nf = lista_nf[0].upper() + lista_nf[1:]
+    # com NF primeiro; se estourar, volta ao texto de sempre (o PS nunca sai do texto)
     opcoes = [
+        f"{inicio}{_nome_simples(nome, 30)}, {lista_nf} (fora do dia de visita da região). {fim}",
+        f"{inicio}{frase_nf} (fora do dia de visita da região). {fim}",
+        f"{inicio}{frase_nf}. {fim}",
         f"{inicio}{_nome_simples(nome, 30)}, {lista} (fora do dia de visita da região). {fim}",
         f"{inicio}{frase} (fora do dia de visita da região). {fim}",
         f"{inicio}{frase}. {fim}",
@@ -586,17 +611,24 @@ def texto_cadastro_link_concluido(cadastro: dict, agora: datetime | None = None)
     return f"✅ Cadastro de {nome} concluído na Vuupt (agente {cadastro.get('agent_id')})"
 
 
-def texto_boas_vindas_motorista(primeiro_nome: str, email: str, senha: str, link_app: str, iphone: bool) -> str:
-    """Mensagem individual ao motorista novo (sem limite de 200). Android recebe
-    app + acesso; iPhone so o aviso de que a equipe chama (sem app da Vuupt)."""
+def texto_boas_vindas_motorista(primeiro_nome: str, cpf: str, pin: str | None, link_app: str, link_pwa: str,
+                                iphone: bool) -> str:
+    """Mensagem individual ao motorista novo (sem limite de 200), pro app proprio
+    da Fresh Log (login = CPF + PIN provisorio). Android baixa o APK; iPhone abre
+    o PWA no Safari. `pin` None = ja tem login em uso, nao se mexe no PIN dele."""
     nome = _uma_linha(primeiro_nome, 30) or "motorista"
     if iphone:
-        return (f"Olá, {nome}! Seu cadastro na Fresh Log foi aprovado. "
-                "Como seu celular é iPhone, a equipe vai te chamar pra explicar como funcionam as entregas.")
+        acesso = (f"Abra no Safari: {link_pwa}\n"
+                  "Depois toque em Compartilhar > Adicionar à Tela de Início, pra usar como app.")
+    else:
+        acesso = f"Baixe o app: {link_app}"
+    pin_linha = (f"PIN provisório: {pin} (o app pede pra você trocar no primeiro acesso)" if pin
+                 else "PIN: o mesmo que você já usa no app")
+    cpf_digitos = re.sub(r"\D", "", str(cpf or ""))
     return (f"Olá, {nome}! Seu cadastro na Fresh Log foi aprovado.\n"
-            f"Baixe o app: {link_app}\n"
-            f"E-mail: {email}\n"
-            f"Senha: {senha}\n"
+            f"{acesso}\n"
+            f"CPF: {cpf_digitos}\n"
+            f"{pin_linha}\n"
             "Qualquer dúvida, é só responder aqui.")
 
 
@@ -684,13 +716,14 @@ def _enviados_hoje(conn, agora: datetime, origem: str) -> int:
         filtro, args = "origem = ?", (ORIGEM_CLIENTE,)
     elif origem == ORIGEM_MOTORISTA:
         filtro, args = "origem = ?", (ORIGEM_MOTORISTA,)
-    elif origem in ORIGENS_ATUALIZACAO or origem == ORIGEM_PAGAMENTO:
+    elif origem in ORIGENS_ATUALIZACAO or origem == ORIGEM_PAGAMENTO or origem in ORIGENS_AVISO_APP:
         filtro, args = "origem = ?", (origem,)
     elif origem in ORIGENS_PILOTO:
         filtro, args = f"origem IN ({marcas})", ORIGENS_PILOTO
     else:
-        filtro, args = (f"origem NOT IN (?, ?, ?, ?, ?) AND origem NOT IN ({marcas})",
-                        (ORIGEM_CLIENTE, ORIGEM_MOTORISTA, *ORIGENS_ATUALIZACAO, ORIGEM_PAGAMENTO, *ORIGENS_PILOTO))
+        proprias = (ORIGEM_CLIENTE, ORIGEM_MOTORISTA, *ORIGENS_ATUALIZACAO, ORIGEM_PAGAMENTO, *ORIGENS_AVISO_APP)
+        filtro, args = (f"origem NOT IN ({','.join('?' * len(proprias))}) AND origem NOT IN ({marcas})",
+                        (*proprias, *ORIGENS_PILOTO))
     return conn.execute(
         f"SELECT COUNT(*) FROM notificacoes_whatsapp WHERE situacao = 'enviado' AND criado_em >= ? "
         f"AND {filtro}", (inicio_do_dia, *args)).fetchone()[0]
@@ -707,6 +740,8 @@ def _teto(cfg: dict, origem: str, config: dict | None = None) -> int:
         return _inteiro((config or {}).get("atualizacao_motoristas") or {}, "teto_diario", TETO_ATUALIZACAO_PADRAO)
     if origem == ORIGEM_PAGAMENTO:
         return _inteiro((config or {}).get("pagamentos_pontuais") or {}, "teto_diario", TETO_PAGAMENTO_PADRAO)
+    if origem in ORIGENS_AVISO_APP:
+        return _inteiro((config or {}).get("avisos_app_motoristas") or {}, "teto_diario", TETO_AVISO_APP_PADRAO)
     if origem in ORIGENS_PILOTO:
         return _inteiro(cfg.get("clientes") or {}, "teto_piloto", TETO_PILOTO_PADRAO)
     return _inteiro(cfg, "teto_diario", 20)
@@ -1404,6 +1439,109 @@ def avisar_motorista_link_atualizacao(link_id: int, grupo_id: str, grupo_nome: s
         assinatura = f"link_atualizacao:{link_id}"
         situacao = despachar(config, origem, "link_atualizacao", texto, assinatura, modo_teste=modo_teste,
                              grupo_id=f"{destino}@c.us" if piloto else grupo_id, **kw)
+        if situacao == "nao_enviado":
+            motivo = _motivo_da_ultima_recusa(kw.get("conn"), origem, assinatura)
+            situacao = {MOTIVO_TETO: "teto", MOTIVO_CANAL_EM_PAUSA: "canal_em_pausa"}.get(motivo, situacao)
+        return situacao, piloto
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou", False
+
+
+_ROTULO_DOCUMENTO_PENDENTE = {"cnh": "CNH", "crlv": "documento do veículo (CRLV)", "selfie": "selfie",
+                              "antt": "ANTT", "residencia": "comprovante de residência"}
+_ROTULO_CAMPO_PENDENTE = {"PIX": "chave PIX", "nascimento": "data de nascimento"}
+
+
+def texto_pendencias_motorista(primeiro_nome: str, documentos: list, campos: list, link: str, expira) -> str:
+    """Mensagem pessoal com o que falta no cadastro do motorista e o link pessoal de atualizacao.
+    `documentos`/`campos` vem de atualizacao_motorista.pendencias. `expira`: date ou datetime."""
+    linhas = [f"Olá, {primeiro_nome}! Aqui é a Fresh Log. Seu cadastro de motorista está com pendências:"]
+    if documentos:
+        linhas.append("• Documentos: " + ", ".join(_ROTULO_DOCUMENTO_PENDENTE.get(d, d) for d in documentos))
+    if campos:
+        linhas.append("• Dados: " + ", ".join(_ROTULO_CAMPO_PENDENTE.get(c, c) for c in campos))
+    linhas.append(f"Preencha pelo link (uns 5 minutos, com os documentos em mãos): {link}")
+    linhas.append(f"O link vale até {expira:%d/%m}.")
+    return "\n".join(linhas)
+
+
+def avisar_motorista_pendencias_privado(link_id: int, telefone: str, nome: str, texto: str, config: dict,
+                                        modo_teste: bool = False, assinatura: str | None = None, **kw) -> tuple[str, bool]:
+    """Manda a mensagem de pendencias NO PRIVADO do motorista (nao no grupo). Devolve (situacao, piloto).
+    Mesma trava do envio em grupo (atualizacao_motoristas.forcar_destino_whatsapp): ausente = 'desligado',
+    numero = piloto (vai pra la com '[teste -> nome]' na frente), '' = envio real. Real confere antes
+    se o numero tem WhatsApp. Mesma origem e teto diario do envio em grupo; uma mensagem por link."""
+    try:
+        destino = destino_link_atualizacao(config)
+        telefone = re.sub(r"\D", "", str(telefone or ""))
+        if destino is None or not telefone or not gateway_clientes_ok(config):
+            return "desligado", False
+        if len(telefone) in (10, 11):
+            telefone = "55" + telefone
+        piloto = bool(destino)
+        if piloto:
+            texto = f"[teste → {nome} +{telefone}]\n{texto}"
+        elif not modo_teste:
+            existe = integracao_openwa.numero_existe(_cfg(config), telefone)
+            if existe is None:
+                return "indeterminado", False
+            if not existe:
+                return "numero_sem_whatsapp", False
+        origem = ORIGEM_MOTORISTA_ATUALIZACAO_PILOTO if piloto else ORIGEM_MOTORISTA_ATUALIZACAO
+        assinatura = assinatura or f"link_atualizacao:{link_id}"
+        situacao = despachar(config, origem, "link_atualizacao", texto, assinatura, modo_teste=modo_teste,
+                             grupo_id=f"{destino or telefone}@c.us", **kw)
+        if situacao == "nao_enviado":
+            motivo = _motivo_da_ultima_recusa(kw.get("conn"), origem, assinatura)
+            situacao = {MOTIVO_TETO: "teto", MOTIVO_CANAL_EM_PAUSA: "canal_em_pausa"}.get(motivo, situacao)
+        return situacao, piloto
+    except Exception as exc:
+        logger.warning(f"Falha na notificacao por WhatsApp (nao afeta a rotina): {exc}")
+        return "falhou", False
+
+
+def destino_aviso_app(config: dict) -> str | None:
+    """Trava dos avisos ao motorista do PWA (avisos_app_motoristas.forcar_destino_whatsapp):
+    None = desligado (chave ausente, nula ou sem digitos), numero = piloto (so pra la),
+    "" = envio real no privado do motorista. Esquecer ou errar a chave nunca libera o envio."""
+    cfg_app = (config or {}).get("avisos_app_motoristas") or {}
+    if "forcar_destino_whatsapp" not in cfg_app or cfg_app["forcar_destino_whatsapp"] is None:
+        return None
+    bruto = str(cfg_app["forcar_destino_whatsapp"]).strip()
+    digitos = re.sub(r"\D", "", bruto)
+    if bruto and not digitos:
+        return None
+    return digitos
+
+
+def avisar_motorista_app_privado(nome: str, telefone: str | None, texto: str, config: dict, tipo: str,
+                                 assinatura: str, modo_teste: bool = False, **kw) -> tuple[str, bool]:
+    """Aviso NO PRIVADO do motorista que usa o app pelo navegador (PWA/iPhone), que nao recebe push.
+    Devolve (situacao, piloto). Situacoes: desligado | modo_teste | enviado | falhou | teto |
+    canal_em_pausa | numero_sem_whatsapp | indeterminado | nao_enviado.
+    Piloto (trava com numero): vai so pra la, com '[teste -> nome +tel]' na frente, e NAO exige
+    telefone do motorista (usuario de teste). Real ("") confere se o numero tem WhatsApp.
+    Origem e teto proprios (avisos_app_motoristas.teto_diario, padrao 40)."""
+    try:
+        destino = destino_aviso_app(config)
+        telefone = re.sub(r"\D", "", str(telefone or ""))
+        if len(telefone) in (10, 11):
+            telefone = "55" + telefone
+        if destino is None or not gateway_clientes_ok(config) or (not destino and not telefone):
+            return "desligado", False
+        piloto = bool(destino)
+        if piloto:
+            texto = f"[teste → {nome} {'+' + telefone if telefone else '(sem telefone)'}]\n{texto}"
+        elif not modo_teste:
+            existe = integracao_openwa.numero_existe(_cfg(config), telefone)
+            if existe is None:
+                return "indeterminado", False
+            if not existe:
+                return "numero_sem_whatsapp", False
+        origem = ORIGEM_AVISO_APP_PILOTO if piloto else ORIGEM_AVISO_APP
+        situacao = despachar(config, origem, tipo, texto, assinatura, modo_teste=modo_teste,
+                             grupo_id=f"{destino or telefone}@c.us", **kw)
         if situacao == "nao_enviado":
             motivo = _motivo_da_ultima_recusa(kw.get("conn"), origem, assinatura)
             situacao = {MOTIVO_TETO: "teto", MOTIVO_CANAL_EM_PAUSA: "canal_em_pausa"}.get(motivo, situacao)

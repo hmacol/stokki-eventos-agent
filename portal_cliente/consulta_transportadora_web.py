@@ -20,6 +20,7 @@ from flask import jsonify, render_template, request
 import consulta_transportadora as ctr
 import cotacao as ct
 import transportadoras_cadastro as tc
+from nucleo.nf_pedido import anotar_nf
 
 logger = logging.getLogger("portal_cliente.consulta_transportadora_web")
 
@@ -84,7 +85,7 @@ def registrar(app, *, config: dict, secret: str, db_path=None):
             if transp["situacao"] != "PENDENTE" or consulta["respondido_em"]:
                 return _pagina("indisponivel")
             emb = consulta["embarcador_cnpj"]
-            ctx = dict(transp=transp, pedidos=ctr.pedidos_parados(conn, transp["id"], emb), form={})
+            ctx = dict(transp=transp, pedidos=anotar_nf(ctr.pedidos_parados(conn, transp["id"], emb), "pedido", conn=conn), form={})
             if request.method != "POST":
                 return _pagina("ok", erro=None, **ctx)
 

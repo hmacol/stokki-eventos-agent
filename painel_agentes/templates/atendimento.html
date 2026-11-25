@@ -449,7 +449,7 @@
     }
     if (p) {
       html += `<div class="card"><span class="rot">Parada citada</span><div style="font-weight:700">${esc(p.ordem != null ? p.ordem + '. ' : '')}${esc(p.destinatario_nome || p.codigo || '')}</div>` +
-        (p.codigo ? kv('Pedido', `<span class="mono">${esc(p.codigo)}</span>`) : '') + (p.endereco ? kv('Endereço', esc(p.endereco)) : '') +
+        (p.codigo ? kv('Pedido', `<span class="mono">${esc(p.codigo)} · NF ${esc(p.nf || '—')}</span>`) : '') + (p.endereco ? kv('Endereço', esc(p.endereco)) : '') +
         (p.situacao ? kv('Situação', esc(p.situacao)) : '') + (p.volume_caixas ? kv('Caixas', esc(p.volume_caixas)) : '') +
         (p.janela_inicio ? kv('Janela', `${esc(p.janela_inicio)}–${esc(p.janela_fim || '')}`) : '') +
         (p.motivo_texto ? kv('Motivo', esc(p.motivo_texto)) : '') + (p.tentativas ? kv('Tentativas', esc(p.tentativas)) : '') + `</div>`;

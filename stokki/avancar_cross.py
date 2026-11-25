@@ -140,11 +140,13 @@ def _sondar_iniciar_separacao(page, pid: int) -> int:
             print(f"   {seletor} nao visivel")
     # modal "Filtrar por pedido único": preenche o pedido e filtra (filtrar não altera o pedido)
     modal = page.locator(".modal.show").last
+    if not modal.count():
+        modal = page.locator("body")   # em 22/11 o filtro vem na propria pagina, sem modal
     if modal.count():
         _mostrar_modal(modal, "filtro pedido unico")
         campo = modal.locator("input:visible:not([type=hidden]):not([type=checkbox])").first
         if campo.count():
-            campo.fill(str(pid))
+            campo.fill(f"#PS-{pid}")   # o campo e de codigo de barras e ja vem com "#PS-"
             botao = modal.locator("button:visible", has_text=re.compile("Filtrar|Buscar|Pesquisar|Confirmar|Aplicar|Iniciar", re.I)).first
             if botao.count():
                 print("   clicando no filtro:", " ".join(botao.inner_text().split()))
@@ -158,6 +160,13 @@ def _sondar_iniciar_separacao(page, pid: int) -> int:
     print(f"== lista apos filtro: {len(linhas)} linha(s)")
     for ln in linhas[:6]:
         print("   ", ln)
+    sel_op = page.get_by_text("Selecionar Operador da Tarefa").first
+    if sel_op.count() and sel_op.is_visible():   # so avanca de tela, nao cria tarefa
+        sel_op.click()
+        page.wait_for_timeout(2500)
+        print("print:", _print(page, f"{pid}_tela_operador"))
+        if confirmar_global.get("confirmar"):
+            return _iniciar_separacao_por_lista(page, pid)
     prox = page.locator("#btn_next_operator")
     print("   btn_next_operator visivel:", prox.count() and prox.first.is_visible(), "habilitado:", prox.count() and prox.first.is_enabled())
     print("print:", _print(page, f"{pid}_filtrado"))
@@ -182,6 +191,35 @@ def _sondar_iniciar_separacao(page, pid: int) -> int:
     print("print:", _print(page, f"{pid}_iniciar_separacao"))
     print("== iniciar_separacao: só leitura nesta versão; nada enviado.")
     return 0
+
+
+def _iniciar_separacao_por_lista(page, pid: int) -> int:
+    """Tela 'Selecione os operadores': escolhe o operador pelo nome exato e clica
+    em 'Iniciar separação por lista' (cria a tarefa; pedido vai a Em separação)."""
+    nome = confirmar_global.get("operador") or OPERADOR_PADRAO
+    page.locator('button[data-id="select_operator"]').first.click()
+    page.wait_for_timeout(800)
+    opcao = page.locator(".dropdown-menu.show").get_by_text(nome, exact=True)
+    if opcao.count() != 1:
+        print(f"PARADO: operador '{nome}' nao achado exatamente 1 vez na lista ({opcao.count()}).")
+        print("print:", _print(page, f"{pid}_operador_lista"))
+        return 1
+    opcao.first.click()
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(800)
+    botao = page.locator("#btn_next_operator")
+    if not botao.count() or not botao.first.is_enabled():
+        print("PARADO: 'Iniciar separacao por lista' continua desabilitado.")
+        print("print:", _print(page, f"{pid}_operador_botao"))
+        return 1
+    print("print:", _print(page, f"{pid}_operador_escolhido"))
+    botao.first.click()
+    page.wait_for_timeout(8000)
+    print("== mensagem da Stokki:", page.locator(".toast-message, .swal2-html-container, .alert").all_inner_texts()[:4])
+    print("print:", _print(page, f"{pid}_separacao_iniciada"))
+    depois = situacao_do_pedido(page, pid)
+    print(f"== PS-{pid}: situacao depois = {depois}")
+    return 0 if "separa" in depois.lower() else 1
 
 
 def json_resumo(dados) -> str:

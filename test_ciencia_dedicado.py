@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 import os
+import sqlite3
 import tempfile
 import unittest
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 
 import ciencia_dedicado as cd
 
@@ -28,6 +29,37 @@ class TestCienciaDedicado(unittest.TestCase):
     def tearDown(self):
         self.conn.close()
         os.remove(self.db)
+
+    def test_trava_de_resposta_so_uma_ganha_e_vence_em_10_min(self):
+        cid = cd.abrir(self.conn, _item(), None, AGORA)
+        self.assertTrue(cd.reivindicar_resposta(self.conn, cid, AGORA))
+        self.assertFalse(cd.reivindicar_resposta(self.conn, cid, AGORA + timedelta(minutes=9)))
+        # encerramento do timer espera a resposta em andamento
+        self.assertFalse(cd.encerrar(self.conn, cid, "data passou", AGORA + timedelta(minutes=9)))
+        # processo caiu no meio: passada a trava, outra resposta (ou o encerramento) segue
+        self.assertTrue(cd.reivindicar_resposta(self.conn, cid, AGORA + timedelta(minutes=11)))
+        cd.liberar_resposta(self.conn, cid)
+        self.assertIsNone(cd.buscar(self.conn, cid)["processando_desde"])
+        self.assertTrue(cd.reivindicar_resposta(self.conn, cid, AGORA))
+        self.assertTrue(cd.responder(self.conn, cid, cd.CIENTE, "Maria", "1.2.3.4", AGORA, origem="email",
+                                     navegador="Celular"))
+        c = cd.buscar(self.conn, cid)
+        self.assertEqual((c["situacao"], c["processando_desde"], c["respondido_origem"], c["respondido_navegador"]),
+                         (cd.CIENTE, None, "email", "Celular"))
+        self.assertFalse(cd.reivindicar_resposta(self.conn, cid, AGORA + timedelta(hours=1)))   # ja respondida
+
+    def test_tabela_antiga_ganha_as_colunas_novas(self):
+        # producao criou a tabela em 18/11, sem as colunas da revisao de seguranca
+        self.conn.close()
+        conn = sqlite3.connect(self.db)
+        for coluna in ("respondido_origem", "respondido_navegador", "processando_desde"):
+            conn.execute(f"ALTER TABLE ciencias_dedicado DROP COLUMN {coluna}")
+        conn.commit()
+        conn.close()
+        self.conn = cd.conectar(self.db)
+        colunas = {r[1] for r in self.conn.execute("PRAGMA table_info(ciencias_dedicado)")}
+        self.assertTrue({"respondido_origem", "respondido_navegador", "processando_desde"} <= colunas)
+        cd.conectar(self.db).close()   # de novo: nao tenta criar outra vez
 
     def test_abrir_cria_pendente_com_lembrete_imediato(self):
         cid = cd.abrir(self.conn, _item(), "12345678000199", AGORA)

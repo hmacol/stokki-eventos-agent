@@ -9,6 +9,7 @@
 // mostrar ao motorista (ex.: "insucesso exige motivo").
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as api from './api';
+import * as fotoLocal from './fotoLocal';
 import { ErroApi, ErroRede } from './api';
 import type { TipoDespesa } from './tipos';
 
@@ -27,7 +28,7 @@ export type ItemFila =
   | { uuid: string; tipo: 'EVENTO_PARADA'; paradaId: number; corpo: Record<string, unknown>; criadoEm: string; tentativas: number }
   | { uuid: string; tipo: 'COMPROVANTE'; paradaId: number; uri: string; tipoComprovante: string; capturadoEm: string; criadoEm: string; tentativas: number; nf?: string | null }
   | { uuid: string; tipo: 'PEDAGIO'; rotaId: number; uri: string; valor: number; capturadoEm: string; criadoEm: string; tentativas: number;
-      tipoDespesa?: TipoDespesa; descricao?: string | null; paradaId?: number | null }
+      tipoDespesa?: TipoDespesa; descricao?: string | null; paradaId?: number | null; origem?: 'camera' | 'galeria' }
   | { uuid: string; tipo: 'GPS'; pontos: object[]; criadoEm: string; tentativas: number }
   | { uuid: string; tipo: 'ROTA'; rotaId: number; acao: 'aceitar' | 'iniciar' | 'finalizar'; corpo: Record<string, unknown>; criadoEm: string; tentativas: number };
 
@@ -91,6 +92,8 @@ export async function tamanho(): Promise<number> {
 }
 
 export async function enfileirar(item: ItemFila): Promise<void> {
+  // Web: a foto vai pro IndexedDB antes de entrar na fila (sobrevive a recarregar a página).
+  if ('uri' in item) item = { ...item, uri: await fotoLocal.guardar(item.uri) };
   await mudar((itens) => [...itens, item]);
   void processar();
 }
@@ -172,7 +175,7 @@ async function enviar(item: ItemFila): Promise<void> {
       return;
     case 'PEDAGIO':
       await api.enviarPedagio(item.rotaId, item.uri, item.valor, item.uuid, item.capturadoEm,
-        { tipo: item.tipoDespesa, descricao: item.descricao, paradaId: item.paradaId });
+        { tipo: item.tipoDespesa, descricao: item.descricao, paradaId: item.paradaId, origem: item.origem });
       return;
     case 'GPS':
       await api.enviarGps(item.pontos);
@@ -202,6 +205,7 @@ export async function processar(): Promise<{ enviados: number; pendentes: number
         await enviar(item);
         enviados++;
         await tirar(item.uuid);
+        if ('uri' in item) void fotoLocal.liberar(item.uri);
       } catch (e) {
         const temporario = e instanceof ErroRede
           || (e instanceof ErroApi && (e.status === 401 || e.status === 408 || e.status === 429 || e.status >= 500));

@@ -185,7 +185,9 @@ def _fotos_da_parada(conn: sqlite3.Connection, parada_id: int, raiz: Path) -> tu
     """(quantas fotos ja chegaram, {campo da Vuupt: jpeg}). Foto ilegivel fica de fora."""
     por_campo: dict[int, list[bytes]] = {}
     total = 0
-    for c in conn.execute("SELECT tipo, caminho_local FROM nucleo_comprovantes WHERE parada_id = ? ORDER BY id", (parada_id,)):
+    # FACHADA (validação de fotos, 20/11) não é foto que o app conta como enviada
+    for c in conn.execute("SELECT tipo, caminho_local FROM nucleo_comprovantes "
+                          "WHERE parada_id = ? AND tipo != 'FACHADA' ORDER BY id", (parada_id,)):
         total += 1
         campo = _CAMPO_DO_TIPO.get(c["tipo"])
         if not campo or not c["caminho_local"]:

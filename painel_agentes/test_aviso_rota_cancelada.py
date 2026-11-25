@@ -99,7 +99,7 @@ class Avisar(_Base):
         self.assertEqual([c["cnpj_embarcador"] for c, _ in chamados], [CNPJ_A, CNPJ_B])
         alfa, msgs_alfa = chamados[0]
         self.assertEqual((alfa["status"], alfa["tipo"], alfa["assunto"]), (ch.STATUS_AGUARDANDO_FL, "CLIENTE", "Rota cancelada"))
-        self.assertIn("PS-1, PS-3", msgs_alfa[0])
+        self.assertIn("PS-1 · NF —, PS-3 · NF —", msgs_alfa[0])   # NF ao lado do PS (sem NF = traco)
         self.assertIn("motorista não conseguiu realizar a coleta", msgs_alfa[0])
         self.assertIn("28/10", msgs_alfa[0])
         self.assertNotIn("PS-2", msgs_alfa[0])
@@ -114,7 +114,7 @@ class Avisar(_Base):
         self.assertEqual(len(msgs), 1)
         texto = msgs[0]
         for trecho in ("Rota cancelada · #3 ZONA NORTE · João · 28/10", "Motivo: motorista não conseguiu",
-                       "Cancelada por hugo", "3 pedido(s) · 2 embarcador(es)", "Alfa (2): PS-1, PS-3 · avisado no chat",
+                       "Cancelada por hugo", "3 pedido(s) · 2 embarcador(es)", "Alfa (2): PS-1 · NF —, PS-3 · NF — · avisado no chat",
                        "Beta (1): PS-2"):
             self.assertIn(trecho, texto)
 
@@ -125,7 +125,7 @@ class Avisar(_Base):
         self.assertEqual(r["embarcadores"][0]["aviso"], "piloto: não enviado, prévia abaixo")
         texto = self._mensagens_grupo()[0]
         self.assertIn("Prévia para Alfa:\nA rota de entrega de 28/10 foi cancelada", texto)
-        self.assertIn("Pedidos afetados: PS-1, PS-3.", texto)
+        self.assertIn("Pedidos afetados: PS-1 · NF —, PS-3 · NF —.", texto)
         self.assertIn("Prévia para Beta:", texto)
 
     def test_ligado_nao_repete_o_texto_no_grupo(self):

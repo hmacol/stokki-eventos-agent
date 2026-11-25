@@ -14,7 +14,7 @@
 
 - Idioma: código, comentários, testes e commits em português. Em `portal_cliente/` os comentários usam acento (padrão do diretório); em `stokki/` e `painel_agentes/wms_*.py` não usam.
 - Python: sempre `py -3.11`. Testes: `py -3.11 -m unittest <modulo> -v` (sem pytest). Compilar tudo que editar: `py -3.11 -m py_compile <arquivo>`.
-- **Sem commit por tarefa.** Commit e push só quando o Hugo pedir. Cada tarefa termina com testes verdes e `git status --short` conferido; quando ele pedir, `git add` só dos arquivos listados na tarefa, nunca `git add -A`.
+- **Commits locais por tarefa, só no ramo `pedidos-entrada` deste worktree** (decisão do controlador em 25/09: a execução por subagentes revisa por intervalo de commits). Cada tarefa termina com testes verdes, `git add` só dos arquivos listados na tarefa (nunca `git add -A`) e um commit no formato `Área: o que mudou e por quê`, com a linha `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` no fim. **Nunca `git push`, nunca merge, nunca mexer no `master`**: isso é do Hugo.
 - **Ramo:** o working tree está em `wms-fase2`, 0 à frente e 45 atrás de `origin/master` (tudo do WMS já está no master), com ~28 arquivos de outra sessão modificados. Este plano é executado num **worktree novo a partir de `origin/master`**, ramo `pedidos-entrada`. Confirmar com o Hugo no início da execução.
 - Só a Maria Dolores vê a aba: `portal_clientes_envio.entradas_ativo` (coluna nova, default 0). O timer do WMS continua lendo só o piloto (`wms.embarcador_piloto_id`, hoje 48).
 - Config novo (opcional): `portal_entradas.cnpj_freshlog` no `config.yaml`. Sem a chave, o aviso de destinatário não é emitido. `config.yaml` é gitignored: nunca commitar, nunca colar valores no chat.
@@ -1858,8 +1858,8 @@ Em `painel_agentes/templates/wms.html`, linha 667, trocar o `<div class="meta">`
 
 - [ ] **Step 6: Rodar e ver passar**
 
-Run: `py -3.11 -m unittest portal_cliente.test_entradas test_sincronizar_recebimentos_wms painel_agentes.test_wms_pedidos -v`
-Expected: todos PASS (inclusive os antigos do timer e do WMS).
+Run: `py -3.11 -m unittest portal_cliente.test_entradas test_sincronizar_recebimentos_wms -v && (cd painel_agentes && py -3.11 -m unittest test_wms_pedidos -v)`
+Expected: todos PASS (inclusive os antigos do timer e do WMS). Os testes de `painel_agentes/` só carregam de dentro da pasta (o pacote não expõe `painel_agentes.test_*`).
 
 - [ ] **Step 7: Compilar**
 
@@ -3450,7 +3450,7 @@ Run: `py -3.11 -m py_compile portal_cliente/enviar_entradas_stokki.py portal_cli
 
 - [ ] **Step 1: Testes completos e git limpo**
 
-Run: `py -3.11 -m unittest stokki.test_recebimentos portal_cliente.test_entradas portal_cliente.test_enviar_entradas_stokki test_sincronizar_recebimentos_wms painel_agentes.test_wms_pedidos -v && git status --short`
+Run: `py -3.11 -m unittest stokki.test_recebimentos portal_cliente.test_entradas portal_cliente.test_enviar_entradas_stokki test_sincronizar_recebimentos_wms -v && (cd painel_agentes && py -3.11 -m unittest test_wms_pedidos -v) && git status --short`
 Expected: tudo PASS; só os arquivos deste plano modificados/novos.
 
 - [ ] **Step 2: Commit (quando o Hugo pedir)**
@@ -3484,12 +3484,11 @@ Expected: `Pedidos de Entrada: ATIVO`, sem ATENÇÃO (stkkc 48 = piloto).
 
 Prova: o Hugo (ou a equipe, em nome da Maria Dolores) abre `app.freshhub.com.br/cliente/?aba=entradas` e sobe **um** XML de remessa **novo** (uma nota que ainda não virou `#PE` na Stokki), combinado com o Hugo, com data prevista real. Não usar uma nota antiga já recebida: a chave já existe na Stokki e o worker só marcaria "já existia", sem provar a criação. Expected: linha ANUNCIADO / "Na fila pra Stokki" em `portal_entradas` (`vps_ler.py sql "SELECT id, numero_nf, status, stokki_status, data_prevista FROM portal_entradas"`).
 
-- [ ] **Step 5: Worker em simulação e depois visível, contra a Stokki real**
+- [ ] **Step 5: Worker contra a Stokki real, uma nota só**
 
-Run: `py -3.11 .claude/scripts/vps_ops.py rodar --cwd portal_cliente --real enviar_entradas_stokki.py --uma-vez --simular`
-Expected: log `SIMULAÇÃO: 1 entrada(s)`, `stokki_status = CRIADO` sem `stokki_id`. Voltar a linha pra fila: `vps_ops.py rodar ... --real gerenciar_clientes.py ...` não cobre isso; usar `sudo -u www-data venv/bin/python -c` com `UPDATE portal_entradas SET stokki_status='NA_FILA', stokki_id=NULL WHERE id=<id>` (pela skill deploy-vps, como www-data).
+`--simular` não toca a Stokki (só marca CRIADO no banco), então **não** prova nada em produção: pule a simulação aqui (ela já foi exercitada nos testes) e vá direto ao passo real. Antes de qualquer `--uma-vez` manual, o serviço `portal-cliente-entradas` tem que estar **parado** (ele só é habilitado no Step 6): dois workers ao mesmo tempo resetam o ENVIANDO um do outro.
 
-Depois, o passo que cria de verdade, **uma nota só**, com o Hugo acompanhando:
+O passo que cria de verdade, **uma nota só**, com o Hugo acompanhando:
 `py -3.11 .claude/scripts/vps_ops.py rodar --cwd portal_cliente --real enviar_entradas_stokki.py --uma-vez`
 Expected: log `criando 1 recebimento(s) por XML`, screenshots em `dados/portal_entradas/_lotes/<ts>_<cnpj>/`, linha com `stokki_status = CRIADO` e `stokki_id`/`stokki_codigo` preenchidos; na Stokki, o `#PE` aparece na listagem de Pedidos de Entrada com Ref. = nº da NF e a chave no detalhe. Se `stokki_id` ficar vazio mas o `#PE` existir, o timer amarra na rodada seguinte (Step 7); anotar no plano o que `procurar_pe` não achou e por quê (olhar `dados/sondagem/` se precisar de HTML).
 
@@ -3508,6 +3507,18 @@ Expected no log: `amarrados: 1` (ou 0 se a Stokki ainda estiver "Em transito" se
 `vps_ler.py sql "SELECT e.id, e.status, e.stokki_codigo, e.wms_recebimento_id, r.estado, r.data_prevista, r.portal_entrada_id FROM portal_entradas e LEFT JOIN wms_recebimentos r ON r.id = e.wms_recebimento_id"`.
 
 Quando a mercadoria chegar: o galpão vê o recebimento na aba Receber com "prevista dd/mm" e o chip **portal**; ao endereçar tudo, a próxima rodada do timer leva a entrada a ENDERECADO; ao encerrar com divergência, a rota do painel leva a DIVERGENCIA na hora e a aba mostra a conferência por SKU com a falta.
+
+Conferir também, nesta etapa, o que a revisão final deixou pra produção (ledger `.superpowers/sdd/.../progress.md`, linhas `⚠️`): o `#PE` ainda "Em transito" já mostra a chave NF-e no detalhe (senão `procurar_pe` não acha o id antes da chegada)? O timer trata um `#PE` cancelado sem virar `erros` a cada 30 min? `same_day_receipt` tem custo comercial na Stokki (o worker marca sozinho quando a data prevista é hoje ou já passou)?
+
+- [ ] **Step 7b: Cancelamento com chamado e smoke de Envios**
+
+Com um `#PE` ainda em trânsito, o cliente cancela pela aba: expected linha CANCELADO, chamado aberto no atendimento com o `#PE` (ou "sem #PE identificado") e o motivo digitado; `wms_recebimentos.estado = 'CANCELADO'` só se ainda ESPERADO sem endereçamento. A equipe cancela o `#PE` na Stokki à mão e fecha o chamado.
+
+Smoke de Envios (a aba antiga compartilha `ler_nfe` e `_achar_cabecalho`): subir na aba Enviar pedidos um XML de saída e uma planilha de saída até a prévia e descartar. Expected: prévia igual à de antes do deploy.
+
+- [ ] **Step 7c: Remessa por planilha (só depois do XML provado)**
+
+O worker manda `origin_id` vazio no wizard Excel (a URL `create/excel/client/<id>` foi tirada por nunca ter sido sondada). Anunciar UMA remessa por planilha e ver o que a Stokki responde: criou → ok; recusou por origem → a entrada fica ERRO com a mensagem clara, e aí decidir com o Hugo (cadastrar a origem na Stokki, ou sondar read-only o que o wizard oferece em `#origin_search`) antes de liberar planilha pro cliente.
 
 - [ ] **Step 8: Registrar**
 

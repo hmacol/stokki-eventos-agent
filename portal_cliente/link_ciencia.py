@@ -5,8 +5,11 @@ portal_cliente/link_ciencia.py
 Link publico da pagina de ciencia do dedicado fora do dia fixo, sem login
 (spec docs/superpowers/specs/2026-11-17-ciencia-dedicado-dia-fixo-design.md,
 secao 4). Mesmo padrao de link_canhoto.py: itsdangerous, segredo do portal
-com salt proprio. O token e por embarcador (carrega so o sender_id) e vale
-30 dias; a pagina lista os pedidos PENDENTE daquele sender_id.
+com salt proprio. O token vale 30 dias e carrega o sender_id, as ciencias que
+cobre (as do aviso em que saiu: pedido aberto depois ganha link novo) e a origem
+(canal do aviso, alerta da equipe ou painel:<usuario>), gravada com a resposta.
+A pagina so mostra e so aceita resposta das ciencias do token (revisao de
+seguranca 19/11: link vazado nao alcanca pedido novo).
 
 Pagina (registrar, chamado em app.py): GET /ciencia/<token> lista os PENDENTE
 e os respondidos (CIENTE/REAGENDADO; encerrado pelo sistema nao aparece) dos
@@ -18,6 +21,7 @@ Vuupt, nao tira o dedicado. O cliente teste do portal sempre age de verdade.
 """
 import re
 from datetime import date, datetime
+from typing import NamedTuple
 
 from itsdangerous import BadData, URLSafeTimedSerializer
 
@@ -25,21 +29,30 @@ _SALT = "ciencia-dedicado"
 VALIDADE_DIAS = 30
 
 
-def gerar(sender_id: int, segredo: str) -> str:
-    return URLSafeTimedSerializer(segredo).dumps({"r": int(sender_id)}, salt=_SALT)
+class Link(NamedTuple):
+    sender_id: int
+    ids: frozenset
+    origem: str
 
 
-def ler(token: str, segredo: str, validade_dias: int = VALIDADE_DIAS) -> int | None:
-    """sender_id, ou None se adulterado, vencido ou de outra finalidade (outro salt)."""
+def gerar(sender_id: int, segredo: str, ids, origem: str) -> str:
+    return URLSafeTimedSerializer(segredo).dumps(
+        {"r": int(sender_id), "c": sorted({int(i) for i in ids}), "o": str(origem)[:80]}, salt=_SALT)
+
+
+def ler(token: str, segredo: str, validade_dias: int = VALIDADE_DIAS) -> Link | None:
+    """Link, ou None se adulterado, vencido, de outra finalidade (outro salt) ou sem ciencias."""
     try:
         dados = URLSafeTimedSerializer(segredo).loads(token, salt=_SALT, max_age=validade_dias * 86400)
-        return int(dados["r"])
+        if not isinstance(dados["c"], list) or not dados["c"]:
+            return None
+        return Link(int(dados["r"]), frozenset(int(i) for i in dados["c"]), str(dados["o"]))
     except (BadData, KeyError, TypeError, ValueError):
         return None
 
 
-def url(sender_id: int, segredo: str, url_base: str) -> str:
-    return f"{url_base.rstrip('/')}/ciencia/{gerar(sender_id, segredo)}"
+def url(sender_id: int, segredo: str, url_base: str, ids, origem: str) -> str:
+    return f"{url_base.rstrip('/')}/ciencia/{gerar(sender_id, segredo, ids, origem)}"
 
 
 # ── Pagina de resposta (spec, secao 4) ─────────────────────────────────────────
@@ -95,11 +108,15 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
     alerta_equipe = alerta_equipe or reais.alerta_equipe
     avaliar_servico = avaliar_servico or (lambda conn, servico: ae.avaliar_no_nucleo(conn, servico, config))
 
-    def _piloto(cnpj) -> bool:
+    def _piloto(cnpj, link) -> bool:
         """Simula salvo decisao ENVIAR da tela (cn.ACOES) ou cliente teste. NAO (geral ou
-        tipo desligado, embarcador bloqueado, piloto sem e-mail), PILOTO e erro: simula."""
+        tipo desligado, embarcador bloqueado, piloto sem e-mail), PILOTO e erro: simula.
+        Link de copia de piloto (origem '*-piloto', a que vai pro Hugo) simula sempre, mesmo
+        depois de o embarcador virar ENVIAR: so o cliente teste age por ele."""
         if ae._digitos(cnpj) == CNPJ_CLIENTE_TESTE:
             return False
+        if link.origem.endswith("-piloto"):
+            return True
         try:
             return ncd.decisao_email(cnpj, config, db_path=db_path).acao != "ENVIAR"
         except Exception as e:  # noqa: BLE001
@@ -154,39 +171,45 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
     def _erro():
         return render_template("ciencia_erro.html"), 404
 
-    def _pagina(token, sender_id, *, aviso=None, erro=None, abrir=None, nome="", status=200):
+    def _pagina(token, link, *, aviso=None, erro=None, abrir=None, nome="", status=200):
         with closing(cd.conectar(db)) as conn:
-            pendentes = cd.pendentes_do_sender(conn, sender_id)
+            pendentes = [p for p in cd.pendentes_do_sender(conn, link.sender_id) if p["id"] in link.ids]
             # encerrado pelo sistema nao aparece: o motivo e interno
-            respondidos = [r for r in cd.do_sender(conn, sender_id) if r["situacao"] in (cd.CIENTE, cd.REAGENDADO)]
+            respondidos = [r for r in cd.do_sender(conn, link.sender_id)
+                           if r["id"] in link.ids and r["situacao"] in (cd.CIENTE, cd.REAGENDADO)]
+            from nucleo.nf_pedido import anotar_nf
+            anotar_nf(pendentes, conn=conn)
+            anotar_nf(respondidos, conn=conn)
         linhas = pendentes + respondidos
         cnpj = next((r["cnpj"] for r in linhas if r.get("cnpj")), None)
         return render_template("ciencia.html", token=token, pendentes=[_vista_pendente(p) for p in pendentes],
                                respondidos=[_vista_respondido(r) for r in respondidos],
-                               piloto=bool(linhas) and _piloto(cnpj), aviso=aviso, erro=erro, abrir=abrir,
+                               piloto=bool(linhas) and _piloto(cnpj, link), aviso=aviso, erro=erro, abrir=abrir,
                                nome=nome), status
 
     def _ir(token, resultado, ciencia_id=None, data=None):
         return redirect(url_for("ciencia_pagina", token=token, r=resultado, c=ciencia_id, d=data), code=303)
 
-    def _aviso(sender_id, resultado, ciencia_id, data_txt):
+    def _aviso(link, resultado, ciencia_id, data_txt):
         """Aviso depois do POST, so de chaves fixas: nada da query string vira texto."""
         if resultado == "ja_respondido":
             return "Este pedido já foi respondido."
+        if resultado == "em_andamento":
+            return "Outra resposta para este pedido está sendo registrada agora. Atualize a página em instantes."
         if resultado == "ajuste_pendente":
             return "A data foi alterada. Nossa equipe vai concluir o ajuste do pedido."
         if resultado not in ("ciente", "reagendado"):
             return None
         with closing(cd.conectar(db)) as conn:
-            ciencia = cd.buscar(conn, ciencia_id) if ciencia_id else None
-        if not ciencia or ciencia["sender_id"] != sender_id:
+            ciencia = cd.buscar(conn, ciencia_id) if ciencia_id in link.ids else None
+            codigo = dados.ps_e_nf(ciencia["codigo"], conn) if ciencia else ""
+        if not ciencia or ciencia["sender_id"] != link.sender_id:
             return "Resposta recebida."
-        codigo = ciencia["codigo"]
         if resultado == "ciente" and ciencia["situacao"] == cd.CIENTE:
             return f"Pedido {codigo}: ciência registrada em nome de {ciencia['respondido_por']}. Obrigado!"
         if resultado == "reagendado" and ciencia["situacao"] == cd.REAGENDADO:
             return f"Pedido {codigo}: entrega reagendada para {_br(ciencia['data_nova'])}. Obrigado!"
-        if not _piloto(ciencia["cnpj"]):
+        if not _piloto(ciencia["cnpj"], link):
             return f"Pedido {codigo}: resposta recebida."
         if resultado == "ciente":
             return f"Pedido {codigo}: ciência simulada."
@@ -196,12 +219,15 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
             dia = "a data escolhida"
         return f"Pedido {codigo}: reagendamento simulado para {dia}."
 
-    def _pendente_do_form(conn, sender_id):
+    def _pendente_do_form(conn, link):
         ciencia_id = _id(request.form.get("ciencia_id"))
-        ciencia = cd.buscar(conn, ciencia_id) if ciencia_id else None
-        if not ciencia or ciencia["sender_id"] != sender_id or ciencia["situacao"] != cd.PENDENTE:
+        ciencia = cd.buscar(conn, ciencia_id) if ciencia_id in link.ids else None
+        if not ciencia or ciencia["sender_id"] != link.sender_id or ciencia["situacao"] != cd.PENDENTE:
             return None
         return ciencia
+
+    def _navegador() -> str:
+        return (request.headers.get("User-Agent") or "")[:300]
 
     def _nome_do_form() -> str | None:
         nome = " ".join((request.form.get("nome") or "").split())
@@ -254,70 +280,79 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
 
     @app.route("/ciencia/<token>")
     def ciencia_pagina(token):
-        sender_id = ler(token, secret)
-        if sender_id is None:
+        link = ler(token, secret)
+        if link is None:
             return _erro()
-        aviso = _aviso(sender_id, request.args.get("r"), _id(request.args.get("c")), request.args.get("d"))
-        return _pagina(token, sender_id, aviso=aviso)
+        aviso = _aviso(link, request.args.get("r"), _id(request.args.get("c")), request.args.get("d"))
+        return _pagina(token, link, aviso=aviso)
 
     @app.route("/ciencia/<token>/ciente", methods=["POST"])
     def ciencia_ciente(token):
-        sender_id = ler(token, secret)
-        if sender_id is None:
+        link = ler(token, secret)
+        if link is None:
             return _erro()
         with closing(cd.conectar(db)) as conn:
-            ciencia = _pendente_do_form(conn, sender_id)
+            ciencia = _pendente_do_form(conn, link)
             if not ciencia:
                 return _ir(token, "ja_respondido")
             nome = _nome_do_form()
             if not nome:
-                return _pagina(token, sender_id, erro=_ERRO_NOME, status=400)
-            if _piloto(ciencia["cnpj"]):
+                return _pagina(token, link, erro=_ERRO_NOME, status=400)
+            if _piloto(ciencia["cnpj"], link):
                 return _ir(token, "ciente", ciencia["id"])
             agora = datetime.now()
-            if not cd.responder(conn, ciencia["id"], cd.CIENTE, nome, request.remote_addr, agora):
+            # um reagendar em andamento (esperando a Vuupt) ganha: o ciente nao grava por cima
+            if not cd.reivindicar_resposta(conn, ciencia["id"], agora):
+                return _ir(token, "em_andamento")
+            if not cd.responder(conn, ciencia["id"], cd.CIENTE, nome, request.remote_addr, agora,
+                                origem=link.origem, navegador=_navegador()):
                 return _ir(token, "ja_respondido")
             logger.info(f"ciencia {ciencia['codigo']}: CIENTE por {nome}")
             _postar_no_chat(conn, ciencia, f"{nome} confirmou ciência da entrega dedicada do pedido "
-                                           f"{ciencia['codigo']} em {agora:%d/%m %H:%M}.")
+                                           f"{dados.ps_e_nf(ciencia['codigo'], conn)} em {agora:%d/%m %H:%M}.")
         return _ir(token, "ciente", ciencia["id"])
 
     @app.route("/ciencia/<token>/reagendar", methods=["POST"])
     def ciencia_reagendar(token):
-        sender_id = ler(token, secret)
-        if sender_id is None:
+        link = ler(token, secret)
+        if link is None:
             return _erro()
         with closing(cd.conectar(db)) as conn:
-            ciencia = _pendente_do_form(conn, sender_id)
+            ciencia = _pendente_do_form(conn, link)
             if not ciencia:
                 return _ir(token, "ja_respondido")
             nome = _nome_do_form()
             if not nome:
-                return _pagina(token, sender_id, erro=_ERRO_NOME, abrir=ciencia["id"], status=400)
+                return _pagina(token, link, erro=_ERRO_NOME, abrir=ciencia["id"], status=400)
             datas = _datas(ciencia)
             if not datas:
-                return _pagina(token, sender_id, erro=f"Este pedido não pode ser reagendado por aqui. {ae.CHAT}",
+                return _pagina(token, link, erro=f"Este pedido não pode ser reagendado por aqui. {ae.CHAT}",
                                nome=nome, status=409)
             try:
                 data = date.fromisoformat(request.form.get("data") or "")
             except ValueError:
                 data = None
             if data not in datas:
-                return _pagina(token, sender_id, erro=_ERRO_DATA, abrir=ciencia["id"], nome=nome, status=400)
-            if _piloto(ciencia["cnpj"]):
+                return _pagina(token, link, erro=_ERRO_DATA, abrir=ciencia["id"], nome=nome, status=400)
+            if _piloto(ciencia["cnpj"], link):
                 return _ir(token, "reagendado", ciencia["id"], data.isoformat())
+            # trava antes da Vuupt: ciente ou outra aba no meio nao gravam por cima do que a Vuupt fizer
+            if not cd.reivindicar_resposta(conn, ciencia["id"], datetime.now()):
+                return _ir(token, "em_andamento")
             recusa = _reagendar(conn, ciencia, data, nome)
             if recusa:
+                cd.liberar_resposta(conn, ciencia["id"])
                 logger.info(f"ciencia {ciencia['codigo']}: reagendamento recusado ({recusa})")
-                return _pagina(token, sender_id, erro=recusa, abrir=ciencia["id"], nome=nome, status=409)
+                return _pagina(token, link, erro=recusa, abrir=ciencia["id"], nome=nome, status=409)
             agora = datetime.now()
             # a data ja mudou na Vuupt: cada registro tenta por si; o que falhar vira alerta da equipe
             falhas = []
             try:
                 if not cd.responder(conn, ciencia["id"], cd.REAGENDADO, nome, request.remote_addr, agora,
-                                    data_nova=data):
-                    logger.warning(f"ciencia {ciencia['codigo']}: reagendado na Vuupt, mas a ciencia ja nao "
-                                   f"estava PENDENTE (outra resposta ou encerramento no meio)")
+                                    data_nova=data, origem=link.origem, navegador=_navegador()):
+                    logger.error(f"ciencia {ciencia['codigo']}: reagendado na Vuupt, mas a ciencia ja nao "
+                                 f"estava PENDENTE (encerrada no meio)")
+                    falhas.append("a resposta não foi gravada (a ciência saiu de pendente no meio)")
             except Exception:  # noqa: BLE001
                 logger.exception(f"ciencia {ciencia['codigo']}: reagendado na Vuupt, mas a resposta nao foi gravada")
                 falhas.append("a resposta não foi gravada")
@@ -328,12 +363,12 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
                 logger.exception(f"ciencia {ciencia['codigo']}: reagendado na Vuupt, mas o dedicado nao foi removido")
                 falhas.append("o dedicado não foi removido")
             logger.info(f"ciencia {ciencia['codigo']}: REAGENDADO para {data.isoformat()} por {nome}")
-            _postar_no_chat(conn, ciencia, f"{nome} reagendou o pedido {ciencia['codigo']} para "
+            _postar_no_chat(conn, ciencia, f"{nome} reagendou o pedido {dados.ps_e_nf(ciencia['codigo'], conn)} para "
                                            f"{data:%d/%m/%Y} (dia de visita da região) em {agora:%d/%m %H:%M}.")
             if falhas:
                 embarcador = " ".join(p for p in (_nome_embarcador(conn, ciencia["cnpj"]),
                                                   f"(CNPJ {ciencia['cnpj'] or '?'})") if p)
-                texto = (f"Ciência do dedicado: pedido {ciencia['codigo']} de {embarcador} reagendado pelo "
+                texto = (f"Ciência do dedicado: pedido {dados.ps_e_nf(ciencia['codigo'], conn)} de {embarcador} reagendado pelo "
                          f"embarcador para {data:%d/%m/%Y}: data alterada, mas {' e '.join(falhas)}. "
                          f"Conferir à mão.")
                 try:

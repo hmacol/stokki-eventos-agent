@@ -1,0 +1,521 @@
+{% extends "base.html" %}
+{% block titulo %}Acompanhamento de Rotas{% endblock %}
+
+{% block estilo_extra %}
+<style>
+  .ac-barra { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--superficie);
+    border: 1px solid var(--borda); border-radius: 10px; padding: 12px 18px; margin-bottom: 16px; font-size: 13px; }
+  .ac-barra input[type=date] { border: 1px solid var(--borda); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+  .ac-barra .ac-atualizado { margin-left: auto; color: var(--texto-suave); }
+  .ac-layout { display: grid; grid-template-columns: 270px minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+  .ac-caixa { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; }
+  .ac-caixa h2 { font-size: 13px; margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--borda); }
+  .ac-rolagem { max-height: 560px; overflow-y: auto; }
+  .ac-rota { display: block; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--borda);
+    padding: 10px 14px; cursor: pointer; font: inherit; color: var(--texto); }
+  .ac-rota:hover { background: var(--fundo); }
+  .ac-rota.ativa { background: var(--fundo); box-shadow: inset 3px 0 0 var(--acento); }
+  .ac-rota .l1 { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
+  .ac-rota .l2 { font-size: 12px; color: var(--texto-suave); margin: 3px 0 0 18px; }
+  .ac-bola { width: 10px; height: 10px; border-radius: 50%; flex: none; background: #9aa3ad; }
+  .ac-bola.verde { background: #2e9e5b; } .ac-bola.amarelo { background: #d9a400; } .ac-bola.vermelho { background: #d64545; }
+  .ac-selo { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--borda);
+    color: var(--texto-suave); white-space: nowrap; }
+  .ac-selo.vivo { color: #2e9e5b; border-color: #2e9e5b; }
+  #ac-mapa { height: 560px; border-radius: 0 0 10px 10px; }
+  .ac-mapa-topo { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--borda); font-size: 13px; }
+  .ac-mapa-topo { flex-wrap: wrap; }
+  .ac-mapa-topo strong { font-size: 14px; white-space: nowrap; }
+  .ac-mapa-topo .ac-botao { white-space: nowrap; }
+  .ac-vazio { padding: 28px 14px; text-align: center; color: var(--texto-suave); font-size: 13px; }
+  .ac-parada { padding: 10px 14px; border-bottom: 1px solid var(--borda); font-size: 13px; }
+  .ac-parada .l1 { display: flex; gap: 8px; align-items: baseline; }
+  .ac-parada .n { font-weight: 700; min-width: 20px; }
+  .ac-parada .cod { font-weight: 600; }
+  .ac-parada .dest { color: var(--texto-suave); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ac-parada .tempos { margin: 4px 0 0 28px; font-size: 12px; }
+  .ac-parada .fino { margin: 2px 0 0 28px; font-size: 12px; color: var(--texto-suave); }
+  .ac-parada.pendente { opacity: .65; }
+  /* Uma cor por fase da parada: a mesma no selo, na borda da linha, no mapa e na legenda. */
+  .ac-fase { color: #fff; border-color: transparent; font-weight: 600; }
+  .ac-fase.PENDENTE, .ac-leg i.PENDENTE { background: #7a8591; }
+  .ac-fase.EM_DESLOCAMENTO, .ac-leg i.EM_DESLOCAMENTO { background: #1a73e8; }
+  .ac-fase.EM_ROTA, .ac-leg i.EM_ROTA { background: #7b4cc2; }
+  .ac-fase.ENTREGUE, .ac-leg i.ENTREGUE { background: #2e9e5b; }
+  .ac-fase.PARCIAL, .ac-leg i.PARCIAL { background: #c98a00; }
+  .ac-fase.INSUCESSO, .ac-leg i.INSUCESSO { background: #d64545; }
+  .ac-parada { border-left: 4px solid #7a8591; }
+  .ac-parada.EM_DESLOCAMENTO { border-left-color: #1a73e8; } .ac-parada.EM_ROTA { border-left-color: #7b4cc2; }
+  .ac-parada.ENTREGUE { border-left-color: #2e9e5b; } .ac-parada.PARCIAL { border-left-color: #c98a00; }
+  .ac-parada.INSUCESSO { border-left-color: #d64545; }
+  .ac-leg { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 8px 14px; border-bottom: 1px solid var(--borda); font-size: 12px; color: var(--texto-suave); }
+  .ac-leg span { display: inline-flex; align-items: center; gap: 5px; }
+  .ac-leg i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .ac-botao { font: inherit; font-size: 12px; padding: 3px 9px; border: 1px solid var(--borda); border-radius: 6px;
+    background: var(--superficie); color: var(--texto); cursor: pointer; }
+  .ac-botao:hover { background: var(--fundo); }
+  .ac-botao.principal { background: var(--acento); border-color: var(--acento); color: #fff; padding: 7px 14px; font-size: 13px; }
+  .ac-botao:disabled { opacity: .5; cursor: default; }
+  .ac-acoes { margin: 6px 0 0 28px; }
+  #ac-modal-docs, #ac-modal-cancelar { border: 1px solid var(--borda); border-radius: 12px; padding: 0; width: min(620px, 94vw); background: var(--superficie); color: var(--texto); }
+  #ac-modal-docs::backdrop, #ac-modal-cancelar::backdrop { background: rgba(10, 12, 24, .45); }
+  #ac-modal-docs h2, #ac-modal-cancelar h2 { font-size: 15px; margin: 0; padding: 14px 18px; border-bottom: 1px solid var(--borda); }
+  #ac-modal-docs .corpo, #ac-modal-cancelar .corpo { padding: 14px 18px; font-size: 13px; max-height: 62vh; overflow-y: auto; }
+  #ac-modal-docs .corpo p, #ac-modal-cancelar .corpo p { margin: 0 0 10px; color: var(--texto-suave); }
+  #ac-modal-docs ul { list-style: none; margin: 0 0 10px; padding: 0; }
+  #ac-modal-docs li { padding: 5px 0; border-bottom: 1px solid var(--borda); }
+  #ac-modal-docs .falta { color: var(--erro); }
+  #ac-modal-docs input[type=text], #ac-modal-cancelar input[type=text] { width: 100%; box-sizing: border-box; border: 1px solid var(--borda); border-radius: 6px; padding: 7px 10px; font-size: 13px; }
+  #ac-modal-docs .rodape, #ac-modal-cancelar .rodape { display: flex; gap: 10px; justify-content: flex-end; padding: 12px 18px; border-top: 1px solid var(--borda); }
+  #ac-docs-erro { color: var(--erro); font-weight: 600; }
+  .ac-mais { color: #d64545; font-weight: 600; } .ac-menos { color: #2e9e5b; font-weight: 600; }
+  .ac-ocorrencia { margin: 4px 0 0 28px; font-size: 12px; color: var(--erro); font-weight: 600; }
+  .ac-rodape { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+  .ac-linha { display: flex; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--borda); font-size: 13px; }
+  .ac-linha .valor { margin-left: auto; font-weight: 600; white-space: nowrap; }
+  .ac-nota { font-size: 12px; color: var(--texto-suave); margin: 12px 2px 0; }
+  @media (max-width: 1100px) { .ac-layout, .ac-rodape { grid-template-columns: 1fr; } .ac-rolagem { max-height: 320px; } #ac-mapa { height: 380px; } }
+</style>
+{% endblock %}
+
+{% block conteudo %}
+<h1 style="font-size:20px;margin:0 0 16px;">Acompanhamento de Rotas</h1>
+
+<div class="ac-barra">
+  <label>Dia das rotas <input type="date" id="ac-data" value="{{ data_inicial }}"></label>
+  <span id="ac-resumo"></span>
+  <span class="ac-atualizado" id="ac-atualizado"></span>
+</div>
+
+<div class="ac-layout">
+  <div class="ac-caixa">
+    <h2>Rotas do dia</h2>
+    <div class="ac-rolagem" id="ac-lista"><div class="ac-vazio">Carregando…</div></div>
+  </div>
+
+  <div class="ac-caixa">
+    <div class="ac-mapa-topo" id="ac-mapa-topo"><span style="color:var(--texto-suave)">Escolha uma rota na lista.</span></div>
+    {% if google_maps_key %}
+    <div id="ac-mapa"></div>
+    {% else %}
+    <div class="ac-vazio">Falta a chave do Google Maps (google_maps.api_key) no config.yaml: sem ela não dá pra desenhar o mapa. O resto da tela funciona.</div>
+    {% endif %}
+  </div>
+
+  <div class="ac-caixa">
+    <h2>Paradas</h2>
+    <div class="ac-leg" aria-label="Legenda das fases">
+      <span><i class="PENDENTE"></i>a fazer</span><span><i class="EM_DESLOCAMENTO"></i>a caminho</span>
+      <span><i class="EM_ROTA"></i>no local</span><span><i class="ENTREGUE"></i>entregue</span>
+      <span><i class="PARCIAL"></i>entrega parcial</span><span><i class="INSUCESSO"></i>não entregue</span>
+    </div>
+    <div class="ac-rolagem" id="ac-paradas"><div class="ac-vazio">Escolha uma rota na lista.</div></div>
+  </div>
+</div>
+
+<div class="ac-rodape">
+  <div class="ac-caixa"><h2>Ocorrências da rota</h2><div id="ac-ocorrencias"><div class="ac-vazio">—</div></div></div>
+  <div class="ac-caixa" id="ac-caixa-despesas" style="display:none"><h2 id="ac-despesas-titulo">Despesas lançadas</h2><div id="ac-despesas"></div></div>
+</div>
+
+{% if pode_documentos %}
+<dialog id="ac-modal-docs" aria-labelledby="ac-docs-titulo">
+  <h2 id="ac-docs-titulo">Documentos por e-mail</h2>
+  <div class="corpo">
+    <p>Manda o XML, a DANFE e o boleto guardados de cada pedido num e-mail só. Desmarque o que não quer enviar; clique no nome do arquivo para baixar. O e-mail sai de verdade para o endereço abaixo e fica salvo para o CNPJ do destinatário.</p>
+    <div id="ac-docs-lista" aria-live="polite"></div>
+    <div id="ac-docs-mesmo" hidden>
+      <p>Enviar para o mesmo e-mail do último envio? <strong id="ac-docs-mesmo-email" style="color:var(--texto)"></strong>
+        <button type="button" class="ac-botao" id="ac-docs-alterar">Alterar e-mail</button></p>
+    </div>
+    <div id="ac-docs-campo">
+      <label for="ac-docs-email">E-mail de quem vai receber</label>
+      <input type="text" id="ac-docs-email" inputmode="email" autocomplete="off" maxlength="600" placeholder="nome@empresa.com.br (mais de um: separe por vírgula)">
+    </div>
+    <p id="ac-docs-erro" role="alert" hidden></p>
+  </div>
+  <div class="rodape">
+    <button type="button" class="ac-botao" id="ac-docs-fechar" style="padding:7px 14px;font-size:13px">Fechar</button>
+    <button type="button" class="ac-botao principal" id="ac-docs-enviar">Enviar por e-mail</button>
+  </div>
+</dialog>
+{% endif %}
+
+<dialog id="ac-modal-cancelar" aria-labelledby="ac-cancelar-titulo">
+  <h2 id="ac-cancelar-titulo">Cancelar finalização</h2>
+  <div class="corpo">
+    <p><strong id="ac-cancelar-pedido" style="color:var(--texto)"></strong></p>
+    <p>A Vuupt não reabre um serviço concluído. O pedido é <b>duplicado</b> como serviço novo (código com -R), entra nesta mesma rota e aparece no app do motorista para ele fazer a baixa de novo, do início.</p>
+    <p>A baixa anterior <b>não é apagada</b>: fica guardada com o resultado, os horários e as fotos. O que já saiu por causa dela (e-mail ao cliente, expedição na Stokki) não é desfeito.</p>
+    <label for="ac-cancelar-motivo">Motivo (fica no histórico)</label>
+    <input type="text" id="ac-cancelar-motivo" maxlength="300" autocomplete="off" placeholder="Ex.: motorista baixou o pedido errado">
+    <p id="ac-cancelar-erro" role="alert" hidden style="color:var(--erro);font-weight:600;margin-top:10px"></p>
+  </div>
+  <div class="rodape">
+    <button type="button" class="ac-botao" id="ac-cancelar-fechar" style="padding:7px 14px;font-size:13px">Voltar</button>
+    <button type="button" class="ac-botao principal" id="ac-cancelar-confirmar" style="background:var(--erro);border-color:var(--erro)">Cancelar finalização</button>
+  </div>
+</dialog>
+
+<p class="ac-nota">
+  Tempo por parada = da conclusão da parada anterior até a conclusão desta, comparado com o trajeto mais o atendimento previstos (30 min por entrega).
+  A cor da rota é o atraso acumulado: verde até 10 min, amarelo até 30, vermelho acima; cinza quando ainda não há o que medir.
+  Os dados das entregas chegam com 15 a 30 minutos de atraso. Posição ao vivo só de quem usa o nosso app.
+</p>
+
+<script>
+(function () {
+  const URL_LISTA = {{ url_for('api_acompanhamento_rotas')|tojson }};
+  const URL_ROTA = {{ url_for('api_acompanhamento_rota', rota_id=0)|tojson }}.replace(/0$/, "");
+  const URL_PEDAGIOS = {{ url_for('pedagios')|tojson }};
+  const el = (id) => document.getElementById(id);
+  const esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const URL_CANCELAR = {{ url_for('api_acompanhamento_cancelar_finalizacao', parada_id=0)|tojson }};
+  const PODE_DOCS = {{ 'true' if pode_documentos else 'false' }};
+  const URL_DOCS_CONFERIR = {{ url_for('api_pedidos_documentos_conferir')|tojson }};
+  const URL_DOCS_ENVIAR = {{ url_for('api_pedidos_documentos_enviar')|tojson }};
+  const CODIGO_PS = /^#?PS-\d+(-[RC]\d+)?$/i;   // o mesmo formato que a tela Pedidos aceita
+  let rotaAtual = null, enquadrar = false, mapa = null, marcas = [], detalheAtual = null;
+
+  function dur(s) {
+    if (s == null) return "—";
+    const m = Math.round(Math.abs(s) / 60);
+    return m < 60 ? m + " min" : Math.floor(m / 60) + "h" + String(m % 60).padStart(2, "0");
+  }
+  function dif(s) {
+    if (s == null) return "";
+    if (Math.abs(s) < 60) return '<span class="ac-menos">no previsto</span>';
+    return s > 0 ? '<span class="ac-mais">+' + dur(s) + "</span>" : '<span class="ac-menos">−' + dur(s) + "</span>";
+  }
+  function atraso(r) {
+    if (r.atraso_s == null) return r.concluidas ? "sem previsão" : "sem entregas ainda";
+    return r.atraso_s < 60 ? "no previsto" : "+" + dur(r.atraso_s) + " de atraso";
+  }
+  const SITUACAO = { PENDENTE: "a fazer", EM_DESLOCAMENTO: "a caminho", EM_ROTA: "no local", ENTREGUE: "entregue",
+                     PARCIAL: "entrega parcial", INSUCESSO: "não entregue" };
+  const STATUS = { PLANEJADA: "não iniciada", ACEITA: "aceita", EM_ROTA: "em rota", CONCLUIDA: "concluída" };
+  const hora = (t) => (t || "").slice(11, 16);
+  const reais = (v) => "R$ " + Number(v || 0).toFixed(2).replace(".", ",");
+
+  async function buscar(url) {
+    const r = await fetch(url, { headers: { Accept: "application/json" } });
+    if (r.status === 401) { location.reload(); throw new Error("sessão"); }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }
+
+  async function carregarLista() {
+    const dia = el("ac-data").value;
+    let d;
+    try { d = await buscar(URL_LISTA + "?data=" + encodeURIComponent(dia)); }
+    catch (e) { el("ac-atualizado").textContent = "Não consegui atualizar agora."; return; }
+    if (dia !== el("ac-data").value) return;   // trocou o dia enquanto carregava
+    el("ac-atualizado").textContent = "Atualizado às " + d.atualizado_em;
+    const n = { verde: 0, amarelo: 0, vermelho: 0, cinza: 0 };
+    d.rotas.forEach((r) => n[r.semaforo]++);
+    el("ac-resumo").textContent = d.rotas.length
+      ? d.rotas.length + " rotas: " + n.vermelho + " atrasadas, " + n.amarelo + " em atenção, " + n.verde + " no previsto" : "";
+    if (!d.rotas.length) { el("ac-lista").innerHTML = '<div class="ac-vazio">Nenhuma rota neste dia.</div>'; return; }
+    el("ac-lista").innerHTML = d.rotas.map((r) =>
+      '<button type="button" class="ac-rota' + (r.rota_id === rotaAtual ? " ativa" : "") + '" data-id="' + r.rota_id + '">' +
+      '<div class="l1"><span class="ac-bola ' + r.semaforo + '"></span><span>' + esc(r.motorista || "Sem motorista") + "</span></div>" +
+      '<div class="l2">' + esc(r.nome || "") + "</div>" +
+      '<div class="l2">' + r.concluidas + " de " + r.total_paradas + " paradas · " + esc(STATUS[r.status] || r.status) + "</div>" +
+      '<div class="l2">' + atraso(r) + (r.tem_gps ? "" : ' · <span class="ac-selo">sem GPS</span>') + "</div></button>").join("");
+    if (rotaAtual && !d.rotas.some((r) => r.rota_id === rotaAtual)) { rotaAtual = null; limparDetalhe(); }
+  }
+
+  function limparDetalhe() {
+    el("ac-mapa-topo").innerHTML = '<span style="color:var(--texto-suave)">Escolha uma rota na lista.</span>';
+    el("ac-paradas").innerHTML = '<div class="ac-vazio">Escolha uma rota na lista.</div>';
+    el("ac-ocorrencias").innerHTML = '<div class="ac-vazio">—</div>';
+    el("ac-caixa-despesas").style.display = "none";
+    detalheAtual = null;
+    desenharMapa(null);
+  }
+
+  function seloPosicao(p) {
+    if (p.fonte === "GPS") {
+      return p.ao_vivo ? '<span class="ac-selo vivo">GPS ao vivo</span>'
+                       : '<span class="ac-selo">GPS há ' + dur(p.ha_s) + "</span>";
+    }
+    return '<span class="ac-selo">sem GPS ao vivo' + (p.fonte ? ": carro na última parada concluída" : "") + "</span>";
+  }
+
+  async function carregarRota() {
+    if (!rotaAtual) return;
+    const id = rotaAtual;
+    let d;
+    try { d = await buscar(URL_ROTA + id); }
+    catch (e) { el("ac-atualizado").textContent = "Não consegui atualizar a rota agora."; return; }
+    if (id !== rotaAtual) return;   // trocou de rota enquanto carregava
+    const r = d.rota;
+    detalheAtual = d;
+    const comDocs = PODE_DOCS && d.paradas.some((p) => CODIGO_PS.test(p.codigo || ""));
+    el("ac-mapa-topo").innerHTML = '<span class="ac-bola ' + r.semaforo + '"></span><strong>' + esc(r.motorista || "Sem motorista") +
+      "</strong><span>" + esc(r.tipo_veiculo || "") + "</span><span>" + r.concluidas + " de " + r.total_paradas + " paradas · " + atraso(r) +
+      (r.iniciada_em ? " · saiu às " + hora(r.iniciada_em) : "") + '</span><span style="margin-left:auto">' + seloPosicao(d.posicao) + "</span>" +
+      (comDocs ? '<button type="button" class="ac-botao" data-docs="rota">Documentos da rota</button>' : "");
+
+    el("ac-paradas").innerHTML = d.paradas.length ? d.paradas.map((p) => {
+      let tempos = "";
+      if (p.concluida_em) {
+        tempos = p.junto ? '<div class="fino">baixada junto com a anterior (' + hora(p.concluida_em) + ")</div>"
+          : '<div class="tempos">' + (p.real_s == null ? "concluída às " + hora(p.concluida_em)
+              : "levou " + dur(p.real_s) + (p.plan_s == null ? "" : " · previsto " + dur(p.plan_s) + " · " + dif(p.dif_s))) + "</div>";
+        if (!p.junto) {
+          tempos += '<div class="fino">' + (p.cliques_ok
+            ? "deslocamento " + dur(p.desloc_s) + " · no cliente " + dur(p.no_local_s)
+            : "deslocamento e espera sem separar (cliques juntos)") + " · " + hora(p.concluida_em) + "</div>";
+        }
+      } else if (p.plan_s != null) {
+        tempos = '<div class="fino">previsto ' + dur(p.plan_s) + "</div>";
+      }
+      return '<div class="ac-parada ' + esc(p.situacao) + (p.concluida_em ? "" : " pendente") + '"><div class="l1"><span class="n">' + esc(p.ordem) +
+        '</span><span class="cod">' + esc(p.codigo || "") + (p.codigo ? " · NF " + esc(p.nf || "—") : "") + "</span>" + (p.reentrega ? '<span class="ac-selo">reentrega</span>' : "") +
+        '<span class="ac-selo ac-fase ' + esc(p.situacao) + '" style="margin-left:auto">' + esc(SITUACAO[p.situacao] || p.situacao) + "</span></div>" +
+        '<div class="dest" style="margin-left:28px">' + esc(p.destinatario || "") + "</div>" + tempos +
+        (p.ocorrencia ? '<div class="ac-ocorrencia">' + esc(p.ocorrencia) + "</div>" : "") +
+        (p.lat == null || p.lng == null ? '<div class="fino">sem coordenada: fora do mapa</div>' : "") +
+        (p.finalizacao_cancelada ? '<div class="fino">finalização cancelada: a nova baixa é na parada duplicada (-R)</div>' : "") +
+        acoes(p, r) + "</div>";
+    }).join("") : '<div class="ac-vazio">Rota sem paradas.</div>';
+
+    el("ac-ocorrencias").innerHTML = d.ocorrencias.length ? d.ocorrencias.map((o) =>
+      '<div class="ac-linha"><strong>' + esc(o.codigo || "") + (o.codigo ? " · NF " + esc(o.nf || "—") : "") + "</strong><span>" + esc(o.destinatario || "") +
+      '</span><span class="valor" style="color:var(--erro)">' + esc(o.motivo) + "</span></div>").join("")
+      : '<div class="ac-vazio">Nenhuma ocorrência nesta rota.</div>';
+
+    const caixa = el("ac-caixa-despesas");
+    if (d.despesas) {   // a chave so vem pra quem pode ver /financeiro/pedagios
+      caixa.style.display = "";
+      el("ac-despesas-titulo").innerHTML = "Despesas lançadas · " + reais(d.total_despesas) +
+        ' <a href="' + URL_PEDAGIOS + '" style="font-weight:400;margin-left:8px">aprovar em Pedágios</a>';
+      const ST = { PENDENTE: "aguardando aprovação", APROVADO: "aprovada", REJEITADO: "rejeitada", CANCELADO: "cancelada pelo motorista" };
+      el("ac-despesas").innerHTML = d.despesas.length ? d.despesas.map((x) =>
+        '<div class="ac-linha"><strong>' + esc(x.tipo_rotulo || x.tipo) + "</strong><span>" +
+        esc(x.pedido_codigo ? x.pedido_codigo + " " + (x.pedido_nome || "") : (x.descricao || "")) + ' · <span style="color:var(--texto-suave)">' +
+        esc(ST[x.status] || x.status) + '</span></span><span class="valor">' +
+        reais(x.valor_aprovado != null ? x.valor_aprovado : x.valor_informado) + "</span></div>").join("")
+        : '<div class="ac-vazio">Nenhuma despesa lançada nesta rota.</div>';
+    } else {
+      caixa.style.display = "none";
+    }
+    desenharMapa(d);
+  }
+
+  const FINALIZADA = { ENTREGUE: 1, PARCIAL: 1, INSUCESSO: 1 };
+  function acoes(p, r) {
+    let h = "";
+    if (PODE_DOCS && CODIGO_PS.test(p.codigo || "")) h += '<button type="button" class="ac-botao" data-docs="' + esc(p.codigo) + '">Documentos por e-mail</button> ';
+    if (r.pode_cancelar_finalizacao && FINALIZADA[p.situacao] && !p.finalizacao_cancelada)
+      h += '<button type="button" class="ac-botao" data-cancelar="' + esc(p.parada_id) + '">Cancelar finalização</button>';
+    return h ? '<div class="ac-acoes">' + h + "</div>" : "";
+  }
+
+  const COR = { PENDENTE: "#7a8591", EM_DESLOCAMENTO: "#1a73e8", EM_ROTA: "#7b4cc2", ENTREGUE: "#2e9e5b",
+                PARCIAL: "#c98a00", INSUCESSO: "#d64545" };
+  function desenharMapa(d) {
+    if (!mapa) return;
+    marcas.forEach((m) => m.setMap(null));
+    marcas = [];
+    if (!d) return;
+    const limites = new google.maps.LatLngBounds();
+    d.paradas.forEach((p) => {
+      if (p.lat == null || p.lng == null) return;
+      const pos = { lat: p.lat, lng: p.lng };
+      marcas.push(new google.maps.Marker({
+        map: mapa, position: pos, title: (p.codigo || "") + (p.codigo ? " · NF " + (p.nf || "—") : "") + " " + (p.destinatario || ""),
+        label: { text: String(p.ordem), color: "#fff", fontSize: "11px", fontWeight: "700" },
+        icon: { path: google.maps.SymbolPath.CIRCLE, scale: 11, fillColor: COR[p.situacao] || "#7a8591", fillOpacity: 1,
+                strokeColor: "#fff", strokeWeight: 2 },
+      }));
+      limites.extend(pos);
+    });
+    if (d.posicao.lat != null && d.posicao.lng != null) {
+      const pos = { lat: d.posicao.lat, lng: d.posicao.lng };
+      marcas.push(new google.maps.Marker({
+        map: mapa, position: pos, zIndex: 999,
+        title: d.posicao.fonte === "GPS" ? "Motorista (GPS)" : "Motorista: última parada concluída (sem GPS ao vivo)",
+        icon: { path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW, scale: 6, fillColor: "#141428",   /* o azul e da fase "a caminho" */
+                fillOpacity: 1, strokeColor: "#fff", strokeWeight: 2 },
+      }));
+      limites.extend(pos);
+    }
+    if (enquadrar && !limites.isEmpty()) { mapa.fitBounds(limites, 40); enquadrar = false; }
+  }
+
+  window.iniciarMapaAcompanhamento = function () {
+    mapa = new google.maps.Map(el("ac-mapa"), { center: { lat: -23.55, lng: -46.63 }, zoom: 10, mapTypeControl: false, streetViewControl: false });
+    enquadrar = true;
+    carregarRota();
+  };
+
+  el("ac-lista").addEventListener("click", (e) => {
+    const b = e.target.closest(".ac-rota");
+    if (!b) return;
+    rotaAtual = Number(b.dataset.id);
+    enquadrar = true;
+    el("ac-lista").querySelectorAll(".ac-rota").forEach((x) => x.classList.toggle("ativa", x === b));
+    carregarRota();
+  });
+  // ── Documentos por e-mail: as mesmas rotas e a mesma escolha da tela Pedidos ──
+  if (PODE_DOCS) {
+    const modal = el("ac-modal-docs"), lista = el("ac-docs-lista"), botao = el("ac-docs-enviar"), erro = el("ac-docs-erro");
+    const ROTULO = { XML: "XML", DANFE: "DANFE", BOLETO: "boleto" };
+    let itens = [], pedido = 0;
+    const tamanho = (b) => b >= 1048576 ? (b / 1048576).toFixed(1).replace(".", ",") + " MB" : Math.max(1, Math.round(b / 1024)) + " KB";
+    const semDocs = (f) => "sem " + f.map((t) => ROTULO[t] || t).join(" e ");
+    const marcados = () => Array.from(lista.querySelectorAll(".ac-doc-sel:checked"));
+    const falhar = (texto) => { erro.textContent = texto; erro.hidden = !texto; };
+    async function postar(url, corpo) {
+      const r = await fetch(url, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(corpo) });
+      let d = null;
+      try { d = await r.json(); } catch (e) { /* resposta sem JSON */ }
+      if (!r.ok) throw new Error((d && d.erro) || "Falha (HTTP " + r.status + ").");
+      return d;
+    }
+    function total() {
+      const todos = lista.querySelectorAll(".ac-doc-sel").length, m = marcados();
+      const bytes = m.reduce((s, c) => s + Number(c.dataset.bytes || 0), 0);
+      el("ac-docs-total").textContent = m.length
+        ? m.length + " de " + todos + " arquivo(s) marcado(s), " + tamanho(bytes) + (bytes > 18 * 1048576 ? ": vai em mais de um e-mail por causa do tamanho." : ".")
+        : "Marque pelo menos um documento para enviar.";
+      botao.disabled = !m.length;
+    }
+    function email(lembrado) {
+      el("ac-docs-mesmo").hidden = !lembrado;
+      el("ac-docs-campo").hidden = !!lembrado;
+      el("ac-docs-mesmo-email").textContent = lembrado || "";
+      el("ac-docs-email").value = lembrado || "";
+    }
+    async function abrir(listaItens) {
+      const meu = ++pedido;
+      itens = listaItens;
+      falhar("");
+      lista.textContent = "Procurando os documentos...";
+      botao.disabled = true;
+      botao.hidden = false;
+      botao.textContent = "Enviar por e-mail";
+      email("");
+      modal.showModal();
+      let d;
+      try { d = await postar(URL_DOCS_CONFERIR, { itens }); }
+      catch (e) { if (meu === pedido) { lista.textContent = ""; falhar("Falha ao procurar os documentos: " + e.message); } return; }
+      if (meu !== pedido) return;
+      lista.textContent = "";
+      const ul = document.createElement("ul");
+      d.pedidos.forEach((p) => {
+        const li = document.createElement("li"), forte = document.createElement("strong");
+        const par = detalheAtual && detalheAtual.paradas.find((x) => x.codigo === p.codigo);
+        forte.textContent = p.codigo + " · NF " + ((par && par.nf) || "—") + ": ";
+        li.appendChild(forte);
+        p.arquivos.forEach((a, i) => {
+          if (i) li.appendChild(document.createTextNode(" · "));
+          const rotulo = document.createElement("label"), marca = document.createElement("input"), link = document.createElement("a");
+          marca.type = "checkbox"; marca.className = "ac-doc-sel"; marca.checked = true;
+          marca.dataset.ref = a.ref; marca.dataset.bytes = a.tamanho;
+          marca.addEventListener("change", total);
+          link.href = a.url; link.textContent = a.nome; link.title = "Baixar (" + tamanho(a.tamanho) + ")";
+          rotulo.appendChild(marca); rotulo.appendChild(document.createTextNode(" ")); rotulo.appendChild(link);
+          li.appendChild(rotulo);
+        });
+        if (!p.arquivos.length || p.faltando.length) {
+          const falta = document.createElement("span");
+          falta.className = "falta";
+          falta.textContent = p.arquivos.length ? " — " + semDocs(p.faltando) : "nenhum documento guardado";
+          li.appendChild(falta);
+        }
+        ul.appendChild(li);
+      });
+      lista.appendChild(ul);
+      const linha = document.createElement("p");
+      linha.id = "ac-docs-total";
+      lista.appendChild(linha);
+      if (!d.total_arquivos) { linha.textContent = "Nada para enviar: nenhum documento guardado para a seleção."; botao.disabled = true; }
+      else total();
+      const lembrados = d.emails_lembrados || [];
+      email(lembrados.length === 1 ? lembrados[0] : "");
+    }
+    el("ac-docs-alterar").addEventListener("click", () => {
+      el("ac-docs-mesmo").hidden = true; el("ac-docs-campo").hidden = false; el("ac-docs-email").focus(); el("ac-docs-email").select();
+    });
+    el("ac-docs-fechar").addEventListener("click", () => modal.close());
+    modal.addEventListener("close", () => { pedido++; });
+    botao.addEventListener("click", async () => {
+      const emails = el("ac-docs-email").value.trim();
+      if (!emails) { falhar("Informe o e-mail de quem vai receber."); el("ac-docs-mesmo").hidden = true; el("ac-docs-campo").hidden = false; el("ac-docs-email").focus(); return; }
+      falhar("");
+      botao.disabled = true;
+      botao.textContent = "Enviando...";
+      let d;
+      try { d = await postar(URL_DOCS_ENVIAR, { itens, emails, refs: marcados().map((c) => c.dataset.ref) }); }
+      catch (e) { falhar(e.message); botao.disabled = false; botao.textContent = "Enviar por e-mail"; return; }
+      lista.textContent = "";
+      const ok = document.createElement("p");
+      ok.style.color = "var(--texto)";
+      ok.textContent = "Enviado para " + d.emails.join(", ") + ": " + d.arquivos + " arquivo(s)" + (d.partes > 1 ? " em " + d.partes + " e-mails." : ".");
+      lista.appendChild(ok);
+      Object.keys(d.faltando || {}).forEach((c) => {
+        const p = document.createElement("p"); p.className = "falta"; p.textContent = c + ": " + semDocs(d.faltando[c]); lista.appendChild(p);
+      });
+      el("ac-docs-mesmo").hidden = true; el("ac-docs-campo").hidden = true; botao.hidden = true;
+    });
+    document.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-docs]");
+      if (!b || !detalheAtual) return;
+      const paradas = detalheAtual.paradas.filter((p) => CODIGO_PS.test(p.codigo || "") && (b.dataset.docs === "rota" || p.codigo === b.dataset.docs));
+      if (paradas.length > 50) { alert("Essa rota tem mais de 50 pedidos: mande os documentos parada por parada."); return; }
+      if (paradas.length) abrir(paradas.map((p) => ({ codigo: p.codigo, destinatario: p.destinatario || "" })));
+    });
+  }
+
+  // ── Cancelar finalizacao: duplica o servico na Vuupt e o motorista refaz a baixa ──
+  (function () {
+    const modal = el("ac-modal-cancelar"), erro = el("ac-cancelar-erro"), botao = el("ac-cancelar-confirmar"), campo = el("ac-cancelar-motivo");
+    let parada = null;
+    const falhar = (t) => { erro.textContent = t; erro.hidden = !t; };
+    document.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-cancelar]");
+      if (!b || !detalheAtual) return;
+      parada = detalheAtual.paradas.find((p) => String(p.parada_id) === b.dataset.cancelar);
+      if (!parada) return;
+      el("ac-cancelar-pedido").textContent = (parada.codigo || "") + " · NF " + (parada.nf || "—") + " · " + (parada.destinatario || "") + " · " + (SITUACAO[parada.situacao] || parada.situacao);
+      campo.value = ""; falhar(""); botao.disabled = false; botao.textContent = "Cancelar finalização";
+      modal.showModal(); campo.focus();
+    });
+    el("ac-cancelar-fechar").addEventListener("click", () => modal.close());
+    botao.addEventListener("click", async () => {
+      const motivo = campo.value.trim();
+      if (motivo.length < 5) { falhar("Escreva o motivo."); campo.focus(); return; }
+      falhar(""); botao.disabled = true; botao.textContent = "Duplicando na Vuupt...";
+      let d = null, r;
+      try {
+        r = await fetch(URL_CANCELAR.replace("/0/", "/" + parada.parada_id + "/"), { method: "POST", credentials: "same-origin",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ motivo }) });
+        try { d = await r.json(); } catch (e) { /* sem JSON */ }
+      } catch (e) { r = null; }
+      if (!r || !r.ok) {
+        falhar((d && d.erro) || "Não consegui falar com o painel. Confira a rota antes de tentar de novo.");
+        botao.disabled = false; botao.textContent = "Cancelar finalização";
+        carregarRota();
+        return;
+      }
+      modal.close();
+      el("ac-atualizado").textContent = "Finalização cancelada: nova parada " + d.novo_codigo + " na rota.";
+      carregarLista(); carregarRota();
+    });
+  })();
+
+  el("ac-data").addEventListener("change", () => { rotaAtual = null; limparDetalhe(); carregarLista(); });
+
+  carregarLista();
+  const atualizar = () => { if (!document.hidden) { carregarLista(); carregarRota(); } };
+  setInterval(atualizar, 60000);
+  document.addEventListener("visibilitychange", atualizar);   // voltou pra aba: nao espera o proximo minuto
+})();
+</script>
+{% if google_maps_key %}
+<script async src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_key }}&callback=iniciarMapaAcompanhamento"></script>
+{% endif %}
+{% endblock %}
