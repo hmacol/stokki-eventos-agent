@@ -74,6 +74,19 @@ class TestAulaEquipe(unittest.TestCase):
         self.assertEqual(self._entrar().headers["Location"], "/wms")
         self.assertEqual(self._entrar(proximo="https://fora.com").headers["Location"], "/wms")   # so "aula" muda o destino
 
+    def test_qr_da_coleta_sem_login_entra_e_volta_pra_coleta(self):
+        # Hugo, 16/11: o celular da doca le o QR da folha, entra e cai na coleta (antes caia na Expedicao)
+        r = self.cli.get("/expedicao/coletas/7")
+        self.assertEqual(r.status_code, 302)
+        self.assertIn("/login?proximo=coleta7", r.headers["Location"])
+        self.assertEqual(self._entrar(proximo="coleta7").headers["Location"], "/expedicao/coletas/7")
+
+    def test_so_o_numero_da_coleta_muda_o_destino(self):
+        for proximo in ("coleta", "coleta7/../../x", "coleta7x", "//fora.com", "coleta-7", "coleta1234567890"):
+            self.assertEqual(self._entrar(proximo=proximo).headers["Location"], "/wms", proximo)
+        sem_login = painel_agentes.app.test_client()   # outra tela sem login: login sem volta, como antes
+        self.assertEqual(sem_login.get("/expedicao").headers["Location"], "/login")
+
     def test_galpao_ve_os_videos_em_pe_e_deitado(self):
         self._manifesto(_video(2, "coletas", 1280, 720), _video(1, "retornos"))
         self._entrar()

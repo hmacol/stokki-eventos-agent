@@ -1673,7 +1673,8 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
    /expedicao                 expedicao.html
    /expedicao/coletas         coletas_expedicao.html (+ /api/expedicao/coletas/...: folha,
                               estado (a lista recarrega quando outro aparelho confirma),
-                              /expedicao/coletas/<id> = tela de UMA coleta, destino do QR;
+                              /expedicao/coletas/<id> = tela de UMA coleta, destino do QR
+                              (sem login: /login?proximo=coleta<id> e volta pra coleta, 16/11);
                               <id>/confirmar|cancelar|tentar-de-novo|retirar|andamento;
                               <id>/folha.pdf e <id>/foto). Ver: total, operador, leitura,
                               atendimento, logistica, expedicao, galpao. Agir: total,
