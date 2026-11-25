@@ -594,6 +594,7 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  infra/sequencia_tarde.sh (16h desde 05/10, para no 1º erro):
    executar_tudo.py -> verificar_pedidos_duplicados_vuupt.py ->
    atualizar_agendamentos_confirmados.py -> marcar_clientes_agenda.py ->
+   roteirizacao/conferir_pool.py (falha não para) ->
    roteirizacao/criar_rotas_diarias.py --gerar-rascunho (antes do rascunho anda a
    data automatica de quem nao saiu) ->
    documentos_pedido/processar_documentos.py
@@ -1216,6 +1217,12 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
                            retido (selo "Retornando — no carro de {motorista}" no pool) ate
                            a /retornos receber; pool, rascunho e incremento pulam. Chave =
                            service_id (codigo pode ser combinado). Marcar 2x mantem 1 ativo.
+ conferir_pool.py          Antes do rascunho (sequência da tarde): pedido do
+                           pool já entregue (Stokki Enviado + outro serviço
+                           entregue na Vuupt ou Lalamove COMPLETED) é
+                           cancelado na Vuupt e sai dos rascunhos abertos.
+                           Só Stokki Enviado/Cancelado e duplicado no pool
+                           = só aviso no WhatsApp. Log: dados/conferir_pool.log.
  reprocessar_rotas.py      Desfaz rotas sem motorista para reprocessar.
  fingerprint_rotas.py      Evita incluir o mesmo pedido duas vezes.
 
