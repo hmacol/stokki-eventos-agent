@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 SISTEMA = ("virtual", "falta", "sobra", "ajuste", "recebimento")
 
+# Embarcador com endereco proprio no galpao (id #stkkc-<n> da Stokki): a devolucao vai sempre pra la,
+# sem olhar origem da separacao nem saldo. Fabenne = FABENNE-1 (decisao do Hugo, 19/11/2026).
+DESTINO_FIXO_POR_EMBARCADOR = {100: "FABENNE-1"}
+
 
 def _e_sistema(endereco: str) -> bool:
     """Endereco de sistema ou vazio nunca e destino."""
@@ -385,6 +389,10 @@ def _plano_do_item(sess, ped: dict, item: dict, agora: datetime, ignorar=frozens
             return saida, f"devolucao do Virtual ainda em andamento (produto {item['sku']})"
         return saida, ("ha movimento do Virtual para endereco fisico depois do cancelamento que nao fecha com a "
                        f"quantidade do pedido (produto {item['sku']})")
+    fixo = DESTINO_FIXO_POR_EMBARCADOR.get(ped["cliente_id"])
+    if fixo:
+        saida["destinos"], saida["situacao"] = [(fixo, bloqueado)], "mover"
+        return saida, ""
     origem = ler_origem(sess, item["product_id"], ped["separado_em"], ped["cancelado_em"], bloqueado)
     saldo_produto = ler_saldo_enderecos(sess, item["product_id"])
     saldo_embarcador = []

@@ -112,6 +112,9 @@ class Coluna:
 COLUNAS = [
     Coluna("data", "Data", "data_referencia", True, "data"),
     Coluna("codigo", "Código", "pedido_base", True),
+    # NF: o valor sai de nucleo/nf_pedido (uma busca em lote por tela, ver _anotar_nf);
+    # o filtro da coluna e a busca livre usam _sql_nf (EXISTS), nao esta coluna.
+    Coluna("nf", "NF", "NULL", True),
     Coluna("codigo_servico", "Código do serviço", "codigo"),
     Coluna("referencia", "Referência", _SQL_REFERENCIA, True),
     Coluna("status", "Status", "status", True, "status"),
@@ -361,6 +364,34 @@ def _periodo_sql(filtros: dict) -> tuple[str, list]:
     return f"{sql_data} BETWEEN ? AND ?", [inicio, fim]
 
 
+def _sql_nf(conn: sqlite3.Connection | None) -> str:
+    """Condicao "a NF do pedido contem ?" (mesmas fontes de nucleo/nf_pedido).
+    Sem conn ou sem as tabelas, devolve "0" (nao acha)."""
+    if conn is None:
+        return "0"
+    tabelas = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN "
+        "('documentos_pedido', 'documentos_processados')")}
+    partes = []
+    if "documentos_pedido" in tabelas:
+        partes.append("EXISTS (SELECT 1 FROM documentos_pedido dn WHERE dn.tipo_doc = 'nf' "
+                      "AND dn.status IN ('casado', 'baixado') "
+                      "AND dn.id_pedido IN (pedido_base, '#' || pedido_base) AND dn.numero_nf LIKE ?)")
+    if "documentos_processados" in tabelas:
+        partes.append("EXISTS (SELECT 1 FROM documentos_processados dp WHERE dp.status = 'ENVIADO' "
+                      "AND dp.tipo = 'Nota Fiscal' "
+                      "AND dp.codigo_pedido IN (pedido_base, '#' || pedido_base) AND dp.numero_nf LIKE ?)")
+    return "(" + " OR ".join(partes) + ")" if partes else "0"
+
+
+def _anotar_nf(linhas: list, conn: sqlite3.Connection) -> None:
+    """Poe a NF (ou "") em cada linha, com UMA busca em lote."""
+    from nucleo import nf_pedido
+    nf_pedido.anotar_nf(linhas, "pedido_base", "nf", conn)
+    for l in linhas:
+        l["nf"] = l["nf"] or nf_pedido.SEM_NF
+
+
 def _termo_coluna(termo: str) -> str:
     """O banco guarda data em ISO; quem filtra digita 09/11 ou 09/11/2026."""
     m = _RE_DATA_BR.match(termo)
@@ -420,11 +451,19 @@ def _where(filtros: dict, conn: sqlite3.Connection | None = None) -> tuple[str, 
         for alvo in alvos:
             ou += [f"{c} LIKE ?" for c in campos]
             params += [alvo] * len(campos)
+        sql_nf = _sql_nf(conn)
+        if sql_nf != "0":
+            ou.append(sql_nf)
+            params += [f"%{q}%"] * sql_nf.count("?")
         partes.append("(" + " OR ".join(ou) + ")")
 
     for chave, termo in (filtros.get("colunas") or {}).items():
         coluna, termo = POR_CHAVE.get(chave), (termo or "").strip()
-        if coluna and termo:
+        if coluna and termo and chave == "nf":
+            sql_nf = _sql_nf(conn)
+            partes.append(sql_nf)
+            params += [f"%{termo}%"] * sql_nf.count("?")
+        elif coluna and termo:
             partes.append(f"CAST(({coluna.sql}) AS TEXT) LIKE ?")
             params.append(f"%{_termo_coluna(termo)}%")
     return " WHERE " + " AND ".join(partes), params
@@ -479,6 +518,7 @@ def listar(filtros: dict, pagina: int = 1, por_pagina: int = POR_PAGINA, ordem: 
         hist = tentativas([(l["sender_id"], l["pedido_base"]) for l in linhas], conn)
         for l in linhas:
             l["historico"] = hist.get((l["sender_id"], l["pedido_base"]), [])
+        _anotar_nf(linhas, conn)
         return {"linhas": linhas, "total": total, "total_caixas": caixas,
                 "pagina": pagina, "paginas": paginas, "periodo": {"de": inicio, "ate": fim},
                 "fora_do_periodo": fora}
@@ -631,6 +671,8 @@ def exportar_csv(filtros: dict, chaves: list[str] | None = None, ordem: str | No
         base, where, params = _consulta(filtros, conn)
         rows = conn.execute(f"{base} {_select()}{where}{_order_by(ordem, direcao)}", params).fetchall()
         hist = tentativas([(r["sender_id"], r["pedido_base"]) for r in rows], conn)
+        rows = [dict(r) for r in rows]
+        _anotar_nf(rows, conn)
     finally:
         if fechar:
             conn.close()

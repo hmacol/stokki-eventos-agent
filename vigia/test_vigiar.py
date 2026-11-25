@@ -75,7 +75,7 @@ class TestRodada(unittest.TestCase):
         self.assertEqual(e["PS-4-R1"]["estado"], "NO_POOL")
         self.assertEqual(e["PS-4-R1"]["vencido"], 0)
         self.assertEqual(e["PS-6"]["estado"], "EM_RASCUNHO")
-        self.assertEqual(e["PS-6"]["vencido"], 0)  # vence hoje 19h
+        self.assertEqual(e["PS-6"]["vencido"], 0)  # vence amanhã 05h30 (rascunho de 30/09)
         self.assertEqual(e["PS-7"]["estado"], "SEM_SERVICO")
         self.assertIn("aguardando_redespacho", e["PS-7"]["motivo"])
         self.assertEqual(e["PS-7"]["vencido"], 1)  # visto 05:00, prazo 4h

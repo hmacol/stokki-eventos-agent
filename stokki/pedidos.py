@@ -6,7 +6,7 @@ Leitura de pedidos de saída (outbound) via endpoints internos do Stokki.
 
 Endpoints usados (descobertos via investigação de tráfego de rede):
   GET /pt-br/outbound/count/{status}/all/.../all          — contagem por status
-  GET /pt-br/administrator/inventory/outbound/table       — listagem paginada
+  GET /pt-br/administrator/inventory/outbound/listing/table — listagem paginada (ver stokki/listagem.py)
   GET /pt-br/administrator/inventory/outbound/show/{id}   — detalhe completo
   GET /pt-br/administrator/inventory/outbound/carrier     — diretório de transportadoras
   GET /pt-br/administrator/inventory/outbound/select      — diretório de embarcadores
@@ -38,6 +38,7 @@ from typing import Iterator
 
 from bs4 import BeautifulSoup
 
+from stokki import listagem
 from stokki.auth import StokkiSession
 
 logger = logging.getLogger(__name__)
@@ -129,16 +130,21 @@ def listar_pedidos(
         "input_search": busca,
     }
     resp = sessao.get(
-        f"{BASE_URL}/pt-br/administrator/inventory/outbound/table",
+        # 24/11: a Stokki trocou outbound/table por outbound/listing/table (o
+        # antigo redireciona pro /login) e a linha virou JSON estruturado --
+        # ver stokki/listagem.py, que devolve a linha no formato de antes.
+        f"{BASE_URL}/pt-br/administrator/inventory/outbound/listing/table",
         params=params,
         headers={"Referer": f"{BASE_URL}/pt-br/administrator/inventory/outbound"},
     )
+    listagem.conferir_resposta(resp)
     resp.raise_for_status()
     try:
-        return resp.json()
+        dados = resp.json()
     except Exception:
         # O Content-Type é text/html mas o corpo é JSON — tenta parsear assim mesmo
-        return json.loads(resp.text)
+        dados = json.loads(resp.text)
+    return listagem.converter_resposta(dados)
 
 
 def iterar_todos_pedidos(
@@ -330,6 +336,7 @@ def _parsear_pagina_detalhe(html: str, id_pedido: int) -> dict:
     # sempre preenchido) sobre o mencionado na NF-e (frequentemente
     # "Não informado"). Usado pra calcular o dimension_3 do VUUPT.
     quantidade_volumes = None
+    fonte_volumes = None        # "conferencia" | "nfe" -- de onde saiu o numero acima
     m_conf = re.search(
         r"Quantidade de volumes informado na confer[êe]ncia:\s*</strong>\s*([^<]*?)\s*<br>",
         html,
@@ -338,19 +345,28 @@ def _parsear_pagina_detalhe(html: str, id_pedido: int) -> dict:
         r"Quantidade de volumes mencionado na NF-e:\s*</strong>\s*([^<]*?)\s*<br>",
         html,
     )
-    for m in (m_conf, m_nfe):
+    for fonte, m in (("conferencia", m_conf), ("nfe", m_nfe)):
         if m:
             try:
                 quantidade_volumes = int(float(m.group(1).strip().replace(",", ".")))
+                fonte_volumes = fonte
                 break
             except ValueError:
                 continue
 
+    # Situacao ("Cancelado", "Aguardando Transportador"...) -- mesmo campo que
+    # stokki/cancelar.situacao_e_token le. O pipeline confere antes de subir
+    # pra Vuupt: a listagem da rodada pode estar 20 min velha (PS-44507, 17/11).
+    m_sit = re.search(r"Situa[çc][ãa]o:\s*</th>\s*<td>(.*?)</td>", html, re.S)
+    situacao = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m_sit.group(1))).strip() if m_sit else ""
+
     return {
         "id":         id_pedido,
+        "situacao":   situacao,
         "referencia": referencia,
         "stkkc_id":   stkkc_id,
         "quantidade_volumes": quantidade_volumes,
+        "fonte_volumes": fonte_volumes,
         "cliente":    blocos.get("cliente"),
         "transportadora": blocos.get("transportadora"),
         "local_entrega": blocos.get("local_entrega"),
@@ -569,6 +585,72 @@ def extrair_itens_do_pedido(html: str) -> list[dict]:
             "ean_linha": re.sub(r"\D", "", ean),
             "descricao": descricao,
             "qtd_embalagem": quantidade,
+        })
+    return itens
+
+
+def extrair_numero_nf(html: str) -> str:
+    """
+    Numero da NF-e do pedido, tirado da chave de 44 digitos que a pagina de detalhe
+    mostra na linha "NF-e:" (link de consulta com ?nfe=<chave>). O numero sao os 9
+    digitos da posicao 26 a 34 da chave, sem os zeros a esquerda. Devolve '' quando
+    o pedido ainda nao tem NF ou quando a chave e o marcador da Stokki (comeca com
+    99: DANFE de mentira, nao e nota).
+    """
+    m = re.search(r"[?&;]nfe=(\d{44})(?!\d)", html or "")
+    if not m:
+        return ""
+    chave = m.group(1)
+    if chave.startswith("99"):
+        return ""
+    numero = chave[25:34].lstrip("0")
+    return numero
+
+
+def extrair_itens_tabela_pedido(html: str) -> list[dict]:
+    """
+    Itens da tabela `#example1` (aba "Itens do pedido": NR. | ID | SKU | Nome |
+    Quantidade | unidade | ...). Ao contrario da tabela Produto|EAN|Quantidade de
+    extrair_itens_do_pedido, esta existe desde o pedido ABERTO (17/11: o galpao
+    comeca a separar no nosso sistema antes de a Stokki mexer no pedido).
+
+    A quantidade aqui esta na UNIDADE DO PRODUTO (a mesma do cadastro), uma linha
+    por SKU, sem EAN: por isso cada item leva `unidade_do_produto: True`, que
+    wms_pedidos.resolver_item usa pra nao converter por embalagem. `linha` e o
+    NR. da propria tabela (chave de reconciliacao), nunca a posicao na lista.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    tabela = soup.find("table", id="example1")
+    if tabela is None:
+        return []
+    cab = [th.get_text(strip=True).upper() for th in tabela.find_all("th")]
+    try:
+        i_sku, i_nome, i_qtd = cab.index("SKU"), cab.index("NOME"), cab.index("QUANTIDADE")
+    except ValueError:
+        return []
+    i_nr = cab.index("NR.") if "NR." in cab else None
+    itens, posicao = [], 0
+    for tr in tabela.find_all("tr"):
+        celulas = tr.find_all("td")
+        if len(celulas) <= max(i_sku, i_nome, i_qtd):
+            continue
+        posicao += 1
+        bruta = celulas[i_qtd].get_text(" ", strip=True).replace(".", "").replace(",", ".")
+        try:
+            quantidade = float(bruta)
+        except ValueError:
+            continue  # nao renumera as de baixo
+        linha = posicao
+        if i_nr is not None:
+            nr = re.sub(r"[^0-9]", "", celulas[i_nr].get_text(strip=True))
+            linha = int(nr) if nr else posicao
+        itens.append({
+            "linha": linha,
+            "sku": celulas[i_sku].get_text(" ", strip=True),
+            "ean_linha": "",
+            "descricao": celulas[i_nome].get_text(" ", strip=True),
+            "qtd_embalagem": quantidade,
+            "unidade_do_produto": True,
         })
     return itens
 

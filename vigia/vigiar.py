@@ -257,6 +257,7 @@ def _desde_estimado(estado: str, f: dict, agora: datetime) -> datetime:
         regras.SEM_SERVICO: f.get("_primeira_vez"),
         regras.NO_POOL: f.get("_criado"),
         regras.AGENDADO: f.get("_criado"),
+        regras.AGUARDANDO_RETIRADA: f.get("_primeira_vez"),
         regras.AGUARDANDO_CLIENTE: f.get("_agendamento_desde") or f.get("_criado"),
         regras.EM_RASCUNHO: f.get("_rascunho_criado"),
         regras.RASCUNHO_COM_ERRO: f.get("_rascunho_criado"),
@@ -313,7 +314,8 @@ def rodar(conn: sqlite3.Connection, agora: datetime | None = None, gravar: bool 
         # (apagar) justamente quando não dá pra ver -- a Torre ganha o
         # aviso de retrato velho (consulta.excecoes_torre).
         for codigo, ant in anteriores.items():
-            if codigo not in novos and ant["estado"] in (regras.SEM_SERVICO, regras.INSUCESSO, regras.RECUSADO):
+            if codigo not in novos and ant["estado"] in (regras.SEM_SERVICO, regras.INSUCESSO, regras.RECUSADO,
+                                                  regras.AGUARDANDO_RETIRADA):
                 vence = _dt(ant["vence_em"])
                 novos[codigo] = {**ant, "vencido": 1 if regras.vencido(vence, agora) else 0,
                                  "visto_em": agora_txt}

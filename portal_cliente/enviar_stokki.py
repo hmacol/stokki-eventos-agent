@@ -62,6 +62,7 @@ import yaml
 import anexos_pedido
 import cancelamento as cm
 import endereco_entrega
+import transportadora_envio
 import envio_pedidos as ep
 import pedidos_dedicados
 import retomada as rt
@@ -130,6 +131,14 @@ def transformar_xml(regra: str, origem: Path, destino: Path, px, fluxo: str = "a
     if fn is None:
         raise ValueError(f"Regra de XML '{regra}' não existe no importador (TRANSFORMACOES).")
     fn(origem, destino)
+
+
+def aplicar_transportadora_no_lote(e: dict, destino: Path) -> None:
+    """Transportadora escolhida pelo embarcador na prévia: troca o <transporta>
+    do XML do lote (cópia), nunca o original do cliente. Sem escolha: nada."""
+    transp = transportadora_envio.da_linha(e)
+    if transp:
+        destino.write_bytes(transportadora_envio.trocar_transporta_xml(destino.read_bytes(), transp["nome"], transp.get("cnpj") or ""))
 
 
 def aplicar_entrega_no_lote(e: dict, destino: Path) -> None:
@@ -612,6 +621,7 @@ def processar_lote(conn, cnpj: str, envios: list[dict], config: dict, simular: b
                     else:
                         transformar_xml(cfg["regra_xml"], ep.caminho_xml(e), destino, px,
                                         fluxo=e.get("fluxo") or "armazenagem", xd=xd)
+                    aplicar_transportadora_no_lote(e, destino)
                     aplicar_entrega_no_lote(e, destino)
                     arquivos.append(destino)
                     prontos_xml.append(e)
@@ -767,7 +777,9 @@ def _codigo_em_documentos(conn, envio: dict) -> str | None:
     dest = re.sub(r"\D", "", envio.get("destinatario_doc") or "")
     candidatos = {r["codigo_pedido"] for r in linhas if dest and r["dest"] == dest}
     if not candidatos:
-        candidatos = {r["codigo_pedido"] for r in linhas}
+        # Contraparte preenchida e diferente do destinatario = outro pedido
+        # (PS-39753, 24/11); so vale a linha com contraparte vazia.
+        candidatos = {r["codigo_pedido"] for r in linhas if not (dest and r["dest"])}
     if len(candidatos) == 1:
         return candidatos.pop()
     logger.warning(f"envio {envio['id']}: NF {envio['numero_nf']} aponta pra {len(candidatos)} pedidos "
@@ -947,6 +959,34 @@ def processar_cancelamentos_do_ciclo(conn, config: dict, simular: bool = False) 
         sessao_uso.liberar(DONO_TRAVA)
 
 
+def processar_cancelamentos_painel_do_ciclo(conn, config: dict, simular: bool = False) -> dict:
+    """Fila do "Cancelar Stokki" da tela /pedidos do painel (stokki/fila_cancelamento.py). Sem nada
+    na fila não abre sessão; Stokki ocupada = espera o próximo ciclo (a fila não tem prazo)."""
+    from stokki import fila_cancelamento as fc
+    vazio = {"ok": 0, "erro": 0, "de_novo": 0}
+    n = fc.pendentes(conn)
+    if not n:
+        return vazio
+    if simular:
+        logger.info(f"SIMULAÇÃO: {n} cancelamento(s) do painel ficam na fila.")
+        return vazio
+    conta = sessao_uso.adquirir(DONO_TRAVA, ttl_segundos=10 * 60, esperar_segundos=60, alternativa=True)
+    if not conta:
+        logger.info(f"Stokki ocupada por '{sessao_uso.em_uso()}' -- {n} cancelamento(s) do painel esperam o próximo ciclo.")
+        return vazio
+    try:
+        import tratativas
+        from stokki import devolucao_estoque
+        from stokki.cancelar import cancelar_pedido
+        return fc.processar(
+            conn, StokkiSession(config, conta=conta), cancelar=cancelar_pedido,
+            registrar_evento=tratativas.registrar_evento,
+            registrar_devolucao=lambda id_stokki, ja_estava: devolucao_estoque.registrar(
+                id_stokki, "pedidos", config, ja_estava=ja_estava))
+    finally:
+        sessao_uso.liberar(DONO_TRAVA)
+
+
 def processar_retomadas_do_ciclo(conn, config: dict, simular: bool = False) -> dict:
     """Retoma o que o cliente pediu (status RETOMANDO): data na Vuupt e fecha a
     pausa. NÃO usa a Stokki, então não pega a trava de sessão."""
@@ -1106,6 +1146,10 @@ def ciclo(config: dict, simular: bool = False, headless: bool = True) -> dict:
             total["cancelamentos"] = processar_cancelamentos_do_ciclo(conn, config, simular=simular)
         except Exception as e:  # noqa: BLE001 -- cancelamento não derruba a fila de envios
             logger.error(f"cancelamentos falharam: {e}\n{traceback.format_exc()}")
+        try:
+            total["cancelamentos_painel"] = processar_cancelamentos_painel_do_ciclo(conn, config, simular=simular)
+        except Exception as e:  # noqa: BLE001 -- a fila do painel não derruba a fila de envios
+            logger.error(f"cancelamentos do painel falharam: {e}\n{traceback.format_exc()}")
         try:
             total["retomadas"] = processar_retomadas_do_ciclo(conn, config, simular=simular)
         except Exception as e:  # noqa: BLE001 -- retomada não derruba a fila de envios

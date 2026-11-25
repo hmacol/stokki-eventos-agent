@@ -138,10 +138,15 @@ class TestCanhotoNF(unittest.TestCase):
             r = vf.validar_foto(_cfg(), "CANHOTO", _imagem(), nfs_esperadas=["12345", "777"])
         self.assertEqual((r["resultado"], r["nf_batidas"]), (vf.APROVADO, ["777"]))
 
-    def test_foto_de_outra_coisa(self):
-        with _modelo(_leitura_canhoto(documento="NAO_E_DOCUMENTO", motivo="A foto mostra uma caixa.")):
+    def test_foto_de_outra_coisa_vira_fachada_e_nunca_libera(self):
+        # Hugo, 20/11: fachada não vale; grava e pede outra foto, sem o
+        # "não consigo melhorar" nem depois das tentativas.
+        with _modelo(_leitura_canhoto(documento="NAO_E_DOCUMENTO", motivo="A foto mostra uma fachada.")):
             r = vf.validar_foto(_cfg(), "CANHOTO", _imagem(), nf_alvo="12345")
-        self.assertEqual((r["resultado"], r["motivo"]), (vf.REPROVADO, "A foto mostra uma caixa."))
+        self.assertEqual((r["resultado"], r["guardar_como"], r["exige_outra_foto"]), (vf.REPROVADO, vf.TIPO_FACHADA, True))
+        self.assertIn("ficou guardada", r["motivo"])
+        p = vf.aplicar_tentativas(_cfg(max_tentativas=2), r, 5)
+        self.assertEqual((p["pode_seguir"], p["revisao_humana"]), (False, False))
 
     def test_ilegivel_pelo_modelo(self):
         with _modelo(_leitura_canhoto(legivel=False, problemas=["REFLEXO"], motivo="Reflexo cobre o texto.")):
@@ -167,6 +172,129 @@ class TestCanhotoNF(unittest.TestCase):
         self.assertEqual(r["resultado"], vf.NAO_VERIFICADO)
 
 
+def _leitura_canhoteira(linhas, **kw) -> dict:
+    return _leitura_canhoto(**{"documento": "CANHOTEIRA_FRESHLOG", "numeros_nf": [],
+                               "linhas_canhoteira": [{"codigo_pedido": c, "preenchida": p} for c, p in linhas], **kw})
+
+
+class TestCanhoteira(unittest.TestCase):
+    """Canhoteira da FreshLog (Hugo, 20/11): vale, mas a folha junta várias
+    entregas -- confere a linha do PS da parada, não a NF."""
+
+    def test_linha_do_pedido_preenchida_aprova_sem_cobrar_nf(self):
+        with _modelo(_leitura_canhoteira([("PS-44598", True), ("PS-44581", True), ("PS-44608", False)])):
+            r = vf.validar_foto(_cfg(), "CANHOTO", _imagem(), nf_alvo="12345", codigos_pedido=["PS-44581"])
+        self.assertEqual(r["resultado"], vf.APROVADO)
+        self.assertIn("PS-44581", r["motivo"])
+
+    def test_linha_do_pedido_em_branco_reprova(self):
+        # Mesma folha: a linha 3 (PS-44608) ficou sem recebedor.
+        with _modelo(_leitura_canhoteira([("PS-44598", True), ("PS-44608", False)])):
+            r = vf.validar_foto(_cfg(), "CANHOTO", _imagem(), codigos_pedido=["PS-44608"])
+        self.assertEqual(r["resultado"], vf.REPROVADO)
+        self.assertIn("sem recebedor", r["motivo"])
+
+    def test_linha_do_pedido_fora_da_foto_reprova(self):
+        with _modelo(_leitura_canhoteira([("PS-44598", True), ("PS-44581", True)])):
+            r = vf.validar_foto(_cfg(), "CANHOTO", _imagem(), codigos_pedido=["PS-44605"])
+        self.assertEqual(r["resultado"], vf.REPROVADO)
+        self.assertIn("não mostra a linha do PS-44605", r["motivo"])
+
+    def test_folha_cortada_chamada_de_outra_coisa_ainda_e_canhoteira(self):
+        # Teste de 20/11 (#59): sem o cabeçalho, o modelo às vezes diz
+        # OUTRO_COMPROVANTE, mas lê as linhas PS -- vale a regra da folha.
+        with _modelo(_leitura_canhoteira([("PS-44534", True)], documento="OUTRO_COMPROVANTE")):
+            r = vf.validar_foto(_cfg(), "CANHOTO", _imagem(), nf_alvo="181005", codigos_pedido=["PS-44534"])
+        self.assertEqual(r["resultado"], vf.APROVADO)
+
+    def test_reentrega_casa_com_o_codigo_base(self):
+        with _modelo(_leitura_canhoteira([("PS-44598 · NF —", True)])):
+            r = vf.validar_foto(_cfg(), "CANHOTO", _imagem(), codigos_pedido=vf.codigos_base("#PS-44598-R1"))
+        self.assertEqual(r["resultado"], vf.APROVADO)
+
+    def test_mesma_foto_decide_por_parada_sem_chamar_o_modelo(self):
+        with _modelo(_leitura_canhoteira([("PS-1", True), ("PS-2", False)])):
+            r = vf.validar_foto(_cfg(), "CANHOTO", _imagem(), codigos_pedido=["PS-1"])
+        self.assertEqual(r["resultado"], vf.APROVADO)
+        with mock.patch.object(vf, "_chamar_modelo", side_effect=AssertionError("não devia chamar")):
+            outra = vf.redecidir_canhoto(_cfg(), r, codigos_pedido=["PS-2"])
+        self.assertEqual(outra["resultado"], vf.REPROVADO)
+        self.assertIsNone(vf.redecidir_canhoto(_cfg(), {"resultado": vf.REPROVADO}, codigos_pedido=["PS-1"]))
+
+
+class TestOrientacao(unittest.TestCase):
+    def _foto(self, w=400, h=200):
+        buf = io.BytesIO()
+        Image.new("RGB", (w, h), "white").save(buf, format="JPEG")
+        return buf.getvalue()
+
+    def test_gira_pra_posicao_de_leitura(self):
+        foto = self._foto()
+        for topo, tamanho in (("DE_CIMA_PARA_BAIXO", (200, 400)), ("DE_BAIXO_PARA_CIMA", (200, 400)), ("DE_CABECA_PARA_BAIXO", (400, 200))):
+            girada = vf.corrigir_orientacao(foto, {"leitura": {"sentido_do_texto": topo}})
+            self.assertNotEqual(girada, foto, topo)
+            self.assertEqual(Image.open(io.BytesIO(girada)).size, tamanho, topo)
+
+    def test_texto_em_pe_ou_sem_leitura_nao_mexe(self):
+        foto = self._foto()
+        for res in (None, {}, {"leitura": {"sentido_do_texto": "NORMAL"}}, {"leitura": {"sentido_do_texto": "SEM_TEXTO"}}):
+            self.assertIs(vf.corrigir_orientacao(foto, res), foto)
+
+    def test_conferencia_desvira_quando_o_lado_veio_trocado(self):
+        leitura = _leitura_canhoto(sentido_do_texto="DE_CIMA_PARA_BAIXO")
+        respostas = [(leitura, {"entrada": 100, "saida": 10}), ({"texto": "DE_CABECA_PARA_BAIXO"}, {"entrada": 50, "saida": 5})]
+        with mock.patch.object(vf, "_chamar_modelo", side_effect=respostas) as m:
+            r = vf.validar_foto(_cfg(), "CANHOTO", _imagem(), nf_alvo="12345")
+        self.assertEqual((m.call_count, r["giro"], r["tokens"]), (2, "ROTATE_270", {"entrada": 150, "saida": 15}))
+        # a decisão refeita pela leitura guardada mantém o giro conferido
+        self.assertEqual(vf.giro_para_leitura(vf.redecidir_canhoto(_cfg(), r, nf_alvo="12345")), "ROTATE_270")
+
+    def test_conferencia_em_pe_mantem_e_texto_normal_nem_confere(self):
+        respostas = [(_leitura_canhoto(sentido_do_texto="DE_CABECA_PARA_BAIXO"), {}), ({"texto": "EM_PE"}, {})]
+        with mock.patch.object(vf, "_chamar_modelo", side_effect=respostas):
+            self.assertEqual(vf.validar_foto(_cfg(), "CANHOTO", _imagem(), nf_alvo="12345")["giro"], "ROTATE_180")
+        with mock.patch.object(vf, "_chamar_modelo", side_effect=[(_leitura_canhoto(sentido_do_texto="NORMAL"), {})]) as m:
+            r = vf.validar_foto(_cfg(), "CANHOTO", _imagem(), nf_alvo="12345")
+        self.assertEqual((m.call_count, r["giro"]), (1, None))
+
+    def test_falha_na_conferencia_mantem_o_giro_da_leitura(self):
+        respostas = [(_leitura_canhoto(sentido_do_texto="DE_BAIXO_PARA_CIMA"), {}), RuntimeError("sem rede")]
+        with mock.patch.object(vf, "_chamar_modelo", side_effect=respostas):
+            r = vf.validar_foto(_cfg(), "CANHOTO", _imagem(), nf_alvo="12345")
+        self.assertEqual((r["resultado"], r["giro"]), (vf.APROVADO, "ROTATE_270"))
+
+    def test_direcao_do_giro(self):
+        # Texto lido de cima para baixo = topo das letras virado pra
+        # direita: o que está à direita tem que subir.
+        im = Image.new("RGB", (400, 200), "white")
+        ImageDraw.Draw(im).rectangle([380, 90, 399, 110], fill="black")
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        girada = Image.open(io.BytesIO(vf.corrigir_orientacao(buf.getvalue(), {"leitura": {"sentido_do_texto": "DE_CIMA_PARA_BAIXO"}})))
+        self.assertLess(girada.convert("L").getpixel((100, 10)), 80)      # preto em cima
+        self.assertGreater(girada.convert("L").getpixel((100, 390)), 200)  # branco embaixo
+
+
+class TestChamadaModelo(unittest.TestCase):
+    def _chamar(self, modelo, esforco):
+        cfg = {**_cfg(modelo=modelo, esforco=esforco)}
+        resp = mock.Mock(stop_reason="end_turn", usage=mock.Mock(input_tokens=1, output_tokens=1),
+                         content=[mock.Mock(type="text", text="{}")])
+        falso = mock.MagicMock()   # o SDK pode nem estar instalado na máquina de teste
+        falso.Anthropic.return_value.messages.create.return_value = resp
+        with mock.patch.dict(sys.modules, {"anthropic": falso}):
+            vf._chamar_modelo(cfg, b"x", "image/jpeg", "p", {"type": "object"})
+        return falso.Anthropic.return_value.messages.create.call_args.kwargs
+
+    def test_padrao_e_haiku_5_5_com_esforco_low(self):
+        cfg = _cfg()
+        self.assertEqual((cfg["modelo"], cfg["esforco"]), ("claude-haiku-5-5", "low"))
+        self.assertEqual(self._chamar("claude-haiku-5-5", "low")["output_config"]["effort"], "low")
+
+    def test_haiku_4_5_nunca_recebe_effort(self):
+        self.assertNotIn("effort", self._chamar("claude-haiku-4-5", "low")["output_config"])
+
+
 class TestPedagio(unittest.TestCase):
     def test_recibo_ok(self):
         with _modelo(_leitura_pedagio()):
@@ -183,6 +311,45 @@ class TestPedagio(unittest.TestCase):
         with _modelo(_leitura_pedagio(eh_recibo_pedagio=False, motivo="Isso é uma nota de posto.")):
             r = vf.validar_foto(_cfg(), "PEDAGIO", _imagem(), valor_informado=12.5)
         self.assertEqual((r["resultado"], r["motivo"]), (vf.REPROVADO, "Isso é uma nota de posto."))
+
+
+def _leitura_carregamento(**kw) -> dict:
+    return {"legivel": True, "eh_carga": True, "bau_inteiro": True, "ocupacao_pct": 73,
+            "problemas": [], "motivo": "Bau inteiro visivel.", **kw}
+
+
+class TestCarregamento(unittest.TestCase):
+    def test_aprova_bau_inteiro(self):
+        with _modelo(_leitura_carregamento()):
+            r = vf.validar_foto(_cfg(), "CARREGAMENTO", _imagem())
+        self.assertEqual(r["resultado"], vf.APROVADO)
+        self.assertEqual(r["ocupacao_pct"], 70)
+
+    def test_reprova_bau_cortado(self):
+        with _modelo(_leitura_carregamento(bau_inteiro=False, problemas=["CORTADA"], motivo="Bau cortado.")):
+            r = vf.validar_foto(_cfg(), "CARREGAMENTO", _imagem())
+        self.assertEqual(r["resultado"], vf.REPROVADO)
+        self.assertIn("baú inteiro", r["motivo"])
+        self.assertEqual(r["ocupacao_pct"], 70)
+
+    def test_reprova_nao_e_carga(self):
+        with _modelo(_leitura_carregamento(eh_carga=False, ocupacao_pct=None)):
+            r = vf.validar_foto(_cfg(), "CARREGAMENTO", _imagem())
+        self.assertEqual(r["resultado"], vf.REPROVADO)
+
+    def test_haiku_fora_nao_trava(self):
+        with mock.patch.object(vf, "_chamar_modelo", side_effect=RuntimeError("fora")):
+            r = vf.validar_foto(_cfg(), "CARREGAMENTO", _imagem())
+        self.assertEqual(r["resultado"], vf.NAO_VERIFICADO)
+        self.assertTrue(vf.aplicar_tentativas(_cfg(), r, 1)["pode_seguir"])
+
+    def test_libera_na_ultima_tentativa_sem_excecao_da_fachada(self):
+        cfg = _cfg()
+        with _modelo(_leitura_carregamento(bau_inteiro=False)):
+            r = vf.validar_foto(cfg, "CARREGAMENTO", _imagem())
+        p = vf.aplicar_tentativas(cfg, r, cfg["max_tentativas"])
+        self.assertTrue(p["pode_seguir"])
+        self.assertTrue(p["revisao_humana"])
 
 
 class TestTentativas(unittest.TestCase):
@@ -381,6 +548,57 @@ class TestApiValidacao(unittest.TestCase):
         dados = conn.execute("SELECT dados_json FROM nucleo_pedagios WHERE uuid = 'p1'").fetchone()[0]
         conn.close()
         self.assertIn("VALOR_DIVERGE", dados)   # recibo de R$ 99 x R$ 12,50 digitados
+
+    def _comprovantes(self):
+        conn = banco.conectar()
+        rows = [dict(r) for r in conn.execute("SELECT tipo, uuid, caminho_local, sha256 FROM nucleo_comprovantes ORDER BY id")]
+        conn.close()
+        return rows
+
+    def test_fachada_no_ato_fica_gravada_e_pede_outra_foto(self):
+        foto = _imagem()
+        with _modelo(_leitura_canhoto(documento="NAO_E_DOCUMENTO")):
+            r = self._validar(foto, tipo="CANHOTO", parada_id=self.parada_id, nf="12345", tentativa=2).get_json()
+        self.assertEqual((r["resultado"], r["pode_seguir"], r["revisao_humana"]), (vf.REPROVADO, False, False))
+        rows = self._comprovantes()
+        self.assertEqual([(c["tipo"], c["uuid"]) for c in rows], [("FACHADA", f"fachada-{r['sha256'][:16]}")])
+        self.assertTrue((Path(api_motorista._RAIZ) / rows[0]["caminho_local"]).exists()
+                        or Path(rows[0]["caminho_local"]).exists())
+
+    def test_falha_ao_guardar_fachada_ainda_devolve_o_veredito(self):
+        # Erro HTTP aqui faria o app achar que está sem sinal e ACEITAR a
+        # fachada como canhoto (revisão de segurança de 20/11).
+        with _modelo(_leitura_canhoto(documento="NAO_E_DOCUMENTO")), \
+                mock.patch.object(operacao, "registrar_comprovante", side_effect=operacao.OperacaoInvalida("x", 409)):
+            r = self._validar(_imagem(), tipo="CANHOTO", parada_id=self.parada_id, nf="12345", tentativa=1)
+        self.assertEqual(r.status_code, 200, r.get_json())
+        self.assertEqual((r.get_json()["resultado"], r.get_json()["pode_seguir"]), (vf.REPROVADO, False))
+
+    def test_fachada_que_chega_pela_fila_nao_vira_canhoto(self):
+        with _modelo(_leitura_canhoto(documento="NAO_E_DOCUMENTO")):
+            env = self.cli.post(f"/api/paradas/{self.parada_id}/comprovantes", headers=self.h,
+                                data={"arquivo": (io.BytesIO(_imagem()), "f.jpg"), "tipo": "CANHOTO", "uuid": "c9"},
+                                content_type="multipart/form-data")
+        self.assertEqual(env.status_code, 201, env.get_json())
+        self.assertEqual([c["tipo"] for c in self._comprovantes()], ["FACHADA"])
+
+    def test_foto_gravada_sai_girada_e_guarda_o_sha_do_original(self):
+        im = Image.new("RGB", (600, 300), "white")
+        ImageDraw.Draw(im).text((20, 20), "NF 12345", fill="black")
+        buf = io.BytesIO()
+        im.save(buf, format="JPEG")
+        foto = buf.getvalue()
+        with _modelo(_leitura_canhoto(sentido_do_texto="DE_CIMA_PARA_BAIXO")):
+            env = self.cli.post(f"/api/paradas/{self.parada_id}/comprovantes", headers=self.h,
+                                data={"arquivo": (io.BytesIO(foto), "f.jpg"), "tipo": "CANHOTO", "uuid": "c8", "nf": "12345"},
+                                content_type="multipart/form-data")
+        self.assertEqual(env.status_code, 201, env.get_json())
+        c = self._comprovantes()[0]
+        caminho = Path(c["caminho_local"])
+        caminho = caminho if caminho.is_absolute() else Path(api_motorista._RAIZ) / caminho
+        self.assertEqual(Image.open(caminho).size, (300, 600))     # em pé
+        import hashlib
+        self.assertEqual(c["sha256"], hashlib.sha256(foto).hexdigest())
 
     def test_parada_de_outro_motorista(self):
         r = self._validar(_imagem(), tipo="CANHOTO", parada_id=999999, tentativa=1)

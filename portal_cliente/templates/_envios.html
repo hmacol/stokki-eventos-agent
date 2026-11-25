@@ -10,7 +10,26 @@
   .vistas button em.on { display: inline-block; }
   #vista-envios { display: flex; flex-direction: column; gap: 16px; }
   .env-grade { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
-  @media (max-width: 980px) { .env-grade { grid-template-columns: minmax(0, 1fr); } }
+  @media (max-width: 1280px) { .env-grade { grid-template-columns: minmax(0, 1fr); } }
+  /* Tabela de envios (19/11): colunas com largura pensada pra caber sem cortar "Ações" */
+  /* Prévia do envio: título clicável ordena (A→Z, de novo Z→A); borda do título arrasta pra mudar a largura */
+  #previa-tabela th, #env-tabela th { position: relative; cursor: pointer; user-select: none; padding-right: 16px; }
+  #previa-tabela th select, #env-tabela th select { cursor: default; }
+  #previa-tabela th .seta, #env-tabela th .seta { margin-left: 4px; font-size: 9px; }
+  #previa-tabela th .grip, #env-tabela th .grip { position: absolute; top: 0; right: 0; width: 8px; height: 100%; cursor: col-resize; }
+  #previa-tabela th .grip:hover, #env-tabela th .grip:hover, #previa-tabela th .grip.arrastando, #env-tabela th .grip.arrastando { background: var(--borda); }
+  #previa-tabela.fixa, #env-tabela.fixa { table-layout: fixed; }
+  #previa-tabela.fixa td, #env-tabela.fixa td { overflow-wrap: anywhere; }
+  #previa-tabela.fixa td.nw, #env-tabela.fixa td.nw { white-space: normal; }
+  #previa-tabela.fixa select, #env-tabela.fixa select, #previa-tabela.fixa input, #env-tabela.fixa input { max-width: 100%; }
+  #env-tabela.fixa td { min-width: 0 !important; }
+  #env-tabela th, #env-tabela td { padding-left: 8px; padding-right: 8px; }
+  #env-tabela td:nth-child(1) { white-space: normal; width: 84px; }
+  #env-tabela td:nth-child(3) { min-width: 220px; }
+  #env-tabela th:nth-child(4), #env-tabela td:nth-child(4) { width: 1%; }
+  #env-tabela td:nth-child(7) { white-space: normal; min-width: 96px; }
+  #env-tabela td:nth-child(8) { min-width: 170px; }
+  #env-tabela .acoes-linha { max-width: 230px; }
   .zona { border: 2px dashed var(--borda); border-radius: 10px; padding: 26px 18px; text-align: center; color: var(--texto-suave); cursor: pointer; transition: border-color .15s, background .15s; }
   .zona:hover, .zona.sobre { border-color: var(--acento); background: var(--sucesso-bg); color: var(--texto); }
   .zona b { color: var(--texto); }
@@ -107,6 +126,12 @@
   .anx-nome { font-weight: 600; color: var(--texto); word-break: break-all; }
   .anx-info { font-size: 11px; color: var(--texto-suave); }
   .anx-alerta { font-size: 11px; color: var(--st-falha); font-weight: 600; }
+  .lotes-res { font-size: 11.5px; color: var(--st-rota); margin-top: 3px; white-space: normal; }
+  .lotes-tab { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .lotes-tab th, .lotes-tab td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--borda); vertical-align: middle; }
+  .lotes-tab input { width: 100%; min-width: 90px; box-sizing: border-box; }
+  .lotes-box { border: 1px solid var(--rodando-borda); background: var(--rodando-bg); border-radius: 8px; padding: 10px 14px; font-size: 12.5px; display: flex; flex-direction: column; gap: 8px; }
+  .lotes-box ul { margin: 0; padding-left: 18px; color: var(--rodando-texto); }
   .anx-link { background: none; border: none; padding: 0; color: var(--st-rota); font-size: 11.5px; font-weight: 600; text-decoration: underline; cursor: pointer; font-family: inherit; align-self: flex-start; }
   .anx-mais { border: 1px dashed var(--borda); color: var(--texto-suave); background: none; border-radius: 6px; padding: 3px 9px; font-size: 11.5px; font-weight: 600; cursor: pointer; font-family: inherit; }
   .anx-mais:hover { border-color: var(--acento); color: var(--acento); }
@@ -133,8 +158,9 @@
           <div><b>Arraste os XMLs das notas ou a planilha de pedidos aqui</b> ou clique pra escolher</div>
           <div style="font-size:11.5px; margin-top:4px;">XML: vários .xml de uma vez ou um .zip (só NF-e de saída da sua empresa). Planilha: .xlsx no modelo Fresh Log ou a sua, uma linha por item (se os nomes das colunas forem outros, você indica qual é qual).</div>
           <div style="font-size:11.5px; margin-top:4px;">Documentos dos pedidos (boleto e outros, em PDF) podem vir juntos: o sistema coloca cada um no pedido certo e você confere antes de enviar. Eles saem impressos com a nota na entrega.</div>
+          {% if lotes_ativo %}<div style="font-size:11.5px; margin-top:4px;">Lote específico: envie junto a sua planilha de lotes (por nota fiscal e produto) ou use "Indicar lote" em cada nota da prévia. Sem indicação, sai primeiro o que vence primeiro.</div>{% endif %}
         </label>
-        <input type="file" id="anx-arquivo" multiple accept=".pdf,application/pdf" hidden>
+        <input type="file" id="anx-arquivo" multiple accept=".pdf,.xml,application/pdf,text/xml,application/xml" hidden>
         <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:12px; color:var(--texto-suave);">
           <a class="botao-linha" id="btn-modelo" href="{{ request.script_root }}/api/envios/modelo-planilha" download style="text-decoration:none;">Baixar modelo de planilha (.xlsx)</a>
           <span>Sem XML da nota? Preencha o modelo e suba aqui -- os pedidos são criados do mesmo jeito.</span>
@@ -145,6 +171,7 @@
           {% endif %}
         </div>
         <div class="msg" id="env-msg"></div>
+        <div class="lotes-box oculto" id="env-lotes"></div>
         <div class="previa" id="previa">
           <div class="rej oculto" id="previa-rej"></div>
           <div class="anx-soltos oculto" id="previa-anexos"></div>
@@ -190,7 +217,7 @@
           <div><b style="color:var(--texto)">2.</b> A gente confere: NF-e precisa ser de saída da sua empresa e não pode ter sido enviada antes; na planilha, cada pedido precisa de destinatário, endereço completo e pelo menos um SKU com quantidade.</div>
           <div><b style="color:var(--texto)">3.</b> Na primeira vez que um destinatário aparece, você informa o horário em que ele recebe. Quem só recebe com agendamento pede a data (ou fica como <i>agendamento pendente</i>).</div>
           <div><b style="color:var(--texto)">4.</b> O pedido entra na fila e é criado na Stokki em instantes. Se der erro, aparece aqui e você recebe um e-mail.</div>
-          <div><b style="color:var(--texto)">5.</b> Boleto ou outro documento que precisa ir com a nota? Suba os PDFs junto com os pedidos, ou anexe depois em <i>Documentos</i>, na lista, enquanto o pedido não saiu pra entrega.</div>
+          <div><b style="color:var(--texto)">5.</b> Boleto ou outro documento que precisa ir com a nota? Suba os PDFs junto com os pedidos, ou anexe depois em <i>Documentos</i>, na lista, enquanto o pedido não saiu pra entrega. O XML da nota também pode ser anexado, pelo botão do próprio pedido (não é impresso).</div>
         </div>
       </div>
       <div class="card">
@@ -342,7 +369,7 @@
         ${PODE_ENVIAR && x.pode_em_espera ? `<button type="button" data-acao="em_espera" data-id="${x.id}">Tirar da rota</button>` : ''}
         ${PODE_ENVIAR && x.pode_reenviar ? `<button type="button" data-acao="reenviar" data-id="${x.id}">Reenviar</button>` : ''}
         ${PODE_ENVIAR && x.pode_cancelar ? `<button type="button" class="perigo" data-acao="cancelar" data-id="${x.id}">Cancelar</button>` : ''}
-        ${(PODE_ENVIAR && x.pode_anexar) || (x.anexos || []).length ? `<button type="button" data-acao="documentos" data-id="${x.id}" title="Documentos em PDF que vão impressos com a nota">Documentos${(x.anexos || []).length ? ' (' + x.anexos.length + ')' : ''}</button>` : ''}
+        ${(PODE_ENVIAR && x.pode_anexar) || (x.anexos || []).length ? `<button type="button" data-acao="documentos" data-id="${x.id}" title="Documentos do pedido: PDFs que vão impressos com a nota e o XML da nota">Documentos${(x.anexos || []).length ? ' (' + x.anexos.length + ')' : ''}</button>` : ''}
         <button type="button" data-acao="xml" data-id="${x.id}" title="${x.origem === 'planilha' ? 'Baixar a planilha enviada' : 'Baixar o XML enviado'}">${x.origem === 'planilha' ? 'Planilha' : 'XML'}</button>
       </div></td></tr>`).join('');
     const vazio = $('env-vazia');
@@ -354,6 +381,7 @@
     const btLote = $('env-reenviar-todos');
     btLote.classList.toggle('oculto', !(PODE_ENVIAR && aba === 'erros' && nErros >= 2));
     btLote.textContent = `Reenviar todos (${nErros})`;
+    if (colEnvios.reordenar) colEnvios.reordenar();  // o tbody foi refeito: reaplica a ordem escolhida
   }
 
   function renderLateral() {
@@ -371,7 +399,7 @@
     card.classList.remove('oculto');
     card.innerHTML = `<h3 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">Precisa da sua atenção (${pend.length + erros.length})${PODE_ENVIAR && erros.length >= 2 ? `<button type="button" class="botao-linha" style="margin-left:auto;" data-acao="reenviar-todos">Reenviar todos com erro (${erros.length})</button>` : ''}</h3>` +
       pend.map(x => `<div class="item"><span class="chip">Agendamento pendente</span><span><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)} só recebe com agendamento.</span>${PODE_ENVIAR ? `<button type="button" class="botao" style="padding:5px 12px;font-size:12px;margin-left:auto;" data-acao="reagendar" data-id="${x.id}">Definir data</button>` : ''}</div>`).join('') +
-      erros.map(x => `<div class="item"><span class="chip falha">Erro</span><span><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}: ${esc((x.erro || '').slice(0, 140))}</span>${PODE_ENVIAR ? `<button type="button" class="botao-linha" style="margin-left:auto;" data-acao="reenviar" data-id="${x.id}">Reenviar</button>` : ''}</div>`).join('');
+      erros.map(x => `<div class="item"><span class="chip falha">Erro</span><span><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}: ${esc((x.erro || '').slice(0, 140))}</span><span style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;">${PODE_ENVIAR && x.pode_cancelar ? `<button type="button" class="botao-linha perigo" data-acao="cancelar" data-id="${x.id}">Cancelar</button>` : ''}<button type="button" class="botao-linha" data-acao="atendimento">Falar com atendimento</button>${PODE_ENVIAR ? `<button type="button" class="botao-linha" data-acao="reenviar" data-id="${x.id}">Reenviar</button>` : ''}</span></div>`).join('');
   }
 
   // ── Upload → prévia ────────────────────────────────────────────────────────
@@ -412,6 +440,7 @@
       previa = j;
       previa.anexos = j.anexos || [];
       mensagem(previa.anexos.length && !j.itens.length ? 'Nenhum pedido válido neste lote: os documentos em PDF não foram anexados.' : '', 'info');
+      renderLotesPlanilha(j.lotes_planilhas || []);
       renderPrevia();
     } catch (e) {
       pedirIndicacao = false;
@@ -452,6 +481,55 @@
     });
   }
 
+  // ── Lote indicado pelo cliente (18/11, lotes_cliente.py) ──────────────────────
+  // Planilha de lotes: já gravada na leitura; aqui só mostra o resultado.
+  function renderLotesPlanilha(lista) {
+    const box = $('env-lotes');
+    box.classList.toggle('oculto', !lista.length);
+    const SIT = { aguardando_pedido: 'pedido ainda não chegou: vale quando chegar', produto_desconhecido: 'produto fora do cadastro', chegou_tarde: 'pedido já em separação: não aplicado' };
+    box.innerHTML = lista.map(r => `<div><b>Planilha de lotes ${esc(r.arquivo)}:</b> ${r.gravadas} indicaç${r.gravadas === 1 ? 'ão' : 'ões'} de lote gravada${r.gravadas === 1 ? '' : 's'}${r.sem_lote ? `; ${r.sem_lote} linha${r.sem_lote > 1 ? 's' : ''} sem lote sai${r.sem_lote > 1 ? 'em' : ''} pelo que vence primeiro` : ''}.</div>
+      ${r.avisos.length ? `<ul>${r.avisos.map(a => `<li>${esc(a)}</li>`).join('')}</ul>` : ''}
+      ${r.linhas.length ? `<div class="rolagem"><table class="lotes-tab"><thead><tr><th>NF</th><th>Pedido</th><th>SKU</th><th>Lote</th><th style="text-align:right">Quantidade</th><th></th></tr></thead><tbody>${r.linhas.map(l => `<tr><td class="mono">${esc(l.nf)}</td><td class="mono">${esc(l.codigo_ps || '—')}</td><td>${esc(l.sku)}</td><td><b>${esc(l.lote)}</b></td><td class="num" style="text-align:right">${Number(l.qtd_un).toLocaleString('pt-BR')}</td><td>${SIT[l.situacao] ? `<span class="chip">${esc(SIT[l.situacao])}</span>` : ''}</td></tr>`).join('')}</tbody></table></div>` : ''}`).join('');
+  }
+
+  const resumoLotes = it => {
+    const m = Object.entries(it._lotes || {});
+    return m.length ? `<div class="lotes-res">Lote: ${m.map(([s, l]) => `<b>${esc(l)}</b> (${esc(s)})`).join(', ')}</div>` : '';
+  };
+
+  function abrirLotes(i) {
+    const it = previa.itens[i], est = it.lotes_estoque || {}, marc = it._lotes || {};
+    modal(`<h3>Lote dos produtos · ${esc(rotIt(it))}</h3>
+      <p>Diga de qual lote deve sair cada produto (o produto inteiro sai desse lote). Deixe em branco para sair o que vence primeiro. Para dividir um produto entre dois lotes, envie a sua planilha de lotes junto com os XMLs.</p>
+      <div class="rolagem"><table class="lotes-tab"><thead><tr><th>SKU</th><th>Produto</th><th style="text-align:right">Qtd.</th><th>Lote</th></tr></thead><tbody>
+      ${it.produtos.map((pr, k) => {
+        const sku = pr.sku.toUpperCase(), ops = est[sku] || [];
+        return `<tr><td class="mono">${esc(pr.sku)}</td><td>${esc(pr.descricao)}</td><td class="num nw" style="text-align:right">${Number(pr.quantidade).toLocaleString('pt-BR')} ${esc(pr.unidade)}</td>
+          <td><input type="text" maxlength="40" data-sku="${esc(sku)}" value="${esc(marc[sku] || '')}" ${ops.length ? `list="dl-lote-${k}"` : ''} aria-label="Lote de ${esc(pr.sku)}" autocomplete="off">
+          ${ops.length ? `<datalist id="dl-lote-${k}">${ops.map(o => `<option value="${esc(o.lote)}">${o.validade ? 'val. ' + esc(dataBr(o.validade)) : 'sem validade'}</option>`).join('')}</datalist>` : ''}</td></tr>`;
+      }).join('')}</tbody></table></div>
+      <div class="msg" id="m-msg"></div>
+      <div class="pe"><button type="button" class="botao-linha" data-fechar>Voltar</button><button type="button" class="botao" id="m-ok">Guardar lotes</button></div>`, true);
+    $('m-ok').addEventListener('click', () => {
+      const novo = {};
+      for (const el of $('modal-caixa').querySelectorAll('input[data-sku]')) {
+        const v = el.value.trim().replace(/\s+/g, ' ').toUpperCase();
+        if (!v) continue;
+        if (!/^[A-Z0-9][A-Z0-9 ./_-]{0,39}$/.test(v)) {
+          const m = $('m-msg'); m.className = 'msg erro';
+          m.textContent = `Lote "${v}" de ${el.dataset.sku}: use letras, números, espaço, ponto, barra, hífen ou sublinhado.`;
+          el.focus();
+          return;
+        }
+        novo[el.dataset.sku] = v;
+      }
+      it._lotes = novo;
+      fecharModal();
+      const td = $('previa-tabela').querySelector(`tr[data-i="${i}"] .lotes-cel`);
+      if (td) td.innerHTML = resumoLotes(it);
+    });
+  }
+
   function renderPrevia() {
     const p = previa, box = $('previa');
     if (!p.itens.length && !p.rejeitados.length) { box.classList.remove('aberta'); return; }
@@ -469,15 +547,23 @@
     const rotFl = p.fluxo_rotulos || {};
     $('previa-tabela').querySelector('thead').innerHTML = '<tr><th>NF / Pedido</th>' +
       (multi ? `<th>Fluxo <select id="fl-todos" title="Aplicar a todos"><option value="">todos…</option>${p.fluxos_disponiveis.map(f => `<option value="${esc(f)}">${esc(rotFl[f] || f)}</option>`).join('')}</select></th>` : '') +
-      `<th>Destinatário</th><th>${p.entrega_ativa ? 'Endereço de entrega' : 'Endereço'}</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Documentos</th><th>Agendamento</th></tr>`;
-    const opcoesFluxo = it => (it.fluxos || p.fluxos_disponiveis || []).filter(f => !(it.origem === 'planilha' && f === 'cross'));
+      `<th>Destinatário</th><th>${p.entrega_ativa ? 'Endereço de entrega' : 'Endereço'}</th><th>Transportadora</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Documentos</th><th>Agendamento</th></tr>`;
+    // Transportadora da nota; no XML o embarcador pode trocar por uma do cadastro (o servidor reescreve o <transporta>)
+    const celulaTransportadora = (it, lista) => {
+      if (it.origem === 'planilha') return '<span style="color:var(--texto-suave)">—</span>';
+      const nome = `<div>${esc(it.transportadora_nome || 'não informada na nota')}</div>`;
+      if (!lista.length) return nome;
+      return nome + `<select class="tp" aria-label="Trocar a transportadora do pedido"><option value="">manter a da nota</option>${lista.map(t => `<option value="${t.id}" data-tipo="${esc(t.tipo || '')}">${esc(t.nome)}</option>`).join('')}</select>`;
+    };
+    const opcoesFluxo = it =>(it.fluxos || p.fluxos_disponiveis || []).filter(f => !(it.origem === 'planilha' && f === 'cross'));
     $('previa-tabela').querySelector('tbody').innerHTML = p.itens.map((it, i) => {
       const d = p.destinatarios[it.destinatario_doc] || {};
       const plan = it.origem === 'planilha';
       const doc = plan
         ? `<span class="mono num" style="font-weight:600">${esc(it.referencia)}</span> <span class="chip" title="Pedido lido da planilha${it.linhas && it.linhas.length ? ' (linhas ' + it.linhas.join(', ') + ')' : ''}">planilha</span>` +
           `<div class="end">${it.numero_nf ? 'NF ' + esc(it.numero_nf) + ' · ' : ''}${it.itens} ${it.itens > 1 ? 'itens' : 'item'}${it.data_expedicao ? ' · expede ' + dataBr(it.data_expedicao) : ''}</div>`
-        : `<span class="mono num" style="font-weight:600">${esc(it.numero_nf)}</span>`;
+        : `<span class="mono num" style="font-weight:600">${esc(it.numero_nf)}</span>` +
+          (it.lotes_ativo ? `<div><button type="button" class="anx-link" data-lote="${i}" title="Escolher de qual lote sai cada produto desta nota">Indicar lote</button><span class="lotes-cel">${resumoLotes(it)}</span></div>` : '');
       const ops = opcoesFluxo(it);
       const celFluxo = !multi ? '' : (ops.length === 1
         ? `<td class="nw" data-fluxo="${esc(ops[0])}">${esc(rotFl[ops[0]] || ops[0])}</td>`
@@ -486,6 +572,7 @@
         <td class="nw">${doc}${empresaDe(it)}${it.avisos.length ? `<div class="avisos">${esc(it.avisos.join(' '))}</div>` : ''}</td>${celFluxo}
         <td><div style="font-weight:600">${esc(it.destinatario_nome)}</div><div class="end">${esc(it.destinatario_doc_formatado)}</div></td>
         <td class="c-end" data-i="${i}">${celulaEndereco(it)}</td>
+        <td class="c-transp">${celulaTransportadora(it, p.transportadoras || [])}</td>
         <td class="num nw" style="text-align:center">${it.volumes}</td>
         <td class="num nw" style="text-align:right">${it.peso_kg ? it.peso_kg.toLocaleString('pt-BR') + ' kg' : '—'}</td>
         <td class="num nw" style="text-align:right">${brl(it.valor_nf)}</td>
@@ -505,8 +592,67 @@
     }).join('');
     $('btn-confirmar').disabled = !p.itens.length;
     $('btn-confirmar').textContent = p.itens.length ? `Confirmar envio de ${p.itens.length} pedido${p.itens.length > 1 ? 's' : ''}` : 'Nada a enviar';
+    ajustarColunasPrevia();
     renderAnexos();
   }
+
+  // Colunas das tabelas (prévia e histórico): largura e ordem ficam guardadas por título e sobrevivem ao redesenho
+  const colPrevia = { larg: {}, ord: null }, colEnvios = { larg: {}, ord: null };
+  const ajustarColunasPrevia = () => ajustarColunas($('previa-tabela'), colPrevia);
+  function ajustarColunas(tb, col) {
+    const tbody = tb.querySelector('tbody');
+    const ths = [...tb.querySelectorAll('thead th')];
+    ths.forEach(th => { th.dataset.k = th.firstChild.textContent.trim(); });
+    const aplicarLarg = () => {
+      tb.classList.add('fixa');
+      let soma = 0;
+      ths.forEach(th => { const w = col.larg[th.dataset.k]; th.style.boxSizing = 'border-box'; th.style.width = w + 'px'; soma += w; });
+      tb.style.width = soma + 'px';
+    };
+    if (ths.every(th => col.larg[th.dataset.k])) aplicarLarg();
+    else { col.larg = {}; tb.classList.remove('fixa'); tb.style.width = ''; }
+    const chave = (tr, n) => {
+      const c = tr.children[n].cloneNode(true);
+      c.querySelectorAll('select').forEach(s => s.replaceWith(s.value ? s.selectedOptions[0].textContent : ''));
+      return c.textContent.replace(/\s+/g, ' ').trim();
+    };
+    const num = s => s.replace(/[^\d,-]/g, '').replace(',', '.');
+    const ordenar = (n, dir) => {
+      const linhas = [...tbody.rows].map(tr => ({ tr, k: chave(tr, n) }));
+      const numerico = linhas.every(l => l.k === '—' || l.k === '' || /^(R\$\s?)?-?[\d.]+(,\d+)?(\s?kg)?$/.test(l.k));
+      const data = linhas.every(l => /^\d\d\/\d\d\/\d{4}/.test(l.k));
+      if (data) linhas.forEach(l => { l.k = l.k.replace(/^(\d\d)\/(\d\d)\/(\d{4})/, '$3$2$1'); });
+      linhas.sort((a, b) => {
+        if (numerico) return ((parseFloat(num(a.k)) || 0) - (parseFloat(num(b.k)) || 0)) * dir;
+        return a.k.localeCompare(b.k, 'pt-BR', { numeric: true, sensitivity: 'base' }) * dir;
+      });
+      linhas.forEach(l => tbody.appendChild(l.tr));
+      ths.forEach((th, j) => { const s = th.querySelector('.seta'); if (s) s.textContent = j === n ? (dir > 0 ? '▲' : '▼') : ''; });
+    };
+    ths.forEach((th, n) => {
+      const seta = document.createElement('span'); seta.className = 'seta'; th.appendChild(seta);
+      const grip = document.createElement('span'); grip.className = 'grip'; th.appendChild(grip);
+      th.addEventListener('click', e => {
+        if (e.target.closest('select, .grip')) return;
+        const dir = col.ord && col.ord.k === th.dataset.k && col.ord.dir === 1 ? -1 : 1;
+        col.ord = { k: th.dataset.k, dir };
+        ordenar(n, dir);
+      });
+      grip.addEventListener('click', e => e.stopPropagation());
+      grip.addEventListener('pointerdown', e => {
+        e.preventDefault(); e.stopPropagation();
+        if (!tb.classList.contains('fixa')) { ths.forEach(t => { col.larg[t.dataset.k] = t.offsetWidth; }); aplicarLarg(); }
+        const x0 = e.clientX, w0 = col.larg[th.dataset.k];
+        grip.setPointerCapture(e.pointerId); grip.classList.add('arrastando');
+        const mover = ev => { col.larg[th.dataset.k] = Math.max(48, w0 + ev.clientX - x0); aplicarLarg(); };
+        const soltar = () => { grip.classList.remove('arrastando'); grip.removeEventListener('pointermove', mover); grip.removeEventListener('pointerup', soltar); };
+        grip.addEventListener('pointermove', mover); grip.addEventListener('pointerup', soltar);
+      });
+    });
+    col.reordenar = () => { if (col.ord) { const n = ths.findIndex(th => th.dataset.k === col.ord.k); if (n >= 0) ordenar(n, col.ord.dir); } };
+    col.reordenar();
+  }
+  ajustarColunas($('env-tabela'), colEnvios);
 
   // ── Documentos dos pedidos (PDF) -- 11/11, anexos_pedido.py ─────────────────
   // previa.anexos: [{token, nome, tipo, numero_nf, pedido (token do item ou
@@ -514,7 +660,10 @@
   // usuário, que marca a conferência antes de enviar (o confirmar recusa sem).
   const nfLimpa = v => String(v || '').replace(/\D/g, '').replace(/^0+/, '');
   const rotIt = it => it.rotulo || ('NF ' + it.numero_nf);
-  const infoAnexo = a => esc(a.tipo || 'Documento') + (a.numero_nf ? ' · NF ' + esc(a.numero_nf) : '');
+  // rótulo que não é a NF (pedido de planilha): mostra a NF junto, traço se não houver
+  const nfExtra = x => (x.rotulo && x.rotulo.indexOf('NF') !== 0) ? ' · NF ' + (x.numero_nf ? esc(x.numero_nf) : '—') : '';
+  // ped: o pedido onde o documento está. Em pedido de planilha, o XML da nota é o XML do pedido.
+  const infoAnexo = (a, ped) => esc(a.tipo === 'XML da NF-e' && ped && ped.origem === 'planilha' ? 'XML do pedido' : a.tipo || 'Documento') + (a.numero_nf ? ' · NF ' + esc(a.numero_nf) : '');
   const diverge = (a, numeroNf) => a.numero_nf && numeroNf && nfLimpa(a.numero_nf) !== nfLimpa(numeroNf);
   // pedido (da prévia) que o sistema sugeriu, quando o usuário pôs o documento em outro
   const outroPedido = (a, it) => a.sugerido && a.sugerido !== it.token && a.motivo !== 'único pedido' && previa.itens.find(v => v.token === a.sugerido);
@@ -529,11 +678,11 @@
       if (!td) return;
       td.innerHTML = p.anexos.filter(a => a.pedido === it.token).map(a => `<div class="anx ${diverge(a, it.numero_nf) || outroPedido(a, it) ? 'diverge' : ''}">
           <span class="anx-nome">${esc(a.nome)}</span>
-          <span class="anx-info">${infoAnexo(a)} · ${a.manual ? 'escolhido por você' : 'colocado pelo sistema (' + esc(a.motivo) + ')'}</span>
+          <span class="anx-info">${infoAnexo(a, it)} · ${a.manual ? 'escolhido por você' : 'colocado pelo sistema (' + esc(a.motivo) + ')'}</span>
           ${diverge(a, it.numero_nf) ? `<span class="anx-alerta">Atenção: o documento cita a NF ${esc(a.numero_nf)}, e este pedido é a NF ${esc(it.numero_nf)}.</span>` : ''}
           ${outroPedido(a, it) ? `<span class="anx-alerta">Atenção: pelo nome ou conteúdo, este documento parece ser de ${esc(rotIt(outroPedido(a, it)))}.</span>` : ''}
           <button type="button" class="anx-link" data-anx="tirar" data-token="${esc(a.token)}">tirar deste pedido</button></div>`).join('') +
-        `<button type="button" class="anx-mais" data-anx="anexar" data-i="${i}">+ Anexar PDF</button>`;
+        `<button type="button" class="anx-mais" data-anx="anexar" data-i="${i}">+ Anexar PDF ou XML</button>`;
     });
     const soltos = p.anexos.filter(a => !p.itens.some(it => it.token === a.pedido));
     const box = $('previa-anexos');
@@ -592,14 +741,14 @@
     if (!x) { fecharModal(); return; }
     const pode = PODE_ENVIAR && x.pode_anexar, atuais = x.anexos || [];
     modal(`<h3>Documentos do pedido</h3>
-      <p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}</p>
-      <p>Os documentos anexados aqui saem impressos junto da nota fiscal na entrega.</p>
-      <div class="anx-lista">${atuais.length ? atuais.map(a => `<div class="anx-solto"><a href="${BASE}/api/envios/${x.id}/anexos/${a.id}" target="_blank" rel="noopener" class="anx-nome">${esc(a.nome)}</a><span class="anx-info">${infoAnexo(a)}</span>${pode ? `<button type="button" class="anx-link" data-doc-remover="${a.id}">remover</button>` : ''}</div>`).join('') : '<div class="anx-info">Nenhum documento anexado ainda.</div>'}</div>
-      ${docNovos.length ? `<div class="anx-lista"><b style="font-size:12.5px;">Pra anexar agora:</b>${docNovos.map(a => `<div class="anx ${diverge(a, x.numero_nf) ? 'diverge' : ''}"><span class="anx-nome">${esc(a.nome)}</span><span class="anx-info">${infoAnexo(a)}</span>${diverge(a, x.numero_nf) ? `<span class="anx-alerta">Atenção: o documento cita a NF ${esc(a.numero_nf)}, e este pedido é a NF ${esc(x.numero_nf)}.</span>` : ''}</div>`).join('')}
+      <p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}${nfExtra(x)}</p>
+      <p>Os documentos em PDF anexados aqui saem impressos junto da nota fiscal na entrega. O XML da nota fica guardado no pedido e não é impresso.</p>
+      <div class="anx-lista">${atuais.length ? atuais.map(a => `<div class="anx-solto"><a href="${BASE}/api/envios/${x.id}/anexos/${a.id}" target="_blank" rel="noopener" class="anx-nome">${esc(a.nome)}</a><span class="anx-info">${infoAnexo(a, x)}</span>${pode ? `<button type="button" class="anx-link" data-doc-remover="${a.id}">remover</button>` : ''}</div>`).join('') : '<div class="anx-info">Nenhum documento anexado ainda.</div>'}</div>
+      ${docNovos.length ? `<div class="anx-lista"><b style="font-size:12.5px;">Pra anexar agora:</b>${docNovos.map(a => `<div class="anx ${diverge(a, x.numero_nf) ? 'diverge' : ''}"><span class="anx-nome">${esc(a.nome)}</span><span class="anx-info">${infoAnexo(a, x)}</span>${diverge(a, x.numero_nf) ? `<span class="anx-alerta">Atenção: o documento cita a NF ${esc(a.numero_nf)}, e este pedido é a NF ${esc(x.numero_nf)}.</span>` : ''}</div>`).join('')}
         <label class="anx-conf"><input type="checkbox" id="m-conf"> ${docNovos.length > 1 ? `Conferi os ${docNovos.length} documentos: são deste pedido.` : 'Conferi o documento: é deste pedido.'}</label></div>` : ''}
       ${!pode && PODE_ENVIAR ? '<p>Este pedido já saiu pra entrega ou foi encerrado: não aceita mais documentos.</p>' : ''}
       <div class="msg ${erro ? 'erro' : ''}" id="m-msg">${esc(erro)}</div>
-      <div class="pe"><button type="button" class="botao-linha" data-fechar>Fechar</button>${pode ? `<button type="button" class="botao-linha" id="m-escolher">${docNovos.length ? 'Escolher mais PDFs' : 'Escolher PDF…'}</button>` : ''}${pode && docNovos.length ? `<button type="button" class="botao" id="m-ok">Anexar ${docNovos.length} documento${docNovos.length > 1 ? 's' : ''}</button>` : ''}</div>`);
+      <div class="pe"><button type="button" class="botao-linha" data-fechar>Fechar</button>${pode ? `<button type="button" class="botao-linha" id="m-escolher">${docNovos.length ? 'Escolher mais arquivos' : 'Escolher PDF ou XML…'}</button>` : ''}${pode && docNovos.length ? `<button type="button" class="botao" id="m-ok">Anexar ${docNovos.length} documento${docNovos.length > 1 ? 's' : ''}</button>` : ''}</div>`);
     const falha = t => { const m = $('m-msg'); m.className = 'msg erro'; m.textContent = t; };
     const chamar = async (url, corpo) => {
       const r = await fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
@@ -724,6 +873,8 @@
   }
 
   $('previa-tabela').addEventListener('click', e => {
+    const bl = e.target.closest('[data-lote]');
+    if (bl) { abrirLotes(Number(bl.dataset.lote)); return; }
     const b = e.target.closest('[data-ent]');
     if (!b) return;
     const i = Number(b.closest('td.c-end').dataset.i), it = previa.itens[i], st = it._ent, acao = b.dataset.ent;
@@ -811,8 +962,12 @@
         item.agendamento_hora_fim = (tr.querySelector('.ag-fim') || {}).value;
         if (!item.agendamento_pendente && !item.agendamento_data) { mensagem(`${rotuloIt}: ${it.destinatario_nome} só recebe com agendamento — informe a data ou marque "pendente".`, 'erro'); return; }
       }
+      const tp = tr.querySelector('select.tp'), tpOpt = tp && tp.value ? tp.selectedOptions[0] : null;
+      if (tpOpt) item.transportadora_id = Number(tp.value);
+      // retirada/redespacho não têm endereço de entrega a escolher (o servidor também recusa)
+      const semEntrega = !!tpOpt && ['RETIRADA', 'TERCEIROS'].includes(tpOpt.dataset.tipo);
       const st = it._ent;
-      if (p.entrega_ativa && it.entrega && st) {
+      if (p.entrega_ativa && it.entrega && st && !semEntrega) {
         if (st.editando) { mensagem(`${rotuloIt}: termine o endereço de entrega (Usar este endereço ou Cancelar).`, 'erro'); return; }
         if (it.entrega.modo === 'sugestao' && !st.escolha) { mensagem(`${rotuloIt}: escolha onde entregar este pedido.`, 'erro'); return; }
         if (st.escolha) item.entrega_escolha = st.escolha;
@@ -821,6 +976,7 @@
       }
       const meus = anx.filter(a => a.pedido === it.token);
       if (meus.length) item.anexos = meus.map(a => ({ token: a.token, casado_por: a.manual ? 'manual' : 'automatico' }));
+      if (it._lotes && Object.keys(it._lotes).length) item.lotes = it._lotes;
       itens.push(item);
     }
     $('btn-confirmar').disabled = true;
@@ -976,7 +1132,7 @@
     if (tipo === 'alterar_endereco') { alterarEndereco(x); return; }
     if (tipo === 'xml') { window.open(`${BASE}/api/envios/${id}/xml`, '_blank'); return; }
     if (tipo === 'documentos') { docNovos = []; abrirDocumentos(x.id); return; }
-    const cab = `<p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}</p>`;
+    const cab = `<p><b>${esc(x.rotulo || 'NF ' + x.numero_nf)}</b> · ${esc(x.destinatario_nome)}${x.codigo_pedido ? ' · #' + esc(x.codigo_pedido) : ''}${nfExtra(x)}</p>`;
     const textos = {
       cancelar: ['Cancelar pedido', x.status === 'NA_FILA' || x.status === 'ERRO' ? 'O pedido ainda não foi criado na Stokki — será cancelado na hora.' : 'O pedido já existe na Stokki. A Fresh Log vai cancelá-lo e você acompanha por aqui.'],
       em_espera: ['Tirar da rota', 'O pedido fica em espera (não sai pra entrega) até você pedir pra reenviar. A Fresh Log aplica e avisa aqui.'],
@@ -1047,6 +1203,10 @@
   $('env-atualizar').addEventListener('click', () => carregar());
   secao.addEventListener('click', e => {
     const b = e.target.closest('[data-acao]'); if (!b) return;
+    if (b.dataset.acao === 'atendimento') {
+      if (window.atdAbrir) window.atdAbrir(); else location.href = `${BASE}/`;
+      return;
+    }
     // bloqueio de área (23/09): os dois botões abrem o chat no chamado do bloqueio;
     // "cotação" já manda a mensagem pronta
     if (b.dataset.acao === 'chat' || b.dataset.acao === 'cotacao') {

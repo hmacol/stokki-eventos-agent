@@ -9,6 +9,7 @@
 // mostrar ao motorista (ex.: "insucesso exige motivo").
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as api from './api';
+import * as fotoLocal from './fotoLocal';
 import { ErroApi, ErroRede } from './api';
 import type { TipoDespesa } from './tipos';
 
@@ -27,7 +28,7 @@ export type ItemFila =
   | { uuid: string; tipo: 'EVENTO_PARADA'; paradaId: number; corpo: Record<string, unknown>; criadoEm: string; tentativas: number }
   | { uuid: string; tipo: 'COMPROVANTE'; paradaId: number; uri: string; tipoComprovante: string; capturadoEm: string; criadoEm: string; tentativas: number; nf?: string | null }
   | { uuid: string; tipo: 'PEDAGIO'; rotaId: number; uri: string; valor: number; capturadoEm: string; criadoEm: string; tentativas: number;
-      tipoDespesa?: TipoDespesa; descricao?: string | null; paradaId?: number | null }
+      tipoDespesa?: TipoDespesa; descricao?: string | null; paradaId?: number | null; origem?: 'camera' | 'galeria' }
   | { uuid: string; tipo: 'GPS'; pontos: object[]; criadoEm: string; tentativas: number }
   | { uuid: string; tipo: 'ROTA'; rotaId: number; acao: 'aceitar' | 'iniciar' | 'finalizar'; corpo: Record<string, unknown>; criadoEm: string; tentativas: number };
 
@@ -74,14 +75,26 @@ async function gravar(itens: ItemFila[]) {
   ouvintes.forEach((f) => f(itens.length));
 }
 
+// Toda mudança na fila relê o que está gravado e passa por aqui, uma de
+// cada vez (17/11): o envio guardava uma cópia da fila na memória e, ao
+// terminar o evento da parada, gravava essa cópia por cima -- apagando a
+// foto que tinha entrado na fila enquanto o evento estava sendo enviado.
+// Nenhum canhoto chegava ao servidor e nenhum erro aparecia.
+let cadeia: Promise<void> = Promise.resolve();
+function mudar(fn: (itens: ItemFila[]) => ItemFila[]): Promise<void> {
+  const p = cadeia.then(async () => gravar(fn(await ler())));
+  cadeia = p.catch(() => undefined);
+  return p;
+}
+
 export async function tamanho(): Promise<number> {
   return (await ler()).length;
 }
 
 export async function enfileirar(item: ItemFila): Promise<void> {
-  const itens = await ler();
-  itens.push(item);
-  await gravar(itens);
+  // Web: a foto vai pro IndexedDB antes de entrar na fila (sobrevive a recarregar a página).
+  if ('uri' in item) item = { ...item, uri: await fotoLocal.guardar(item.uri) };
+  await mudar((itens) => [...itens, item]);
   void processar();
 }
 
@@ -121,6 +134,7 @@ async function registrarUltimoErro(item: ItemFila, e: unknown) {
   } catch {
     // diagnóstico é best-effort
   }
+  if (item.tipo === 'COMPROVANTE' || item.tipo === 'PEDAGIO') void api.diagnostico(`${item.tipo} t${item.tentativas ?? 0}: ${erro.mensagem}`);
 }
 
 /** Resumo dos itens na fila (Perfil). */
@@ -148,7 +162,7 @@ export async function descartarItem(uuid: string): Promise<void> {
   const item = itens.find((i) => i.uuid === uuid);
   if (!item) return;
   await registrarDescartado(item, 'Descartado pelo usuário');
-  await gravar(itens.filter((i) => i.uuid !== uuid));
+  await mudar((atual) => atual.filter((i) => i.uuid !== uuid));
 }
 
 async function enviar(item: ItemFila): Promise<void> {
@@ -161,7 +175,7 @@ async function enviar(item: ItemFila): Promise<void> {
       return;
     case 'PEDAGIO':
       await api.enviarPedagio(item.rotaId, item.uri, item.valor, item.uuid, item.capturadoEm,
-        { tipo: item.tipoDespesa, descricao: item.descricao, paradaId: item.paradaId });
+        { tipo: item.tipoDespesa, descricao: item.descricao, paradaId: item.paradaId, origem: item.origem });
       return;
     case 'GPS':
       await api.enviarGps(item.pontos);
@@ -181,39 +195,38 @@ export async function processar(): Promise<{ enviados: number; pendentes: number
   processando = true;
   let enviados = 0;
   try {
-    let itens = await ler();
-    let reordenados = 0;
-    const limiteReordenacoes = itens.length; // cada item vai pro fim no máximo 1x por passada
-    while (itens.length > 0) {
-      const item = itens[0];
+    // Fotos/GPS que falharam nesta passada: ficam pra próxima, sem segurar o resto.
+    const adiados = new Set<string>();
+    const tirar = (uuid: string) => mudar((atual) => atual.filter((i) => i.uuid !== uuid));
+    for (;;) {
+      const item = (await ler()).find((i) => !adiados.has(i.uuid));
+      if (!item) break;
       try {
         await enviar(item);
         enviados++;
-        itens = itens.slice(1);
-        await gravar(itens);
+        await tirar(item.uuid);
+        if ('uri' in item) void fotoLocal.liberar(item.uri);
       } catch (e) {
         const temporario = e instanceof ErroRede
           || (e instanceof ErroApi && (e.status === 401 || e.status === 408 || e.status === 429 || e.status >= 500));
+        await registrarUltimoErro(item, e);
         if (temporario) {
-          await registrarUltimoErro(item, e);
-          item.tentativas = (item.tentativas ?? 0) + 1;
-          if (TIPOS_REORDENAVEIS.has(item.tipo) && reordenados < limiteReordenacoes && itens.length > 1) {
-            reordenados++;
-            itens = [...itens.slice(1), item];
-            await gravar(itens);
-            continue;
-          }
-          await gravar(itens);
-          break;
+          const reordena = TIPOS_REORDENAVEIS.has(item.tipo);
+          await mudar((atual) => {
+            const novo = { ...item, tentativas: (item.tentativas ?? 0) + 1 };
+            const resto = atual.filter((i) => i.uuid !== item.uuid);
+            return reordena ? [...resto, novo] : atual.map((i) => (i.uuid === item.uuid ? novo : i));
+          });
+          if (!reordena) break;
+          adiados.add(item.uuid);
+          continue;
         }
         // Erro de regra: não adianta insistir
-        await registrarUltimoErro(item, e);
         await registrarDescartado(item, e instanceof Error ? e.message : String(e));
-        itens = itens.slice(1);
-        await gravar(itens);
+        await tirar(item.uuid);
       }
     }
-    return { enviados, pendentes: itens.length };
+    return { enviados, pendentes: await tamanho() };
   } finally {
     processando = false;
   }

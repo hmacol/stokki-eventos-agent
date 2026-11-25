@@ -78,6 +78,16 @@ class TestReconciliarCodigos(unittest.TestCase):
         self.assertEqual(worker.reconciliar_codigos(conn), 1)
         self.assertEqual(_codigo(conn, 1), "PS-36205")
 
+    def test_unica_danfe_de_outro_destinatario_nao_vira_o_codigo(self):
+        """PS-39753 (24/11): NF 16462 da ATW p/ J BURGER pegou o PS da NF 16462
+        da Manioca p/ Mocoto, unica DANFE com aquele numero. Destinatario
+        preenchido e diferente prova que e outro pedido."""
+        conn = _conn()
+        _envio(conn, 1, "16462", destinatario=DEST_X)
+        _danfe(conn, "16462", "PS-39753", DEST_Y)
+        self.assertEqual(worker.reconciliar_codigos(conn), 0)
+        self.assertIsNone(_codigo(conn, 1))
+
     def test_nf_repetida_sem_desempate_nao_inventa_codigo(self):
         """Mesmo numero de NF e mesmo destinatario em dois pedidos: nao da
         pra saber qual e, entao deixa vazio pra proxima rodada."""

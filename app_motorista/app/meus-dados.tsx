@@ -7,18 +7,29 @@ import { useRouter } from 'expo-router';
 import * as api from '../src/api';
 import { useSessao } from '../src/sessao';
 import { Botao } from '../src/componentes';
+import { CampoPin } from '../src/campoPin';
 import { mascaraTelefone, placaValida } from '../src/cadastroOpcoes';
 import { cores } from '../src/tema';
 
+// Só desenha depois que a sessão carregou: o estado inicial dos campos vem do motorista (no
+// PWA, recarregar a página nesta tela abria o formulário vazio).
 export default function MeusDados() {
+  const { motorista } = useSessao();
+  return motorista ? <Formulario key={motorista.cpf} /> : null;
+}
+
+function Formulario() {
   const { motorista, atualizarMotorista } = useSessao();
   const router = useRouter();
   const [telefone, setTelefone] = useState(mascaraTelefone(motorista?.telefone ?? ''));
   const [email, setEmail] = useState(motorista?.email ?? '');
   const [pix, setPix] = useState(motorista?.chave_pix ?? '');
   const [placa, setPlaca] = useState(motorista?.placa ?? '');
+  const [pin, setPin] = useState('');
   const [erro, setErro] = useState<string | null>(null);
   const [salvando, setSalvando] = useState(false);
+  // Trocar a chave PIX redireciona pagamento: só com o PIN (a API confere).
+  const pixMudou = pix.trim() !== (motorista?.chave_pix ?? '').trim();
 
   const salvar = async () => {
     setErro(null);
@@ -26,9 +37,10 @@ export default function MeusDados() {
     if (tel && (tel.length < 10 || tel.length > 11)) return setErro('Telefone com DDD, 10 ou 11 números.');
     if (email.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) return setErro('E-mail inválido.');
     if (placa.trim() && !placaValida(placa)) return setErro('Placa no formato ABC1234 ou ABC1D23.');
+    if (pixMudou && pin.length !== 6) return setErro('Pra trocar a chave PIX, digite o seu PIN de 6 números.');
     setSalvando(true);
     try {
-      const r = await api.atualizarMeusDados({ telefone: tel, email: email.trim(), chave_pix: pix.trim(), placa: placa.trim().toUpperCase() });
+      const r = await api.atualizarMeusDados({ telefone: tel, email: email.trim(), chave_pix: pix.trim(), placa: placa.trim().toUpperCase(), ...(pixMudou ? { pin_atual: pin } : {}) });
       atualizarMotorista(r.motorista);
       Alert.alert('Salvo', r.mudancas.length ? `Alterado: ${r.mudancas.map((m) => m.rotulo).join(', ')}.` : 'Nada mudou.');
       router.back();
@@ -50,6 +62,12 @@ export default function MeusDados() {
         <TextInput style={s.campo} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" placeholder="opcional" placeholderTextColor="#9CA3AF" />
         <Text style={s.rotulo}>Chave PIX</Text>
         <TextInput style={s.campo} value={pix} onChangeText={setPix} autoCapitalize="none" placeholder="CPF, telefone, e-mail ou chave aleatória" placeholderTextColor="#9CA3AF" />
+        {pixMudou ? (
+          <>
+            <Text style={s.rotulo}>Seu PIN (pra confirmar a troca da chave PIX)</Text>
+            <CampoPin value={pin} onChangeText={setPin} />
+          </>
+        ) : null}
         <Text style={s.rotulo}>Placa do veículo</Text>
         <TextInput style={s.campo} value={placa} onChangeText={(v) => setPlaca(v.toUpperCase().slice(0, 8))} autoCapitalize="characters" placeholder="ABC1D23" placeholderTextColor="#9CA3AF" />
         {erro ? <Text style={s.erro}>{erro}</Text> : null}

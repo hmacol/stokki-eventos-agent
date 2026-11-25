@@ -28,6 +28,11 @@ export function tituloCaso(texto: string): string {
     .join(' ');
 }
 
+/** "PS-1 · NF 123" (ou "NF —" sem NF / API antiga). Sem codigo devolve ''. */
+export function codigoComNf(p: { codigo?: string | null; nf?: string | null }): string {
+  return p.codigo ? `${p.codigo} · NF ${(p.nf || '').trim() || '—'}` : '';
+}
+
 export function nomeExibicao(p: { destinatario_nome?: string | null; titulo?: string | null; codigo?: string | null }): string {
   let bruto = (p.destinatario_nome || p.titulo || p.codigo || 'Parada').trim();
   // "FULANO LTDA ME" tem dois sufixos: tira até parar de casar.

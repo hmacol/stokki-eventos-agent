@@ -56,7 +56,7 @@
         return;
       }
       corpo.innerHTML = trabalhos.map(function(t) {
-        return '<tr><td>' + esc(t.titulo) + '</td><td>' + t.itens.length + '</td><td>' + esc(t.pedido_por) +
+        return '<tr><td>' + esc(t.titulo) + '</td><td>' + t.itens.length + ' · ' + esc(t.tamanho || '') + '</td><td>' + esc(t.pedido_por) +
           '</td><td>' + esc(t.criado_em) + '</td><td class="acoes">' +
           '<a href="' + URL_PDF.replace(/0\.pdf$/, t.id + ".pdf") + '" target="_blank" rel="noopener">Abrir PDF</a>' +
           '<button type="button" data-id="' + t.id + '">Marcar impresso</button></td></tr>';

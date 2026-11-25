@@ -61,6 +61,7 @@ for _p in (_RAIZ, Path(__file__).parent):  # painel importa como portal_cliente.
         sys.path.insert(0, str(_p))
 
 import endereco_entrega  # noqa: E402
+import transportadora_envio  # noqa: E402
 from nucleo.fluxo_embarcador import FLUXOS, ROTULOS as FLUXO_ROTULOS  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,7 @@ PASTA_XMLS = _RAIZ / "dados" / "portal_envios"
 PASTA_TEMP = PASTA_XMLS / "_temporarios"
 TEMP_VALIDADE_SEGUNDOS = 2 * 3600
 DIAS_LISTAGEM = 30
+MAX_PRODUTOS_NFE = 300   # produtos da nota na prévia (indicação de lote)
 
 NS_NFE = "http://www.portalfiscal.inf.br/nfe"
 NS = {"nfe": NS_NFE}
@@ -254,6 +256,9 @@ def conectar() -> sqlite3.Connection:
         # origem fiscal|nota|cliente|ultima_entrega; json só em cliente/ultima_entrega
         "endereco_entrega_origem": "TEXT",
         "endereco_entrega_json": "TEXT",
+        # transportadora escolhida na prévia (transportadora_envio.py): {id, nome, cnpj};
+        # vazio = a do XML. O worker reescreve o <transporta> na cópia do lote.
+        "transportadora_json": "TEXT",
     })
     _garantir_colunas(conn, "portal_clientes_envio", {"carrier_id": "TEXT", "prioridade": "TEXT"})
     conn.commit()
@@ -319,10 +324,23 @@ def _endereco_linha(el) -> str:
     return endereco
 
 
-def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
+def _recusar_dtd(conteudo: bytes, nome_arquivo: str = "") -> None:
+    """NF-e não usa DTD nem entidades. Recusar antes de parsear fecha XXE e expansão de entidades
+    (billion laughs) sem depender do expat do sistema nem de defusedxml. UTF-16 (que esconderia o
+    <!DOCTYPE> do teste em bytes) também não é NF-e: recusa."""
+    if conteudo[:2] in (b"\xff\xfe", b"\xfe\xff") or b"\x00" in conteudo[:64]:
+        raise ErroEnvio(f"{nome_arquivo or 'Arquivo'}: codificação de XML não aceita (a NF-e vem em UTF-8).")
+    baixo = conteudo.lower()
+    if b"<!doctype" in baixo or b"<!entity" in baixo:
+        raise ErroEnvio(f"{nome_arquivo or 'Arquivo'}: XML com DTD/entidades não é aceito (a NF-e não usa).")
+
+
+def ler_nfe(conteudo: bytes, nome_arquivo: str = "", permitir_entrada: bool = False) -> dict:
     """Extrai os campos que a máscara mostra/valida. Levanta ErroEnvio com
     mensagem pro usuário quando o arquivo não é uma NF-e (validação 1 do
-    item 9)."""
+    item 9). `permitir_entrada` (aba Pedidos de Entrada, 25/09): aceita
+    tpNF=0 também -- Envios continua recusando."""
+    _recusar_dtd(conteudo, nome_arquivo)
     try:
         root = ET.fromstring(conteudo)
     except ET.ParseError as e:
@@ -343,10 +361,28 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
         raise ErroEnvio(f"{nome_arquivo or 'Arquivo'}: NF-e sem destinatário (<dest>).")
     ender = dest.find("nfe:enderDest", NS)
     tipo_nf = _texto(ide, "nfe:tpNF")
-    if tipo_nf == "0":
+    if tipo_nf == "0" and not permitir_entrada:
         raise ErroEnvio(f"{nome_arquivo or 'Arquivo'}: NF-e de ENTRADA (tpNF=0) -- só notas de saída viram pedido de entrega.")
 
     dets = inf.findall("nfe:det", NS)
+    itens_lista = []
+    for i, det in enumerate(dets, start=1):
+        prod = det.find("nfe:prod", NS)
+        ean = _texto(prod, "nfe:cEAN")
+        try:
+            qtd = float(_texto(prod, "nfe:qCom") or 0)
+        except ValueError:
+            qtd = 0.0
+        try:
+            vu = float(_texto(prod, "nfe:vUnCom") or 0)
+        except ValueError:
+            vu = 0.0
+        itens_lista.append({
+            "linha": int(det.get("nItem") or i), "sku": _texto(prod, "nfe:cProd"),
+            "ean": _so_digitos(ean) if ean.upper() != "SEM GTIN" else "",
+            "descricao": _texto(prod, "nfe:xProd"), "quantidade": qtd,
+            "unidade": _texto(prod, "nfe:uCom"), "valor_unitario": vu,
+        })
     volumes = 0
     peso = 0.0
     for vol in inf.findall("nfe:transp/nfe:vol", NS):
@@ -383,6 +419,18 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
 
     emitida = _texto(ide, "nfe:dhEmi") or _texto(ide, "nfe:dEmi")
     transporta = inf.find("nfe:transp/nfe:transporta", NS)
+    # Produtos da nota (18/11): a prévia mostra pra o cliente indicar o lote (lotes_cliente.py)
+    produtos = []
+    for det in dets[:MAX_PRODUTOS_NFE]:
+        sku = _texto(det, "nfe:prod/nfe:cProd")
+        if not sku:
+            continue
+        try:
+            qtd = round(float(_texto(det, "nfe:prod/nfe:qCom") or 0), 4)
+        except ValueError:
+            qtd = 0.0
+        produtos.append({"sku": sku[:60], "descricao": _texto(det, "nfe:prod/nfe:xProd")[:120], "quantidade": qtd,
+                         "unidade": _texto(det, "nfe:prod/nfe:uCom")[:12]})
     return {
         "chave_nfe": chave,
         "numero_nf": _texto(ide, "nfe:nNF"),
@@ -403,9 +451,12 @@ def ler_nfe(conteudo: bytes, nome_arquivo: str = "") -> dict:
         "peso_kg": round(peso, 3),
         "valor_nf": round(valor, 2),
         "itens": len(dets),
+        "produtos": produtos,
         "nome_arquivo": nome_arquivo or f"{chave}.xml",
         "transportadora_nome": _texto(transporta, "nfe:xNome"),
         "transportadora_cnpj": _so_digitos(_texto(transporta, "nfe:CNPJ") or _texto(transporta, "nfe:CPF")),
+        "tipo_nf": tipo_nf,
+        "itens_lista": itens_lista,
     }
 
 
@@ -493,6 +544,12 @@ COLUNA_EMPRESA: tuple[str, str, bool, tuple[str, ...], int, str] = (
      "cnpj do remetente", "cnpj remetente", "remetente"), 26, "")
 MAX_LINHAS_PLANILHA = 2000
 MAX_ITENS_PLANILHA = 10000   # planilha de pares (um pedido por linha) multiplica itens por linha
+# Revisão de segurança (19/11): um .xlsx de 2 KB pode declarar 16 mil colunas e várias abas, e o
+# openpyxl (read_only) completa cada linha até a coluna declarada: o portal esgotava a memória.
+# As planilhas reais têm 22 colunas e 2 abas; a de pares da Marchef (16 fixas + 100 pares de
+# Sku/Quantidade = 216 colunas) cabe com folga.
+MAX_COLUNAS_PLANILHA = 300
+MAX_ABAS_PLANILHA = 10
 UFS = {"AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ",
        "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"}
 NOMES_UF = {"AC": "Acre", "AL": "Alagoas", "AP": "Amapá", "AM": "Amazonas", "BA": "Bahia", "CE": "Ceará", "DF": "Distrito Federal",
@@ -582,31 +639,40 @@ def _abrir_planilha(conteudo: bytes, nome: str):
         except ImportError:
             raise ErroEnvio(f"{nome}: o formato .xls (Excel 97-2003) não é suportado -- salve a planilha como .xlsx e envie de novo.")
         try:
-            wb = xlrd.open_workbook(file_contents=conteudo)
+            wb = xlrd.open_workbook(file_contents=conteudo, on_demand=True)   # carrega só a aba pedida
         except Exception as e:
             raise ErroEnvio(f"{nome}: não consegui abrir a planilha ({e}).")
-        for sh in wb.sheets():
-            linhas = [[sh.cell_value(r, c) for c in range(sh.ncols)] for r in range(min(sh.nrows, MAX_LINHAS_PLANILHA + 20))]
-            if any(any(_celula_texto(v) for v in l) for l in linhas):
-                return linhas
-        return []
+        try:
+            for i in range(min(wb.nsheets, MAX_ABAS_PLANILHA)):
+                sh = wb.sheet_by_index(i)
+                linhas = [[sh.cell_value(r, c) for c in range(min(sh.ncols, MAX_COLUNAS_PLANILHA))]
+                          for r in range(min(sh.nrows, MAX_LINHAS_PLANILHA + 20))]
+                if any(any(_celula_texto(v) for v in l) for l in linhas):
+                    return linhas
+                wb.unload_sheet(i)
+            return []
+        except ErroEnvio:
+            raise
+        except Exception as e:
+            raise ErroEnvio(f"{nome}: não consegui ler a planilha ({type(e).__name__}).")
+        finally:
+            wb.release_resources()
     try:
         import openpyxl
         wb = openpyxl.load_workbook(io.BytesIO(conteudo), read_only=True, data_only=True)
     except Exception as e:
         raise ErroEnvio(f"{nome}: não consegui abrir a planilha ({type(e).__name__}). Envie um .xlsx no modelo Fresh Log.")
     try:
-        for ws in wb.worksheets:
+        for ws in wb.worksheets[:MAX_ABAS_PLANILHA]:
             if (ws.title or "").strip().lower().startswith("instru"):
                 continue
-            linhas = []
-            for i, row in enumerate(ws.iter_rows(values_only=True)):
-                if i > MAX_LINHAS_PLANILHA + 20:
-                    break
-                linhas.append(list(row))
+            linhas = [list(row) for row in ws.iter_rows(max_row=MAX_LINHAS_PLANILHA + 21, max_col=MAX_COLUNAS_PLANILHA,
+                                                        values_only=True)]
             if any(any(_celula_texto(v) for v in l) for l in linhas):
                 return linhas
         return []
+    except Exception as e:
+        raise ErroEnvio(f"{nome}: não consegui ler a planilha ({type(e).__name__}).")
     finally:
         wb.close()
 
@@ -642,17 +708,45 @@ _RE_PAR_SKU = re.compile(r"^(?:sku|produto|codigo|cod|item) ?(\d{1,3})$")
 _RE_PAR_QTD = re.compile(r"^(?:quantidade|qtd|qtde|quant) ?(\d{1,3})$")
 
 
-def _pares_de_itens(cabecalho: list) -> list[tuple[int, int]]:
+def _pares_de_itens(cabecalho: list, ocupadas: set[int] | None = None, avisos: list[str] | None = None) -> list[tuple[int, int]]:
     """[(coluna do SKU, coluna da quantidade)] dos pares numerados do cabeçalho,
-    na ordem do número; vazio quando a planilha é de uma linha por item."""
+    na ordem do número; vazio quando a planilha é de uma linha por item.
+    Cabeçalho alterado pelo cliente não trava (17/11, pedido do Hugo): lê e
+    explica em `avisos`. SkuN sem a QuantidadeN usa a coluna logo à direita,
+    desde que ela não seja outro SKU, quantidade de outro par nem campo do
+    pedido (`ocupadas`); e as colunas de SKU/quantidade do modelo, no meio de
+    uma planilha de pares, valem como mais um item (o primeiro)."""
     skus: dict[int, int] = {}
     qtds: dict[int, int] = {}
-    for j, v in enumerate(cabecalho):
-        n = _normalizar_texto(v)
+    nomes = [_normalizar_texto(v) for v in cabecalho]
+    for j, n in enumerate(nomes):
         for padrao, destino in ((_RE_PAR_SKU, skus), (_RE_PAR_QTD, qtds)):
             m = padrao.match(n)
             if m:
                 destino.setdefault(int(m.group(1)), j)
+    if not skus:
+        return []
+    fora = set(ocupadas or ()) | set(skus.values()) | set(qtds.values())
+    notas = []
+    nome = lambda j: _celula_texto(cabecalho[j])[:60]   # texto do cliente: curto no aviso e no log
+    for k in sorted(skus):
+        j = skus[k] + 1
+        if k not in qtds and j < len(nomes) and nomes[j] and j not in fora:
+            qtds[k] = j
+            fora.add(j)
+            notas.append(f'Coluna "{nome(j)}" lida como a quantidade do item da coluna '
+                         f'"{nome(skus[k])}" (o esperado era "Quantidade{k}").')
+    soltas = {}
+    for j, n in enumerate(nomes):
+        chave = _APELIDOS_NORMALIZADOS.get(n)
+        if chave in ("sku", "quantidade") and j not in fora:
+            soltas.setdefault(chave, j)
+    if len(soltas) == 2:
+        skus[0], qtds[0] = soltas["sku"], soltas["quantidade"]
+        notas.append(f'Colunas "{nome(soltas["sku"])}" e "{nome(soltas["quantidade"])}" '
+                     "lidas como um item do pedido, junto com os pares numerados.")
+    if avisos is not None:
+        avisos.extend(notas)
     return [(skus[k], qtds[k]) for k in sorted(skus) if k in qtds]
 
 
@@ -727,7 +821,7 @@ def guardar_mapa_planilha(conn: sqlite3.Connection, cnpj_login: str, mapa: dict,
 def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
                  empresas: dict[str, str] | None = None, guardado: dict | None = None,
                  indicado: dict | None = None, pedir_indicacao: bool = False,
-                 mapa_usado: dict | None = None) -> tuple[list[dict], list[dict]]:
+                 mapa_usado: dict | None = None, avisos: list[str] | None = None) -> tuple[list[dict], list[dict]]:
     """Lê a planilha de pedidos. Devolve (pedidos, rejeitados):
     cada pedido tem o MESMO formato do dict de ler_nfe (pra prévia, validação
     e gravação serem as mesmas) mais origem/referencia/itens_lista/
@@ -742,8 +836,8 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
     Faltando coluna obrigatória (ou com `pedir_indicacao`), levanta
     ColunasPorIndicar no lugar de recusar a planilha.
     Cabeçalho com pares numerados (Sku1 | Quantidade1 | Sku2 ...): cada linha é
-    um pedido e os itens saem dos pares preenchidos; as colunas de SKU e
-    quantidade do modelo deixam de valer."""
+    um pedido e os itens saem dos pares preenchidos. Coluna de item com o nome
+    alterado é lida assim mesmo e explicada em `avisos` (lista de quem chama)."""
     linhas = _abrir_planilha(conteudo, nome)
     if not linhas:
         raise ErroEnvio(f"{nome}: a planilha está vazia.")
@@ -758,7 +852,9 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
             raise ErroEnvio(f"{nome}: colunas indicadas inválidas -- envie a planilha de novo.")
     else:
         i_cab, col_de = _achar_cabecalho(linhas, guardado)
-    pares = _pares_de_itens(linhas[i_cab])
+    # colunas que já são campo do pedido não viram quantidade de item (volumes pode: é quantidade também)
+    ocupadas = {j for k, j in (escolhas if escolhas is not None else col_de).items() if k not in (*_CAMPOS_ITEM, "volumes")}
+    pares = _pares_de_itens(linhas[i_cab], ocupadas, avisos)
     campos_validos = [c for c in _campos_planilha(empresas is not None) if not (pares and c[0] in _CAMPOS_ITEM)]
     chaves = {c[0] for c in campos_validos}
     if escolhas is not None:
@@ -933,6 +1029,31 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
     return pedidos, rejeitados
 
 
+def produtos_do_embarcador(conn: sqlite3.Connection, cfg: dict) -> list[sqlite3.Row] | None:
+    """Produtos ativos do embarcador no catálogo local (wms_produtos), com as
+    colunas sku, ean, dun, descricao, unidade, qtd_por_caixa (NULL pra coluna
+    que o banco não tenha). None = sem tabela, ou cfg sem client_id nem nome."""
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(wms_produtos)")}
+    except sqlite3.Error:
+        cols = set()
+    if not cols:
+        return None
+    cid = cfg.get("client_id")
+    nome = (cfg.get("nome") or "").strip()
+    cond, args = [], []
+    if cid:
+        cond.append("embarcador_id = ?")
+        args.append(int(cid))
+    if nome:
+        cond.append("LOWER(embarcador) = LOWER(?)")
+        args.append(nome)
+    if not cond:
+        return None
+    sel = ", ".join(c if c in cols else f"NULL AS {c}" for c in ("sku", "ean", "dun", "descricao", "unidade", "qtd_por_caixa"))
+    return conn.execute(f"SELECT {sel} FROM wms_produtos WHERE ativo = 1 AND ({' OR '.join(cond)})", args).fetchall()
+
+
 def validar_skus(conn: sqlite3.Connection, pedido: dict, cfg: dict) -> tuple[list[str], list[str]]:
     """Confere os SKUs no catálogo local do Stokki (wms_produtos, sincronizado
     pelo WMS). Se o catálogo tem produtos desse embarcador e o SKU não está
@@ -944,18 +1065,9 @@ def validar_skus(conn: sqlite3.Connection, pedido: dict, cfg: dict) -> tuple[lis
         tem = None
     if not tem:
         return erros, ["Catálogo de produtos indisponível -- os SKUs serão conferidos pela Stokki."]
-    cid = cfg.get("client_id")
-    nome = (cfg.get("nome") or "").strip()
-    cond, args = [], []
-    if cid:
-        cond.append("embarcador_id = ?")
-        args.append(int(cid))
-    if nome:
-        cond.append("LOWER(embarcador) = LOWER(?)")
-        args.append(nome)
-    if not cond:
+    rows = produtos_do_embarcador(conn, cfg)
+    if rows is None:   # cfg sem client_id nem nome
         return erros, avisos
-    rows = conn.execute(f"SELECT sku, ean, dun, descricao FROM wms_produtos WHERE ativo = 1 AND ({' OR '.join(cond)})", args).fetchall()
     if not rows:
         return erros, ["Catálogo do seu embarcador ainda não sincronizado -- os SKUs serão conferidos pela Stokki."]
     conhecidos = {}
@@ -1569,6 +1681,16 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
             raise ErroEnvio(f"{rotulo_envio(nfe)}: " + " ".join(v["erros"]))
         nfe["_fluxo"] = escolher_fluxo(item, ctx["fluxos"] or ["armazenagem"], nfe.get("origem") or ORIGEM_XML,
                                        rotulo_envio(nfe))
+        # Transportadora escolhida na prévia: antes do endereço e da área, que
+        # dependem do tipo dela (retirada/redespacho não checam região).
+        if item.get("transportadora_id"):
+            if nfe.get("origem") != ORIGEM_XML:
+                raise ErroEnvio(f"{rotulo_envio(nfe)}: pedido de planilha não aceita troca de transportadora.")
+            try:
+                transp = transportadora_envio.resolver(conn, item["transportadora_id"])
+            except transportadora_envio.ErroTransportadora as e:
+                raise ErroEnvio(f"{rotulo_envio(nfe)}: {e}")
+            nfe = {**transportadora_envio.aplicar_no_nfe(nfe, transp), "_transp_json": transportadora_envio.gravar_json(transp)}
         # Endereço de entrega escolhido na prévia (27/10): antes da área, pra
         # área, dia fixo e gravação já usarem o endereço de entrega.
         if nfe.get("origem") == ORIGEM_XML:
@@ -1659,6 +1781,7 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
             "data_expedicao": nfe.get("data_expedicao") if planilha else None,
             "linhas_planilha": ",".join(str(n) for n in nfe.get("linhas") or []) if planilha else None,
             "endereco_entrega_origem": nfe.get("_entrega_origem"), "endereco_entrega_json": nfe.get("_entrega_json"),
+            "transportadora_json": nfe.get("_transp_json"),
         }
         if existente:
             sets = ", ".join(f"{k} = ?" for k in campos if k != "chave_nfe")
@@ -1804,6 +1927,14 @@ def buscar_envio(conn: sqlite3.Connection, envio_id: int, cnpj_embarcador: str) 
 
 def caminho_xml(envio: dict) -> Path:
     return _RAIZ / envio["xml_path"]
+
+
+def ler_nfe_do_envio(envio: dict) -> dict:
+    """ler_nfe do XML gravado, já com a transportadora que o embarcador
+    escolheu na prévia (o arquivo guardado é o original da nota)."""
+    nfe = ler_nfe(caminho_xml(envio).read_bytes())
+    transp = transportadora_envio.da_linha(envio)
+    return transportadora_envio.aplicar_no_nfe(nfe, transp) if transp else nfe
 
 
 # ── Ações do cliente (item 12) ─────────────────────────────────────────────────
@@ -2016,7 +2147,7 @@ def alterar_endereco_bloqueado(conn: sqlite3.Connection, envio: dict, campos: di
     if not endereco_entrega.entrega_ativa(config):
         raise ErroEnvio("A troca de endereço de entrega não está disponível. Fale com a equipe Fresh Log.")
     try:
-        nfe = ler_nfe(caminho_xml(envio).read_bytes())
+        nfe = ler_nfe_do_envio(envio)
     except OSError:
         raise ErroEnvio("Não foi possível ler o XML deste pedido. Fale com a equipe Fresh Log.")
     if nfe.get("endereco_fiscal"):

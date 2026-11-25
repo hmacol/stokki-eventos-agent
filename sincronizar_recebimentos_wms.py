@@ -51,12 +51,15 @@ from pathlib import Path
 _RAIZ = Path(__file__).parent
 sys.path.insert(0, str(_RAIZ))
 sys.path.insert(0, str(_RAIZ / "painel_agentes"))
+sys.path.insert(0, str(_RAIZ / "portal_cliente"))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 import yaml
 
 import wms_pedidos
+import entradas as portal_entradas
+import wms_pilotos
 from stokki import recebimentos as stokki_recebimentos
 from stokki import sessao_uso
 from stokki.auth import StokkiSession
@@ -107,14 +110,14 @@ def _sem_acento(texto: str) -> str:
 
 def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste: bool) -> dict:
     res = {"lidos": 0, "do_piloto": 0, "ignorados_outro_embarcador": 0,
-           "gravados": 0, "em_transito": 0, "ja_fechados": 0, "erros": 0}
-    # Recebimento ja ENDERECADO (fechou sozinho) ou encerrado com
-    # DIVERGENCIA (chegou menos e o operador assumiu a falta) esta fechado:
-    # nao ha nada pra reler nele. Sem este filtro a rotina rebuscava o
-    # detalhe dos ~50 mais recentes a cada 30 min, pra sempre, contra um
-    # sistema de sessao unica e fragil.
+           "gravados": 0, "amarrados": 0, "em_transito": 0, "ja_fechados": 0, "erros": 0}
+    # Recebimento ja ENDERECADO (fechou sozinho), encerrado com DIVERGENCIA
+    # (chegou menos e o operador assumiu a falta) ou CANCELADO (entrada
+    # cancelada no portal) esta fechado: nao ha nada pra reler nele. Sem
+    # este filtro a rotina rebuscava o detalhe dos ~50 mais recentes a cada
+    # 30 min, pra sempre, contra um sistema de sessao unica e fragil.
     fechados = {r["id_stokki"] for r in conn.execute(
-        "SELECT id_stokki FROM wms_recebimentos WHERE estado IN ('ENDERECADO', 'DIVERGENCIA')")}
+        "SELECT id_stokki FROM wms_recebimentos WHERE estado IN ('ENDERECADO', 'DIVERGENCIA', 'CANCELADO')")}
 
     # Filtro do lado do servidor (correcao 1): a Stokki ja devolve so os
     # recebimentos do piloto quando cliente=piloto_id.
@@ -166,7 +169,12 @@ def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste:
         # Leitura HTTP fora da transacao; commit por recebimento, porque o
         # dados.db e compartilhado com o painel e todos os agentes.
         try:
-            itens = stokki_recebimentos.ler_itens(sess, dados["id_stokki"])
+            # "Aguardando recebimento" (22/11, Hugo): a mercadoria chegou e quem recebe e o
+            # NOSSO app. A Stokki ainda nao tem a quantidade recebida, entao a entrada
+            # esperada nasce com a quantidade do pedido de compra. "Em transito" segue fora.
+            aguardando = "AGUARDANDO" in _sem_acento(dados.get("situacao", "")).upper()
+            detalhe = stokki_recebimentos.ler_detalhe(sess, dados["id_stokki"], usar_esperada=aguardando)
+            itens = detalhe["itens"]
         except Exception as e:  # noqa: BLE001 -- um recebimento ruim nao derruba a rodada
             logger.warning("Leitura do recebimento %s falhou: %s", dados["id_stokki"], e)
             res["erros"] += 1
@@ -187,15 +195,33 @@ def rodar(conn, sess, piloto_nome: str, piloto_id: str, limite: int, modo_teste:
             continue
 
         try:
-            wms_pedidos.registrar_recebimento(conn, dados, itens)
+            recebimento_id = wms_pedidos.registrar_recebimento(conn, dados, itens)
             conn.commit()
             res["gravados"] += 1
+            # Aba Pedidos de Entrada do portal (25/09): amarra o #PE a entrada
+            # anunciada pelo cliente -- por stokki_id, pela chave NF-e ou pela
+            # referencia. Falha aqui nao derruba o recebimento ja gravado.
+            try:
+                if portal_entradas.amarrar_recebimento(conn, recebimento_id, dados["id_stokki"], dados.get("codigo", ""),
+                                                       stkkc_id, detalhe["chave_nfe"], detalhe["ref_pedido"]):
+                    res["amarrados"] += 1
+            except Exception as e:  # noqa: BLE001
+                conn.rollback()
+                logger.warning("Amarracao do recebimento %s com o portal falhou: %s", dados["id_stokki"], e)
         except Exception as e:  # noqa: BLE001 -- um recebimento ruim nao derruba a rodada
             conn.rollback()
             logger.warning("Recebimento %s falhou: %s", dados["id_stokki"], e)
             res["erros"] += 1
             continue
         time.sleep(0.3)
+    if modo_teste:
+        res["status_portal"] = 0
+        logger.info("modo teste: status do portal nao sincronizado")
+    else:
+        try:
+            res["status_portal"] = portal_entradas.sincronizar_status(conn)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("sincronizar_status do portal falhou: %s", e)
     return res
 
 
@@ -212,8 +238,11 @@ def main(argv=None) -> int:
         handlers=[logging.StreamHandler(),
                   logging.FileHandler(_RAIZ / "dados" / "wms_recebimentos.log", encoding="utf-8")])
     config = _carregar_config()
-    piloto_id = (args.embarcador_id or _piloto_id(config)).strip()
-    piloto_nome = (args.embarcador or _piloto_nome(config)).strip().upper()
+    # Varios pilotos (17/11): lista wms.pilotos do config; --embarcador-id roda so aquele.
+    if args.embarcador_id:
+        alvos = [(args.embarcador_id.strip(), (args.embarcador or _piloto_nome(config)).strip().upper())]
+    else:
+        alvos = [(str(p["id"]), p["nome"]) for p in wms_pilotos.pilotos(config)]
 
     # Trava cooperativa da sessao Stokki (sessao unica -- ver stokki/sessao_uso.py
     # e sincronizar_pedidos_wms.py). Adquire ANTES de abrir a conexao com o
@@ -230,17 +259,27 @@ def main(argv=None) -> int:
         logger.warning("Stokki ocupada por '%s' -- desistindo desta rodada (proxima em 30 min).", ocupante)
         return 0
 
-    t0 = time.time()
+    erro = None
     try:
         conn = wms_pedidos.conectar()
         sess = StokkiSession(config)
         try:
-            res = rodar(conn, sess, piloto_nome, piloto_id, args.limite, args.modo_teste)
+            for piloto_id, piloto_nome in alvos:
+                t0 = time.time()
+                try:
+                    res = rodar(conn, sess, piloto_nome, piloto_id, args.limite, args.modo_teste)
+                except Exception as e:  # noqa: BLE001 -- um piloto ruim nao impede o seguinte
+                    logger.exception("Piloto %s (#stkkc-%s) falhou", piloto_nome, piloto_id)
+                    conn.rollback()
+                    erro = erro or e
+                    continue
+                logger.info("Piloto %s (#stkkc-%s): %s (%.0fs)", piloto_nome, piloto_id, res, time.time() - t0)
         finally:
             conn.close()
     finally:
         sessao_uso.liberar(DONO_TRAVA)
-    logger.info("Piloto %s (#stkkc-%s): %s (%.0fs)", piloto_nome, piloto_id, res, time.time() - t0)
+    if erro:
+        raise erro  # a rodada falha (OnFailure avisa), mas so depois de tentar todos
     return 0
 
 

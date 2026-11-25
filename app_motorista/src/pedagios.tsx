@@ -15,7 +15,7 @@ import * as fila from './fila';
 import { Botao, Cartao } from './componentes';
 import { conferirPermissao } from './permissoes';
 import { cores, formatarData, formatarReal } from './tema';
-import { nomeExibicao } from './textos';
+import { codigoComNf, nomeExibicao } from './textos';
 import type { Parada, Rota, TipoDespesa } from './tipos';
 
 const STATUS_ROTULO: Record<string, string> = { PENDENTE: 'aguardando aprovação', APROVADO: 'aprovado', REJEITADO: 'rejeitado', CANCELADO: 'cancelado por você' };
@@ -35,7 +35,7 @@ export const aceitaPedagio = (r: Rota) => r.editavel && (r.status === 'EM_ROTA' 
 
 const real = (v: number) => `R$ ${v.toFixed(2).replace('.', ',')}`;
 const codigoLimpo = (c?: string | null) => (c ?? '').replace(/^#/, '');
-const rotuloParada = (p: Parada) => `${p.ordem} · ${nomeExibicao(p)}${p.codigo ? ` · ${codigoLimpo(p.codigo)}` : ''}`;
+const rotuloParada = (p: Parada) => `${p.ordem} · ${nomeExibicao(p)}${p.codigo ? ` · ${codigoComNf({ codigo: codigoLimpo(p.codigo), nf: p.nf })}` : ''}`;
 
 /** Menu suspenso simples: o campo mostra a escolha; o toque abre a lista logo abaixo. */
 function Seletor<T extends string | number>({ rotulo, placeholder, valor, opcoes, aoEscolher, mostrarSub = false, estilo }: {
@@ -82,6 +82,7 @@ export function LancarPedagio({ rotas, rotaInicial, aoMudar }: { rotas: Rota[]; 
   const [paradaId, setParadaId] = useState<number | null>(null);
   const [valor, setValor] = useState('');
   const [foto, setFoto] = useState<string | null>(null);
+  const [origemFoto, setOrigemFoto] = useState<'camera' | 'galeria'>('camera');
   const [naFila, setNaFila] = useState<Awaited<ReturnType<typeof fila.pedagiosNaFila>>>([]);
   const [ocupado, setOcupado] = useState(false);
   // Conferência automática do recibo (Hugo, 12/09) -- só roda se o
@@ -131,12 +132,31 @@ export function LancarPedagio({ rotas, rotaInicial, aoMudar }: { rotas: Rota[]; 
     setAviso('');
   };
 
-  const fotografar = async () => {
+  const escolherFoto = () => {
+    Alert.alert('Foto do recibo', 'De onde?', [
+      { text: 'Câmera', onPress: () => void fotografar('camera') },
+      { text: 'Galeria', onPress: () => void fotografar('galeria') },
+      { text: 'Cancelar', style: 'cancel' },
+    ]);
+  };
+
+  const fotografar = async (origem: 'camera' | 'galeria') => {
     if (!rota) return;
-    if (!conferirPermissao(await ImagePicker.requestCameraPermissionsAsync(), 'Câmera', 'Permita o uso da câmera pra fotografar o recibo.')) return;
-    const r = await ImagePicker.launchCameraAsync({ quality: 0.6, allowsEditing: false, exif: false });
+    let r: ImagePicker.ImagePickerResult;
+    if (origem === 'camera') {
+      if (!conferirPermissao(await ImagePicker.requestCameraPermissionsAsync(), 'Câmera', 'Permita o uso da câmera pra fotografar o recibo.')) return;
+      r = await ImagePicker.launchCameraAsync({ quality: 0.6, allowsEditing: false, exif: false });
+    } else {
+      r = await ImagePicker.launchImageLibraryAsync({ quality: 0.6, mediaTypes: ['images'], exif: false });
+    }
     if (r.canceled || !r.assets[0]) return;
+    // O servidor só aceita jpg/png/webp/heic; GIF/BMP da galeria seriam descartados no envio.
+    const formato = (r.assets[0].mimeType ?? '').toLowerCase();
+    if (formato && !/^image\/(jpe?g|png|webp|heic|heif)$/.test(formato)) {
+      return Alert.alert('Formato não aceito', 'Escolha uma foto JPG, PNG, WebP ou HEIC.');
+    }
     const uri = r.assets[0].uri;
+    setOrigemFoto(origem);
     if (!validacaoAtiva || tipo !== 'PEDAGIO') return setFoto(uri);
 
     const tentativa = tentativas + 1;
@@ -177,7 +197,7 @@ export function LancarPedagio({ rotas, rotaInicial, aoMudar }: { rotas: Rota[]; 
     const agora = fila.agoraIso();
     await fila.enfileirar({
       uuid: fila.novoUuid(), tipo: 'PEDAGIO', rotaId: rota.id, uri: foto, valor: v, capturadoEm: agora, criadoEm: agora, tentativas: 0,
-      tipoDespesa: tipo, descricao: tipo === 'OUTROS' ? descricao.trim() : null, paradaId: exigePedido(tipo) ? paradaId : null,
+      origem: origemFoto, tipoDespesa: tipo, descricao: tipo === 'OUTROS' ? descricao.trim() : null, paradaId: exigePedido(tipo) ? paradaId : null,
     });
     limpar();
     await lerFila();
@@ -214,7 +234,7 @@ export function LancarPedagio({ rotas, rotaInicial, aoMudar }: { rotas: Rota[]; 
   const pendentesDaRota = naFila.filter((f) => f.rotaId === rota?.id && !enviados.some((p) => p.uuid === f.uuid));
   const detalheParada = (id?: number | null) => {
     const p = id ? paradasDaRota.find((x) => x.id === id) : null;
-    return p ? `Pedido ${codigoLimpo(p.codigo)} · ${nomeExibicao(p)}` : null;
+    return p ? `Pedido ${codigoComNf({ codigo: codigoLimpo(p.codigo), nf: p.nf })} · ${nomeExibicao(p)}` : null;
   };
 
   return (
@@ -309,11 +329,11 @@ export function LancarPedagio({ rotas, rotaInicial, aoMudar }: { rotas: Rota[]; 
                   {foto ? <Image source={{ uri: foto }} style={s.foto} /> : null}
                   {aviso ? <Text style={[s.sub, { color: cores.alerta, fontWeight: '600' }]}>{aviso}</Text> : null}
                   <Botao
-                    titulo={conferindo ? 'Conferindo a foto…' : foto ? 'Tirar outra foto' : '📷  Fotografar recibo'}
+                    titulo={conferindo ? 'Conferindo a foto…' : foto ? 'Trocar foto' : '📷  Foto do recibo'}
                     tipo={foto ? 'secundario' : 'primario'}
                     carregando={conferindo}
                     desabilitado={conferindo}
-                    onPress={() => void fotografar()}
+                    onPress={escolherFoto}
                     estilo={{ marginTop: 10 }}
                   />
                 </>

@@ -205,6 +205,11 @@ def sincronizar_servicos(servicos: list[dict], conn: sqlite3.Connection) -> dict
                                driver_id = ?, status_done_provedor = ?, excluido_em = ? WHERE codigo = ?""",
                      (campos["agendamento_inicio"], campos["agendamento_fim"], campos["vuupt_route_id"],
                       campos["driver_id"], campos["status_done_provedor"], campos["excluido_em"], codigo))
+        # 18/11: a linha acima é do serviço mais recente do código; a tentativa
+        # anterior (recriada com o MESMO código) fica em nucleo_servicos.
+        nucleo_pedidos.registrar_servico(conn, s.get("id"), codigo,
+                                         {**campos, "concluido_em": vuupt_para_local(s.get("completed_at"))},
+                                         status=status, completo=True)
         if anterior is None:
             stats["novos"] += 1
             if campos["reentrega_de_service_id"]:

@@ -20,6 +20,11 @@ from test_incrementar_rotas import TestMainComRascunho  # noqa: E402
 
 
 class TestProntidaoNoIncremento(TestMainComRascunho):
+    # Os testes de pausado herdados da base (28/10) pausam o PS-1; somado ao PS-2 em espera deste
+    # retrato nao sobra pedido e o main sai sem avisar. Eles ja rodam na base, sem retrato.
+    test_pausado_fica_fora_do_pool_antes_do_dia_fixo = None
+    test_reentrega_do_pausado_fica_fora = None
+
     def setUp(self):
         self.registrar = mock.Mock(return_value={"aceitos": 1, "repetidos": 0, "desconhecidos": []})
         self.retrato = ({"PS-2": "On hold"}, "25/10 21:40")
@@ -80,6 +85,11 @@ class TestEventoDoIncremento(unittest.TestCase):
 class TestProntidaoSoDoQueOIncrementoAlocaria(TestMainComRascunho):
     """Revisao (25/10, C2): pedido em rascunho continua not_assigned na Vuupt; ele NAO e do incremento, o
     veredito dele e do envio do rascunho. Emitir nao_aprontou aqui derrubaria 'roteirizado' no novo."""
+
+    # Os testes de pausado herdados da base (28/10) pausam o PS-1; somado ao PS-2 em espera deste
+    # retrato nao sobra pedido e o main sai sem avisar. Eles ja rodam na base, sem retrato.
+    test_pausado_fica_fora_do_pool_antes_do_dia_fixo = None
+    test_reentrega_do_pausado_fica_fora = None
 
     def setUp(self):
         self.registrar = mock.Mock(return_value={"aceitos": 1, "repetidos": 0, "desconhecidos": []})

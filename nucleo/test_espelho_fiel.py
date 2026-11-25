@@ -95,6 +95,54 @@ class TestUpsertPedido(_BaseTemp):
         self.assertEqual(pedidos.buscar_pedido("PS-6", conn=self.conn)["tipo"], "pickup")
 
 
+class TestReentregaMesmoCodigoPelasRotas(_BaseTemp):
+    """Bug de 29/09: a Vuupt recriou o serviço do PS-40151 com o MESMO código
+    (falhou em 28/09, entregue em 30/09). nucleo_pedidos guarda 1 linha por
+    código, então a contagem de serviços de 28/09 pelo núcleo saía menor."""
+
+    def test_cada_servico_fica_na_sua_rota_e_o_dia_conta_igual_a_vuupt(self):
+        falha = _servico(service_id=9101, code="#PS-40151", status_done="failed")
+        outro = _servico(service_id=9102, code="#PS-40152")
+        reentrega = _servico(service_id=9103, code="#PS-40151", recreated_order_origin_id=9101,
+                             completed_at="2026-09-16 13:00:00")
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(route_id=901, servicos=[falha, outro])], self.conn)
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(route_id=902, start_at="2026-09-16 09:00:00",
+                                                         servicos=[reentrega])], self.conn)
+
+        def servicos_do_dia(dia):
+            return self.conn.execute("""SELECT COUNT(*) FROM nucleo_servicos s
+                                          JOIN nucleo_rotas r ON r.vuupt_route_id = s.vuupt_route_id
+                                         WHERE r.data_rota = ? AND r.status <> 'CANCELADA'""", (dia,)).fetchone()[0]
+
+        self.assertEqual(servicos_do_dia("2026-09-14"), 2)    # a Vuupt: PS-40151 (falhou) + PS-40152
+        self.assertEqual(servicos_do_dia("2026-09-16"), 1)    # a reentrega
+        falhou = self.conn.execute("SELECT * FROM nucleo_servicos WHERE vuupt_service_id = 9101").fetchone()
+        self.assertEqual((falhou["codigo"], falhou["status"], falhou["vuupt_route_id"]), ("PS-40151", "INSUCESSO", 901))
+        self.assertEqual(falhou["concluido_em"], "2026-09-14 10:00:00")   # UTC -> hora local
+
+    def test_rota_operada_pelo_app_tambem_entra_com_o_resultado_do_app(self):
+        """20/11 em produção: 29 serviços de 19/11 faltavam -- rota com
+        operada_app=1 saía do laço (preserva_app) antes de gravar."""
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(route_id=904, status="started", servicos=[
+            _servico(service_id=9301, code="#PS-3", status="assigned", status_done=None)])], self.conn)
+        self.conn.execute("DELETE FROM nucleo_servicos")   # serviço visto só antes do deploy
+        self.conn.execute("UPDATE nucleo_rotas SET operada_app = 1 WHERE vuupt_route_id = 904")
+        self.conn.execute("UPDATE nucleo_paradas SET situacao = 'ENTREGUE' WHERE service_id = 9301")   # o app deu baixa
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(route_id=904, status="started", servicos=[
+            _servico(service_id=9301, code="#PS-3", status="assigned", status_done=None)])], self.conn)
+        s = self.conn.execute("SELECT status, vuupt_route_id FROM nucleo_servicos WHERE vuupt_service_id = 9301").fetchone()
+        self.assertIsNotNone(s, "serviço de rota operada pelo app não entrou em nucleo_servicos")
+        self.assertEqual(tuple(s), ("ENTREGUE", 904))     # vale o app, não a cópia atrasada da Vuupt
+
+    def test_rota_cancelada_nao_apaga_status_nem_rota_do_servico(self):
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(route_id=903, servicos=[
+            _servico(service_id=9201, code="#PS-2", status_done="failed")])], self.conn)
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(route_id=903, status="canceled", servicos=[
+            _servico(service_id=9201, code="#PS-2", status_done="failed")])], self.conn)
+        s = self.conn.execute("SELECT status, vuupt_route_id FROM nucleo_servicos WHERE vuupt_service_id = 9201").fetchone()
+        self.assertEqual(tuple(s), ("INSUCESSO", 903))
+
+
 class TestSincronizarCorrigido(_BaseTemp):
     def test_horarios_viram_hora_local_e_data_rota_sai_do_local(self):
         sincronizar_vuupt.sincronizar_rotas([_rota_vuupt()], self.conn)
@@ -131,6 +179,20 @@ class TestSincronizarCorrigido(_BaseTemp):
         sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(agent_id=None, status="not_started")], self.conn)
         rota = self.conn.execute("SELECT agent_id, motorista_nome FROM nucleo_rotas").fetchone()
         self.assertIsNone(rota["agent_id"])
+        self.assertIsNone(rota["motorista_nome"])
+
+    def test_sync_sem_lista_de_nomes_nao_apaga_nome_do_mesmo_motorista(self):
+        # Caso real 18/11: o espelho de servicos ressincroniza a rota com nomes=None
+        # e o nome do motorista sumia ate a proxima rodada do sync de rotas.
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(status="started")], self.conn, {1234: "Renato Forte"})
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(status="started")], self.conn)
+        self.assertEqual(self.conn.execute("SELECT motorista_nome FROM nucleo_rotas").fetchone()[0], "Renato Forte")
+
+    def test_troca_de_motorista_sem_lista_de_nomes_nao_herda_nome_antigo(self):
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(status="started")], self.conn, {1234: "Renato Forte"})
+        sincronizar_vuupt.sincronizar_rotas([_rota_vuupt(status="started", agent_id=999)], self.conn)
+        rota = self.conn.execute("SELECT agent_id, motorista_nome FROM nucleo_rotas").fetchone()
+        self.assertEqual(rota["agent_id"], 999)
         self.assertIsNone(rota["motorista_nome"])
 
     def test_rota_cancelada_nao_reabre_pedido_de_outra_rota(self):
@@ -291,6 +353,28 @@ class TestComparador(_BaseTemp):
         self.assertEqual(len(d["horario_parada_em_utc"]), 1)
         self.assertEqual(len(d["parada_sobrando"]), 1)
         self.assertEqual(len(d["rota_ausente_no_nucleo"]), 0)
+
+    def test_horario_de_rota_operada_pelo_app_nao_e_divergencia(self):
+        """17-20/11 em produção: 115 'horario_parada_diferente', todas de parada
+        concluída pelo app -- a Vuupt carimba a hora em que a ponte repetiu."""
+        rota = _rota_vuupt()
+        sincronizar_vuupt.sincronizar_rotas([rota], self.conn)
+        self.conn.execute("UPDATE nucleo_rotas SET operada_app = 1")
+        self.conn.execute("UPDATE nucleo_paradas SET completed_at = '2026-09-14 09:59:50'")   # app; Vuupt 10:00:00
+        self.conn.commit()
+        resultado = comparar_vuupt.comparar_dia(date(2026, 9, 14), [rota], self.conn)
+        self.assertEqual({c: len(v) for c, v in resultado["divergencias"].items() if v}, {})
+        self.assertEqual(len(resultado["horario_do_app"]), 1)
+        self.assertIn("horario_do_app", comparar_vuupt.resumir([resultado], 1))
+
+    def test_horario_diferente_em_rota_que_nao_e_do_app_continua_divergencia(self):
+        rota = _rota_vuupt()
+        sincronizar_vuupt.sincronizar_rotas([rota], self.conn)
+        self.conn.execute("UPDATE nucleo_paradas SET completed_at = '2026-09-14 09:59:50'")
+        self.conn.commit()
+        resultado = comparar_vuupt.comparar_dia(date(2026, 9, 14), [rota], self.conn)
+        self.assertEqual(len(resultado["divergencias"]["horario_parada_diferente"]), 1)
+        self.assertEqual(resultado["horario_do_app"], [])
 
 
 class TestHistoricoDaComparacao(_BaseTemp):

@@ -181,6 +181,21 @@ def liberar_cpf(conn, motorista_id: int, origem: str) -> bool:
     return True
 
 
+def apagar(conn, motorista_id: int, origem: str, commit: bool = True) -> dict:
+    """Apaga a linha e deixa em bd_motoristas_alteracoes campo EXCLUIDO com o
+    nome em valor_antigo (o historico da linha continua). commit=False deixa a
+    transacao aberta pro chamador (exclusao com varias escritas). Devolve a linha apagada."""
+    atual = conn.execute("SELECT * FROM bd_motoristas WHERE id = ?", (motorista_id,)).fetchone()
+    if atual is None:
+        raise ValueError(f"motorista id={motorista_id} nao existe")
+    agora = banco.agora()
+    conn.execute("DELETE FROM bd_motoristas WHERE id = ?", (motorista_id,))
+    _historico(conn, motorista_id, atual["AGENT_ID_VUUPT"], "EXCLUIDO", atual["NOME_MOTORISTA"], None, origem, agora)
+    if commit:
+        conn.commit()
+    return _linha_para_dict(atual)
+
+
 def marcar_posicao(conn, fixos: set[int], origem: str) -> int:
     """FIXO pra quem tem AGENT_ID_VUUPT em `fixos`, ESPORADICO pro resto (pelo
     atualizar(): fica no historico). Devolve quantas linhas mudaram."""

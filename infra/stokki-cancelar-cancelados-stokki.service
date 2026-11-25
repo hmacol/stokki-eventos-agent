@@ -1,0 +1,10 @@
+[Unit]
+Description=Stokki Eventos - Cancela na Vuupt (so no pool) servico de pedido cancelado na Stokki; em rota so avisa por e-mail (roteirizacao/cancelar_cancelados_stokki.py)
+OnFailure=stokki-alerta-falha@%n.service
+# ATENCAO: CANCELA servico na Vuupt (PUT /cancel, irreversivel), so not_assigned fora de rota enviada/ofertada.
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos
+ExecStart=/opt/stokki-eventos/venv/bin/python -m roteirizacao.cancelar_cancelados_stokki

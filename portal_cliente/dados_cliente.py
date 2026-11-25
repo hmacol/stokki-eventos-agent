@@ -38,7 +38,7 @@ import sys
 import threading
 import time
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -88,6 +88,7 @@ ROTULOS = {
     "aguardando_saida": "Aguardando saída",
     "agendado": "Agendado",
     "insucesso": "Insucesso",
+    "cancelado": "Cancelado",
 }
 
 
@@ -110,17 +111,18 @@ def codigos_base_lista(codigo: str) -> list[str]:
 
 def _parse_dt(valor) -> datetime | None:
     """Datas da VUUPT vêm como ISO com offset ('2026-09-08T10:42:00-03:00')
-    ou 'YYYY-MM-DD HH:MM:SS'. Devolve datetime no fuso de São Paulo
-    (naive) ou None."""
+    ou 'YYYY-MM-DD HH:MM:SS' -- esta em UTC sem fuso (scheduled_start,
+    completed_at, created_at; mesma regra de nucleo.normalizacao.
+    vuupt_para_local). Devolve datetime no fuso de São Paulo (naive) ou None."""
     if not valor:
         return None
     try:
         dt = datetime.fromisoformat(str(valor).replace(" ", "T").replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(FUSO).replace(tzinfo=None)
-    return dt
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(FUSO).replace(tzinfo=None)
 
 
 def _hora(valor) -> str:
@@ -216,29 +218,51 @@ def _conectar() -> sqlite3.Connection:
 
 
 def nf_por_codigo(codigos_base: set[str]) -> dict[str, str]:
-    """Mesma query de painel_agentes/rascunhos_rota.carregar_nf_por_codigo_pedido."""
+    """{codigo base: "111, 222"}. Delega a nucleo.nf_pedido (fonte unica de NF
+    por PS, usada em todas as telas)."""
     if not codigos_base:
         return {}
     try:
-        conn = _conectar()
-        try:
-            resultado: dict[str, set[str]] = {}
-            lista = sorted(codigos_base)
-            for i in range(0, len(lista), 900):
-                lote = lista[i:i + 900]
-                marc = ",".join("?" * len(lote))
-                for row in conn.execute(
-                        f"SELECT codigo_pedido, numero_nf FROM documentos_processados "
-                        f"WHERE status='ENVIADO' AND tipo='Nota Fiscal' AND numero_nf IS NOT NULL "
-                        f"AND codigo_pedido IN ({marc})", lote):
-                    if row["numero_nf"]:
-                        resultado.setdefault(row["codigo_pedido"], set()).add(str(row["numero_nf"]))
-            return {c: ", ".join(sorted(v)) for c, v in resultado.items()}
-        finally:
-            conn.close()
+        from nucleo.nf_pedido import nf_por_codigo as _nf
+        return _nf(list(codigos_base))
     except Exception as e:
         logger.warning(f"[portal] NF por código falhou: {e}")
         return {}
+
+
+def ps_e_nf(codigo, conn=None) -> str:
+    """'PS-1 · NF 123' (sem NF: 'PS-1 · NF —'; varias: 'NF 1, 2') para textos de
+    e-mail/mensagem. Falha de banco nunca quebra: cai no traco."""
+    try:
+        from nucleo.nf_pedido import SEM_NF, nf_do_codigo, nf_por_codigo as _nf
+        nf = nf_do_codigo(codigo, _nf([codigo], conn)) or SEM_NF
+    except Exception:  # noqa: BLE001
+        nf = "—"
+    return f"{codigo} · NF {nf}"
+
+
+def cancelados_na_stokki(codigos_base: set[str]) -> set[str]:
+    """Códigos base cancelados na Stokki, pelo coletor do galpão (galpao_pedidos,
+    1 min) -- a mesma fonte do status CANCELADO da tela /pedidos. Falha = vazio
+    (o portal segue como antes)."""
+    if not codigos_base:
+        return set()
+    try:
+        conn = _conectar()
+        try:
+            achados: set[str] = set()
+            lista = sorted(codigos_base)
+            for i in range(0, len(lista), 900):
+                lote = lista[i:i + 900]
+                achados.update(r["codigo"] for r in conn.execute(
+                    f"SELECT codigo FROM galpao_pedidos WHERE situacao = 'Cancelado' "
+                    f"AND codigo IN ({','.join('?' * len(lote))})", lote))
+            return achados
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.warning(f"[portal] cancelados na Stokki indisponível: {e}")
+        return set()
 
 
 def _catalogo_motoristas(config: dict) -> dict:
@@ -444,6 +468,11 @@ def _coletar_atencao(sender_id) -> list[dict]:
         if codigo not in g["codigos"]:  # reentrega repete o code do original
             g["codigos"].append(codigo)
         g["service_ids"].append(r["service_id"])
+    # NF de cada PS do grupo (a tela mostra "PS · NF")
+    from nucleo.nf_pedido import nf_do_codigo
+    mapa = nf_por_codigo({c for g in grupos.values() for c in g["codigos"]})
+    for g in grupos.values():
+        g["nfs"] = {c: nf_do_codigo(c, mapa) for c in g["codigos"]}
     return list(grupos.values())
 
 
@@ -566,7 +595,7 @@ def invalidar_cache(sender_id: int) -> None:
             _cache_dia.pop(k, None)
 
 
-ORDEM_SITUACAO = {"insucesso": 0, "em_rota": 1, "programado": 2, "aguardando_saida": 3, "entregue": 4}
+ORDEM_SITUACAO = {"insucesso": 0, "em_rota": 1, "programado": 2, "aguardando_saida": 3, "entregue": 4, "cancelado": 5}
 
 
 def _carimbar_dia(linhas: list[dict], dia: date) -> list[dict]:
@@ -602,12 +631,23 @@ def _so_nao_coletado(p: dict, dia: date) -> dict:
             "data": dia.isoformat(), "data_rotulo": f"{_dia_semana(dia)} {_ddmm(dia)}"}
 
 
-def unir_tentativas(linhas: list[dict], dia: date) -> list[dict]:
+def _como_cancelado(p: dict) -> dict:
+    """Pedido cancelado na Stokki (Hugo, 18/11, PS-44507): fica no dia da última
+    tentativa, sem motorista nem motivo."""
+    return {**p, "situacao": "cancelado", "situacao_rotulo": ROTULOS["cancelado"],
+            "detalhe": "Pedido cancelado", "motorista": "", "rota": "", "placa": "", "ordem": None,
+            "total_paradas": None, "concluido_em": "", "motivo": "", "failed_reason_id": None,
+            "comprovante": False, "rota_iniciada_em": ""}
+
+
+def unir_tentativas(linhas: list[dict], dia: date, cancelados: set[str] | frozenset[str] = frozenset()) -> list[dict]:
     """Uma linha por pedido (empresa + códigos base). `codigo` passa a ser o
     código base; o do serviço da última tentativa fica em `codigo_servico`
     (é o que casa com os insucessos aguardando resposta). Só entram no
     histórico as tentativas que terminaram e a atual: programado de rota
-    antiga e rota duplicada não são tentativa."""
+    antiga e rota duplicada não são tentativa. `cancelados` = códigos base
+    cancelados na Stokki: o pedido (todos os códigos dele) que não foi
+    entregue vira "Cancelado"."""
     grupos: dict[tuple, list[dict]] = {}
     for p in linhas:
         grupos.setdefault((p.get("sender_id"), tuple(codigos_base_lista(p["codigo"]))), []).append(p)
@@ -618,11 +658,16 @@ def unir_tentativas(linhas: list[dict], dia: date) -> list[dict]:
     saida = []
     for (_, bases), grupo in grupos.items():
         validas = [p for p in grupo if not (p["situacao"] == "insucesso" and p.get("failed_reason_id") == NAO_COLETADO)]
+        cancelado = bool(bases) and all(b in cancelados for b in bases)
         if validas:
             entregues = [p for p in validas if p["situacao"] == "entregue"]
             final = dict(max(entregues or validas, key=recencia))
+        elif cancelado:
+            final = dict(max(grupo, key=recencia))
         else:
             final = _so_nao_coletado(max(grupo, key=recencia), dia)
+        if cancelado and final["situacao"] != "entregue":
+            final = _como_cancelado(final)
         tentativas = {}
         for p in sorted(validas, key=recencia):
             if p["situacao"] in ("entregue", "insucesso"):
@@ -643,7 +688,9 @@ def unir_tentativas(linhas: list[dict], dia: date) -> list[dict]:
 def _unir_com_futuros(pedidos: list[dict], futuros: list[dict], dia: date) -> tuple[list[dict], list[dict]]:
     """Os agendados pra frente entram na união (a reentrega agendada é a
     última tentativa do pedido) e voltam pra lista deles."""
-    unidos = unir_tentativas(pedidos + futuros, dia)
+    todos = pedidos + futuros
+    cancelados = cancelados_na_stokki({b for p in todos for b in codigos_base_lista(p["codigo"])})
+    unidos = unir_tentativas(todos, dia, cancelados)
     return ([p for p in unidos if p["situacao"] != "agendado"],
             [p for p in unidos if p["situacao"] == "agendado"])
 
@@ -835,6 +882,18 @@ def checklist_id_do_servico(servico: dict) -> int | None:
     if int(cl.get("images_quantity") or 0) <= 0:
         return None
     return cl.get("id")
+
+
+def comprovante_proprio(servico: dict, config: dict) -> Path | None:
+    """Comprovante no modelo da Freshlog (comprovante_entrega/, 17/11), com a
+    foto original do canhoto. None = a foto nao baixou ou a geracao falhou:
+    quem chama cai no PDF da Vuupt (baixar_canhoto_pdf)."""
+    try:
+        from comprovante_entrega import gerar_comprovante
+        return gerar_comprovante.salvar_com_foto(servico, config, CANHOTOS_DIR, validade_s=3600)
+    except Exception:
+        logger.exception(f"[portal] comprovante proprio de {servico.get('code')} falhou")
+        return None
 
 
 def baixar_canhoto_pdf(token: str, checklist_id: int, codigo: str) -> Path | None:

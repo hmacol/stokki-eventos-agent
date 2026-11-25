@@ -1,0 +1,42 @@
+# PWA dos motoristas (iPhone) em domínio PRÓPRIO: https://motorista.freshhub.com.br
+#
+# Por que domínio próprio: o token do motorista fica no localStorage do navegador
+# (30 dias de refresh; dá pra ler rota/financeiro e trocar PIX). Em
+# app.freshhub.com.br a origem é dividida com painel e portal: um XSS lá leria o
+# token. Origem própria isola (mesma decisão de 21/10 que separou a API do
+# freshhub em novo.freshhub.com.br). Cookie HttpOnly NÃO resolveria: o script
+# injetado na mesma origem faria as chamadas com o cookie do mesmo jeito.
+#
+# Requisito: registro A  motorista.freshhub.com.br -> 187.127.52.197  ANTES de
+# ativar (senão o Let's Encrypt não emite o certificado).
+#
+# Ativar na VPS: copiar para /etc/caddy/motorista-pwa.caddy, acrescentar no FIM
+# de /etc/caddy/Caddyfile a linha  `import /etc/caddy/motorista-pwa.caddy`,
+# `caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile` e
+# `systemctl reload caddy`.
+#
+# /api/* vai pra mesma API do app Android (motorista-api, 8073); o resto é o export
+# web (dados/app_motorista/web, fora do git; publicar com app_motorista/publicar_web.sh).
+# index/sw/manifest nunca ficam em cache (é como o app pega versão nova); os
+# arquivos de _expo/static têm hash no nome e podem ficar pra sempre.
+
+motorista.freshhub.com.br {
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8073
+	}
+
+	handle {
+		root * /opt/stokki-eventos/dados/app_motorista/web
+		@sempre_novo path / /index.html /sw.js /manifest.webmanifest /registrar-sw.js
+		header @sempre_novo Cache-Control "no-cache"
+		@manifesto path /manifest.webmanifest
+		header @manifesto Content-Type application/manifest+json
+		header /_expo/static/* Cache-Control "public, max-age=31536000, immutable"
+		header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		header X-Content-Type-Options nosniff
+		header Referrer-Policy same-origin
+		header Strict-Transport-Security "max-age=31536000"
+		try_files {path} /index.html
+		file_server
+	}
+}

@@ -28,6 +28,11 @@ logger = logging.getLogger("painel.avisos_pendencias")
 
 IGNORAR_MINUTOS = 30
 
+# Faixas escondidas temporariamente (17/11, pedido do Hugo): com False a API
+# devolve a lista vazia e nenhuma tela mostra faixa. Os contadores do menu
+# continuam. Pra voltar: True + restart do painel-agentes.
+ATIVO = False
+
 
 def _item(chave, texto, niveis, destino, endpoint_destino, vermelho=False):
     return {"chave": chave, "texto": texto, "niveis": tuple(niveis), "destino": destino,

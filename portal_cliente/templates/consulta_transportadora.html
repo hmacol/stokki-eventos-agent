@@ -7,7 +7,7 @@
   {% if pedidos %}
   <ul class="lista">
     {% for p in pedidos[:5] %}
-    <li><b>{{ p.pedido }}</b>{% if p.resumo.destinatario %} · {{ p.resumo.destinatario }}{% endif %}{% if p.resumo.cidade %} · {{ p.resumo.cidade }}{% if p.resumo.uf %}/{{ p.resumo.uf }}{% endif %}{% endif %}</li>
+    <li><b>{{ p.pedido }} · NF {{ p.nf or '—' }}</b>{% if p.resumo.destinatario %} · {{ p.resumo.destinatario }}{% endif %}{% if p.resumo.cidade %} · {{ p.resumo.cidade }}{% if p.resumo.uf %}/{{ p.resumo.uf }}{% endif %}{% endif %}</li>
     {% endfor %}
     {% if pedidos|length > 5 %}<li class="suave">e mais {{ pedidos|length - 5 }} pedido(s)</li>{% endif %}
   </ul>

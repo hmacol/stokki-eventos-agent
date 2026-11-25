@@ -146,7 +146,7 @@ def _liberar_por_transportadora(por: str, embarcador_cnpj: str | None) -> list[i
         liberados = []
         for envio in bloqueados:
             try:
-                nfe = ep.ler_nfe(ep.caminho_xml(envio).read_bytes())
+                nfe = ep.ler_nfe_do_envio(envio)
                 tipo = ep._tipo_transportadora(nfe.get("transportadora_nome") or "", nfe.get("transportadora_cnpj") or "")
             except Exception as e:
                 logger.warning(f"bloqueio: nao reavaliou a transportadora da NF {_rotulo(envio)}: {e}")

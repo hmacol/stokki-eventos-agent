@@ -66,6 +66,24 @@ def main(modo_teste: bool = False, apenas_ids: set | None = None):
 
     try:
         resultado = imprimir_pedidos_pendentes(config, dry_run=modo_teste, apenas_ids=apenas_ids)
+        nfs = resultado.get("nfs_portal")
+        if nfs and (nfs.get("erro") or nfs.get("candidatos")):
+            if nfs.get("erro"):
+                detalhe_nfs = f"falhou: {nfs['erro']}"
+            elif modo_teste:
+                detalhe_nfs = (f"[Teste] enviaria {len(nfs['simulados'])}: {', '.join(nfs['simulados']) or '-'}; "
+                               f"não enviaria {len(nfs['falhas'])}")
+            else:
+                detalhe_nfs = f"{len(nfs['informadas'])} informada(s), {len(nfs['falhas'])} falha(s)"
+                if nfs.get("motivo"):
+                    detalhe_nfs += f" ({nfs['motivo']})"
+            for falha in nfs.get("falhas") or []:
+                logger.warning(f"NF do portal: {falha}")
+            logger.info(f"Notas do portal: {detalhe_nfs}")
+            resumo_etapas["Notas do portal"] = {
+                "status": "erro" if nfs.get("erro") or (nfs.get("falhas") and not modo_teste) else "ok",
+                "detalhe": detalhe_nfs,
+            }
         if modo_teste:
             logger.info(
                 f"[MODO TESTE] {resultado['pendentes']} pedido(s) na fila "
