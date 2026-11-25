@@ -5964,7 +5964,8 @@ def api_reagendar_pedido():
     except (KeyError, ValueError) as e:
         return jsonify({"erro": str(e)}), 400
 
-    resultado = reagendar_pedido(service_id, data, hora_inicio, hora_fim)
+    resultado = reagendar_pedido(service_id, data, hora_inicio, hora_fim,
+                                 manter_horarios=bool(body.get("manter_horarios")))
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400
     return jsonify({"ok": True})
@@ -5989,7 +5990,8 @@ def api_reagendar_pedidos():
         return jsonify({"erro": str(e)}), 400
 
     try:
-        resultado = reagendar_pedidos(itens, data, hora_inicio, hora_fim)
+        resultado = reagendar_pedidos(itens, data, hora_inicio, hora_fim,
+                                      manter_horarios=bool(body.get("manter_horarios")))
     except Exception as e:
         # rede de segurança: o loop em si já isola falha por item (ver
         # planejamento_rotas.reagendar_pedidos), isso é só pra nunca

@@ -2120,6 +2120,12 @@
       <input type="date" id="reagendar-data" style="width:100%;">
     </div>
     <div class="campo-reagendar">
+      <label style="display:flex; align-items:center; gap:6px; font-weight:600; cursor:pointer;">
+        <input type="checkbox" id="reagendar-manter-horarios"> Manter os horários do agendamento anterior
+      </label>
+      <p class="subtitulo" style="margin:4px 0 0;">Troca só a data; cada pedido fica com a própria janela. Sem agendamento anterior, usa a janela abaixo.</p>
+    </div>
+    <div class="campo-reagendar" id="reagendar-campo-janela">
       <label>Janela de horário</label>
       <div class="linha-horarios">
         <label for="reagendar-hora-inicio">Das</label>
@@ -6690,14 +6696,15 @@
   }
 
   async function salvarReagendamento(pendente, data, horaInicio, horaFim) {
+    const manter = document.getElementById("reagendar-manter-horarios").checked;
     if (pendente.itens) {
       const resp = await postJSON("/api/planejamento/reagendar-pedidos", {
-        itens: pendente.itens, data, hora_inicio: horaInicio, hora_fim: horaFim,
+        itens: pendente.itens, data, hora_inicio: horaInicio, hora_fim: horaFim, manter_horarios: manter,
       });
       return resp.falhas || [];
     }
     await postJSON("/api/planejamento/reagendar-pedido", {
-      service_id: pendente.serviceId, data, hora_inicio: horaInicio, hora_fim: horaFim,
+      service_id: pendente.serviceId, data, hora_inicio: horaInicio, hora_fim: horaFim, manter_horarios: manter,
     });
     return [];
   }
@@ -8151,6 +8158,9 @@
     });
     document.getElementById("botao-salvar-disponibilidade").addEventListener("click", (e) => salvarDisponibilidade(e.target));
     document.getElementById("botao-aplicar-periodo").addEventListener("click", (e) => aplicarPeriodoDisponibilidade(e.target));
+    document.getElementById("reagendar-manter-horarios").addEventListener("change", (e) => {
+      document.getElementById("reagendar-campo-janela").style.opacity = e.target.checked ? "0.5" : "1";
+    });
     document.getElementById("botao-cancelar-reagendar").addEventListener("click", () => {
       document.getElementById("modal-reagendar").classList.remove("aberto");
       reagendarPendente = null;
