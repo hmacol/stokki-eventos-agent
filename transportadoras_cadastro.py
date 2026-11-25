@@ -165,6 +165,15 @@ def atualizar(conn, tid: int, mudancas: dict, por: str, commit: bool = True) -> 
     return buscar(conn, tid)
 
 
+def registrar_sugestao(conn, tid: int, texto: str, por: str) -> None:
+    """Guarda no historico o endereco que o embarcador sugeriu pelo link e que
+    a equipe ainda precisa aprovar (a linha segue PENDENTE)."""
+    conn.execute(
+        "INSERT INTO transportadoras_historico (transportadora_id, quando, quem, campo, antes, depois) "
+        "VALUES (?,?,?,?,?,?)", (tid, _agora(), por, "sugestao_link", None, texto))
+    conn.commit()
+
+
 def listar(conn, situacao: str | None = None, busca: str = "") -> list[dict]:
     sql, params = "SELECT * FROM transportadoras WHERE 1=1", []
     if situacao:

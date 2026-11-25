@@ -117,7 +117,52 @@ class TestPagina(Base):
         t = self.transp()
         self.assertEqual((t["tipo"], t["situacao"], t["uf"], t["logradouro"], t["numero"]),
                          ("TERCEIROS", "ATIVA", "SP", "Rua X", "10"))
-        self.assertEqual(t["email"], "t@t.com")
+        # revisao 24/10 (M1): e-mail vindo do link publico nunca entra no cadastro
+        self.assertFalse(t["email"])
+
+    def test_email_do_link_e_ignorado_mesmo_com_marcador(self):
+        self.client.post(self.url(self.cid_a), data={
+            "opcao": "redespacho", "nome": "Maria", "cep": "13000000", "logradouro": "Rua X", "numero": "10",
+            "municipio": "Campinas", "uf": "SP", "email_transportadora": "NAO ENVIAR"})
+        self.assertFalse(self.transp()["email"])
+
+    def test_formulario_nao_pede_email_da_transportadora(self):
+        self.assertNotIn("email_transportadora", self.client.get(self.url(self.cid_a)).get_data(as_text=True))
+
+    def _redespacho_fora_da_area(self, uf="RJ"):
+        with mock.patch("envio_pedidos._identificar_area", return_value=[({"id": 0}, "fora_sp")]) as m:
+            r = self.client.post(self.url(self.cid_a), data={
+                "opcao": "redespacho", "nome": "Maria", "cep": "20000000", "logradouro": "Rua Y", "numero": "5",
+                "municipio": "Rio de Janeiro", "uf": uf})
+        return r, m
+
+    def test_redespacho_fora_da_area_fica_pendente_para_a_equipe(self):
+        # revisao 24/10 (M2): endereco livre nao fura o bloqueio de area
+        r, m = self._redespacho_fora_da_area()
+        self.assertTrue(m.called)
+        self.assertEqual(self.transp()["situacao"], "PENDENTE")
+        self.assertIsNone(self.consulta(self.cid_a)["respondido_em"])
+        self.assertFalse(self.liberar.called)
+        self.assertIn("equipe Fresh Log", r.get_data(as_text=True))
+        conn = ctr.conectar_consultas(self.db)
+        hist = [dict(x) for x in conn.execute("SELECT * FROM transportadoras_historico WHERE campo='sugestao_link'")]
+        conn.close()
+        self.assertEqual(len(hist), 1)
+        self.assertIn("Rua Y", hist[0]["depois"])
+
+    def test_redespacho_dentro_da_area_ativa(self):
+        with mock.patch("envio_pedidos._identificar_area", return_value=[]):
+            self.client.post(self.url(self.cid_a), data={
+                "opcao": "redespacho", "nome": "Maria", "cep": "13000000", "logradouro": "Rua X", "numero": "10",
+                "municipio": "Campinas", "uf": "SP"})
+        self.assertEqual(self.transp()["situacao"], "ATIVA")
+
+    def test_checagem_de_area_que_falha_nao_segura_a_resposta(self):
+        with mock.patch("envio_pedidos._identificar_area", side_effect=RuntimeError("sem maps")):
+            self.client.post(self.url(self.cid_a), data={
+                "opcao": "redespacho", "nome": "Maria", "cep": "13000000", "logradouro": "Rua X", "numero": "10",
+                "municipio": "Campinas", "uf": "SP"})
+        self.assertEqual(self.transp()["situacao"], "ATIVA")
 
     def test_post_sem_nome_volta_com_erro(self):
         r = self.client.post(self.url(self.cid_a), data={"opcao": "retirada", "nome": " "})
