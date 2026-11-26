@@ -3601,6 +3601,7 @@
         ${(ofertada && PODE_EDITAR) ? `<button type="button" class="botao-despublicar-oferta perigo" data-rascunho-id="${rascunho.id}" title="Tira a rota do marketplace -- volta a ser rascunho editável (se ninguém já tiver escolhido)">Despublicar</button>` : ""}
         ${(enviada && PODE_EDITAR) ? `<button type="button" class="botao-cancelar-rota perigo" data-rascunho-id="${rascunho.id}" title="Cancela essa rota na VUUPT -- só funciona se o motorista ainda não iniciou o deslocamento; a rota volta a ser rascunho editável, pronta pra ajustar e reenviar">Cancelar rota</button>` : ""}
         ${(enviada && PODE_EDITAR) ? `<button type="button" class="botao-cancelar-notificar perigo" data-rascunho-id="${rascunho.id}" title="Cancela a rota na VUUPT (mesma regra do Cancelar rota) e avisa o grupo Rotas canceladas do Atendimento e os embarcadores dos pedidos, pelo chat do portal">Cancelar e notificar</button>` : ""}
+        ${(enviada && PODE_EDITAR) ? botoesOfertaEnviadaHtml(rascunho) : ""}
         ${PODE_EDITAR ? `<button type="button" class="botao-duplicar" data-rascunho-id="${rascunho.id}">Duplicar rota</button>` : ""}
         <button type="button" class="botao-imprimir" data-rascunho-id="${rascunho.id}">Imprimir rota</button>
       </div>
@@ -6405,6 +6406,63 @@
 
   // "Cancelar e notificar" (Hugo, 27/10): mesmo cancelamento do botão
   // acima + aviso no grupo Rotas canceladas e no chat de cada embarcador.
+  // Oferta da rota ja enviada (Hugo, 21/11): a equipe oferta, retira, e confirma ou recusa quem
+  // pegou -- o Confirmar troca o motorista na Vuupt sozinho (nucleo/ofertas_rota_enviada.py).
+  const ACOES_OFERTA_ENVIADA = {
+    ofertar: { url: "/api/planejamento/ofertar-rota", fazendo: "Ofertando...",
+      pergunta: "Ofertar essa rota pros motoristas?\nSai aviso no grupo Rotas FRESHLOG em até 2 minutos da hora escolhida e, se ninguém pegar, mensagem particular em etapas.",
+      hora: true },
+    retirar: { url: "/api/planejamento/retirar-oferta", fazendo: "Retirando...",
+      pergunta: "Retirar a oferta?\nEla some do app dos motoristas e não dá pra ofertar essa rota de novo." },
+    confirmar: { url: "/api/planejamento/confirmar-escolha", fazendo: "Confirmando...",
+      pergunta: "Confirmar esse motorista?\nA rota troca de motorista na Vuupt e passa pra ele no app agora." },
+    recusar: { url: "/api/planejamento/recusar-escolha", fazendo: "Recusando...",
+      pergunta: "Recusar esse motorista?\nA rota volta pra oferta e ele não vê mais essa rota." },
+  };
+
+  function botoesOfertaEnviadaHtml(rascunho) {
+    const o = rascunho.oferta_enviada;
+    const botao = (acao, texto, title, classe = "") =>
+      `<button type="button" class="botao-oferta-enviada ${classe}" data-acao="${acao}" data-rascunho-id="${rascunho.id}" title="${title}">${texto}</button>`;
+    if (!o) return botao("ofertar", "Ofertar para motoristas", "Abre a rota pros outros motoristas: aviso no grupo Rotas FRESHLOG e, se ninguém pegar, mensagem particular em etapas");
+    if (o.status === "AGENDADA") {
+      return `<span class="oferta-enviada-situacao">Oferta agendada para ${escaparHtml(o.publicar_em || "")}</span>`
+        + botao("retirar", "Cancelar agendamento", "A rota não será ofertada no horário; não dá pra ofertar de novo", "perigo");
+    }
+    if (o.status === "ESCOLHIDA") {
+      return `<span class="oferta-enviada-situacao"><strong>${escaparHtml(o.escolhido_nome || "Um motorista")}</strong> quer esta rota</span>`
+        + botao("confirmar", "Confirmar motorista", "Troca o motorista na Vuupt e passa a rota pra ele no app")
+        + botao("recusar", "Recusar", "A rota volta pra oferta; esse motorista não vê mais essa rota", "perigo");
+    }
+    if (o.status === "ABERTA") {
+      return `<span class="oferta-enviada-situacao">Ofertada${o.motivo === "RECUSA" ? " (motorista recusou)" : ""}</span>`
+        + (o.motivo === "EQUIPE" ? botao("retirar", "Retirar oferta", "Tira a rota do app dos motoristas; não dá pra ofertar de novo", "perigo") : "");
+    }
+    return `<span class="oferta-enviada-situacao">${o.status === "APLICADA" ? "Oferta confirmada" : "Oferta encerrada"}</span>`;
+  }
+
+  async function acaoOfertaEnviada(rascunhoId, acao, botaoOrigem) {
+    const cfg = ACOES_OFERTA_ENVIADA[acao];
+    if (!cfg) return;
+    let hora = "";
+    if (cfg.hora) {
+      // Vazio = agora; HH:MM = publica hoje nessa hora (a rota fica Agendada ate la).
+      const r = prompt(cfg.pergunta + "\n\nHorário pra publicar hoje (HH:MM). Deixe em branco pra ofertar agora:", "");
+      if (r === null) return;
+      hora = r.trim();
+    } else if (!confirm(cfg.pergunta)) return;
+    const textoOriginal = botaoOrigem.textContent;
+    botaoOrigem.disabled = true; botaoOrigem.textContent = cfg.fazendo;
+    try {
+      const resp = await postJSON(cfg.url, { rascunho_id: rascunhoId, hora });
+      if (resp.aviso) alert(resp.aviso);
+      location.reload();
+    } catch (e) {
+      alert(`Não deu certo: ${e.message}`);
+      botaoOrigem.disabled = false; botaoOrigem.textContent = textoOriginal;
+    }
+  }
+
   async function cancelarENotificar(rascunhoId, botaoOrigem) {
     const motivo = (prompt("Motivo do cancelamento (vai para o grupo Rotas canceladas e para os embarcadores dos pedidos):\nEx.: motorista não conseguiu realizar a coleta") || "").trim();
     if (!motivo) return;
@@ -8091,6 +8149,8 @@
         cancelarRota([Number(e.target.dataset.rascunhoId)], e.target);
       } else if (e.target.classList.contains("botao-cancelar-notificar")) {
         cancelarENotificar(Number(e.target.dataset.rascunhoId), e.target);
+      } else if (e.target.classList.contains("botao-oferta-enviada")) {
+        acaoOfertaEnviada(Number(e.target.dataset.rascunhoId), e.target.dataset.acao, e.target);
       } else if (e.target.classList.contains("botao-lancar-lalamove")) {
         lancarLalamove(Number(e.target.dataset.rascunhoId), e.target);
       } else if (e.target.classList.contains("botao-lalamove-horario-limpar")) {
