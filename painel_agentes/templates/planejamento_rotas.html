@@ -2111,6 +2111,26 @@
   </div>
 </div>
 
+<div class="modal-overlay-reagendar" id="modal-publicar-oferta">
+  <div class="modal-reagendar" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-publicar-oferta">
+    <h2 id="titulo-modal-publicar-oferta">Publicar para motoristas</h2>
+    <p class="subtitulo">Publique agora ou agende o dia e a hora da publicação. A data de entrega da rota não muda.</p>
+    <div class="campo-reagendar">
+      <label for="publicar-data">Dia da publicação</label>
+      <input type="date" id="publicar-data" style="width:100%;">
+    </div>
+    <div class="campo-reagendar">
+      <label for="publicar-hora">Hora (clique ou digite HH:MM)</label>
+      <input type="time" id="publicar-hora" style="width:100%;">
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" id="botao-publicar-cancelar">Cancelar</button>
+      <button type="button" class="cancelar" id="botao-publicar-agora">Publicar agora</button>
+      <button type="button" class="confirmar" id="botao-publicar-agendar">Agendar</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay-reagendar" id="modal-reagendar">
   <div class="modal-reagendar" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-reagendar">
     <h2 id="titulo-modal-reagendar">Agendar / reagendar pedido</h2>
@@ -3573,9 +3593,9 @@
         ${(bloqueada || !PODE_EDITAR) ? "" : `
         <button type="button" class="botao-otimizar" data-rascunho-id="${rascunho.id}">Otimizar sequência</button>
         <button type="button" class="botao-inverter" data-rascunho-id="${rascunho.id}" title="Inverte a ordem de execução das paradas (roda de trás pra frente)">Inverter rota</button>
-        ${(rascunho.oferta_agendada_em && !rascunho.agent_id) ? `<span class="oferta-agendada-situacao">Publicação agendada às ${escaparHtml(rascunho.oferta_agendada_em.slice(11, 16))}</span><button type="button" class="botao-cancelar-agendamento-oferta perigo" data-rascunho-id="${rascunho.id}">Cancelar agendamento</button>` : ""}
+        ${(rascunho.oferta_agendada_em && !rascunho.agent_id) ? `<span class="oferta-agendada-situacao">Publicação agendada ${rascunho.oferta_agendada_em.slice(0, 10) === new Date().toLocaleDateString("sv-SE") ? "às" : escaparHtml(rascunho.oferta_agendada_em.slice(8, 10) + "/" + rascunho.oferta_agendada_em.slice(5, 7)) + " às"} ${escaparHtml(rascunho.oferta_agendada_em.slice(11, 16))}</span><button type="button" class="botao-cancelar-agendamento-oferta perigo" data-rascunho-id="${rascunho.id}">Cancelar agendamento</button>` : ""}
         ${rascunho.oferta_agendada_erro ? `<span class="oferta-agendada-situacao" style="color:var(--perigo,#b00020)">Agendamento não publicou: ${escaparHtml(rascunho.oferta_agendada_erro)}</span>` : ""}
-        ${rascunho.paradas.length ? `<button type="button" class="botao-publicar-oferta" data-rascunho-id="${rascunho.id}" ${rascunho.agent_id ? "hidden" : ""} title="Publica a rota (sem revelar endereços) pro grupo de motoristas elegível escolher. Você pode escolher um horário de hoje.">Publicar para motoristas</button>` : ""}
+        ${rascunho.paradas.length ? `<button type="button" class="botao-publicar-oferta" data-rascunho-id="${rascunho.id}" ${rascunho.agent_id ? "hidden" : ""} title="Publica a rota (sem revelar endereços) pro grupo de motoristas elegível escolher. Você pode agendar o dia e a hora da publicação.">Publicar para motoristas</button>` : ""}
         <button type="button" class="botao-enviar" data-rascunho-id="${rascunho.id}">Confirmar e enviar</button>
         <button type="button" class="botao-descartar perigo" data-rascunho-id="${rascunho.id}">Descartar</button>`}
         ${(ofertada && PODE_EDITAR) ? `<button type="button" class="botao-despublicar-oferta perigo" data-rascunho-id="${rascunho.id}" title="Tira a rota do marketplace -- volta a ser rascunho editável (se ninguém já tiver escolhido)">Despublicar</button>` : ""}
@@ -5932,17 +5952,45 @@
     return linhas.length ? "\n\nAviso: " + linhas.join(" ") : "";
   }
 
+  // Abre o modal; resolve null (cancelou), "" (publicar agora) ou "AAAA-MM-DD HH:MM".
+  function escolherQuandoPublicar() {
+    return new Promise((resolve) => {
+      const modal = document.getElementById("modal-publicar-oferta");
+      const campoData = document.getElementById("publicar-data");
+      const campoHora = document.getElementById("publicar-hora");
+      const hoje = new Date().toLocaleDateString("sv-SE");
+      campoData.min = hoje;
+      campoData.value = hoje;
+      campoHora.value = "";
+      const botoes = ["botao-publicar-cancelar", "botao-publicar-agora", "botao-publicar-agendar"].map((id) => document.getElementById(id));
+      const fechar = (valor) => {
+        modal.classList.remove("aberto");
+        botoes[0].onclick = botoes[1].onclick = botoes[2].onclick = null;
+        resolve(valor);
+      };
+      botoes[0].onclick = () => fechar(null);
+      botoes[1].onclick = () => fechar("");
+      botoes[2].onclick = () => {
+        if (!campoData.value || !campoHora.value) { alert("Informe o dia e a hora, ou use \"Publicar agora\"."); return; }
+        fechar(`${campoData.value} ${campoHora.value}`);
+      };
+      modal.classList.add("aberto");
+      setTimeout(() => campoHora.focus(), 50);  // depois do foco automático do diálogo (acessibilidade)
+    });
+  }
+
   async function publicarOferta(rascunhoId, botao) {
     // publica 1 rota pro marketplace de escolha aberta (Hugo, 22/08) --
     // recarrega a página no sucesso, mesmo padrão de confirmarEnvio/
     // cancelarRota (o card muda de status/controles disponíveis)
     // Horário opcional (Hugo, 25/11): vazio = agora; HH:MM = hoje nessa hora (timer publica).
-    const hora = prompt("Publicar para motoristas.\n\nHorário de hoje pra publicar (HH:MM). Deixe em branco pra publicar agora:", "");
-    if (hora === null) return;
-    if (hora.trim()) {
+    // Dia + hora escolhidos num modal com calendário/relógio (e dá pra digitar) -- Hugo, 25/11.
+    const escolha = await escolherQuandoPublicar();
+    if (escolha === null) return;
+    if (escolha) {
       botao.disabled = true;
       try {
-        const r = await postJSON("/api/planejamento/agendar-oferta", { rascunho_id: rascunhoId, horario: hora.trim() });
+        const r = await postJSON("/api/planejamento/agendar-oferta", { rascunho_id: rascunhoId, horario: escolha });
         if (!r.ok) { alert(`Não deu pra agendar: ${r.erro}`); botao.disabled = false; return; }
         location.reload();
       } catch (e) {

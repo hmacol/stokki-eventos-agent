@@ -53,6 +53,32 @@ class TestOfertaAgendada(unittest.TestCase):
                 rascunhos_rota.agendar_oferta(self.rid, h, agora=self._agora("10:00"))
         self.assertIsNone(self._rascunho()["oferta_agendada_em"])
 
+    def test_agenda_outro_dia(self):
+        conn = rascunhos_rota._conectar()
+        conn.execute("UPDATE rascunhos_rota SET data_alvo = '2026-11-27' WHERE id = ?", (self.rid,))
+        conn.commit()
+        conn.close()
+        for texto in ("26/11 07:00", "2026-11-26 07:00", "26/11/2026 7:00"):
+            q = rascunhos_rota.agendar_oferta(self.rid, texto, agora=self._agora("10:00"))
+            self.assertEqual(q, "2026-11-26 07:00", texto)
+        self.assertEqual(rascunhos_rota.listar_ofertas_agendadas_vencidas("2026-11-25 23:59"), [])
+        self.assertEqual(len(rascunhos_rota.listar_ofertas_agendadas_vencidas("2026-11-26 07:00")), 1)
+
+    def test_nao_agenda_depois_da_data_da_entrega(self):
+        with self.assertRaises(ValueError):
+            rascunhos_rota.agendar_oferta(self.rid, "2026-11-26 07:00", agora=self._agora("10:00"))
+        self.assertIsNone(self._rascunho()["oferta_agendada_em"])
+
+    def test_publicar_e_despublicar_limpam_agendamento(self):
+        rascunhos_rota.agendar_oferta(self.rid, "18:30", agora=self._agora("10:00"))
+        rascunhos_rota.publicar_oferta(self.rid)
+        self.assertIsNone(self._rascunho()["oferta_agendada_em"])
+
+    def test_data_passada_ou_inexistente_e_recusada(self):
+        for h in ("24/11 07:00", "31/02 07:00"):
+            with self.assertRaises(ValueError, msg=h):
+                rascunhos_rota.agendar_oferta(self.rid, h, agora=self._agora("10:00"))
+
     def test_cancelar_limpa(self):
         rascunhos_rota.agendar_oferta(self.rid, "18:30", agora=self._agora("10:00"))
         self.assertIsNone(rascunhos_rota.agendar_oferta(self.rid, "", agora=self._agora("10:00")))

@@ -4189,7 +4189,7 @@ def api_publicar_oferta():
 @exige_mesma_origem
 @bloqueia_planejamento_passado
 def api_agendar_oferta():
-    """"Publicar para motoristas" com horário (Hugo, 25/11): HH:MM de HOJE; o timer
+    """"Publicar para motoristas" com horário (Hugo, 25/11): HH:MM de hoje ou "AAAA-MM-DD HH:MM" / "DD/MM HH:MM"; o timer
     nucleo/publicar_ofertas_agendadas.py publica e avisa quando a hora chega.
     horario vazio cancela o agendamento."""
     body = request.get_json(force=True)
