@@ -174,6 +174,17 @@
      roteirização (notificar_area_nao_atendida.py), então só aparecem
      aqui pra decisão manual (cotação dedicada / redespacho / etc). */
   .secao-pool-alerta .cabecalho-secao-pool { color: var(--erro-texto); }
+  /* Visao "Nova" do pool (opt-in, guardada por aparelho): bloco Atrasados
+     no topo e chave Todos / So elegiveis. Na Classica nada disso aparece. */
+  #secao-pool-atrasados, #controles-visao-nova { display: none; }
+  html.visao-nova #secao-pool-atrasados { display: block; }
+  html.visao-nova #controles-visao-nova { display: flex; }
+  .secao-pool-atrasados .cabecalho-secao-pool { color: var(--erro-texto); }
+  html.visao-nova.pool-so-elegiveis #secao-pool-separacao,
+  html.visao-nova.pool-so-elegiveis #secao-pool-futuro,
+  html.visao-nova.pool-so-elegiveis #secao-pool-fora-area { display: none; }
+  .seletor-visao { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; font-size: 12px; color: var(--texto-suave); }
+  .seletor-visao button[aria-pressed="true"] { font-weight: 700; background: var(--acento-fundo, var(--borda)); }
   /* 4º bloco, "A retirar no galpão" (Hugo, 28/08): só leitura -- cards
      sem cursor de arrasto, com o status do acompanhamento como badge. */
   .secao-pool-retirada { margin-top: 10px; border-top: 1px dashed var(--borda); padding-top: 4px; }
@@ -1972,6 +1983,11 @@
     if (salvar !== false) { try { localStorage.setItem("planejamento.topoRecolhido", recolher ? "1" : "0"); } catch (e) {} }
   }
   try { if (localStorage.getItem("planejamento.topoRecolhido") === "1") alternarTopoPlanejamento(true, false); } catch (e) {}
+  // visao do pool (Classica = padrao; Nova = Atrasados + chave Todos/So elegiveis)
+  try {
+    if (localStorage.getItem("planejamento.visao") === "nova") document.documentElement.classList.add("visao-nova");
+    if (localStorage.getItem("planejamento.poolSoElegiveis") === "1") document.documentElement.classList.add("pool-so-elegiveis");
+  } catch (e) {}
 </script>
 
 <div class="barra-agentes-planejamento" id="barra-agentes-planejamento"></div>
@@ -2750,6 +2766,16 @@
       <p><strong>Mapa:</strong> "Não alocados" mostra o pool em vermelho; "Alocados" e "Enviadas" mostram ou escondem as rotas; "Futuros" mostra os agendados pra depois (escondidos por padrão); "Em separação" mostra os que ainda não estão prontos na Stokki (escondidos por padrão). "Selecionar área" laça só o que está aparecendo no mapa: cada clique é um vértice, duplo clique conclui, Esc cancela.</p>
     </div>
     <button id="botao-atualizar-pool" type="button" class="botao" style="width:100%;margin-bottom:10px;">Atualizar (buscar novos pedidos)</button>
+    <div class="seletor-visao" id="seletor-visao" role="group" aria-label="Visão do pool">
+      Visão:
+      <button type="button" class="botao-mini" data-visao="classica" aria-pressed="true">Clássica</button>
+      <button type="button" class="botao-mini" data-visao="nova" aria-pressed="false" title="Mostra os atrasados num bloco próprio e permite alternar entre todos os pedidos e só os elegíveis na data">Nova</button>
+      <span id="controles-visao-nova" style="gap:6px;align-items:center;">
+        ·
+        <button type="button" class="botao-mini" data-pool-filtro="todos" aria-pressed="true">Todos</button>
+        <button type="button" class="botao-mini" data-pool-filtro="elegiveis" aria-pressed="false" title="Esconde Em separação, Agendados pra depois e Fora da área; sobra só o que pode entrar na rota da data">Só elegíveis</button>
+      </span>
+    </div>
     <div class="linha-busca-pool">
       <input type="text" id="busca-pool" class="campo-busca" placeholder="Buscar por código, NF, remetente, destinatário ou endereço...">
       <button type="button" id="botao-filtros-pool" class="botao-filtros" title="Mais filtros: precisa sair no dia, faixa de CEP e faixa de caixas. Valem no pool e na seção A retirar no galpão">
@@ -2772,6 +2798,14 @@
       <select id="select-adicionar-rota" disabled title="Adiciona os pedidos selecionados ao fim de uma rota já existente"><option value="">Adicionar à rota…</option></select>
     </div>
     <div id="lista-pool">
+      <div class="secao-pool secao-pool-atrasados" data-secao="atrasados" id="secao-pool-atrasados">
+        <div class="cabecalho-secao-pool">
+          <span class="seta-secao">▾</span>
+          <span class="titulo-secao-pool">Atrasados (<span id="contagem-secao-atrasados">0</span>)</span>
+          <button type="button" class="botao-mini botao-selecionar-secao" data-secao="atrasados" title="Seleciona só os pedidos visíveis desta seção: agendamento anterior à data em edição">Selecionar</button>
+        </div>
+        <ul class="lista-paradas pool" id="lista-pool-atrasados" data-list-id="pool"></ul>
+      </div>
       <div class="secao-pool" data-secao="hoje" id="secao-pool-hoje">
         <div class="cabecalho-secao-pool">
           <span class="seta-secao">▾</span>
@@ -4396,6 +4430,11 @@
     // ainda não pronto na Stokki (Hugo, 19/10): só tira do "hoje" -- agendado
     // pra depois continua no bloco da data, fora de área continua vencendo
     if (li.dataset.situacaoStokki) return document.getElementById("lista-pool-separacao");
+    // visao Nova: atrasado ganha bloco próprio (separação continua vencendo:
+    // pedido que o galpão ainda não liberou não dá pra rotear)
+    if (li.dataset.urgencia === "atrasado" && document.documentElement.classList.contains("visao-nova")) {
+      return document.getElementById("lista-pool-atrasados");
+    }
     return document.getElementById("lista-pool-hoje");
   }
 
@@ -4619,6 +4658,8 @@
     const elForaArea = document.getElementById("contagem-secao-fora-area");
     const elFuturo = document.getElementById("contagem-secao-futuro");
     const elSeparacao = document.getElementById("contagem-secao-separacao");
+    const elAtrasados = document.getElementById("contagem-secao-atrasados");
+    if (elAtrasados) elAtrasados.textContent = document.getElementById("lista-pool-atrasados").children.length;
     if (elSeparacao) elSeparacao.textContent = document.getElementById("lista-pool-separacao").children.length;
     if (elHoje) elHoje.textContent = document.getElementById("lista-pool-hoje").children.length;
     if (elForaArea) elForaArea.textContent = document.getElementById("lista-pool-fora-area").children.length;
@@ -4636,6 +4677,7 @@
     secoesPoolColapsadas = {};
   }
   if (secoesPoolColapsadas.hoje === undefined) secoesPoolColapsadas.hoje = false;
+  if (secoesPoolColapsadas.atrasados === undefined) secoesPoolColapsadas.atrasados = false;
   if (secoesPoolColapsadas.separacao === undefined) secoesPoolColapsadas.separacao = false;
   if (secoesPoolColapsadas["fora-area"] === undefined) secoesPoolColapsadas["fora-area"] = false;
   if (secoesPoolColapsadas.futuro === undefined) secoesPoolColapsadas.futuro = true;
@@ -7867,9 +7909,52 @@
       secaoDoItem(li).appendChild(li);
     });
     iniciarSortable(listaPoolHoje);
+    iniciarSortable(document.getElementById("lista-pool-atrasados"));
     iniciarSortable(listaPoolSeparacao);
     iniciarSortable(listaPoolForaArea);
     iniciarSortable(listaPoolFuturo);
+
+    // Seletor de visao do pool (Classica/Nova) e chave Todos/So elegiveis.
+    // Guardado por aparelho (localStorage), mesmo padrao da densidade dos cards.
+    (function() {
+      const raiz = document.documentElement;
+      const seletor = document.getElementById("seletor-visao");
+      if (!seletor) return;
+      function pintarBotoes() {
+        const nova = raiz.classList.contains("visao-nova");
+        const soEleg = raiz.classList.contains("pool-so-elegiveis");
+        seletor.querySelectorAll("[data-visao]").forEach(b => b.setAttribute("aria-pressed", String((b.dataset.visao === "nova") === nova)));
+        seletor.querySelectorAll("[data-pool-filtro]").forEach(b => b.setAttribute("aria-pressed", String((b.dataset.poolFiltro === "elegiveis") === soEleg)));
+      }
+      function reencaixarPool() {
+        document.querySelectorAll("#lista-pool .lista-paradas.pool > .item-parada").forEach(li => {
+          const destino = secaoDoItem(li);
+          if (destino && li.parentElement !== destino) destino.appendChild(li);
+        });
+        atualizarContagensSecoesPool();
+      }
+      seletor.addEventListener("click", (e) => {
+        const b = e.target.closest("button");
+        if (!b) return;
+        try {
+          if (b.dataset.visao) {
+            const nova = b.dataset.visao === "nova";
+            raiz.classList.toggle("visao-nova", nova);
+            try { localStorage.setItem("planejamento.visao", nova ? "nova" : "classica"); } catch (e2) {}
+            reencaixarPool();
+            // na visao Nova os agendados pra depois aparecem abertos
+            const futuro = document.getElementById("secao-pool-futuro");
+            if (nova && futuro) definirColapsoSecaoPool(futuro, false);
+          } else if (b.dataset.poolFiltro) {
+            const so = b.dataset.poolFiltro === "elegiveis";
+            raiz.classList.toggle("pool-so-elegiveis", so);
+            try { localStorage.setItem("planejamento.poolSoElegiveis", so ? "1" : "0"); } catch (e2) {}
+          }
+        } catch (err) {}
+        pintarBotoes();
+      });
+      pintarBotoes();
+    })();
     inicializarSecoesPool();
     atualizarContagensSecoesPool();
     renderizarRetiradas(POOL_RETIRADAS);
