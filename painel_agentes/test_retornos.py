@@ -97,6 +97,22 @@ class Lista(Base):
         self.parada("João", "PS-3", failed_reason_id=None, motivo="  NÃO COLETADO ")
         self.assertEqual(retornos.listar_pendentes(self.conn, HOJE), [])
 
+    def test_lista_exclui_variantes_de_nao_coletado(self):
+        # Producao 25/11: "Nao Coletado - Nao Encontrado" (motivo 13, sem failed_reason_id)
+        # passava e foi cobrado no grupo Alertas. "- Nao Coube" idem.
+        self.conn.execute("INSERT INTO motivos_ocorrencia VALUES (8, 6829, 'Não Coletado - Não Coube', 'X')")
+        self.conn.commit()
+        self.parada("João", "PS-1", failed_reason_id=None, motivo="Não Coletado - Não Encontrado")
+        self.parada("João", "PS-2", failed_reason_id=None, motivo="Não Coletado - Não Coube")
+        self.parada("João", "PS-3", failed_reason_id=None, motivo_id=8, motivo="")
+        self.assertEqual(retornos.listar_pendentes(self.conn, HOJE), [])
+
+    def test_lista_mantem_motivo_parecido_que_nao_e_nao_coletado(self):
+        self.parada("João", "PS-1", motivo="Cliente ausente")
+        self.parada("João", "PS-2", motivo="Mercadoria não coube no local")
+        codigos = [p["codigo"] for g in retornos.listar_pendentes(self.conn, HOJE) for p in g["pedidos"]]
+        self.assertEqual(sorted(codigos), ["PS-1", "PS-2"])
+
     def test_lista_ignora_entregue(self):
         self.parada("João", "PS-1", situacao="ENTREGUE")
         self.assertEqual(retornos.listar_pendentes(self.conn, HOJE), [])
