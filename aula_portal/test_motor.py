@@ -5,6 +5,7 @@ manifesto, narracao e as regras dos roteiros.
 
     py -3.11 -m unittest aula_portal.test_motor
 """
+import copy
 import fnmatch
 import json
 import tempfile
@@ -227,7 +228,7 @@ class RoteirosTest(unittest.TestCase):
 
     def test_roteiros_numeracao(self):
         numeros = [v.numero for v in roteiro.VIDEOS]
-        self.assertEqual(sorted(numeros), list(range(1, 14)))
+        self.assertEqual(sorted(numeros), list(range(1, 15)))
         self.assertEqual(len({v.slug for v in roteiro.VIDEOS}), len(roteiro.VIDEOS))
 
     def test_video3_endereco_na_previa_e_agendado_alterado_na_hora(self):
@@ -248,7 +249,7 @@ class RoteirosTest(unittest.TestCase):
         # Video que depende de tela liberada (requer) pode estar escondido: ninguem anuncia ele.
         videos = sorted(roteiro.VIDEOS, key=lambda v: v.numero)
         for v in videos:
-            seguinte = next((o for o in videos if o.numero > v.numero and o.publicar and not o.requer), None)
+            seguinte = next((o for o in videos if o.numero > v.numero and o.publicar and o.anunciar and not o.requer), None)
             fala = v.passos[-1].fala
             if seguinte:
                 self.assertEqual(fala, f"No próximo vídeo: {seguinte.titulo}.", f"video {v.numero}")
@@ -296,6 +297,32 @@ class RoteirosTest(unittest.TestCase):
         falas = " ".join(p.fala for p in v.passos).lower()
         for trecho in ("cep", "lista", "veículo", "pedágio", "ida e a volta", "pdf", "aprovar"):
             self.assertIn(trecho, falas, trecho)
+
+    def test_video14_ninguem_anuncia_e_os_fechos_dos_videos_1_a_13_nao_mudam(self):
+        # o 14 foi acrescentado depois: se algum fecho passasse a anunciar o 14, o 12 e o 13 teriam de ser regravados
+        v14 = next(v for v in roteiro.VIDEOS if v.numero == 14)
+        self.assertFalse(v14.anunciar)
+        self.assertTrue(v14.passos[-1].fala.startswith("Pronto!"))          # fecho padrao, sem proximo
+        for v in roteiro.VIDEOS:
+            self.assertNotIn(v14.titulo, v.passos[-1].fala, f"video {v.numero}")
+        # os passos dos videos 1 a 13 sao os mesmos de quando o 14 nao existia
+        sem14 = [copy.deepcopy(v) for v in roteiro.VIDEOS if v.numero != 14]
+        for v in sem14:
+            v.passos.pop()                                                    # tira o fecho
+        roteiro._amarrar_fechos(sem14)
+        for antes, agora in zip(sem14, (v for v in roteiro.VIDEOS if v.numero != 14)):
+            self.assertEqual(antes.passos, agora.passos, f"video {agora.numero}")
+
+    def test_video14_botoes_do_manual(self):
+        v = next(v for v in roteiro.VIDEOS if v.numero == 14)
+        self.assertEqual(v.estado, "status")
+        falas = " ".join(p.fala for p in v.passos).lower()
+        for trecho in ("reagendar", "tirar da rota", "não é imediato", "retomar entrega", "cancelar", "cancelando", "reenviar",
+                       "documentos", "xml", "reenviar todos", "canhoto", "alterar entrega", "tentativas",
+                       "reentregar na próxima rota", "escolher outra data", "não reenviar"):
+            self.assertIn(trecho, falas, trecho)
+        textos = " ".join(str(x) for p in v.passos for a in p.acoes for x in a[1:])
+        self.assertNotIn("00000000000191", textos)
 
     def test_acoes_conhecidas(self):
         for v in roteiro.VIDEOS:

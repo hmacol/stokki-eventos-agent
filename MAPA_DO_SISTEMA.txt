@@ -1850,6 +1850,8 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            servidor.py; 3 = status do pedido,
                            banco no estado "status" com um envio em cada status; 4 = endereço na
                            prévia + alterar entrega pela regra de 12/11; CEP e alteração interceptados).
+                           14 = botões de ação dos pedidos (Video.anunciar=False: nenhum fecho o
+                           anuncia, então 1 a 13 não são regravados; fonte: docs/manual-botoes-pedidos-portal.md).
                            Rede: DNS bloqueado no Chromium + falha se algo tentar sair.
                            Narração edge-tts (Francisca; NUNCA voz "Multilingual": a Thalita
                            trocava de língua em frases fixas), ffmpeg do imageio-ffmpeg. Saída em

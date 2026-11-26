@@ -45,6 +45,7 @@ class Video:
     inicio: str = "/login"       # sem login invisivel, o video comeca nesta pagina
     mostrar_chat: bool = False   # balao "Precisa de ajuda?" (texto muda com a hora)
     requer: str | None = None    # tela oculta do cliente (ex.: "cotacao"): a pagina so lista com ela liberada
+    anunciar: bool = True        # False: nenhum fecho anuncia este video (os anteriores nao precisam ser regravados)
 
 
 def json_fixo(dados) -> Callable:
@@ -671,16 +672,120 @@ _V12 = Video(
     ],
 )
 
-VIDEOS: list[Video] = [_V1, _V2, _V_STATUS, _V3, _V4, _V5, _V6, _V7, _V8, _V9, _V10, _V11, _V12]
+# ── 14. Botoes de acao dos pedidos ─────────────────────────────────────────────
+# Acrescentado depois do 13 (26/11) a partir de docs/manual-botoes-pedidos-portal.md.
+# anunciar=False: nenhum fecho o anuncia, entao os videos 1 a 13 ficam como estao.
+# Banco "status": um envio em cada status (NA_FILA, CRIADO, ERRO, EM_ESPERA_CLIENTE, CANCELANDO...).
+
+def _linha_env(status: str, acao: str) -> str:
+    return f"#env-tabela tbody tr:has(.badge.b-{status}) [data-acao='{acao}']"
+
+
+def _alteracao_barrada(route, request):
+    """O pedido 9008 (aguardando saida) cai no bloqueio 'rota ja comecou'; os demais seguem o video 4."""
+    from alterar_entrega import CHAT
+    if "/9008/" in request.url:
+        base = dt.alteracao(9008)
+        corpo = {"pode": False, "motivo": f"A rota desse pedido já começou. {CHAT}", "em_rota": False,
+                 "destinatario": base["destinatario"], "atual": base["atual"]}
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(corpo, ensure_ascii=False))
+    else:
+        _alteracao(route, request)
+
+
+_V14 = Video(
+    numero=14, slug="botoes-de-acao", titulo="Botões de ação dos pedidos",
+    resumo="Cada botão da lista de envios e do acompanhamento: quando aparece, o que faz e o que fazer quando ele some.",
+    estado="status", anunciar=False,
+    intercepta={"**/api/dia*": _dia_insucesso, "**/api/responder": _responder, "**/api/pedidos/*/alteracao": _alteracao_barrada},
+    passos=[
+        _abertura("Botões de ação dos pedidos"),
+        Passo("Neste vídeo, você vê os botões que aparecem nos seus pedidos. Eles não ficam sempre na tela: "
+              "cada botão só aparece no momento em que a ação faz sentido.",
+              [("py", _zerar_insucesso), ("fechar_cartao",),
+               ("cartao", "Cada botão tem a sua hora", "Se um botão não aparece, o pedido não está nesse momento")]),
+        Passo("Por exemplo, não dá para pedir o canhoto de um pedido que ainda não foi entregue. "
+              "Por isso, o botão só aparece quando a entrega termina.",
+              [("pausa", 1.5)]),
+        Passo("Vamos começar pela aba Enviar pedidos. Cada linha da lista é um envio, e a coluna Ações muda conforme a "
+              "situação dele.",
+              [("fechar_cartao",), ("clicar", _ABA_ENVIOS), ("rolar", "#env-tabela"),
+               ("destacar", "#env-tabela thead th:last-child")]),
+        Passo("Reagendar: troca a data e o horário da entrega. Aparece enquanto o pedido está na fila ou já foi criado. "
+              "Se o destinatário só recebe com agendamento, o botão se chama Definir agendamento.",
+              [("destacar", _linha_env("CRIADO", "reagendar"))]),
+        Passo("Tirar da rota: serve para segurar um pedido. Atenção: é um pedido para a Fresh Log, não é imediato. "
+              "A nossa equipe coloca o pedido em espera e avisa aqui na tela.",
+              [("destacar", _linha_env("CRIADO", "em_espera"))]),
+        Passo("Retomar entrega: aparece no pedido que está em espera, a seu pedido. É o jeito de liberar de novo. "
+              "O vídeo Retomar um pedido em espera mostra o passo a passo.",
+              [("destacar", _linha_env("EM_ESPERA_CLIENTE", "retomar"))]),
+        Passo("Cancelar: se o pedido ainda está na fila, ou deu erro, ele é cancelado na hora.",
+              [("destacar", _linha_env("NA_FILA", "cancelar"))]),
+        Passo("Se o pedido já foi criado, ele passa para Cancelando, e a Fresh Log conclui o cancelamento. "
+              "Enquanto isso, o botão some, para não pedir duas vezes. Veja o vídeo Cancelar um pedido.",
+              [("destacar", _linha_env("CRIADO", "cancelar")), _env("CANCELANDO")]),
+        Passo("Reenviar: aparece quando o envio deu erro. Depois de resolver o problema, ele volta para a fila. "
+              "Um pedido que foi barrado por área continua retido: o reenvio não fura o bloqueio.",
+              [("destacar", _linha_env("ERRO", "reenviar"))]),
+        Passo("Documentos: sobe o boleto e outros PDFs que saem impressos com a nota, e também o XML. "
+              "Ele fecha quando a rota sai, por isso mande antes.",
+              [("destacar", "#env-tabela [data-acao='documentos']")]),
+        Passo("E o botão XML, ou Planilha, baixa de volta o arquivo que você enviou. Este fica sempre disponível.",
+              [("destacar", "#env-tabela [data-acao='xml']")]),
+        Passo("Lá em cima, o card Precisa da sua atenção junta o que está parado. Nele, um envio com erro tem três botões: "
+              "Reenviar, Cancelar e Falar com atendimento.",
+              [("js", _TOPO), ("pausa", 0.8), ("destacar", "#env-atencao"),
+               ("destacar", "#env-atencao [data-acao='reenviar']"), ("destacar", "#env-atencao [data-acao='atendimento']")]),
+        Passo("Quando falta a data de um agendamento, o botão é Definir data. E, se dois ou mais envios deram erro, "
+              "aparece também Reenviar todos, para mandar tudo de uma vez.",
+              [("destacar", "#env-atencao")]),
+        Passo("Agora, a aba de Acompanhamento.",
+              [("clicar", "button[data-vista='acompanhamento']"), ("esperar", "#tabela"),
+               ("clicar", "#abas button[data-aba='entregues']"), ("rolar", "#tabela")]),
+        Passo("Canhoto: só aparece nos pedidos entregues. Ele abre o comprovante de entrega. "
+              "Mais detalhes no vídeo Canhoto e planilha.",
+              [("destacar", "#tabela a[href*='/api/canhoto/']")]),
+        Passo("Alterar entrega: aparece nos pedidos que ainda não saíram, ou seja, programados, aguardando saída ou agendados. "
+              "Dá para mudar o endereço, a data e o horário.",
+              [("clicar", "#abas button[data-aba='agendados']"), ("destacar", "#tabela a[data-alterar='9011']")]),
+        Passo("Quando já não dá para alterar, o portal explica o motivo. Por exemplo, aqui, a rota do pedido já começou. "
+              "Nesses casos, fale com a Fresh Log pelo chat.",
+              [("clicar", "#abas button[data-aba='todos']"), ("clicar", "#tabela a[data-alterar='9008']"),
+               ("esperar", ".alt-msg.erro"), ("destacar", ".alt-msg.erro")]),
+        Passo("O mesmo acontece com pedido cancelado, retirada, ou em entrega. E, se o pedido já está numa rota que ainda "
+              "não saiu, alterar tira o pedido da rota, e a entrega pode atrasar um dia. "
+              "Veja o vídeo Alterar endereço e pedidos agendados.",
+              [("clicar", "[data-alt-fechar]")]),
+        Passo("Quando o pedido teve mais de uma entrega, aparece o selo com o número de tentativas. "
+              "Ele só abre o histórico: não é um botão de ação.",
+              [("destacar", ".selo-tent")]),
+        Passo("Por fim, o insucesso. O botão Responder leva ao card Precisa da sua atenção, onde a decisão fica em três botões.",
+              [("destacar", "#tabela a[data-ir-atencao]"), ("destacar", "#atencao")]),
+        Passo("Reentregar na próxima rota, Escolher outra data, e Não reenviar.",
+              [("destacar", "#atencao [data-acao='manter']"), ("destacar", "#atencao [data-acao='abrir-reagendar']"),
+               ("destacar", "#atencao [data-acao='cancelar']")]),
+        Passo("A sua escolha vale para todos os pedidos do mesmo grupo, ou seja, da mesma empresa e com o mesmo motivo. "
+              "O vídeo Responder a um insucesso mostra com calma.",
+              [("pausa", 1)]),
+        Passo("Resumindo: se um botão não aparece, é porque o pedido não está nesse momento. "
+              "Olhe a situação do pedido e, na dúvida, chame a gente.",
+              [("js", _TOPO), ("pausa", 1)]),
+    ],
+)
+
+
+VIDEOS: list[Video] = [_V1, _V2, _V_STATUS, _V3, _V4, _V5, _V6, _V7, _V8, _V9, _V10, _V11, _V12, _V14]
 
 
 def _amarrar_fechos(videos: list[Video]) -> None:
     """Cada video termina anunciando o proximo PUBLICADO (a pagina so lista
     esses). Liberou o 3 ou o 10: regravar o anterior a ele. Video com requer
-    nunca e anunciado (some da pagina enquanto a tela dele estiver oculta)."""
+    nunca e anunciado (some da pagina enquanto a tela dele estiver oculta); o
+    mesmo vale pra anunciar=False (video acrescentado depois, sem regravar os outros)."""
     for v in videos:
         seguinte = next((o for o in sorted(videos, key=lambda o: o.numero)
-                         if o.numero > v.numero and o.publicar and not o.requer), None)   # o com requer pode estar escondido
+                         if o.numero > v.numero and o.publicar and o.anunciar and not o.requer), None)   # o com requer pode estar escondido
         v.passos.append(_fecho(seguinte.titulo if seguinte else None))
 
 
