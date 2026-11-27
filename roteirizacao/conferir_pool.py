@@ -144,6 +144,26 @@ def _tirar_dos_rascunhos(service_id: int) -> list[int]:
     return ids
 
 
+def cancelar_ja_entregue(vuupt, s: dict) -> list[int] | None:
+    """Tira do pool o pedido ja entregue: cancela o servico na Vuupt e tira dos rascunhos nao
+    enviados. Pedido sem servico na Vuupt (id negativo, fonte stokki) fecha LOCAL no nucleo
+    (CANCELADO): nunca chama a Vuupt com id sintetico e, fora do pool e dos rascunhos, nunca
+    e materializado no envio. Devolve os rascunhos mexidos, ou None se o cancelamento falhou."""
+    from nucleo import banco, pool
+    if pool.eh_sem_servico(s["id"]):
+        from nucleo.pedidos import cancelar_sem_servico
+        if not cancelar_sem_servico(s.get("code"), "ja entregue (conferir_pool)", banco.ORIGEM_PIPELINE):
+            logger.warning(f"{s.get('code')}: pedido sem servico ja nao estava ABERTO no nucleo")
+    else:
+        from vuupt_client import VuuptAPIError
+        try:
+            vuupt.cancelar_servico_oficial(s["id"])
+        except VuuptAPIError as e:
+            logger.warning(f"{s.get('code')}: cancelamento na Vuupt falhou ({e})")
+            return None
+    return _tirar_dos_rascunhos(s["id"])
+
+
 # ── Rotina ────────────────────────────────────────────────────────────────────
 
 def main(argv: list[str] | None = None) -> int:
@@ -165,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
     from nucleo.sincronizar_servicos_vuupt import ressincronizar_ids
     from stokki import sessao_uso
     from stokki.auth import StokkiSession
-    from vuupt_client import VuuptClient, VuuptAPIError
+    from vuupt_client import VuuptClient
 
     config = yaml.safe_load((_RAIZ / "config.yaml").read_text(encoding="utf-8"))
     vuupt = VuuptClient(config.get("vuupt_api", {}).get("token", ""))
@@ -212,12 +232,9 @@ def main(argv: list[str] | None = None) -> int:
                 logger.info(f"[MODO TESTE] cancelaria {item['codigo']} (serviço {s['id']}): já entregue")
                 cancelados.append(item)
                 continue
-            try:
-                vuupt.cancelar_servico_oficial(s["id"])
-            except VuuptAPIError as e:
-                logger.warning(f"{item['codigo']}: cancelamento na Vuupt falhou ({e})")
+            rascunhos = cancelar_ja_entregue(vuupt, s)
+            if rascunhos is None:
                 continue
-            rascunhos = _tirar_dos_rascunhos(s["id"])
             cancelados.append(item)
             logger.info(f"CANCELADO {item['codigo']} (serviço {s['id']}): já entregue; "
                         f"tirado dos rascunhos {rascunhos or '-'}")
