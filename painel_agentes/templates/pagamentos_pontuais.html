@@ -139,6 +139,10 @@
       <label for="f-valor" id="l-valor">Valor</label>
       <div class="grupo-valor"><span>R$</span><input type="text" id="f-valor" name="valor" inputmode="decimal" placeholder="0,00" autocomplete="off"></div>
     </div>
+    <div class="campo" id="c-data_combinada" hidden>
+      <label for="f-data-combinada">Data combinada para pagamento <span style="text-transform:none;font-weight:500">(opcional)</span></label>
+      <input type="date" id="f-data-combinada" name="data_combinada">
+    </div>
     <div class="campo" id="c-valor_cobrado" hidden>
       <label for="f-valor-cobrado">Valor cobrado do cliente</label>
       <div class="grupo-valor"><span>R$</span><input type="text" id="f-valor-cobrado" name="valor_cobrado" inputmode="decimal" placeholder="0,00" autocomplete="off"></div>
@@ -207,6 +211,7 @@
       <div class="detalhes">
         <strong>{{ p.motorista_nome }}</strong>{% if p.motorista_placa %} · {{ p.motorista_placa }}{% endif %}
         {% if p.descricao %}<br>Frete: {{ p.descricao }}{% endif %}
+        {% if p.data_combinada %}<br>Data combinada para pagamento: <strong>{{ pp.data_br(p.data_combinada) }}</strong>{% endif %}
         {% if p.valor_cobrado is not none %}{% set mg = pp.margem(p) %}<br>Cobrado do cliente: {{ moeda(p.valor_cobrado) }} · margem <span class="{{ 'margem negativa' if mg < 0 else '' }}">{{ '-' if mg < 0 else '' }}{{ moeda(mg|abs) }}</span>{% endif %}
         {% if p.favorecido == 'LOCAL' %}<br>Pagar ao local: <strong>{{ p.local_nome }}</strong> · {{ p.local_pagamento }}{% elif p.motorista_pix %}<br>PIX: {{ p.motorista_pix }}{% endif %}
         {% if p.observacao %}<br>Obs: {{ p.observacao }}{% endif %}
@@ -299,7 +304,7 @@
     cFav.hidden = !descarga;
     blocoLocal.classList.toggle("aberto", aoLocal);
     document.getElementById("c-pix").hidden = aoLocal;
-    for (const id of ["c-descricao", "c-valor_cobrado", "c-anexo"]) document.getElementById(id).hidden = !frete;
+    for (const id of ["c-descricao", "c-valor_cobrado", "c-data_combinada", "c-anexo"]) document.getElementById(id).hidden = !frete;
     document.getElementById("l-valor").textContent = frete ? "Valor a pagar ao motorista" : "Valor";
     atualizarMargem();
   }
@@ -333,6 +338,7 @@
       observacao: valorDe("observacao"), local_nome: valorDe("local_nome"), local_pagamento: valorDe("local_pagamento"),
       local_endereco: valorDe("local_endereco"), local_documento: valorDe("local_documento"),
       pix: valorDe("pix"), descricao: valorDe("descricao"), valor_cobrado: valorDe("valor_cobrado"),
+      data_combinada: valorDe("data_combinada"),
     };
     const frete = corpo.tipo === "FRETE_AVULSO";
     const aoLocal = corpo.tipo === "DESCARGA" && corpo.favorecido === "LOCAL";
