@@ -155,6 +155,47 @@ class EnviarRascunhoSemServicoTest(_Base):
         self.assertIn("erro 422 da Vuupt", resultado["codigos_sem_servico"]["#PS-2"])
         self.assertEqual(resultado["codigos_pendentes_tecnico"], {})
 
+    def test_todos_recusados_com_o_mesmo_422_e_sistemico_e_nada_sai(self):
+        """Onda 3 (Hugo): o mesmo erro permanente em todos = problema nosso/da Vuupt, nao dos pedidos."""
+        a, b, c = self._sem_servico("PS-1"), self._sem_servico("PS-2"), self._sem_servico("PS-3")
+        self._vuupt_com_status({"#PS-1": 422, "#PS-2": 422, "#PS-3": 422})
+        rid = _inserir_rascunho([(a, "#PS-1"), (b, "#PS-2"), (c, "#PS-3")])
+        resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertFalse(resultado["ok"])
+        self.criar_rota.assert_not_called()
+        self.assertEqual(_paradas(rid), [(a, "#PS-1"), (b, "#PS-2"), (c, "#PS-3")])
+        self.assertEqual(resultado["codigos_sem_servico"], {})
+        self.assertEqual(set(resultado["codigos_pendentes_tecnico"]), {"#PS-1", "#PS-2", "#PS-3"})
+        self.assertIn("possivel problema sistemico", resultado["erro"])
+        self.assertEqual(rascunhos_rota.buscar_rascunho(rid)["status"], rascunhos_rota.STATUS_ERRO_ENVIO)
+
+    def test_um_422_e_dois_ok_tira_so_o_422(self):
+        a, b, c = self._sem_servico("PS-1"), self._sem_servico("PS-2"), self._sem_servico("PS-3")
+        self._vuupt_com_status({"#PS-1": 422})
+        rid = _inserir_rascunho([(a, "#PS-1"), (b, "#PS-2"), (c, "#PS-3")])
+        resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertTrue(resultado["ok"], resultado)
+        self.assertEqual(list(resultado["codigos_sem_servico"]), ["#PS-1"])
+        self.assertEqual(_paradas(rid), [(900, "#PS-2"), (901, "#PS-3")])
+
+    def test_recusa_mais_ocupado_tem_texto_fiel(self):
+        """Onda 3 (nit): so ocupado (sem falha tecnica) nao pode dizer "as com falha tecnica ficaram"."""
+        a = self._sem_servico("PS-1", status=banco.PEDIDO_CANCELADO)
+        b = self._sem_servico("PS-2")
+        conn = banco.conectar()
+        try:
+            conn.execute("INSERT INTO nucleo_materializacao VALUES ('PS-2', ?, 'outro clique')", (banco.agora(),))
+            conn.commit()
+        finally:
+            conn.close()
+        rid = _inserir_rascunho([(a, "#PS-1"), (b, "#PS-2")])
+        with mock.patch.object(materializar, "ESPERA_TRAVA_S", 0.2):
+            resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertFalse(resultado["ok"])
+        self.assertNotIn("falha tecnica", resultado["erro"])
+        self.assertIn("as em materializacao por outro envio ficaram no rascunho", resultado["erro"])
+        self.assertEqual(_paradas(rid), [(b, "#PS-2")])
+
     def test_429_e_timeout_mantem_todas_as_paradas_e_nao_criam_rota(self):
         a, b, c = self._sem_servico("PS-1"), self._sem_servico("PS-2"), self._sem_servico("PS-3")
         self._vuupt_com_status({"#PS-2": 429, "#PS-3": "timeout"})

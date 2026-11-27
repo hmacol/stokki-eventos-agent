@@ -306,6 +306,16 @@ class TestIncrementoSemServico(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(any("PS-70" in m and "Status 422" in m for m in logs.output))
 
+    def test_ocupado_por_outro_envio_e_warning_nao_error(self):
+        """Onda 3 (nit): trava ocupada nao e recusa: WARNING de rodada."""
+        res = inc.materializar.ResultadoMaterializacao(
+            falhas={"PS-7": "outro envio esta criando o servico de PS-7"}, ocupados={"PS-7"})
+        with mock.patch.object(inc.materializar, "materializar_servicos", return_value=res), \
+                self.assertLogs(inc.logger, "WARNING") as logs:
+            self.assertFalse(inc._garantir_servico({"id": -7, "code": "#PS-7"}, "vuupt", {}))
+        self.assertTrue(any("outro envio" in m for m in logs.output))
+        self.assertFalse(any(m.startswith("ERROR") for m in logs.output))
+
     def test_incremento_com_id_real_nao_materializa(self):
         with mock.patch.object(inc.materializar, "materializar_servicos") as m:
             self._rodar([self._rota()], [], pool=[_servico(1)])

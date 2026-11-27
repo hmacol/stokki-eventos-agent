@@ -834,13 +834,34 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
     return rascunhos
 
 
+class RotaAdiada(Exception):
+    """A rota nao sai nesta rodada: falha tecnica ao criar o servico de algum pedido dela."""
+
+
 def _com_servico(sublote: list[dict], vuupt, config: dict, nome_rota: str) -> list[dict]:
     """Criacao direta de rota: pedido de id sintetico (pool direto da Stokki) ganha o servico na
-    Vuupt aqui; quem falha fica fora da rota com o motivo no log. A rota nunca vai com id negativo."""
-    prontos, falhas = materializar.materializar_lote(sublote, vuupt, config)
+    Vuupt aqui. A rota nunca vai com id negativo e NUNCA sai parcial por falha tecnica (Hugo, 27/11):
+    falha tecnica/trava ocupada em QUALQUER pedido do lote levanta RotaAdiada (nenhuma rota criada,
+    todos seguem no pool; quem ja materializou fica com o servico not_assigned). Recusa permanente
+    (regra ou 400/404/409/410/422 da Vuupt) tira so aquele pedido, com o motivo no log."""
+    prontos, falhas, pendentes = materializar.materializar_lote(sublote, vuupt, config)
+    if pendentes:
+        motivo = "; ".join(f"{c}: {m}" for c, m in pendentes.items())
+        logger.error(f"'{nome_rota}': rota NAO criada nesta rodada (nunca sai parcial): falha tecnica ao criar "
+                     f"servico na Vuupt -- {motivo}; todos os pedidos seguem no pool")
+        raise RotaAdiada(motivo)
     for codigo, motivo in falhas.items():
-        logger.error(f"'{nome_rota}': {codigo} sem servico na Vuupt, fica fora da rota -- {motivo}")
+        logger.error(f"'{nome_rota}': {codigo} recusado, fica fora da rota (a rota sai com o resto) -- {motivo}")
     return prontos
+
+
+def _frase_rotas_adiadas(rotas_adiadas: list[str]) -> str:
+    """Pro resumo da execucao (e-mail notificar_execucao)."""
+    if not rotas_adiadas:
+        return ""
+    return (f" [ALERTA_ROTA_NAO_CRIADA] {len(rotas_adiadas)} rota(s) NAO criada(s) por falha tecnica ao criar "
+            f"servico na Vuupt (os pedidos seguem no pool; rodar de novo ou montar pelo planejamento): "
+            + " | ".join(rotas_adiadas) + ".")
 
 
 def main(modo_teste: bool = False, gerar_rascunho: bool = False):
@@ -1075,6 +1096,7 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         pedidos_alocados = 0
         indice_global = 1
         rotas_tarde = pedidos_tarde = 0
+        rotas_adiadas: list[str] = []   # "nome (motivo)": rota nao criada por falha tecnica (nunca sai parcial)
         modelos_vencedores: dict[str, str] = {}
         rascunhos_acumulados: list[dict] = []
         historico = carregar_historico_justica(data_alvo, config)
@@ -1214,6 +1236,8 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                         contagem_alocacoes_dia[motorista.agent_id] = contagem_alocacoes_dia.get(motorista.agent_id, 0) + 1
                     else:
                         rotas_sem_motorista += 1
+                except RotaAdiada as e:
+                    rotas_adiadas.append(f"{nome_rota} ({e})")
                 except Exception as e:
                     logger.error(f"Falha ao criar rota '{nome_rota}': {e}")
 
@@ -1250,6 +1274,9 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                             marcar_alocado(s["id"], rota["id"])
                         agendar_documentacao(rota["id"], data_alvo, motivo=f"rota criada ({nome_rota})")
                         sublote = sublote_criado
+                    except RotaAdiada as e:
+                        rotas_adiadas.append(f"{nome_rota} ({e})")
+                        continue
                     except Exception as e:
                         logger.error(f"Falha ao criar rota da tarde '{nome_rota}': {e}")
                         continue
@@ -1285,8 +1312,9 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         else:
             detalhe_criacao = f"{prefixo_teste}{rotas_criadas} rota(s) criada(s), {pedidos_alocados} pedido(s) alocado(s)."
         resumo_etapas["Criação de rotas"] = {
-            "status": "ok",
+            "status": "erro" if rotas_adiadas else "ok",
             "detalhe": detalhe_criacao
+                      + _frase_rotas_adiadas(rotas_adiadas)
                       + _frase_rotas_fracas(resumo_fracas)
                       + (f" Rota(s) da tarde: {rotas_tarde} ({pedidos_tarde} pedido(s))." if rotas_tarde else "")
                       + (" Modelo do dia: " + "; ".join(f"{l}: {m}" for l, m in modelos_vencedores.items()) + "."

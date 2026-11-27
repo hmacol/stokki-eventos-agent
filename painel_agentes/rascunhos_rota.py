@@ -1634,7 +1634,10 @@ def _enviar_rascunho(rascunho_id: int, token: str, marca: str | None = None) -> 
                 # o texto fica fiel: recusa no mesmo envio tirou parada do rascunho
                 fim = (f" -- nada enviado; {len(removidos)} parada(s) recusada(s) saiu(ram) do rascunho e "
                        f"voltou(aram) ao pool ({'; '.join(f'{c}: {m}' for c, m in removidos.items())}); "
-                       f"as com falha tecnica ficaram no rascunho.")
+                       + ("as com falha tecnica e as em materializacao por outro envio ficaram no rascunho."
+                          if transitorios and ocupados else
+                          "as com falha tecnica ficaram no rascunho." if transitorios else
+                          "as em materializacao por outro envio ficaram no rascunho."))
             else:
                 fim = " -- nada enviado, nenhuma parada descartada."
             mensagem = " | ".join(partes) + fim

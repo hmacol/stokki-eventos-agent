@@ -384,10 +384,11 @@ class FalhaTransitoriaTest(_Base):
 
     def test_lote_pula_o_transitorio_nesta_rodada(self):
         a, b = self._pedido("PS-1"), self._pedido("PS-2")
-        saida, falhas = materializar.materializar_lote([{"id": a}, {"id": b}], FakeVuupt(falhar_em={"PS-2"}), {},
-                                                       self.conn)
+        saida, falhas, pendentes = materializar.materializar_lote([{"id": a}, {"id": b}],
+                                                                  FakeVuupt(falhar_em={"PS-2"}), {}, self.conn)
         self.assertEqual([s["id"] for s in saida], [900])
         self.assertIn("falha tecnica", falhas["PS-2"])
+        self.assertEqual(list(pendentes), ["PS-2"])   # onda 3: quem chama sabe que foi tecnico
         self.assertIsNone(pedidos.buscar_pedido("PS-2", conn=self.conn)["vuupt_service_id"])   # nada gravado
 
 
@@ -463,6 +464,54 @@ class ErroHttpDaVuuptTest(_Base):
         self.assertIsNone(pedidos.buscar_pedido("PS-1", conn=self.conn)["vuupt_service_id"])
 
 
+class ErroSistemicoTest(_Base):
+    """Onda 3 (Hugo): TODOS os pedidos sem servico do lote (>= 2) recusados pela Vuupt com o MESMO status
+    permanente e nenhum sucesso = provavel problema sistemico (payload/config nosso), nao do pedido:
+    vira transitorio, nada e removido."""
+
+    def _lote(self, status):
+        ids = [self._pedido(f"PS-{n}") for n in range(1, len(status) + 1)]
+        vuupt = _VuuptQueRecusa({f"PS-{n}": s for n, s in enumerate(status, 1) if s})
+        return materializar.materializar_servicos([{"id": i} for i in ids], vuupt, {}, self.conn)
+
+    def test_todos_com_o_mesmo_422_viram_transitorios(self):
+        res = self._lote([422, 422, 422])
+        self.assertEqual(res.ok, {})
+        self.assertEqual(set(res.transitorios), {"PS-1", "PS-2", "PS-3"})
+        for c in ("PS-1", "PS-2", "PS-3"):
+            for texto in ("a Vuupt recusou todos os pedidos com o mesmo erro (Status 422",
+                          "possivel problema sistemico", "nada foi removido", "avise o Hugo"):
+                self.assertIn(texto, res.falhas[c])
+
+    def test_dois_pedidos_com_o_mesmo_erro_ja_e_sistemico(self):
+        res = self._lote([409, 409])
+        self.assertEqual(set(res.transitorios), {"PS-1", "PS-2"})
+
+    def test_um_422_e_dois_ok_tira_so_o_422(self):
+        res = self._lote([422, None, None])
+        self.assertEqual(set(res.ok), {"PS-2", "PS-3"})
+        self.assertEqual(res.transitorios, {})
+        self.assertTrue(res.falhas["PS-1"].startswith("a Vuupt recusou o pedido (Status 422)"))
+
+    def test_status_diferentes_seguem_a_regra_normal(self):
+        res = self._lote([422, 400, 422])
+        self.assertEqual(res.transitorios, {})
+        self.assertEqual(set(res.falhas), {"PS-1", "PS-2", "PS-3"})
+        self.assertIn("Status 400", res.falhas["PS-2"])
+
+    def test_um_pedido_so_segue_a_regra_normal(self):
+        res = self._lote([422])
+        self.assertEqual(res.transitorios, {})
+        self.assertIn("Status 422", res.falhas["PS-1"])
+
+    def test_recusa_de_regra_no_meio_desliga_o_sistemico(self):
+        ids = [self._pedido("PS-1"), self._pedido("PS-2"), self._pedido("PS-3", status=banco.PEDIDO_CANCELADO)]
+        res = materializar.materializar_servicos([{"id": i} for i in ids], _VuuptQueRecusa({"PS-1": 422, "PS-2": 422}),
+                                                 {}, self.conn)
+        self.assertEqual(res.transitorios, {})
+        self.assertIn("CANCELADO", res.falhas["PS-3"])
+
+
 class IdSinteticoNaoEncontradoTest(_Base):
     """Revisao Fable FIX 6: id negativo que nao existe no nucleo e recusa com motivo; nunca cai pro
     codigo do item (que pode ser de outro pedido / velho na parada)."""
@@ -475,9 +524,11 @@ class IdSinteticoNaoEncontradoTest(_Base):
         self.assertIn("id sintetico -999 nao encontrado no nucleo", res.falhas["-999"])
         self.assertEqual(res.transitorios, {})
         self.assertEqual(vuupt.chamadas, [])
-        saida, falhas = materializar.materializar_lote([{"id": -999, "code": "#PS-1"}], vuupt, {}, self.conn)
+        saida, falhas, pendentes = materializar.materializar_lote([{"id": -999, "code": "#PS-1"}], vuupt, {},
+                                                                  self.conn)
         self.assertEqual(saida, [])
         self.assertIn("-999", falhas)
+        self.assertEqual(pendentes, {})
 
     def test_sem_id_continua_pelo_codigo(self):
         self._pedido("PS-1")
@@ -592,18 +643,19 @@ class MaterializarLoteTest(_Base):
     def test_lote_troca_o_id_e_tira_quem_falhou(self):
         a, b = self._pedido("PS-1"), self._pedido("PS-2", status=banco.PEDIDO_CANCELADO)
         lote = [{"id": 5, "code": "#PS-9"}, {"id": a, "code": "#PS-1"}, {"id": b, "code": "#PS-2"}]
-        saida, falhas = materializar.materializar_lote(lote, FakeVuupt(), {}, self.conn)
+        saida, falhas, pendentes = materializar.materializar_lote(lote, FakeVuupt(), {}, self.conn)
         self.assertEqual([s["id"] for s in saida], [5, 900])
         self.assertEqual(list(falhas), ["PS-2"])
+        self.assertEqual(pendentes, {})
         self.assertEqual(lote[1]["id"], a)   # a lista de quem chamou nao muda
 
     def test_lote_so_com_id_real_nao_chama_nada(self):
         vuupt = FakeVuupt()
         lote = [{"id": 5, "code": "#PS-9"}]
         with mock.patch.object(materializar, "materializar_servicos") as m:
-            saida, falhas = materializar.materializar_lote(lote, vuupt, {})
+            saida, falhas, pendentes = materializar.materializar_lote(lote, vuupt, {})
         m.assert_not_called()
-        self.assertEqual((saida, falhas), (lote, {}))
+        self.assertEqual((saida, falhas, pendentes), (lote, {}, {}))
 
 
 class PedidoAgrupadoTest(_Base):

@@ -6259,8 +6259,10 @@
       : "";
     // pool direto da Stokki: o serviço na VUUPT nasce no envio; quem foi RECUSADO voltou pro pool com o motivo,
     // quem teve falha técnica (ou outro envio criando) FICOU no rascunho
-    const semServico = Object.entries(resultado.codigos_sem_servico || {});
-    const pendentesTecnico = Object.entries(resultado.codigos_pendentes_tecnico || {});
+    // na falha, o erro do envio ja pode listar os pedidos com o motivo: o card nao repete quem ja esta nele
+    const jaNoErro = ([c]) => !resultado.ok && (resultado.erro || "").includes(c);
+    const semServico = Object.entries(resultado.codigos_sem_servico || {}).filter(e => !jaNoErro(e));
+    const pendentesTecnico = Object.entries(resultado.codigos_pendentes_tecnico || {}).filter(e => !jaNoErro(e));
     const avisoSemServico = (semServico.length
       ? ` -- ${semServico.length} pedido(s) recusado(s) sem serviço na VUUPT voltaram pro pool, NÃO foram enviados: ${semServico.map(([c, m]) => `${c} (${m})`).join("; ")}`
       : "") + (pendentesTecnico.length

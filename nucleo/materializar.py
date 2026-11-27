@@ -94,6 +94,10 @@ _STATUS_HTTP = re.compile(r"\bstatus (\d{3})\b:?\s*", re.IGNORECASE)
 # existe": recusa com motivo, nunca tenta criar de novo). Repetir nao resolve.
 STATUS_RECUSA_VUUPT = {400, 404, 409, 410, 422}
 STATUS_CREDENCIAL_VUUPT = {401, 403}   # transitorio, mas com mensagem propria (token/permissao)
+# Erro sistemico (Hugo, onda 3): TODOS os pedidos sem servico do lote recusados com o MESMO status permanente
+# e nenhum sucesso = provavel problema nosso (payload/config) ou da Vuupt, nao dos pedidos: vira transitorio
+# (nada e removido). Limiar 2: com 1 pedido so nao da pra distinguir, segue a regra normal.
+MINIMO_LOTE_SISTEMICO = 2
 
 
 def _erro_http_vuupt(e: BaseException) -> tuple[int, str] | None:
@@ -172,6 +176,7 @@ def materializar_servicos(itens: list[dict], vuupt, config: dict | None, conn: s
     conn = conn or banco.conectar()
     try:
         vistos: set[str] = set()
+        recusas_http: dict[str, tuple[int, str]] = {}   # codigo -> (status, mensagem) das recusas da Vuupt
         for item in itens or []:
             sid = _id_do_item(item)
             if sid is not None and sid > 0:
@@ -210,20 +215,40 @@ def materializar_servicos(itens: list[dict], vuupt, config: dict | None, conn: s
                 resultado.falhas[codigo] = motivo
                 if tipo == FALHA_OCUPADO:
                     resultado.ocupados.add(codigo)
+                http = _erro_http_vuupt(e)
+                if tipo == FALHA_RECUSA and http:
+                    recusas_http[codigo] = http
                 logger.warning(f"materializar {codigo}: servico NAO criado -- {e}")
+        _aplicar_erro_sistemico(resultado, recusas_http)
     finally:
         if fechar:
             conn.close()
     return resultado
 
 
+def _aplicar_erro_sistemico(resultado: ResultadoMaterializacao, recusas_http: dict[str, tuple[int, str]]) -> None:
+    """Todas as falhas do lote sao recusas da Vuupt com o MESMO status (>= MINIMO_LOTE_SISTEMICO pedidos)
+    e nenhum pedido deu certo: o lote inteiro vira transitorio (nada sai do rascunho/pool)."""
+    if (resultado.ok or len(recusas_http) < MINIMO_LOTE_SISTEMICO or set(resultado.falhas) != set(recusas_http)
+            or len({s for s, _ in recusas_http.values()}) != 1):
+        return
+    status, mensagem = next(iter(recusas_http.values()))
+    texto = (f"a Vuupt recusou todos os pedidos com o mesmo erro (Status {status}: {mensagem}): possivel problema "
+             f"sistemico, nada foi removido, avise o Hugo")
+    for codigo in recusas_http:
+        resultado.falhas[codigo] = resultado.transitorios[codigo] = texto
+    logger.error(f"materializar: {len(recusas_http)} pedido(s) recusado(s) pela Vuupt com Status {status} -- "
+                 f"tratado como erro sistemico (nada removido): {', '.join(recusas_http)}")
+
+
 def materializar_lote(itens: list[dict], vuupt, config: dict | None, conn: sqlite3.Connection | None = None,
-                      *, modo_teste: bool = False) -> tuple[list[dict], dict[str, str]]:
-    """Para quem monta a rota com uma lista de servicos (criacao direta, incremento): devolve
-    (copia da lista so com quem tem servico, ja com o id real; falhas {codigo: motivo}).
-    Lista sem id sintetico volta igual e nada e chamado."""
+                      *, modo_teste: bool = False) -> tuple[list[dict], dict[str, str], dict[str, str]]:
+    """Para quem monta a rota com uma lista de servicos (criacao direta): devolve (copia da lista so com
+    quem tem servico, ja com o id real; falhas {codigo: motivo}; pendentes {codigo: motivo} = as falhas
+    TECNICAS ou de trava ocupada, que nao sao recusa do pedido). Lista sem id sintetico volta igual e
+    nada e chamado."""
     if not any((_id_do_item(s) or 0) < 0 for s in itens or []):
-        return list(itens or []), {}
+        return list(itens or []), {}, {}
     fechar = conn is None
     conn = conn or banco.conectar()
     try:
@@ -237,7 +262,8 @@ def materializar_lote(itens: list[dict], vuupt, config: dict | None, conn: sqlit
             real = res.ok.get(_codigo_do_item(conn, s, sid))
             if real:
                 saida.append(dict(s, id=real))
-        return saida, res.falhas
+        pendentes = {c: m for c, m in res.falhas.items() if c in res.transitorios or c in res.ocupados}
+        return saida, res.falhas, pendentes
     finally:
         if fechar:
             conn.close()
