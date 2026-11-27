@@ -111,6 +111,50 @@ class TestDatasAutomaticas(unittest.TestCase):
         esperado = rdf.proxima_data_valida(rdf.regra_dia_fixo_do_servico(a), QUA)
         self.assertEqual(feitos[0]["para"], esperado)
 
+    def _sem_servico(self, codigo="PS-77", address=None):
+        """Pedido so no nucleo (fonte stokki): item do pool com id sintetico negativo."""
+        from unittest import mock
+        from nucleo import banco, pedidos, pool
+        p = mock.patch.object(banco, "DB_PATH", self.db)
+        p.start()
+        self.addCleanup(p.stop)
+        conn = banco.conectar()
+        try:
+            pedidos.upsert_pedido(conn, codigo, {"titulo": codigo, "endereco": address or SOROCABA,
+                                                 "agendamento_inicio": "2026-11-10 00:00:00",
+                                                 "agendamento_fim": "2026-11-10 23:59:00"},
+                                  banco.ORIGEM_PIPELINE)
+            conn.commit()
+            return pool.pedido_para_servico(dict(conn.execute(
+                "SELECT * FROM nucleo_pedidos WHERE codigo = ?", (codigo,)).fetchone()))
+        finally:
+            conn.close()
+
+    def _agendamento_nucleo(self, codigo="PS-77"):
+        from nucleo import pedidos
+        p = pedidos.buscar_pedido(codigo)
+        return p["agendamento_inicio"], p["agendamento_fim"]
+
+    def test_andar_sem_servico_grava_no_nucleo_e_nao_chama_vuupt(self):
+        a = self._sem_servico(address="Rua A 1, Centro, Sao Paulo - SP, 01001-000, Brasil")
+        self.assertLess(a["id"], 0)
+        self._auto(a)
+        feitos = da.andar_datas_automaticas([a], self.vuupt, QUA, set(), False, self.db)
+        self.assertEqual([(f["de"], f["para"]) for f in feitos], [(TER, QUA)])
+        self.assertEqual(self.vuupt.chamadas, [])
+        self.assertEqual(self._agendamento_nucleo(), ("2026-11-11 00:00:00", "2026-11-11 23:59:00"))
+        self.assertTrue(reg.data_e_automatica(self.conn, a, QUA))
+
+    def test_dia_fixo_sem_servico_grava_no_nucleo_e_nao_chama_vuupt(self):
+        a = self._sem_servico()
+        a["scheduled_start"] = a["scheduled_end"] = None
+        feitos = rdf.aplicar_regioes_dia_fixo([a], self.vuupt, hoje=TER, db_path=self.db)
+        self.assertEqual(len(feitos), 1)
+        self.assertEqual(self.vuupt.chamadas, [])
+        data = feitos[0]["data"].isoformat()
+        self.assertEqual(self._agendamento_nucleo(), (f"{data} 08:00:00", f"{data} 16:00:00"))
+        self.assertTrue(reg.data_nao_e_do_cliente(self.conn, a, feitos[0]["data"]))
+
     def test_ids_em_rascunho_recentes(self):
         vistos = []
 

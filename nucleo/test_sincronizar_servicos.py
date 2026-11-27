@@ -366,6 +366,12 @@ class TestRessincronizarIds(_Base):
         with mock.patch.object(banco, "conectar", side_effect=AssertionError("não devia conectar")):
             self.assertEqual(sinc.ressincronizar_ids(object(), [], None), 0)
 
+    def test_id_sintetico_negativo_nunca_vai_na_vuupt(self):
+        # pedido sem servico (fonte stokki): dia fixo/data automatica gravaram no nucleo
+        vuupt = mock.Mock()
+        self.assertEqual(sinc.ressincronizar_ids(vuupt, [-3, -4], self.conn), 0)
+        self.assertEqual(vuupt.mock_calls, [])
+
 
 class TestMarcarEmRotaNoEnvio(_Base):
     def test_envio_da_rota_marca_os_pedidos_em_rota_sem_ir_na_vuupt(self):

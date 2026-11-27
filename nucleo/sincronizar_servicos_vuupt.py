@@ -316,7 +316,8 @@ def ressincronizar_ids(vuupt, service_ids, conn: sqlite3.Connection | None = Non
     Best-effort por contrato: a escrita na Vuupt já aconteceu, então falha
     aqui só pode virar aviso no log -- o timer alcança depois. 404 é a única
     resposta que autoriza CANCELADO (mesma regra de reconciliar_pool)."""
-    ids = [int(i) for i in (service_ids or []) if i]
+    # id negativo = pedido sem servico na Vuupt (fonte stokki): nao existe la, nada a ressincronizar
+    ids = [int(i) for i in (service_ids or []) if i and int(i) > 0]
     if not ids:
         return 0
     fechar = conn is None
