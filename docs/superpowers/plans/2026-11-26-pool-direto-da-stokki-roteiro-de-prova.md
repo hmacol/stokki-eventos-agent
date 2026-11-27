@@ -8,22 +8,35 @@ Spec: `docs/superpowers/specs/2026-11-26-pool-direto-da-stokki-design.md`. Mapa:
 1. Push do ramo `pool-stokki` (nada foi pushado ate aqui).
 2. `py -3.11 .claude/scripts/vps_ops.py homolog subir pool-stokki` (skill `homologar`; "deploy" continua sendo producao).
 3. No config da homologacao, `planejamento.fonte_pool: stokki`. Nunca rodar script a mao em `/opt/stokki-homolog`.
-4. Em homologacao a Vuupt e so GET e a Stokki nunca: **a criacao do servico na Vuupt NAO se prova la**.
-   - Em homologacao prova-se o que e local: pool com pedido sem servico (id negativo), rascunho, edicao local,
-     cancelar, portal, /pedidos. No "Confirmar e enviar" a materializacao deve ser **recusada/bloqueada pela guarda**
-     (nada sai) -- a confirmar (nao verificado).
-   - A materializacao se prova por mock/`--modo-teste`: `py -3.11 -m unittest nucleo.test_materializar nucleo.test_adocao_servico`
-     (Vuupt falsa, banco temporario) e `--modo-teste` nos scripts de lote (nao escreve na Vuupt/Stokki; lembrar que
-     `--modo-teste` pode mandar e-mail real: `forcar_destino`).
-   - O que fica para o **1o dia de producao supervisionado**: criar o servico de verdade, ver o `not_assigned` na Vuupt,
-     medir o tempo do envio.
+4. **O que cada ambiente prova (e o que NAO prova).** Resumo honesto: nenhum ambiente fora da producao cria um
+   pedido sem servico de verdade nem materializa um servico. A 1a materializacao REAL acontece em producao
+   (secao 6a, "primeiro dia supervisionado").
+   - **Testes (mock, banco temporario)**: o caminho novo inteiro. `nucleo.test_materializar`, `nucleo.test_pool`,
+     `nucleo.test_adocao_servico`, `test_pipeline_sem_servico`, `painel_agentes/test_rascunhos_rota` (Vuupt falsa:
+     criacao, adocao, recusa de regra, falha tecnica/429, heartbeat, trava assumida, envio concorrente).
+   - **`--modo-teste` do pipeline NAO exercita o caminho novo**: em `pipeline.processar_pedido` o `if modo_teste:`
+     (acao `simulado`) vem ANTES do `elif sem_servico:` que grava no nucleo; com a chave ligada e `--modo-teste` nada
+     chega ao nucleo, nenhum pedido sem servico nasce. Serve so pra ver o payload montado e os logs. (E `--modo-teste`
+     pode mandar e-mail real: `forcar_destino`.)
+   - **Homologacao** (Vuupt so GET, Stokki nunca, nenhum script a mao em `/opt/stokki-homolog`, bancada so
+     painel/portal): ninguem roda o pipeline la, entao **nenhum pedido nasce sem servico** (`nasceu_sem_servico`), e a
+     linha legada sem servico da copia da producao fica fora do pool (correcao FIX 2). Prova-se: com a chave ligada as
+     telas (pool, /planejamento, portal, Torre, /pedidos) leem o nucleo sem quebrar e os pedidos COM servico aparecem
+     como antes; "Confirmar e enviar" de rascunho com ids reais bate na guarda (POST da Vuupt bloqueado) e o rascunho
+     vai pra ERRO_ENVIO sem rota. NAO se prova la: pedido sem servico no pool, edicao local, cancelar sem servico,
+     materializacao, adocao do id, tempo do envio.
+   - **Sombra `comparar_pool.py --fonte stokki` com a chave desligada**: o pipeline continua criando o servico na
+     importacao, entao o nucleo nao tem pedido nascido sem servico; a sombra stokki = sombra `nucleo` (o espelho do
+     nucleo bate com a Vuupt) e o balde "sem servico" fica vazio. Prova o espelho, NAO o caminho novo.
 5. **Decisao pendente do Hugo: confirmar a excecao da fila freshhub.** Com a chave ligada, a fila de replica do
    freshhub (`pipeline.py --fila-freshhub`, `_materializar_pela_fila` em `atender_fila_freshhub`) cria o servico na
    Vuupt NA IMPORTACAO (a fila exige o id da Vuupt), excecao ao "materializa so no envio" (o spec, item 8, permite).
 
 ## 1a. Deploy (producao; vale tambem com a chave desligada)
 
-O ramo acrescenta `id_pool` e `edicao_local_json` em `nucleo_pedidos` (tabela quente) e a tabela `rascunho_envio_trava`.
+O ramo acrescenta `id_pool`, `edicao_local_json` e `nasceu_sem_servico` em `nucleo_pedidos` (tabela quente), a
+coluna `codigo` em `pedidos_area_notificada` e a tabela `rascunho_envio_trava`. Os dois ALTER toleram a corrida
+"duplicate column name" entre processos.
 
 1. `git pull --no-rebase` + `chown -R www-data:www-data /opt/stokki-eventos`.
 2. ANTES de reiniciar qualquer coisa, migrar uma vez como www-data:
@@ -52,17 +65,18 @@ Na VPS, como `www-data`, com a chave ainda em `nucleo`/`vuupt`:
   rodar a mao ou criar um par com `--fonte stokki` se o Hugo aprovar.
 - Pedido sem servico que JA existe na Vuupt com o mesmo codigo segue a comparacao normal (id difere = divergencia), por desenho.
 
-## 3. Passos de prova (homologacao, depois producao supervisionada)
+## 3. Passos de prova (producao supervisionada; em homologacao so o que a secao 1 item 4 diz)
 
 | # | Passo | Esperado |
 |---|-------|----------|
-| 1 | Rodar o pipeline em `--modo-teste` e abrir o pool (`/planejamento`) | Pedido sem servico aparece no pool como os outros (a tela nao tem selo proprio pra ele); o id negativo e o `_sem_servico_vuupt` aparecem so no JSON do pool |
+| 1 | Com a chave ligada, deixar rodar uma rodada REAL do pipeline (timer ou `pipeline.py` sem `--modo-teste`, como www-data) e abrir o pool (`/planejamento`). **Nao vale `--modo-teste`**: ele para antes de gravar no nucleo (secao 1 item 4) | Pedido novo nasce so no nucleo (`nasceu_sem_servico = 1`, sem servico na Vuupt) e aparece no pool como os outros (a tela nao tem selo proprio pra ele); o id negativo e o `_sem_servico_vuupt` aparecem so no JSON do pool. Linha legada ABERTA sem servico NAO aparece e o pipeline pede revisao dela |
 | 2 | Montar rascunho com um pedido sem servico | Parada entra com id negativo; nada chamado na Vuupt |
 | 3 | Editar endereco/janela do pedido sem servico | Grava em `edicao_local_json`; o pipeline seguinte nao regrava o campo (atencao: mudanca legitima da Stokki no mesmo campo tambem e ignorada ate materializar; hoje viraria PUT) |
 | 4 | Cancelar pedido sem servico (e reagendar) | Fecha/atualiza so no nucleo; sai do pool e do rascunho |
 | 5 | Confirmar e enviar o rascunho | **Producao**: servico criado na Vuupt (so leitura confirma `not_assigned`/atribuido), id real adotado (`adotar_servico`), rota enviada. **Homologacao**: nada sai |
-| 5a | Clicar "Confirmar e enviar" de novo enquanto o 1o envio roda | 2o clique volta "envio deste rascunho ja em andamento" e nao mexe em nada (`rascunho_envio_trava`) |
-| 6 | Pedido agrupado / reentrega -R / pedido nao ABERTO | Recusado com motivo na tela, sem servico duplicado |
+| 5a | Clicar "Confirmar e enviar" de novo enquanto o 1o envio roda | 2o clique volta "envio deste rascunho ja em andamento" e nao mexe em nada (`rascunho_envio_trava`, renovada pelo heartbeat) |
+| 5b | Vuupt falha no meio (timeout, 5xx, 429) | Rascunho em ERRO_ENVIO "falha tecnica ao criar servico na Vuupt (...): tente de novo -- nada enviado, nenhuma parada descartada"; nenhuma rota criada; os pedidos que ja materializaram ficam no id real; o reenvio segue dali |
+| 6 | Pedido agrupado / reentrega -R / pedido nao ABERTO / linha que ja teve servico | Recusado com motivo na tela (a parada sai do rascunho), sem servico duplicado |
 | 7 | Incremento (`incrementar_rotas`) | Pedido sem servico e materializado antes de entrar |
 | 8 | Rota ja enviada + adicionar parada | Materializa e adiciona |
 | 9 | Portal do cliente (pedido sem servico) | Listado e tratado pelo nucleo (cancelar, alterar entrega) |
@@ -71,7 +85,7 @@ Na VPS, como `www-data`, com a chave ainda em `nucleo`/`vuupt`:
 
 ## 4. Consultas de verificacao (somente leitura)
 
-    SELECT codigo, id_pool, vuupt_service_id, status FROM nucleo_pedidos WHERE vuupt_service_id IS NULL AND status='ABERTO';
+    SELECT codigo, id_pool, vuupt_service_id, status, nasceu_sem_servico FROM nucleo_pedidos WHERE vuupt_service_id IS NULL AND status='ABERTO';
     SELECT * FROM nucleo_materializacao;                 -- travas presas (devem sumir)
     SELECT nome, valor FROM nucleo_contadores;
     SELECT substr(rodado_em,1,10) dia, MAX(divergencias_proprias) FROM nucleo_reconciliacoes_pool WHERE fonte='stokki' GROUP BY dia;
@@ -81,9 +95,13 @@ Na VPS, como `www-data`, com a chave ainda em `nucleo`/`vuupt`:
 
 Na Vuupt (GET): o servico do codigo existe uma unica vez (`buscar_servico_por_code`), sem duplicado.
 
-**Antes de ligar a chave (M1 da revisao final, nao tratado em codigo):** revisar a 1a consulta. Linha legada ABERTA
-sem servico (pedido "pulado" pelo pipeline antigo, sobra de sync) passa a entrar no pool como pedido sem servico e
-seria materializada no envio. Fechar ou corrigir essas linhas antes.
+**Antes de ligar a chave:** revisar a 1a consulta. Desde a correcao FIX 2 so entra no pool (e so materializa) a linha
+com `nasceu_sem_servico = 1` (nasceu pelo caminho sem servico do pipeline e nunca teve servico). Linha legada ABERTA
+sem servico (pedido "pulado" pelo pipeline antigo, servico renomeado/apagado na Vuupt, agrupado) fica FORA do pool
+(log `pool.sem_servico_legado`), e recusada na materializacao ("nao nasceu sem servico") e, se o pedido ainda esta
+aberto na Stokki, o pipeline grava e pede revisao a cada rodada. Essas linhas viram trabalho manual: conferir na
+Vuupt e criar/vincular o servico (o sync liga o id e o pedido volta ao pool pelo caminho normal) ou fechar. Quanto
+menos houver ao ligar, melhor. Codigo com servico em `nucleo_servicos` tambem e recusado (conservador).
 
 ## 5. Criterios de aceite
 
@@ -95,9 +113,37 @@ seria materializada no envio. Fechar ou corrigir essas linhas antes.
 
 ## 6. PORTAO para ligar em producao (decisao do Hugo)
 
-1. **3 dias uteis seguidos em 0** divergencias proprias na sombra `--fonte stokki` (`dias_limpos_seguidos`); e
-2. a prova acima (homologacao para o que e local; mock/`--modo-teste` para a materializacao); e
-3. o 1o dia de producao supervisionado, com poucos pedidos: criar o servico, conferir na Vuupt, medir tempo.
+1. **3 dias uteis seguidos em 0** divergencias proprias na sombra `--fonte stokki` (`dias_limpos_seguidos`). Lembrar:
+   com a chave desligada essa sombra prova o espelho do nucleo, nao o caminho novo (secao 1 item 4); e
+2. os testes do ramo verdes (o caminho novo so e exercitado la) + homologacao para as telas com a chave ligada; e
+3. o 1o dia de producao supervisionado (secao 6a): e ali que acontece a 1a materializacao de verdade.
+
+## 6a. Primeiro dia supervisionado (producao)
+
+A chave e GLOBAL: `planejamento.fonte_pool` e um valor so no config.yaml, lido pelo pipeline, painel, portal,
+incremento e criacao de rotas. **Nao existe ligar para poucos pedidos**: ligada, todo pedido NOVO da rodada seguinte
+do pipeline nasce sem servico. O mais perto de "poucos pedidos" e ligar logo antes de uma rodada de pouco volume
+(escolher com o Hugo) e acompanhar ate as rotas daquela data sairem.
+
+Antes de ligar:
+- [ ] Deploy feito (secao 1a), migracao rodada, servicos reiniciados; `SELECT * FROM rascunho_envio_trava` e
+      `SELECT * FROM nucleo_materializacao` vazias.
+- [ ] Copia do `dados.db` do dia (backup GCS da noite ou copia manual).
+- [ ] 1a consulta da secao 4: linhas legadas ABERTAS sem servico revisadas (ficam fora do pool e pedem revisao).
+- [ ] Plano de volta (secao 8) lido, com o checklist pre-volta pronto pra rodar.
+- [ ] Alguem olhando o painel e a Vuupt durante a 1a rodada e o 1o envio.
+
+Durante:
+- [ ] Depois da 1a rodada do pipeline: `SELECT COUNT(*) FROM nucleo_pedidos WHERE nasceu_sem_servico = 1 AND status='ABERTO'`
+      bate com os pedidos novos da rodada; nenhum servico novo criado na Vuupt pela importacao (exceto a fila freshhub).
+- [ ] 1o envio com um rascunho PEQUENO (1 a 3 pedidos sem servico): para cada pedido, conferir na Vuupt (GET,
+      `buscar_servico_por_code`) que o servico existe UMA vez, com endereco/janela/data/caixas certos; conferir a rota
+      (paradas, ordem, motorista); no nucleo o pedido ficou com o id real e EM_ROTA.
+- [ ] Medir o tempo do envio (log "N de M pedido(s) sem servico ganharam servico na Vuupt em X s").
+- [ ] Log sem "falha tecnica" em sequencia (429 = parar e espaçar os envios) e sem trava presa.
+- [ ] Incremento e "adicionar parada em rota enviada" com um pedido sem servico, conferindo na Vuupt.
+
+Se algo der errado: nao reenviar em massa; voltar a chave (secao 8) depois do checklist pre-volta.
 
 ## 7. Risco: timeout do envio
 
@@ -106,9 +152,24 @@ A materializacao cria o servico pedido a pedido, **~5-7 chamadas a Vuupt por ped
 Medir no 1o dia; se estourar: limite de pedidos por clique ou execucao em segundo plano (nao feito).
 
 - Duplo clique: `enviar_rascunho` reserva o rascunho em `rascunho_envio_trava` (INSERT OR IGNORE, solto no fim, velho
-  apos 15 min). O 2o envio concorrente do mesmo rascunho volta "envio deste rascunho ja em andamento" sem mexer em
-  nada. No "Confirmar e enviar (todas)" uma excecao num rascunho vira `ok: False` com a mensagem e os outros seguem;
-  o log traz o tempo de cada rascunho.
+  apos 15 min SEM renovacao). O 2o envio concorrente do mesmo rascunho volta "envio deste rascunho ja em andamento" sem
+  mexer em nada. No "Confirmar e enviar (todas)" uma excecao num rascunho vira `ok: False` com a mensagem e os outros
+  seguem; o log traz o tempo de cada rascunho.
+- Heartbeat (correcao FIX 3): o envio vivo renova `iniciado_em` da sua trava (UPDATE com o dono conferido, transacao
+  curta, nunca atravessando chamada HTTP) antes de cada pedido materializado, antes de cada passo na Vuupt e antes de
+  criar a rota; a trava por pedido (`nucleo_materializacao`) tambem e renovada antes de buscar e de criar o servico.
+  Se a renovacao acha a trava assumida por outro, o envio para com "envio assumido por outro clique/processo ...:
+  este envio parou sem criar a rota" (status e paradas intactos). O status do rascunho e reconferido antes de criar a
+  rota e depois dela; `marcar_erro_envio` so muda RASCUNHO/ERRO_ENVIO (nunca rebaixa ENVIADO/DESCARTADO). Limite que
+  sobra: um UNICO passo (uma chamada a Vuupt com backoff, ou o `criar_rota_removendo_conflitos` inteiro) com mais de
+  15 min ainda perde a trava.
+- Falha tecnica (correcao FIX 1): timeout/5xx/429 (depois do backoff do `http_retry`), banco ocupado, modo teste ou
+  erro inesperado NAO tira a parada: vai em `ResultadoMaterializacao.transitorios` e o envio do rascunho para em
+  ERRO_ENVIO ("falha tecnica ao criar servico na Vuupt (...): tente de novo -- nada enviado, nenhuma parada
+  descartada"), sem rota parcial. So recusa de REGRA (nao ABERTO, agrupado, -R, pulado_atribuido, done/canceled, ja
+  teve servico, id sintetico inexistente) tira a parada. Incremento e criacao direta pulam o pedido so naquela
+  rodada (log); a fila do freshhub nao devolve erro (o item volta a pendente em 1 h). Os pedidos do lote que
+  materializaram antes da falha ficam no id real (servico `not_assigned` na Vuupt).
 - Trava velha por pedido: se o processo morre no meio do envio (restart do painel), a trava do pedido em
   `nucleo_materializacao` fica ate **10 minutos**; nesse tempo cada nova tentativa espera ate **30 s por pedido**
   travado e devolve "tente de novo" (nada e descartado). A mensagem ao operador e "tente de novo"; depois de 10 min a
@@ -125,6 +186,24 @@ Medir no 1o dia; se estourar: limite de pedidos por clique ou execucao em segund
   do payload da Stokki: o que foi editado so no nucleo (endereco, datas de equipe/feriado guardadas so nas colunas do
   nucleo, marcas de `edicao_local_json`) nao vai junto, e o dia fixo e reaplicado na roteirizacao. Conferir os pedidos
   editados antes de desligar.
+- **Efeitos colaterais na 1a rodada do pipeline depois da volta** (conferido em `pipeline.processar_pedido`): o pedido
+  ainda ABERTO sem servico e visto como NOVO (`servico_existente = vuupt.buscar_servico_por_code(...)` = None). Por isso:
+  1. **data automatica nova**: `agendamento_automatico(None, ...)` calcula a data pela hora DESTA rodada (pode ser
+     outro dia que a gravada no nucleo, ex. rodada depois do corte das 14h15) em vez de repetir a do nucleo;
+  2. **aviso de dia fixo reenviado ao embarcador**: a checagem "a Vuupt ja tem essa data" compara com
+     `servico_existente` (None), entao `ajuste_dia_fixo` e montado de novo e o `main()` manda o aviso ao remetente
+     outra vez (com a chave ligada ele ja tinha recebido);
+  3. o servico nasce na Vuupt pelo caminho antigo, com o payload da Stokki (edicoes so do nucleo ficam de fora, item
+     acima); o rascunho que ainda tem a parada com id negativo continua materializando por id no envio (nao pela chave).
+- **Checklist pre-volta** (antes de trocar a chave):
+  - [ ] `SELECT codigo, id_pool, agendamento_inicio, agendamento_fim, edicao_local_json FROM nucleo_pedidos
+        WHERE vuupt_service_id IS NULL AND status='ABERTO' AND nasceu_sem_servico = 1;` -- salvar a lista.
+  - [ ] Se possivel, ENVIAR antes os rascunhos com esses pedidos (a materializacao usa as colunas do nucleo: data e
+        edicao vao certas) e so depois desligar; quanto menos pedidos sem servico, menos efeito colateral.
+  - [ ] Para os que sobrarem: anotar data/endereco editados pra reaplicar na Vuupt depois da 1a rodada; avisar a equipe
+        que o aviso de dia fixo desses pedidos vai de novo ao embarcador (sem chave propria pra suprimir).
+  - [ ] Depois da 1a rodada do pipeline com a chave desligada: cada codigo da lista tem UM servico na Vuupt
+        (`buscar_servico_por_code`), com a data/endereco certos; reaplicar o anotado.
 
 ## 9. Itens adiados e avisos (de `.superpowers/sdd/.../progress.md`)
 
@@ -133,6 +212,12 @@ AVISO AO HUGO
 
 Ruling
 - Subir em homologacao exige push do ramo: nao feito; depende do Hugo.
+
+Limitacao conhecida (fora desta onda)
+- Base do payload: a materializacao parte de `dados_json["payload"]`, que o `upsert_pedido` mescla por `json_patch`
+  a cada rodada; as colunas do nucleo vao por cima (`montar_payload`), mas campo do payload que nao tem coluna
+  correspondente fica com o valor da ultima rodada do pipeline, e chave que a Stokki deixou de mandar pode sobrar do
+  payload anterior (json_patch nao apaga o que nao veio). Spec item 9; nao tratado.
 
 Minor (deferred)
 - `fonte_pool` desconhecida devolve a string em vez de cair para `vuupt`; `eh_sem_servico(None)` sem teste.
