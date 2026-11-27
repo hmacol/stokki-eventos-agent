@@ -363,7 +363,9 @@ def sincronizar_pool_agora(config: dict | None = None) -> dict:
     Vuupt sobe pra quem chama."""
     config = config or _carregar_config()
     fonte = fonte_pool(config)
-    if fonte != "nucleo":
+    # stokki: pool do nucleo como o "nucleo"; o que muda na Vuupt (reentrega, servico ja
+    # materializado, edicao no site) continua chegando pelo incremental
+    if fonte not in ("nucleo", "stokki"):
         # fonte freshhub (plano 1.2 do sistema novo): o pool vem da API nova, nao ha nucleo a ressincronizar
         return {"pulado": True, "motivo": "fonte freshhub"} if fonte == "freshhub" else {"pulado": True}
     if not _TRAVA_SINCRONIZACAO.acquire(blocking=False):

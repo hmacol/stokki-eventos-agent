@@ -103,6 +103,18 @@ class TestSincronizarPoolAgora(unittest.TestCase):
             ex.assert_called_once_with(vc.return_value, conn, "t", sem_pool=True, limite_rotas=0)
         conn.close.assert_called_once()
 
+    def test_fonte_stokki_tambem_roda_o_incremental(self):
+        """Pool direto da Stokki (Task 7): o pool e do nucleo, mas reentrega, servico ja
+        materializado e edicao feita no site da Vuupt chegam pelo incremental -- o "Atualizar"
+        roda o mesmo que com fonte nucleo (o retrato da Stokki e feito por buscar_pool_e_agendados)."""
+        cfg = {"planejamento": {"fonte_pool": "stokki"}, "vuupt_api": {"token": "t"}}
+        conn = mock.Mock()
+        with mock.patch.object(pr, "VuuptClient") as vc, \
+             mock.patch("nucleo.banco.conectar", return_value=conn), \
+             mock.patch("nucleo.sincronizar_servicos_vuupt.executar", return_value={"abertos": 3}) as ex:
+            self.assertEqual(pr.sincronizar_pool_agora(cfg), {"abertos": 3})
+            ex.assert_called_once_with(vc.return_value, conn, "t", sem_pool=True, limite_rotas=0)
+
     def test_nao_roda_duas_vezes_ao_mesmo_tempo(self):
         """Dois operadores clicando (ou o timer) não podem empilhar rodadas
         dentro do processo do painel: a segunda só lê o núcleo."""

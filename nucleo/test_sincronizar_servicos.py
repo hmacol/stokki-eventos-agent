@@ -425,5 +425,59 @@ class TestExecutar(_Base):
         vuupt.listar_servicos.assert_called_once()
 
 
+class TestPoolDiretoDaStokki(_Base):
+    """Fonte stokki (Task 7): o pedido do pool que ainda nao tem servico na Vuupt nunca esteve la."""
+
+    def _sem_servico(self, codigo="#PS-800"):
+        pedidos.registrar_importacao({"code": codigo, "title": "t", "sender_id": 11}, None, "nucleo_sem_servico",
+                                     conn=self.conn)
+        self.conn.commit()
+
+    def test_sync_nao_marca_sumiu_pedido_sem_servico(self):
+        self._sem_servico()
+        chamou = []
+        stats = sinc.reconciliar_pool([], self.conn, buscar_por_id=lambda sid: chamou.append(sid))
+        self.assertEqual((stats["conferidos"], stats["sumidos"], chamou), (0, 0, []))
+        self.assertEqual(self._pedido("PS-800")["status"], "ABERTO")
+        self.assertNotIn("PEDIDO_SUMIU_DA_VUUPT", self._eventos())
+        # rodada inteira (pool da Vuupt vazio) tambem nao toca nele
+        vuupt = mock.Mock()
+        vuupt.listar_servicos.return_value = []
+        sinc.executar(vuupt, self.conn, token="t", inicio="2026-09-16 00:00:00", sem_servico_local=True)
+        self.assertEqual(self._pedido("PS-800")["status"], "ABERTO")
+        self.assertNotIn("PEDIDO_SUMIU_DA_VUUPT", self._eventos())
+
+    def test_fonte_stokki_nao_procura_na_vuupt_pedido_sem_servico(self):
+        self._sem_servico()
+        vuupt = mock.Mock()
+        vuupt.listar_servicos.return_value = []
+        resultado = sinc.executar(vuupt, self.conn, token="t", inicio="2026-09-16 00:00:00", sem_servico_local=True)
+        vuupt.buscar_servico_por_code.assert_not_called()
+        self.assertIn("pulado", resultado["vinculo"])
+        # o "pool do nucleo != pool da Vuupt" compara so quem tem servico (o sem servico nao esta la)
+        self.assertEqual(resultado["abertos"], 0)
+
+    def test_chave_desligada_igual_a_hoje(self):
+        self._sem_servico()
+        vuupt = mock.Mock()
+        vuupt.listar_servicos.return_value = []
+        vuupt.buscar_servico_por_code.return_value = None
+        resultado = sinc.executar(vuupt, self.conn, token="t", inicio="2026-09-16 00:00:00")
+        vuupt.buscar_servico_por_code.assert_called_once_with("PS-800")
+        self.assertEqual(resultado["vinculo"]["nao_achados"], 1)
+        self.assertEqual(resultado["abertos"], 1)
+
+    def test_main_liga_pela_chave(self):
+        for cfg, esperado in (({"vuupt_api": {"token": "t"}, "planejamento": {"fonte_pool": "stokki"}}, True),
+                              ({"vuupt_api": {"token": "t"}}, False)):
+            with self.subTest(esperado=esperado), \
+                    mock.patch.object(sinc, "_carregar_config", return_value=cfg), \
+                    mock.patch.object(sinc, "_cliente"), \
+                    mock.patch.object(sinc, "executar", return_value={}) as ex, \
+                    mock.patch.object(sinc.logging, "FileHandler", return_value=mock.Mock(level=0)):
+                sinc.main([])
+                self.assertIs(ex.call_args.kwargs["sem_servico_local"], esperado)
+
+
 if __name__ == "__main__":
     unittest.main()

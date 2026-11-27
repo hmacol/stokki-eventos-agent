@@ -435,8 +435,10 @@ def main(argv=None) -> int:
             pool = vuupt.listar_servicos([{"field": "status", "operator": "eq", "value": "not_assigned"}])
             logger.info(f"[TESTE] pool na VUUPT: {len(pool)} serviço(s); nada foi gravado.")
             return 0
+        from nucleo import pool as nucleo_pool
         resultado = executar(vuupt, conn, config["vuupt_api"]["token"], inicio=inicio, sem_pool=args.sem_pool,
-                             limite_sumidos=args.limite_sumidos, limite_rotas=args.limite_rotas)
+                             limite_sumidos=args.limite_sumidos, limite_rotas=args.limite_rotas,
+                             sem_servico_local=nucleo_pool.fonte_pool(config) == nucleo_pool.FONTE_STOKKI)
         logger.info(f"Resultado: {resultado}")
     finally:
         conn.close()
@@ -444,10 +446,15 @@ def main(argv=None) -> int:
 
 
 def executar(vuupt, conn: sqlite3.Connection, token: str, inicio: str | None = None, sem_pool: bool = False,
-             limite_sumidos: int = LIMITE_SUMIDOS, limite_rotas: int = 20) -> dict:
+             limite_sumidos: int = LIMITE_SUMIDOS, limite_rotas: int = 20, sem_servico_local: bool = False) -> dict:
     """Uma rodada completa (o que o timer roda a cada 15 min), reutilizável
     pelo botão "Atualizar" do planejamento com fonte_pool=nucleo. `inicio`
-    é 'YYYY-MM-DD HH:MM:SS' em UTC; None lê o cursor (ou 2 dias atrás)."""
+    é 'YYYY-MM-DD HH:MM:SS' em UTC; None lê o cursor (ou 2 dias atrás).
+    `sem_servico_local` (fonte_pool=stokki): pedido ABERTO sem serviço é o
+    pool direto da Stokki, que nunca esteve na Vuupt -- não é procurado lá
+    pelo código (vincular_sem_service_id: até 2 GET por pedido a cada 15 min)
+    e fica fora da comparação com o pool da Vuupt. A reconciliação por
+    ausência (reconciliar_pool) já só confere quem tem serviço."""
     agora_utc = datetime.now(timezone.utc)
     if not inicio:
         cursor = ler_cursor(conn)
@@ -474,9 +481,14 @@ def executar(vuupt, conn: sqlite3.Connection, token: str, inicio: str | None = N
         # O pool inteiro também entra no espelho (pedido que nunca passou
         # pelo pipeline com dual-write, ex.: criado na tela da VUUPT).
         stats_pool_upsert = sincronizar_servicos(pool, conn)
-        stats_vinculo = vincular_sem_service_id(conn, vuupt.buscar_servico_por_code)
+        if sem_servico_local:
+            # o servico que nasce no envio ja vem pelo incremental (updated_at) e o upsert liga pelo codigo
+            stats_vinculo = {"pulado": "fonte_pool=stokki: pedido sem servico nao existe na Vuupt"}
+        else:
+            stats_vinculo = vincular_sem_service_id(conn, vuupt.buscar_servico_por_code)
         logger.info(f"Pool: {stats_pool} | upsert: {stats_pool_upsert} | vínculo: {stats_vinculo}")
-        abertos = conn.execute("SELECT COUNT(*) FROM nucleo_pedidos WHERE status = ?",
+        abertos = conn.execute("SELECT COUNT(*) FROM nucleo_pedidos WHERE status = ?"
+                               + (" AND vuupt_service_id IS NOT NULL" if sem_servico_local else ""),
                                (banco.PEDIDO_ABERTO,)).fetchone()[0]
         if abertos != len(pool):
             logger.warning(f"Pool do núcleo ({abertos}) != pool da VUUPT ({len(pool)}) -- "
