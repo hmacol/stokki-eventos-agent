@@ -110,9 +110,11 @@ def _id_do_item(item: dict):
 
 
 def _codigo_do_item(conn: sqlite3.Connection, item: dict, sid) -> str | None:
-    """O id sintetico e a identidade; o code do item so vale sem id (fila do freshhub)."""
-    pelo_id = pedidos.codigo_por_id_sintetico(conn, sid) if sid is not None else None
-    return pelo_id or normalizacao.normalizar_codigo(item.get("code") or item.get("codigo"))
+    """O id sintetico e a identidade; o code do item so vale sem id (fila do freshhub). Id negativo
+    que nao esta no nucleo devolve None (recusa), nunca cai pro code do item (pode ser de outro pedido)."""
+    if sid is not None and sid < 0:
+        return pedidos.codigo_por_id_sintetico(conn, sid)
+    return normalizacao.normalizar_codigo(item.get("code") or item.get("codigo"))
 
 
 def materializar_servicos(itens: list[dict], vuupt, config: dict | None, conn: sqlite3.Connection | None = None,
@@ -141,7 +143,10 @@ def materializar_servicos(itens: list[dict], vuupt, config: dict | None, conn: s
                 continue
             codigo = _codigo_do_item(conn, item, sid)
             if not codigo:
-                resultado.falhas[str(sid)] = f"id {sid} sem pedido no nucleo: servico nao criado"
+                resultado.falhas[str(sid)] = (f"id sintetico {sid} nao encontrado no nucleo: servico nao criado "
+                                              f"(recarregue a tela)" if sid is not None and sid < 0 else
+                                              f"id {sid} sem pedido no nucleo: servico nao criado")
+                logger.warning(f"materializar: {resultado.falhas[str(sid)]}")
                 continue
             if sid is not None:
                 resultado.codigos[sid] = codigo

@@ -610,6 +610,16 @@ def _fechar_sem_servico(codigo_ps: str, id_sintetico: int, motivo: str, modo_tes
         from nucleo.pedidos import cancelar_sem_servico
         from nucleo import banco as nucleo_banco
         if not cancelar_sem_servico(codigo_ps, motivo, nucleo_banco.ORIGEM_PIPELINE):
+            # mudou entre a leitura e o cancelamento (ganhou servico num envio, ou saiu de ABERTO)
+            from nucleo.pedidos import buscar_pedido
+            agora = buscar_pedido(codigo_ps) or {}
+            resultado["requer_revisao"] = True
+            resultado["observacao"] += (f" Pedido mudou no nucleo antes de fechar (servico "
+                                        f"{agora.get('vuupt_service_id') or '-'}, status {agora.get('status') or '-'}): "
+                                        f"nao fechado -- conferir e cancelar a mao (na Vuupt, se tem servico).")
+            logger.warning(f"  {codigo_ps}: {motivo}, mas o pedido sem servico mudou antes de fechar no nucleo "
+                           f"(servico {agora.get('vuupt_service_id') or '-'}, status {agora.get('status') or '-'}): "
+                           f"pede revisao")
             return
         resultado["observacao"] += " Pedido sem servico na Vuupt fechado (CANCELADO) no nucleo."
     except Exception as e:

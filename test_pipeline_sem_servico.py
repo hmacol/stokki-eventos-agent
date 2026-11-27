@@ -305,6 +305,29 @@ class FecharSemServicoTest(_Base):
         self.assertEqual(len(self._eventos()), 1)
         self.assertEqual(pool.listar_pool(incluir_sem_servico=True), [])
 
+    def test_pedido_que_ganhou_servico_no_meio_pede_revisao(self):
+        """Revisao Fable FIX 6: entre a leitura e o cancelamento o pedido ganhou servico (envio no
+        painel): nao fecha no nucleo, avisa (WARNING) e pede revisao (cancelar pela Vuupt)."""
+        self._ja_no_nucleo_sem_servico()
+        self.detalhe = _detalhe("Cancelado")
+        real = pedidos.cancelar_sem_servico
+
+        def ganhou_servico_antes(codigo, motivo, origem, conn=None):
+            c = banco.conectar()
+            try:
+                c.execute("UPDATE nucleo_pedidos SET vuupt_service_id = 77 WHERE codigo = 'PS-1'")
+                c.commit()
+            finally:
+                c.close()
+            return real(codigo, motivo, origem, conn=conn)
+        with mock.patch("nucleo.pedidos.cancelar_sem_servico", side_effect=ganhou_servico_antes), \
+                self.assertLogs(pipeline.logger, "WARNING") as logs:
+            res = self._processar(self._vuupt())
+        self.assertTrue(res["requer_revisao"])
+        self.assertIn("77", res["observacao"])
+        self.assertEqual(self._linha()["status"], banco.PEDIDO_ABERTO)
+        self.assertTrue(any("PS-1" in m and "77" in m for m in logs.output))
+
     def test_cancelado_na_stokki_modo_teste_nao_fecha(self):
         self._ja_no_nucleo_sem_servico()
         self.detalhe = _detalhe("Cancelado")

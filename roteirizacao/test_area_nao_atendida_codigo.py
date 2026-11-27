@@ -75,5 +75,45 @@ class RegistroAntigo(_Base):
         self.assertIn("codigo", colunas)
 
 
+class _ConnPragmaVelho:
+    """Conexao de verdade cujo PRAGMA table_info nao mostra `codigo` (lido antes do ALTER de outro
+    processo, corrida logo apos o deploy)."""
+
+    def __init__(self, conn, erro_alter=None):
+        self._conn, self._erro_alter = conn, erro_alter
+
+    def execute(self, sql, *args):
+        if sql.startswith("PRAGMA table_info(pedidos_area_notificada)"):
+            return [r for r in self._conn.execute(sql, *args) if r[1] != "codigo"]
+        if self._erro_alter and sql.startswith("ALTER TABLE pedidos_area_notificada"):
+            raise sqlite3.OperationalError(self._erro_alter)
+        return self._conn.execute(sql, *args)
+
+    def __getattr__(self, nome):
+        return getattr(self._conn, nome)
+
+
+class MigracaoConcorrente(_Base):
+    """Revisao Fable FIX 6: o ALTER da coluna codigo tolera "duplicate column name" (mesma regra de
+    nucleo/banco._migrar_colunas); qualquer outro erro continua subindo."""
+
+    def _conectar_com(self, **kw):
+        fp._conectar().close()   # tabela ja com a coluna codigo (o outro processo migrou)
+        real = sqlite3.connect
+        return mock.patch.object(fp.sqlite3, "connect", side_effect=lambda *a, **k: _ConnPragmaVelho(real(*a, **k), **kw))
+
+    def test_coluna_ja_criada_por_outro_processo_nao_derruba(self):
+        with self._conectar_com():
+            conn = fp._conectar()
+            conn.close()
+        fp.marcar_notificado(5, "fora_sp", codigo="PS-5")
+        self.assertTrue(fp.ja_notificado(-1, codigo="PS-5"))
+
+    def test_outro_erro_do_alter_sobe(self):
+        with self._conectar_com(erro_alter="database is locked"):
+            with self.assertRaises(sqlite3.OperationalError):
+                fp._conectar()
+
+
 if __name__ == "__main__":
     unittest.main()

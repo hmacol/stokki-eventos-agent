@@ -391,6 +391,28 @@ class FalhaTransitoriaTest(_Base):
         self.assertIsNone(pedidos.buscar_pedido("PS-2", conn=self.conn)["vuupt_service_id"])   # nada gravado
 
 
+class IdSinteticoNaoEncontradoTest(_Base):
+    """Revisao Fable FIX 6: id negativo que nao existe no nucleo e recusa com motivo; nunca cai pro
+    codigo do item (que pode ser de outro pedido / velho na parada)."""
+
+    def test_id_negativo_inexistente_recusa_sem_usar_o_codigo(self):
+        self._pedido("PS-1")
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": -999, "code": "#PS-1"}], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {})
+        self.assertIn("id sintetico -999 nao encontrado no nucleo", res.falhas["-999"])
+        self.assertEqual(res.transitorios, {})
+        self.assertEqual(vuupt.chamadas, [])
+        saida, falhas = materializar.materializar_lote([{"id": -999, "code": "#PS-1"}], vuupt, {}, self.conn)
+        self.assertEqual(saida, [])
+        self.assertIn("-999", falhas)
+
+    def test_sem_id_continua_pelo_codigo(self):
+        self._pedido("PS-1")
+        res = materializar.materializar_servicos([{"code": "#PS-1"}], FakeVuupt(), {}, self.conn)
+        self.assertEqual(res.ok, {"PS-1": 900})
+
+
 class HistoricoDeServicoTest(_Base):
     """Revisao Fable FIX 2: so materializa pedido que o pipeline marcou como nascido sem servico e sem
     servico no historico (nucleo_servicos). Linha sem id por rename/servico apagado/pulado antigo: recusa."""

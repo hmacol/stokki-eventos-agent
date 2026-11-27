@@ -42,7 +42,12 @@ def _conectar():
         )
     """)
     if "codigo" not in {r[1] for r in conn.execute("PRAGMA table_info(pedidos_area_notificada)")}:
-        conn.execute("ALTER TABLE pedidos_area_notificada ADD COLUMN codigo TEXT")   # tabela de antes de 26/11
+        try:
+            conn.execute("ALTER TABLE pedidos_area_notificada ADD COLUMN codigo TEXT")   # tabela de antes de 26/11
+        except sqlite3.OperationalError as e:
+            # corrida logo apos o deploy: outro processo fez o ALTER entre o PRAGMA e aqui
+            if "duplicate column name" not in str(e):
+                raise
     conn.commit()
     return conn
 
