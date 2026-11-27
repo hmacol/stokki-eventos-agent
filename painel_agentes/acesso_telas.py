@@ -81,7 +81,7 @@ TELAS = [
     ("pedagios", "Pedágios", "Motoristas", [r"^/financeiro/pedagios(/|$)", r"^/api/financeiro/pedagios/"]),
     ("compras_tela", "Compras", "", [r"^/compras$", r"^/api/compras(/|$)"]),
     ("pagamentos", "Pagamentos", "Motoristas", [r"^/financeiro/pagamentos(/|$)", r"^/api/financeiro/pagamentos(/|$)"]),
-    ("relatorio_esporadicos", "Pagamento esporádicos", "Motoristas", [r"^/financeiro/esporadicos(\.csv)?$"]),
+    ("relatorio_esporadicos", "Pagamento esporádicos", "Motoristas", [r"^/financeiro/esporadicos(\.csv)?$", r"^/api/financeiro/esporadicos/"]),
     ("canhotos", "Canhotos", "Motoristas", [r"^/canhotos(/|$)", r"^/api/canhotos/"]),
     ("index", "Agentes", "Sistema", [r"^/$", r"^/rodar/", r"^/execucao/", r"^/api/agentes/progresso$",
                                      r"^/encerrar-tudo$"]),

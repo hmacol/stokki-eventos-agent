@@ -116,6 +116,52 @@ class TestRelatorioEsporadicos(unittest.TestCase):
             self.assertTrue(csv_.splitlines()[1].startswith("'=cmd|calc;"))
         self.assertIn(";'=1+1;", rel.csv_detalhe(r))
 
+    def _duas_rotas(self):
+        self.motorista(1, "Ana", "ESPORADICO", cpf="123")
+        self.rota(1, "2026-11-10", combinado=500.0, motivo="a")
+        self.rota(1, "2026-11-11", combinado=300.0, motivo="b")
+
+    def test_marcar_pago_tira_dos_pendentes_e_aparece_em_pagos(self):
+        self._duas_rotas()
+        res = rel.marcar_pago("123", "2026-11-01", "2026-11-30", "financeiro", "PIX 123", conn=self.conn)
+        self.assertEqual((res["valor"], res["rotas"]), (800.0, 2))
+        pend = rel.gerar("2026-11-01", "2026-11-30", "pendentes", conn=self.conn)
+        self.assertEqual(pend["motoristas"], [])
+        pagos = rel.gerar("2026-11-01", "2026-11-30", "pagos", conn=self.conn)
+        m = pagos["motoristas"][0]
+        self.assertEqual((m["total_pago"], m["total_pendente"], m["pode_pagar"]), (800.0, 0.0, False))
+        self.assertEqual(m["pagamentos"][0]["pago_por"], "financeiro")
+        self.assertEqual(rel.gerar("2026-11-01", "2026-11-30", "todos", conn=self.conn)["total_pago"], 800.0)
+        self.assertIn("Pago em", rel.csv_detalhe(pagos))
+
+    def test_nao_paga_duas_vezes_e_rota_nova_volta_pendente(self):
+        self._duas_rotas()
+        rel.marcar_pago("123", "2026-11-01", "2026-11-30", "f", conn=self.conn)
+        with self.assertRaises(rel.ErroPagamento):
+            rel.marcar_pago("123", "2026-11-01", "2026-11-30", "f", conn=self.conn)
+        self.rota(1, "2026-11-12", combinado=100.0, motivo="c")
+        pend = rel.gerar("2026-11-01", "2026-11-30", "pendentes", conn=self.conn)
+        self.assertEqual(pend["motoristas"][0]["total_pendente"], 100.0)
+        self.assertEqual(pend["motoristas"][0]["rotas"], 1)
+        self.assertEqual(rel.marcar_pago("123", "2026-11-01", "2026-11-30", "f", conn=self.conn)["valor"], 100.0)
+
+    def test_desfazer_devolve_as_rotas_aos_pendentes(self):
+        self._duas_rotas()
+        pid = rel.marcar_pago("123", "2026-11-01", "2026-11-30", "f", conn=self.conn)["id"]
+        rel.desfazer_pago(pid, "f", conn=self.conn)
+        pend = rel.gerar("2026-11-01", "2026-11-30", "pendentes", conn=self.conn)
+        self.assertEqual(pend["motoristas"][0]["total_pendente"], 800.0)
+        with self.assertRaises(rel.ErroPagamento):
+            rel.desfazer_pago(pid, "f", conn=self.conn)
+
+    def test_rota_sem_valor_nao_e_paga(self):
+        self.motorista(1, "Ana", "ESPORADICO", cpf="123", tipo="TRUCK")
+        self.rota(1, "2026-11-10")
+        with self.assertRaises(rel.ErroPagamento):
+            rel.marcar_pago("123", "2026-11-01", "2026-11-30", "f", conn=self.conn)
+        m = rel.gerar("2026-11-01", "2026-11-30", conn=self.conn)["motoristas"][0]
+        self.assertFalse(m["pode_pagar"])
+
     def test_tela_renderiza_com_dados(self):
         import painel_agentes
         self.motorista(1, "Ana", "ESPORADICO")
@@ -126,6 +172,90 @@ class TestRelatorioEsporadicos(unittest.TestCase):
         self.assertIn("Ana", html)
         self.assertIn("Combinado: Diaria acordada", html)
         self.assertIn("500,00", html)
+        self.assertIn('data-nome="Ana"', html)
+        rel.marcar_pago("111.222.333-44".replace(".", "").replace("-", ""), "2026-11-01", "2026-11-30", "f", conn=self.conn)
+        r2 = rel.gerar("2026-11-01", "2026-11-30", "todos", conn=self.conn)
+        with painel_agentes.app.test_request_context("/financeiro/esporadicos"):
+            html2 = painel_agentes.render_template("relatorio_esporadicos.html", rel=r2, fonte_km=rel.fonte_km)
+        self.assertIn("Desfazer", html2)
+        self.assertNotIn('data-nome="Ana"', html2)
+
+
+class TestRotasEsporadicos(unittest.TestCase):
+    """Rotas HTTP: login, nivel, CSRF e o fluxo pagar/desfazer de ponta a ponta."""
+
+    def setUp(self):
+        from pathlib import Path as _P
+        from unittest import mock
+        import acesso_telas
+        import painel_agentes
+        self._tmp = tempfile.TemporaryDirectory()
+        base = _P(self._tmp.name)
+        self.db = base / "dados.db"
+        c = banco.conectar(self.db)
+        c.execute("INSERT INTO bd_motoristas (NOME_MOTORISTA, AGENT_ID_VUUPT, ATIVO, CPF_MOTORISTA, TIPO_VEICULO, POSICAO, criado_em, atualizado_em) "
+                  "VALUES ('Ana', 1, 'TRUE', '123', 'FIORINO', 'ESPORADICO', 'x', 'x')")
+        c.execute("INSERT INTO nucleo_rotas (data_rota, nome, agent_id, km_real, km_fonte, valor_combinado, valor_combinado_motivo) "
+                  "VALUES ('2026-11-10', 'R', 1, 10, 'GPS_APP', 500, 'a')")
+        c.commit()
+        c.close()
+        original = banco.conectar
+        self._ps = [
+            mock.patch.object(acesso_telas, "DB_PATH", base / "acesso.db"),
+            mock.patch.object(rel.banco, "conectar", lambda *a, **k: original(self.db)),
+        ]
+        for p in self._ps:
+            p.start()
+        conn = acesso_telas.conectar()
+        try:
+            acesso_telas.importar_do_config(conn, {"usuarios_extras": [
+                {"usuario": "fin", "senha": "s1", "nivel": "atendimento"},
+                {"usuario": "log", "senha": "s2", "nivel": "logistica"}]})
+        finally:
+            conn.close()
+        painel_agentes.app.config["TESTING"] = True
+        self.app = painel_agentes.app
+
+    def tearDown(self):
+        for p in self._ps:
+            p.stop()
+        self._tmp.cleanup()
+
+    def cliente(self, usuario, senha):
+        c = self.app.test_client()
+        self.assertEqual(c.post("/login", data={"usuario": usuario, "senha": senha}).status_code, 302)
+        return c
+
+    def test_tela_csv_e_nivel(self):
+        fin = self.cliente("fin", "s1")
+        q = "?de=2026-11-01&ate=2026-11-30"
+        self.assertEqual(fin.get("/financeiro/esporadicos" + q).status_code, 200)
+        r = fin.get("/financeiro/esporadicos.csv" + q + "&tipo=resumo")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("attachment", r.headers["Content-Disposition"])
+        self.assertIn("Ana", r.get_data(as_text=True))
+        log = self.cliente("log", "s2")
+        self.assertEqual(log.get("/financeiro/esporadicos" + q).status_code, 403)
+        self.assertEqual(log.post("/api/financeiro/esporadicos/pagar", json={}).status_code, 403)
+
+    def test_pagar_e_desfazer_pela_api(self):
+        fin = self.cliente("fin", "s1")
+        corpo = {"chave": "123", "de": "2026-11-01", "ate": "2026-11-30", "observacao": "pix 1"}
+        # sem Origin/Referer = bloqueio CSRF
+        self.assertEqual(fin.post("/api/financeiro/esporadicos/pagar", json=corpo).status_code, 403)
+        origem = {"Origin": "http://localhost"}
+        r = fin.post("/api/financeiro/esporadicos/pagar", json=corpo, headers=origem)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertEqual(r.get_json()["valor"], 500.0)
+        r2 = fin.post("/api/financeiro/esporadicos/pagar", json=corpo, headers=origem)
+        self.assertEqual(r2.status_code, 400)
+        self.assertIn("erro", r2.get_json())
+        self.assertEqual(fin.post("/api/financeiro/esporadicos/pagar", json={**corpo, "de": "x"}, headers=origem).status_code, 400)
+        pago = fin.get("/financeiro/esporadicos?de=2026-11-01&ate=2026-11-30&filtro=pagos").get_data(as_text=True)
+        self.assertIn("Desfazer", pago)
+        d = fin.post(f"/api/financeiro/esporadicos/{r.get_json()['id']}/desfazer", headers=origem)
+        self.assertEqual(d.status_code, 200)
+        self.assertEqual(fin.post("/api/financeiro/esporadicos/999/desfazer", headers=origem).status_code, 400)
 
 
 if __name__ == "__main__":
