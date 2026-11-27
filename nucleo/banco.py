@@ -648,7 +648,13 @@ def _migrar_colunas(conn: sqlite3.Connection, tabela: str, colunas: list[tuple[s
     existentes = {row[1] for row in conn.execute(f"PRAGMA table_info({tabela})")}
     for nome, tipo in colunas:
         if nome not in existentes:
-            conn.execute(f"ALTER TABLE {tabela} ADD COLUMN {nome} {tipo}")
+            try:
+                conn.execute(f"ALTER TABLE {tabela} ADD COLUMN {nome} {tipo}")
+            except sqlite3.OperationalError as e:
+                # corrida logo apos o deploy: outro processo fez o ALTER entre o PRAGMA e aqui
+                if "duplicate column name" not in str(e):
+                    raise
+                continue
             logger.info(f"nucleo: coluna {tabela}.{nome} adicionada.")
 
 

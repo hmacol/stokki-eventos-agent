@@ -136,16 +136,24 @@ def listar_pool(conn: sqlite3.Connection | None = None, incluir_sem_servico: boo
         # pedido agrupado noutro servico da Vuupt perdeu o id no sync: nao e pedido sem servico
         agrupados = pedidos.servicos_que_agrupam(conn) if incluir_sem_servico else {}
         por_id: dict[int, sqlite3.Row] = {}
+        sem_id_pool: list[str] = []
         for p in conn.execute(sql, (banco.PEDIDO_ABERTO, banco.FLUXO_ENTREGA, banco.FLUXO_ENTREGA)):
             if p["vuupt_service_id"] is None and p["codigo"] in agrupados:
                 sid, composto = agrupados[p["codigo"]]
                 logger.info("pool.pedido_agrupado: %s esta no servico %s ('%s') da Vuupt; fora do pool sem servico",
                             p["codigo"], sid, composto)
                 continue
+            if p["vuupt_service_id"] is None and p["id_pool"] is None:
+                # linha gravada por codigo antigo (antes do restart): sem id nao entra, mas nao derruba o pool
+                sem_id_pool.append(p["codigo"])
+                continue
             chave = p["vuupt_service_id"] if p["vuupt_service_id"] is not None else pedidos.id_sintetico(p)
             atual = por_id.get(chave)
             if atual is None or (p["atualizado_em"] or "") > (atual["atualizado_em"] or ""):
                 por_id[chave] = p
+        if sem_id_pool:
+            logger.warning("pool.sem_id_pool: %d pedido(s) sem servico e sem id_pool fora do pool: %s "
+                           "(reabrir uma conexao do nucleo faz o backfill)", len(sem_id_pool), ", ".join(sem_id_pool))
     finally:
         if fechar:
             conn.close()

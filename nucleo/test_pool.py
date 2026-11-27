@@ -185,6 +185,18 @@ class TestFonteStokki(_Base):
         self.conn.commit()
         self.assertEqual([s["code"] for s in pool.listar_pool(self.conn, incluir_sem_servico=True)], ["#PS-903"])
 
+    def test_linha_sem_id_pool_fica_fora_com_warning_sem_derrubar_o_pool(self):
+        """Revisao final M3: linha com id_pool NULL (codigo antigo inseriu entre o pull e o
+        restart) dava TypeError e derrubava o pool inteiro."""
+        self._sem_servico("PS-906")
+        self.conn.execute("INSERT INTO nucleo_pedidos (codigo, status, origem, id_pool) "
+                          "VALUES ('PS-907', 'ABERTO', 'PIPELINE', NULL)")
+        self.conn.commit()
+        with self.assertLogs("nucleo.pool", level="WARNING") as cap:
+            codigos = [s["code"] for s in pool.listar_pool(self.conn, incluir_sem_servico=True)]
+        self.assertEqual(codigos, ["#PS-906"])
+        self.assertTrue(any("PS-907" in m for m in cap.output))
+
     def test_fonte_desconhecida_loga_warning(self):
         pool._FONTES_AVISADAS.clear()
         cfg = {"planejamento": {"fonte_pool": "banana"}}

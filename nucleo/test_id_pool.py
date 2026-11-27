@@ -118,5 +118,30 @@ class TestIdPool(_Base):
         self.assertIsNone(pedidos.codigo_por_id_sintetico(self.conn, -999))
 
 
+class _ConnPragmaVelho:
+    """Simula a corrida logo apos o git pull: o PRAGMA deste processo foi lido
+    antes de outro processo fazer o ALTER (a coluna ja existe de verdade)."""
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, *args):
+        if sql.startswith("PRAGMA table_info"):
+            return iter([])
+        return self._conn.execute(sql, *args)
+
+
+class TestMigracaoConcorrente(_Base):
+    def test_coluna_ja_criada_por_outro_processo_nao_derruba(self):
+        # sem a tolerancia o 2o processo morre 1x com "duplicate column name"
+        banco._migrar_colunas(_ConnPragmaVelho(self.conn), "nucleo_pedidos",
+                              [("id_pool", "INTEGER"), ("edicao_local_json", "TEXT")])
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(nucleo_pedidos)")}
+        self.assertIn("id_pool", cols)
+
+    def test_outro_erro_de_alter_continua_subindo(self):
+        with self.assertRaises(sqlite3.OperationalError):
+            banco._migrar_colunas(self.conn, "tabela_que_nao_existe", [("x", "TEXT")])
+
+
 if __name__ == "__main__":
     unittest.main()
