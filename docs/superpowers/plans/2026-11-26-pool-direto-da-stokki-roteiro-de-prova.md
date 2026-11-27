@@ -141,6 +141,8 @@ Durante:
       (paradas, ordem, motorista); no nucleo o pedido ficou com o id real e EM_ROTA.
 - [ ] Medir o tempo do envio (log "N de M pedido(s) sem servico ganharam servico na Vuupt em X s").
 - [ ] Log sem "falha tecnica" em sequencia (429 = parar e espaçar os envios) e sem trava presa.
+- [ ] Sem "possivel problema sistemico" (todos os pedidos recusados com o mesmo status: parar e chamar o Hugo antes
+      de reenviar) e sem `[ALERTA_ROTA_NAO_CRIADA]` no e-mail da criacao de rotas (rota adiada por falha tecnica).
 - [ ] Incremento e "adicionar parada em rota enviada" com um pedido sem servico, conferindo na Vuupt.
 
 Se algo der errado: nao reenviar em massa; voltar a chave (secao 8) depois do checklist pre-volta.
@@ -171,10 +173,23 @@ Medir no 1o dia; se estourar: limite de pedidos por clique ou execucao em segund
   recusa de REGRA (nao ABERTO, agrupado, -R, pulado_atribuido, done/canceled, ja teve servico, id sintetico
   inexistente) ou erro PERMANENTE da Vuupt (`VuuptAPIError` 400/404/409/410/422: "a Vuupt recusou o pedido
   (Status NNN): ...") tira a parada (`codigos_sem_servico`, volta ao pool) e a rota sai com o resto. O status vem do
-  texto "Status NNN" (o client nao tem atributo). Incremento e criacao direta pulam o pedido so naquela rodada
-  (WARNING no transitorio, ERROR na recusa); a fila do freshhub nao devolve erro no transitorio (o item volta a
-  pendente em 1 h) e devolve o erro na recusa. Os pedidos do lote que
-  materializaram antes da falha ficam no id real (servico `not_assigned` na Vuupt).
+  texto "Status NNN" (o client nao tem atributo). O incremento pula o pedido so naquela rodada (WARNING no
+  transitorio e na trava ocupada, ERROR na recusa; ali nao ha rota nova, so adicao a rota existente); a fila do
+  freshhub nao devolve erro no transitorio (o item volta a pendente em 1 h) e devolve o erro na recusa. Os pedidos do
+  lote que materializaram antes da falha ficam no id real (servico `not_assigned` na Vuupt).
+- **Rota automatica nunca sai parcial por falha tecnica** (Hugo, onda 3): na criacao direta
+  (`criar_rotas_diarias.py` sem `--gerar-rascunho`, `_com_servico`) falha tecnica ou trava ocupada em QUALQUER pedido
+  do lote levanta `RotaAdiada`: aquela rota NAO e criada na rodada (nenhuma chamada a `criar_rota_removendo_conflitos`),
+  todos os pedidos seguem no pool (quem materializou antes fica com o servico `not_assigned`), log ERROR com a rota e o
+  motivo, e o resumo da execucao (e-mail `notificar_execucao`) sai com a etapa "Criacao de rotas" em erro e
+  `[ALERTA_ROTA_NAO_CRIADA]` com as rotas. A rodada seguinte (ou o planejamento) cria a rota completa. Recusa
+  PERMANENTE (regra ou 400/404/409/410/422) continua tirando so aquele pedido e a rota sai com o resto (decisao de
+  borda pro Hugo confirmar). O envio de rascunho ja seguia o mesmo principio (aborta em ERRO_ENVIO).
+- **Erro sistemico nao remove paradas** (Hugo, onda 3): se TODOS os pedidos sem servico do lote (2 ou mais) sao
+  recusados pela Vuupt com o MESMO status permanente e nenhum deu certo, o lote inteiro vira transitorio ("a Vuupt
+  recusou todos os pedidos com o mesmo erro (Status NNN: ...): possivel problema sistemico, nada foi removido, avise
+  o Hugo"): rascunho em ERRO_ENVIO com tudo dentro; criacao direta adia a rota. Com 1 pedido so (incremento, fila,
+  adicionar parada) segue a regra normal; status diferentes no lote, recusa de regra no meio ou 1 sucesso tambem.
 - Trava velha por pedido: se o processo morre no meio do envio (restart do painel), a trava do pedido em
   `nucleo_materializacao` fica ate **10 minutos**; nesse tempo cada nova tentativa espera ate **30 s por pedido**
   travado e devolve "tente de novo" (nada e descartado). A mensagem ao operador e "tente de novo"; depois de 10 min a

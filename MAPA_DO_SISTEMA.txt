@@ -299,7 +299,13 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                                (...): tente de novo", sem rota parcial (resposta: codigos_pendentes_
                                                tecnico); só recusa de regra ou erro PERMANENTE da Vuupt (400/404/
                                                409/410/422, "a Vuupt recusou o pedido (Status NNN): ...") tira a
-                                               parada (volta ao pool; resposta: codigos_sem_servico);
+                                               parada (volta ao pool; resposta: codigos_sem_servico). TODOS os
+                                               pedidos do lote (>= 2) com o MESMO status permanente = erro
+                                               sistêmico: nada sai ("possivel problema sistemico ... avise o Hugo");
+                                             - criação direta de rota (criar_rotas_diarias sem --gerar-rascunho)
+                                               NUNCA sai parcial por falha técnica: a rota fica pra próxima rodada
+                                               (RotaAdiada, [ALERTA_ROTA_NAO_CRIADA] no e-mail da execução); recusa
+                                               permanente tira só aquele pedido e a rota sai com o resto;
                                              - enquanto o pedido não tem serviço, os campos marcados em
                                                edicao_local_json ficam protegidos: mudança legítima da Stokki no
                                                mesmo campo é ignorada até materializar (hoje viraria PUT);
@@ -1180,7 +1186,8 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
                            fusão/divisão de sublotes, macro-região, janela de
                            horário, orçamento de horas.
  criar_rotas_diarias.py    Job principal (16h). --gerar-rascunho grava rascunhos;
-                           sem a flag cria direto na Vuupt. Também expõe
+                           sem a flag cria direto na Vuupt (pool stokki: rota com falha
+                           técnica ao criar serviço não sai, RotaAdiada). Também expõe
                            roteirizar_para_rascunhos (botão "Roteirizar").
  otimizacao_rotas.py       Modelos: Sweep Polar, Clarke-Wright, 2-Opt, CEP, K-means.
  selecao_modelo.py         Roda os 5 e escolhe o melhor.
@@ -1369,6 +1376,10 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            Qualquer outra exceção (rede, 408/425/429/5xx, 401/403 com mensagem
                            própria, banco, modo teste, resposta sem id) é falha técnica:
                            ResultadoMaterializacao.transitorios (classificar_falha), a parada fica. `pulso` = heartbeat de quem chama (EnvioInterrompido sobe).
+                           Erro sistêmico (_aplicar_erro_sistemico): >= MINIMO_LOTE_SISTEMICO (2)
+                           pedidos, todos recusados com o MESMO status 4xx permanente e nenhum ok
+                           = o lote inteiro vira transitório (nada removido). materializar_lote
+                           devolve (prontos, falhas, pendentes técnicos).
                            Serviço já not_assigned com o mesmo code é adotado.
                            Payload vem do núcleo (janela/telefone/edição local); o fingerprint da
                            importação é regravado com o payload da Stokki
