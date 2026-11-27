@@ -104,10 +104,15 @@ def upsert_pedido(conn: sqlite3.Connection, codigo: str, campos: dict, origem: s
 
     set_coalesce = ", ".join(f"{c} = COALESCE(excluded.{c}, nucleo_pedidos.{c})" for c in colunas)
     # id_pool so no INSERT (pedido novo); contador nunca reutiliza id
+    # (pedido existente com id_pool NULL, ex. linha anterior ao backfill, tambem ganha um)
     id_pool = None
-    if not conn.execute("SELECT 1 FROM nucleo_pedidos WHERE codigo = ?", (codigo,)).fetchone():
+    existente = conn.execute("SELECT id_pool FROM nucleo_pedidos WHERE codigo = ?", (codigo,)).fetchone()
+    if existente is None or existente[0] is None:
         conn.execute("UPDATE nucleo_contadores SET valor = valor + 1 WHERE nome = 'id_pool'")
         id_pool = conn.execute("SELECT valor FROM nucleo_contadores WHERE nome = 'id_pool'").fetchone()[0]
+        if existente is not None:
+            conn.execute("UPDATE nucleo_pedidos SET id_pool = ? WHERE codigo = ?", (id_pool, codigo))
+            id_pool = None
     conn.execute(f"""
         INSERT INTO nucleo_pedidos (codigo, vuupt_service_id, {", ".join(colunas)}, tipo, status,
                                     origem, dados_json, atualizado_em, id_pool)

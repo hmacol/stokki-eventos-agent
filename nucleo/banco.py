@@ -648,21 +648,33 @@ def _garantir_id_pool(conn: sqlite3.Connection):
     pedido ainda nao tem servico na Vuupt). Contador proprio em
     nucleo_contadores: nunca reutiliza id de pedido apagado. Backfill unico
     ordenado por criado_em, codigo; idempotente."""
+    # Estado estavel = SOMENTE LEITURA (sem BEGIN/lock de escrita a cada conectar()).
+    def _precisa_migrar() -> bool:
+        if conn.execute("SELECT 1 FROM nucleo_pedidos WHERE id_pool IS NULL LIMIT 1").fetchone():
+            return True
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'idx_nucleo_pedidos_id_pool'").fetchone():
+            return True
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'nucleo_contadores'").fetchone():
+            return True
+        return conn.execute("SELECT 1 FROM nucleo_contadores WHERE nome = 'id_pool'").fetchone() is None
+
+    if not _precisa_migrar():
+        return
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    # dentro do lock: outro processo pode ter migrado enquanto esperavamos
     conn.execute("CREATE TABLE IF NOT EXISTS nucleo_contadores (nome TEXT PRIMARY KEY, valor INTEGER NOT NULL)")
-    if conn.execute("SELECT 1 FROM nucleo_pedidos WHERE id_pool IS NULL LIMIT 1").fetchone():
-        base = conn.execute("SELECT COALESCE(MAX(id_pool), 0) FROM nucleo_pedidos").fetchone()[0]
-        atual = conn.execute("SELECT valor FROM nucleo_contadores WHERE nome = 'id_pool'").fetchone()
-        base = max(base, atual[0] if atual else 0)
-        codigos = [r[0] for r in conn.execute(
-            "SELECT codigo FROM nucleo_pedidos WHERE id_pool IS NULL ORDER BY criado_em, codigo")]
-        conn.executemany("UPDATE nucleo_pedidos SET id_pool = ? WHERE codigo = ?",
-                         [(base + i, c) for i, c in enumerate(codigos, 1)])
-        conn.execute("INSERT INTO nucleo_contadores (nome, valor) VALUES ('id_pool', ?) "
-                     "ON CONFLICT(nome) DO UPDATE SET valor = excluded.valor", (base + len(codigos),))
+    base = conn.execute("SELECT COALESCE(MAX(id_pool), 0) FROM nucleo_pedidos").fetchone()[0]
+    atual = conn.execute("SELECT valor FROM nucleo_contadores WHERE nome = 'id_pool'").fetchone()
+    base = max(base, atual[0] if atual else 0)
+    codigos = [r[0] for r in conn.execute(
+        "SELECT codigo FROM nucleo_pedidos WHERE id_pool IS NULL ORDER BY criado_em, codigo")]
+    conn.executemany("UPDATE nucleo_pedidos SET id_pool = ? WHERE codigo = ?",
+                     [(base + i, c) for i, c in enumerate(codigos, 1)])
+    conn.execute("INSERT INTO nucleo_contadores (nome, valor) VALUES ('id_pool', ?) "
+                 "ON CONFLICT(nome) DO UPDATE SET valor = excluded.valor", (base + len(codigos),))
+    if codigos:
         logger.info(f"nucleo: id_pool atribuido a {len(codigos)} pedidos.")
-    else:
-        conn.execute("INSERT OR IGNORE INTO nucleo_contadores (nome, valor) VALUES ('id_pool', "
-                     "(SELECT COALESCE(MAX(id_pool), 0) FROM nucleo_pedidos))")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_nucleo_pedidos_id_pool ON nucleo_pedidos(id_pool)")
     conn.commit()
 

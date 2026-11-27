@@ -84,6 +84,30 @@ class TestIdPool(_Base):
         self.assertEqual(antes, depois)
         self.assertEqual(depois, {"PS-2": 2, "PS-3": 3})
 
+    def test_estado_estavel_nao_abre_transacao_de_escrita(self):
+        self._novo("PS-1")
+        banco.garantir_esquema(self.conn)
+        self.assertFalse(self.conn.in_transaction)
+        # outra conexao segura o lock de escrita: conectar() nao pode bloquear
+        outra = sqlite3.connect(self.db, timeout=0.2, isolation_level=None)
+        try:
+            outra.execute("BEGIN IMMEDIATE")
+            c2 = banco.conectar()
+            self.assertFalse(c2.in_transaction)
+            c2.close()
+            outra.execute("ROLLBACK")
+        finally:
+            outra.close()
+
+    def test_pedido_existente_com_id_pool_null_recebe_id_no_upsert(self):
+        self._novo("PS-1")
+        self.conn.execute("DROP INDEX idx_nucleo_pedidos_id_pool")
+        self.conn.execute("UPDATE nucleo_pedidos SET id_pool = NULL WHERE codigo = 'PS-1'")
+        self.conn.commit()
+        pedidos.upsert_pedido(self.conn, "PS-1", {"titulo": "x"}, banco.ORIGEM_PIPELINE)
+        self.conn.commit()
+        self.assertEqual(self._id("PS-1"), 2)  # proximo do contador (PS-1 original usou 1)
+
     def test_id_sintetico_ida_e_volta(self):
         self._novo("PS-77")
         row = self.conn.execute("SELECT * FROM nucleo_pedidos WHERE codigo='PS-77'").fetchone()
