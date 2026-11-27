@@ -55,15 +55,38 @@ class ResultadoMaterializacao:
     falhas: dict[str, str] = field(default_factory=dict)   # codigo normalizado -> motivo legivel
     # falhas por trava ocupada (outro envio criando o servico agora): quem chama NAO descarta o pedido
     ocupados: set[str] = field(default_factory=set)
+    # falha TECNICA (rede, timeout, HTTP 5xx/429 depois do backoff, banco ocupado, modo teste, erro
+    # inesperado): codigo -> causa. Tambem esta em `falhas`. Nao e recusa do pedido: quem chama NAO
+    # descarta a parada (o envio do rascunho para; incremento/criacao direta/fila pulam so nesta rodada)
+    transitorios: dict[str, str] = field(default_factory=dict)
     codigos: dict[int, str] = field(default_factory=dict)  # id sintetico do item -> codigo do nucleo
 
 
 class _Recusa(Exception):
-    """Pedido que nao vira servico agora; a mensagem e o motivo mostrado na tela e no log."""
+    """Recusa de REGRA: pedido que nao vira servico (nao ABERTO, agrupado, -R, pulado_atribuido,
+    done/canceled...); a mensagem e o motivo mostrado na tela e no log. So ela tira a parada do envio."""
 
 
 class _Ocupado(_Recusa):
     """Outro envio segura a trava do pedido: nao e recusa do pedido, e "tente de novo"."""
+
+
+class _Transitorio(Exception):
+    """Falha tecnica conhecida (modo teste, servico criado mas nao gravado no nucleo): a mensagem vale
+    como esta; o pedido continua no envio."""
+
+
+FALHA_RECUSA, FALHA_OCUPADO, FALHA_TRANSITORIA = "recusa", "ocupado", "transitoria"
+
+
+def classificar_falha(e: BaseException) -> str:
+    """Recusa de regra (_Recusa) x trava ocupada (_Ocupado) x falha tecnica (qualquer outra excecao:
+    rede, HTTP, 429, banco, inesperado). Na duvida e transitoria: nunca descarta parada por erro tecnico."""
+    if isinstance(e, _Ocupado):
+        return FALHA_OCUPADO
+    if isinstance(e, _Recusa):
+        return FALHA_RECUSA
+    return FALHA_TRANSITORIA
 
 
 def _modo_teste(config: dict | None, modo_teste: bool) -> bool:
@@ -90,8 +113,10 @@ def materializar_servicos(itens: list[dict], vuupt, config: dict | None, conn: s
     {codigo: service_id} em `ok` e {codigo: motivo} em `falhas`; item com id real e ignorado
     (nem aparece no resultado). Ordem do lote = ordem dos itens. Commita na `conn` a cada pedido
     (a trava precisa ser vista pelos outros processos na hora). Modo teste: nada vai na Vuupt e
-    cada pedido sem servico volta em `falhas` com o motivo. Trava ocupada alem de `espera_s` (padrao
-    ESPERA_TRAVA_S): falha com o codigo tambem em `ocupados`. `codigos` = {id do item: codigo do nucleo}
+    cada pedido sem servico volta em `falhas` (e em `transitorios`) com o motivo. Trava ocupada alem de
+    `espera_s` (padrao ESPERA_TRAVA_S): falha com o codigo tambem em `ocupados`. Excecao que nao e
+    recusa de regra (classificar_falha): falha com o codigo tambem em `transitorios` (quem chama nao
+    descarta o pedido). `codigos` = {id do item: codigo do nucleo}
     (quem chama casa o resultado pelo id, nao pelo codigo que tem na mao)."""
     espera_s = ESPERA_TRAVA_S if espera_s is None else espera_s
     resultado = ResultadoMaterializacao()
@@ -115,14 +140,21 @@ def materializar_servicos(itens: list[dict], vuupt, config: dict | None, conn: s
             try:
                 resultado.ok[codigo] = _materializar_um(conn, codigo, vuupt, _modo_teste(config, modo_teste), espera_s)
                 logger.info(f"materializar {codigo}: servico {resultado.ok[codigo]} na Vuupt")
-            except _Recusa as e:
+            except Exception as e:  # noqa: BLE001 - um pedido nunca derruba os outros
+                tipo = classificar_falha(e)
+                if tipo == FALHA_TRANSITORIA:
+                    resultado.transitorios[codigo] = str(e)
+                    resultado.falhas[codigo] = (str(e) if isinstance(e, _Transitorio) else
+                                                f"falha tecnica ao criar servico na Vuupt ({e}): tente de novo")
+                    if isinstance(e, _Transitorio):
+                        logger.warning(f"materializar {codigo}: servico NAO criado (transitorio) -- {e}")
+                    else:
+                        logger.exception(f"materializar {codigo}: falha tecnica, pedido segue no envio -- {e}")
+                    continue
                 resultado.falhas[codigo] = str(e)
-                if isinstance(e, _Ocupado):
+                if tipo == FALHA_OCUPADO:
                     resultado.ocupados.add(codigo)
                 logger.warning(f"materializar {codigo}: servico NAO criado -- {e}")
-            except Exception as e:  # noqa: BLE001 - um pedido nunca derruba os outros
-                resultado.falhas[codigo] = f"erro ao criar o servico na Vuupt: {e}"
-                logger.exception(f"materializar {codigo}: erro inesperado")
     finally:
         if fechar:
             conn.close()
@@ -188,7 +220,7 @@ def _materializar_um(conn: sqlite3.Connection, codigo: str, vuupt, modo_teste: b
         return _ja_tem_servico(conn, codigo, int(linha["vuupt_service_id"]))
     _conferir_agrupamento(conn, codigo)
     if modo_teste:
-        raise _Recusa("modo teste: servico nao criado na Vuupt")
+        raise _Transitorio("modo teste: servico nao criado na Vuupt (nada descartado)")
 
     processo = f"{os.getpid()}:{threading.get_ident()}:{uuid.uuid4().hex[:8]}"
     limite = time.monotonic() + espera_s
@@ -270,8 +302,8 @@ def _criar_ou_adotar(conn: sqlite3.Connection, codigo: str, linha, vuupt) -> int
         try:
             pedidos.registrar_importacao(payload, resposta, acao, conn=conn)   # id no nucleo + rascunhos, 1 transacao
         except Exception as e:
-            raise _Recusa(f"servico {sid} criado na Vuupt mas nao gravado no nucleo ({e}); o proximo envio adota "
-                          f"o mesmo servico") from e
+            raise _Transitorio(f"falha tecnica: servico {sid} criado na Vuupt mas nao gravado no nucleo ({e}); "
+                               f"tente de novo, o proximo envio adota o mesmo servico") from e
     _fingerprint_do_pipeline(codigo, base, servico, vuupt)
     _propagar_origens(conn, codigo, sid, linha["agendamento_inicio"])
     return sid

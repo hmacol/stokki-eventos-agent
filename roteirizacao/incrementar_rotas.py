@@ -433,6 +433,12 @@ def _garantir_servico(pedido: dict, vuupt, config: dict) -> bool:
     if real:
         pedido["id"] = real
         return True
+    if res.transitorios:
+        # falha tecnica (rede, 429, 5xx): nao e recusa do pedido, so fica fora desta rodada
+        causa = next(iter(res.transitorios.values()))
+        logger.warning(f"  {pedido.get('code')}: falha tecnica ao criar o servico na Vuupt ({causa}); fica fora "
+                       f"deste incremento e volta na proxima rodada")
+        return False
     motivo = next(iter(res.falhas.values()), "servico nao criado na Vuupt")
     logger.error(f"  {pedido.get('code')}: sem servico na Vuupt, fica fora do incremento -- {motivo}")
     return False

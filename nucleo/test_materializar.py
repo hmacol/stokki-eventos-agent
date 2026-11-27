@@ -325,6 +325,72 @@ class FixRound1Test(_Base):
         self.assertTrue(any("trava" in m and "locked" in m for m in logs.output))
 
 
+class FalhaTransitoriaTest(_Base):
+    """Revisao Fable FIX 1: so recusa de REGRA (_Recusa) tira o pedido do envio; rede/HTTP/429/erro
+    inesperado e falha tecnica (transitoria): quem chama mantem a parada e tenta de novo."""
+
+    def test_classificacao_recusa_ocupado_transitorio(self):
+        c = materializar.classificar_falha
+        self.assertEqual(c(materializar._Recusa("pedido CANCELADO")), materializar.FALHA_RECUSA)
+        self.assertEqual(c(materializar._Ocupado("outro envio")), materializar.FALHA_OCUPADO)
+        for e in (RuntimeError("Status 429: Too Many Requests"), TimeoutError("read timed out"),
+                  ConnectionError("reset"), sqlite3.OperationalError("database is locked"),
+                  materializar._Transitorio("modo teste")):
+            self.assertEqual(c(e), materializar.FALHA_TRANSITORIA, e)
+
+    def test_erro_http_vai_em_transitorios_e_nao_derruba_os_outros(self):
+        ids = [self._pedido(c) for c in ("PS-1", "PS-2", "PS-3")]
+        vuupt = FakeVuupt(falhar_em={"PS-2"})
+        res = materializar.materializar_servicos([{"id": i} for i in ids], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {"PS-1": 900, "PS-3": 901})
+        self.assertEqual(list(res.transitorios), ["PS-2"])
+        self.assertIn("500", res.transitorios["PS-2"])
+        self.assertIn("falha tecnica ao criar servico na Vuupt", res.falhas["PS-2"])
+        self.assertIn("tente de novo", res.falhas["PS-2"])
+        self.assertEqual(res.ocupados, set())
+
+    def test_timeout_na_busca_e_transitorio(self):
+        sid = self._pedido()
+        vuupt = FakeVuupt()
+        vuupt.buscar_servico_por_code = mock.Mock(side_effect=TimeoutError("read timed out"))
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        self.assertIn("timed out", res.transitorios["PS-1"])
+        self.assertEqual(vuupt.criados, [])
+        self.assertEqual(self._travas(), 0)
+
+    def test_recusa_de_regra_nao_e_transitoria(self):
+        a = self._pedido("PS-1", status=banco.PEDIDO_CANCELADO)
+        b = self._pedido("PS-2-R1")
+        res = materializar.materializar_servicos([{"id": a}, {"id": b}], FakeVuupt(), {}, self.conn)
+        self.assertEqual(set(res.falhas), {"PS-1", "PS-2-R1"})
+        self.assertEqual(res.transitorios, {})
+        res = materializar.materializar_servicos([{"id": self._pedido("PS-3")}], FakeVuupt(acao="pulado_atribuido"),
+                                                 {}, self.conn)
+        self.assertIn("PS-3", res.falhas)
+        self.assertEqual(res.transitorios, {})
+
+    def test_modo_teste_e_transitorio(self):
+        """Modo teste nao e recusa do pedido: a parada nao pode sair do rascunho."""
+        sid = self._pedido()
+        res = materializar.materializar_servicos([{"id": sid}], FakeVuupt(), {"modo_teste": True}, self.conn)
+        self.assertIn("modo teste", res.transitorios["PS-1"])
+
+    def test_criado_na_vuupt_mas_nao_gravado_no_nucleo_e_transitorio(self):
+        sid = self._pedido()
+        with mock.patch.object(pedidos, "registrar_importacao", side_effect=sqlite3.OperationalError("database is locked")):
+            res = materializar.materializar_servicos([{"id": sid}], FakeVuupt(), {}, self.conn)
+        self.assertIn("PS-1", res.transitorios)
+        self.assertIn("servico 900 criado na Vuupt", res.falhas["PS-1"])
+
+    def test_lote_pula_o_transitorio_nesta_rodada(self):
+        a, b = self._pedido("PS-1"), self._pedido("PS-2")
+        saida, falhas = materializar.materializar_lote([{"id": a}, {"id": b}], FakeVuupt(falhar_em={"PS-2"}), {},
+                                                       self.conn)
+        self.assertEqual([s["id"] for s in saida], [900])
+        self.assertIn("falha tecnica", falhas["PS-2"])
+        self.assertIsNone(pedidos.buscar_pedido("PS-2", conn=self.conn)["vuupt_service_id"])   # nada gravado
+
+
 class MaterializarLoteTest(_Base):
     def test_lote_troca_o_id_e_tira_quem_falhou(self):
         a, b = self._pedido("PS-1"), self._pedido("PS-2", status=banco.PEDIDO_CANCELADO)

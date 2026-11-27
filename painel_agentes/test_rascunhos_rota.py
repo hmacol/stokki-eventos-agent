@@ -105,18 +105,89 @@ class EnviarRascunhoSemServicoTest(_Base):
         self.assertEqual(_paradas(rid), [(101, "#PS-9"), (900, "#PS-1"), (901, "#PS-2")])
         self.assertEqual(pedidos.buscar_pedido("PS-1")["vuupt_service_id"], 900)
 
-    def test_falha_no_meio_envia_so_os_materializados(self):
+    def test_falha_tecnica_no_meio_nao_envia_e_mantem_todas_as_paradas(self):
+        """Revisao Fable FIX 1: erro da Vuupt (500/429/timeout) num pedido do lote NAO tira a parada nem
+        manda rota parcial: o envio para (ERRO_ENVIO, 'tente de novo') e nada e descartado."""
         a, b, c = self._sem_servico("PS-1"), self._sem_servico("PS-2"), self._sem_servico("PS-3")
         self.vuupt.falhar_em = {"PS-2"}
         rid = _inserir_rascunho([(a, "#PS-1"), (b, "#PS-2"), (c, "#PS-3")])
         with self.assertLogs(rascunhos_rota.logger, "INFO") as logs:
             resultado = rascunhos_rota.enviar_rascunho(rid, "token")
-        self.assertTrue(resultado["ok"], resultado)
-        self.assertEqual(self._ids_enviados(), [900, 901])
+        self.assertFalse(resultado["ok"], resultado)
+        self.criar_rota.assert_not_called()
         self.assertEqual(list(resultado["codigos_sem_servico"]), ["#PS-2"])
         self.assertIn("500", resultado["codigos_sem_servico"]["#PS-2"])
-        self.assertEqual(_paradas(rid), [(900, "#PS-1"), (901, "#PS-3")])   # PS-2 saiu do rascunho (volta ao pool)
+        self.assertEqual(_paradas(rid), [(900, "#PS-1"), (b, "#PS-2"), (901, "#PS-3")])   # nada descartado
+        rascunho = rascunhos_rota.buscar_rascunho(rid)
+        self.assertEqual(rascunho["status"], rascunhos_rota.STATUS_ERRO_ENVIO)
+        self.assertIn("falha tecnica ao criar servico na Vuupt", rascunho["erro_envio"])
+        self.assertIn("tente de novo", rascunho["erro_envio"])
+        self.assertEqual(resultado["erro"], rascunho["erro_envio"])
         self.assertTrue(any("PS-2" in m and "500" in m for m in logs.output))
+
+    def test_429_mantem_a_parada_e_reenvio_depois_funciona(self):
+        a, b = self._sem_servico("PS-1"), self._sem_servico("PS-2")
+        rid = _inserir_rascunho([(a, "#PS-1"), (b, "#PS-2")])
+        original = self.vuupt.criar_ou_atualizar_servico
+
+        def com_429(payload):
+            if payload["code"] == "#PS-2":
+                raise RuntimeError("429 Client Error: Too Many Requests")
+            return original(payload)
+        self.vuupt.criar_ou_atualizar_servico = com_429
+        resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertFalse(resultado["ok"])
+        self.criar_rota.assert_not_called()
+        self.assertEqual(_paradas(rid), [(900, "#PS-1"), (b, "#PS-2")])
+        self.assertIn("429", rascunhos_rota.buscar_rascunho(rid)["erro_envio"])
+        # a Vuupt voltou: o reenvio (ERRO_ENVIO e aceito) sai com as duas paradas
+        self.vuupt.criar_ou_atualizar_servico = original
+        resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertTrue(resultado["ok"], resultado)
+        self.assertEqual(self._ids_enviados(), [900, 901])
+
+    def test_recusa_de_regra_sai_e_falha_tecnica_fica(self):
+        a = self._sem_servico("PS-1", status=banco.PEDIDO_CANCELADO)
+        b = self._sem_servico("PS-2")
+        self.vuupt.falhar_em = {"PS-2"}
+        rid = _inserir_rascunho([(101, "#PS-9"), (a, "#PS-1"), (b, "#PS-2")])
+        resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertFalse(resultado["ok"])
+        self.criar_rota.assert_not_called()
+        self.assertEqual(_paradas(rid), [(101, "#PS-9"), (b, "#PS-2")])   # so o CANCELADO saiu
+        self.assertIn("CANCELADO", resultado["codigos_sem_servico"]["#PS-1"])
+
+    def test_recusa_de_regra_ainda_tira_so_a_parada_recusada(self):
+        a, b = self._sem_servico("PS-1"), self._sem_servico("PS-2", status=banco.PEDIDO_CANCELADO)
+        rid = _inserir_rascunho([(a, "#PS-1"), (b, "#PS-2")])
+        resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertTrue(resultado["ok"], resultado)
+        self.assertEqual(self._ids_enviados(), [900])
+        self.assertEqual(_paradas(rid), [(900, "#PS-1")])
+
+    def test_modo_teste_nao_esvazia_o_rascunho(self):
+        a = self._sem_servico("PS-1")
+        rid = _inserir_rascunho([(a, "#PS-1")])
+        with mock.patch.object(rascunhos_rota, "_carregar_config",
+                               return_value={"planejamento": {"fonte_pool": "stokki"}, "modo_teste": True}):
+            resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertFalse(resultado["ok"])
+        self.criar_rota.assert_not_called()
+        self.assertEqual(_paradas(rid), [(a, "#PS-1")])
+
+    def test_adicao_em_rota_enviada_com_falha_tecnica_diz_tente_de_novo(self):
+        a = self._sem_servico("PS-1")
+        self.vuupt.falhar_em = {"PS-1"}
+        rid = _inserir_rascunho([(101, "#PS-9")], status="ENVIADO", vuupt_route_id=555)
+        with mock.patch("edicao_rota.ler_rota", return_value={"status": "not_started"}), \
+                mock.patch("edicao_rota.adicionar_pedidos") as adicionar, \
+                mock.patch.object(rascunhos_rota, "_recusar_se_retornando"):
+            with self.assertRaises(ValueError) as erro:
+                rascunhos_rota.adicionar_em_rota_enviada(rid, self._parada(a, "#PS-1"), "token", "hugo")
+        self.assertIn("falha tecnica", str(erro.exception))
+        self.assertIn("tente de novo", str(erro.exception))
+        adicionar.assert_not_called()
+        self.assertEqual(_paradas(rid), [(101, "#PS-9")])
 
     def test_todas_falham_nao_vai_na_vuupt_e_diz_o_motivo(self):
         a = self._sem_servico("PS-1", status=banco.PEDIDO_CANCELADO)

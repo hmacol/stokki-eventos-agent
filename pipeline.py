@@ -1238,6 +1238,24 @@ def _espelho_para_freshhub(servico: dict | None) -> dict | None:
     return espelho
 
 
+class FalhaTransitoriaMaterializacao(Exception):
+    """Falha tecnica ao criar o servico pela fila (rede, 429, 5xx): nao e recusa do pedido."""
+
+
+def _materializar_para_fila(codigo: str, vuupt, config: dict) -> tuple[int | None, str]:
+    """Fonte stokki: o pedido so estava no nucleo e a fila exige o id -> o servico nasce agora.
+    (service_id, "") ou (None, motivo da recusa de regra); falha tecnica levanta
+    FalhaTransitoriaMaterializacao (atender_fila_freshhub nao devolve erro: o item volta em 1 h)."""
+    from nucleo import materializar
+    res = materializar.materializar_servicos([{"code": codigo}], vuupt, config)
+    sid = next(iter(res.ok.values()), None)
+    if sid:
+        return sid, ""
+    if res.transitorios:
+        raise FalhaTransitoriaMaterializacao(next(iter(res.transitorios.values())))
+    return None, next(iter(res.falhas.values()), "servico nao criado na Vuupt")
+
+
 def atender_fila_freshhub(cliente, processar, *, modo_teste: bool, limite: int = 50,
                           buscar_servico=None, materializar=None) -> list[dict]:
     """Pendentes de destino vuupt na fila de replica do sistema novo: pra cada um roda o MESMO
@@ -1288,6 +1306,14 @@ def atender_fila_freshhub(cliente, processar, *, modo_teste: bool, limite: int =
                 and res.get("acao") == ACAO_GRAVADO_NUCLEO):
             try:
                 sid, motivo = materializar(codigo)
+            except FalhaTransitoriaMaterializacao as e:
+                # falha tecnica (rede, 429, 5xx) nao e erro do pedido: nada devolvido, o item fica
+                # 'enviado' e volta a pendente na API nova em 1 h (proxima rodada tenta de novo)
+                logger.warning(f"  fila freshhub {ident} ({codigo}): falha tecnica ao criar o servico na Vuupt "
+                               f"({e}); nada devolvido, volta na proxima rodada")
+                saida.append({"id": ident, "codigo": codigo, "ok": False, "vuupt_service_id": None,
+                              "acao": res.get("acao")})
+                continue
             except Exception as e:  # noqa: BLE001 - o item falha sozinho
                 sid, motivo = None, str(e)
             if sid is None:
@@ -1672,11 +1698,7 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
     # trava da rodada; roda DEPOIS dos pedidos da Stokki (o pipeline normal pode ja ter criado o servico;
     # criar_ou_atualizar_servico e idempotente por code e a fila so devolve o id)
     def _materializar_pela_fila(codigo: str):
-        # fonte stokki: o pedido so estava no nucleo e a fila exige o id -> o servico nasce agora
-        from nucleo.materializar import materializar_servicos
-        res = materializar_servicos([{"code": codigo}], vuupt, config)
-        sid = next(iter(res.ok.values()), None)
-        return sid, ("" if sid else next(iter(res.falhas.values()), "servico nao criado na Vuupt"))
+        return _materializar_para_fila(codigo, vuupt, config)
 
     def _atender_fila():
         if not fila_freshhub:

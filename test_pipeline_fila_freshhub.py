@@ -208,6 +208,35 @@ class FilaSemServicoTest(unittest.TestCase):
         self.assertEqual(args, ("r1", False))
         self.assertIn("CANCELADO", kwargs["erro"])
 
+    def test_falha_tecnica_na_materializacao_nao_devolve_erro_e_volta_na_proxima(self):
+        """Revisao Fable FIX 1: 429/timeout nao e recusa do pedido; o item nao e devolvido com erro (fica
+        'enviado' e volta a pendente na API nova em 1 h)."""
+        cliente = mock.Mock()
+        cliente.pendentes.return_value = [_item()]
+        processar = mock.Mock(return_value=_res(acao="gravado_nucleo", sid=None, servico=None))
+        materializar = mock.Mock(side_effect=pipeline.FalhaTransitoriaMaterializacao("429 Too Many Requests"))
+        with self.assertLogs(pipeline.logger, "WARNING") as logs:
+            saida = pipeline.atender_fila_freshhub(cliente, processar, modo_teste=False, buscar_servico=mock.Mock(),
+                                                   materializar=materializar)
+        cliente.resultado.assert_not_called()
+        self.assertFalse(saida[0]["ok"])
+        self.assertTrue(any("429" in m and "PS-41679" in m for m in logs.output))
+
+    def test_materializar_para_fila_separa_transitorio_de_recusa(self):
+        from nucleo import materializar
+        transitorio = materializar.ResultadoMaterializacao(
+            falhas={"PS-1": "falha tecnica ao criar servico na Vuupt (429): tente de novo"}, transitorios={"PS-1": "429"})
+        with mock.patch.object(materializar, "materializar_servicos", return_value=transitorio):
+            with self.assertRaises(pipeline.FalhaTransitoriaMaterializacao):
+                pipeline._materializar_para_fila("PS-1", mock.Mock(), {})
+        recusa = materializar.ResultadoMaterializacao(falhas={"PS-1": "pedido PS-1 esta CANCELADO no nucleo"})
+        with mock.patch.object(materializar, "materializar_servicos", return_value=recusa):
+            self.assertEqual(pipeline._materializar_para_fila("PS-1", mock.Mock(), {}),
+                             (None, "pedido PS-1 esta CANCELADO no nucleo"))
+        ok = materializar.ResultadoMaterializacao(ok={"PS-1": 901})
+        with mock.patch.object(materializar, "materializar_servicos", return_value=ok):
+            self.assertEqual(pipeline._materializar_para_fila("PS-1", mock.Mock(), {}), (901, ""))
+
     def test_caminho_antigo_nao_materializa(self):
         cliente = mock.Mock()
         cliente.pendentes.return_value = [_item()]

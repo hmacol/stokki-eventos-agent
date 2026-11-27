@@ -1387,10 +1387,11 @@ def marcar_erro_envio(rascunho_id: int, mensagem: str):
 
 
 def _materializar_paradas(rascunho_id: int, paradas: list[dict], token: str,
-                          config: dict) -> tuple[dict[str, str], list[str]]:
+                          config: dict) -> tuple[dict[str, str], list[str], dict[str, str]]:
     """Cria na Vuupt o servico das paradas de id sintetico (nucleo/materializar.py: trava por codigo,
-    busca por code antes de criar). Quem falha sai do rascunho, MENOS quem esta com a trava ocupada
-    por outro envio (fica onde esta). Devolve ({codigo da parada: motivo}, [codigos ocupados])."""
+    busca por code antes de criar). So quem foi RECUSADO por regra sai do rascunho; quem esta com a
+    trava ocupada por outro envio ou teve falha tecnica (rede, 429, 5xx, modo teste) fica onde esta.
+    Devolve ({codigo da parada: motivo}, [codigos ocupados], {codigo da parada: causa da falha tecnica})."""
     import time
     from vuupt_client import VuuptClient
     from nucleo import banco as nucleo_banco, normalizacao
@@ -1406,6 +1407,7 @@ def _materializar_paradas(rascunho_id: int, paradas: list[dict], token: str,
         conn.close()
     falhas: dict[str, str] = {}
     ocupados: list[str] = []
+    transitorios: dict[str, str] = {}
     for p in sem_servico:
         # casa pelo id (o codigo da parada pode diferir do nucleo); sem id no resultado, pelo codigo
         codigo = res.codigos.get(int(p["service_id"])) or normalizacao.normalizar_codigo(p["codigo"])
@@ -1416,11 +1418,14 @@ def _materializar_paradas(rascunho_id: int, paradas: list[dict], token: str,
         if codigo in res.ocupados:
             ocupados.append(p["codigo"])   # outro envio esta criando: nao descarta a parada
             continue
+        if codigo in res.transitorios:
+            transitorios[p["codigo"]] = res.transitorios[codigo]   # falha tecnica: nao descarta a parada
+            continue
         remover_parada(rascunho_id, p["service_id"])
     logger.info(f"Rascunho {rascunho_id}: {len(sem_servico) - len(falhas)} de {len(sem_servico)} pedido(s) sem "
                 f"servico ganharam servico na Vuupt em {time.monotonic() - inicio:.1f}s"
                 + ("; sem servico: " + "; ".join(f"{c} ({m})" for c, m in falhas.items()) if falhas else ""))
-    return falhas, ocupados
+    return falhas, ocupados, transitorios
 
 
 TRAVA_ENVIO_VELHA_MIN = 15   # trava de processo morto no meio do envio (restart) expira sozinha
@@ -1542,16 +1547,24 @@ def _enviar_rascunho(rascunho_id: int, token: str) -> dict:
         return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem, **saiu}
 
     # Pool direto da Stokki (planejamento.fonte_pool = stokki): parada de id negativo ainda nao tem
-    # servico na Vuupt; ele nasce AGORA. Quem falha sai do rascunho (volta ao pool) com o motivo; as
-    # outras ja estao no id real (adotar_servico reescreveu o rascunho), por isso recarrega.
+    # servico na Vuupt; ele nasce AGORA. Quem e RECUSADO por regra sai do rascunho (volta ao pool) com o
+    # motivo; as outras ja estao no id real (adotar_servico reescreveu o rascunho), por isso recarrega.
     saiu["codigos_sem_servico"] = {}
     if any(nucleo_pool.eh_sem_servico(p["service_id"]) for p in paradas):
-        saiu["codigos_sem_servico"], ocupados = _materializar_paradas(rascunho_id, paradas, token, config)
-        if ocupados:
-            # outro envio (clique duplo, incremento) esta criando o servico desses pedidos: a rota nao sai
-            # agora e nada e descartado; o reenvio ja encontra o id real
-            mensagem = (f"Pedido(s) em materializacao por outro envio, tente de novo em instantes: "
-                        f"{', '.join(ocupados)} -- nada enviado.")
+        saiu["codigos_sem_servico"], ocupados, transitorios = _materializar_paradas(
+            rascunho_id, paradas, token, config)
+        if ocupados or transitorios:
+            # outro envio (clique duplo, incremento) esta criando o servico desses pedidos, ou a Vuupt
+            # falhou (rede, 429, 5xx): a rota nao sai agora (nunca parcial) e nada e descartado; o
+            # reenvio ja encontra o id real de quem materializou
+            partes = []
+            if transitorios:
+                partes.append("falha tecnica ao criar servico na Vuupt ("
+                              + "; ".join(f"{c}: {m}" for c, m in transitorios.items()) + "): tente de novo")
+            if ocupados:
+                partes.append(f"pedido(s) em materializacao por outro envio, tente de novo em instantes: "
+                              f"{', '.join(ocupados)}")
+            mensagem = " | ".join(partes) + " -- nada enviado, nenhuma parada descartada."
             marcar_erro_envio(rascunho_id, mensagem)
             return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem, **saiu}
         rascunho = buscar_rascunho(rascunho_id)

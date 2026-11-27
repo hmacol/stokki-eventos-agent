@@ -282,6 +282,15 @@ class TestIncrementoSemServico(unittest.TestCase):
             self._rodar([self._rota()], [], pool=self._pool())
         self.adicionar.assert_not_called()
 
+    def test_falha_tecnica_pula_so_nesta_rodada_com_log_proprio(self):
+        res = inc.materializar.ResultadoMaterializacao(
+            falhas={"PS-7": "falha tecnica ao criar servico na Vuupt (429): tente de novo"}, transitorios={"PS-7": "429"})
+        with mock.patch.object(inc.materializar, "materializar_servicos", return_value=res), \
+                self.assertLogs(inc.logger, "WARNING") as logs:
+            self.assertFalse(inc._garantir_servico({"id": -7, "code": "#PS-7"}, "vuupt", {}))
+        self.assertTrue(any("falha tecnica" in m and "proxima rodada" in m for m in logs.output))
+        self.assertFalse(any(" ERROR:" in m or m.startswith("ERROR") for m in logs.output))
+
     def test_incremento_com_id_real_nao_materializa(self):
         with mock.patch.object(inc.materializar, "materializar_servicos") as m:
             self._rodar([self._rota()], [], pool=[_servico(1)])
