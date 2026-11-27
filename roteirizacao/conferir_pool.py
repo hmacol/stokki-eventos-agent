@@ -128,8 +128,13 @@ def _irmaos_vuupt(vuupt, base: str) -> list[dict]:
     return list(vistos.values())
 
 
-def _tirar_dos_rascunhos(service_id: int) -> list[int]:
-    """Remove a parada de todo rascunho ainda não enviado, de hoje em diante."""
+def tirar_dos_rascunhos(service_id: int) -> list[int]:
+    """Remove a parada de todo rascunho ainda não enviado (RASCUNHO/ERRO_ENVIO), de hoje em
+    diante. OFERTADA/ENVIADO não são mexidos. Também usado pelo pipeline (pedido sem serviço
+    fechado no núcleo), por isso garante o painel_agentes no sys.path (no fim: não sombreia nada)."""
+    painel = str(_RAIZ / "painel_agentes")
+    if painel not in sys.path:
+        sys.path.append(painel)
     import rascunhos_rota
     conn = sqlite3.connect(rascunhos_rota.DB_PATH)
     try:
@@ -148,12 +153,16 @@ def cancelar_ja_entregue(vuupt, s: dict) -> list[int] | None:
     """Tira do pool o pedido ja entregue: cancela o servico na Vuupt e tira dos rascunhos nao
     enviados. Pedido sem servico na Vuupt (id negativo, fonte stokki) fecha LOCAL no nucleo
     (CANCELADO): nunca chama a Vuupt com id sintetico e, fora do pool e dos rascunhos, nunca
-    e materializado no envio. Devolve os rascunhos mexidos, ou None se o cancelamento falhou."""
+    e materializado no envio. Devolve os rascunhos mexidos, ou None se nada foi cancelado agora
+    (falha na Vuupt, ou pedido sem servico que ja nao estava ABERTO): esse nao conta como CANCELADO."""
     from nucleo import banco, pool
     if pool.eh_sem_servico(s["id"]):
         from nucleo.pedidos import cancelar_sem_servico
         if not cancelar_sem_servico(s.get("code"), "ja entregue (conferir_pool)", banco.ORIGEM_PIPELINE):
-            logger.warning(f"{s.get('code')}: pedido sem servico ja nao estava ABERTO no nucleo")
+            tirar_dos_rascunhos(s["id"])   # defensivo: fechado por outro caminho, a parada nao fica
+            logger.warning(f"{s.get('code')}: pedido sem servico ja nao estava ABERTO no nucleo; "
+                           f"nao conta como cancelado")
+            return None
     else:
         from vuupt_client import VuuptAPIError
         try:
@@ -161,7 +170,7 @@ def cancelar_ja_entregue(vuupt, s: dict) -> list[int] | None:
         except VuuptAPIError as e:
             logger.warning(f"{s.get('code')}: cancelamento na Vuupt falhou ({e})")
             return None
-    return _tirar_dos_rascunhos(s["id"])
+    return tirar_dos_rascunhos(s["id"])
 
 
 # ── Rotina ────────────────────────────────────────────────────────────────────

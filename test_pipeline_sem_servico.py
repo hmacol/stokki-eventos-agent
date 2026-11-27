@@ -224,6 +224,63 @@ class FecharSemServicoTest(_Base):
         self.assertIsNone(self._linha())
         self.assertEqual(vuupt.mock_calls, [])
 
+    def _parada_em_rascunhos(self):
+        """Pedido sem servico com parada de id negativo num rascunho RASCUNHO e num OFERTADA (hoje)."""
+        import sys
+        painel = str(Path(pipeline.__file__).parent / "painel_agentes")
+        if painel not in sys.path:
+            sys.path.append(painel)
+        import rascunhos_rota
+        for p in (mock.patch.object(rascunhos_rota, "DB_PATH", self.db),
+                  mock.patch.object(rascunhos_rota, "_recalcular_km_silencioso")):
+            p.start()
+            self.addCleanup(p.stop)
+        self._ja_no_nucleo_sem_servico()
+        neg = pedidos.id_sintetico(self._linha())
+        ids = {}
+        for status in (rascunhos_rota.STATUS_RASCUNHO, rascunhos_rota.STATUS_OFERTADA):
+            rid = rascunhos_rota.criar_rascunho_vazio(date.today(), "L1", "p", "t", 1, None, "06:00")
+            conn = rascunhos_rota._conectar()
+            try:
+                conn.execute("UPDATE rascunhos_rota SET status = ? WHERE id = ?", (status, rid))
+                conn.execute("INSERT INTO rascunhos_parada (rascunho_id, ordem, service_id, codigo) "
+                             "VALUES (?, 0, ?, 'PS-1')", (rid, neg))
+                conn.commit()
+            finally:
+                conn.close()
+            ids[status] = rid
+        return rascunhos_rota, neg, ids
+
+    def _paradas(self, rascunhos_rota, neg):
+        conn = rascunhos_rota._conectar()
+        try:
+            return {r[0] for r in conn.execute(
+                "SELECT r.status FROM rascunhos_parada p JOIN rascunhos_rota r ON r.id = p.rascunho_id "
+                "WHERE p.service_id = ?", (neg,))}
+        finally:
+            conn.close()
+
+    def test_cancelado_na_stokki_sem_servico_sai_do_rascunho(self):
+        rr, neg, _ = self._parada_em_rascunhos()
+        self.detalhe = _detalhe("Cancelado")
+        self._processar(self._vuupt())
+        self.assertEqual(self._linha()["status"], banco.PEDIDO_CANCELADO)
+        # RASCUNHO perde a parada; OFERTADA nao e mexido (regra da materializacao, Task 5)
+        self.assertEqual(self._paradas(rr, neg), {rr.STATUS_OFERTADA})
+
+    def test_retirada_sem_servico_sai_do_rascunho(self):
+        rr, neg, _ = self._parada_em_rascunhos()
+        self.res_end = _res_end("RETIRADA")
+        self._processar(self._vuupt())
+        self.assertEqual(self._linha()["status"], banco.PEDIDO_CANCELADO)
+        self.assertEqual(self._paradas(rr, neg), {rr.STATUS_OFERTADA})
+
+    def test_modo_teste_nao_tira_do_rascunho(self):
+        rr, neg, _ = self._parada_em_rascunhos()
+        self.detalhe = _detalhe("Cancelado")
+        self._processar(self._vuupt(), modo_teste=True)
+        self.assertEqual(self._paradas(rr, neg), {rr.STATUS_RASCUNHO, rr.STATUS_OFERTADA})
+
     def test_cancelado_no_nucleo_e_aberto_na_stokki_pede_revisao(self):
         self._ja_no_nucleo_sem_servico()
         pedidos.cancelar_sem_servico("PS-1", "teste", banco.ORIGEM_PAINEL)

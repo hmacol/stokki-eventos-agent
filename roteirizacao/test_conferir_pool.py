@@ -86,7 +86,7 @@ class TestCancelarJaEntregue(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         mock.patch.object(banco, "DB_PATH", Path(tmp.name) / "t.db").start()
         self.addCleanup(mock.patch.stopall)
-        self.tirar = mock.patch.object(cp, "_tirar_dos_rascunhos", return_value=[7]).start()
+        self.tirar = mock.patch.object(cp, "tirar_dos_rascunhos", return_value=[7]).start()
 
     def test_conferir_pool_entregue_sem_servico_cancela_local_e_nunca_materializa(self):
         from nucleo import pool
@@ -104,6 +104,21 @@ class TestCancelarJaEntregue(unittest.TestCase):
         self.tirar.assert_called_once_with(s["id"])               # sai do rascunho: nao materializa no envio
         self.assertEqual(self.pedidos.buscar_pedido("PS-40426")["status"], self.banco.PEDIDO_CANCELADO)
         self.assertEqual(pool.listar_pool(incluir_sem_servico=True), [])   # sai do pool
+
+    def test_sem_servico_ja_fechado_nao_conta_como_cancelado(self):
+        from nucleo import pool
+        conn = self.banco.conectar()
+        try:
+            self.pedidos.upsert_pedido(conn, "PS-40426", {"titulo": "x"}, self.banco.ORIGEM_PIPELINE)
+            conn.commit()
+        finally:
+            conn.close()
+        [s] = pool.listar_pool(incluir_sem_servico=True)
+        self.pedidos.cancelar_sem_servico("PS-40426", "outro caminho", self.banco.ORIGEM_PIPELINE)
+        vuupt = self.mock.Mock()
+        self.assertIsNone(cp.cancelar_ja_entregue(vuupt, s))     # None = main nao conta nem loga CANCELADO
+        self.assertEqual(vuupt.mock_calls, [])
+        self.tirar.assert_called_once_with(s["id"])              # mesmo assim a parada nao fica
 
     def test_com_servico_cancela_na_vuupt_como_hoje(self):
         vuupt = self.mock.Mock()

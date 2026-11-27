@@ -596,20 +596,33 @@ def _pedido_sem_servico(config_app: dict | None, codigo_ps: str, forcar_caminho_
     return True, servico
 
 
-def _fechar_sem_servico(codigo_ps: str, motivo: str, modo_teste: bool, resultado: dict) -> None:
+def _fechar_sem_servico(codigo_ps: str, id_sintetico: int, motivo: str, modo_teste: bool,
+                        resultado: dict) -> None:
     """Cancelado na Stokki / virou retirada, pedido sem servico na Vuupt: CANCELADO no nucleo
-    (o equivalente ao cancelar_servico_oficial do caminho antigo)."""
+    (o equivalente ao cancelar_servico_oficial do caminho antigo) e fora dos rascunhos nao enviados
+    (mesmo helper do conferir_pool), senao o envio criaria servico de pedido fechado."""
     if modo_teste:
         logger.info(f"  [TESTE] {codigo_ps}: {motivo} -- fecharia (CANCELADO) no nucleo o pedido sem servico na Vuupt.")
         return
     try:
         from nucleo.pedidos import cancelar_sem_servico
         from nucleo import banco as nucleo_banco
-        if cancelar_sem_servico(codigo_ps, motivo, nucleo_banco.ORIGEM_PIPELINE):
-            resultado["observacao"] += " Pedido sem servico na Vuupt fechado (CANCELADO) no nucleo."
+        if not cancelar_sem_servico(codigo_ps, motivo, nucleo_banco.ORIGEM_PIPELINE):
+            return
+        resultado["observacao"] += " Pedido sem servico na Vuupt fechado (CANCELADO) no nucleo."
     except Exception as e:
         resultado["requer_revisao"] = True
         resultado["observacao"] += f" Falha ao fechar no nucleo o pedido sem servico ({e}) -- fechar a mao."
+        return
+    try:
+        from roteirizacao.conferir_pool import tirar_dos_rascunhos
+        rascunhos = tirar_dos_rascunhos(id_sintetico)
+        if rascunhos:
+            resultado["observacao"] += f" Tirado dos rascunhos {rascunhos}."
+    except Exception as e:
+        resultado["requer_revisao"] = True
+        resultado["observacao"] += (f" Falha ao tirar dos rascunhos a parada {id_sintetico} ({e}) "
+                                    f"-- remover a mao no Planejamento.")
 
 
 # ── Processamento de um pedido ─────────────────────────────────────────────────
@@ -778,7 +791,8 @@ def processar_pedido(
             resultado["observacao"] = f"Cancelado na Stokki ({detalhe['situacao']}) -- não sobe pra VUUPT."
             if status_vuupt == vuupt.STATUS_ATUALIZAVEL:
                 if sem_servico:
-                    _fechar_sem_servico(codigo_ps, f"cancelado na Stokki ({detalhe['situacao']})",
+                    _fechar_sem_servico(codigo_ps, servico_existente["id"],
+                                        f"cancelado na Stokki ({detalhe['situacao']})",
                                         modo_teste, resultado)
                 elif modo_teste:
                     logger.info(f"  [TESTE] {codigo_ps}: cancelado na Stokki -- cancelaria o serviço "
@@ -833,7 +847,8 @@ def processar_pedido(
             resultado["observacao"] = f"Retirada no galpão via {nome_transp} -- não sobe pra VUUPT."
             if status_vuupt == vuupt.STATUS_ATUALIZAVEL:
                 if sem_servico:
-                    _fechar_sem_servico(codigo_ps, f"virou retirada no galpao via {nome_transp}",
+                    _fechar_sem_servico(codigo_ps, servico_existente["id"],
+                                        f"virou retirada no galpao via {nome_transp}",
                                         modo_teste, resultado)
                 elif modo_teste:
                     logger.info(f"  [TESTE] {codigo_ps}: RETIRADA -- cancelaria o serviço "
