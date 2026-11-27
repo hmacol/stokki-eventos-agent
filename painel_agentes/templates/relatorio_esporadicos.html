@@ -28,6 +28,9 @@
   table.t td.n, table.t th.n { text-align: right; font-variant-numeric: tabular-nums; }
   .sem-gps { color: var(--erro, #b3261e); font-weight: 600; }
   .filtro select { height: 36px; padding: 0 10px; border: 1px solid var(--borda); border-radius: 7px; background: var(--fundo); color: var(--texto); font-size: 13.5px; font-family: inherit; }
+  .selo { font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--borda); color: var(--texto-suave); }
+  .selo.esp { background: #FFF3D6; color: #7A4B00; border-color: #F0C36A; }
+  html.tema-escuro .selo.esp { background: #3A2D0E; color: #F5CF7A; border-color: #6B5320; }
   .pago { color: var(--sucesso, #1b7a46); font-weight: 600; }
   .acoes-pag { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 0 14px 10px; }
   .acoes-pag .obs { height: 36px; padding: 0 10px; border: 1px solid var(--borda); border-radius: 7px; background: var(--fundo); color: var(--texto); font-size: 13px; font-family: inherit; min-width: 260px; flex: 1 1 260px; max-width: 420px; }
@@ -86,7 +89,7 @@
 <details class="mot">
   <summary>
     <strong>{{ m.nome }}</strong>
-    <span class="meta">{{ 'Esporádico' if m.posicao == 'ESPORADICO' else 'Fixo' }}</span>
+    <span class="selo {{ 'esp' if m.posicao == 'ESPORADICO' else 'fixo' }}">{{ 'Esporádico' if m.posicao == 'ESPORADICO' else 'Fixo' }}</span>
     {% if m.rotas_sem_gps %}<span class="meta sem-gps">{{ m.rotas_sem_gps }} sem GPS</span>{% endif %}
     <span class="meta">CPF {{ m.cpf or '—' }} · PIX {{ m.pix or 'não informado' }}{% if m.veiculo %} · {{ m.veiculo }}{% endif %} · {{ m.rotas }} rota(s)</span>
     <span class="total">{% if m.total_pendente %}R$ {{ '%.2f'|format(m.total_pendente)|replace('.', ',') }}{% elif m.total_pago %}<span class="pago">Pago · R$ {{ '%.2f'|format(m.total_pago)|replace('.', ',') }}</span>{% else %}<span class="meta">Sem valor definido</span>{% endif %}</span>
