@@ -263,7 +263,7 @@ def registrar_importacao(payload: dict, resposta, acao: str, conn: sqlite3.Conne
         campos = {} if (acao or "").startswith("pulado") and ja_existe else _campos_do_payload(payload)
         if ja_existe and existente[0] is None:
             # pedido sem servico editado no Planejamento: a rodada seguinte nao desfaz (None = mantem)
-            for campo in _campos_editados(existente[1]):
+            for campo in campos_editados(existente[1]):
                 campos.pop(campo, None)
         upsert_pedido(
             conn, codigo, campos, origem=banco.ORIGEM_PIPELINE,
@@ -331,7 +331,8 @@ def _marcas_edicao(edicao_local_json) -> dict:
     return marcas if isinstance(marcas, dict) else {}
 
 
-def _campos_editados(edicao_local_json) -> set[str]:
+def campos_editados(edicao_local_json) -> set[str]:
+    """Campos marcados como editados no Planejamento (pedido sem servico)."""
     return set(_marcas_edicao(edicao_local_json))
 
 

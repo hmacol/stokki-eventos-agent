@@ -212,6 +212,56 @@ class EdicaoLocalTest(_Base):
         self.assertEqual(payload["scheduled_start"], "2026-11-20T08:00:00-03:00")
 
 
+    def test_edicao_local_sobrevive_ao_servico_voltar_a_not_assigned(self):
+        # Fix round 1: materializa o pedido editado com o VuuptClient de verdade (HTTP mockado, fingerprint
+        # real num banco temporario); o servico volta a not_assigned (envio falhou / rota cancelada) e a
+        # rodada seguinte do pipeline (caminho antigo) nao pode mandar o payload da Stokki por cima
+        import fingerprint_importacao
+        from nucleo import materializar
+        from nucleo.normalizacao import local_para_vuupt
+        from vuupt_client import VuuptClient
+        p = mock.patch.object(fingerprint_importacao, "DB_PATH", self.db)
+        p.start()
+        self.addCleanup(p.stop)
+        self._processar(self._vuupt())
+        sid = pedidos.id_sintetico(self._linha())
+        pedidos.editar_sem_servico(sid, {"endereco": "RUA NOVA 2", "latitude": -23.6, "longitude": -46.7})
+        antes = self._linha()
+
+        vuupt = VuuptClient("tok")
+        vuupt.session = mock.Mock(**{f"{m}.side_effect": AssertionError("rede") for m in
+                                     ("get", "post", "put", "patch", "delete", "request")})
+        vivo = {}
+        servico = {"id": 5, "code": "#PS-1", "status": "not_assigned", "customer_id": 77, "sender_id": 11,
+                   "scheduled_start": local_para_vuupt(antes["agendamento_inicio"]),
+                   "scheduled_end": local_para_vuupt(antes["agendamento_fim"])}
+
+        def criar(payload):
+            vivo["s"] = servico
+            return {"service": servico}
+        metodos = {"buscar_servico_por_code": mock.Mock(side_effect=lambda code: vivo.get("s")),
+                   "criar_servico": mock.Mock(side_effect=criar),
+                   "atualizar_servico": mock.Mock(return_value={"service": servico}),
+                   "resolver_customer_id": mock.Mock(return_value=77),
+                   "skill_ids_por_nome": mock.Mock(return_value=[55])}
+        for nome, m in metodos.items():
+            setattr(vuupt, nome, m)
+
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, CONFIG_STOKKI)
+        self.assertEqual((res.ok, res.falhas), ({"PS-1": 5}, {}))
+        self.assertEqual(metodos["criar_servico"].call_args.args[0]["latitude"], -23.6)
+        self.assertEqual(metodos["resolver_customer_id"].call_args.args[2], "RUA NOVA 2")
+
+        # rodada seguinte, servico de volta a not_assigned na Vuupt
+        res = self._processar(vuupt)
+        self.assertEqual(res["acao"], "pulado_sem_alteracao")
+        metodos["atualizar_servico"].assert_not_called()
+        metodos["criar_servico"].assert_called_once()
+        depois = self._linha()
+        for coluna in ("endereco", "latitude", "longitude", "agendamento_inicio", "agendamento_fim"):
+            self.assertEqual(depois[coluna], antes[coluna], coluna)
+
+
 class FecharSemServicoTest(_Base):
     def _eventos(self):
         conn = banco.conectar()

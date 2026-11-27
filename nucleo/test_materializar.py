@@ -34,6 +34,7 @@ class FakeVuupt:
         self.demora, self.acao, self.falhar_em = demora, acao, set(falhar_em)
         self.existentes: dict[str, dict] = {}
         self.criados: list[dict] = []
+        self.fingerprints: list[dict] = []
         self.chamadas: list[str] = []
         self._lock = threading.Lock()
         self._proximo = 900
@@ -45,6 +46,10 @@ class FakeVuupt:
     def skill_ids_por_nome(self, *nomes):
         self.chamadas.append(f"skills {nomes}")
         return [55]
+
+    def salvar_fingerprint_importacao(self, payload, customer_id=None, sender_id=None):
+        self.chamadas.append(f"fingerprint {payload['code']}")
+        self.fingerprints.append(payload)
 
     def criar_ou_atualizar_servico(self, payload):
         self.chamadas.append(f"criar {payload['code']}")

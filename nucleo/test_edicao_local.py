@@ -110,6 +110,69 @@ class ProtecaoContraSobrescritaTest(_Base):
                          ("2026-12-01T08:00:00-03:00", "2026-12-01T12:00:00-03:00"))
 
 
+class MaterializacaoComEdicaoTest(_Base):
+    """Fix round 1: a Vuupt recebe o editado, mas o fingerprint guarda o payload da Stokki (o que a
+    proxima rodada do pipeline compara); servico adotado sem criar tambem recebe a edicao."""
+
+    def _editar(self):
+        pedidos.editar_sem_servico(self._id(), {"endereco": "RUA NOVA 2", "latitude": -23.6, "longitude": -46.7},
+                                   conn=self.conn)
+
+    def test_fingerprint_guarda_o_payload_da_stokki_nao_o_editado(self):
+        self._pipeline()
+        self._editar()
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": self._id()}], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {"PS-1": 900})
+        (enviado,) = vuupt.criados
+        self.assertEqual(enviado["customer"]["address"], "RUA NOVA 2")
+        (base,) = vuupt.fingerprints
+        esperado = {k: v for k, v in _payload().items() if not k.startswith("_")}
+        esperado["skills"] = [{"id": 55}]
+        self.assertEqual(base, esperado)   # exatamente o que o pipeline manda (sem as colunas editadas)
+
+    def test_adocao_com_edicao_local_reenvia_o_editado(self):
+        self._pipeline()
+        self._editar()
+        vuupt = FakeVuupt()
+        vuupt.existentes["PS-1"] = {"id": 800, "code": "#PS-1", "status": "not_assigned"}
+        vuupt.criar_ou_atualizar_servico = mock.Mock(return_value=({"service": {"id": 800}}, "atualizado"))
+        res = materializar.materializar_servicos([{"id": self._id()}], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {"PS-1": 800})
+        enviado = vuupt.criar_ou_atualizar_servico.call_args.args[0]
+        self.assertEqual((enviado["customer"]["address"], enviado["latitude"]), ("RUA NOVA 2", -23.6))
+        self.assertEqual(vuupt.fingerprints[0]["customer"]["address"], "RUA A 1, Sao Paulo - SP")
+        self.assertEqual(self._linha()["vuupt_service_id"], 800)
+        self.assertEqual(self._linha()["endereco"], "RUA NOVA 2")
+
+    def test_adocao_com_edicao_que_a_vuupt_ja_tem(self):
+        self._pipeline()
+        self._editar()
+        vuupt = FakeVuupt()
+        vuupt.existentes["PS-1"] = {"id": 800, "code": "#PS-1", "status": "not_assigned"}
+        vuupt.criar_ou_atualizar_servico = mock.Mock(return_value=(None, "pulado_sem_alteracao"))
+        res = materializar.materializar_servicos([{"id": self._id()}], vuupt, {}, self.conn)
+        self.assertEqual((res.ok, res.falhas), ({"PS-1": 800}, {}))
+        self.assertEqual(self._linha()["vuupt_service_id"], 800)
+        self.assertEqual(len(vuupt.fingerprints), 1)
+
+    def test_adocao_sem_edicao_nao_reenvia(self):
+        self._pipeline()
+        vuupt = FakeVuupt()
+        vuupt.existentes["PS-1"] = {"id": 800, "code": "#PS-1", "status": "not_assigned"}
+        res = materializar.materializar_servicos([{"id": self._id()}], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {"PS-1": 800})
+        self.assertEqual((vuupt.criados, vuupt.fingerprints), ([], []))
+
+    def test_falha_ao_gravar_o_fingerprint_nao_derruba_o_envio(self):
+        self._pipeline()
+        self._editar()
+        vuupt = FakeVuupt()
+        vuupt.salvar_fingerprint_importacao = mock.Mock(side_effect=OSError("disco cheio"))
+        res = materializar.materializar_servicos([{"id": self._id()}], vuupt, {}, self.conn)
+        self.assertEqual((res.ok, res.falhas), ({"PS-1": 900}, {}))
+
+
 class MigracaoTest(unittest.TestCase):
     def test_coluna_nova_em_banco_antigo(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

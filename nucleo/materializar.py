@@ -234,28 +234,50 @@ def _criar_ou_adotar(conn: sqlite3.Connection, codigo: str, linha, vuupt) -> int
             raise _Recusa(f"ja existe o servico {existente.get('id')} na Vuupt com o codigo {codigo} e status "
                           f"'{status}': nao crio outro (pulado_atribuido); conferir o pedido a mao")
         sid = int(existente["id"])
-        _ja_tem_servico(conn, codigo, sid)
-        _propagar_origens(conn, codigo, sid, linha["agendamento_inicio"])
-        logger.info(f"materializar {codigo}: servico {sid} ja existia na Vuupt (not_assigned), adotado sem criar")
-        return sid
+        if not pedidos.campos_editados(linha["edicao_local_json"]):
+            _ja_tem_servico(conn, codigo, sid)
+            _propagar_origens(conn, codigo, sid, linha["agendamento_inicio"])
+            logger.info(f"materializar {codigo}: servico {sid} ja existia na Vuupt (not_assigned), adotado sem criar")
+            return sid
+        # edicao local (Planejamento) que a Vuupt ainda nao tem: reenvia o editado no servico existente
+        logger.info(f"materializar {codigo}: servico {sid} ja existia na Vuupt (not_assigned); reenvia a edicao local")
 
-    payload = montar_payload(linha, vuupt)
+    base = _payload_do_pipeline(linha, vuupt)
+    payload = montar_payload(linha, vuupt, base)
     resposta, acao = vuupt.criar_ou_atualizar_servico(payload)
     servico = pedidos.servico_da_resposta(resposta)
-    sid = servico.get("id")
     if acao == "pulado_atribuido":
         raise _Recusa(f"a Vuupt ja tem servico de {codigo} fora de 'nao atribuido' (pulado_atribuido): "
                       f"nao crio outro; conferir o pedido a mao")
-    if sid is None:
-        raise _Recusa(f"a Vuupt devolveu '{acao}' sem id do servico de {codigo}")
-    sid = int(sid)
-    try:
-        pedidos.registrar_importacao(payload, resposta, acao, conn=conn)   # id no nucleo + rascunhos, 1 transacao
-    except Exception as e:
-        raise _Recusa(f"servico {sid} criado na Vuupt mas nao gravado no nucleo ({e}); o proximo envio adota "
-                      f"o mesmo servico") from e
+    if servico.get("id") is None and existente and acao == "pulado_sem_alteracao":
+        sid = int(existente["id"])   # a Vuupt ja tem exatamente o editado
+        _ja_tem_servico(conn, codigo, sid)
+    else:
+        if servico.get("id") is None:
+            raise _Recusa(f"a Vuupt devolveu '{acao}' sem id do servico de {codigo}")
+        sid = int(servico["id"])
+        try:
+            pedidos.registrar_importacao(payload, resposta, acao, conn=conn)   # id no nucleo + rascunhos, 1 transacao
+        except Exception as e:
+            raise _Recusa(f"servico {sid} criado na Vuupt mas nao gravado no nucleo ({e}); o proximo envio adota "
+                          f"o mesmo servico") from e
+    _fingerprint_do_pipeline(codigo, base, servico, vuupt)
     _propagar_origens(conn, codigo, sid, linha["agendamento_inicio"])
     return sid
+
+
+def _fingerprint_do_pipeline(codigo: str, base: dict, servico: dict, vuupt) -> None:
+    """A Vuupt recebeu o payload com as colunas do nucleo por cima (edicao do Planejamento), e o
+    criar_ou_atualizar gravou o fingerprint DELE. Regrava com o payload do pipeline: a proxima rodada
+    (caminho antigo, servico de volta a not_assigned) da pulado_sem_alteracao e nao desfaz a edicao,
+    salvo mudanca real na Stokki (mesmo comportamento de quando o Planejamento edita a Vuupt direto).
+    Best-effort: o servico ja existe."""
+    try:
+        vuupt.salvar_fingerprint_importacao(base, customer_id=servico.get("customer_id"),
+                                            sender_id=servico.get("sender_id"))
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"materializar {codigo}: fingerprint do pipeline nao regravado ({e}); a proxima rodada "
+                       f"do pipeline pode reenviar o payload da Stokki")
 
 
 # ── Payload ────────────────────────────────────────────────────────────────────
@@ -270,12 +292,9 @@ def _para_payload(ts) -> str | None:
     return dt.isoformat(timespec="seconds")
 
 
-def montar_payload(linha, vuupt) -> dict:
-    """Payload do pipeline (dados_json["payload"]) com as colunas do nucleo por cima (fonte da verdade
-    do que o Planejamento/portal edita no pedido sem servico): titulo, destinatario (nome, telefone),
-    janela de atendimento, endereco, coordenadas, agendamento, caixas, nota e complemento. Coluna vazia
-    nao apaga o valor do payload (exceto agendamento, ver abaixo). Skill: o nome gravado pelo pipeline
-    (_skill_nome) vira id aqui."""
+def _payload_do_pipeline(linha, vuupt) -> dict:
+    """O payload como o pipeline mandaria pra Vuupt (dados_json["payload"] sem as chaves "_" e com a
+    skill, gravada pelo nome em _skill_nome, ja em id): base da materializacao e do fingerprint."""
     try:
         dados = json.loads(linha["dados_json"] or "{}")
     except (TypeError, ValueError):
@@ -287,6 +306,19 @@ def montar_payload(linha, vuupt) -> dict:
     nome_skill = payload.get("_skill_nome")
     for chave in [k for k in payload if k.startswith("_")]:
         payload.pop(chave)
+    if nome_skill and not payload.get("skills"):
+        ids = vuupt.skill_ids_por_nome(nome_skill)
+        if ids:
+            payload["skills"] = [{"id": i} for i in ids]
+    return payload
+
+
+def montar_payload(linha, vuupt, base: dict | None = None) -> dict:
+    """Payload do pipeline (_payload_do_pipeline, ou `base` ja montada) com as colunas do nucleo por cima
+    (fonte da verdade do que o Planejamento/portal edita no pedido sem servico): titulo, destinatario
+    (nome, telefone), janela de atendimento, endereco, coordenadas, agendamento, caixas, nota e
+    complemento. Coluna vazia nao apaga o valor do payload (exceto agendamento, ver abaixo)."""
+    payload = copy.deepcopy(base if base is not None else _payload_do_pipeline(linha, vuupt))
     customer = payload.setdefault("customer", {})
     if linha["titulo"]:
         payload["title"] = linha["titulo"]
@@ -315,10 +347,6 @@ def montar_payload(linha, vuupt) -> dict:
         payload["note"] = linha["nota"]
     if linha["complemento"]:
         payload["address_complement"] = linha["complemento"]
-    if nome_skill and not payload.get("skills"):
-        ids = vuupt.skill_ids_por_nome(nome_skill)
-        if ids:
-            payload["skills"] = [{"id": i} for i in ids]
     return payload
 
 
