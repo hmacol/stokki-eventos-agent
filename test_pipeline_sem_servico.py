@@ -156,6 +156,29 @@ class CaminhoSemServicoTest(_Base):
         self.assertEqual(self._linha()["vuupt_service_id"], 5)
 
 
+class LinhaLegadaSemServicoTest(_Base):
+    """Revisao Fable FIX 2: linha ABERTA sem servico que NAO nasceu pelo caminho sem servico (pulado
+    antigo, servico renomeado/apagado na Vuupt) nao vira pedido novo: grava no nucleo, fica fora do pool
+    e pede revisao (senao sumiria calada do planejamento)."""
+
+    def test_linha_legada_pede_revisao_e_fica_fora_do_pool(self):
+        self._ja_no_nucleo_sem_servico()   # upsert direto: nao nasceu pelo caminho sem servico
+        vuupt = self._vuupt()
+        res = self._processar(vuupt)
+        self.assertEqual(res["acao"], "gravado_nucleo")
+        self.assertTrue(res["requer_revisao"])
+        self.assertIn("nao nasceu sem servico", res["observacao"])
+        self.assertEqual(vuupt.mock_calls, [])
+        self.assertEqual(pool.listar_pool(incluir_sem_servico=True), [])
+
+    def test_pedido_que_nasceu_sem_servico_nao_pede_revisao(self):
+        vuupt = self._vuupt()
+        self._processar(vuupt)
+        res = self._processar(vuupt)
+        self.assertFalse(res.get("requer_revisao"))
+        self.assertEqual([i["code"] for i in pool.listar_pool(incluir_sem_servico=True)], ["#PS-1"])
+
+
 class MemoriaDoPedidoTest(_Base):
     def test_segunda_rodada_nao_recalcula_data_automatica(self):
         vuupt = self._vuupt()

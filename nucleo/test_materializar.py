@@ -391,6 +391,48 @@ class FalhaTransitoriaTest(_Base):
         self.assertIsNone(pedidos.buscar_pedido("PS-2", conn=self.conn)["vuupt_service_id"])   # nada gravado
 
 
+class HistoricoDeServicoTest(_Base):
+    """Revisao Fable FIX 2: so materializa pedido que o pipeline marcou como nascido sem servico e sem
+    servico no historico (nucleo_servicos). Linha sem id por rename/servico apagado/pulado antigo: recusa."""
+
+    def test_linha_de_servico_renomeado_e_recusada(self):
+        from nucleo import sincronizar_servicos_vuupt as sinc
+        pedidos.registrar_importacao(_payload("PS-10"), {"id": 5010}, "criado", conn=self.conn)
+        sinc.sincronizar_servicos([{"id": 5010, "code": "#PS-99", "title": "x", "status": "not_assigned",
+                                    "sender_id": 11, "customer": {}}], self.conn)
+        sid = pedidos.id_sintetico(pedidos.buscar_pedido("PS-10", conn=self.conn))
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {})
+        self.assertIn("ja teve servico", res.falhas["PS-10"])
+        self.assertEqual(res.transitorios, {})
+        self.assertEqual(vuupt.chamadas, [])
+
+    def test_linha_legada_pulada_e_recusada(self):
+        pedidos.registrar_importacao(_payload("PS-5"), None, "pulado_sem_alteracao", conn=self.conn)
+        sid = pedidos.id_sintetico(pedidos.buscar_pedido("PS-5", conn=self.conn))
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        self.assertIn("nao nasceu sem servico", res.falhas["PS-5"])
+        self.assertEqual(vuupt.chamadas, [])
+
+    def test_codigo_com_servico_no_historico_e_recusado(self):
+        sid = self._pedido("PS-1")
+        pedidos.registrar_servico(self.conn, 4444, "PS-1", {}, status=banco.PEDIDO_CANCELADO)
+        self.conn.commit()
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        self.assertIn("4444", res.falhas["PS-1"])
+        self.assertEqual(vuupt.chamadas, [])
+
+    def test_pedido_nascido_sem_servico_materializa(self):
+        sid = self._pedido("PS-1")
+        res = materializar.materializar_servicos([{"id": sid}], FakeVuupt(), {}, self.conn)
+        self.assertEqual(res.ok, {"PS-1": 900})
+        marca = self.conn.execute("SELECT nasceu_sem_servico FROM nucleo_pedidos WHERE codigo = 'PS-1'").fetchone()[0]
+        self.assertFalse(marca)   # ganhou servico: a marca sai
+
+
 class HeartbeatTravaTest(_Base):
     """Revisao Fable FIX 3: a trava do pedido e renovada (dono conferido) antes de cada passo na Vuupt;
     trava assumida por outro = nao cria (ocupado, tente de novo). O `pulso` de quem chama para o lote."""
@@ -502,11 +544,15 @@ class PedidoAgrupadoTest(_Base):
         res = materializar.materializar_servicos([{"id": sid}], FakeVuupt(), {}, self.conn)
         self.assertIn("agrupado no servico 5010", res.falhas["PS-10"])
 
-    def test_composto_cancelado_nao_segura_o_pedido(self):
+    def test_composto_cancelado_ainda_recusa_porque_o_pedido_ja_teve_servico(self):
+        """Revisao Fable FIX 2 (muda o fix round 1): o pedido ja teve servico na Vuupt -> conservador."""
         sid = self._agrupar(status_composto="canceled")
         vuupt = FakeVuupt()
         res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
-        self.assertEqual((res.ok, res.falhas), ({"PS-10": 900}, {}))
+        self.assertEqual(res.ok, {})
+        self.assertIn("ja teve servico", res.falhas["PS-10"])
+        self.assertEqual(res.transitorios, {})
+        self.assertEqual(vuupt.chamadas, [])
 
     def test_codigo_parecido_nao_e_agrupado(self):
         from nucleo import sincronizar_servicos_vuupt as sinc

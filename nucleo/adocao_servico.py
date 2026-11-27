@@ -54,8 +54,8 @@ def adotar_servico(conn: sqlite3.Connection, codigo: str, service_id: int) -> in
         logger.warning(f"adotar_servico {codigo}: ja tem o servico {atual}, nao troca por {service_id}")
         return 0
     if atual is None:
-        conn.execute("UPDATE nucleo_pedidos SET vuupt_service_id = ?, atualizado_em = ? WHERE codigo = ?",
-                     (service_id, banco.agora(), codigo))
+        conn.execute("UPDATE nucleo_pedidos SET vuupt_service_id = ?, nasceu_sem_servico = NULL, atualizado_em = ? "
+                     "WHERE codigo = ?", (service_id, banco.agora(), codigo))
     if id_pool is None:
         return 0
     antigo = -int(id_pool)

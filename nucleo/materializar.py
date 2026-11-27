@@ -9,7 +9,10 @@ servico na Vuupt AO ENVIAR (rascunho, incremento, parada em rota enviada,
 criacao direta de rota, fila do freshhub). Aqui o servico nasce:
 
   1. recusa, com motivo, pedido que nao esta ABERTO no nucleo (cancelado,
-     em rota, entregue...) e reentrega (-R) sem servico: nunca cria duplicado;
+     em rota, entregue...), reentrega (-R) sem servico, pedido agrupado e linha
+     sem servico que nao NASCEU sem servico ou ja teve servico (nucleo_servicos):
+     nunca cria duplicado. So recusa de regra tira a parada; falha tecnica
+     (rede, 429, 5xx) vai em `transitorios` e a parada fica;
   2. trava por codigo no banco (nucleo_materializacao): clique duplo,
      "enviar todas" e o incremento (outro processo) nunca criam dois servicos;
      quem perde a corrida espera e reaproveita o id que o outro gravou;
@@ -226,6 +229,21 @@ def _conferir_agrupamento(conn: sqlite3.Connection, codigo: str) -> None:
                       f"conferir o pedido a mao")
 
 
+def _conferir_historico(conn: sqlite3.Connection, linha, codigo: str) -> None:
+    """Linha sem id que NAO nasceu sem servico (servico renomeado/apagado na Vuupt, pulado do pipeline
+    antigo) ou codigo que ja teve servico (nucleo_servicos): a busca por "#codigo" pode nao achar o
+    servico de verdade e criaria um SEGUNDO. Conservador: recusa e o operador confere a mao."""
+    anterior = conn.execute("SELECT vuupt_service_id, status FROM nucleo_servicos WHERE codigo = ? "
+                            "ORDER BY vuupt_service_id DESC LIMIT 1", (codigo,)).fetchone()
+    if anterior is not None:
+        raise _Recusa(f"pedido {codigo} ja teve servico na Vuupt (servico {anterior[0]}, {anterior[1]} no "
+                      f"historico): nao crio outro; conferir o pedido na Vuupt a mao")
+    if not pedidos.nasceu_sem_servico(linha):
+        raise _Recusa(f"pedido {codigo} sem servico na Vuupt mas nao nasceu sem servico (ja teve servico: "
+                      f"renomeado/apagado na Vuupt, ou pulado pelo pipeline antigo): nao crio outro; conferir o "
+                      f"pedido na Vuupt a mao")
+
+
 def _materializar_um(conn: sqlite3.Connection, codigo: str, vuupt, modo_teste: bool, espera_s: float,
                      pulso=None) -> int:
     linha = _linha(conn, codigo)
@@ -233,6 +251,7 @@ def _materializar_um(conn: sqlite3.Connection, codigo: str, vuupt, modo_teste: b
     if linha["vuupt_service_id"] is not None:
         return _ja_tem_servico(conn, codigo, int(linha["vuupt_service_id"]))
     _conferir_agrupamento(conn, codigo)
+    _conferir_historico(conn, linha, codigo)
     if modo_teste:
         raise _Transitorio("modo teste: servico nao criado na Vuupt (nada descartado)")
 

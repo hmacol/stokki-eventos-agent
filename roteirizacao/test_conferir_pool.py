@@ -92,8 +92,9 @@ class TestCancelarJaEntregue(unittest.TestCase):
         from nucleo import pool
         conn = self.banco.conectar()
         try:
-            self.pedidos.upsert_pedido(conn, "PS-40426", {"titulo": "x"}, self.banco.ORIGEM_PIPELINE)
-            conn.commit()
+            # como o pipeline grava com a chave ligada (so linha que nasceu sem servico entra no pool)
+            self.pedidos.registrar_importacao({"code": "#PS-40426", "title": "x"}, None, "nucleo_sem_servico",
+                                              conn=conn)
         finally:
             conn.close()
         [s] = pool.listar_pool(incluir_sem_servico=True)
@@ -109,8 +110,9 @@ class TestCancelarJaEntregue(unittest.TestCase):
         from nucleo import pool
         conn = self.banco.conectar()
         try:
-            self.pedidos.upsert_pedido(conn, "PS-40426", {"titulo": "x"}, self.banco.ORIGEM_PIPELINE)
-            conn.commit()
+            # como o pipeline grava com a chave ligada (so linha que nasceu sem servico entra no pool)
+            self.pedidos.registrar_importacao({"code": "#PS-40426", "title": "x"}, None, "nucleo_sem_servico",
+                                              conn=conn)
         finally:
             conn.close()
         [s] = pool.listar_pool(incluir_sem_servico=True)

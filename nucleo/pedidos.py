@@ -121,6 +121,8 @@ def upsert_pedido(conn: sqlite3.Connection, codigo: str, campos: dict, origem: s
         VALUES (?, ?, {", ".join("?" for _ in colunas)}, COALESCE(?, 'delivery'), COALESCE(?, ?), ?, ?, ?, ?)
         ON CONFLICT(codigo) DO UPDATE SET
             vuupt_service_id = COALESCE(excluded.vuupt_service_id, nucleo_pedidos.vuupt_service_id),
+            nasceu_sem_servico = CASE WHEN excluded.vuupt_service_id IS NOT NULL THEN NULL
+                                      ELSE nucleo_pedidos.nasceu_sem_servico END,
             {set_coalesce},
             tipo = COALESCE(?, nucleo_pedidos.tipo),
             status = COALESCE(?, nucleo_pedidos.status),
@@ -136,6 +138,19 @@ def upsert_pedido(conn: sqlite3.Connection, codigo: str, campos: dict, origem: s
     if ganha_servico:
         from nucleo.adocao_servico import adotar_servico
         adotar_servico(conn, codigo, vuupt_service_id)
+
+
+ACAO_SEM_SERVICO = "nucleo_sem_servico"   # = pipeline.ACAO_NUCLEO_SEM_SERVICO (fonte stokki)
+
+
+def nasceu_sem_servico(pedido) -> bool:
+    """Linha que nasceu pelo caminho sem servico do pipeline e nunca teve servico (coluna
+    nasceu_sem_servico). Linha ABERTA sem id por outro motivo (servico renomeado/apagado na Vuupt,
+    pulado do pipeline antigo, agrupado) nao e pedido sem servico."""
+    try:
+        return bool(pedido["nasceu_sem_servico"])
+    except (IndexError, KeyError):
+        return False
 
 
 def id_sintetico(pedido) -> int:
@@ -270,6 +285,10 @@ def registrar_importacao(payload: dict, resposta, acao: str, conn: sqlite3.Conne
             dados_json={"payload": payload, "acao": acao, "service": servico or None},
             vuupt_service_id=int(service_id) if service_id is not None else None,
         )
+        if not ja_existe and acao == ACAO_SEM_SERVICO and service_id is None:
+            # so a linha que NASCE aqui e marcada; a que ja existia sem id (renomeada, pulada) nunca e
+            conn.execute("UPDATE nucleo_pedidos SET nasceu_sem_servico = 1 WHERE codigo = ?",
+                         (normalizacao.normalizar_codigo(codigo),))
         conn.commit()
     finally:
         if fechar:

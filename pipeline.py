@@ -582,7 +582,7 @@ def _pedido_sem_servico(config_app: dict | None, codigo_ps: str):
     from nucleo import pool
     if pool.fonte_pool(config_app) != pool.FONTE_STOKKI:
         return False, None
-    from nucleo.pedidos import buscar_pedido
+    from nucleo.pedidos import buscar_pedido, nasceu_sem_servico
     try:
         linha = buscar_pedido(codigo_ps)
     except Exception as e:
@@ -593,6 +593,8 @@ def _pedido_sem_servico(config_app: dict | None, codigo_ps: str):
         return False, None
     servico = pool.pedido_para_servico(linha)
     servico["status"] = _STATUS_NUCLEO_PARA_VUUPT.get(linha["status"], str(linha["status"]).lower())
+    # linha sem id que nao nasceu sem servico (servico renomeado/apagado, pulado antigo): fica fora do pool
+    servico["_nasceu_sem_servico"] = nasceu_sem_servico(linha)
     return True, servico
 
 
@@ -1172,6 +1174,15 @@ def processar_pedido(
             resultado["acao"] = ACAO_GRAVADO_NUCLEO
             logger.info(f"  {codigo_ps}: gravado no nucleo, sem servico na Vuupt (endereco via "
                         f"{'cliente no portal' if resultado['endereco_cliente_portal'] else res_end.fonte})")
+            if servico_existente is not None and not servico_existente.get("_nasceu_sem_servico"):
+                # o pool e a materializacao recusam essa linha (criariam um 2o servico): sem revisao ela
+                # sumiria calada do planejamento
+                resultado["requer_revisao"] = True
+                resultado["observacao"] = ((resultado.get("observacao") or "") +
+                                           " Pedido ABERTO sem servico na Vuupt que nao nasceu sem servico (servico "
+                                           "renomeado/apagado na Vuupt ou pulado pelo pipeline antigo): fica fora do "
+                                           "pool -- conferir na Vuupt e criar/vincular o servico a mao.").strip()
+                logger.warning(f"  {codigo_ps}: {resultado['observacao']}")
             # data automatica de pedido NOVO marcada AUTOMATICO (pelo codigo), senao vira data do
             # cliente e o pedido vira dedicado; pedido que ja estava no nucleo repete a mesma data
             if (servico_existente is None and fonte_agendamento == FONTE_PROXIMO_DIA_UTIL

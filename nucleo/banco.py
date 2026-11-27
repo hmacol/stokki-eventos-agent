@@ -714,7 +714,10 @@ def garantir_esquema(conn: sqlite3.Connection):
     _migrar_colunas(conn, "motoristas_links_atualizacao", [("pix_inicial", "TEXT"), ("pix_pendente", "TEXT")])
     _migrar_colunas(conn, "nucleo_pedidos", _COLUNAS_PEDIDOS_NOVAS)
     # edicao_local_json: {campo: quando} editado no Planejamento em pedido sem servico (o pipeline nao regrava)
-    _migrar_colunas(conn, "nucleo_pedidos", [("id_pool", "INTEGER"), ("edicao_local_json", "TEXT")])
+    # nasceu_sem_servico: 1 = a linha NASCEU pelo caminho sem servico do pipeline (fonte stokki) e nunca teve
+    # servico; sai (NULL) quando ganha servico. So linha marcada vira pedido sem servico no pool/materializacao
+    _migrar_colunas(conn, "nucleo_pedidos", [("id_pool", "INTEGER"), ("edicao_local_json", "TEXT"),
+                                             ("nasceu_sem_servico", "INTEGER")])
     _garantir_id_pool(conn)
     _migrar_colunas(conn, "nucleo_paradas", _COLUNAS_PARADAS_NOVAS)
     _migrar_colunas(conn, "nucleo_rotas", _COLUNAS_ROTAS_NOVAS)

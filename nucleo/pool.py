@@ -128,7 +128,10 @@ def listar_pool(conn: sqlite3.Connection | None = None, incluir_sem_servico: boo
     apontam pro mesmo id (serviço que absorveu outro código), fica a
     atualizada por último.
     Com `incluir_sem_servico` (fonte stokki) o pedido sem serviço entra com
-    id sintético negativo (-id_pool), um item por pedido; nunca colide com id real."""
+    id sintético negativo (-id_pool), um item por pedido; nunca colide com id real.
+    Só entra a linha que NASCEU sem serviço (pedidos.nasceu_sem_servico): linha ABERTA
+    sem id por serviço renomeado/apagado na Vuupt ou "pulado" antigo fica fora (o envio
+    criaria um segundo serviço), com 1 INFO por chamada."""
     sql = _SQL_BASE + ("" if incluir_sem_servico else " AND vuupt_service_id IS NOT NULL")
     fechar = conn is None
     conn = conn or banco.conectar()
@@ -137,6 +140,7 @@ def listar_pool(conn: sqlite3.Connection | None = None, incluir_sem_servico: boo
         agrupados = pedidos.servicos_que_agrupam(conn) if incluir_sem_servico else {}
         por_id: dict[int, sqlite3.Row] = {}
         sem_id_pool: list[str] = []
+        legados: list[str] = []
         for p in conn.execute(sql, (banco.PEDIDO_ABERTO, banco.FLUXO_ENTREGA, banco.FLUXO_ENTREGA)):
             if p["vuupt_service_id"] is None and p["codigo"] in agrupados:
                 sid, composto = agrupados[p["codigo"]]
@@ -147,6 +151,9 @@ def listar_pool(conn: sqlite3.Connection | None = None, incluir_sem_servico: boo
                 # linha gravada por codigo antigo (antes do restart): sem id nao entra, mas nao derruba o pool
                 sem_id_pool.append(p["codigo"])
                 continue
+            if p["vuupt_service_id"] is None and not pedidos.nasceu_sem_servico(p):
+                legados.append(p["codigo"])   # ja teve servico / pulado antigo: nao e pedido novo sem servico
+                continue
             chave = p["vuupt_service_id"] if p["vuupt_service_id"] is not None else pedidos.id_sintetico(p)
             atual = por_id.get(chave)
             if atual is None or (p["atualizado_em"] or "") > (atual["atualizado_em"] or ""):
@@ -154,6 +161,10 @@ def listar_pool(conn: sqlite3.Connection | None = None, incluir_sem_servico: boo
         if sem_id_pool:
             logger.warning("pool.sem_id_pool: %d pedido(s) sem servico e sem id_pool fora do pool: %s "
                            "(reabrir uma conexao do nucleo faz o backfill)", len(sem_id_pool), ", ".join(sem_id_pool))
+        if legados:
+            logger.info("pool.sem_servico_legado: %d pedido(s) ABERTO(s) sem servico que nao nasceram sem servico "
+                        "(servico renomeado/apagado na Vuupt ou pulado antigo) fora do pool: %s%s", len(legados),
+                        ", ".join(legados[:20]), " ..." if len(legados) > 20 else "")
     finally:
         if fechar:
             conn.close()
