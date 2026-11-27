@@ -1831,6 +1831,10 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                               que chama /api/motoristas/<id>/resetar-pin)
    /financeiro/pedagios       pedagios.html
    /financeiro/pagamentos     pagamentos_pontuais.html (Adiantamento/Descarga/Frete avulso)
+  /financeiro/esporadicos    relatorio_esporadicos.html (+ .csv ?tipo=resumo|detalhe): fechamento dos motoristas
+                             POSICAO=ESPORADICO por periodo (data da rota) = nucleo/financeiro.extrato_motorista
+                             + CPF/PIX; painel_agentes/relatorio_esporadicos.py. Niveis total+atendimento.
+                             Nao inclui pagamentos pontuais; banco/agencia nao existem no cadastro (so PIX).
    /canhotos                  canhotos.html
    /  (agentes), /execucao/<id>, /historico   index.html, execucao.html, historico.html
    APIs em /api/<tela>/...

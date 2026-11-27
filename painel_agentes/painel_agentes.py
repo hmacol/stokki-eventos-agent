@@ -4940,6 +4940,44 @@ def pagamentos():
                            motoristas=motoristas, pp=pp, envio_ligado=pp.config_pagamentos(config)["ativo"])
 
 
+NIVEIS_ESPORADICOS = ("total", "atendimento")    # CPF e PIX dos motoristas: sem logistica
+
+
+def _periodo_esporadicos() -> tuple[str, str]:
+    """de/ate da query (ISO); invalido ou ausente = 1o do mes ate hoje."""
+    hoje = date.today()
+
+    def _d(chave, padrao):
+        try:
+            return date.fromisoformat((request.args.get(chave) or "").strip())
+        except ValueError:
+            return padrao
+    de, ate = _d("de", hoje.replace(day=1)), _d("ate", hoje)
+    if de > ate:
+        de, ate = ate, de
+    return de.isoformat(), ate.isoformat()
+
+
+@app.route("/financeiro/esporadicos")
+@requer_auth(niveis=NIVEIS_ESPORADICOS)
+def relatorio_esporadicos():
+    de, ate = _periodo_esporadicos()
+    return render_template("relatorio_esporadicos.html", rel=relatorio_esporadicos_mod.gerar(de, ate))
+
+
+@app.route("/financeiro/esporadicos.csv")
+@requer_auth(niveis=NIVEIS_ESPORADICOS)
+def relatorio_esporadicos_csv():
+    de, ate = _periodo_esporadicos()
+    rel = relatorio_esporadicos_mod.gerar(de, ate)
+    detalhe = request.args.get("tipo") == "detalhe"
+    corpo = (relatorio_esporadicos_mod.csv_detalhe if detalhe else relatorio_esporadicos_mod.csv_resumo)(rel)
+    nome = f"esporadicos_{'rotas' if detalhe else 'resumo'}_{de}_a_{ate}.csv"
+    # BOM: o Excel pt-BR abre em UTF-8 sem baguncar os acentos
+    return Response("﻿" + corpo, mimetype="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{nome}"'})
+
+
 def _resposta_pagamento(conn, pagamento_id: int, evento: str | None):
     aviso = pagamentos_pontuais.disparar_aviso(conn, pagamento_id, evento, _carregar_config()) if evento else None
     return jsonify({"ok": True, "id": pagamento_id, "pagamento": pagamentos_pontuais.obter(conn, pagamento_id),
