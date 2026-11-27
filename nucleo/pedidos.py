@@ -271,6 +271,49 @@ def registrar_importacao(payload: dict, resposta, acao: str, conn: sqlite3.Conne
             conn.close()
 
 
+def cancelar_sem_servico(codigo: str, motivo: str, origem: str, conn: sqlite3.Connection | None = None) -> bool:
+    """Fecha LOCAL (CANCELADO) pedido ABERTO que ainda nao tem servico na Vuupt (fonte stokki):
+    cancelado na Stokki, virou retirada, ja entregue. Pedido com servico nunca e tocado aqui (fecha
+    pela Vuupt). Registra o evento PEDIDO_CANCELADO com o motivo. Devolve True se mudou."""
+    fechar = conn is None
+    conn = conn or banco.conectar()
+    try:
+        codigo = normalizacao.normalizar_codigo(codigo)
+        cur = conn.execute("""UPDATE nucleo_pedidos SET status = ?, atualizado_em = ?
+                              WHERE codigo = ? AND vuupt_service_id IS NULL AND status = ?""",
+                           (banco.PEDIDO_CANCELADO, banco.agora(), codigo, banco.PEDIDO_ABERTO))
+        mudou = cur.rowcount > 0
+        if mudou:
+            from nucleo.rotas import registrar_evento
+            registrar_evento(conn, "PEDIDO_CANCELADO", origem,
+                             dados={"codigo": codigo, "motivo": motivo, "sem_servico_vuupt": True})
+        conn.commit()
+        return mudou
+    finally:
+        if fechar:
+            conn.close()
+
+
+def gravar_agendamento_sem_servico(id_negativo, inicio: str, fim: str | None,
+                                   conn: sqlite3.Connection | None = None) -> bool:
+    """Data de pedido sem servico na Vuupt (id sintetico do pool): dia fixo e data automatica que
+    andou gravam aqui em vez de PUT na Vuupt. `inicio`/`fim` como o PUT mandaria (com -03:00)."""
+    if int(id_negativo) >= 0:
+        raise ValueError(f"id {id_negativo} nao e sintetico (pedido com servico grava na Vuupt)")
+    fechar = conn is None
+    conn = conn or banco.conectar()
+    try:
+        cur = conn.execute("""UPDATE nucleo_pedidos SET agendamento_inicio = ?, agendamento_fim = ?, atualizado_em = ?
+                              WHERE id_pool = ? AND vuupt_service_id IS NULL""",
+                           (normalizacao.para_local(inicio), normalizacao.para_local(fim), banco.agora(),
+                            -int(id_negativo)))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        if fechar:
+            conn.close()
+
+
 def buscar_pedido(codigo: str, conn: sqlite3.Connection | None = None) -> dict | None:
     """Aceita o código em qualquer forma ('#PS-1', 'ps-1'): a chave é a
     normalizada."""

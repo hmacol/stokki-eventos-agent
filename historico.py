@@ -64,6 +64,7 @@ ROTULOS = {
     "retirada_criada":      "Retiradas criadas (serviço avulso)",
     "retirada_atualizada":  "Retiradas atualizadas",
     "simulado":             "Simulados (modo teste)",
+    "gravado_nucleo":       "Gravados no núcleo (sem serviço na Vuupt, fonte stokki)",
     "erro":                 "Erros",
     "revisao":              "Revisão manual",
 }
