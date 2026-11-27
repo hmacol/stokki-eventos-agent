@@ -203,7 +203,8 @@ _CAMPOS = ["codigo", "vuupt_service_id", "titulo", "status", "sender_id", "remet
            "endereco", "complemento", "zona", "horario_inicio", "horario_fim", "agendamento_inicio",
            "agendamento_fim", "caixas", "fluxo", "reentrega_de_codigo", "status_provedor",
            "status_done_provedor", "qtd_checklists", "qtd_anexos", "origem", "nota",
-           "criado_em_provedor", "criado_em", "atualizado_em_provedor", "excluido_em", "situacao_stokki"]
+           "criado_em_provedor", "criado_em", "atualizado_em_provedor", "excluido_em", "id_pool",
+           "situacao_stokki"]
 _NORM_NUCLEO = "SELECT " + ", ".join(_CAMPOS[:-1]) + ", NULL AS situacao_stokki FROM nucleo_pedidos"
 # Envio do portal que vale como pedido: o último de cada código (ou o próprio
 # envio, enquanto não tem código). Erro e duplicado ficam fora (Hugo, 12/11).
@@ -488,11 +489,14 @@ def _order_by(ordem: str | None, direcao: str | None) -> str:
 
 def _select(extra: str = "") -> str:
     campos = ", ".join(f"({c.sql}) AS {c.chave}" for c in COLUNAS)
-    return f"SELECT {campos}, rota_id, sender_id, pedido_base, vuupt_service_id{extra} FROM base"
+    return f"SELECT {campos}, rota_id, sender_id, pedido_base, vuupt_service_id, id_pool{extra} FROM base"
 
 
 def listar(filtros: dict, pagina: int = 1, por_pagina: int = POR_PAGINA, ordem: str | None = None,
-           direcao: str | None = None, conn: sqlite3.Connection | None = None) -> dict:
+           direcao: str | None = None, conn: sqlite3.Connection | None = None, id_sintetico: bool = False) -> dict:
+    """`id_sintetico` (pool direto da Stokki, planejamento.fonte_pool = stokki): pedido do nucleo
+    sem servico na Vuupt leva -id_pool em `vuupt_service_id`, o id que as acoes da tela aceitam
+    (acoes_pedidos trata id negativo no nucleo). A coluna "ID do servico Vuupt" nao muda."""
     fechar = conn is None
     conn = conn or banco.conectar()
     try:
@@ -513,6 +517,10 @@ def listar(filtros: dict, pagina: int = 1, por_pagina: int = POR_PAGINA, ordem: 
         paginas = max(1, -(-total // por_pagina))
         inicio, fim = periodo(filtros.get("de"), filtros.get("ate"))
         linhas = [{k: r[k] for k in r.keys() if k not in ("_n", "_cx", "_data")} for r in rows]
+        if id_sintetico:
+            for l in linhas:
+                if l["vuupt_service_id"] is None and l["id_pool"]:
+                    l["vuupt_service_id"] = -int(l["id_pool"])
         # Só a busca por código traz pedido de fora do período (_periodo_sql).
         fora = [r["codigo"] for r in rows if not inicio <= (r["_data"] or "") <= fim]
         hist = tentativas([(l["sender_id"], l["pedido_base"]) for l in linhas], conn)

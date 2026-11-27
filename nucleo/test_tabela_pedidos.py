@@ -503,5 +503,36 @@ class TestOpcoesFormatoCsv(_Base):
         self.assertTrue(linha.endswith(";3;"), linha)
 
 
+class TestIdSintetico(_Base):
+    """Pool direto da Stokki (Task 7): pedido ABERTO sem servico na Vuupt leva o id sintetico
+    (-id_pool) em vuupt_service_id, que e o que a tela manda pras acoes (cancelar, reagendar,
+    endereco: acoes_pedidos aceita id negativo). A coluna "ID do servico Vuupt" continua vazia."""
+
+    def _sem_servico(self):
+        self._pedido("PS-1", status="ABERTO")
+        self.conn.execute("UPDATE nucleo_pedidos SET id_pool = 7 WHERE codigo = 'PS-1'")
+        self._pedido("PS-2", status="ABERTO")
+        self.conn.execute("UPDATE nucleo_pedidos SET id_pool = 8, vuupt_service_id = 900 WHERE codigo = 'PS-2'")
+        self.conn.commit()
+
+    def test_pedido_sem_servico_leva_o_id_sintetico(self):
+        self._sem_servico()
+        linhas = {l["codigo"]: l for l in tp.listar({}, conn=self.conn, id_sintetico=True)["linhas"]}
+        self.assertEqual(linhas["PS-1"]["vuupt_service_id"], -7)
+        self.assertIsNone(linhas["PS-1"]["service_id"])          # coluna da Vuupt: nao inventa id
+        self.assertEqual(linhas["PS-2"]["vuupt_service_id"], 900)
+
+    def test_chave_desligada_igual_a_hoje(self):
+        self._sem_servico()
+        linhas = {l["codigo"]: l for l in tp.listar({}, conn=self.conn)["linhas"]}
+        self.assertIsNone(linhas["PS-1"]["vuupt_service_id"])
+        self.assertEqual(linhas["PS-2"]["vuupt_service_id"], 900)
+
+    def test_csv_nao_muda(self):
+        self._sem_servico()
+        texto = tp.exportar_csv({}, ["service_id"], conn=self.conn)
+        self.assertEqual(sorted(l.split(";")[0] for l in texto.lstrip("﻿").splitlines()[1:]), ["", "900"])
+
+
 if __name__ == "__main__":
     unittest.main()

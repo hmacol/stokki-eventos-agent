@@ -5441,9 +5441,13 @@ def pedidos_tabela():
         pagina = int(request.args.get("pagina") or 1)
     except ValueError:
         pagina = 1
+    from nucleo import pool as nucleo_pool
+    # pool direto da Stokki: pedido sem servico na Vuupt vai pras acoes com o id sintetico
+    id_sintetico = nucleo_pool.fonte_pool(_carregar_config()) == nucleo_pool.FONTE_STOKKI
     conn = nucleo_banco.conectar()
     try:
-        r = tabela_pedidos.listar(filtros, pagina=pagina, ordem=ordem, direcao=direcao, conn=conn)
+        r = tabela_pedidos.listar(filtros, pagina=pagina, ordem=ordem, direcao=direcao, conn=conn,
+                                  id_sintetico=id_sintetico)
         opcoes = tabela_pedidos.opcoes(conn=conn)
     finally:
         conn.close()
