@@ -303,7 +303,9 @@ def criar_pedido_para_rascunho(rascunho_id: int, token: str, config: dict | None
 
     erros_titulo = _carimbar_titulos(vuupt, rascunho["paradas"], resumo["orderId"], cfg)
     if erros_titulo:
-        rascunhos_rota.gravar_lalamove(rascunho_id, erro="Título não atualizado: " + "; ".join(erros_titulo))
+        from lalamove_erros import formatar as formatar_erro_lalamove
+        rascunhos_rota.gravar_lalamove(
+            rascunho_id, erro=formatar_erro_lalamove("Título não atualizado: " + "; ".join(erros_titulo)))
     return {"ok": True, "order_id": resumo["orderId"], "preco": preco, "share_link": resumo.get("shareLink"),
             "erros_titulo": erros_titulo}
 
