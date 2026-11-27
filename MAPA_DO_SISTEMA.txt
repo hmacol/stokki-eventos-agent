@@ -293,10 +293,13 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                                rascunho; o 2º clique volta "envio deste rascunho ja em andamento" sem
                                                mexer em nada; o envio vivo renova a trava antes de cada pedido e
                                                passo na Vuupt; trava de processo morto expira em 15 min);
-                                             - falha técnica da Vuupt (timeout, 5xx, 429, modo teste) NÃO tira a
-                                               parada: o envio para em ERRO_ENVIO "falha tecnica ao criar servico
-                                               na Vuupt (...): tente de novo", sem rota parcial; só recusa de regra
-                                               tira a parada (volta ao pool);
+                                             - falha técnica da Vuupt (timeout, 408/425/429/5xx, 401/403 com
+                                               "avise o Hugo", modo teste, resposta sem id) NÃO tira a parada: o
+                                               envio para em ERRO_ENVIO "falha tecnica ao criar servico na Vuupt
+                                               (...): tente de novo", sem rota parcial (resposta: codigos_pendentes_
+                                               tecnico); só recusa de regra ou erro PERMANENTE da Vuupt (400/404/
+                                               409/410/422, "a Vuupt recusou o pedido (Status NNN): ...") tira a
+                                               parada (volta ao pool; resposta: codigos_sem_servico);
                                              - enquanto o pedido não tem serviço, os campos marcados em
                                                edicao_local_json ficam protegidos: mudança legítima da Stokki no
                                                mesmo campo é ignorada até materializar (hoje viraria PUT);
@@ -1361,9 +1364,11 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            agrupado noutro serviço da Vuupt, linha que não nasceu sem serviço
                            (nasceu_sem_servico) ou código com serviço em nucleo_servicos, id
                            sintético inexistente, serviço achado em done/canceled/atribuído.
-                           Qualquer outra exceção (rede, 429, 5xx, banco, modo teste) é falha
-                           técnica: ResultadoMaterializacao.transitorios (classificar_falha), a
-                           parada fica. `pulso` = heartbeat de quem chama (EnvioInterrompido sobe).
+                           VuuptAPIError 400/404/409/410/422 (status lido do texto "Status NNN")
+                           também é recusa ("a Vuupt recusou o pedido (Status NNN): ...").
+                           Qualquer outra exceção (rede, 408/425/429/5xx, 401/403 com mensagem
+                           própria, banco, modo teste, resposta sem id) é falha técnica:
+                           ResultadoMaterializacao.transitorios (classificar_falha), a parada fica. `pulso` = heartbeat de quem chama (EnvioInterrompido sobe).
                            Serviço já not_assigned com o mesmo code é adotado.
                            Payload vem do núcleo (janela/telefone/edição local); o fingerprint da
                            importação é regravado com o payload da Stokki
@@ -2546,7 +2551,8 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
        seção "Primeiro dia supervisionado"). A chave é global: não dá pra ligar só pra alguns pedidos.
      * Linha ABERTA sem serviço que não nasceu sem serviço (renomeado/apagado na Vuupt, pulado antigo) fica
        fora do pool e o pipeline pede revisão dela toda rodada: trabalho manual (criar/vincular na Vuupt).
-     * Falha técnica da Vuupt no envio (429, 5xx, timeout) deixa o rascunho em ERRO_ENVIO com tudo dentro;
+     * Falha técnica da Vuupt no envio (429, 5xx, timeout, 401/403) deixa o rascunho em ERRO_ENVIO com essas
+       paradas dentro (erro permanente 400/404/409/410/422 tira só a parada recusada e a rota sai);
        os pedidos que materializaram antes já têm serviço not_assigned na Vuupt (reenvio segue dali).
      * Voltar a chave: a 1ª rodada do pipeline trata o pedido sem serviço como NOVO (data automática nova e
        aviso de dia fixo reenviado ao embarcador). Checklist pré-volta no roteiro, seção 8.

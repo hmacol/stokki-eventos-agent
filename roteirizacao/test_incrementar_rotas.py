@@ -291,6 +291,21 @@ class TestIncrementoSemServico(unittest.TestCase):
         self.assertTrue(any("falha tecnica" in m and "proxima rodada" in m for m in logs.output))
         self.assertFalse(any(" ERROR:" in m or m.startswith("ERROR") for m in logs.output))
 
+    def test_422_da_vuupt_registra_erro_no_incremento(self):
+        """Fix round 1 da onda 2: erro PERMANENTE da Vuupt e recusa (ERROR com o motivo), nao WARNING de rodada."""
+        import tempfile
+        from nucleo import banco, pedidos
+        from nucleo.test_materializar import _VuuptQueRecusa, _payload
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        with mock.patch.object(banco, "DB_PATH", Path(tmp.name) / "t.db"):
+            pedidos.registrar_importacao(_payload("PS-70"), None, "nucleo_sem_servico")
+            sid = pedidos.id_sintetico(pedidos.buscar_pedido("PS-70"))
+            with self.assertLogs(inc.logger, "ERROR") as logs:
+                ok = inc._garantir_servico({"id": sid, "code": "#PS-70"}, _VuuptQueRecusa({"PS-70": 422}), {})
+        self.assertFalse(ok)
+        self.assertTrue(any("PS-70" in m and "Status 422" in m for m in logs.output))
+
     def test_incremento_com_id_real_nao_materializa(self):
         with mock.patch.object(inc.materializar, "materializar_servicos") as m:
             self._rodar([self._rota()], [], pool=[_servico(1)])

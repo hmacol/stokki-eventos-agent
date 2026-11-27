@@ -391,6 +391,78 @@ class FalhaTransitoriaTest(_Base):
         self.assertIsNone(pedidos.buscar_pedido("PS-2", conn=self.conn)["vuupt_service_id"])   # nada gravado
 
 
+class _VuuptQueRecusa(FakeVuupt):
+    """criar_ou_atualizar_servico levanta o VuuptAPIError de verdade (texto "Status NNN: {...}")."""
+
+    def __init__(self, status_por_codigo, **kw):
+        super().__init__(**kw)
+        self.status_por_codigo = status_por_codigo
+
+    def criar_ou_atualizar_servico(self, payload):
+        from vuupt_client import VuuptAPIError
+        status = self.status_por_codigo.get(normalizacao.normalizar_codigo(payload["code"]))
+        if status:
+            self.chamadas.append(f"criar {payload['code']}")
+            raise VuuptAPIError(f"Status {status}: {{'message': 'erro {status} da Vuupt'}}")
+        return super().criar_ou_atualizar_servico(payload)
+
+
+class ErroHttpDaVuuptTest(_Base):
+    """Fix round 1 da onda 2: erro PERMANENTE da Vuupt (400/404/409/410/422) e recusa com o motivo real
+    (a parada sai); 401/403 e transitorio com mensagem propria; 408/425/429/5xx e o resto, transitorio."""
+
+    def test_classificacao_pelo_status_http(self):
+        from vuupt_client import VuuptAPIError
+        c = materializar.classificar_falha
+        for s in (400, 404, 409, 410, 422):
+            self.assertEqual(c(VuuptAPIError(f"Status {s}: {{}}")), materializar.FALHA_RECUSA, s)
+        for s in (401, 403, 408, 425, 429, 500, 502, 503):
+            self.assertEqual(c(VuuptAPIError(f"Status {s}: {{}}")), materializar.FALHA_TRANSITORIA, s)
+        # formato das acoes sobre o servico (vuupt_client: "<acao> do servico X: status NNN: ...")
+        self.assertEqual(c(VuuptAPIError("cancelar do servico 5: status 422: x")), materializar.FALHA_RECUSA)
+        self.assertEqual(c(VuuptAPIError("sem status nenhum")), materializar.FALHA_TRANSITORIA)
+        # so o erro do client da Vuupt e lido pelo status; texto parecido em outra excecao nao vira recusa
+        self.assertEqual(c(RuntimeError("Status 422: x")), materializar.FALHA_TRANSITORIA)
+
+    def test_422_e_recusa_com_o_motivo_real_e_nao_derruba_os_outros(self):
+        ids = [self._pedido(c) for c in ("PS-1", "PS-2", "PS-3")]
+        res = materializar.materializar_servicos([{"id": i} for i in ids], _VuuptQueRecusa({"PS-2": 422}), {},
+                                                 self.conn)
+        self.assertEqual(res.ok, {"PS-1": 900, "PS-3": 901})
+        self.assertEqual(res.transitorios, {})
+        self.assertTrue(res.falhas["PS-2"].startswith("a Vuupt recusou o pedido (Status 422): "), res.falhas)
+        self.assertIn("erro 422 da Vuupt", res.falhas["PS-2"])
+
+    def test_409_e_recusa(self):
+        sid = self._pedido()
+        res = materializar.materializar_servicos([{"id": sid}], _VuuptQueRecusa({"PS-1": 409}), {}, self.conn)
+        self.assertIn("Status 409", res.falhas["PS-1"])
+        self.assertEqual(res.transitorios, {})
+
+    def test_429_e_503_sao_transitorios(self):
+        a, b = self._pedido("PS-1"), self._pedido("PS-2")
+        res = materializar.materializar_servicos([{"id": a}, {"id": b}], _VuuptQueRecusa({"PS-1": 429, "PS-2": 503}),
+                                                 {}, self.conn)
+        self.assertEqual(set(res.transitorios), {"PS-1", "PS-2"})
+
+    def test_401_e_transitorio_com_mensagem_propria(self):
+        sid = self._pedido()
+        res = materializar.materializar_servicos([{"id": sid}], _VuuptQueRecusa({"PS-1": 401}), {}, self.conn)
+        self.assertIn("PS-1", res.transitorios)
+        for texto in ("credencial/permissao da Vuupt", "avise o Hugo", "401"):
+            self.assertIn(texto, res.falhas["PS-1"])
+            self.assertIn(texto, res.transitorios["PS-1"])
+
+    def test_vuupt_devolve_acao_sem_id_e_transitorio(self):
+        """Minor 4: anomalia da Vuupt (resposta sem id) nao pode tirar a parada."""
+        sid = self._pedido()
+        res = materializar.materializar_servicos([{"id": sid}], FakeVuupt(acao="atualizado"), {}, self.conn)
+        self.assertEqual(res.ok, {})
+        self.assertIn("PS-1", res.transitorios)
+        self.assertIn("sem id", res.falhas["PS-1"])
+        self.assertIsNone(pedidos.buscar_pedido("PS-1", conn=self.conn)["vuupt_service_id"])
+
+
 class IdSinteticoNaoEncontradoTest(_Base):
     """Revisao Fable FIX 6: id negativo que nao existe no nucleo e recusa com motivo; nunca cai pro
     codigo do item (que pode ser de outro pedido / velho na parada)."""

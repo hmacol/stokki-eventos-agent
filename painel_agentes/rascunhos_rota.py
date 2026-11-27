@@ -1401,11 +1401,12 @@ def _status_rascunho(rascunho_id: int) -> str | None:
 
 
 def _materializar_paradas(rascunho_id: int, paradas: list[dict], token: str, config: dict,
-                          pulso=None) -> tuple[dict[str, str], list[str], dict[str, str]]:
+                          pulso=None) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
     """Cria na Vuupt o servico das paradas de id sintetico (nucleo/materializar.py: trava por codigo,
     busca por code antes de criar). So quem foi RECUSADO por regra sai do rascunho; quem esta com a
     trava ocupada por outro envio ou teve falha tecnica (rede, 429, 5xx, modo teste) fica onde esta.
-    Devolve ({codigo da parada: motivo}, [codigos ocupados], {codigo da parada: causa da falha tecnica}).
+    Devolve ({codigo: motivo} das que SAIRAM do rascunho (recusa), {codigo: motivo} das que ficaram por
+    trava ocupada, {codigo: causa} das que ficaram por falha tecnica).
     `pulso` = heartbeat da trava do envio (materializar.EnvioInterrompido sobe se ela foi assumida)."""
     import time
     from vuupt_client import VuuptClient
@@ -1423,7 +1424,8 @@ def _materializar_paradas(rascunho_id: int, paradas: list[dict], token: str, con
     if pulso is not None:
         pulso()   # ainda dono do envio antes de tirar parada do rascunho
     falhas: dict[str, str] = {}
-    ocupados: list[str] = []
+    removidos: dict[str, str] = {}
+    ocupados: dict[str, str] = {}
     transitorios: dict[str, str] = {}
     for p in sem_servico:
         # casa pelo id (o codigo da parada pode diferir do nucleo); sem id no resultado, pelo codigo
@@ -1433,16 +1435,17 @@ def _materializar_paradas(rascunho_id: int, paradas: list[dict], token: str, con
         falhas[p["codigo"]] = (res.falhas.get(codigo) or res.falhas.get(str(p["service_id"]))
                                or "servico nao criado na Vuupt (sem resultado da materializacao)")
         if codigo in res.ocupados:
-            ocupados.append(p["codigo"])   # outro envio esta criando: nao descarta a parada
+            ocupados[p["codigo"]] = falhas[p["codigo"]]   # outro envio esta criando: nao descarta a parada
             continue
         if codigo in res.transitorios:
             transitorios[p["codigo"]] = res.transitorios[codigo]   # falha tecnica: nao descarta a parada
             continue
         remover_parada(rascunho_id, p["service_id"])
+        removidos[p["codigo"]] = falhas[p["codigo"]]
     logger.info(f"Rascunho {rascunho_id}: {len(sem_servico) - len(falhas)} de {len(sem_servico)} pedido(s) sem "
                 f"servico ganharam servico na Vuupt em {time.monotonic() - inicio:.1f}s"
                 + ("; sem servico: " + "; ".join(f"{c} ({m})" for c, m in falhas.items()) if falhas else ""))
-    return falhas, ocupados, transitorios
+    return removidos, ocupados, transitorios
 
 
 TRAVA_ENVIO_VELHA_MIN = 15   # trava de processo morto no meio do envio (restart) expira sozinha
@@ -1594,9 +1597,12 @@ def _enviar_rascunho(rascunho_id: int, token: str, marca: str | None = None) -> 
         return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem, **saiu}
 
     # Pool direto da Stokki (planejamento.fonte_pool = stokki): parada de id negativo ainda nao tem
-    # servico na Vuupt; ele nasce AGORA. Quem e RECUSADO por regra sai do rascunho (volta ao pool) com o
-    # motivo; as outras ja estao no id real (adotar_servico reescreveu o rascunho), por isso recarrega.
+    # servico na Vuupt; ele nasce AGORA. Quem e RECUSADO (regra ou erro permanente da Vuupt) sai do rascunho
+    # (volta ao pool) e vai em codigos_sem_servico com o motivo; quem fica no rascunho por falha tecnica ou
+    # trava ocupada vai em codigos_pendentes_tecnico. As outras ja estao no id real (adotar_servico
+    # reescreveu o rascunho), por isso recarrega.
     saiu["codigos_sem_servico"] = {}
+    saiu["codigos_pendentes_tecnico"] = {}
     if any(nucleo_pool.eh_sem_servico(p["service_id"]) for p in paradas):
         from nucleo.materializar import EnvioInterrompido
 
@@ -1607,13 +1613,14 @@ def _enviar_rascunho(rascunho_id: int, token: str, marca: str | None = None) -> 
         try:
             saiu["codigos_sem_servico"], ocupados, transitorios = _materializar_paradas(
                 rascunho_id, paradas, token, config, pulso=_pulso)
+            saiu["codigos_pendentes_tecnico"] = {**transitorios, **ocupados}
         except EnvioInterrompido as e:
             # outro envio e dono agora: nao mexe em status nem paradas (quem materializou ja esta no id real)
             logger.warning(f"Rascunho {rascunho_id}: {e}")
             return {"rascunho_id": rascunho_id, "ok": False, "erro": str(e), **saiu}
         if ocupados or transitorios:
             # outro envio (clique duplo, incremento) esta criando o servico desses pedidos, ou a Vuupt
-            # falhou (rede, 429, 5xx): a rota nao sai agora (nunca parcial) e nada e descartado; o
+            # falhou (rede, 429, 5xx): a rota nao sai agora (nunca parcial) e essas paradas ficam; o
             # reenvio ja encontra o id real de quem materializou
             partes = []
             if transitorios:
@@ -1622,7 +1629,15 @@ def _enviar_rascunho(rascunho_id: int, token: str, marca: str | None = None) -> 
             if ocupados:
                 partes.append(f"pedido(s) em materializacao por outro envio, tente de novo em instantes: "
                               f"{', '.join(ocupados)}")
-            mensagem = " | ".join(partes) + " -- nada enviado, nenhuma parada descartada."
+            removidos = saiu["codigos_sem_servico"]
+            if removidos:
+                # o texto fica fiel: recusa no mesmo envio tirou parada do rascunho
+                fim = (f" -- nada enviado; {len(removidos)} parada(s) recusada(s) saiu(ram) do rascunho e "
+                       f"voltou(aram) ao pool ({'; '.join(f'{c}: {m}' for c, m in removidos.items())}); "
+                       f"as com falha tecnica ficaram no rascunho.")
+            else:
+                fim = " -- nada enviado, nenhuma parada descartada."
+            mensagem = " | ".join(partes) + fim
             marcar_erro_envio(rascunho_id, mensagem)
             return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem, **saiu}
         rascunho = buscar_rascunho(rascunho_id)

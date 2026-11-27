@@ -6257,11 +6257,15 @@
     const avisoNaoProntos = naoProntos.length
       ? ` -- ${naoProntos.length} pedido(s) em espera na Stokki (retrato de ${resultado.retrato_stokki_em || "?"}) voltaram pro pool, NÃO foram enviados: ${naoProntos.join(", ")}`
       : "";
-    // pool direto da Stokki: o serviço na VUUPT nasce no envio; quem não ganhou serviço voltou pro pool com o motivo
+    // pool direto da Stokki: o serviço na VUUPT nasce no envio; quem foi RECUSADO voltou pro pool com o motivo,
+    // quem teve falha técnica (ou outro envio criando) FICOU no rascunho
     const semServico = Object.entries(resultado.codigos_sem_servico || {});
-    const avisoSemServico = semServico.length
-      ? ` -- ${semServico.length} pedido(s) sem serviço na VUUPT voltaram pro pool, NÃO foram enviados: ${semServico.map(([c, m]) => `${c} (${m})`).join("; ")}`
-      : "";
+    const pendentesTecnico = Object.entries(resultado.codigos_pendentes_tecnico || {});
+    const avisoSemServico = (semServico.length
+      ? ` -- ${semServico.length} pedido(s) recusado(s) sem serviço na VUUPT voltaram pro pool, NÃO foram enviados: ${semServico.map(([c, m]) => `${c} (${m})`).join("; ")}`
+      : "") + (pendentesTecnico.length
+      ? ` -- ${pendentesTecnico.length} pedido(s) ficaram no rascunho sem serviço (falha técnica ou outro envio), NÃO foram enviados: ${pendentesTecnico.map(([c, m]) => `${c} (${m})`).join("; ")}`
+      : "");
     if (resultado.ok) {
       let msg = `Enviada à VUUPT (rota #${resultado.vuupt_route_id})`;
       if (resultado.codigos_removidos && resultado.codigos_removidos.length) {
@@ -6354,14 +6358,21 @@
         const retrato = (comNaoProntos.find(r => r.retrato_stokki_em) || {}).retrato_stokki_em || "?";
         alert(`Atenção: ${comNaoProntos.reduce((n, r) => n + r.codigos_nao_prontos.length, 0)} pedido(s) em espera na Stokki (retrato de ${retrato}) voltaram pro pool, NÃO foram enviados:\n${linhas.join("\n")}`);
       }
-      // idem pros pedidos que não ganharam serviço na VUUPT no envio (pool direto da Stokki), com o motivo
-      const comSemServico = resp.resultados.filter(r => r.codigos_sem_servico && Object.keys(r.codigos_sem_servico).length);
-      if (comSemServico.length) {
-        const linhas = comSemServico.flatMap(r => {
+      // idem pros pedidos que não ganharam serviço na VUUPT no envio (pool direto da Stokki), com o motivo:
+      // recusados voltaram pro pool; falha técnica/outro envio ficaram no rascunho
+      const linhasSemServico = (chave) => resp.resultados
+        .filter(r => r[chave] && Object.keys(r[chave]).length)
+        .flatMap(r => {
           const nome = (RASCUNHOS.find(x => x.id === r.rascunho_id) || {}).nome || `rota ${r.rascunho_id}`;
-          return Object.entries(r.codigos_sem_servico).map(([c, m]) => `• ${nome}: ${c} -- ${m}`);
+          return Object.entries(r[chave]).map(([c, m]) => `• ${nome}: ${c} -- ${m}`);
         });
-        alert(`Atenção: ${linhas.length} pedido(s) não ganharam serviço na VUUPT e voltaram pro pool, NÃO foram enviados:\n${linhas.join("\n")}`);
+      const recusados = linhasSemServico("codigos_sem_servico");
+      if (recusados.length) {
+        alert(`Atenção: ${recusados.length} pedido(s) recusado(s) não ganharam serviço na VUUPT e voltaram pro pool, NÃO foram enviados:\n${recusados.join("\n")}`);
+      }
+      const pendentes = linhasSemServico("codigos_pendentes_tecnico");
+      if (pendentes.length) {
+        alert(`Atenção: ${pendentes.length} pedido(s) ficaram no rascunho sem serviço na VUUPT (falha técnica ou outro envio criando), NÃO foram enviados -- tente de novo:\n${pendentes.join("\n")}`);
       }
       // trava de carro desligada (planejamento.trava_sem_carro): rota saiu sem carro, só avisa
       const semCarro = resp.resultados.filter(r => r.ok && r.aviso);

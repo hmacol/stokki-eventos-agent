@@ -237,6 +237,29 @@ class FilaSemServicoTest(unittest.TestCase):
         with mock.patch.object(materializar, "materializar_servicos", return_value=ok):
             self.assertEqual(pipeline._materializar_para_fila("PS-1", mock.Mock(), {}), (901, ""))
 
+    def test_422_da_vuupt_devolve_o_erro_a_fila(self):
+        """Fix round 1 da onda 2: erro PERMANENTE (422) nao pode virar retentativa eterna: devolve o erro."""
+        import tempfile
+        from pathlib import Path
+        from nucleo import banco, pedidos
+        from nucleo.test_materializar import _VuuptQueRecusa, _payload
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        with mock.patch.object(banco, "DB_PATH", Path(tmp.name) / "t.db"):
+            pedidos.registrar_importacao(_payload("PS-41679"), None, "nucleo_sem_servico")
+            vuupt = _VuuptQueRecusa({"PS-41679": 422})
+            sid, motivo = pipeline._materializar_para_fila("PS-41679", vuupt, {})
+            self.assertIsNone(sid)
+            self.assertIn("a Vuupt recusou o pedido (Status 422)", motivo)
+            cliente = mock.Mock()
+            cliente.pendentes.return_value = [_item()]
+            processar = mock.Mock(return_value=_res(acao="gravado_nucleo", sid=None, servico=None))
+            pipeline.atender_fila_freshhub(cliente, processar, modo_teste=False, buscar_servico=mock.Mock(),
+                                           materializar=lambda c: pipeline._materializar_para_fila(c, vuupt, {}))
+        args, kwargs = cliente.resultado.call_args
+        self.assertEqual(args, ("r1", False))
+        self.assertIn("Status 422", kwargs["erro"])
+
     def test_caminho_antigo_nao_materializa(self):
         cliente = mock.Mock()
         cliente.pendentes.return_value = [_item()]

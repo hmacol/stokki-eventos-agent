@@ -163,12 +163,17 @@ Medir no 1o dia; se estourar: limite de pedidos por clique ou execucao em segund
   rota e depois dela; `marcar_erro_envio` so muda RASCUNHO/ERRO_ENVIO (nunca rebaixa ENVIADO/DESCARTADO). Limite que
   sobra: um UNICO passo (uma chamada a Vuupt com backoff, ou o `criar_rota_removendo_conflitos` inteiro) com mais de
   15 min ainda perde a trava.
-- Falha tecnica (correcao FIX 1): timeout/5xx/429 (depois do backoff do `http_retry`), banco ocupado, modo teste ou
-  erro inesperado NAO tira a parada: vai em `ResultadoMaterializacao.transitorios` e o envio do rascunho para em
-  ERRO_ENVIO ("falha tecnica ao criar servico na Vuupt (...): tente de novo -- nada enviado, nenhuma parada
-  descartada"), sem rota parcial. So recusa de REGRA (nao ABERTO, agrupado, -R, pulado_atribuido, done/canceled, ja
-  teve servico, id sintetico inexistente) tira a parada. Incremento e criacao direta pulam o pedido so naquela
-  rodada (log); a fila do freshhub nao devolve erro (o item volta a pendente em 1 h). Os pedidos do lote que
+- Falha tecnica (correcao FIX 1 + fix round 1): timeout, 408/425/429/5xx (depois do backoff do `http_retry`),
+  401/403 (mensagem propria "credencial/permissao da Vuupt ...: avise o Hugo"), banco ocupado, modo teste, resposta
+  da Vuupt sem id ou erro inesperado NAO tira a parada: vai em `ResultadoMaterializacao.transitorios` e o envio do
+  rascunho para em ERRO_ENVIO ("falha tecnica ao criar servico na Vuupt (...): tente de novo -- nada enviado, ..."),
+  sem rota parcial; na resposta do envio essas paradas vem em `codigos_pendentes_tecnico` (ficaram no rascunho). So
+  recusa de REGRA (nao ABERTO, agrupado, -R, pulado_atribuido, done/canceled, ja teve servico, id sintetico
+  inexistente) ou erro PERMANENTE da Vuupt (`VuuptAPIError` 400/404/409/410/422: "a Vuupt recusou o pedido
+  (Status NNN): ...") tira a parada (`codigos_sem_servico`, volta ao pool) e a rota sai com o resto. O status vem do
+  texto "Status NNN" (o client nao tem atributo). Incremento e criacao direta pulam o pedido so naquela rodada
+  (WARNING no transitorio, ERROR na recusa); a fila do freshhub nao devolve erro no transitorio (o item volta a
+  pendente em 1 h) e devolve o erro na recusa. Os pedidos do lote que
   materializaram antes da falha ficam no id real (servico `not_assigned` na Vuupt).
 - Trava velha por pedido: se o processo morre no meio do envio (restart do painel), a trava do pedido em
   `nucleo_materializacao` fica ate **10 minutos**; nesse tempo cada nova tentativa espera ate **30 s por pedido**

@@ -87,14 +87,49 @@ class EnvioInterrompido(Exception):
 FALHA_RECUSA, FALHA_OCUPADO, FALHA_TRANSITORIA = "recusa", "ocupado", "transitoria"
 
 
+# Erro HTTP da Vuupt: o client (vuupt_client.VuuptAPIError, nao importado aqui de proposito) so traz o
+# texto "Status NNN: {...}" (ou "<acao> do servico X: status NNN: ..."), sem atributo de status.
+_STATUS_HTTP = re.compile(r"\bstatus (\d{3})\b:?\s*", re.IGNORECASE)
+# PERMANENTE: a Vuupt recusou ESTE pedido (payload invalido, nao existe, conflito -- 409 pode ser "codigo ja
+# existe": recusa com motivo, nunca tenta criar de novo). Repetir nao resolve.
+STATUS_RECUSA_VUUPT = {400, 404, 409, 410, 422}
+STATUS_CREDENCIAL_VUUPT = {401, 403}   # transitorio, mas com mensagem propria (token/permissao)
+
+
+def _erro_http_vuupt(e: BaseException) -> tuple[int, str] | None:
+    """(status, mensagem da Vuupt) do VuuptAPIError; None pra qualquer outra excecao ou sem status."""
+    if not any(c.__name__ == "VuuptAPIError" for c in type(e).__mro__):
+        return None
+    m = _STATUS_HTTP.search(str(e))
+    return (int(m.group(1)), str(e)[m.end():].strip()) if m else None
+
+
 def classificar_falha(e: BaseException) -> str:
-    """Recusa de regra (_Recusa) x trava ocupada (_Ocupado) x falha tecnica (qualquer outra excecao:
-    rede, HTTP, 429, banco, inesperado). Na duvida e transitoria: nunca descarta parada por erro tecnico."""
+    """Recusa de regra (_Recusa) ou erro PERMANENTE da Vuupt (VuuptAPIError 400/404/409/410/422) x trava
+    ocupada (_Ocupado) x falha tecnica (qualquer outra excecao: 408/425/429/5xx, 401/403, rede, timeout,
+    banco, inesperado). Na duvida e transitoria: nunca descarta parada por erro tecnico."""
     if isinstance(e, _Ocupado):
         return FALHA_OCUPADO
     if isinstance(e, _Recusa):
         return FALHA_RECUSA
+    http = _erro_http_vuupt(e)
+    if http and http[0] in STATUS_RECUSA_VUUPT:
+        return FALHA_RECUSA
     return FALHA_TRANSITORIA
+
+
+def _motivo_da_falha(e: BaseException, tipo: str) -> tuple[str, str]:
+    """(motivo em `falhas`, causa em `transitorios`) legiveis pra tela e log."""
+    http = _erro_http_vuupt(e)
+    if tipo == FALHA_RECUSA and http:
+        return f"a Vuupt recusou o pedido (Status {http[0]}): {http[1]}", ""
+    if tipo != FALHA_TRANSITORIA or isinstance(e, _Transitorio):
+        return str(e), str(e)
+    if http and http[0] in STATUS_CREDENCIAL_VUUPT:
+        msg = (f"credencial/permissao da Vuupt recusada (Status {http[0]}): avise o Hugo; nada descartado, "
+               f"tente de novo depois -- {http[1]}")
+        return msg, msg
+    return f"falha tecnica ao criar servico na Vuupt ({e}): tente de novo", str(e)
 
 
 def _modo_teste(config: dict | None, modo_teste: bool) -> bool:
@@ -163,16 +198,16 @@ def materializar_servicos(itens: list[dict], vuupt, config: dict | None, conn: s
                 raise
             except Exception as e:  # noqa: BLE001 - um pedido nunca derruba os outros
                 tipo = classificar_falha(e)
+                motivo, causa = _motivo_da_falha(e, tipo)
                 if tipo == FALHA_TRANSITORIA:
-                    resultado.transitorios[codigo] = str(e)
-                    resultado.falhas[codigo] = (str(e) if isinstance(e, _Transitorio) else
-                                                f"falha tecnica ao criar servico na Vuupt ({e}): tente de novo")
+                    resultado.transitorios[codigo] = causa
+                    resultado.falhas[codigo] = motivo
                     if isinstance(e, _Transitorio):
                         logger.warning(f"materializar {codigo}: servico NAO criado (transitorio) -- {e}")
                     else:
                         logger.exception(f"materializar {codigo}: falha tecnica, pedido segue no envio -- {e}")
                     continue
-                resultado.falhas[codigo] = str(e)
+                resultado.falhas[codigo] = motivo
                 if tipo == FALHA_OCUPADO:
                     resultado.ocupados.add(codigo)
                 logger.warning(f"materializar {codigo}: servico NAO criado -- {e}")
@@ -355,7 +390,9 @@ def _criar_ou_adotar(conn: sqlite3.Connection, codigo: str, linha, vuupt, passo=
         _ja_tem_servico(conn, codigo, sid)
     else:
         if servico.get("id") is None:
-            raise _Recusa(f"a Vuupt devolveu '{acao}' sem id do servico de {codigo}")
+            # anomalia da Vuupt (resposta sem id): nao e recusa do pedido, a parada fica
+            raise _Transitorio(f"falha tecnica: a Vuupt devolveu '{acao}' sem id do servico de {codigo} (nada "
+                               f"descartado): tente de novo; se repetir, conferir o pedido na Vuupt")
         sid = int(servico["id"])
         try:
             pedidos.registrar_importacao(payload, resposta, acao, conn=conn)   # id no nucleo + rascunhos, 1 transacao
