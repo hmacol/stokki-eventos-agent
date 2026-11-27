@@ -16,6 +16,7 @@ import csv
 import io
 import re
 import sqlite3
+from datetime import date
 
 from nucleo import banco, financeiro
 
@@ -47,6 +48,36 @@ def _esporadicos(conn) -> list[dict]:
             "chave": chave, "nome": r["NOME_MOTORISTA"].strip(), "cpf": cpf, "pix": pix.get(cpf, ""), "agentes": {}})
         p["agentes"][int(r["AGENT_ID_VUUPT"])] = (r["TIPO_VEICULO"] or "").strip() or None
     return sorted(pessoas.values(), key=lambda p: p["nome"].casefold())
+
+
+def _mes(ano: int, mes: int, delta: int) -> tuple[int, int]:
+    t = ano * 12 + (mes - 1) + delta
+    return t // 12, t % 12 + 1
+
+
+def ciclo_atual(hoje: date) -> tuple[date, date]:
+    """Ciclos fixos de pagamento: 10 a 24 do mes, e 25 ao dia 9 do mes seguinte."""
+    if 10 <= hoje.day <= 24:
+        return date(hoje.year, hoje.month, 10), date(hoje.year, hoje.month, 24)
+    ano, mes = (hoje.year, hoje.month) if hoje.day >= 25 else _mes(hoje.year, hoje.month, -1)
+    ano2, mes2 = _mes(ano, mes, 1)
+    return date(ano, mes, 25), date(ano2, mes2, 9)
+
+
+def ciclos_recentes(hoje: date, n: int = 10) -> list[dict]:
+    """Do ciclo de hoje pra tras: [{rotulo, de, ate}] com datas ISO."""
+    de, ate = ciclo_atual(hoje)
+    lista = []
+    for _ in range(n):
+        lista.append({"rotulo": f"{de.day:02d}/{de.month:02d} a {ate.day:02d}/{ate.month:02d}/{ate.year}",
+                      "de": de.isoformat(), "ate": ate.isoformat()})
+        if de.day == 10:         # anterior: 25 do mes passado ao dia 9 deste
+            ano, mes = _mes(de.year, de.month, -1)
+            nde, nate = date(ano, mes, 25), date(de.year, de.month, 9)
+        else:                    # anterior: 10 a 24 do mes em que este ciclo comecou
+            nde, nate = date(de.year, de.month, 10), date(de.year, de.month, 24)
+        de, ate = nde, nate
+    return lista
 
 
 _SCHEMA = """

@@ -7,6 +7,7 @@ Relatorio de pagamento dos esporadicos (/financeiro/esporadicos).
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 _AQUI = Path(__file__).parent
@@ -162,14 +163,29 @@ class TestRelatorioEsporadicos(unittest.TestCase):
         m = rel.gerar("2026-11-01", "2026-11-30", conn=self.conn)["motoristas"][0]
         self.assertFalse(m["pode_pagar"])
 
+    def test_ciclos_fixos_10_a_24_e_25_a_09(self):
+        from datetime import date
+        iso = lambda t: (t[0].isoformat(), t[1].isoformat())
+        self.assertEqual(iso(rel.ciclo_atual(date(2026, 11, 10))), ("2026-11-10", "2026-11-24"))
+        self.assertEqual(iso(rel.ciclo_atual(date(2026, 11, 24))), ("2026-11-10", "2026-11-24"))
+        self.assertEqual(iso(rel.ciclo_atual(date(2026, 11, 25))), ("2026-11-25", "2026-12-09"))
+        self.assertEqual(iso(rel.ciclo_atual(date(2026, 12, 9))), ("2026-11-25", "2026-12-09"))
+        self.assertEqual(iso(rel.ciclo_atual(date(2027, 1, 3))), ("2026-12-25", "2027-01-09"))
+        lista = rel.ciclos_recentes(date(2026, 11, 27), 4)
+        self.assertEqual([(c["de"], c["ate"]) for c in lista], [
+            ("2026-11-25", "2026-12-09"), ("2026-11-10", "2026-11-24"),
+            ("2026-10-25", "2026-11-09"), ("2026-10-10", "2026-10-24")])
+
     def test_tela_renderiza_com_dados(self):
         import painel_agentes
         self.motorista(1, "Ana", "ESPORADICO")
         self.rota(1, "2026-11-10", combinado=500.0, motivo="Diaria acordada")
         r = rel.gerar("2026-11-01", "2026-11-30", conn=self.conn)
         with painel_agentes.app.test_request_context("/financeiro/esporadicos"):
-            html = painel_agentes.render_template("relatorio_esporadicos.html", rel=r, fonte_km=rel.fonte_km)
+            html = painel_agentes.render_template("relatorio_esporadicos.html", rel=r, fonte_km=rel.fonte_km,
+                                                  ciclos=rel.ciclos_recentes(date(2026, 11, 27)))
         self.assertIn("Ana", html)
+        self.assertIn("25/11 a 09/12/2026", html)
         self.assertIn("Combinado: Diaria acordada", html)
         self.assertIn("500,00", html)
         self.assertIn('data-nome="Ana"', html)

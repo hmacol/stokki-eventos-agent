@@ -4945,15 +4945,16 @@ NIVEIS_ESPORADICOS = ("total", "atendimento")    # CPF e PIX dos motoristas: sem
 
 
 def _periodo_esporadicos() -> tuple[str, str]:
-    """de/ate da query (ISO); invalido ou ausente = 1o do mes ate hoje."""
+    """de/ate da query (ISO); invalido ou ausente = o ciclo de pagamento de hoje (10-24 / 25-09)."""
     hoje = date.today()
+    ciclo = relatorio_esporadicos_mod.ciclo_atual(hoje)
 
     def _d(chave, padrao):
         try:
             return date.fromisoformat((request.args.get(chave) or "").strip())
         except ValueError:
             return padrao
-    de, ate = _d("de", hoje.replace(day=1)), _d("ate", hoje)
+    de, ate = _d("de", ciclo[0]), _d("ate", ciclo[1])
     if de > ate:
         de, ate = ate, de
     return de.isoformat(), ate.isoformat()
@@ -4970,7 +4971,8 @@ def relatorio_esporadicos():
     de, ate = _periodo_esporadicos()
     return render_template("relatorio_esporadicos.html",
                            rel=relatorio_esporadicos_mod.gerar(de, ate, _filtro_esporadicos()),
-                           fonte_km=relatorio_esporadicos_mod.fonte_km)
+                           fonte_km=relatorio_esporadicos_mod.fonte_km,
+                           ciclos=relatorio_esporadicos_mod.ciclos_recentes(date.today()))
 
 
 @app.route("/financeiro/esporadicos.csv")

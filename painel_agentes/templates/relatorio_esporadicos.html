@@ -45,6 +45,11 @@
 </div>
 
 <form class="filtro" method="get" action="{{ url_for('relatorio_esporadicos') }}">
+  <div class="campo"><label for="ciclo">Ciclo</label>
+    <select id="ciclo">
+      <option value="">Personalizado</option>
+      {% for c in ciclos %}<option value="{{ c.de }}|{{ c.ate }}"{% if c.de == rel.inicio and c.ate == rel.fim %} selected{% endif %}>{{ c.rotulo }}</option>{% endfor %}
+    </select></div>
   <div class="campo"><label for="de">De</label><input type="date" id="de" name="de" value="{{ rel.inicio }}"></div>
   <div class="campo"><label for="ate">Até</label><input type="date" id="ate" name="ate" value="{{ rel.fim }}"></div>
   <div class="campo"><label for="filtro">Mostrar</label>
@@ -117,6 +122,13 @@
 {% endif %}
 <script>
 (function () {
+  const ciclo = document.getElementById('ciclo');
+  if (ciclo) ciclo.addEventListener('change', () => {
+    if (!ciclo.value) return;
+    const [de, ate] = ciclo.value.split('|');
+    document.getElementById('de').value = de; document.getElementById('ate').value = ate;
+    ciclo.form.submit();
+  });
   const URL_PAGAR = {{ url_for('api_esporadicos_pagar')|tojson }};
   const DE = {{ rel.inicio|tojson }}, ATE = {{ rel.fim|tojson }};
   async function enviar(url, corpo, caixa, botao) {
