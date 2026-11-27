@@ -103,10 +103,15 @@ def upsert_pedido(conn: sqlite3.Connection, codigo: str, campos: dict, origem: s
     json_txt = json.dumps(dados_json, ensure_ascii=False, default=str) if dados_json is not None else None
 
     set_coalesce = ", ".join(f"{c} = COALESCE(excluded.{c}, nucleo_pedidos.{c})" for c in colunas)
+    # id_pool so no INSERT (pedido novo); contador nunca reutiliza id
+    id_pool = None
+    if not conn.execute("SELECT 1 FROM nucleo_pedidos WHERE codigo = ?", (codigo,)).fetchone():
+        conn.execute("UPDATE nucleo_contadores SET valor = valor + 1 WHERE nome = 'id_pool'")
+        id_pool = conn.execute("SELECT valor FROM nucleo_contadores WHERE nome = 'id_pool'").fetchone()[0]
     conn.execute(f"""
         INSERT INTO nucleo_pedidos (codigo, vuupt_service_id, {", ".join(colunas)}, tipo, status,
-                                    origem, dados_json, atualizado_em)
-        VALUES (?, ?, {", ".join("?" for _ in colunas)}, COALESCE(?, 'delivery'), COALESCE(?, ?), ?, ?, ?)
+                                    origem, dados_json, atualizado_em, id_pool)
+        VALUES (?, ?, {", ".join("?" for _ in colunas)}, COALESCE(?, 'delivery'), COALESCE(?, ?), ?, ?, ?, ?)
         ON CONFLICT(codigo) DO UPDATE SET
             vuupt_service_id = COALESCE(excluded.vuupt_service_id, nucleo_pedidos.vuupt_service_id),
             {set_coalesce},
@@ -120,7 +125,23 @@ def upsert_pedido(conn: sqlite3.Connection, codigo: str, campos: dict, origem: s
                 ELSE excluded.dados_json END,
             atualizado_em = excluded.atualizado_em
     """, (codigo, vuupt_service_id, *valores, tipo, status, banco.PEDIDO_ABERTO, origem, json_txt,
-          banco.agora(), tipo, status))
+          banco.agora(), id_pool, tipo, status))
+
+
+def id_sintetico(pedido) -> int:
+    """Id negativo do pedido no pool (-id_pool); nunca colide com id da Vuupt."""
+    return -int(pedido["id_pool"])
+
+
+def codigo_por_id_sintetico(conn: sqlite3.Connection, id_negativo) -> str | None:
+    try:
+        n = int(id_negativo)
+    except (TypeError, ValueError):
+        return None
+    if n >= 0:
+        return None
+    row = conn.execute("SELECT codigo FROM nucleo_pedidos WHERE id_pool = ?", (-n,)).fetchone()
+    return row[0] if row else None
 
 
 _COLUNAS_SERVICO = ["status_provedor", "status_done_provedor", "vuupt_route_id", "driver_id",

@@ -643,6 +643,30 @@ def _migrar_colunas(conn: sqlite3.Connection, tabela: str, colunas: list[tuple[s
             logger.info(f"nucleo: coluna {tabela}.{nome} adicionada.")
 
 
+def _garantir_id_pool(conn: sqlite3.Connection):
+    """id_pool: id inteiro estavel por pedido (o pool mostra -id_pool quando o
+    pedido ainda nao tem servico na Vuupt). Contador proprio em
+    nucleo_contadores: nunca reutiliza id de pedido apagado. Backfill unico
+    ordenado por criado_em, codigo; idempotente."""
+    conn.execute("CREATE TABLE IF NOT EXISTS nucleo_contadores (nome TEXT PRIMARY KEY, valor INTEGER NOT NULL)")
+    if conn.execute("SELECT 1 FROM nucleo_pedidos WHERE id_pool IS NULL LIMIT 1").fetchone():
+        base = conn.execute("SELECT COALESCE(MAX(id_pool), 0) FROM nucleo_pedidos").fetchone()[0]
+        atual = conn.execute("SELECT valor FROM nucleo_contadores WHERE nome = 'id_pool'").fetchone()
+        base = max(base, atual[0] if atual else 0)
+        codigos = [r[0] for r in conn.execute(
+            "SELECT codigo FROM nucleo_pedidos WHERE id_pool IS NULL ORDER BY criado_em, codigo")]
+        conn.executemany("UPDATE nucleo_pedidos SET id_pool = ? WHERE codigo = ?",
+                         [(base + i, c) for i, c in enumerate(codigos, 1)])
+        conn.execute("INSERT INTO nucleo_contadores (nome, valor) VALUES ('id_pool', ?) "
+                     "ON CONFLICT(nome) DO UPDATE SET valor = excluded.valor", (base + len(codigos),))
+        logger.info(f"nucleo: id_pool atribuido a {len(codigos)} pedidos.")
+    else:
+        conn.execute("INSERT OR IGNORE INTO nucleo_contadores (nome, valor) VALUES ('id_pool', "
+                     "(SELECT COALESCE(MAX(id_pool), 0) FROM nucleo_pedidos))")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_nucleo_pedidos_id_pool ON nucleo_pedidos(id_pool)")
+    conn.commit()
+
+
 def garantir_esquema(conn: sqlite3.Connection):
     """Cria o que falta e aplica migrações aditivas. Seguro rodar a cada
     conexão (mesmo padrão de rascunhos_rota._conectar)."""
@@ -662,6 +686,8 @@ def garantir_esquema(conn: sqlite3.Connection):
     # motorista digitou outro (tabela pode já existir de uma rodada anterior deste ramo)
     _migrar_colunas(conn, "motoristas_links_atualizacao", [("pix_inicial", "TEXT"), ("pix_pendente", "TEXT")])
     _migrar_colunas(conn, "nucleo_pedidos", _COLUNAS_PEDIDOS_NOVAS)
+    _migrar_colunas(conn, "nucleo_pedidos", [("id_pool", "INTEGER")])
+    _garantir_id_pool(conn)
     _migrar_colunas(conn, "nucleo_paradas", _COLUNAS_PARADAS_NOVAS)
     _migrar_colunas(conn, "nucleo_rotas", _COLUNAS_ROTAS_NOVAS)
     _migrar_colunas(conn, "nucleo_pedagios", [("tipo", "TEXT NOT NULL DEFAULT 'PEDAGIO'"), ("descricao", "TEXT"),
