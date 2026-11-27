@@ -8,7 +8,7 @@ import { API_URL } from '../../src/api';
 import { cores } from '../../src/tema';
 
 const ROTULO_TIPO: Record<string, string> = {
-  EVENTO_PARADA: 'Parada', COMPROVANTE: 'Foto', PEDAGIO: 'Pedágio', GPS: 'GPS', ROTA: 'Rota',
+  EVENTO_PARADA: 'Parada', EVENTO_LOTE: 'Grupo', COMPROVANTE: 'Foto', COMPROVANTE_LOTE: 'Foto do grupo', PEDAGIO: 'Pedágio', GPS: 'GPS', ROTA: 'Rota',
 };
 
 export default function Perfil() {

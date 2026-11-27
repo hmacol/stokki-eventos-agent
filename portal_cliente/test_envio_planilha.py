@@ -644,3 +644,38 @@ def test_planilha_sem_alteracao_nao_gera_aviso_e_vizinho_que_e_campo_do_pedido_n
     # Sku1 sem quantidade e a coluna ao lado e outro SKU ou um campo do pedido: nao adivinha
     assert ep._pares_de_itens(["Sku1", "Sku2", "Quantidade2"]) == [(1, 2)]
     assert ep._pares_de_itens(["Sku1", "Bairro", "Sku2", "Quantidade2"], ocupadas={1}) == [(2, 3)]
+
+
+# ── Coluna Transportadora (27/11) ──────────────────────────────────────────────
+
+def test_coluna_transportadora_e_lida_e_conflito_entre_linhas_recusa():
+    ok = _planilha([_linha(transportadora="Rapida SA"), _linha(sku="SKU-B", transportadora="")])
+    pedidos, rej = ep.ler_planilha(ok, "p.xlsx", CNPJ)
+    assert rej == [] and pedidos[0]["transportadora_texto"] == "Rapida SA"
+    sem = ep.ler_planilha(_planilha([_linha()]), "p.xlsx", CNPJ)[0]
+    assert sem[0]["transportadora_texto"] == ""
+    conflito = _planilha([_linha(transportadora="Rapida SA"), _linha(sku="SKU-B", transportadora="Outra")])
+    pedidos, rej = ep.ler_planilha(conflito, "p.xlsx", CNPJ)
+    assert pedidos == [] and "transportadora diferente" in rej[0]["erro"]
+
+
+def test_confirmar_planilha_grava_a_transportadora_resolvida_no_analisar(ambiente):
+    conn = ambiente
+    conn.execute("CREATE TABLE transportadoras (id INTEGER, nome TEXT, tipo TEXT, situacao TEXT, cnpj TEXT)")
+    conn.execute("INSERT INTO transportadoras VALUES (1, 'RAPIDA SA', 'ENTREGA', 'ATIVA', '44555666000181')")
+    conn.commit()
+    pedidos, _ = ep.ler_planilha(_planilha([_linha(transportadora="rapida")]), "p.xlsx", CNPJ)
+    pedidos[0]["transportadora_id"] = 1   # o que o analisar do app.py faz com achar_por_texto
+    tk = ep.guardar_temporario_pedido(pedidos[0], ep.guardar_temporario(_planilha([_linha()]), "xlsx"))
+    ep.confirmar_envios(conn, CNPJ, [{"token": tk, "horario_inicio": "08:00", "horario_fim": "17:00"}], "cliente", {}, "nenhuma")
+    r = dict(conn.execute("SELECT * FROM portal_envios").fetchone())
+    assert json.loads(r["transportadora_json"])["nome"] == "RAPIDA SA"
+
+
+def test_confirmar_planilha_recusa_transportadora_vinda_do_navegador(ambiente):
+    conn = ambiente
+    pedidos, _ = ep.ler_planilha(_planilha([_linha()]), "p.xlsx", CNPJ)
+    tk = ep.guardar_temporario_pedido(pedidos[0], ep.guardar_temporario(_planilha([_linha()]), "xlsx"))
+    with pytest.raises(ep.ErroEnvio, match="não aceita troca de transportadora"):
+        ep.confirmar_envios(conn, CNPJ, [{"token": tk, "horario_inicio": "08:00", "horario_fim": "17:00",
+                                          "transportadora_id": 1}], "cliente", {}, "nenhuma")

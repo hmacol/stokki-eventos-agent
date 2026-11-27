@@ -189,6 +189,9 @@ export const iniciarRota = (id: number, corpo: object) => chamar<Rota>(`/rotas/$
 export const finalizarRota = (id: number, corpo: object) => chamar<Rota>(`/rotas/${id}/finalizar`, { metodo: 'POST', corpo });
 export const eventoParada = (paradaId: number, corpo: object) =>
   chamar<{ ja_registrado: boolean; rota_status: string }>(`/paradas/${paradaId}/eventos`, { metodo: 'POST', corpo });
+/** Baixa em grupo: `itens` = um {parada_id, uuid} por pedido; o resto é o corpo do evento de parada. */
+export const eventoLote = (corpo: object) =>
+  chamar<{ ja_registrado: boolean; rota_status: string }>('/paradas/lote/eventos', { metodo: 'POST', corpo });
 export const enviarGps = (pontos: object[]) => chamar<{ novos: number }>('/gps', { metodo: 'POST', corpo: { pontos } });
 export const checklist = () => chamar<Checklist>('/checklist');
 export const ofertas = () => chamar<{ abertas: Oferta[]; minhas: Oferta[] }>('/ofertas');
@@ -240,6 +243,13 @@ async function enviarArquivo<T>(caminho: string, uri: string, campos: Record<str
 export async function enviarComprovante(paradaId: number, uri: string, tipo: string, uuid: string, capturadoEm: string, nf?: string | null) {
   return enviarArquivo<{ id: number; ja_registrado: boolean; gcs: boolean }>(`/paradas/${paradaId}/comprovantes`, uri, {
     tipo, uuid, capturado_em: capturadoEm, ...(nf ? { nf } : {}),
+  });
+}
+
+/** Foto única do grupo: o servidor grava uma vez e liga a todos os pedidos de `itens`. */
+export async function enviarComprovanteLote(uri: string, tipo: string, uuid: string, capturadoEm: string, itens: { parada_id: number; uuid: string }[]) {
+  return enviarArquivo<{ ja_registrado: boolean; gcs: boolean }>('/paradas/lote/comprovantes', uri, {
+    tipo, uuid, capturado_em: capturadoEm, itens: JSON.stringify(itens),
   });
 }
 

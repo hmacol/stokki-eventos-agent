@@ -121,11 +121,13 @@ CREATE TABLE IF NOT EXISTS pagamentos_pontuais (
     aviso_em            TEXT,
     descricao           TEXT,
     valor_cobrado       REAL,
-    anexo               TEXT
+    anexo               TEXT,
+    data_combinada      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pagamentos_pontuais_situacao ON pagamentos_pontuais(situacao);
 """
-_COLUNAS_NOVAS = (("descricao", "TEXT"), ("valor_cobrado", "REAL"), ("anexo", "TEXT"))
+_COLUNAS_NOVAS = (("descricao", "TEXT"), ("valor_cobrado", "REAL"), ("anexo", "TEXT"),
+                 ("data_combinada", "TEXT"))
 
 
 def conectar(caminho=None) -> sqlite3.Connection:
@@ -247,12 +249,18 @@ def validar(dados: dict, motoristas: list[dict]) -> dict:
     if motorista is None:
         raise ErroPagamento("Motorista não encontrado ou inativo. Recarregue a tela.")
     valor = ler_valor(dados.get("valor"))
-    descricao, valor_cobrado = "", None
+    descricao, valor_cobrado, data_combinada = "", None, ""
     if tipo == FRETE_AVULSO:
         descricao = _campo(dados, "descricao", MAX_DESCRICAO)
         if not descricao:
             raise ErroPagamento("Descreva o frete (cliente, origem → destino, data).")
         valor_cobrado = ler_valor(dados.get("valor_cobrado"), "valor cobrado do cliente")
+        data_combinada = str(dados.get("data_combinada") or "").strip()
+        if data_combinada:
+            try:
+                datetime.strptime(data_combinada, "%Y-%m-%d")
+            except ValueError:
+                raise ErroPagamento("Data combinada para pagamento inválida.")
     favorecido = str(dados.get("favorecido") or MOTORISTA).strip().upper()
     if tipo != DESCARGA or favorecido not in (MOTORISTA, LOCAL):
         favorecido = MOTORISTA
@@ -270,7 +278,8 @@ def validar(dados: dict, motoristas: list[dict]) -> dict:
             raise ErroPagamento("Informe a chave PIX ou os dados bancários do local da descarga.")
     observacao = str(dados.get("observacao") or "").strip()[:MAX_OBSERVACAO]
     return {"tipo": tipo, "valor": valor, "observacao": observacao, "favorecido": favorecido,
-            "motorista": motorista, "pix": pix, "descricao": descricao, "valor_cobrado": valor_cobrado, **local}
+            "motorista": motorista, "pix": pix, "descricao": descricao, "valor_cobrado": valor_cobrado,
+            "data_combinada": data_combinada, **local}
 
 
 # ── Fluxo ─────────────────────────────────────────────────────────────────────
@@ -286,13 +295,13 @@ def lancar(conn, dados: dict, usuario: str, anexo: bytes = b"") -> int:
         "INSERT INTO pagamentos_pontuais (tipo, situacao, valor, observacao, motorista_id, motorista_nome, "
         "motorista_cpf, motorista_telefone, motorista_placa, motorista_veiculo, motorista_pix, favorecido, "
         "local_nome, local_endereco, local_documento, local_pagamento, lancado_por, lancado_em, "
-        "descricao, valor_cobrado) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "descricao, valor_cobrado, data_combinada) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (campos["tipo"], AGUARDANDO_PAGAMENTO, campos["valor"], campos["observacao"] or None, m["id"], m["nome"],
          m["cpf"] or None, m["telefone"] or None, m["placa"] or None, m["veiculo"] or None, campos["pix"] or None,
          campos["favorecido"], campos["local_nome"] or None, campos["local_endereco"] or None,
          campos["local_documento"] or None, campos["local_pagamento"] or None, usuario or None, _agora(),
-         campos["descricao"] or None, campos["valor_cobrado"]))
+         campos["descricao"] or None, campos["valor_cobrado"], campos["data_combinada"] or None))
     novo_id = cur.lastrowid
     if anexo:
         conn.execute("UPDATE pagamentos_pontuais SET anexo = ? WHERE id = ?",
@@ -467,11 +476,21 @@ def _linhas_motorista(p: dict) -> list[str]:
     return linhas
 
 
+def data_br(iso: str) -> str:
+    """'2026-11-30' -> '30/11/2026'."""
+    try:
+        return datetime.strptime(iso, "%Y-%m-%d").strftime("%d/%m/%Y")
+    except (TypeError, ValueError):
+        return iso or ""
+
+
 def texto_lancamento(p: dict) -> str:
     linhas = [f"💰 *Solicitação de pagamento #{p['id']} · {TIPOS[p['tipo']]}*"]
     if p["tipo"] == FRETE_AVULSO:
         linhas.append(f"Frete: {p.get('descricao') or ''}")
         linhas.append(f"Valor a pagar ao motorista: *{_moeda(p['valor'])}*")
+        if p.get("data_combinada"):
+            linhas.append(f"Data combinada para pagamento: *{data_br(p['data_combinada'])}*")
         if p.get("valor_cobrado") is not None:
             linhas.append(f"Cobrado do cliente: {_moeda(p['valor_cobrado'])} · margem {_moeda_sinal(margem(p))}")
     else:

@@ -1738,23 +1738,26 @@ def lancar_lalamove(rascunho_id: int, token: str) -> dict:
 
     Retorna {"rascunho_id", "ok", "order_id"?, "preco"?, "erro"?}.
     """
+    from lalamove_erros import formatar as formatar_erro_lalamove
     from lalamove_integracao import criar_pedido_para_rascunho, rascunho_e_lalamove
 
     rascunho = buscar_rascunho(rascunho_id)
     if not rascunho:
-        return {"rascunho_id": rascunho_id, "ok": False, "erro": "Rascunho não encontrado."}
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": formatar_erro_lalamove("Rascunho não encontrado.")}
     if rascunho["status"] != STATUS_ENVIADO:
         return {"rascunho_id": rascunho_id, "ok": False,
-                "erro": f"Rota ainda não enviada à VUUPT (status={rascunho['status']}) -- confirme o envio antes de lançar na Lalamove."}
+                "erro": formatar_erro_lalamove(f"Rota ainda não enviada à VUUPT (status={rascunho['status']}) -- confirme o envio antes de lançar na Lalamove.")}
     if not rascunho_e_lalamove(rascunho):
-        return {"rascunho_id": rascunho_id, "ok": False, "erro": "Rota não está com o motorista virtual LALAMOVE."}
+        return {"rascunho_id": rascunho_id, "ok": False,
+                "erro": formatar_erro_lalamove("Rota não está com o motorista virtual LALAMOVE.")}
 
     try:
         resultado = criar_pedido_para_rascunho(rascunho_id, token)
     except Exception as e:
-        logger.warning(f"Lançamento Lalamove do rascunho {rascunho_id} falhou: {e}")
-        gravar_lalamove(rascunho_id, erro=str(e))
-        return {"rascunho_id": rascunho_id, "ok": False, "erro": str(e)}
+        erro = formatar_erro_lalamove(e)
+        logger.warning(f"Lançamento Lalamove do rascunho {rascunho_id} falhou: {erro}")
+        gravar_lalamove(rascunho_id, erro=erro)
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": erro}
     return {"rascunho_id": rascunho_id, **resultado}
 
 

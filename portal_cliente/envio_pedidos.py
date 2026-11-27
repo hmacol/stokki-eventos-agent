@@ -529,7 +529,9 @@ COLUNAS_PLANILHA: list[tuple[str, str, bool, tuple[str, ...], int, str]] = [
     ("peso_kg", "Peso (kg)", False, ("peso", "peso kg", "peso (kg)", "peso bruto"), 10, "12,5"),
     ("valor_total", "Valor total do pedido (R$)", False, ("valor", "valor total", "valor do pedido", "total", "valor nf", "valor da nf"), 16, "450,00"),
     ("observacoes", "Observações", False, ("observacoes", "observacao", "obs", "instrucoes"), 30, "Entregar no fundo"),
-    ("sku", "SKU do produto", True, ("sku", "codigo", "codigo do produto", "cod produto", "produto", "ean", "gtin", "item", "cod"), 18, "QE-0001"),
+    ("transportadora", "Transportadora (opcional)", False,
+     ("transportadora", "transp", "nome da transportadora", "cnpj da transportadora", "cnpj transportadora"), 26, ""),
+    ("sku", "SKU do produto", True,("sku", "codigo", "codigo do produto", "cod produto", "produto", "ean", "gtin", "item", "cod"), 18, "QE-0001"),
     ("quantidade", "Quantidade", True, ("quantidade", "qtd", "qtde", "qte", "quant", "qtd itens"), 12, "10"),
     ("valor_unitario", "Valor unitário (R$)", False,
      ("valor unitario", "vlr unitario", "vlr unit", "valor unit", "preco", "preco unitario", "unitario"), 16, "45,00"),
@@ -994,6 +996,8 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
                 "peso_kg": round(peso or 0.0, 3),
                 "valor_nf": round(valor_total or 0.0, 2),
                 "observacoes": _celula_texto(campos.get("observacoes"))[:500],
+                # nome ou CNPJ escrito pelo cliente; o app.py casa com o cadastro (analisar)
+                "transportadora_texto": _celula_texto(campos.get("transportadora"))[:80],
                 "itens_lista": [],
                 "linhas": [],
                 "nome_arquivo": nome,
@@ -1003,6 +1007,12 @@ def ler_planilha(conteudo: bytes, nome: str, cnpj_embarcador: str,
             if doc_linha and doc_linha != g["destinatario_doc"]:
                 erros_grupo.setdefault(chave_grupo, []).append(
                     f"linha {n}: destinatário diferente do da primeira linha do pedido {ref} -- use outra referência.")
+            transp_linha = _celula_texto(campos.get("transportadora"))[:80]
+            if transp_linha and g["transportadora_texto"] and _normalizar_texto(transp_linha) != _normalizar_texto(g["transportadora_texto"]):
+                erros_grupo.setdefault(chave_grupo, []).append(
+                    f"linha {n}: transportadora diferente da primeira linha do pedido {ref} -- use outra referência.")
+            elif transp_linha and not g["transportadora_texto"]:
+                g["transportadora_texto"] = transp_linha
             if empresas is not None:
                 emb_linha = _so_digitos(_celula_texto(campos.get(COLUNA_EMPRESA[0])))
                 if emb_linha and emb_linha.zfill(14) != g["emitente_cnpj"]:
@@ -1683,11 +1693,16 @@ def confirmar_envios(conn: sqlite3.Connection, cnpj_embarcador: str, itens: list
                                        rotulo_envio(nfe))
         # Transportadora escolhida na prévia: antes do endereço e da área, que
         # dependem do tipo dela (retirada/redespacho não checam região).
-        if item.get("transportadora_id"):
-            if nfe.get("origem") != ORIGEM_XML:
-                raise ErroEnvio(f"{rotulo_envio(nfe)}: pedido de planilha não aceita troca de transportadora.")
+        # Planilha: a transportadora vem da coluna da planilha (resolvida em analisar e
+        # gravada no pedido temporário, nunca do que o navegador manda aqui).
+        tid = item.get("transportadora_id")
+        if nfe.get("origem") != ORIGEM_XML:
+            if tid:
+                raise ErroEnvio(f"{rotulo_envio(nfe)}: pedido de planilha não aceita troca de transportadora na prévia.")
+            tid = nfe.get("transportadora_id")
+        if tid:
             try:
-                transp = transportadora_envio.resolver(conn, item["transportadora_id"])
+                transp = transportadora_envio.resolver(conn, tid)
             except transportadora_envio.ErroTransportadora as e:
                 raise ErroEnvio(f"{rotulo_envio(nfe)}: {e}")
             nfe = {**transportadora_envio.aplicar_no_nfe(nfe, transp), "_transp_json": transportadora_envio.gravar_json(transp)}

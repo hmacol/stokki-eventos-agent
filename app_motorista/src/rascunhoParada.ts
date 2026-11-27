@@ -12,6 +12,8 @@ const VALIDADE_MS = 12 * 60 * 60 * 1000;
 export type RascunhoParada = {
   paradaId: number;
   rotaId: number;
+  /** Baixa em grupo: "12,13,14" (ids das paradas); null/ausente = parada so. */
+  grupo?: string | null;
   fluxo: string | null;
   respostas: Record<string, string>;
   fotos: Record<string, string[]>;

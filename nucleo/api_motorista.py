@@ -551,6 +551,15 @@ def criar_app(config: dict | None = None) -> Flask:
         resultado = operacao.registrar_evento_parada(conn(), parada_id, agent_id(), corpo())
         return jsonify(resultado), (200 if resultado["ja_registrado"] else 201)
 
+    @app.post("/api/paradas/lote/eventos")
+    @requer_motorista
+    def evento_lote():
+        """Baixa em grupo (Hugo, 26/11): mesmo resultado pros pedidos do mesmo
+        embarcador, destinatario e endereco. Corpo: {tipo, itens: [{parada_id, uuid}], ...
+        o resto igual ao evento de parada}. Cada pedido ganha o proprio evento."""
+        resultado = operacao.registrar_evento_lote(conn(), agent_id(), corpo())
+        return jsonify(resultado), (200 if resultado["ja_registrado"] else 201)
+
     def _extensao_foto(arquivo) -> str:
         ext = (arquivo.filename.rsplit(".", 1)[-1] if "." in arquivo.filename else "jpg").lower()
         if ext not in EXTENSOES_FOTO:
@@ -783,6 +792,41 @@ def criar_app(config: dict | None = None) -> Flask:
         )
         return jsonify({**resultado, "gcs": caminho_gcs is not None,
                         "validacao": (validacao or {}).get("resultado")}), 201
+
+    @app.post("/api/paradas/lote/comprovantes")
+    @requer_motorista
+    def comprovante_lote():
+        """Foto unica do grupo (multipart): arquivo, tipo, uuid (do lote), itens (JSON
+        [{parada_id, uuid}]), capturado_em. Grava a foto UMA vez e uma linha de
+        comprovante por pedido; sempre fica pra conferencia manual."""
+        arquivo = request.files.get("arquivo")
+        if arquivo is None or not arquivo.filename:
+            raise OperacaoInvalida("Envie o arquivo no campo 'arquivo' (multipart).")
+        tipo = (request.form.get("tipo") or "CANHOTO").upper()
+        if tipo not in operacao.TIPOS_COMPROVANTE or tipo == validacao_fotos.TIPO_FACHADA:
+            raise OperacaoInvalida(f"Tipo de comprovante inválido: {tipo!r}.")
+        uuid = (request.form.get("uuid") or "").strip()
+        if not uuid:
+            raise OperacaoInvalida("Comprovante do grupo sem uuid.")
+        ext = _extensao_foto(arquivo)
+        itens = operacao.itens_do_lote(request.form.get("itens"))
+        paradas = operacao.validar_grupo_lote(conn(), agent_id(), itens, exigir_abertas=False)
+
+        # Reenvio da fila: se todos ja existem, nao grava a foto de novo
+        marcas = ",".join("?" * len(itens))
+        existentes = {r["uuid"] for r in conn().execute(
+            f"SELECT uuid FROM nucleo_comprovantes WHERE uuid IN ({marcas})", [i["uuid"] for i in itens])}
+        if all(i["uuid"] in existentes for i in itens):
+            return jsonify({"ja_registrado": True, "itens": [{"parada_id": i["parada_id"], "ja_registrado": True} for i in itens]})
+
+        conteudo = arquivo.read()
+        sha = hashlib.sha256(conteudo).hexdigest()
+        codigo = f"grupo-{paradas[0]['codigo'] or paradas[0]['id']}"
+        caminho, caminho_gcs = _guardar_foto(conteudo, codigo, tipo, uuid, ext)
+        resultado = operacao.registrar_comprovante_lote(
+            conn(), agent_id(), tipo, uuid, itens, caminho, sha, len(conteudo),
+            request.form.get("capturado_em") or banco.agora(), caminho_gcs)
+        return jsonify({**resultado, "gcs": caminho_gcs is not None}), (200 if resultado["ja_registrado"] else 201)
 
     @app.post("/api/rotas/<int:rota_id>/pedagios")
     @requer_motorista

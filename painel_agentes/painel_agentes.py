@@ -86,6 +86,7 @@ from planejamento_rotas import (
     placas_veiculos_vuupt, seletor_veiculos, confirmar_envio_rascunhos,
 )
 from regras import veiculos as veiculos_regras
+from regras import corte_roteirizacao
 from avisar_motoristas_rotas import notificar_oferta_motoristas, push_ofertas_vps
 from motoristas import dados_pagina_motoristas, url_app_motorista, listar_agentes_vuupt_nao_cadastrados, cadastrar_motorista, editar_motorista, MotoristaNaoEncontrado
 from expedicao import listar_rotas_do_dia, gerar_romaneio_rota, excluir_pedido_da_rota, MOTIVOS_EXCLUSAO
@@ -125,6 +126,7 @@ import avisos_pendencias
 from galpao3d import banco as galpao3d_banco, estado as galpao3d_estado
 import retornos
 import pagamentos_pontuais
+import relatorio_esporadicos as relatorio_esporadicos_mod
 import compras
 
 def _carregar_config() -> dict:
@@ -1393,7 +1395,22 @@ def planejamento():
         motivos_exclusao=MOTIVOS_EXCLUSAO,
         # selo "sem carro" recalculado no card depois de trocar motorista/carro
         agentes_sem_carro=sorted(veiculos_regras.AGENTES_SEM_CARRO),
+        # corte da roteirizacao: todos veem, so "total" (administrador) edita
+        corte=corte_roteirizacao.detalhe_corte(),
+        pode_editar_corte=g.nivel_acesso == "total",
     )
+
+
+@app.route("/api/planejamento/corte", methods=["POST"])
+@requer_auth(niveis=("total",))
+def api_planejamento_corte():
+    """Salva o horario de corte da roteirizacao (so administrador)."""
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        hhmm = corte_roteirizacao.definir_corte(body.get("corte"), g.get("nome_usuario") or "admin")
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True, **corte_roteirizacao.detalhe_corte(), "hhmm": hhmm})
 
 
 @app.route("/planejamento/mobile")
@@ -4922,6 +4939,45 @@ def pagamentos():
         p["pode_reenviar"] = pp.pode_reenviar(p)
     return render_template("pagamentos_pontuais.html", itens=itens, situacao=situacao, contagem=contagem,
                            motoristas=motoristas, pp=pp, envio_ligado=pp.config_pagamentos(config)["ativo"])
+
+
+NIVEIS_ESPORADICOS = ("total", "atendimento")    # CPF e PIX dos motoristas: sem logistica
+
+
+def _periodo_esporadicos() -> tuple[str, str]:
+    """de/ate da query (ISO); invalido ou ausente = 1o do mes ate hoje."""
+    hoje = date.today()
+
+    def _d(chave, padrao):
+        try:
+            return date.fromisoformat((request.args.get(chave) or "").strip())
+        except ValueError:
+            return padrao
+    de, ate = _d("de", hoje.replace(day=1)), _d("ate", hoje)
+    if de > ate:
+        de, ate = ate, de
+    return de.isoformat(), ate.isoformat()
+
+
+@app.route("/financeiro/esporadicos")
+@requer_auth(niveis=NIVEIS_ESPORADICOS)
+def relatorio_esporadicos():
+    de, ate = _periodo_esporadicos()
+    return render_template("relatorio_esporadicos.html", rel=relatorio_esporadicos_mod.gerar(de, ate),
+                           fonte_km=relatorio_esporadicos_mod.fonte_km)
+
+
+@app.route("/financeiro/esporadicos.csv")
+@requer_auth(niveis=NIVEIS_ESPORADICOS)
+def relatorio_esporadicos_csv():
+    de, ate = _periodo_esporadicos()
+    rel = relatorio_esporadicos_mod.gerar(de, ate)
+    detalhe = request.args.get("tipo") == "detalhe"
+    corpo = (relatorio_esporadicos_mod.csv_detalhe if detalhe else relatorio_esporadicos_mod.csv_resumo)(rel)
+    nome = f"esporadicos_{'rotas' if detalhe else 'resumo'}_{de}_a_{ate}.csv"
+    # BOM: o Excel pt-BR abre em UTF-8 sem baguncar os acentos
+    return Response("﻿" + corpo, mimetype="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{nome}"'})
 
 
 def _resposta_pagamento(conn, pagamento_id: int, evento: str | None):

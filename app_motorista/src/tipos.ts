@@ -82,6 +82,9 @@ export type Parada = {
   // NFs do pedido (documentos_processados): um canhoto por NF (Hugo, 12/09).
   // Vazio = pedido sem NF conhecida, um canhoto só e sem cobrar número.
   nfs?: string[];
+  // Baixa em grupo (26/11): paradas da rota com a MESMA chave (embarcador + destinatario
+  // + endereco) podem ser baixadas juntas, com um comprovante so. Calculada no servidor.
+  grupo_baixa?: string | null;
 };
 
 // Pedágio da rota (Hugo, 11/09): valor + foto do recibo, um por recibo;

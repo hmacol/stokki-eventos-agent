@@ -555,7 +555,7 @@
       `<th>Destinatário</th><th>${p.entrega_ativa ? 'Endereço de entrega' : 'Endereço'}</th><th>Transportadora</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Documentos</th><th>Agendamento</th></tr>`;
     // Transportadora da nota; no XML o embarcador pode trocar por uma do cadastro (o servidor reescreve o <transporta>)
     const celulaTransportadora = (it, lista) => {
-      if (it.origem === 'planilha') return '<span style="color:var(--texto-suave)">—</span>';
+      if (it.origem === 'planilha') return it.transportadora_nome ? `<div>${esc(it.transportadora_nome)}</div>` : '<span style="color:var(--texto-suave)">—</span>';
       const nome = `<div>${esc(it.transportadora_nome || 'não informada na nota')}</div>`;
       if (!lista.length) return nome;
       return nome + `<select class="tp" aria-label="Trocar a transportadora do pedido"><option value="">manter a da nota</option>${lista.map(t => `<option value="${t.id}" data-tipo="${esc(t.tipo || '')}">${esc(t.nome)}</option>`).join('')}</select>`;

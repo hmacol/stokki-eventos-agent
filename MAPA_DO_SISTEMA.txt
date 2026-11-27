@@ -949,6 +949,10 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
  --- Lalamove ---
  lalamove_client.py      Cliente API v3 (HMAC, cotação, pedido).
  lalamove_integracao.py  Liga o /planejamento à Lalamove (lançar, sincronizar).
+ lalamove_erros.py       Nomenclatura das falhas de lançamento (LAL-01..LAL-11, LAL-99 = não
+                         classificada): "LAL-04 título -- o que fazer [texto cru]" em lalamove_erro
+                         (card do /planejamento e log). Tabela _REGRAS = ordem de prioridade.
+                         Teste: py -3.11 -m unittest test_lalamove_erros
 
  --- Tratativas ---
  tratativas.py           Log append-only de tratativas por pedido.
@@ -1140,6 +1144,13 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
                             (mensagem da Stokki > horario do destinatario > dia todo).
                             Registrada como AUTOMATICO em agendamentos_origem: nunca vira
                             dedicado (nao e data do cliente).
+ corte_roteirizacao.py      Horario de corte UNICO da roteirizacao (padrao 14:15; tabela
+                            roteirizacao_config no dados.db). Editavel no /planejamento so por
+                            nivel "total" (POST /api/planejamento/corte); lido por
+                            agendamento_automatico.data_automatica e criar_rotas_diarias.
+                            Ate o corte = pedido do dia; depois = agendado (dia seguinte).
+                            Compara com a hora de LANCAMENTO (created_at da listagem da Stokki,
+                            pipeline._lancado_em_da_linha); sem hora ou data antiga, cai no inicio da rodada.
  feriados.py                Calendário de feriados (nacionais, Carnaval, Corpus
                             Christi, 09/07, 25/01; móveis pela Páscoa) e as
                             funções de dia útil usadas por rota do dia, dia
@@ -1932,6 +1943,10 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                               que chama /api/motoristas/<id>/resetar-pin)
    /financeiro/pedagios       pedagios.html
    /financeiro/pagamentos     pagamentos_pontuais.html (Adiantamento/Descarga/Frete avulso)
+  /financeiro/esporadicos    relatorio_esporadicos.html (+ .csv ?tipo=resumo|detalhe): fechamento dos motoristas
+                             POSICAO=ESPORADICO por periodo (data da rota) = nucleo/financeiro.extrato_motorista
+                             + CPF/PIX; painel_agentes/relatorio_esporadicos.py. Niveis total+atendimento.
+                             Nao inclui pagamentos pontuais; banco/agencia nao existem no cadastro (so PIX).
    /canhotos                  canhotos.html
    /  (agentes), /execucao/<id>, /historico   index.html, execucao.html, historico.html
    APIs em /api/<tela>/...
@@ -2176,7 +2191,18 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
                            desmarcar paradas com motivo) -> POST /api/rotas/<id>/carregamento.
  app/parada/[id].tsx       Entregue / Parcial / Não entregue / Reagendar,
                            checklist e fotos.
- app/mapa/[id].tsx         Mapa da rota (botão "Mapa" na tela da rota): pinos numerados,
+                           BAIXA EM GRUPO (26/11): pedidos pendentes da rota com a mesma chave
+                           (embarcador + destinatário + endereço; operacao.chave_grupo_baixa,
+                           campo `grupo_baixa` da parada, só dado interno) ganham o atalho
+                           "Baixar juntos" na rota -> /parada/<id>?rota=..&grupo=<ids>: um resultado
+                           e UM comprovante pra todos (entregue/parcial/insucesso; sem Reagendar).
+                           Fila: EVENTO_LOTE + COMPROVANTE_LOTE -> POST /api/paradas/lote/eventos e
+                           /lote/comprovantes (operacao.registrar_evento_lote/_comprovante_lote): 1 evento
+                           por PS, 1 foto em disco e 1 linha de nucleo_comprovantes por PS, sempre SEM
+                           leitura da IA (resultado_validacao NULL = "Sem conferência" em /canhotos).
+                           O servidor reconfere o grupo (409 se misturar embarcador/destinatário/endereço);
+                           queda no meio: reenviar com os mesmos uuids termina o resto.
+ app/mapa/[id].tsx        Mapa da rota (botão "Mapa" na tela da rota): pinos numerados,
                            linha do trajeto e cartão com os passos (Deslizar). Entregue /
                            Não entregue abrem app/parada/[id].tsx?fluxo=... Peças em src/mapa/.
  src/trajeto.ts            GET /api/rotas/<id>/trajeto; guarda o do Google por rota
