@@ -391,6 +391,67 @@ class FalhaTransitoriaTest(_Base):
         self.assertIsNone(pedidos.buscar_pedido("PS-2", conn=self.conn)["vuupt_service_id"])   # nada gravado
 
 
+class HeartbeatTravaTest(_Base):
+    """Revisao Fable FIX 3: a trava do pedido e renovada (dono conferido) antes de cada passo na Vuupt;
+    trava assumida por outro = nao cria (ocupado, tente de novo). O `pulso` de quem chama para o lote."""
+
+    def _trava(self):
+        return self.conn.execute("SELECT iniciado_em, processo FROM nucleo_materializacao").fetchone()
+
+    def test_trava_renovada_antes_de_criar(self):
+        sid = self._pedido()
+        vuupt = FakeVuupt()
+        visto = {}
+        buscar = vuupt.buscar_servico_por_code
+
+        def buscar_e_envelhecer(code):
+            with sqlite3.connect(self.db) as c:   # a trava "envelhece" durante a chamada lenta
+                c.execute("UPDATE nucleo_materializacao SET iniciado_em = '2026-01-01 00:00:00'")
+            return buscar(code)
+        criar = vuupt.criar_ou_atualizar_servico
+
+        def criar_e_olhar(payload):
+            with sqlite3.connect(self.db) as c:
+                visto["iniciado_em"] = c.execute("SELECT iniciado_em FROM nucleo_materializacao").fetchone()[0]
+            return criar(payload)
+        vuupt.buscar_servico_por_code, vuupt.criar_ou_atualizar_servico = buscar_e_envelhecer, criar_e_olhar
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {"PS-1": 900})
+        self.assertGreater(visto["iniciado_em"], "2026-01-01 00:00:00")
+        self.assertEqual(self._travas(), 0)
+
+    def test_trava_assumida_por_outro_nao_cria(self):
+        sid = self._pedido()
+        vuupt = FakeVuupt()
+        buscar = vuupt.buscar_servico_por_code
+
+        def buscar_e_perder(code):
+            with sqlite3.connect(self.db) as c:   # outro processo achou a trava velha e assumiu
+                c.execute("UPDATE nucleo_materializacao SET processo = 'outro'")
+            return buscar(code)
+        vuupt.buscar_servico_por_code = buscar_e_perder
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        self.assertEqual(vuupt.criados, [])
+        self.assertEqual(res.ocupados, {"PS-1"})
+        self.assertIn("assumida", res.falhas["PS-1"])
+        self.assertEqual(self._trava()["processo"], "outro")   # a do outro fica
+
+    def test_pulso_de_quem_chama_para_o_lote(self):
+        ids = [self._pedido(c) for c in ("PS-1", "PS-2")]
+        chamadas = []
+
+        def pulso():
+            chamadas.append(1)
+            if len(vuupt.criados) >= 1:
+                raise materializar.EnvioInterrompido("trava do envio assumida")
+        vuupt = FakeVuupt()
+        with self.assertRaises(materializar.EnvioInterrompido):
+            materializar.materializar_servicos([{"id": i} for i in ids], vuupt, {}, self.conn, pulso=pulso)
+        self.assertEqual(len(vuupt.criados), 1)
+        self.assertGreaterEqual(len(chamadas), 3)   # antes de cada pedido e de cada passo na Vuupt
+        self.assertEqual(self._travas(), 0)
+
+
 class MaterializarLoteTest(_Base):
     def test_lote_troca_o_id_e_tira_quem_falhou(self):
         a, b = self._pedido("PS-1"), self._pedido("PS-2", status=banco.PEDIDO_CANCELADO)

@@ -76,6 +76,11 @@ class _Transitorio(Exception):
     como esta; o pedido continua no envio."""
 
 
+class EnvioInterrompido(Exception):
+    """Levantada pelo `pulso` de quem chama (ex.: a trava do envio do rascunho foi assumida por outro):
+    para o lote na hora, sem criar mais nenhum servico. Nunca vira falha de pedido: sobe."""
+
+
 FALHA_RECUSA, FALHA_OCUPADO, FALHA_TRANSITORIA = "recusa", "ocupado", "transitoria"
 
 
@@ -108,7 +113,8 @@ def _codigo_do_item(conn: sqlite3.Connection, item: dict, sid) -> str | None:
 
 
 def materializar_servicos(itens: list[dict], vuupt, config: dict | None, conn: sqlite3.Connection | None = None,
-                          *, modo_teste: bool = False, espera_s: float | None = None) -> ResultadoMaterializacao:
+                          *, modo_teste: bool = False, espera_s: float | None = None,
+                          pulso=None) -> ResultadoMaterializacao:
     """Cria na Vuupt o servico dos itens SEM servico (id <= 0, ou sem id) e devolve
     {codigo: service_id} em `ok` e {codigo: motivo} em `falhas`; item com id real e ignorado
     (nem aparece no resultado). Ordem do lote = ordem dos itens. Commita na `conn` a cada pedido
@@ -117,7 +123,9 @@ def materializar_servicos(itens: list[dict], vuupt, config: dict | None, conn: s
     `espera_s` (padrao ESPERA_TRAVA_S): falha com o codigo tambem em `ocupados`. Excecao que nao e
     recusa de regra (classificar_falha): falha com o codigo tambem em `transitorios` (quem chama nao
     descarta o pedido). `codigos` = {id do item: codigo do nucleo}
-    (quem chama casa o resultado pelo id, nao pelo codigo que tem na mao)."""
+    (quem chama casa o resultado pelo id, nao pelo codigo que tem na mao). `pulso()` (opcional) e chamado
+    antes de cada pedido e de cada passo na Vuupt (heartbeat da trava de quem chama); se levantar
+    EnvioInterrompido o lote para e a excecao sobe."""
     espera_s = ESPERA_TRAVA_S if espera_s is None else espera_s
     resultado = ResultadoMaterializacao()
     fechar = conn is None
@@ -137,9 +145,14 @@ def materializar_servicos(itens: list[dict], vuupt, config: dict | None, conn: s
             if codigo in vistos:
                 continue
             vistos.add(codigo)
+            if pulso is not None:
+                pulso()
             try:
-                resultado.ok[codigo] = _materializar_um(conn, codigo, vuupt, _modo_teste(config, modo_teste), espera_s)
+                resultado.ok[codigo] = _materializar_um(conn, codigo, vuupt, _modo_teste(config, modo_teste), espera_s,
+                                                        pulso)
                 logger.info(f"materializar {codigo}: servico {resultado.ok[codigo]} na Vuupt")
+            except EnvioInterrompido:
+                raise
             except Exception as e:  # noqa: BLE001 - um pedido nunca derruba os outros
                 tipo = classificar_falha(e)
                 if tipo == FALHA_TRANSITORIA:
@@ -213,7 +226,8 @@ def _conferir_agrupamento(conn: sqlite3.Connection, codigo: str) -> None:
                       f"conferir o pedido a mao")
 
 
-def _materializar_um(conn: sqlite3.Connection, codigo: str, vuupt, modo_teste: bool, espera_s: float) -> int:
+def _materializar_um(conn: sqlite3.Connection, codigo: str, vuupt, modo_teste: bool, espera_s: float,
+                     pulso=None) -> int:
     linha = _linha(conn, codigo)
     _conferir_pedido(linha, codigo)
     if linha["vuupt_service_id"] is not None:
@@ -238,7 +252,7 @@ def _materializar_um(conn: sqlite3.Connection, codigo: str, vuupt, modo_teste: b
         _conferir_pedido(linha, codigo)
         if linha["vuupt_service_id"] is not None:
             return _ja_tem_servico(conn, codigo, int(linha["vuupt_service_id"]))
-        return _criar_ou_adotar(conn, codigo, linha, vuupt)
+        return _criar_ou_adotar(conn, codigo, linha, vuupt, lambda: _passo(conn, codigo, processo, pulso))
     finally:
         try:
             if conn.in_transaction:
@@ -268,8 +282,27 @@ def _travar(conn: sqlite3.Connection, codigo: str, processo: str) -> bool:
     return pegou
 
 
-def _criar_ou_adotar(conn: sqlite3.Connection, codigo: str, linha, vuupt) -> int:
+def _renovar_trava(conn: sqlite3.Connection, codigo: str, processo: str) -> bool:
+    """Heartbeat da trava do pedido (so o dono renova; commit curto, nunca atravessa HTTP).
+    False = outro processo assumiu (achou a trava velha)."""
+    cur = conn.execute("UPDATE nucleo_materializacao SET iniciado_em = ? WHERE codigo = ? AND processo = ?",
+                       (banco.agora(), codigo, processo))
+    conn.commit()
+    return cur.rowcount == 1
+
+
+def _passo(conn: sqlite3.Connection, codigo: str, processo: str, pulso=None) -> None:
+    """Antes de cada chamada a Vuupt: pulso de quem chama + renova a trava do pedido."""
+    if pulso is not None:
+        pulso()
+    if not _renovar_trava(conn, codigo, processo):
+        raise _Ocupado(f"a trava do pedido {codigo} foi assumida por outro envio (este passou de "
+                       f"{TRAVA_VELHA_MIN} min?): servico nao criado por este envio, tente de novo")
+
+
+def _criar_ou_adotar(conn: sqlite3.Connection, codigo: str, linha, vuupt, passo=lambda: None) -> int:
     code = f"#{codigo}"
+    passo()
     existente = vuupt.buscar_servico_por_code(code)
     if existente:
         status = existente.get("status")
@@ -287,6 +320,7 @@ def _criar_ou_adotar(conn: sqlite3.Connection, codigo: str, linha, vuupt) -> int
 
     base = _payload_do_pipeline(linha, vuupt)
     payload = montar_payload(linha, vuupt, base)
+    passo()
     resposta, acao = vuupt.criar_ou_atualizar_servico(payload)
     servico = pedidos.servico_da_resposta(resposta)
     if acao == "pulado_atribuido":

@@ -316,6 +316,140 @@ class EnvioConcorrenteTest(_Base):
         self.assertTrue(rascunhos_rota.enviar_rascunho(r2, "token")["ok"])
 
 
+class _Relogio:
+    """datetime do rascunhos_rota com o now() controlado pelo teste (o resto e o datetime de verdade)."""
+
+    def __init__(self, inicio):
+        from datetime import datetime as _dt
+        relogio = self
+        self.atual = inicio
+
+        class _DT(_dt):
+            @classmethod
+            def now(cls, tz=None):
+                return relogio.atual
+        self.classe = _DT
+
+    def andar(self, minutos):
+        from datetime import timedelta
+        self.atual += timedelta(minutes=minutos)
+
+
+class EnvioLongoTest(_Base):
+    """Revisao Fable FIX 3: envio com mais de 15 min (429s) perdia a trava para o 2o clique, que depois
+    rebaixava o ENVIADO para ERRO_ENVIO e tirava as paradas. Agora: heartbeat na trava, status
+    reconferido antes de criar a rota e marcar_erro_envio nunca rebaixa ENVIADO/DESCARTADO."""
+
+    def _status(self, rid):
+        r = rascunhos_rota.buscar_rascunho(rid)
+        return r["status"], r["vuupt_route_id"], r["erro_envio"]
+
+    def test_marcar_erro_envio_nao_rebaixa_enviado_nem_descartado(self):
+        r1 = _inserir_rascunho([(101, "#PS-1")], status="ENVIADO", vuupt_route_id=555)
+        r2 = _inserir_rascunho([(102, "#PS-2")], status="DESCARTADO")
+        r3 = _inserir_rascunho([(103, "#PS-3")])
+        self.assertFalse(rascunhos_rota.marcar_erro_envio(r1, "x"))
+        self.assertFalse(rascunhos_rota.marcar_erro_envio(r2, "x"))
+        self.assertTrue(rascunhos_rota.marcar_erro_envio(r3, "x"))
+        self.assertEqual(self._status(r1), ("ENVIADO", 555, None))
+        self.assertEqual(self._status(r2)[0], "DESCARTADO")
+        self.assertEqual(self._status(r3), ("ERRO_ENVIO", None, "x"))
+
+    def test_envio_que_acha_tudo_em_outra_rota_deixa_o_enviado_do_outro_intacto(self):
+        rid = _inserir_rascunho([(101, "#PS-1"), (102, "#PS-2")])
+
+        def criar_rota(token, nome, start_at, sublote, **kw):
+            rascunhos_rota.marcar_enviado(rid, 999)   # o outro envio terminou antes
+            return None, [], ["#PS-1", "#PS-2"]
+        self.criar_rota.side_effect = criar_rota
+        resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertFalse(resultado["ok"])
+        self.assertEqual(self._status(rid), ("ENVIADO", 999, None))
+        self.assertEqual(_paradas(rid), [(101, "#PS-1"), (102, "#PS-2")])
+
+    def test_rota_parcial_com_rascunho_ja_enviado_pelo_outro_nao_mexe_nas_paradas(self):
+        rid = _inserir_rascunho([(101, "#PS-1"), (102, "#PS-2")])
+
+        def criar_rota(token, nome, start_at, sublote, **kw):
+            rascunhos_rota.marcar_enviado(rid, 999)
+            return {"id": 778}, [sublote[0]], ["#PS-2"]
+        self.criar_rota.side_effect = criar_rota
+        with self.assertLogs(rascunhos_rota.logger, "ERROR") as logs:
+            resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertFalse(resultado["ok"])
+        self.assertIn("778", resultado["erro"])
+        self.assertEqual(self._status(rid), ("ENVIADO", 999, None))
+        self.assertEqual(_paradas(rid), [(101, "#PS-1"), (102, "#PS-2")])
+        self.assertTrue(any("778" in m for m in logs.output))
+
+    def test_status_mudou_durante_a_materializacao_nao_cria_a_rota(self):
+        a = self._sem_servico("PS-1")
+        rid = _inserir_rascunho([(a, "#PS-1")])
+        original = self.vuupt.criar_ou_atualizar_servico
+
+        def criar(payload):
+            conn = rascunhos_rota._conectar()
+            try:
+                conn.execute("UPDATE rascunhos_rota SET status = 'DESCARTADO' WHERE id = ?", (rid,))
+                conn.commit()
+            finally:
+                conn.close()
+            return original(payload)
+        self.vuupt.criar_ou_atualizar_servico = criar
+        resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertFalse(resultado["ok"])
+        self.criar_rota.assert_not_called()
+        self.assertIn("DESCARTADO", resultado["erro"])
+        self.assertEqual(self._status(rid)[0], "DESCARTADO")
+
+    def test_heartbeat_segura_a_trava_de_envio_longo(self):
+        from datetime import datetime as _dt
+        relogio = _Relogio(_dt(2026, 11, 27, 10, 0, 0))
+        ids = [self._sem_servico(c) for c in ("PS-1", "PS-2", "PS-3")]
+        rid = _inserir_rascunho([(i, f"#PS-{n}") for n, i in enumerate(ids, 1)])
+        original = self.vuupt.criar_ou_atualizar_servico
+        segundo = {}
+
+        def criar_devagar(payload):
+            relogio.andar(10)   # cada servico leva 10 min (429 + backoff): o envio passa de 15 min
+            if payload["code"] == "#PS-3":
+                segundo["resultado"] = rascunhos_rota.enviar_rascunho(rid, "token")
+            return original(payload)
+        self.vuupt.criar_ou_atualizar_servico = criar_devagar
+        with mock.patch.object(rascunhos_rota, "datetime", relogio.classe), \
+                mock.patch.object(materializar, "ESPERA_TRAVA_S", 0.1):
+            resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertEqual(segundo["resultado"]["erro"], "envio deste rascunho ja em andamento")
+        self.assertTrue(resultado["ok"], resultado)
+        self.assertEqual(self.criar_rota.call_count, 1)
+        self.assertEqual(self._status(rid), ("ENVIADO", 777, None))
+        self.assertEqual(_travas(), [])
+
+    def test_trava_assumida_no_meio_para_sem_criar_a_rota(self):
+        ids = [self._sem_servico(c) for c in ("PS-1", "PS-2", "PS-3")]
+        rid = _inserir_rascunho([(i, f"#PS-{n}") for n, i in enumerate(ids, 1)])
+        original = self.vuupt.criar_ou_atualizar_servico
+
+        def criar(payload):
+            if payload["code"] == "#PS-2":   # outro processo assumiu a trava (achou que a nossa era velha)
+                conn = rascunhos_rota._conectar()
+                try:
+                    conn.execute("UPDATE rascunho_envio_trava SET processo = 'pid=9 outro' WHERE rascunho_id = ?",
+                                 (rid,))
+                    conn.commit()
+                finally:
+                    conn.close()
+            return original(payload)
+        self.vuupt.criar_ou_atualizar_servico = criar
+        resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertFalse(resultado["ok"])
+        self.assertIn("assumido", resultado["erro"])
+        self.criar_rota.assert_not_called()
+        self.assertEqual(self._status(rid), ("RASCUNHO", None, None))   # o envio do outro decide
+        self.assertEqual(_paradas(rid), [(900, "#PS-1"), (901, "#PS-2"), (ids[2], "#PS-3")])
+        self.assertEqual(_travas(), [(rid, "pid=9 outro")])               # a trava do outro fica
+
+
 class AdicionarEmRotaEnviadaTest(_Base):
     def setUp(self):
         super().setUp()

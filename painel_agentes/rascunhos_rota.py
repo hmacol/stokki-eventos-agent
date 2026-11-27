@@ -1374,24 +1374,39 @@ def marcar_enviado(rascunho_id: int, vuupt_route_id: int):
         logger.warning(f"Rota VUUPT {vuupt_route_id} (rascunho {rascunho_id}) enviada, mas não espelhada no núcleo: {e}")
 
 
-def marcar_erro_envio(rascunho_id: int, mensagem: str):
+def marcar_erro_envio(rascunho_id: int, mensagem: str) -> bool:
+    """So rascunho ainda pendente (RASCUNHO/ERRO_ENVIO) vira ERRO_ENVIO: nunca rebaixa ENVIADO
+    nem DESCARTADO (envio concorrente que terminou antes). Devolve se mudou."""
     conn = _conectar()
     try:
-        conn.execute(
-            "UPDATE rascunhos_rota SET status = ?, erro_envio = ? WHERE id = ?",
-            (STATUS_ERRO_ENVIO, mensagem, rascunho_id),
+        cur = conn.execute(
+            "UPDATE rascunhos_rota SET status = ?, erro_envio = ? WHERE id = ? AND status IN (?, ?)",
+            (STATUS_ERRO_ENVIO, mensagem, rascunho_id, STATUS_RASCUNHO, STATUS_ERRO_ENVIO),
         )
         conn.commit()
+        if cur.rowcount == 0:
+            logger.info(f"Rascunho {rascunho_id}: nao esta mais pendente, erro de envio nao gravado ({mensagem})")
+        return cur.rowcount > 0
     finally:
         conn.close()
 
 
-def _materializar_paradas(rascunho_id: int, paradas: list[dict], token: str,
-                          config: dict) -> tuple[dict[str, str], list[str], dict[str, str]]:
+def _status_rascunho(rascunho_id: int) -> str | None:
+    conn = _conectar()
+    try:
+        row = conn.execute("SELECT status FROM rascunhos_rota WHERE id = ?", (rascunho_id,)).fetchone()
+        return row["status"] if row else None
+    finally:
+        conn.close()
+
+
+def _materializar_paradas(rascunho_id: int, paradas: list[dict], token: str, config: dict,
+                          pulso=None) -> tuple[dict[str, str], list[str], dict[str, str]]:
     """Cria na Vuupt o servico das paradas de id sintetico (nucleo/materializar.py: trava por codigo,
     busca por code antes de criar). So quem foi RECUSADO por regra sai do rascunho; quem esta com a
     trava ocupada por outro envio ou teve falha tecnica (rede, 429, 5xx, modo teste) fica onde esta.
-    Devolve ({codigo da parada: motivo}, [codigos ocupados], {codigo da parada: causa da falha tecnica})."""
+    Devolve ({codigo da parada: motivo}, [codigos ocupados], {codigo da parada: causa da falha tecnica}).
+    `pulso` = heartbeat da trava do envio (materializar.EnvioInterrompido sobe se ela foi assumida)."""
     import time
     from vuupt_client import VuuptClient
     from nucleo import banco as nucleo_banco, normalizacao
@@ -1402,9 +1417,11 @@ def _materializar_paradas(rascunho_id: int, paradas: list[dict], token: str,
     conn = nucleo_banco.conectar(DB_PATH)
     try:
         res = materializar_servicos([{"id": p["service_id"], "code": p["codigo"]} for p in sem_servico],
-                                    VuuptClient(token), config, conn)
+                                    VuuptClient(token), config, conn, pulso=pulso)
     finally:
         conn.close()
+    if pulso is not None:
+        pulso()   # ainda dono do envio antes de tirar parada do rascunho
     falhas: dict[str, str] = {}
     ocupados: list[str] = []
     transitorios: dict[str, str] = {}
@@ -1429,6 +1446,7 @@ def _materializar_paradas(rascunho_id: int, paradas: list[dict], token: str,
 
 
 TRAVA_ENVIO_VELHA_MIN = 15   # trava de processo morto no meio do envio (restart) expira sozinha
+# (o envio vivo renova a trava a cada pedido e a cada passo na Vuupt: _renovar_envio)
 
 
 def _travar_envio(rascunho_id: int) -> str | None:
@@ -1471,21 +1489,50 @@ def _soltar_envio(rascunho_id: int, marca: str) -> None:
                        f"{TRAVA_ENVIO_VELHA_MIN} min")
 
 
+def _renovar_envio(rascunho_id: int, marca: str) -> bool:
+    """Heartbeat da trava do envio: so o dono (marca) renova iniciado_em; transacao curta, nunca
+    atravessa chamada HTTP. False = outro clique/processo assumiu a trava (achou que era velha)."""
+    conn = _conectar()
+    try:
+        with conn:
+            cur = conn.execute("UPDATE rascunho_envio_trava SET iniciado_em = ? WHERE rascunho_id = ? AND processo = ?",
+                               (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rascunho_id, marca))
+        return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+_MSG_ENVIO_ASSUMIDO = ("envio assumido por outro clique/processo (a trava deste envio foi perdida): este envio "
+                       "parou sem criar a rota")
+
+
+def _envio_perdido(rascunho_id: int, marca: str | None) -> str | None:
+    """Antes de criar a rota: ainda dono da trava (heartbeat) e rascunho ainda pendente? Devolve o
+    motivo pra parar (sem mexer em status nem paradas) ou None."""
+    if marca is not None and not _renovar_envio(rascunho_id, marca):
+        return _MSG_ENVIO_ASSUMIDO
+    status = _status_rascunho(rascunho_id)
+    if status not in (STATUS_RASCUNHO, STATUS_ERRO_ENVIO):
+        return f"Rascunho mudou para {status} durante o envio: este envio parou sem criar a rota."
+    return None
+
+
 def enviar_rascunho(rascunho_id: int, token: str) -> dict:
     """Um envio por rascunho de cada vez: o 2o clique concorrente (ou outro processo) e
-    recusado sem tocar no rascunho, no nucleo nem na Vuupt. O trabalho e _enviar_rascunho."""
+    recusado sem tocar no rascunho, no nucleo nem na Vuupt. O trabalho e _enviar_rascunho,
+    que renova a trava (heartbeat) a cada pedido materializado e antes de criar a rota."""
     marca = _travar_envio(rascunho_id)
     if marca is None:
         logger.info(f"Rascunho {rascunho_id}: envio recusado, outro envio deste rascunho em andamento")
         return {"rascunho_id": rascunho_id, "ok": False, "codigos_nao_prontos": [],
                 "erro": "envio deste rascunho ja em andamento"}
     try:
-        return _enviar_rascunho(rascunho_id, token)
+        return _enviar_rascunho(rascunho_id, token, marca)
     finally:
         _soltar_envio(rascunho_id, marca)
 
 
-def _enviar_rascunho(rascunho_id: int, token: str) -> dict:
+def _enviar_rascunho(rascunho_id: int, token: str, marca: str | None = None) -> dict:
     """
     Confirma e envia UM rascunho pra VUUPT de verdade (Fase 3: botão
     'Confirmar e Enviar' da tela de planejamento) -- rotas_client.
@@ -1551,8 +1598,19 @@ def _enviar_rascunho(rascunho_id: int, token: str) -> dict:
     # motivo; as outras ja estao no id real (adotar_servico reescreveu o rascunho), por isso recarrega.
     saiu["codigos_sem_servico"] = {}
     if any(nucleo_pool.eh_sem_servico(p["service_id"]) for p in paradas):
-        saiu["codigos_sem_servico"], ocupados, transitorios = _materializar_paradas(
-            rascunho_id, paradas, token, config)
+        from nucleo.materializar import EnvioInterrompido
+
+        def _pulso():
+            # heartbeat: o envio longo (429, dezenas de pedidos) nao perde a trava pro 2o clique
+            if marca is not None and not _renovar_envio(rascunho_id, marca):
+                raise EnvioInterrompido(_MSG_ENVIO_ASSUMIDO)
+        try:
+            saiu["codigos_sem_servico"], ocupados, transitorios = _materializar_paradas(
+                rascunho_id, paradas, token, config, pulso=_pulso)
+        except EnvioInterrompido as e:
+            # outro envio e dono agora: nao mexe em status nem paradas (quem materializou ja esta no id real)
+            logger.warning(f"Rascunho {rascunho_id}: {e}")
+            return {"rascunho_id": rascunho_id, "ok": False, "erro": str(e), **saiu}
         if ocupados or transitorios:
             # outro envio (clique duplo, incremento) esta criando o servico desses pedidos, ou a Vuupt
             # falhou (rede, 429, 5xx): a rota nao sai agora (nunca parcial) e nada e descartado; o
@@ -1581,6 +1639,13 @@ def _enviar_rascunho(rascunho_id: int, token: str) -> dict:
         marcar_erro_envio(rascunho_id, mensagem)
         return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem, **saiu}
 
+    # Reconfere logo antes de criar a rota: ainda dono da trava (heartbeat) e rascunho ainda pendente
+    # (outro envio pode ter terminado/descartado). Parar aqui nao mexe em status nem paradas.
+    perdido = _envio_perdido(rascunho_id, marca)
+    if perdido:
+        logger.warning(f"Rascunho {rascunho_id}: {perdido}")
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": perdido, **saiu}
+
     try:
         rota, sublote_criado, codigos_removidos = criar_rota_removendo_conflitos(
             token, rascunho["nome"], rascunho["start_at"], sublote,
@@ -1594,7 +1659,17 @@ def _enviar_rascunho(rascunho_id: int, token: str) -> dict:
 
     if rota is None:
         mensagem = f"Todos os {len(sublote)} pedido(s) já estavam em outra rota -- nenhum enviado."
-        marcar_erro_envio(rascunho_id, mensagem)
+        if not marcar_erro_envio(rascunho_id, mensagem):
+            # outro envio deste rascunho terminou antes (ENVIADO): os pedidos estao na rota DELE
+            mensagem = f"Rascunho ja esta {_status_rascunho(rascunho_id)} (outro envio terminou antes): nada alterado."
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem, **saiu}
+
+    status = _status_rascunho(rascunho_id)
+    if status not in (STATUS_RASCUNHO, STATUS_ERRO_ENVIO):
+        # so com envio concorrente (o heartbeat evita): nao tira parada nem sobrescreve a rota do outro
+        mensagem = (f"Rota {rota['id']} criada na Vuupt, mas o rascunho ja esta {status} por outro envio: "
+                    f"conferir e cancelar a rota {rota['id']} na Vuupt se estiver duplicada.")
+        logger.error(f"Rascunho {rascunho_id}: {mensagem}")
         return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem, **saiu}
 
     for codigo in codigos_removidos:
