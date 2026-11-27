@@ -232,6 +232,17 @@ def _sublote_para_mapa(sublote: list[dict], remetentes_por_id: dict[int, str]) -
     return paradas
 
 
+def _pool_vivo(config: dict) -> list[dict]:
+    """Pool de verdade. Fonte stokki (planejamento.fonte_pool): o do nucleo, com o pedido ainda
+    sem servico na Vuupt (id sintetico); senao o not_assigned da Vuupt, como sempre."""
+    from nucleo import pool as nucleo_pool
+    if nucleo_pool.fonte_pool(config) == nucleo_pool.FONTE_STOKKI:
+        return nucleo_pool.listar_pool(incluir_sem_servico=True)
+    vuupt = VuuptClient(config.get("vuupt_api", {}).get("token", ""))
+    filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"}]
+    return vuupt.listar_servicos(filtro, per_page=100, include=["customer"])
+
+
 def buscar_dados_laboratorio(data_alvo: date, particao: str = "Todos", usar_teste: bool = False) -> dict:
     """
     Roda os 5 esquemas de agrupamento sobre os pedidos elegíveis pra
@@ -264,10 +275,7 @@ def buscar_dados_laboratorio(data_alvo: date, particao: str = "Todos", usar_test
     if usar_teste:
         servicos = _gerar_massa_de_teste(gmaps_key)
     else:
-        token = config.get("vuupt_api", {}).get("token", "")
-        vuupt = VuuptClient(token)
-        filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"}]
-        servicos_brutos = vuupt.listar_servicos(filtro, per_page=100, include=["customer"])
+        servicos_brutos = _pool_vivo(config)
         servicos = [s for s in servicos_brutos if elegivel_para_data(s, data_alvo)]
         _injetar_classificacoes(servicos, config, crd.DB_PATH)
 
