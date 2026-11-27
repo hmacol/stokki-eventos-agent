@@ -6,6 +6,7 @@ temporario, sem rede. Rodar (da raiz):
     py -3.11 -m unittest nucleo.test_materializar -v
 """
 import json
+import sqlite3
 import tempfile
 import threading
 import time
@@ -243,6 +244,80 @@ class MaterializarTest(_Base):
         dados = json.loads(pedidos.buscar_pedido("PS-1", conn=self.conn)["dados_json"])
         self.assertEqual(dados["acao"], "criado")
         self.assertEqual(dados["payload"]["_skill_nome"], "Seco-2")
+
+
+class _ConnQueFalhaAoSoltar:
+    """Conexao de verdade, mas o DELETE que solta a trava levanta 'database is locked'."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, *args):
+        if sql.startswith("DELETE FROM nucleo_materializacao WHERE codigo = ? AND processo"):
+            raise sqlite3.OperationalError("database is locked")
+        return self._conn.execute(sql, *args)
+
+    def __getattr__(self, nome):
+        return getattr(self._conn, nome)
+
+
+class FixRound1Test(_Base):
+    def test_janela_telefone_titulo_e_nome_do_nucleo_vao_no_payload(self):
+        sid = self._pedido(customer={"name": "DEST", "code": "123", "address": "RUA A 1",
+                                     "phone_number": "+5511900000000", "operating_hour_start": "07:00",
+                                     "operating_hour_end": "10:00"}, phone_number="+5511900000000")
+        self.conn.execute("UPDATE nucleo_pedidos SET horario_inicio = '13:00', horario_fim = '17:00', "
+                          "destinatario_telefone = '+5511988887777', titulo = '#PS-1 - NF1 / EMB / DEST NOVO', "
+                          "destinatario_nome = 'DEST NOVO' WHERE codigo = 'PS-1'")
+        self.conn.commit()
+        vuupt = FakeVuupt()
+        materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        (enviado,) = vuupt.criados
+        c = enviado["customer"]
+        self.assertEqual((c["operating_hour_start"], c["operating_hour_end"]), ("13:00", "17:00"))
+        self.assertEqual((c["phone_number"], enviado["phone_number"]), ("+5511988887777", "+5511988887777"))
+        self.assertEqual((enviado["title"], c["name"]), ("#PS-1 - NF1 / EMB / DEST NOVO", "DEST NOVO"))
+
+    def test_coluna_vazia_nao_apaga_o_valor_do_payload(self):
+        sid = self._pedido(customer={"name": "DEST", "code": "123", "address": "RUA A 1",
+                                     "phone_number": "+5511900000000", "operating_hour_start": "07:00"},
+                           phone_number="+5511900000000")
+        self.conn.execute("UPDATE nucleo_pedidos SET horario_inicio = NULL, destinatario_telefone = NULL, "
+                          "titulo = NULL, destinatario_nome = NULL WHERE codigo = 'PS-1'")
+        self.conn.commit()
+        vuupt = FakeVuupt()
+        materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        (enviado,) = vuupt.criados
+        self.assertEqual(enviado["customer"]["operating_hour_start"], "07:00")
+        self.assertEqual((enviado["customer"]["phone_number"], enviado["phone_number"]),
+                         ("+5511900000000", "+5511900000000"))
+        self.assertEqual((enviado["title"], enviado["customer"]["name"]), ("#PS-1 - NF1 / EMB / DEST", "DEST"))
+
+    def test_trava_ocupada_vai_em_ocupados(self):
+        sid = self._pedido()
+        self.conn.execute("INSERT INTO nucleo_materializacao VALUES ('PS-1', ?, 'outro')", (banco.agora(),))
+        self.conn.commit()
+        res = materializar.materializar_servicos([{"id": sid}], FakeVuupt(), {}, self.conn, espera_s=0.2)
+        self.assertEqual(res.ocupados, {"PS-1"})
+        self.assertIn("PS-1", res.falhas)
+        # recusa comum nao e "ocupado"
+        sid2 = self._pedido("PS-2", status=banco.PEDIDO_CANCELADO)
+        res = materializar.materializar_servicos([{"id": sid2}], FakeVuupt(), {}, self.conn)
+        self.assertEqual(res.ocupados, set())
+
+    def test_resultado_diz_o_codigo_de_cada_id(self):
+        sid = self._pedido()
+        res = materializar.materializar_servicos([{"id": sid, "code": "qualquer"}], FakeVuupt(), {}, self.conn)
+        self.assertEqual(res.codigos, {sid: "PS-1"})
+        self.assertEqual(res.ok, {"PS-1": 900})
+
+    def test_falha_ao_soltar_a_trava_nao_mascara_o_sucesso(self):
+        sid = self._pedido()
+        with self.assertLogs(materializar.logger, "WARNING") as logs:
+            res = materializar.materializar_servicos([{"id": sid}], FakeVuupt(), {}, _ConnQueFalhaAoSoltar(self.conn))
+        self.assertEqual(res.ok, {"PS-1": 900})
+        self.assertEqual(res.falhas, {})
+        self.assertTrue(any("trava" in m and "locked" in m for m in logs.output))
 
 
 class MaterializarLoteTest(_Base):

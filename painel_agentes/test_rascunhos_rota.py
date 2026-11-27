@@ -138,6 +138,34 @@ class EnviarRascunhoSemServicoTest(_Base):
         self.assertEqual(self.vuupt.chamadas, [])
 
 
+class FixRound1EnvioTest(_Base):
+    def test_codigo_da_parada_diferente_do_nucleo_casa_pelo_id(self):
+        a, b = self._sem_servico("PS-100"), self._sem_servico("PS-200")
+        rid = _inserir_rascunho([(a, "#PS-100"), (b, "#PS-999")])   # codigo velho/diferente na parada
+        resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertTrue(resultado["ok"], resultado)
+        self.assertEqual(resultado["codigos_sem_servico"], {})
+        self.assertEqual(self._ids_enviados(), [900, 901])
+
+    def test_trava_ocupada_nao_remove_a_parada(self):
+        a, b = self._sem_servico("PS-1"), self._sem_servico("PS-2")
+        conn = banco.conectar()
+        try:
+            conn.execute("INSERT INTO nucleo_materializacao VALUES ('PS-2', ?, 'outro clique')", (banco.agora(),))
+            conn.commit()
+        finally:
+            conn.close()
+        rid = _inserir_rascunho([(a, "#PS-1"), (b, "#PS-2")])
+        with mock.patch.object(materializar, "ESPERA_TRAVA_S", 0.2):
+            resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertFalse(resultado["ok"])
+        self.criar_rota.assert_not_called()
+        self.assertIn("outro envio", resultado["codigos_sem_servico"]["#PS-2"])
+        self.assertIn("tente de novo", resultado["erro"])
+        self.assertEqual(_paradas(rid), [(900, "#PS-1"), (b, "#PS-2")])   # nada descartado
+        self.assertEqual(rascunhos_rota.buscar_rascunho(rid)["status"], rascunhos_rota.STATUS_ERRO_ENVIO)
+
+
 class AdicionarEmRotaEnviadaTest(_Base):
     def setUp(self):
         super().setUp()
@@ -156,6 +184,13 @@ class AdicionarEmRotaEnviadaTest(_Base):
         self.assertEqual(resultado["service_id"], 900)
         self.assertEqual(self.adicionar.call_args.args[2], [900])
         self.assertEqual(_paradas(rid), [(101, "#PS-9"), (900, "#PS-1")])
+
+    def test_adicao_com_codigo_diferente_do_nucleo_nao_estoura_depois_de_criar(self):
+        a = self._sem_servico("PS-100")
+        rid = _inserir_rascunho([(101, "#PS-9")], status="ENVIADO", vuupt_route_id=555)
+        resultado = rascunhos_rota.adicionar_em_rota_enviada(rid, self._parada(a, "#PS-999"), "token", "hugo")
+        self.assertEqual(resultado["service_id"], 900)
+        self.assertEqual(self.adicionar.call_args.args[2], [900])
 
     def test_adicao_recusa_com_motivo_quando_nao_materializa(self):
         a = self._sem_servico("PS-1-R1")

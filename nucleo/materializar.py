@@ -53,10 +53,17 @@ _REENTREGA = re.compile(r"-R\d+")
 class ResultadoMaterializacao:
     ok: dict[str, int] = field(default_factory=dict)       # codigo normalizado -> service_id real
     falhas: dict[str, str] = field(default_factory=dict)   # codigo normalizado -> motivo legivel
+    # falhas por trava ocupada (outro envio criando o servico agora): quem chama NAO descarta o pedido
+    ocupados: set[str] = field(default_factory=set)
+    codigos: dict[int, str] = field(default_factory=dict)  # id sintetico do item -> codigo do nucleo
 
 
 class _Recusa(Exception):
     """Pedido que nao vira servico agora; a mensagem e o motivo mostrado na tela e no log."""
+
+
+class _Ocupado(_Recusa):
+    """Outro envio segura a trava do pedido: nao e recusa do pedido, e "tente de novo"."""
 
 
 def _modo_teste(config: dict | None, modo_teste: bool) -> bool:
@@ -78,12 +85,15 @@ def _codigo_do_item(conn: sqlite3.Connection, item: dict, sid) -> str | None:
 
 
 def materializar_servicos(itens: list[dict], vuupt, config: dict | None, conn: sqlite3.Connection | None = None,
-                          *, modo_teste: bool = False, espera_s: float = ESPERA_TRAVA_S) -> ResultadoMaterializacao:
+                          *, modo_teste: bool = False, espera_s: float | None = None) -> ResultadoMaterializacao:
     """Cria na Vuupt o servico dos itens SEM servico (id <= 0, ou sem id) e devolve
     {codigo: service_id} em `ok` e {codigo: motivo} em `falhas`; item com id real e ignorado
     (nem aparece no resultado). Ordem do lote = ordem dos itens. Commita na `conn` a cada pedido
     (a trava precisa ser vista pelos outros processos na hora). Modo teste: nada vai na Vuupt e
-    cada pedido sem servico volta em `falhas` com o motivo."""
+    cada pedido sem servico volta em `falhas` com o motivo. Trava ocupada alem de `espera_s` (padrao
+    ESPERA_TRAVA_S): falha com o codigo tambem em `ocupados`. `codigos` = {id do item: codigo do nucleo}
+    (quem chama casa o resultado pelo id, nao pelo codigo que tem na mao)."""
+    espera_s = ESPERA_TRAVA_S if espera_s is None else espera_s
     resultado = ResultadoMaterializacao()
     fechar = conn is None
     conn = conn or banco.conectar()
@@ -97,6 +107,8 @@ def materializar_servicos(itens: list[dict], vuupt, config: dict | None, conn: s
             if not codigo:
                 resultado.falhas[str(sid)] = f"id {sid} sem pedido no nucleo: servico nao criado"
                 continue
+            if sid is not None:
+                resultado.codigos[sid] = codigo
             if codigo in vistos:
                 continue
             vistos.add(codigo)
@@ -105,6 +117,8 @@ def materializar_servicos(itens: list[dict], vuupt, config: dict | None, conn: s
                 logger.info(f"materializar {codigo}: servico {resultado.ok[codigo]} na Vuupt")
             except _Recusa as e:
                 resultado.falhas[codigo] = str(e)
+                if isinstance(e, _Ocupado):
+                    resultado.ocupados.add(codigo)
                 logger.warning(f"materializar {codigo}: servico NAO criado -- {e}")
             except Exception as e:  # noqa: BLE001 - um pedido nunca derruba os outros
                 resultado.falhas[codigo] = f"erro ao criar o servico na Vuupt: {e}"
@@ -173,8 +187,8 @@ def _materializar_um(conn: sqlite3.Connection, codigo: str, vuupt, modo_teste: b
         if sid and sid[0] is not None:
             return int(sid[0])
         if time.monotonic() >= limite:
-            raise _Recusa(f"outro envio esta criando o servico de {codigo} ha mais de {espera_s:g} s: "
-                          f"tente de novo em instantes")
+            raise _Ocupado(f"outro envio esta criando o servico de {codigo} ha mais de {espera_s:g} s: "
+                           f"pedido em materializacao por outro envio, tente de novo em instantes")
         time.sleep(INTERVALO_ESPERA_S)
     try:
         linha = _linha(conn, codigo)   # dentro da trava: o outro pode ter gravado antes de soltar
@@ -183,10 +197,13 @@ def _materializar_um(conn: sqlite3.Connection, codigo: str, vuupt, modo_teste: b
             return _ja_tem_servico(conn, codigo, int(linha["vuupt_service_id"]))
         return _criar_ou_adotar(conn, codigo, linha, vuupt)
     finally:
-        if conn.in_transaction:
-            conn.rollback()
-        conn.execute("DELETE FROM nucleo_materializacao WHERE codigo = ? AND processo = ?", (codigo, processo))
-        conn.commit()
+        try:
+            if conn.in_transaction:
+                conn.rollback()
+            conn.execute("DELETE FROM nucleo_materializacao WHERE codigo = ? AND processo = ?", (codigo, processo))
+            conn.commit()
+        except sqlite3.Error as e:   # nao mascara o resultado: a trava expira sozinha (TRAVA_VELHA_MIN)
+            logger.warning(f"materializar {codigo}: trava nao liberada ({e}); expira em {TRAVA_VELHA_MIN} min")
 
 
 def _ja_tem_servico(conn: sqlite3.Connection, codigo: str, sid: int) -> int:
@@ -254,9 +271,11 @@ def _para_payload(ts) -> str | None:
 
 
 def montar_payload(linha, vuupt) -> dict:
-    """Payload do pipeline (dados_json["payload"]) com as colunas do nucleo por cima: endereco,
-    coordenadas, agendamento, caixas, nota e complemento (o que o Planejamento pode editar no
-    pedido sem servico). Skill: o nome gravado pelo pipeline (_skill_nome) vira id aqui."""
+    """Payload do pipeline (dados_json["payload"]) com as colunas do nucleo por cima (fonte da verdade
+    do que o Planejamento/portal edita no pedido sem servico): titulo, destinatario (nome, telefone),
+    janela de atendimento, endereco, coordenadas, agendamento, caixas, nota e complemento. Coluna vazia
+    nao apaga o valor do payload (exceto agendamento, ver abaixo). Skill: o nome gravado pelo pipeline
+    (_skill_nome) vira id aqui."""
     try:
         dados = json.loads(linha["dados_json"] or "{}")
     except (TypeError, ValueError):
@@ -269,6 +288,16 @@ def montar_payload(linha, vuupt) -> dict:
     for chave in [k for k in payload if k.startswith("_")]:
         payload.pop(chave)
     customer = payload.setdefault("customer", {})
+    if linha["titulo"]:
+        payload["title"] = linha["titulo"]
+    if linha["destinatario_nome"]:
+        customer["name"] = linha["destinatario_nome"]
+    if linha["destinatario_telefone"]:
+        payload["phone_number"] = customer["phone_number"] = linha["destinatario_telefone"]
+    if linha["horario_inicio"]:
+        customer["operating_hour_start"] = linha["horario_inicio"]
+    if linha["horario_fim"]:
+        customer["operating_hour_end"] = linha["horario_fim"]
     if linha["endereco"]:
         customer["address"] = linha["endereco"]
     if linha["latitude"] is not None and linha["longitude"] is not None:

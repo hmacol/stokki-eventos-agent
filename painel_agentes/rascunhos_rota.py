@@ -1376,9 +1376,11 @@ def marcar_erro_envio(rascunho_id: int, mensagem: str):
         conn.close()
 
 
-def _materializar_paradas(rascunho_id: int, paradas: list[dict], token: str, config: dict) -> dict[str, str]:
+def _materializar_paradas(rascunho_id: int, paradas: list[dict], token: str,
+                          config: dict) -> tuple[dict[str, str], list[str]]:
     """Cria na Vuupt o servico das paradas de id sintetico (nucleo/materializar.py: trava por codigo,
-    busca por code antes de criar). Quem falha sai do rascunho; devolve {codigo da parada: motivo}."""
+    busca por code antes de criar). Quem falha sai do rascunho, MENOS quem esta com a trava ocupada
+    por outro envio (fica onde esta). Devolve ({codigo da parada: motivo}, [codigos ocupados])."""
     import time
     from vuupt_client import VuuptClient
     from nucleo import banco as nucleo_banco, normalizacao
@@ -1393,17 +1395,22 @@ def _materializar_paradas(rascunho_id: int, paradas: list[dict], token: str, con
     finally:
         conn.close()
     falhas: dict[str, str] = {}
+    ocupados: list[str] = []
     for p in sem_servico:
-        codigo = normalizacao.normalizar_codigo(p["codigo"])
+        # casa pelo id (o codigo da parada pode diferir do nucleo); sem id no resultado, pelo codigo
+        codigo = res.codigos.get(int(p["service_id"])) or normalizacao.normalizar_codigo(p["codigo"])
         if codigo in res.ok:
             continue
         falhas[p["codigo"]] = (res.falhas.get(codigo) or res.falhas.get(str(p["service_id"]))
                                or "servico nao criado na Vuupt (sem resultado da materializacao)")
+        if codigo in res.ocupados:
+            ocupados.append(p["codigo"])   # outro envio esta criando: nao descarta a parada
+            continue
         remover_parada(rascunho_id, p["service_id"])
     logger.info(f"Rascunho {rascunho_id}: {len(sem_servico) - len(falhas)} de {len(sem_servico)} pedido(s) sem "
                 f"servico ganharam servico na Vuupt em {time.monotonic() - inicio:.1f}s"
-                + ("; voltaram ao pool: " + "; ".join(f"{c} ({m})" for c, m in falhas.items()) if falhas else ""))
-    return falhas
+                + ("; sem servico: " + "; ".join(f"{c} ({m})" for c, m in falhas.items()) if falhas else ""))
+    return falhas, ocupados
 
 
 def enviar_rascunho(rascunho_id: int, token: str) -> dict:
@@ -1472,7 +1479,14 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
     # outras ja estao no id real (adotar_servico reescreveu o rascunho), por isso recarrega.
     saiu["codigos_sem_servico"] = {}
     if any(nucleo_pool.eh_sem_servico(p["service_id"]) for p in paradas):
-        saiu["codigos_sem_servico"] = _materializar_paradas(rascunho_id, paradas, token, config)
+        saiu["codigos_sem_servico"], ocupados = _materializar_paradas(rascunho_id, paradas, token, config)
+        if ocupados:
+            # outro envio (clique duplo, incremento) esta criando o servico desses pedidos: a rota nao sai
+            # agora e nada e descartado; o reenvio ja encontra o id real
+            mensagem = (f"Pedido(s) em materializacao por outro envio, tente de novo em instantes: "
+                        f"{', '.join(ocupados)} -- nada enviado.")
+            marcar_erro_envio(rascunho_id, mensagem)
+            return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem, **saiu}
         rascunho = buscar_rascunho(rascunho_id)
         paradas = rascunho["paradas"]
         if not paradas:
@@ -1994,7 +2008,7 @@ def adicionar_em_rota_enviada(rascunho_id: int, parada: dict, token: str, usuari
     from vuupt_client import VuuptClient
     if nucleo_pool.eh_sem_servico(service_id):
         # pool direto da Stokki: o servico na Vuupt nasce agora (mesma materializacao do envio)
-        from nucleo import banco as nucleo_banco, normalizacao
+        from nucleo import banco as nucleo_banco
         from nucleo.materializar import materializar_servicos
         conn = nucleo_banco.conectar(DB_PATH)
         try:
@@ -2002,7 +2016,7 @@ def adicionar_em_rota_enviada(rascunho_id: int, parada: dict, token: str, usuari
                                         VuuptClient(token), _carregar_config(), conn)
         finally:
             conn.close()
-        real = res.ok.get(normalizacao.normalizar_codigo(parada.get("codigo")))
+        real = next(iter(res.ok.values()), None)   # lote de 1 item: nao depende do codigo da parada
         if not real:
             motivo = next(iter(res.falhas.values()), "servico nao criado na Vuupt")
             raise ValueError(f"Pedido {parada.get('codigo')} não entrou na rota: {motivo}")
