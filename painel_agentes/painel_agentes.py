@@ -86,6 +86,7 @@ from planejamento_rotas import (
     placas_veiculos_vuupt, seletor_veiculos, confirmar_envio_rascunhos,
 )
 from regras import veiculos as veiculos_regras
+from regras import corte_roteirizacao
 from avisar_motoristas_rotas import notificar_oferta_motoristas, push_ofertas_vps
 from motoristas import dados_pagina_motoristas, url_app_motorista, listar_agentes_vuupt_nao_cadastrados, cadastrar_motorista, editar_motorista, MotoristaNaoEncontrado
 from expedicao import listar_rotas_do_dia, gerar_romaneio_rota, excluir_pedido_da_rota, MOTIVOS_EXCLUSAO
@@ -1393,7 +1394,22 @@ def planejamento():
         motivos_exclusao=MOTIVOS_EXCLUSAO,
         # selo "sem carro" recalculado no card depois de trocar motorista/carro
         agentes_sem_carro=sorted(veiculos_regras.AGENTES_SEM_CARRO),
+        # corte da roteirizacao: todos veem, so "total" (administrador) edita
+        corte=corte_roteirizacao.detalhe_corte(),
+        pode_editar_corte=g.nivel_acesso == "total",
     )
+
+
+@app.route("/api/planejamento/corte", methods=["POST"])
+@requer_auth(niveis=("total",))
+def api_planejamento_corte():
+    """Salva o horario de corte da roteirizacao (so administrador)."""
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        hhmm = corte_roteirizacao.definir_corte(body.get("corte"), g.get("nome_usuario") or "admin")
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True, **corte_roteirizacao.detalhe_corte(), "hhmm": hhmm})
 
 
 @app.route("/planejamento/mobile")

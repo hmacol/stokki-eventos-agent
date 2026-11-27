@@ -103,6 +103,7 @@ from rascunhos_rota import criar_lote_rascunhos
 from nucleo.pool import listar_pool_not_assigned
 from notificar_agendamento_pendente import identificar_pendentes, notificar_remetentes
 from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agendamento
+from regras import corte_roteirizacao
 from agendamento_confirmacao import buscar_confirmacao
 from regioes_dia_fixo import aplicar_regioes_dia_fixo
 from notificar_agendamento_dia_fixo import notificar_agendamentos_dia_fixo
@@ -239,7 +240,6 @@ def _preparar_janelas(servicos: list[dict], config: dict) -> int:
 
 
 TZ_BRASILIA = timezone(timedelta(hours=-3))
-HORA_CORTE_MESMO_DIA = 14  # pedido do Hugo, 10/08
 
 
 def _proximo_dia_util(data: date) -> date:
@@ -255,7 +255,9 @@ def _data_alvo_rotas(agora: datetime) -> date:
     (pedido do Hugo, 10/08 -- antes disso a data alvo era sempre
     "amanhã", fixo, não importava o horário de execução).
     """
-    if agora.hour < HORA_CORTE_MESMO_DIA:
+    # corte unico e editavel no /planejamento (regras/corte_roteirizacao.py);
+    # ate o corte (inclusive) = mesmo dia, depois = proximo dia util
+    if corte_roteirizacao.dentro_do_corte(agora.time()):
         base = agora.date()
     else:
         base = agora.date() + timedelta(days=1)

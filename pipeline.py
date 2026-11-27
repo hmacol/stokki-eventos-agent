@@ -530,8 +530,21 @@ def _data_automatica_ja_gravada(servico_existente: dict, db_path=None):
         return None
 
 
+def _lancado_em_da_linha(linha) -> datetime | None:
+    """Hora em que o pedido foi lancado na Stokki (created_at da listagem, 'DD/MM/YYYY HH:MM',
+    horario de Brasilia). None se a linha nao traz (linhas sinteticas) ou sem hora."""
+    if not isinstance(linha, dict):
+        return None
+    texto = re.sub(r"<[^>]+>", "", str(linha.get("created_at") or "")).strip()
+    try:
+        return datetime.strptime(texto, "%d/%m/%Y %H:%M")
+    except ValueError:
+        return None
+
+
 def agendamento_automatico(servico_existente, horario_mensagem, documento, data_saida,
-                           inicio_rodada, mapa_horarios, ajustes_manuais, db_path=None):
+                           inicio_rodada, mapa_horarios, ajustes_manuais, db_path=None,
+                           lancado_em=None):
     """(inicio, fim) ISO da data automática. Data NOVA só na CRIAÇÃO do serviço: o pipeline reprocessa
     os not_assigned toda rodada, então serviço que já existe nunca ganha nem muda data (se a data dele
     é automática, repete a mesma pra o payload não sair sem data)."""
@@ -539,7 +552,7 @@ def agendamento_automatico(servico_existente, horario_mensagem, documento, data_
         return _data_automatica_ja_gravada(servico_existente, db_path)
     if inicio_rodada is None or inicio_rodada.date() < A_PARTIR_DE:
         return None
-    data = data_automatica(inicio_rodada, data_saida).strftime("%d/%m/%Y")
+    data = data_automatica(inicio_rodada, data_saida, lancado_em=lancado_em).strftime("%d/%m/%Y")
     ini, fim = janela_automatica(horario_mensagem, documento, mapa_horarios, ajustes_manuais)
     par = (_converter_data_para_iso(f"{data} {ini}"), _converter_data_para_iso(f"{data} {fim}"))
     return par if all(par) else None
@@ -632,6 +645,7 @@ def processar_pedido(
     referencia: str = "",
     stkkc_id_emb: int | None = None,
     data_saida: str = "",
+    lancado_em: datetime | None = None,
     google_maps_api_key: str = "",
     indice_xmls: dict | None = None,
     mapa_niveis: dict | None = None,
@@ -972,7 +986,8 @@ def processar_pedido(
             try:
                 automatico = agendamento_automatico(
                     servico_existente, res_end.horario_entrega, cnpj_destino_bruto, data_saida,
-                    inicio_rodada, mapa_horarios or {}, ajustes_manuais or {})
+                    inicio_rodada, mapa_horarios or {}, ajustes_manuais or {},
+                    lancado_em=lancado_em)
             except Exception as e:
                 logger.warning(f"  {codigo_ps}: falha na data automática (segue sem data): {e}")
                 automatico = None
@@ -1641,6 +1656,7 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
         data_saida = ""
         if isinstance(linha, dict):
             data_saida = re.sub(r"<[^>]+>", "", str(linha.get("expedition_date", ""))).strip()
+        lancado_em = _lancado_em_da_linha(linha)
 
         # stkkc_id do embarcador para lookup no banco
         stkkc_id_emb = None
@@ -1668,6 +1684,7 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
             referencia=referencia,
             stkkc_id_emb=stkkc_id_emb,
             data_saida=data_saida,
+            lancado_em=lancado_em,
             google_maps_api_key=gmaps_key,
             indice_xmls=indice_xmls,
             mapa_niveis=mapa_niveis,
