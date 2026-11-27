@@ -101,6 +101,44 @@ class TestComparar(unittest.TestCase):
         self.assertEqual(p["dia_fixo"], "Sorocaba")
 
 
+class TestFonteStokki(unittest.TestCase):
+    def test_comparar_fonte_stokki_marca_so_diferencas_reais(self):
+        sem_servico = _s(code="#PS-50", id=-7, _sem_servico_vuupt=True)
+        # (i) sem servico no nucleo + ausente na Vuupt: informativo, nao e divergencia
+        r = cp.comparar([_s()], [_s(), sem_servico])
+        self.assertEqual(r["sem_servico"], ["PS-50"])
+        self.assertEqual(r["so_no_nucleo"], [])
+        self.assertEqual((r["divergencias_proprias"], r["total_divergencias"]), (0, 0))
+        self.assertIn("sem servico", cp.resumir(r, fonte=cp.FONTE_STOKKI))
+        # (ii) campo diferente em pedido COM servico continua divergencia
+        r = cp.comparar([_s()], [_s(dimension_3=9), sem_servico])
+        self.assertEqual(r["divergencias_proprias"], 1)
+        self.assertEqual(r["sem_servico"], ["PS-50"])
+        # (iii) na Vuupt e ausente no nucleo: divergencia
+        r = cp.comparar([_s(), _s(code="#PS-60", id=6)], [_s(), sem_servico])
+        self.assertEqual(r["so_na_vuupt"], ["PS-60"])
+        self.assertEqual(r["divergencias_proprias"], 1)
+        # so_no_nucleo COM servico (nao sintetico) segue divergencia
+        r = cp.comparar([_s()], [_s(), _s(code="#PS-70", id=7)])
+        self.assertEqual(r["so_no_nucleo"], ["PS-70"])
+        self.assertEqual(r["divergencias_proprias"], 1)
+
+    def test_fonte_stokki_salva_com_chave_propria_e_nao_mexe_nas_outras(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, \
+                mock.patch.object(banco, "DB_PATH", Path(tmp) / "t.db"):
+            conn = banco.conectar()
+            try:
+                r = cp.comparar([_s()], [_s(), _s(code="#PS-50", id=-7, _sem_servico_vuupt=True)])
+                limpo = cp.comparar([_s()], [_s()])
+                cp.salvar(r, conn, rodado_em="2026-11-27 08:00:00", fonte=cp.FONTE_STOKKI)
+                cp.salvar(limpo, conn, rodado_em="2026-11-27 08:00:00", fonte=cp.FONTE_NUCLEO)
+                self.assertEqual(cp.dias_limpos_seguidos(conn, fonte=cp.FONTE_STOKKI), 1)
+                self.assertEqual(len(cp.historico(conn, 5, fonte=cp.FONTE_NUCLEO)), 1)
+                self.assertEqual(len(cp.historico(conn, 5, fonte=cp.FONTE_FRESHHUB)), 0)
+            finally:
+                conn.close()
+
+
 class TestPlacar(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
