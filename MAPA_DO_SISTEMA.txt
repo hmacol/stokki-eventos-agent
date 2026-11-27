@@ -886,6 +886,10 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
  --- Lalamove ---
  lalamove_client.py      Cliente API v3 (HMAC, cotação, pedido).
  lalamove_integracao.py  Liga o /planejamento à Lalamove (lançar, sincronizar).
+ lalamove_erros.py       Nomenclatura das falhas de lançamento (LAL-01..LAL-11, LAL-99 = não
+                         classificada): "LAL-04 título -- o que fazer [texto cru]" em lalamove_erro
+                         (card do /planejamento e log). Tabela _REGRAS = ordem de prioridade.
+                         Teste: py -3.11 -m unittest test_lalamove_erros
 
  --- Tratativas ---
  tratativas.py           Log append-only de tratativas por pedido.
