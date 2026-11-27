@@ -257,9 +257,14 @@ def registrar_importacao(payload: dict, resposta, acao: str, conn: sqlite3.Conne
         # pelo galpão do redespacho no planejamento, PS-40473 em 01/10). Linha
         # que já existe fica como o sync da VUUPT deixou; só a primeira
         # passagem grava o payload, pra linha nascer com dados.
-        ja_existe = conn.execute("SELECT 1 FROM nucleo_pedidos WHERE codigo = ?",
-                                 (normalizacao.normalizar_codigo(codigo),)).fetchone() is not None
+        existente = conn.execute("SELECT vuupt_service_id, edicao_local_json FROM nucleo_pedidos WHERE codigo = ?",
+                                 (normalizacao.normalizar_codigo(codigo),)).fetchone()
+        ja_existe = existente is not None
         campos = {} if (acao or "").startswith("pulado") and ja_existe else _campos_do_payload(payload)
+        if ja_existe and existente[0] is None:
+            # pedido sem servico editado no Planejamento: a rodada seguinte nao desfaz (None = mantem)
+            for campo in _campos_editados(existente[1]):
+                campos.pop(campo, None)
         upsert_pedido(
             conn, codigo, campos, origem=banco.ORIGEM_PIPELINE,
             dados_json={"payload": payload, "acao": acao, "service": servico or None},
@@ -309,6 +314,57 @@ def gravar_agendamento_sem_servico(id_negativo, inicio: str, fim: str | None,
                             -int(id_negativo)))
         conn.commit()
         return cur.rowcount > 0
+    finally:
+        if fechar:
+            conn.close()
+
+
+# Colunas que o Planejamento edita no pedido sem servico (a materializacao manda pra Vuupt)
+CAMPOS_EDICAO_LOCAL = ("endereco", "latitude", "longitude", "agendamento_inicio", "agendamento_fim")
+
+
+def _marcas_edicao(edicao_local_json) -> dict:
+    try:
+        marcas = json.loads(edicao_local_json or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return marcas if isinstance(marcas, dict) else {}
+
+
+def _campos_editados(edicao_local_json) -> set[str]:
+    return set(_marcas_edicao(edicao_local_json))
+
+
+def editar_sem_servico(id_negativo, campos: dict, conn: sqlite3.Connection | None = None) -> str:
+    """Edicao do Planejamento em pedido sem servico na Vuupt (id sintetico): grava as colunas do
+    nucleo (hora local, sem fuso) e marca cada campo em `edicao_local_json` ({campo: quando}), pro
+    pipeline nao regravar na rodada seguinte (registrar_importacao). Devolve o codigo. ValueError com
+    o motivo se o id nao e sintetico, o pedido nao existe, ja ganhou servico ou nao esta ABERTO."""
+    if int(id_negativo) >= 0:
+        raise ValueError(f"id {id_negativo} nao e sintetico (pedido com servico grava na Vuupt)")
+    desconhecidos = set(campos) - set(CAMPOS_EDICAO_LOCAL)
+    if desconhecidos:
+        raise ValueError(f"campo(s) nao editavel(is) no pedido sem servico: {', '.join(sorted(desconhecidos))}")
+    fechar = conn is None
+    conn = conn or banco.conectar()
+    try:
+        row = conn.execute("SELECT codigo, status, vuupt_service_id, edicao_local_json FROM nucleo_pedidos "
+                           "WHERE id_pool = ?", (-int(id_negativo),)).fetchone()
+        if row is None:
+            raise ValueError(f"pedido {id_negativo} nao encontrado no nucleo: recarregue a tela")
+        codigo, status, service_id, marcas_json = row[0], row[1], row[2], row[3]
+        if service_id is not None:
+            raise ValueError(f"pedido {codigo} ja tem o servico {service_id} na Vuupt: recarregue a tela e tente de novo")
+        if status != banco.PEDIDO_ABERTO:
+            raise ValueError(f"pedido {codigo} esta {status} no nucleo: nao da pra alterar")
+        marcas = _marcas_edicao(marcas_json)
+        agora = banco.agora()
+        marcas.update({c: agora for c in campos})
+        sets = ", ".join(f"{c} = ?" for c in campos)
+        conn.execute(f"UPDATE nucleo_pedidos SET {sets}, edicao_local_json = ?, atualizado_em = ? WHERE codigo = ?",
+                     (*campos.values(), json.dumps(marcas), agora, codigo))
+        conn.commit()
+        return codigo
     finally:
         if fechar:
             conn.close()

@@ -190,6 +190,28 @@ class MemoriaDoPedidoTest(_Base):
         self.assertEqual(vuupt.mock_calls, [])
 
 
+class EdicaoLocalTest(_Base):
+    def test_pipeline_nao_sobrescreve_edicao_local(self):
+        # Task 6: o Planejamento reagendou e trocou o endereco do pedido sem servico; a rodada
+        # seguinte do pipeline (Stokki com os dados de sempre) nao desfaz e a materializacao usa o editado
+        from nucleo import materializar
+        vuupt = self._vuupt()
+        self._processar(vuupt)
+        pedidos.editar_sem_servico(pedidos.id_sintetico(self._linha()), {
+            "endereco": "RUA NOVA 2", "latitude": -23.6, "longitude": -46.7,
+            "agendamento_inicio": "2026-11-20 08:00:00", "agendamento_fim": "2026-11-20 12:00:00"})
+        res = self._processar(vuupt)
+        self.assertEqual(res["acao"], "gravado_nucleo")
+        self.assertEqual(vuupt.mock_calls, [])
+        linha = self._linha()
+        self.assertEqual((linha["endereco"], linha["latitude"], linha["longitude"]), ("RUA NOVA 2", -23.6, -46.7))
+        self.assertEqual((linha["agendamento_inicio"], linha["agendamento_fim"]),
+                         ("2026-11-20 08:00:00", "2026-11-20 12:00:00"))
+        payload = materializar.montar_payload(linha, vuupt)
+        self.assertEqual(payload["customer"]["address"], "RUA NOVA 2")
+        self.assertEqual(payload["scheduled_start"], "2026-11-20T08:00:00-03:00")
+
+
 class FecharSemServicoTest(_Base):
     def _eventos(self):
         conn = banco.conectar()
