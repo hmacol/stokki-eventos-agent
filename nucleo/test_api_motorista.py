@@ -26,9 +26,9 @@ PIN = "123456"
 AGENT = 4242
 
 
-def _rascunho(rascunho_id=1, agent_id=AGENT, data=None, km=50.0):
+def _rascunho(rascunho_id=1, agent_id=AGENT, data=None, km=50.0, paradas=None):
     data = data or date.today().isoformat()
-    return {
+    r = {
         "id": rascunho_id, "data_alvo": data, "lote_id": "L", "nome": f"Planejamento - #{rascunho_id}",
         "agent_id": agent_id, "vehicle_id": None, "motorista_nome": "Teste", "tipo_veiculo": None,
         "start_location_base_id": 1, "end_location_base_id": 1, "start_at": f"{data} 07:00:00",
@@ -40,6 +40,15 @@ def _rascunho(rascunho_id=1, agent_id=AGENT, data=None, km=50.0):
              "latitude": -23.55, "longitude": -46.65, "nivel_dificuldade": 2, "volume_caixas": 1},
         ],
     }
+    if paradas is not None:
+        r["paradas"] = paradas
+    return r
+
+
+def _parada_grupo(ordem, codigo, destinatario="Transportadora Alfa", endereco="Rua T, 100", sender_id=10):
+    return {"ordem": ordem, "service_id": None, "codigo": codigo, "titulo": destinatario, "destinatario_nome": destinatario,
+            "endereco": endereco, "latitude": -23.5, "longitude": -46.6, "sender_id": sender_id,
+            "remetente_nome": f"Embarcador {sender_id}", "nivel_dificuldade": 1, "volume_caixas": 1}
 
 
 class TestApiMotorista(unittest.TestCase):
@@ -262,6 +271,122 @@ class TestApiMotorista(unittest.TestCase):
             self.assertEqual(r.status_code, 400, r.get_json())
         depois = {p for p in Path(self._tmp.name).rglob("*") if p.is_file()}
         self.assertEqual({p for p in depois - antes if p.suffix == ".jpg"}, set())
+
+    # baixa em grupo (Hugo, 26/11) ---------------------------------------------
+    def _rota_grupo(self):
+        """PS-1..3 = mesmo embarcador, destinatario e endereco (grupo); PS-4 outro
+        destinatario; PS-5 mesmo destinatario/endereco mas outro embarcador."""
+        h = self._auth()
+        paradas = [_parada_grupo(1, "PS-1"), _parada_grupo(2, "PS-2", endereco="rua t,  100 "),
+                   _parada_grupo(3, "PS-3"), _parada_grupo(4, "PS-4", destinatario="Outro Cliente"),
+                   _parada_grupo(5, "PS-5", sender_id=20)]
+        conn = banco.conectar()
+        rota_id = rotas.materializar_rascunho(_rascunho(paradas=paradas), banco.PROVEDOR_APP, conn=conn)
+        conn.close()
+        self.cli.post(f"/api/rotas/{rota_id}/aceitar", json={"uuid": "u-aceite"}, headers=h)
+        ps = self.cli.post(f"/api/rotas/{rota_id}/iniciar", json={}, headers=h).get_json()["paradas"]
+        return h, rota_id, ps
+
+    def _itens(self, ps, uuid_base="i"):
+        return [{"parada_id": p["id"], "uuid": f"{uuid_base}-{p['id']}"} for p in ps]
+
+    def test_grupo_baixa_une_mesmo_embarcador_destinatario_e_endereco(self):
+        _h, _rota, ps = self._rota_grupo()
+        g = [p["grupo_baixa"] for p in ps]
+        self.assertTrue(g[0])
+        self.assertEqual(g[0], g[1])
+        self.assertEqual(g[0], g[2])
+        self.assertNotEqual(g[0], g[3])   # outro destinatario
+        self.assertNotEqual(g[0], g[4])   # outro embarcador: nunca mistura
+
+    def test_lote_entregue_baixa_todos_e_reenvio_e_idempotente(self):
+        h, rota_id, ps = self._rota_grupo()
+        itens = self._itens(ps[:3])
+        corpo = {"uuid": "lote-1", "tipo": "ENTREGUE", "ocorrido_em": "2026-11-26 10:00:00", "itens": itens,
+                 "checklist": {"nome_recebedor": "Maria", "fotos_qtd": {"foto_canhoto": 1}}}
+        r = self.cli.post("/api/paradas/lote/eventos", json=corpo, headers=h)
+        self.assertEqual(r.status_code, 201, r.get_json())
+        self.assertFalse(r.get_json()["ja_registrado"])
+        rota = self.cli.get(f"/api/rotas/{rota_id}", headers=h).get_json()
+        self.assertEqual([p["situacao"] for p in rota["paradas"][:3]], ["ENTREGUE"] * 3)
+        self.assertEqual([p["situacao"] for p in rota["paradas"][3:]], ["PENDENTE"] * 2)
+        r = self.cli.post("/api/paradas/lote/eventos", json=corpo, headers=h)
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["ja_registrado"])
+
+    def test_lote_retoma_depois_de_cair_no_meio(self):
+        h, _rota, ps = self._rota_grupo()
+        itens = self._itens(ps[:3])
+        # a 1a parada ja foi baixada por uma tentativa que caiu: o reenvio completa as outras
+        self.cli.post(f"/api/paradas/{itens[0]['parada_id']}/eventos", headers=h,
+                      json={"uuid": itens[0]["uuid"], "tipo": "ENTREGUE"})
+        r = self.cli.post("/api/paradas/lote/eventos", json={"uuid": "lote-1", "tipo": "ENTREGUE", "itens": itens}, headers=h)
+        self.assertEqual(r.status_code, 201, r.get_json())
+        self.assertEqual([i["ja_registrado"] for i in r.get_json()["itens"]], [True, False, False])
+
+    def test_lote_recusa_pedido_de_fora_do_grupo_sem_gravar_nada(self):
+        h, rota_id, ps = self._rota_grupo()
+        for fora in (ps[3], ps[4]):
+            r = self.cli.post("/api/paradas/lote/eventos", headers=h,
+                              json={"uuid": "lote-x", "tipo": "ENTREGUE", "itens": self._itens([ps[0], fora])})
+            self.assertEqual(r.status_code, 409, r.get_json())
+        rota = self.cli.get(f"/api/rotas/{rota_id}", headers=h).get_json()
+        self.assertEqual({p["situacao"] for p in rota["paradas"]}, {"PENDENTE"})
+        r = self.cli.post("/api/paradas/lote/eventos", json={"uuid": "l", "tipo": "ENTREGUE", "itens": self._itens(ps[:1])}, headers=h)
+        self.assertEqual(r.status_code, 400)   # grupo de 1 nao e lote
+
+    def test_lote_insucesso_exige_motivo_e_vale_pra_todos(self):
+        h, rota_id, ps = self._rota_grupo()
+        itens = self._itens(ps[:3])
+        r = self.cli.post("/api/paradas/lote/eventos", json={"uuid": "l", "tipo": "INSUCESSO", "itens": itens}, headers=h)
+        self.assertEqual(r.status_code, 400)
+        rota = self.cli.get(f"/api/rotas/{rota_id}", headers=h).get_json()
+        self.assertEqual({p["situacao"] for p in rota["paradas"]}, {"PENDENTE"})
+        r = self.cli.post("/api/paradas/lote/eventos", json={"uuid": "l", "tipo": "INSUCESSO", "motivo_id": 1, "itens": itens}, headers=h)
+        self.assertEqual(r.status_code, 201, r.get_json())
+        rota = self.cli.get(f"/api/rotas/{rota_id}", headers=h).get_json()
+        self.assertEqual([p["motivo_texto"] for p in rota["paradas"][:3]], ["Local fechado"] * 3)
+
+    def test_lote_so_aceita_entregue_parcial_ou_insucesso(self):
+        h, _rota, ps = self._rota_grupo()
+        r = self.cli.post("/api/paradas/lote/eventos", json={"uuid": "l", "tipo": "CHEGADA", "itens": self._itens(ps[:3])}, headers=h)
+        self.assertEqual(r.status_code, 400)
+
+    def test_lote_comprovante_uma_foto_n_linhas_e_vai_pra_conferencia_manual(self):
+        h, _rota, ps = self._rota_grupo()
+        itens = self._itens(ps[:3], "f")
+        import json as _json
+        def enviar(conteudo=b"\xff\xd8\xff canhoto do grupo"):
+            return self.cli.post("/api/paradas/lote/comprovantes", headers=h, content_type="multipart/form-data",
+                                 data={"arquivo": (io.BytesIO(conteudo), "c.jpg"), "tipo": "CANHOTO", "uuid": "lote-f",
+                                       "itens": _json.dumps(itens)})
+        r = enviar()
+        self.assertEqual(r.status_code, 201, r.get_json())
+        self.assertEqual(len(r.get_json()["itens"]), 3)
+        conn = banco.conectar()
+        linhas = conn.execute("SELECT * FROM nucleo_comprovantes ORDER BY parada_id").fetchall()
+        conn.close()
+        self.assertEqual([l["parada_id"] for l in linhas], [i["parada_id"] for i in itens])
+        self.assertEqual(len({l["caminho_local"] for l in linhas}), 1)          # uma foto so em disco
+        self.assertEqual(len(list((Path(self._tmp.name) / "fotos").rglob("*.jpg"))), 1)
+        self.assertEqual({l["resultado_validacao"] for l in linhas}, {None})    # "Sem conferencia" no painel
+        self.assertIn('"revisao_humana": true', linhas[0]["dados_json"])
+        r = enviar(b"outro conteudo")                                            # reenvio: nada novo
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["ja_registrado"])
+        conn = banco.conectar()
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM nucleo_comprovantes").fetchone()[0], 3)
+        conn.close()
+        self.assertEqual(len(list((Path(self._tmp.name) / "fotos").rglob("*.jpg"))), 1)
+
+    def test_lote_comprovante_recusa_pedido_de_fora_do_grupo_sem_gravar_arquivo(self):
+        h, _rota, ps = self._rota_grupo()
+        import json as _json
+        r = self.cli.post("/api/paradas/lote/comprovantes", headers=h, content_type="multipart/form-data",
+                          data={"arquivo": (io.BytesIO(b"\xff\xd8\xff x"), "c.jpg"), "tipo": "CANHOTO", "uuid": "lote-f",
+                                "itens": _json.dumps(self._itens([ps[0], ps[3]], "f"))})
+        self.assertEqual(r.status_code, 409, r.get_json())
+        self.assertEqual(list((Path(self._tmp.name) / "fotos").rglob("*.jpg")) if (Path(self._tmp.name) / "fotos").exists() else [], [])
 
     def test_motorista_cancela_pedagio_pendente(self):
         h = self._auth()

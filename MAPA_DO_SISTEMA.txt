@@ -2068,7 +2068,18 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
                            desmarcar paradas com motivo) -> POST /api/rotas/<id>/carregamento.
  app/parada/[id].tsx       Entregue / Parcial / Não entregue / Reagendar,
                            checklist e fotos.
- app/mapa/[id].tsx         Mapa da rota (botão "Mapa" na tela da rota): pinos numerados,
+                           BAIXA EM GRUPO (26/11): pedidos pendentes da rota com a mesma chave
+                           (embarcador + destinatário + endereço; operacao.chave_grupo_baixa,
+                           campo `grupo_baixa` da parada, só dado interno) ganham o atalho
+                           "Baixar juntos" na rota -> /parada/<id>?rota=..&grupo=<ids>: um resultado
+                           e UM comprovante pra todos (entregue/parcial/insucesso; sem Reagendar).
+                           Fila: EVENTO_LOTE + COMPROVANTE_LOTE -> POST /api/paradas/lote/eventos e
+                           /lote/comprovantes (operacao.registrar_evento_lote/_comprovante_lote): 1 evento
+                           por PS, 1 foto em disco e 1 linha de nucleo_comprovantes por PS, sempre SEM
+                           leitura da IA (resultado_validacao NULL = "Sem conferência" em /canhotos).
+                           O servidor reconfere o grupo (409 se misturar embarcador/destinatário/endereço);
+                           queda no meio: reenviar com os mesmos uuids termina o resto.
+ app/mapa/[id].tsx        Mapa da rota (botão "Mapa" na tela da rota): pinos numerados,
                            linha do trajeto e cartão com os passos (Deslizar). Entregue /
                            Não entregue abrem app/parada/[id].tsx?fluxo=... Peças em src/mapa/.
  src/trajeto.ts            GET /api/rotas/<id>/trajeto; guarda o do Google por rota

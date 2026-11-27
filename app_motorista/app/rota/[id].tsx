@@ -119,6 +119,18 @@ export default function DetalheRota() {
   const depoisDesta = paradasOrdenadas.filter((p) => ehPendente(p) && p.id !== atual?.id);
   const jaFeitas = paradasOrdenadas.filter((p) => !ehPendente(p));
 
+  // Baixa em grupo (26/11): pedidos pendentes com a mesma chave (embarcador + destinatario
+  // + endereco, calculada no servidor) saem num atalho "Baixar juntos" com um comprovante so.
+  const grupos: Parada[][] = [];
+  if (operavel && rota.status === 'EM_ROTA') {
+    const porChave = new Map<string, Parada[]>();
+    for (const p of paradasOrdenadas) {
+      if (!p.grupo_baixa || !ehPendente(p)) continue;
+      porChave.set(p.grupo_baixa, [...(porChave.get(p.grupo_baixa) ?? []), p]);
+    }
+    for (const g of porChave.values()) if (g.length >= 2) grupos.push(g);
+  }
+
   const acaoRota = async (acao: 'aceitar' | 'iniciar' | 'finalizar', status: Rota['status'], extra: Record<string, unknown> = {}): Promise<boolean> => {
     setOcupado(true);
     try {
@@ -426,6 +438,16 @@ export default function DetalheRota() {
           <Text style={s.atalhoPedagioLink}>Lançar ›</Text>
         </Pressable>
       ) : null}
+
+      {grupos.map((g) => (
+        <Pressable key={g[0].grupo_baixa} style={({ pressed }) => [s.atalhoPedagio, pressed && { backgroundColor: cores.fundo }]}
+          onPress={() => router.push(`/parada/${g[0].id}?rota=${rota.id}&grupo=${g.map((p) => p.id).join(',')}`)}
+          accessibilityRole="button" accessibilityLabel={`Baixar juntos os ${g.length} pedidos de ${nomeExibicao(g[0])}`}>
+          <Ionicons name="layers-outline" size={18} color={cores.primaria} />
+          <Text style={s.atalhoPedagioTexto} numberOfLines={2}>{g.length} pedidos pro mesmo local: {nomeExibicao(g[0])}</Text>
+          <Text style={s.atalhoPedagioLink}>Baixar juntos ›</Text>
+        </Pressable>
+      ))}
 
       {atual ? cartaoAtual(atual) : null}
 
