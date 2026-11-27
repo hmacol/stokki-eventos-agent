@@ -447,6 +447,26 @@ def _selo_tarde(rascunho: dict) -> str | None:
     return f"Tarde · sai {_horas_para_hhmm(hora_saida)}" if hora_saida is not None else None
 
 
+def _ofertas_das_rotas_enviadas(rascunhos: list[dict]) -> None:
+    """Card da rota enviada: `oferta_enviada` = None ou {status, motivo, escolhido_nome}
+    (nucleo/ofertas_rota_enviada.py). Falha aqui nunca derruba a tela."""
+    for r in rascunhos:
+        r["oferta_enviada"] = None
+    enviados = [r for r in rascunhos if r["status"] == rascunhos_rota.STATUS_ENVIADO]
+    if not enviados:
+        return
+    try:
+        from nucleo import banco as nucleo_banco, ofertas_rota_enviada
+        conn = nucleo_banco.conectar()
+        try:
+            for r in enviados:
+                r["oferta_enviada"] = ofertas_rota_enviada.situacao_do_card(conn, r["id"])
+        finally:
+            conn.close()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Ofertas das rotas enviadas nao carregadas: {e}")
+
+
 def _badges_trava(rascunho: dict) -> list[str]:
     """Avisos visuais (não bloqueiam) quando o rascunho, do jeito que
     está AGORA, estouraria alguma trava de roteirizacao_dados.py::
@@ -1174,6 +1194,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
 
     rascunhos = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
     confirmacoes_dia = listar_confirmacoes_do_dia(data_alvo)
+    _ofertas_das_rotas_enviadas(rascunhos)
     for r in rascunhos:
         r["badges"] = _badges_trava(r)
         r["selo_tarde"] = _selo_tarde(r)
