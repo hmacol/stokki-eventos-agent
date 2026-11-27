@@ -4045,6 +4045,95 @@ def api_trocar_motorista():
     return jsonify(resposta)
 
 
+def _oferta_rota_enviada(acao):
+    """Botoes de oferta do card da rota enviada (Hugo, 21/11). `acao(ofertas, conn, rota, rascunho,
+    config, usuario)` devolve o dict da resposta; ValueError vira 400 com o texto."""
+    from nucleo import banco as nucleo_banco, ofertas_rota_enviada as ofertas
+    try:
+        rascunho = rascunhos_rota.buscar_rascunho(int(request.get_json(force=True)["rascunho_id"]))
+    except (KeyError, TypeError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    if not rascunho or rascunho["status"] != rascunhos_rota.STATUS_ENVIADO:
+        return jsonify({"erro": "Rota enviada não encontrada."}), 404
+    config = _carregar_config()
+    conn = nucleo_banco.conectar()
+    try:
+        rota = ofertas.rota_do_rascunho(conn, rascunho["id"])
+        if rota is None:
+            return jsonify({"erro": "A rota ainda não chegou ao sistema dos motoristas. Tente de novo em 1 minuto."}), 404
+        try:
+            resultado = acao(ofertas, conn, rota, rascunho, config, session.get("usuario") or g.nivel_acesso)
+        except ValueError as e:
+            return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    if not resultado.get("ok"):
+        return jsonify({"erro": resultado.get("erro") or "Não foi possível."}), 400
+    return jsonify(resultado)
+
+
+@app.route("/api/planejamento/ofertar-rota", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_ofertar_rota():
+    """ "Ofertar para motoristas": abre a rota enviada pros outros motoristas (aviso no grupo
+    Rotas FRESHLOG na rodada seguinte do timer, depois mensagem particular em etapas)."""
+    def acao(ofertas, conn, rota, rascunho, config, usuario):
+        if not ofertas.config_ofertas(config)["ativo"]:
+            raise ValueError("Divulgação de rotas desligada no config (api_motorista.rota_sem_aceite.ativo).")
+        publicar_em = None
+        hora = str((request.get_json(force=True) or {}).get("hora") or "").strip()
+        if hora:        # "HH:MM", hoje, horario local do servidor (America/Sao_Paulo)
+            try:
+                h, m = hora.split(":")
+                publicar_em = datetime.now().replace(hour=int(h), minute=int(m), second=0, microsecond=0)
+            except ValueError:
+                raise ValueError("Horário inválido. Use HH:MM, por exemplo 18:30.")
+            if publicar_em <= datetime.now():
+                raise ValueError(f"{hora} de hoje já passou. Deixe o horário em branco pra ofertar agora.")
+        return ofertas.ofertar_pela_equipe(conn, rota["id"], usuario, config.get("google_maps", {}).get("api_key", ""),
+                                           publicar_em=publicar_em)
+    return _oferta_rota_enviada(acao)
+
+
+@app.route("/api/planejamento/retirar-oferta", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_retirar_oferta():
+    """ "Retirar oferta": so a oferta da equipe que ninguem pegou; nao reabre."""
+    return _oferta_rota_enviada(lambda ofertas, conn, rota, rascunho, config, usuario:
+                                ofertas.retirar_pela_equipe(conn, rota["id"], usuario))
+
+
+@app.route("/api/planejamento/confirmar-escolha", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_confirmar_escolha():
+    """ "Confirmar motorista": troca motorista e carro na Vuupt (mesma troca do card) e, so depois
+    do ok dela, passa a rota pra quem pegou no app e fecha a oferta. Vuupt recusou = nada muda."""
+    def acao(ofertas, conn, rota, rascunho, config, usuario):
+        def trocar(escolha):
+            return rascunhos_rota.trocar_motorista(
+                rascunho["id"], escolha["agent_id"], escolha["vehicle_id"], escolha["nome"],
+                token=config.get("vuupt_api", {}).get("token", ""), placas=placas_veiculos_vuupt(config),
+                trava_sem_carro=veiculos_regras.trava_sem_carro_ligada(config))
+        return ofertas.confirmar_escolha(conn, rota["id"], usuario, trocar)
+    return _oferta_rota_enviada(acao)
+
+
+@app.route("/api/planejamento/recusar-escolha", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_recusar_escolha():
+    """ "Recusar": a rota volta pra oferta e quem foi recusado deixa de ve-la."""
+    return _oferta_rota_enviada(lambda ofertas, conn, rota, rascunho, config, usuario:
+                                ofertas.recusar_escolha(conn, rota["id"], usuario))
+
+
 @app.route("/api/planejamento/lalamove-veiculo", methods=["POST"])
 @requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem

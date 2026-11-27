@@ -147,7 +147,8 @@ def motivos_validos() -> list[str]:
 def _ids_nao_coletado(conn) -> set[int]:
     try:
         return {r[0] for r in conn.execute(
-            "SELECT id FROM motivos_ocorrencia WHERE vuupt_failed_reason_id = ?", (NAO_COLETADO_VUUPT,))}
+            "SELECT id FROM motivos_ocorrencia WHERE vuupt_failed_reason_id = ? OR motivo_texto LIKE 'N_o coletado%'",
+            (NAO_COLETADO_VUUPT,))}
     except sqlite3.OperationalError:
         return set()  # tabela do app proprio ausente
 
@@ -166,7 +167,8 @@ def _nomes_agentes(conn) -> dict[int, str]:
 def eh_nao_coletado(failed_reason_id, motivo_id, motivo_texto, ids_nao_coletado: set[int]) -> bool:
     return (failed_reason_id == NAO_COLETADO_VUUPT
             or (motivo_id is not None and motivo_id in ids_nao_coletado)
-            or _normalizar_texto(motivo_texto) == "nao coletado")
+            # prefixo: pega "Nao Coletado - Nao Encontrado" e "- Nao Coube" (25/11)
+            or _normalizar_texto(motivo_texto).startswith("nao coletado"))
 
 
 # Paradas que sao retorno esperado. O filtro de "Nao coletado" fica em Python.
