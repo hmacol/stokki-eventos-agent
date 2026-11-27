@@ -227,6 +227,40 @@ class TestRodada(unittest.TestCase):
         self.assertIsNone(vigiar._prazo_dias_regiao("Rua A 1, Centro, Santo André - SP, 09000-000, Brasil"))
         self.assertIsNone(vigiar._prazo_dias_regiao(None))
 
+    # Pool direto da Stokki (Task 7): o pedido sem servico na Vuupt esta no rascunho pelo id
+    # sintetico (-id_pool) e o aviso de area nao atendida pode ter sido gravado com esse id.
+    def _sem_servico(self, codigo="PS-11", id_pool=5):
+        self.conn.execute("ALTER TABLE nucleo_pedidos ADD COLUMN id_pool INTEGER")
+        self.conn.execute("INSERT INTO nucleo_pedidos (codigo, vuupt_service_id, status, criado_em_provedor, fluxo, "
+                          "id_pool) VALUES (?, NULL, 'ABERTO', '2026-09-28 17:00:00', 'ENTREGA', ?)", (codigo, id_pool))
+        self.conn.commit()
+
+    def test_pedido_sem_servico_no_rascunho_pelo_id_sintetico(self):
+        self._sem_servico()
+        self.conn.execute("INSERT INTO rascunhos_parada VALUES (1, -5)")
+        self.conn.commit()
+        vigiar.rodar(self.conn, agora=AGORA)
+        self.assertEqual(self._estados()["PS-11"]["estado"], "EM_RASCUNHO")
+
+    def test_area_nao_atendida_casa_pelo_codigo(self):
+        self._sem_servico()
+        self.conn.execute("CREATE TABLE pedidos_area_notificada (service_id INTEGER PRIMARY KEY, tipo TEXT, "
+                          "notificado_em TEXT, codigo TEXT)")
+        # avisado quando ainda era o id sintetico; agora ganhou o servico 77
+        self.conn.execute("INSERT INTO pedidos_area_notificada VALUES (-5, 'fora_sp', '2026-09-28 18:00:00', 'PS-11')")
+        self.conn.execute("UPDATE nucleo_pedidos SET vuupt_service_id = 77 WHERE codigo = 'PS-11'")
+        self.conn.commit()
+        vigiar.rodar(self.conn, agora=AGORA)
+        self.assertIn("área não atendida (embarcador avisado em 2026-09-28)", self._estados()["PS-11"]["motivo"])
+
+    def test_area_nao_atendida_tabela_antiga_sem_codigo(self):
+        self.conn.execute("CREATE TABLE pedidos_area_notificada (service_id INTEGER PRIMARY KEY, tipo TEXT, "
+                          "notificado_em TEXT)")
+        self.conn.execute("INSERT INTO pedidos_area_notificada VALUES (1, 'fora_sp', '2026-09-28 18:00:00')")
+        self.conn.commit()
+        vigiar.rodar(self.conn, agora=AGORA)
+        self.assertIn("área não atendida", self._estados()["PS-1"]["motivo"])
+
 
 if __name__ == "__main__":
     unittest.main()
