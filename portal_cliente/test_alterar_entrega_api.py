@@ -43,6 +43,9 @@ def _nucleo(rota_status="PLANEJADA"):
                            "iniciada_em": None, "agent_id": 1}}
 
 
+STOKKI = {"planejamento": {"fonte_pool": "stokki"}}   # pool direto da Stokki (id negativo existe)
+
+
 class AlterarEntregaApiTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -185,7 +188,8 @@ class AlterarEntregaApiTest(unittest.TestCase):
         e a Vuupt nao e consultada (as acoes de producao tratam o id negativo no nucleo)."""
         self._com(self._fakes())
         sem = _servico(id=-7, status="not_assigned", route_id=None, customer_id=None)
-        with mock.patch.object(self.portal.dados, "servico_sem_servico", return_value=sem) as nucleo:
+        with mock.patch.object(self.portal.dados, "servico_sem_servico", return_value=sem) as nucleo, \
+                mock.patch.dict(self.portal._CONFIG, STOKKI):
             j = self.cli.get("/api/pedidos/-7/alteracao", base_url=HTTPS).get_json()
             self.assertTrue(j["pode"], j)
             self.assertFalse(j["em_rota"])
@@ -196,9 +200,19 @@ class AlterarEntregaApiTest(unittest.TestCase):
         self.portal.dados.buscar_servico.assert_not_called()
         self.assertEqual(self.aplicar.call_args.args[1]["id"], -7)
 
+    def test_pedido_sem_servico_com_a_chave_desligada_404(self):
+        """Revisao final M2: sem planejamento.fonte_pool = stokki o id negativo nem le o nucleo."""
+        self._com(self._fakes())
+        sem = _servico(id=-7, status="not_assigned", route_id=None, customer_id=None)
+        with mock.patch.object(self.portal.dados, "servico_sem_servico", return_value=sem) as nucleo:
+            self.assertEqual(self.cli.get("/api/pedidos/-7/alteracao", base_url=HTTPS).status_code, 404)
+        nucleo.assert_not_called()
+        self.portal.dados.buscar_servico.assert_not_called()
+
     def test_pedido_sem_servico_que_nao_existe_404(self):
         self._com(self._fakes())
-        with mock.patch.object(self.portal.dados, "servico_sem_servico", return_value=None):
+        with mock.patch.object(self.portal.dados, "servico_sem_servico", return_value=None), \
+                mock.patch.dict(self.portal._CONFIG, STOKKI):
             self.assertEqual(self.cli.get("/api/pedidos/-7/alteracao", base_url=HTTPS).status_code, 404)
         self.portal.dados.buscar_servico.assert_not_called()
 

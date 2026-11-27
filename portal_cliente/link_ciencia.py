@@ -102,7 +102,8 @@ def registrar(app, *, config: dict, secret: str, db_path=None, deps_fabrica=None
     token_vuupt = (config.get("vuupt_api") or {}).get("token", "")
     deps_fabrica = deps_fabrica or ae.dependencias_reais
     buscar_servico = buscar_servico or (
-        lambda sid: dados.buscar_servico_ou_nucleo(token_vuupt, sid, incluir="checklistAnswers,customer"))
+        lambda sid: dados.buscar_servico_ou_nucleo(token_vuupt, sid, incluir="checklistAnswers,customer",
+                                                 config=config))
     reais = ncd.canais_reais(config, db_path=db_path)
     chat_mensagem = chat_mensagem or reais.chat_mensagem
     alerta_equipe = alerta_equipe or reais.alerta_equipe

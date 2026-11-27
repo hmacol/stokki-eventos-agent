@@ -420,7 +420,8 @@ def _sem_servico_do_nucleo(remetentes: tuple[int, ...], config: dict | None) -> 
 
 def servico_sem_servico(service_id) -> dict | None:
     """Pedido sem servico na Vuupt pelo id sintetico (-id_pool), no formato do servico; None se o
-    id nao e sintetico, o pedido nao existe ou ja ganhou servico (a tela recarregada traz o id real)."""
+    id nao e sintetico, o pedido nao existe, nao esta ABERTO ou ja ganhou servico (a tela
+    recarregada traz o id real)."""
     if not nucleo_pool.eh_sem_servico(service_id):
         return None
     from nucleo import banco as nucleo_banco, pedidos as nucleo_pedidos
@@ -430,7 +431,7 @@ def servico_sem_servico(service_id) -> dict | None:
         linha = conn.execute("SELECT * FROM nucleo_pedidos WHERE codigo = ?", (codigo,)).fetchone() if codigo else None
     finally:
         conn.close()
-    if linha is None or linha["vuupt_service_id"] is not None:
+    if linha is None or linha["vuupt_service_id"] is not None or linha["status"] != nucleo_banco.PEDIDO_ABERTO:
         return None
     return nucleo_pool.pedido_para_servico(linha)
 
@@ -904,10 +905,14 @@ def buscar_servico(token: str, service_id: int, incluir: str = "checklistAnswers
         return None
 
 
-def buscar_servico_ou_nucleo(token: str, service_id: int, incluir: str = "checklistAnswers") -> dict | None:
+def buscar_servico_ou_nucleo(token: str, service_id: int, incluir: str = "checklistAnswers",
+                             config: dict | None = None) -> dict | None:
     """buscar_servico, mas id negativo (pedido ainda sem servico na Vuupt, pool direto da Stokki)
-    vem do nucleo: a Vuupt nunca e consultada com id sintetico."""
+    vem do nucleo: a Vuupt nunca e consultada com id sintetico. Sem a chave
+    (planejamento.fonte_pool = stokki em `config`) id negativo nao existe: None."""
     if nucleo_pool.eh_sem_servico(service_id):
+        if nucleo_pool.fonte_pool(config) != nucleo_pool.FONTE_STOKKI:
+            return None
         return servico_sem_servico(service_id)
     return buscar_servico(token, service_id, incluir)
 

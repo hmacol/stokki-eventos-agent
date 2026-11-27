@@ -111,10 +111,26 @@ class ListaDoPortal(_NucleoTemporario):
     def test_buscar_servico_ou_nucleo_nunca_vai_na_vuupt_com_id_sintetico(self):
         sid = self.sem_servico("PS-1")
         with mock.patch.object(dc, "buscar_servico", return_value={"id": 501}) as vuupt:
-            self.assertEqual(dc.buscar_servico_ou_nucleo("t", sid, "customer")["code"], "#PS-1")
+            self.assertEqual(dc.buscar_servico_ou_nucleo("t", sid, "customer", config=STOKKI)["code"], "#PS-1")
             vuupt.assert_not_called()
-            self.assertEqual(dc.buscar_servico_ou_nucleo("t", 501, "customer"), {"id": 501})
+            self.assertEqual(dc.buscar_servico_ou_nucleo("t", 501, "customer", config=STOKKI), {"id": 501})
         vuupt.assert_called_once_with("t", 501, "customer")
+
+    def test_chave_desligada_nao_serve_id_sintetico(self):
+        """Revisao final M2: sem a chave o id negativo nao existe pro portal (nem le o nucleo)."""
+        sid = self.sem_servico("PS-1")
+        with mock.patch.object(dc, "buscar_servico") as vuupt, \
+                mock.patch.object(dc, "servico_sem_servico", side_effect=AssertionError("nao le o nucleo")):
+            self.assertIsNone(dc.buscar_servico_ou_nucleo("t", sid, "customer", config={}))
+            self.assertIsNone(dc.buscar_servico_ou_nucleo("t", sid, "customer"))
+        vuupt.assert_not_called()
+
+    def test_pedido_fechado_nao_e_servido_pelo_id_sintetico(self):
+        sid = self.sem_servico("PS-1")
+        self.nucleo.execute("UPDATE nucleo_pedidos SET status = 'CANCELADO' WHERE codigo = 'PS-1'")
+        self.nucleo.commit()
+        self.assertIsNone(dc.servico_sem_servico(sid))
+        self.assertIsNone(dc.buscar_servico_ou_nucleo("t", sid, "customer", config=STOKKI))
 
 
 # ── Worker do cancelamento (cancelamento.py) ───────────────────────────────────

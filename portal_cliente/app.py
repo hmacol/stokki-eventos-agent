@@ -806,7 +806,8 @@ def _servico_alteravel(service_id: int) -> tuple[dict, dict]:
     desligada pra essa empresa ou o serviço não é do login. Id negativo = pedido
     ainda sem serviço na Vuupt (pool direto da Stokki): vem do núcleo, sem Vuupt."""
     token = _CONFIG.get("vuupt_api", {}).get("token", "")
-    servico = dados.buscar_servico_ou_nucleo(token, service_id, incluir="checklistAnswers,customer")
+    servico = dados.buscar_servico_ou_nucleo(token, service_id, incluir="checklistAnswers,customer",
+                                             config=_CONFIG)
     if not servico or servico.get("sender_id") not in g.cliente["sender_ids"]:
         abort(404)
     empresa = next(e for e in g.cliente["empresas"] if e["sender_id"] == servico.get("sender_id"))
