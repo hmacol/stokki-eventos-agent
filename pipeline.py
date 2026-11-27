@@ -574,13 +574,13 @@ _STATUS_NUCLEO_PARA_VUUPT = {"ABERTO": "not_assigned", "CANCELADO": "canceled",
                              "EM_ROTA": "assigned", "ENTREGUE": "done", "INSUCESSO": "done"}
 
 
-def _pedido_sem_servico(config_app: dict | None, codigo_ps: str, forcar_caminho_vuupt: bool):
+def _pedido_sem_servico(config_app: dict | None, codigo_ps: str):
     """(sem_servico, servico_existente). sem_servico=True: fonte stokki e o pedido nao tem servico
     na Vuupt segundo o nucleo (linha sem vuupt_service_id, ou pedido novo); servico_existente e a
     linha do nucleo no formato de pool.pedido_para_servico (None = pedido novo). Pedido que ja tem
     servico segue o caminho antigo (atualiza o servico existente). Nunca chama a Vuupt."""
     from nucleo import pool
-    if forcar_caminho_vuupt or pool.fonte_pool(config_app) != pool.FONTE_STOKKI:
+    if pool.fonte_pool(config_app) != pool.FONTE_STOKKI:
         return False, None
     from nucleo.pedidos import buscar_pedido
     try:
@@ -705,14 +705,13 @@ def processar_pedido(
     ajustes_manuais: dict | None = None,
     inicio_rodada: datetime | None = None,
     conn_alteracoes=None,
-    forcar_caminho_vuupt: bool = False,
 ) -> dict:
     """
     Processa um único pedido: detalhe → endereço → VUUPT.
     Retorna dict com resultado: acao, fonte_endereco, requer_revisao, erro.
     Com planejamento.fonte_pool = stokki, pedido sem servico na Vuupt vai so pro nucleo
-    (acao gravado_nucleo, nenhuma chamada a Vuupt). `forcar_caminho_vuupt` (fila do freshhub)
-    mantem o caminho antigo mesmo com a chave ligada.
+    (acao gravado_nucleo, nenhuma chamada a Vuupt); a fila do freshhub cria o servico depois
+    (atender_fila_freshhub, `materializar`).
     """
     resultado = {
         "codigo_ps":      codigo_ps,
@@ -758,7 +757,7 @@ def processar_pedido(
         # fingerprint e pula sem gastar mais nada.
         # Fonte stokki: pedido sem servico na Vuupt le a memoria do NUCLEO (data automatica,
         # dia fixo, status) em vez de consultar a Vuupt.
-        sem_servico, servico_existente = _pedido_sem_servico(config_app, codigo_ps, forcar_caminho_vuupt)
+        sem_servico, servico_existente = _pedido_sem_servico(config_app, codigo_ps)
         if not sem_servico:
             servico_existente = vuupt.buscar_servico_por_code(codigo_ps)
         status_vuupt = (servico_existente or {}).get("status", "")
@@ -1240,14 +1239,16 @@ def _espelho_para_freshhub(servico: dict | None) -> dict | None:
 
 
 def atender_fila_freshhub(cliente, processar, *, modo_teste: bool, limite: int = 50,
-                          buscar_servico=None) -> list[dict]:
+                          buscar_servico=None, materializar=None) -> list[dict]:
     """Pendentes de destino vuupt na fila de replica do sistema novo: pra cada um roda o MESMO
     processar_pedido do pipeline (`processar(id_stokki, codigo)`: payload, geocodificacao,
     criar_ou_atualizar_servico idempotente por code, registrar_importacao) e devolve o id do servico e o
     espelho; erro de um item vira resultado com erro e o lote segue. Servico que ja existia sem alteracao
     (pipeline normal chegou antes) volta sem id do processar: `buscar_servico(codigo)` (vuupt.
     buscar_servico_por_code) acha o existente e a fila devolve ok. Em modo teste simula e NAO devolve
-    (o item volta a pendente na API em 1 h). `cliente` None = freshhub_api sem configurar, nada a fazer."""
+    (o item volta a pendente na API em 1 h). `cliente` None = freshhub_api sem configurar, nada a fazer.
+    Fonte stokki: o processar so grava no nucleo (gravado_nucleo, sem id) e `materializar(codigo)` ->
+    (service_id | None, motivo) cria o servico na Vuupt (nucleo/materializar.py); falha volta com o motivo."""
     if cliente is None:
         return []
     try:
@@ -1283,6 +1284,19 @@ def atender_fila_freshhub(cliente, processar, *, modo_teste: bool, limite: int =
             res = {"acao": None, "erro": str(e), "vuupt_service_id": None, "servico_vuupt": None, "observacao": ""}
         sid = res.get("vuupt_service_id")
         servico = res.get("servico_vuupt")
+        if (sid is None and not res.get("erro") and materializar is not None
+                and res.get("acao") == ACAO_GRAVADO_NUCLEO):
+            try:
+                sid, motivo = materializar(codigo)
+            except Exception as e:  # noqa: BLE001 - o item falha sozinho
+                sid, motivo = None, str(e)
+            if sid is None:
+                res["erro"] = f"servico nao criado na Vuupt: {motivo}"
+            elif buscar_servico is not None:
+                try:
+                    servico = buscar_servico(codigo)   # espelho pro sistema novo (best-effort)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"  fila freshhub {ident} ({codigo}): espelho do servico {sid} nao lido ({e})")
         if sid is None and not res.get("erro") and buscar_servico is not None:
             # pulado_sem_alteracao / pulado pelo fingerprint: o servico existe, so nao foi tocado agora
             try:
@@ -1657,6 +1671,13 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
     # Fila de replica do sistema novo (plano 1.2): mesmo processar_pedido, mesma sessao da Stokki e mesma
     # trava da rodada; roda DEPOIS dos pedidos da Stokki (o pipeline normal pode ja ter criado o servico;
     # criar_ou_atualizar_servico e idempotente por code e a fila so devolve o id)
+    def _materializar_pela_fila(codigo: str):
+        # fonte stokki: o pedido so estava no nucleo e a fila exige o id -> o servico nasce agora
+        from nucleo.materializar import materializar_servicos
+        res = materializar_servicos([{"code": codigo}], vuupt, config)
+        sid = next(iter(res.ok.values()), None)
+        return sid, ("" if sid else next(iter(res.falhas.values()), "servico nao criado na Vuupt"))
+
     def _atender_fila():
         if not fila_freshhub:
             return
@@ -1673,11 +1694,9 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
                 indice_xmls=indice_xmls, mapa_niveis=mapa_niveis, conjunto_agendamento=conjunto_agendamento,
                 config_email=config.get("email", {}), config_app=config,
                 mapa_horarios=mapa_horarios, ajustes_manuais=ajustes_manuais, inicio_rodada=inicio_rodada,
-                conn_alteracoes=conn_alteracoes,
-                # a fila precisa devolver o id do servico: mesmo com fonte stokki cria na Vuupt como hoje
-                # Task 5: religar a materializar_servicos
-                forcar_caminho_vuupt=True),
-            modo_teste=modo_teste, buscar_servico=vuupt.buscar_servico_por_code)
+                conn_alteracoes=conn_alteracoes),
+            modo_teste=modo_teste, buscar_servico=vuupt.buscar_servico_por_code,
+            materializar=_materializar_pela_fila)
 
     # Lista pedidos
     # ── Coleta pedidos das fontes relevantes ──────────────────────────────────

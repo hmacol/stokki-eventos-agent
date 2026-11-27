@@ -178,5 +178,53 @@ class RevisaoFilaTest(unittest.TestCase):
         self.assertIn("r1", logs.output[0])
 
 
+class FilaSemServicoTest(unittest.TestCase):
+    """Pool direto da Stokki (Task 5): com a chave ligada o processar so grava no nucleo
+    (gravado_nucleo, sem id); a fila exige o id, entao materializa o servico na hora."""
+
+    def test_fila_freshhub_materializa(self):
+        cliente = mock.Mock()
+        cliente.pendentes.return_value = [_item()]
+        processar = mock.Mock(return_value=_res(acao="gravado_nucleo", sid=None, servico=None))
+        materializar = mock.Mock(return_value=(901, ""))
+        buscar = mock.Mock(return_value={**SERVICO, "id": 901})
+        saida = pipeline.atender_fila_freshhub(cliente, processar, modo_teste=False, buscar_servico=buscar,
+                                               materializar=materializar)
+        materializar.assert_called_once_with("PS-41679")
+        args, kwargs = cliente.resultado.call_args
+        self.assertEqual(args, ("r1", True))
+        self.assertEqual(kwargs["resultado"]["vuupt_service_id"], 901)
+        self.assertEqual(kwargs["resultado"]["servico"]["title"], SERVICO["title"])
+        self.assertEqual(saida[0]["vuupt_service_id"], 901)
+
+    def test_falha_na_materializacao_devolve_erro_com_motivo(self):
+        cliente = mock.Mock()
+        cliente.pendentes.return_value = [_item()]
+        processar = mock.Mock(return_value=_res(acao="gravado_nucleo", sid=None, servico=None))
+        materializar = mock.Mock(return_value=(None, "pedido PS-41679 esta CANCELADO no nucleo"))
+        pipeline.atender_fila_freshhub(cliente, processar, modo_teste=False, buscar_servico=mock.Mock(),
+                                       materializar=materializar)
+        args, kwargs = cliente.resultado.call_args
+        self.assertEqual(args, ("r1", False))
+        self.assertIn("CANCELADO", kwargs["erro"])
+
+    def test_caminho_antigo_nao_materializa(self):
+        cliente = mock.Mock()
+        cliente.pendentes.return_value = [_item()]
+        materializar = mock.Mock()
+        pipeline.atender_fila_freshhub(cliente, mock.Mock(return_value=_res()), modo_teste=False,
+                                       materializar=materializar)
+        materializar.assert_not_called()
+
+    def test_modo_teste_nao_materializa(self):
+        cliente = mock.Mock()
+        cliente.pendentes.return_value = [_item()]
+        materializar = mock.Mock()
+        pipeline.atender_fila_freshhub(cliente, mock.Mock(return_value=_res(acao="simulado", sid=None, servico=None)),
+                                       modo_teste=True, materializar=materializar)
+        materializar.assert_not_called()
+        cliente.resultado.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -139,11 +139,21 @@ class CaminhoSemServicoTest(_Base):
         self.assertEqual(acao, "criado")
         self.assertEqual(resposta, {"service": {"id": 5, "code": "#PS-1"}})
 
-    def test_fila_freshhub_forca_caminho_antigo(self):
+    def test_pedido_gravado_pelo_pipeline_materializa_com_o_payload_dele(self):
+        # Task 5: o que o pipeline guardou (dados_json + colunas) e o que vai pra Vuupt no envio
+        from nucleo import materializar
         vuupt = self._vuupt()
-        res = self._processar(vuupt, forcar_caminho_vuupt=True)
-        vuupt.criar_ou_atualizar_servico.assert_called_once()
-        self.assertEqual(res["vuupt_service_id"], 5)
+        self._processar(vuupt)
+        vuupt.buscar_servico_por_code.return_value = None
+        vuupt.skill_ids_por_nome.return_value = [55]
+        res = materializar.materializar_servicos([{"code": "PS-1"}], vuupt, CONFIG_STOKKI)
+        self.assertEqual(res.ok, {"PS-1": 5})
+        payload = vuupt.criar_ou_atualizar_servico.call_args.args[0]
+        self.assertEqual(payload["code"], "#PS-1")
+        self.assertEqual(payload["scheduled_start"], "2026-11-10T07:00:00-03:00")
+        self.assertEqual(payload["skills"], [{"id": 55}])
+        self.assertFalse([k for k in payload if k.startswith("_")])
+        self.assertEqual(self._linha()["vuupt_service_id"], 5)
 
 
 class MemoriaDoPedidoTest(_Base):
