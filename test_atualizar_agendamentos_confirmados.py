@@ -100,5 +100,42 @@ class TestAtualizarAgendamentosConfirmados(unittest.TestCase):
         self.vuupt.atualizar_servico.assert_not_called()
 
 
+class TestPoolDiretoDaStokki(TestAtualizarAgendamentosConfirmados):
+    """Fonte stokki (Task 7): pedido do pool sem servico na Vuupt ganha a data confirmada nas
+    colunas do nucleo (editar_sem_servico, valem na materializacao); a Vuupt nao e consultada."""
+
+    def setUp(self):
+        super().setUp()
+        from nucleo import banco, pedidos
+        p = patch.object(banco, "DB_PATH", Path(self.tmp.name) / "nucleo.db")
+        p.start()
+        self.addCleanup(p.stop)
+        self.pedidos = pedidos
+        conn = banco.conectar()
+        pedidos.registrar_importacao({"code": "#PS-50", "title": "t", "sender_id": 1}, None, "nucleo_sem_servico",
+                                     conn=conn)
+        conn.close()
+
+    def test_sem_servico_grava_a_data_no_nucleo(self):
+        quinta = _proxima_quinta()
+        self._gravar("PS-50", quinta)
+        with patch.object(aac, "_carregar_config", return_value={"planejamento": {"fonte_pool": "stokki"}}):
+            aac.main()
+        self.vuupt.buscar_servico_por_code.assert_not_called()
+        self.vuupt.atualizar_servico.assert_not_called()
+        linha = self.pedidos.buscar_pedido("PS-50")
+        self.assertEqual((linha["agendamento_inicio"], linha["agendamento_fim"]),
+                         (f"{quinta.isoformat()} 06:00:00", f"{quinta.isoformat()} 11:00:00"))
+        self.assertIsNotNone(self._aplicado_em("PS-50"))
+
+    def test_chave_desligada_igual_a_hoje(self):
+        self._gravar("PS-50", _proxima_quinta())
+        self.vuupt.buscar_servico_por_code.return_value = None
+        aac.main()
+        self.vuupt.buscar_servico_por_code.assert_called_once_with("PS-50")
+        self.assertIsNone(self.pedidos.buscar_pedido("PS-50")["agendamento_inicio"])
+        self.assertIsNone(self._aplicado_em("PS-50"))
+
+
 if __name__ == "__main__":
     unittest.main()
