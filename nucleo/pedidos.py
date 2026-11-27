@@ -106,7 +106,9 @@ def upsert_pedido(conn: sqlite3.Connection, codigo: str, campos: dict, origem: s
     # id_pool so no INSERT (pedido novo); contador nunca reutiliza id
     # (pedido existente com id_pool NULL, ex. linha anterior ao backfill, tambem ganha um)
     id_pool = None
-    existente = conn.execute("SELECT id_pool FROM nucleo_pedidos WHERE codigo = ?", (codigo,)).fetchone()
+    existente = conn.execute("SELECT id_pool, vuupt_service_id FROM nucleo_pedidos WHERE codigo = ?", (codigo,)).fetchone()
+    # pedido que GANHA servico (id NULL -> real): rascunhos trocam o id sintetico pelo real
+    ganha_servico = existente is not None and existente[1] is None and vuupt_service_id is not None
     if existente is None or existente[0] is None:
         conn.execute("UPDATE nucleo_contadores SET valor = valor + 1 WHERE nome = 'id_pool'")
         id_pool = conn.execute("SELECT valor FROM nucleo_contadores WHERE nome = 'id_pool'").fetchone()[0]
@@ -131,6 +133,9 @@ def upsert_pedido(conn: sqlite3.Connection, codigo: str, campos: dict, origem: s
             atualizado_em = excluded.atualizado_em
     """, (codigo, vuupt_service_id, *valores, tipo, status, banco.PEDIDO_ABERTO, origem, json_txt,
           banco.agora(), id_pool, tipo, status))
+    if ganha_servico:
+        from nucleo.adocao_servico import adotar_servico
+        adotar_servico(conn, codigo, vuupt_service_id)
 
 
 def id_sintetico(pedido) -> int:
