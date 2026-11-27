@@ -311,7 +311,14 @@ def confirmar_envio_rascunhos(rascunho_ids: list, config: dict) -> list[dict]:
             continue
         # cada resultado ja traz codigos_sem_servico {codigo: motivo} (pool direto da Stokki: o servico
         # na Vuupt nasce no envio e quem falha volta ao pool com o motivo)
-        resultado = rascunhos_rota.enviar_rascunho(rid, token)
+        inicio_rascunho = time.monotonic()
+        try:
+            resultado = rascunhos_rota.enviar_rascunho(rid, token)
+        except Exception as e:  # noqa: BLE001 -- um rascunho com erro nao para o "enviar todas"
+            logger.exception(f"Envio do rascunho {rid} falhou com excecao")
+            resultado = {"rascunho_id": rid, "ok": False, "erro": str(e)}
+        logger.info(f"Envio do rascunho {rid}: {'ok' if resultado.get('ok') else 'falhou'} em "
+                    f"{time.monotonic() - inicio_rascunho:.1f}s")
         if erro_carro:
             resultado = {**resultado, "aviso": erro_carro}
         resultados.append(resultado)

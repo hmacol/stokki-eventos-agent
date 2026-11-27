@@ -26,11 +26,12 @@ com o lote mais recente, ainda não DESCARTADO, de uma data_alvo --
 """
 import json
 import logging
+import os
 import re
 import sqlite3
 import sys
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 _RAIZ = Path(__file__).parent.parent
@@ -120,6 +121,15 @@ def _conectar() -> sqlite3.Connection:
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rascunhos_plano_original_rascunho "
                  "ON rascunhos_plano_original(rascunho_id)")
+    # Envio em andamento (revisao final do pool direto da Stokki, I2): uma linha por rascunho
+    # sendo enviado; o 2o clique concorrente e recusado sem tocar em nada (vale entre processos).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS rascunho_envio_trava (
+            rascunho_id  INTEGER PRIMARY KEY,
+            iniciado_em  TEXT NOT NULL,
+            processo     TEXT NOT NULL
+        )
+    """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rascunhos_rota_lote ON rascunhos_rota(lote_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rascunhos_rota_data ON rascunhos_rota(data_alvo, status)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rascunhos_parada_rascunho ON rascunhos_parada(rascunho_id)")
@@ -1413,7 +1423,64 @@ def _materializar_paradas(rascunho_id: int, paradas: list[dict], token: str,
     return falhas, ocupados
 
 
+TRAVA_ENVIO_VELHA_MIN = 15   # trava de processo morto no meio do envio (restart) expira sozinha
+
+
+def _travar_envio(rascunho_id: int) -> str | None:
+    """Reserva o envio do rascunho (INSERT OR IGNORE atomico, transacao curta, nunca
+    atravessa chamada HTTP). Devolve a marca da reserva ou None se outro envio ja esta em
+    andamento. Trava com mais de TRAVA_ENVIO_VELHA_MIN minutos e assumida."""
+    marca = f"pid={os.getpid()} {uuid.uuid4().hex[:8]}"
+    agora = datetime.now()
+    conn = _conectar()
+    try:
+        with conn:
+            cur = conn.execute("INSERT OR IGNORE INTO rascunho_envio_trava (rascunho_id, iniciado_em, processo) "
+                               "VALUES (?, ?, ?)", (rascunho_id, agora.strftime("%Y-%m-%d %H:%M:%S"), marca))
+            if cur.rowcount == 1:
+                return marca
+            limite = (agora - timedelta(minutes=TRAVA_ENVIO_VELHA_MIN)).strftime("%Y-%m-%d %H:%M:%S")
+            cur = conn.execute("UPDATE rascunho_envio_trava SET iniciado_em = ?, processo = ? "
+                               "WHERE rascunho_id = ? AND iniciado_em < ?",
+                               (agora.strftime("%Y-%m-%d %H:%M:%S"), marca, rascunho_id, limite))
+            if cur.rowcount == 1:
+                logger.warning(f"Rascunho {rascunho_id}: trava de envio velha (> {TRAVA_ENVIO_VELHA_MIN} min) assumida")
+                return marca
+            return None
+    finally:
+        conn.close()
+
+
+def _soltar_envio(rascunho_id: int, marca: str) -> None:
+    """Best-effort: se falhar, a trava expira em TRAVA_ENVIO_VELHA_MIN minutos."""
+    try:
+        conn = _conectar()
+        try:
+            with conn:
+                conn.execute("DELETE FROM rascunho_envio_trava WHERE rascunho_id = ? AND processo = ?",
+                             (rascunho_id, marca))
+        finally:
+            conn.close()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Rascunho {rascunho_id}: trava de envio nao foi solta ({e}); expira em "
+                       f"{TRAVA_ENVIO_VELHA_MIN} min")
+
+
 def enviar_rascunho(rascunho_id: int, token: str) -> dict:
+    """Um envio por rascunho de cada vez: o 2o clique concorrente (ou outro processo) e
+    recusado sem tocar no rascunho, no nucleo nem na Vuupt. O trabalho e _enviar_rascunho."""
+    marca = _travar_envio(rascunho_id)
+    if marca is None:
+        logger.info(f"Rascunho {rascunho_id}: envio recusado, outro envio deste rascunho em andamento")
+        return {"rascunho_id": rascunho_id, "ok": False, "codigos_nao_prontos": [],
+                "erro": "envio deste rascunho ja em andamento"}
+    try:
+        return _enviar_rascunho(rascunho_id, token)
+    finally:
+        _soltar_envio(rascunho_id, marca)
+
+
+def _enviar_rascunho(rascunho_id: int, token: str) -> dict:
     """
     Confirma e envia UM rascunho pra VUUPT de verdade (Fase 3: botão
     'Confirmar e Enviar' da tela de planejamento) -- rotas_client.

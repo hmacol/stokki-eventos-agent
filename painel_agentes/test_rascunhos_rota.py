@@ -166,6 +166,85 @@ class FixRound1EnvioTest(_Base):
         self.assertEqual(rascunhos_rota.buscar_rascunho(rid)["status"], rascunhos_rota.STATUS_ERRO_ENVIO)
 
 
+def _travas():
+    conn = rascunhos_rota._conectar()
+    try:
+        return [tuple(r) for r in conn.execute("SELECT rascunho_id, processo FROM rascunho_envio_trava")]
+    finally:
+        conn.close()
+
+
+class EnvioConcorrenteTest(_Base):
+    """Revisao final I2: com o envio sincrono (materializar leva minutos) um 2o clique rodava
+    enviar_rascunho em paralelo no mesmo rascunho e criava rota parcial/duplicada."""
+
+    def test_segundo_envio_durante_o_primeiro_e_recusado_sem_mexer_em_nada(self):
+        a = self._sem_servico("PS-1")
+        rid = _inserir_rascunho([(101, "#PS-9"), (a, "#PS-1")])
+        segundo = {}
+
+        def criar_rota(token, nome, start_at, sublote, **kw):
+            # o 2o clique chega enquanto o 1o ainda esta criando a rota na Vuupt
+            chamadas_antes = list(self.vuupt.chamadas)
+            segundo["resultado"] = rascunhos_rota.enviar_rascunho(rid, "token")
+            segundo["paradas"] = _paradas(rid)
+            segundo["rascunho"] = rascunhos_rota.buscar_rascunho(rid)
+            segundo["vuupt_igual"] = self.vuupt.chamadas == chamadas_antes
+            return {"id": 777}, list(sublote), []
+
+        self.criar_rota.side_effect = criar_rota
+        resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertTrue(resultado["ok"], resultado)
+        self.assertEqual(self.criar_rota.call_count, 1)
+        self.assertEqual(segundo["resultado"], {"rascunho_id": rid, "ok": False, "codigos_nao_prontos": [],
+                                                "erro": "envio deste rascunho ja em andamento"})
+        self.assertEqual(segundo["paradas"], [(101, "#PS-9"), (900, "#PS-1")])
+        self.assertEqual(segundo["rascunho"]["status"], rascunhos_rota.STATUS_RASCUNHO)
+        self.assertIsNone(segundo["rascunho"]["erro_envio"])
+        self.assertTrue(segundo["vuupt_igual"])
+
+    def test_trava_de_outro_processo_recusa_antes_de_tudo(self):
+        rid = _inserir_rascunho([(101, "#PS-1")])
+        self.assertIsNotNone(rascunhos_rota._travar_envio(rid))
+        with mock.patch.object(rascunhos_rota, "buscar_rascunho") as buscar:
+            resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertFalse(resultado["ok"])
+        self.assertEqual(resultado["erro"], "envio deste rascunho ja em andamento")
+        buscar.assert_not_called()
+        self.criar_rota.assert_not_called()
+
+    def test_trava_solta_depois_do_sucesso(self):
+        rid = _inserir_rascunho([(101, "#PS-1")])
+        self.assertTrue(rascunhos_rota.enviar_rascunho(rid, "token")["ok"])
+        self.assertEqual(_travas(), [])
+
+    def test_trava_solta_depois_de_excecao(self):
+        rid = _inserir_rascunho([(101, "#PS-1")])
+        with mock.patch.object(rascunhos_rota.prontidao_stokki, "carregar_retrato_stokki",
+                               side_effect=RuntimeError("explodiu")):
+            with self.assertRaises(RuntimeError):
+                rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertEqual(_travas(), [])
+        self.assertTrue(rascunhos_rota.enviar_rascunho(rid, "token")["ok"])
+
+    def test_trava_velha_de_processo_morto_e_assumida(self):
+        rid = _inserir_rascunho([(101, "#PS-1")])
+        conn = rascunhos_rota._conectar()
+        try:
+            conn.execute("INSERT INTO rascunho_envio_trava VALUES (?, datetime('now','localtime','-16 minutes'), "
+                         "'pid=1 morto')", (rid,))
+            conn.commit()
+        finally:
+            conn.close()
+        self.assertTrue(rascunhos_rota.enviar_rascunho(rid, "token")["ok"])
+        self.assertEqual(_travas(), [])
+
+    def test_trava_e_por_rascunho(self):
+        r1, r2 = _inserir_rascunho([(101, "#PS-1")]), _inserir_rascunho([(102, "#PS-2")])
+        self.assertIsNotNone(rascunhos_rota._travar_envio(r1))
+        self.assertTrue(rascunhos_rota.enviar_rascunho(r2, "token")["ok"])
+
+
 class AdicionarEmRotaEnviadaTest(_Base):
     def setUp(self):
         super().setUp()
