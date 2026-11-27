@@ -133,8 +133,15 @@ def listar_pool(conn: sqlite3.Connection | None = None, incluir_sem_servico: boo
     fechar = conn is None
     conn = conn or banco.conectar()
     try:
+        # pedido agrupado noutro servico da Vuupt perdeu o id no sync: nao e pedido sem servico
+        agrupados = pedidos.servicos_que_agrupam(conn) if incluir_sem_servico else {}
         por_id: dict[int, sqlite3.Row] = {}
         for p in conn.execute(sql, (banco.PEDIDO_ABERTO, banco.FLUXO_ENTREGA, banco.FLUXO_ENTREGA)):
+            if p["vuupt_service_id"] is None and p["codigo"] in agrupados:
+                sid, composto = agrupados[p["codigo"]]
+                logger.info("pool.pedido_agrupado: %s esta no servico %s ('%s') da Vuupt; fora do pool sem servico",
+                            p["codigo"], sid, composto)
+                continue
             chave = p["vuupt_service_id"] if p["vuupt_service_id"] is not None else pedidos.id_sintetico(p)
             atual = por_id.get(chave)
             if atual is None or (p["atualizado_em"] or "") > (atual["atualizado_em"] or ""):

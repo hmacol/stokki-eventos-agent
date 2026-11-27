@@ -171,11 +171,22 @@ def _conferir_pedido(linha, codigo: str) -> None:
                       f"la), aqui nunca se cria outro servico")
 
 
+def _conferir_agrupamento(conn: sqlite3.Connection, codigo: str) -> None:
+    """Pedido que alguem agrupou num servico da Vuupt ("PS-10" virou "PS-10, PS-20"): a busca por code
+    "#PS-10" nao acha o composto e criaria outro servico (entrega em dobro)."""
+    agrupado = pedidos.servicos_que_agrupam(conn).get(codigo)
+    if agrupado:
+        sid, composto = agrupado
+        raise _Recusa(f"pedido {codigo} agrupado no servico {sid} ('{composto}') na Vuupt: nao crio outro; "
+                      f"conferir o pedido a mao")
+
+
 def _materializar_um(conn: sqlite3.Connection, codigo: str, vuupt, modo_teste: bool, espera_s: float) -> int:
     linha = _linha(conn, codigo)
     _conferir_pedido(linha, codigo)
     if linha["vuupt_service_id"] is not None:
         return _ja_tem_servico(conn, codigo, int(linha["vuupt_service_id"]))
+    _conferir_agrupamento(conn, codigo)
     if modo_teste:
         raise _Recusa("modo teste: servico nao criado na Vuupt")
 

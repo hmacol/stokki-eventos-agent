@@ -371,6 +371,22 @@ def editar_sem_servico(id_negativo, campos: dict, conn: sqlite3.Connection | Non
             conn.close()
 
 
+def servicos_que_agrupam(conn: sqlite3.Connection) -> dict[str, tuple[int, str]]:
+    """{codigo: (service_id, codigo composto)} dos pedidos que estao dentro de um servico da Vuupt que
+    agrupa varios ("PS-10, PS-20", como normalizar_codigo grava). Quando o servico passa a agrupar outro
+    pedido, o sync tira o vuupt_service_id da linha antiga (PS-10), que fica ABERTA sem servico: no pool
+    direto da Stokki ela pareceria pedido sem servico e o envio criaria um SEGUNDO servico. Servico
+    composto cancelado/excluido nao segura ninguem."""
+    mapa: dict[str, tuple[int, str]] = {}
+    for codigo, sid in conn.execute("""SELECT codigo, vuupt_service_id FROM nucleo_pedidos
+                                       WHERE vuupt_service_id IS NOT NULL AND instr(codigo, ',') > 0
+                                         AND status != ? AND excluido_em IS NULL""", (banco.PEDIDO_CANCELADO,)):
+        for parte in codigo.split(","):
+            if parte.strip():
+                mapa.setdefault(parte.strip(), (int(sid), codigo))
+    return mapa
+
+
 def buscar_pedido(codigo: str, conn: sqlite3.Connection | None = None) -> dict | None:
     """Aceita o código em qualquer forma ('#PS-1', 'ps-1'): a chave é a
     normalizada."""

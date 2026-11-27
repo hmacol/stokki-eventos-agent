@@ -206,6 +206,21 @@ class TestFonteStokki(_Base):
         self.assertEqual(pool.listar_pool_not_assigned({"planejamento": {"fonte_pool": "vuupt"}}, vuupt), [{"id": 1}])
         self.assertEqual([s["id"] for s in pool.listar_pool(self.conn)], [5001])
 
+    def test_pedido_agrupado_noutro_servico_nao_entra_como_sem_servico(self):
+        """Fix round 1 da Task 7: "PS-10" virou "#PS-10, #PS-20" na Vuupt; a linha antiga perde o id no
+        sync e nao pode aparecer como pedido sem servico (o envio criaria outro servico)."""
+        sinc.sincronizar_servicos([_servico(service_id=5010, code="#PS-10")], self.conn)
+        sinc.sincronizar_servicos([_servico(service_id=5010, code="#PS-10, #PS-20")], self.conn)
+        self._sem_servico("PS-11")
+        codigos = [s["code"] for s in pool.listar_pool(self.conn, incluir_sem_servico=True)]
+        self.assertEqual(codigos, ["#PS-10, PS-20", "#PS-11"])
+
+    def test_composto_cancelado_libera_o_pedido(self):
+        sinc.sincronizar_servicos([_servico(service_id=5010, code="#PS-10")], self.conn)
+        sinc.sincronizar_servicos([_servico(service_id=5010, code="#PS-10, #PS-20", status="canceled")], self.conn)
+        codigos = [s["code"] for s in pool.listar_pool(self.conn, incluir_sem_servico=True)]
+        self.assertEqual(codigos, ["#PS-10"])
+
 
 class TestEquivalenciaComATela(_Base):
     """O item do pool montado pela tela tem que sair IGUAL, venha o serviço

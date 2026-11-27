@@ -522,6 +522,15 @@ class TestIdSintetico(_Base):
         self.assertIsNone(linhas["PS-1"]["service_id"])          # coluna da Vuupt: nao inventa id
         self.assertEqual(linhas["PS-2"]["vuupt_service_id"], 900)
 
+    def test_cancelado_sem_servico_nao_ganha_id_sintetico(self):
+        """Fix round 1: so ABERTO e do pool; CANCELADO sem servico ficaria com "Reenvio" habilitado e a
+        resposta seria "pedido ainda aberto", que nao e a causa."""
+        self._sem_servico()
+        self.conn.execute("UPDATE nucleo_pedidos SET status = 'CANCELADO' WHERE codigo = 'PS-1'")
+        self.conn.commit()
+        linhas = {l["codigo"]: l for l in tp.listar({}, conn=self.conn, id_sintetico=True)["linhas"]}
+        self.assertIsNone(linhas["PS-1"]["vuupt_service_id"])
+
     def test_chave_desligada_igual_a_hoje(self):
         self._sem_servico()
         linhas = {l["codigo"]: l for l in tp.listar({}, conn=self.conn)["linhas"]}

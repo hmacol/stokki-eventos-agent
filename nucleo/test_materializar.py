@@ -343,5 +343,54 @@ class MaterializarLoteTest(_Base):
         self.assertEqual((saida, falhas), (lote, {}))
 
 
+class PedidoAgrupadoTest(_Base):
+    """Fix round 1 da Task 7: alguem agrupou o pedido num servico da Vuupt ("PS-10" virou "#PS-10, #PS-20").
+    O sync tira o vuupt_service_id da linha antiga PS-10 (fica ABERTO, sem servico); a busca por code
+    "#PS-10" nao acha o composto e o envio criaria um SEGUNDO servico (entrega em dobro)."""
+
+    def _agrupar(self, status_composto="not_assigned"):
+        from nucleo import sincronizar_servicos_vuupt as sinc
+
+        def servico(code, status="not_assigned"):
+            return {"id": 5010, "code": code, "title": code, "status": status, "sender_id": 11,
+                    "address": "RUA A 1", "customer": {"name": "DEST"}}
+        # o pipeline criou o PS-10 (caminho antigo, payload no nucleo) e alguem agrupou na Vuupt
+        pedidos.registrar_importacao(_payload("PS-10"), {"id": 5010}, "criado", conn=self.conn)
+        sinc.sincronizar_servicos([servico("#PS-10, #PS-20", status_composto)], self.conn)
+        linha = pedidos.buscar_pedido("PS-10", conn=self.conn)
+        self.assertEqual((linha["vuupt_service_id"], linha["status"]), (None, banco.PEDIDO_ABERTO))  # o diagnostico
+        return pedidos.id_sintetico(linha)
+
+    def test_pedido_agrupado_recusa_com_motivo_e_nao_cria(self):
+        sid = self._agrupar()
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": sid, "code": "#PS-10"}], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {})
+        self.assertIn("agrupado no servico 5010 ('PS-10, PS-20') na Vuupt", res.falhas["PS-10"])
+        self.assertEqual((vuupt.criados, vuupt.chamadas), ([], []))
+        self.assertEqual(self._travas(), 0)
+
+    def test_composto_ja_entregue_tambem_recusa(self):
+        sid = self._agrupar(status_composto="done")
+        res = materializar.materializar_servicos([{"id": sid}], FakeVuupt(), {}, self.conn)
+        self.assertIn("agrupado no servico 5010", res.falhas["PS-10"])
+
+    def test_composto_cancelado_nao_segura_o_pedido(self):
+        sid = self._agrupar(status_composto="canceled")
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        self.assertEqual((res.ok, res.falhas), ({"PS-10": 900}, {}))
+
+    def test_codigo_parecido_nao_e_agrupado(self):
+        from nucleo import sincronizar_servicos_vuupt as sinc
+        sinc.sincronizar_servicos([{"id": 5100, "code": "#PS-100, #PS-200", "title": "x", "status": "not_assigned",
+                                    "sender_id": 11, "customer": {}}], self.conn)
+        sid = self._pedido("PS-10")
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {"PS-10": 900})
+        self.assertEqual(len(vuupt.criados), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
