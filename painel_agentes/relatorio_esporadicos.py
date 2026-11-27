@@ -8,8 +8,9 @@ aprovado e o pendente, e os dados de pagamento (CPF e PIX). Os valores vem
 de nucleo/financeiro.extrato_motorista: o mesmo calculo do extrato que o
 motorista ve no app, entao o relatorio nunca diverge dele.
 
-Quem entra: bd_motoristas.POSICAO = ESPORADICO e ATIVO. Mesma pessoa em mais
-de uma linha (dois veiculos/agent_id) vira um motorista so, pelo CPF.
+Quem entra: motoristas ATIVOS de bd_motoristas (FIXO e ESPORADICO; o filtro `quem`
+separa). Mesma pessoa em mais de uma linha (dois veiculos/agent_id) vira um
+motorista so, pelo CPF; se alguma das linhas e ESPORADICO, a pessoa conta como esporadica.
 Banco/agencia nao sao cadastrados em lugar nenhum: so a chave PIX.
 """
 import csv
@@ -29,8 +30,11 @@ def _ativo(valor) -> bool:
     return str(valor or "").strip().upper() in ("1", "TRUE", "SIM", "S", "VERDADEIRO")
 
 
-def _esporadicos(conn) -> list[dict]:
-    """Uma entrada por pessoa (CPF; sem CPF, a propria linha), so com agent_id."""
+QUEM = ("todos", "esporadicos", "fixos")
+
+
+def _motoristas(conn) -> list[dict]:
+    """Uma entrada por pessoa (CPF; sem CPF, a propria linha), so ativos e com agent_id."""
     try:
         pix = {_digitos(r["cpf"]): (r["chave_pix"] or "").strip() for r in
                conn.execute("SELECT cpf, chave_pix FROM motoristas WHERE chave_pix IS NOT NULL AND chave_pix != ''")}
@@ -38,14 +42,17 @@ def _esporadicos(conn) -> list[dict]:
         pix = {}
     pessoas: dict[str, dict] = {}
     for r in conn.execute("SELECT * FROM bd_motoristas ORDER BY id"):
-        if (r["POSICAO"] or "").strip().upper() != "ESPORADICO" or not _ativo(r["ATIVO"]):
+        if not _ativo(r["ATIVO"]):
             continue
         if r["AGENT_ID_VUUPT"] is None or not (r["NOME_MOTORISTA"] or "").strip():
             continue
         cpf = _digitos(r["CPF_MOTORISTA"])
         chave = cpf or f"id:{r['id']}"
         p = pessoas.setdefault(chave, {
-            "chave": chave, "nome": r["NOME_MOTORISTA"].strip(), "cpf": cpf, "pix": pix.get(cpf, ""), "agentes": {}})
+            "chave": chave, "nome": r["NOME_MOTORISTA"].strip(), "cpf": cpf, "pix": pix.get(cpf, ""), "agentes": {},
+            "posicao": "FIXO"})
+        if (r["POSICAO"] or "").strip().upper() == "ESPORADICO":
+            p["posicao"] = "ESPORADICO"
         p["agentes"][int(r["AGENT_ID_VUUPT"])] = (r["TIPO_VEICULO"] or "").strip() or None
     return sorted(pessoas.values(), key=lambda p: p["nome"].casefold())
 
@@ -119,11 +126,13 @@ def _valor_linha(l: dict) -> float:
     return 0.0 if l["valor"] is None else round(l["valor"] + l["pedagio_aprovado"], 2)
 
 
-def gerar(data_ini: str, data_fim: str, filtro: str = "pendentes", conn=None) -> dict:
-    """Motoristas esporadicos com rota no periodo. `filtro`: pendentes | pagos | todos
-    (decide quais ROTAS aparecem; motorista sem rota visivel some)."""
+def gerar(data_ini: str, data_fim: str, filtro: str = "pendentes", conn=None, quem: str = "todos") -> dict:
+    """Motoristas com rota no periodo. `filtro`: pendentes | pagos | todos (decide quais ROTAS
+    aparecem; motorista sem rota visivel some). `quem`: todos | esporadicos | fixos."""
     if filtro not in FILTROS:
         filtro = "pendentes"
+    if quem not in QUEM:
+        quem = "todos"
     fechar = conn is None
     conn = conn or banco.conectar()
     try:
@@ -133,7 +142,9 @@ def gerar(data_ini: str, data_fim: str, filtro: str = "pendentes", conn=None) ->
                      "SELECT pr.rota_id, p.id AS pagamento_id, p.pago_em, p.pago_por FROM pagamentos_esporadicos_rotas pr "
                      "JOIN pagamentos_esporadicos p ON p.id = pr.pagamento_id WHERE p.desfeito_em IS NULL")}
         motoristas = []
-        for p in _esporadicos(conn):
+        for p in _motoristas(conn):
+            if (quem == "esporadicos" and p["posicao"] != "ESPORADICO") or (quem == "fixos" and p["posicao"] == "ESPORADICO"):
+                continue
             todas = []
             for agent_id, tipo in p["agentes"].items():
                 todas += financeiro.extrato_motorista(agent_id, data_ini, data_fim, tipo, conn=conn)["linhas"]
@@ -150,7 +161,7 @@ def gerar(data_ini: str, data_fim: str, filtro: str = "pendentes", conn=None) ->
                 f"SELECT id, valor, pago_em, pago_por, observacao FROM pagamentos_esporadicos "
                 f"WHERE id IN ({','.join('?' * len(ids_pag))}) ORDER BY id", ids_pag)] if ids_pag else []
             motoristas.append({
-                "chave": p["chave"], "nome": p["nome"], "cpf": p["cpf"], "pix": p["pix"],
+                "chave": p["chave"], "nome": p["nome"], "cpf": p["cpf"], "pix": p["pix"], "posicao": p["posicao"],
                 "veiculo": ", ".join(sorted({t for t in p["agentes"].values() if t})),
                 "linhas": linhas, "rotas": len(linhas), "pagamentos": pagamentos,
                 "total_rotas": round(sum(l["valor"] or 0 for l in linhas), 2),
@@ -162,7 +173,7 @@ def gerar(data_ini: str, data_fim: str, filtro: str = "pendentes", conn=None) ->
                 "pode_pagar": any(l["valor"] is not None and not l["pago"] for l in linhas),
             })
         return {
-            "inicio": str(data_ini), "fim": str(data_fim), "filtro": filtro, "motoristas": motoristas,
+            "inicio": str(data_ini), "fim": str(data_fim), "filtro": filtro, "quem": quem, "motoristas": motoristas,
             "total": round(sum(m["total"] for m in motoristas), 2),
             "total_pago": round(sum(m["total_pago"] for m in motoristas), 2),
             "total_pendente": round(sum(m["total_pendente"] for m in motoristas), 2),
@@ -250,6 +261,10 @@ def _origem(l: dict) -> str:
     return "A definir" if l["sem_tarifa"] else "Tarifa"
 
 
+def _tipo(m: dict) -> str:
+    return "Esporadico" if m["posicao"] == "ESPORADICO" else "Fixo"
+
+
 def _data_br(iso: str) -> str:
     return f"{iso[8:10]}/{iso[5:7]}/{iso[:4]}" if iso and len(iso) >= 10 else (iso or "")
 
@@ -264,13 +279,13 @@ def csv_detalhe(rel: dict) -> str:
     """Uma linha por rota. `;` e virgula decimal: abre direto no Excel em pt-BR."""
     saida = io.StringIO()
     w = csv.writer(saida, delimiter=";", lineterminator="\r\n")
-    w.writerow(["Motorista", "CPF", "PIX", "Veiculo", "Data da rota", "Rota", "Entregues", "Insucessos",
+    w.writerow(["Motorista", "CPF", "PIX", "Veiculo", "Tipo", "Data da rota", "Rota", "Entregues", "Insucessos",
                 "Km", "Fonte do km", "Origem do valor", "Motivo do valor combinado", "Valor da rota",
                 "Pedagio aprovado", "Pedagio pendente", "Pagamento"])
     for m in rel["motoristas"]:
         for l in m["linhas"]:
             w.writerow([_txt(c) if isinstance(c, str) else c for c in (
-                m["nome"], m["cpf"], m["pix"], l["tipo_veiculo_motorista"] or "", l["data_rota"],
+                m["nome"], m["cpf"], m["pix"], l["tipo_veiculo_motorista"] or "", _tipo(m), l["data_rota"],
                 l["nome"] or l["rota_id"], l["entregues"], l["insucessos"], _num(l["km"]),
                 fonte_km(l), _origem(l), l["valor_combinado_motivo"] or "",
                 _num(l["valor"]), _num(l["pedagio_aprovado"]), _num(l["pedagio_pendente"]), _situacao(l))])
@@ -281,13 +296,13 @@ def csv_resumo(rel: dict) -> str:
     """Uma linha por motorista: o que o financeiro paga."""
     saida = io.StringIO()
     w = csv.writer(saida, delimiter=";", lineterminator="\r\n")
-    w.writerow(["Motorista", "CPF", "PIX", "Veiculo", "Rotas", "Rotas sem GPS", "Rotas sem valor", "Total das rotas",
+    w.writerow(["Motorista", "CPF", "PIX", "Veiculo", "Tipo", "Rotas", "Rotas sem GPS", "Rotas sem valor", "Total das rotas",
                 "Pedagio aprovado", "Total", "Pago", "Pendente", "Pedagio pendente (fora do total)"])
     for m in rel["motoristas"]:
-        w.writerow([_txt(m["nome"]), m["cpf"], _txt(m["pix"]), _txt(m["veiculo"]), m["rotas"], m["rotas_sem_gps"], m["rotas_sem_valor"],
+        w.writerow([_txt(m["nome"]), m["cpf"], _txt(m["pix"]), _txt(m["veiculo"]), _tipo(m), m["rotas"], m["rotas_sem_gps"], m["rotas_sem_valor"],
                     _num(m["total_rotas"]), _num(m["pedagio_aprovado"]), _num(m["total"]),
                     _num(m["total_pago"]), _num(m["total_pendente"]), _num(m["pedagio_pendente"])])
-    w.writerow(["TOTAL", "", "", "", sum(m["rotas"] for m in rel["motoristas"]), rel["rotas_sem_gps"], rel["rotas_sem_valor"], "", "",
+    w.writerow(["TOTAL", "", "", "", "", sum(m["rotas"] for m in rel["motoristas"]), rel["rotas_sem_gps"], rel["rotas_sem_valor"], "", "",
                 _num(rel["total"]), _num(rel["total_pago"]), _num(rel["total_pendente"]),
                 _num(rel["pedagio_pendente"])])
     return saida.getvalue()

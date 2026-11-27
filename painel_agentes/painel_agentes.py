@@ -4960,6 +4960,11 @@ def _periodo_esporadicos() -> tuple[str, str]:
     return de.isoformat(), ate.isoformat()
 
 
+def _quem_esporadicos() -> str:
+    q = (request.args.get("quem") or "todos").lower()
+    return q if q in relatorio_esporadicos_mod.QUEM else "todos"
+
+
 def _filtro_esporadicos() -> str:
     f = (request.args.get("filtro") or "pendentes").lower()
     return f if f in relatorio_esporadicos_mod.FILTROS else "pendentes"
@@ -4970,7 +4975,7 @@ def _filtro_esporadicos() -> str:
 def relatorio_esporadicos():
     de, ate = _periodo_esporadicos()
     return render_template("relatorio_esporadicos.html",
-                           rel=relatorio_esporadicos_mod.gerar(de, ate, _filtro_esporadicos()),
+                           rel=relatorio_esporadicos_mod.gerar(de, ate, _filtro_esporadicos(), quem=_quem_esporadicos()),
                            fonte_km=relatorio_esporadicos_mod.fonte_km,
                            ciclos=relatorio_esporadicos_mod.ciclos_recentes(date.today()))
 
@@ -4979,10 +4984,10 @@ def relatorio_esporadicos():
 @requer_auth(niveis=NIVEIS_ESPORADICOS)
 def relatorio_esporadicos_csv():
     de, ate = _periodo_esporadicos()
-    rel = relatorio_esporadicos_mod.gerar(de, ate, _filtro_esporadicos())
+    rel = relatorio_esporadicos_mod.gerar(de, ate, _filtro_esporadicos(), quem=_quem_esporadicos())
     detalhe = request.args.get("tipo") == "detalhe"
     corpo = (relatorio_esporadicos_mod.csv_detalhe if detalhe else relatorio_esporadicos_mod.csv_resumo)(rel)
-    nome = f"esporadicos_{'rotas' if detalhe else 'resumo'}_{rel['filtro']}_{de}_a_{ate}.csv"
+    nome = f"esporadicos_{'rotas' if detalhe else 'resumo'}_{rel['quem']}_{rel['filtro']}_{de}_a_{ate}.csv"
     # BOM: o Excel pt-BR abre em UTF-8 sem baguncar os acentos
     return Response(chr(0xFEFF) + corpo, mimetype="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f'attachment; filename="{nome}"'})

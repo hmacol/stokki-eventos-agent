@@ -52,8 +52,15 @@ class TestRelatorioEsporadicos(unittest.TestCase):
         self.conn.execute("UPDATE motoristas SET chave_pix = 'ana@pix' WHERE 0")
         self.conn.commit()
         r = rel.gerar("2026-11-01", "2026-11-30", conn=self.conn)
-        self.assertEqual([m["nome"] for m in r["motoristas"]], ["Ana Esporadica"])
+        self.assertEqual([m["nome"] for m in r["motoristas"]], ["Ana Esporadica", "Bia Fixa"])
         self.assertEqual(r["motoristas"][0]["rotas"], 1)
+        self.assertEqual([m["posicao"] for m in r["motoristas"]], ["ESPORADICO", "FIXO"])
+        esp = rel.gerar("2026-11-01", "2026-11-30", quem="esporadicos", conn=self.conn)
+        self.assertEqual([m["nome"] for m in esp["motoristas"]], ["Ana Esporadica"])
+        fixos = rel.gerar("2026-11-01", "2026-11-30", quem="fixos", conn=self.conn)
+        self.assertEqual([m["nome"] for m in fixos["motoristas"]], ["Bia Fixa"])
+        self.assertIn(";Fixo;", rel.csv_detalhe(r))
+        self.assertIn(";Esporadico;", rel.csv_detalhe(r))
 
     def test_valor_combinado_vence_e_entra_no_total_e_no_csv(self):
         self.motorista(1, "Ana", "ESPORADICO")

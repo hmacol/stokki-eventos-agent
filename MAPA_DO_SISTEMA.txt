@@ -1832,7 +1832,7 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
    /financeiro/pedagios       pedagios.html
    /financeiro/pagamentos     pagamentos_pontuais.html (Adiantamento/Descarga/Frete avulso)
   /financeiro/esporadicos    relatorio_esporadicos.html (+ .csv ?tipo=resumo|detalhe): fechamento dos motoristas
-                             POSICAO=ESPORADICO por periodo (data da rota) = nucleo/financeiro.extrato_motorista
+                             (fixos e esporadicos; ?quem=todos|esporadicos|fixos) por periodo (data da rota) = nucleo/financeiro.extrato_motorista
                              + CPF/PIX; painel_agentes/relatorio_esporadicos.py. Niveis total+atendimento.
                              Nao inclui pagamentos pontuais; banco/agencia nao existem no cadastro (so PIX).
                              Cada rota mostra a fonte do km (GPS do app / informado / estimado) e as sem GPS sao contadas.

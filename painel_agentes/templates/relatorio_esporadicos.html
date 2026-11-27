@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block titulo %}Pagamento dos esporádicos{% endblock %}
+{% block titulo %}Pagamento dos motoristas{% endblock %}
 {% block estilo_extra %}
 <style>
   .cabecalho-pagina h1 { font-size: 21px; margin: 0; letter-spacing: -0.2px; }
@@ -39,8 +39,8 @@
 {% endblock %}
 {% block conteudo %}
 <div class="cabecalho-pagina">
-  <h1>Pagamento dos esporádicos</h1>
-  <p>Rotas do período por motorista esporádico, com o valor de cada uma, o pedágio/despesa aprovado e os dados de pagamento.
+  <h1>Pagamento dos motoristas</h1>
+  <p>Rotas do período por motorista (fixos e esporádicos), com o valor de cada uma, o pedágio/despesa aprovado e os dados de pagamento.
      É o mesmo cálculo do extrato que o motorista vê no app. O período vale pela data da rota.</p>
 </div>
 
@@ -58,9 +58,15 @@
       <option value="pagos"{% if rel.filtro == 'pagos' %} selected{% endif %}>Pagos</option>
       <option value="todos"{% if rel.filtro == 'todos' %} selected{% endif %}>Todos</option>
     </select></div>
+  <div class="campo"><label for="quem">Quem</label>
+    <select id="quem" name="quem">
+      <option value="todos"{% if rel.quem == 'todos' %} selected{% endif %}>Todos</option>
+      <option value="esporadicos"{% if rel.quem == 'esporadicos' %} selected{% endif %}>Esporádicos</option>
+      <option value="fixos"{% if rel.quem == 'fixos' %} selected{% endif %}>Fixos</option>
+    </select></div>
   <button class="btn primario" type="submit">Ver relatório</button>
-  <a class="btn" href="{{ url_for('relatorio_esporadicos_csv', de=rel.inicio, ate=rel.fim, filtro=rel.filtro, tipo='resumo') }}">Baixar resumo (CSV)</a>
-  <a class="btn" href="{{ url_for('relatorio_esporadicos_csv', de=rel.inicio, ate=rel.fim, filtro=rel.filtro, tipo='detalhe') }}">Baixar por rota (CSV)</a>
+  <a class="btn" href="{{ url_for('relatorio_esporadicos_csv', de=rel.inicio, ate=rel.fim, filtro=rel.filtro, quem=rel.quem, tipo='resumo') }}">Baixar resumo (CSV)</a>
+  <a class="btn" href="{{ url_for('relatorio_esporadicos_csv', de=rel.inicio, ate=rel.fim, filtro=rel.filtro, quem=rel.quem, tipo='detalhe') }}">Baixar por rota (CSV)</a>
 </form>
 
 {% if rel.motoristas %}
@@ -80,6 +86,7 @@
 <details class="mot">
   <summary>
     <strong>{{ m.nome }}</strong>
+    <span class="meta">{{ 'Esporádico' if m.posicao == 'ESPORADICO' else 'Fixo' }}</span>
     {% if m.rotas_sem_gps %}<span class="meta sem-gps">{{ m.rotas_sem_gps }} sem GPS</span>{% endif %}
     <span class="meta">CPF {{ m.cpf or '—' }} · PIX {{ m.pix or 'não informado' }}{% if m.veiculo %} · {{ m.veiculo }}{% endif %} · {{ m.rotas }} rota(s)</span>
     <span class="total">{% if m.total_pendente %}R$ {{ '%.2f'|format(m.total_pendente)|replace('.', ',') }}{% elif m.total_pago %}<span class="pago">Pago · R$ {{ '%.2f'|format(m.total_pago)|replace('.', ',') }}</span>{% else %}<span class="meta">Sem valor definido</span>{% endif %}</span>
@@ -118,7 +125,7 @@
 </details>
 {% endfor %}
 {% else %}
-<p class="vazio">Nenhum motorista esporádico teve rota entre {{ rel.inicio }} e {{ rel.fim }}.</p>
+<p class="vazio">Nenhum motorista teve rota entre {{ rel.inicio }} e {{ rel.fim }}.</p>
 {% endif %}
 <script>
 (function () {
