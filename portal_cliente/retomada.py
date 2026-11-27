@@ -86,13 +86,16 @@ def _retomar_proxima_rota(envio: dict, vivos: list[dict], aplicar_data_vuupt, pr
             _aplicar(aplicar_data_vuupt, s, dia.isoformat(), ini, fim)
 
 
-def _processar_um(conn, envio: dict, aplicar_data_vuupt, proxima_data, agora_txt: str, hoje: date) -> None:
+def _processar_um(conn, envio: dict, aplicar_data_vuupt, proxima_data, agora_txt: str, hoje: date,
+                  config: dict | None = None) -> None:
     id_stokki = cm.id_stokki_do_codigo(envio.get("codigo_pedido"))
     if not id_stokki:
         raise _Falha("Código do pedido (PS-...) ainda não identificado.")
     codigo = f"PS-{id_stokki}"
     servicos, _ = cm.servicos_do_pedido(conn, codigo)
     vivos = cm._vivos(servicos)
+    if cm.sem_servico_local(config):
+        cm.com_id_sintetico(conn, vivos)   # aplicar_data_vuupt de producao grava o id sintetico no nucleo
     for s in vivos:
         if not s.get("vuupt_service_id"):
             raise _Falha(f"Serviço do {s.get('codigo')} sem id da Vuupt no núcleo.")
@@ -133,7 +136,7 @@ def processar_retomadas(conn: sqlite3.Connection, config: dict, aplicar_data_vuu
     for r in rows:
         envio = dict(r)
         try:
-            _processar_um(conn, envio, aplicar_data_vuupt, proxima_data, agora_txt, quando.date())
+            _processar_um(conn, envio, aplicar_data_vuupt, proxima_data, agora_txt, quando.date(), config)
             total["retomados"] += 1
         except Exception as e:  # noqa: BLE001 -- rede, Vuupt, SQLite: volta pra espera e a fila segue
             erro = str(e) if isinstance(e, _Falha) else f"{type(e).__name__}: {e}"

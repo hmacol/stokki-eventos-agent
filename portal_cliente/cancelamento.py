@@ -94,6 +94,29 @@ def servicos_do_pedido(conn: sqlite3.Connection, codigo_base: str) -> tuple[list
     return servicos, rotas
 
 
+def sem_servico_local(config: dict | None) -> bool:
+    """Pool direto da Stokki (planejamento.fonte_pool = stokki): pedido do pool sem servico na
+    Vuupt e tratado no nucleo pelo id sintetico. Desligado = como sempre (pede a operacao)."""
+    from nucleo import pool
+    return pool.fonte_pool(config) == pool.FONTE_STOKKI
+
+
+def com_id_sintetico(conn: sqlite3.Connection, vivos: list[dict]) -> list[dict]:
+    """So com sem_servico_local: linha do nucleo sem servico na Vuupt ganha o id sintetico
+    (-id_pool) em vuupt_service_id. As acoes de producao que recebem esse id
+    (cancelar_servico_completo, solicitacoes_execucao.reagendar_servico_vuupt e
+    _tirar_da_rota_real) gravam no nucleo e nunca chamam a Vuupt com ele. Sem id_pool a
+    linha fica como esta e cai na recusa "sem id da Vuupt" de sempre."""
+    for s in vivos:
+        if s.get("vuupt_service_id") or not s.get("codigo"):
+            continue
+        row = conn.execute("SELECT id_pool FROM nucleo_pedidos WHERE codigo = ? AND vuupt_service_id IS NULL",
+                           (s["codigo"],)).fetchone()
+        if row and row[0]:
+            s["vuupt_service_id"] = -int(row[0])
+    return vivos
+
+
 def status_ao_devolver(conn, envio_id) -> str:
     """Pedido que veio de um Em espera (pausa aberta) volta pra EM_ESPERA_CLIENTE;
     senao ele ficaria fora da rota pra sempre e sem o Retomar no portal."""
@@ -151,6 +174,8 @@ def _processar_um(conn, envio: dict, agent_lalamove: int, cancelar_vuupt, cancel
                          "status_provedor": s.get("status"), "vuupt_route_id": None, "excluido_em": None}]
 
     vivos = _vivos(servicos)
+    if sem_servico_local(config):
+        com_id_sintetico(conn, vivos)   # cancelar_vuupt de producao cancela o id sintetico no nucleo
     if any(not s.get("vuupt_service_id") for s in vivos):
         _voltar_pra_operacao(conn, envio, agora_txt)
         avisar(envio, f"serviço do {codigo} sem id da Vuupt no núcleo", "")

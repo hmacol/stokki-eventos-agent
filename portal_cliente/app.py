@@ -803,9 +803,10 @@ def _mapa_horarios() -> dict:
 
 def _servico_alteravel(service_id: int) -> tuple[dict, dict]:
     """(serviço da Vuupt, empresa do login dona dele); 404 se a chave está
-    desligada pra essa empresa ou o serviço não é do login."""
+    desligada pra essa empresa ou o serviço não é do login. Id negativo = pedido
+    ainda sem serviço na Vuupt (pool direto da Stokki): vem do núcleo, sem Vuupt."""
     token = _CONFIG.get("vuupt_api", {}).get("token", "")
-    servico = dados.buscar_servico(token, service_id, incluir="checklistAnswers,customer")
+    servico = dados.buscar_servico_ou_nucleo(token, service_id, incluir="checklistAnswers,customer")
     if not servico or servico.get("sender_id") not in g.cliente["sender_ids"]:
         abort(404)
     empresa = next(e for e in g.cliente["empresas"] if e["sender_id"] == servico.get("sender_id"))
@@ -823,7 +824,7 @@ def _destinatario(servico: dict) -> tuple[str, str]:
     return alterar_entrega._digitos(cli.get("code")), cli.get("name") or ""
 
 
-@app.route("/api/pedidos/<int:service_id>/alteracao")
+@app.route("/api/pedidos/<int(signed=True):service_id>/alteracao")
 @requer_cliente
 def api_alteracao(service_id):
     servico, _empresa = _servico_alteravel(service_id)
@@ -845,7 +846,7 @@ def api_alteracao(service_id):
                               "horario": {"inicio": ini, "fim": fim}}})
 
 
-@app.route("/api/pedidos/<int:service_id>/alteracao", methods=["POST"])
+@app.route("/api/pedidos/<int(signed=True):service_id>/alteracao", methods=["POST"])
 @requer_cliente
 @exige_mesma_origem
 def api_alteracao_aplicar(service_id):

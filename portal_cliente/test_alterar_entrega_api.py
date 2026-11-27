@@ -180,6 +180,28 @@ class AlterarEntregaApiTest(unittest.TestCase):
         self.assertEqual((contexto["destinatario_doc"], contexto["destinatario_nome"]), ("12345678000190", "Loja X"))
         self.portal.dados.invalidar_cache.assert_called_with(100)
 
+    def test_pedido_sem_servico_na_vuupt_le_o_nucleo(self):
+        """Pool direto da Stokki: o id da linha e o sintetico (negativo); o servico vem do nucleo
+        e a Vuupt nao e consultada (as acoes de producao tratam o id negativo no nucleo)."""
+        self._com(self._fakes())
+        sem = _servico(id=-7, status="not_assigned", route_id=None, customer_id=None)
+        with mock.patch.object(self.portal.dados, "servico_sem_servico", return_value=sem) as nucleo:
+            j = self.cli.get("/api/pedidos/-7/alteracao", base_url=HTTPS).get_json()
+            self.assertTrue(j["pode"], j)
+            self.assertFalse(j["em_rota"])
+            r = self.cli.post("/api/pedidos/-7/alteracao", json={"horario": {"inicio": "08:00", "fim": "12:00"}},
+                              base_url=HTTPS)
+        self.assertTrue(r.get_json()["ok"])
+        nucleo.assert_called_with(-7)
+        self.portal.dados.buscar_servico.assert_not_called()
+        self.assertEqual(self.aplicar.call_args.args[1]["id"], -7)
+
+    def test_pedido_sem_servico_que_nao_existe_404(self):
+        self._com(self._fakes())
+        with mock.patch.object(self.portal.dados, "servico_sem_servico", return_value=None):
+            self.assertEqual(self.cli.get("/api/pedidos/-7/alteracao", base_url=HTTPS).status_code, 404)
+        self.portal.dados.buscar_servico.assert_not_called()
+
     def test_post_so_horario_aplica_direto_sem_aviso(self):
         fakes = self._fakes()
         aplicar = self.aplicar

@@ -89,13 +89,15 @@ def cancelar_sem_servico_local(service_id: int, motivo: str, origem: str) -> dic
     return {"ok": True, "ja_estava": ja_estava, "erro": ""}
 
 
-def cancelar_servico_completo(token: str, service_id: int, vuupt=None) -> dict:
+def cancelar_servico_completo(token: str, service_id: int, vuupt=None, motivo_sem_servico: str | None = None) -> dict:
     """Devolve {"ok", "ja_estava", "erro"}. `vuupt` injetavel pra teste. Id negativo (pedido sem
-    servico na Vuupt) cancela local no nucleo (cancelar_sem_servico_local)."""
+    servico na Vuupt) cancela local no nucleo (cancelar_sem_servico_local); `motivo_sem_servico`
+    vai no evento (o portal diz que foi o cliente)."""
     from nucleo import pool
     if pool.eh_sem_servico(service_id):
         from nucleo import banco
-        return cancelar_sem_servico_local(service_id, "cancelado pelo painel (cancelar_servico_completo)",
+        return cancelar_sem_servico_local(service_id,
+                                          motivo_sem_servico or "cancelado pelo painel (cancelar_servico_completo)",
                                           banco.ORIGEM_PAINEL)
     vuupt = vuupt or VuuptClient(token)
     try:
