@@ -126,6 +126,7 @@ import avisos_pendencias
 from galpao3d import banco as galpao3d_banco, estado as galpao3d_estado
 import retornos
 import pagamentos_pontuais
+import relatorio_esporadicos as relatorio_esporadicos_mod
 import compras
 
 def _carregar_config() -> dict:
