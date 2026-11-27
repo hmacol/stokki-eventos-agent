@@ -101,6 +101,7 @@ from documentacao_rota import agendar as agendar_documentacao, aguardar as aguar
 sys.path.insert(0, str(_RAIZ_PROJETO / "painel_agentes"))
 from rascunhos_rota import criar_lote_rascunhos
 from nucleo.pool import listar_pool_not_assigned
+from nucleo import materializar  # pool direto da Stokki: servico na Vuupt nasce ao criar a rota
 from notificar_agendamento_pendente import identificar_pendentes, notificar_remetentes
 from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agendamento
 from agendamento_confirmacao import buscar_confirmacao
@@ -833,6 +834,15 @@ def roteirizar_para_rascunhos(servicos: list[dict], data_alvo: date, config: dic
     return rascunhos
 
 
+def _com_servico(sublote: list[dict], vuupt, config: dict, nome_rota: str) -> list[dict]:
+    """Criacao direta de rota: pedido de id sintetico (pool direto da Stokki) ganha o servico na
+    Vuupt aqui; quem falha fica fora da rota com o motivo no log. A rota nunca vai com id negativo."""
+    prontos, falhas = materializar.materializar_lote(sublote, vuupt, config)
+    for codigo, motivo in falhas.items():
+        logger.error(f"'{nome_rota}': {codigo} sem servico na Vuupt, fica fora da rota -- {motivo}")
+    return prontos
+
+
 def main(modo_teste: bool = False, gerar_rascunho: bool = False):
     inicio = time.time()
     prefixo_log = "[MODO TESTE] " if modo_teste else ("[RASCUNHO] " if gerar_rascunho else "")
@@ -1174,8 +1184,12 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                     continue
 
                 try:
+                    sublote_envio = _com_servico(sublote, vuupt, config, nome_rota)
+                    if not sublote_envio:
+                        logger.error(f"'{nome_rota}': nenhum pedido ganhou servico na Vuupt -- nenhuma rota criada.")
+                        continue
                     rota, sublote_criado, codigos_removidos = criar_rota_removendo_conflitos(
-                        token, nome_rota, start_at, sublote,
+                        token, nome_rota, start_at, sublote_envio,
                         start_location_base_id=BASE_LOCATION_ID, end_location_base_id=BASE_LOCATION_ID,
                         agent_id=agent_id, vehicle_id=vehicle_id,
                     )
@@ -1218,8 +1232,13 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
                     logger.info(f"[TESTE] Criaria rota da tarde '{nome_rota}' sem motorista.")
                 else:
                     try:
+                        sublote_envio = _com_servico(sublote, vuupt, config, nome_rota)
+                        if not sublote_envio:
+                            logger.error(f"'{nome_rota}': nenhum pedido ganhou servico na Vuupt -- "
+                                         f"nenhuma rota da tarde criada.")
+                            continue
                         rota, sublote_criado, codigos_removidos = criar_rota_removendo_conflitos(
-                            token, nome_rota, start_at_na_hora(data_alvo, hora_saida), sublote,
+                            token, nome_rota, start_at_na_hora(data_alvo, hora_saida), sublote_envio,
                             start_location_base_id=BASE_LOCATION_ID, end_location_base_id=BASE_LOCATION_ID,
                             agent_id=None, vehicle_id=None,
                         )

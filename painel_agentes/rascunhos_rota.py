@@ -38,6 +38,7 @@ sys.path.insert(0, str(_RAIZ))
 sys.path.insert(0, str(_RAIZ / "roteirizacao"))
 
 from nucleo import eventos_freshhub, prontidao_stokki  # noqa: E402  (plano 1.2 do sistema novo)
+from nucleo import pool as nucleo_pool  # noqa: E402  (id sintetico do pedido sem servico na Vuupt)
 
 logger = logging.getLogger(__name__)
 
@@ -1375,6 +1376,36 @@ def marcar_erro_envio(rascunho_id: int, mensagem: str):
         conn.close()
 
 
+def _materializar_paradas(rascunho_id: int, paradas: list[dict], token: str, config: dict) -> dict[str, str]:
+    """Cria na Vuupt o servico das paradas de id sintetico (nucleo/materializar.py: trava por codigo,
+    busca por code antes de criar). Quem falha sai do rascunho; devolve {codigo da parada: motivo}."""
+    import time
+    from vuupt_client import VuuptClient
+    from nucleo import banco as nucleo_banco, normalizacao
+    from nucleo.materializar import materializar_servicos
+
+    sem_servico = [p for p in paradas if nucleo_pool.eh_sem_servico(p["service_id"])]
+    inicio = time.monotonic()
+    conn = nucleo_banco.conectar(DB_PATH)
+    try:
+        res = materializar_servicos([{"id": p["service_id"], "code": p["codigo"]} for p in sem_servico],
+                                    VuuptClient(token), config, conn)
+    finally:
+        conn.close()
+    falhas: dict[str, str] = {}
+    for p in sem_servico:
+        codigo = normalizacao.normalizar_codigo(p["codigo"])
+        if codigo in res.ok:
+            continue
+        falhas[p["codigo"]] = (res.falhas.get(codigo) or res.falhas.get(str(p["service_id"]))
+                               or "servico nao criado na Vuupt (sem resultado da materializacao)")
+        remover_parada(rascunho_id, p["service_id"])
+    logger.info(f"Rascunho {rascunho_id}: {len(sem_servico) - len(falhas)} de {len(sem_servico)} pedido(s) sem "
+                f"servico ganharam servico na Vuupt em {time.monotonic() - inicio:.1f}s"
+                + ("; voltaram ao pool: " + "; ".join(f"{c} ({m})" for c, m in falhas.items()) if falhas else ""))
+    return falhas
+
+
 def enviar_rascunho(rascunho_id: int, token: str) -> dict:
     """
     Confirma e envia UM rascunho pra VUUPT de verdade (Fase 3: botão
@@ -1436,7 +1467,25 @@ def enviar_rascunho(rascunho_id: int, token: str) -> dict:
         marcar_erro_envio(rascunho_id, mensagem)
         return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem, **saiu}
 
+    # Pool direto da Stokki (planejamento.fonte_pool = stokki): parada de id negativo ainda nao tem
+    # servico na Vuupt; ele nasce AGORA. Quem falha sai do rascunho (volta ao pool) com o motivo; as
+    # outras ja estao no id real (adotar_servico reescreveu o rascunho), por isso recarrega.
+    saiu["codigos_sem_servico"] = {}
+    if any(nucleo_pool.eh_sem_servico(p["service_id"]) for p in paradas):
+        saiu["codigos_sem_servico"] = _materializar_paradas(rascunho_id, paradas, token, config)
+        rascunho = buscar_rascunho(rascunho_id)
+        paradas = rascunho["paradas"]
+        if not paradas:
+            motivos = "; ".join(f"{c}: {m}" for c, m in saiu["codigos_sem_servico"].items())
+            mensagem = f"Nenhuma parada ganhou servico na Vuupt -- nada enviado; os pedidos voltaram ao pool. {motivos}"
+            marcar_erro_envio(rascunho_id, mensagem)
+            return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem, **saiu}
+
     sublote = [{"id": p["service_id"], "code": p["codigo"]} for p in paradas]
+    if any(nucleo_pool.eh_sem_servico(s["id"]) for s in sublote):   # defesa: rota nunca vai com id sintetico
+        mensagem = "Parada sem servico na Vuupt ainda no rascunho -- nada enviado (id sintetico nao vai pra rota)."
+        marcar_erro_envio(rascunho_id, mensagem)
+        return {"rascunho_id": rascunho_id, "ok": False, "erro": mensagem, **saiu}
 
     try:
         rota, sublote_criado, codigos_removidos = criar_rota_removendo_conflitos(
@@ -1942,9 +1991,26 @@ def adicionar_em_rota_enviada(rascunho_id: int, parada: dict, token: str, usuari
     if rota["status"] in edicao_rota.STATUS_ROTA_ENCERRADA:
         raise ValueError(f"Rota #{route_id} já foi encerrada — não dá pra incluir pedido.")
 
+    from vuupt_client import VuuptClient
+    if nucleo_pool.eh_sem_servico(service_id):
+        # pool direto da Stokki: o servico na Vuupt nasce agora (mesma materializacao do envio)
+        from nucleo import banco as nucleo_banco, normalizacao
+        from nucleo.materializar import materializar_servicos
+        conn = nucleo_banco.conectar(DB_PATH)
+        try:
+            res = materializar_servicos([{"id": service_id, "code": parada.get("codigo")}],
+                                        VuuptClient(token), _carregar_config(), conn)
+        finally:
+            conn.close()
+        real = res.ok.get(normalizacao.normalizar_codigo(parada.get("codigo")))
+        if not real:
+            motivo = next(iter(res.falhas.values()), "servico nao criado na Vuupt")
+            raise ValueError(f"Pedido {parada.get('codigo')} não entrou na rota: {motivo}")
+        service_id = real
+        parada = dict(parada, service_id=real)
+
     # pedido AO VIVO: o pool pode estar velho e a Vuupt nao recusa sempre um pedido que ja
     # esta em outra rota -- so entra quem esta sem rota (not_assigned e sem route_id)
-    from vuupt_client import VuuptClient
     servico = VuuptClient(token).buscar_servico_por_id(service_id)
     if not servico:
         raise ValueError(f"Não deu pra conferir o pedido {parada.get('codigo')} na Vuupt agora. Tente de novo.")

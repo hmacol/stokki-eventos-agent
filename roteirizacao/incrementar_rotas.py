@@ -118,6 +118,7 @@ from rotas_client import listar_rotas, adicionar_atividades, atualizar_rota
 from documentacao_rota import agendar_varias as agendar_documentacao_varias, aguardar as aguardar_documentacao
 from nucleo.pool import listar_pool_not_assigned
 from nucleo import eventos_freshhub, prontidao_stokki  # plano 1.2 do sistema novo
+from nucleo import materializar, pool as nucleo_pool  # pool direto da Stokki: servico nasce no envio
 from criar_rotas_diarias import (
     ENDERECO_BASE, PREFIXO_NOME_ROTA, VOLUME_MAXIMO_ROTA, TAMANHO_MAXIMO_ROTA,
     DISTANCIA_MAXIMA_ROTA_KM, DISTANCIA_MAXIMA_VIAGEM_KM, KM_ACUMULADO_MAXIMO_ROTA_KM,
@@ -422,6 +423,19 @@ def _registrar_roteirizado_incremento(config: dict, pedido: dict, rota: dict, da
              "service_id": pedido.get("id"), "origem": "incremento"})], modo_teste=modo_teste)
     except Exception as e:  # noqa: BLE001 - sombra: nunca derruba o incremento
         logger.warning(f"evento roteirizado de {pedido.get('code')} nao enviado ao freshhub: {e}")
+
+
+def _garantir_servico(pedido: dict, vuupt, config: dict) -> bool:
+    """Pedido de id sintetico (pool direto da Stokki) ganha o servico na Vuupt antes de entrar na
+    rota; o id real passa a valer no proprio dict. False (com o motivo no log) = fica fora desta rodada."""
+    res = materializar.materializar_servicos([pedido], vuupt, config)
+    real = next(iter(res.ok.values()), None)
+    if real:
+        pedido["id"] = real
+        return True
+    motivo = next(iter(res.falhas.values()), "servico nao criado na Vuupt")
+    logger.error(f"  {pedido.get('code')}: sem servico na Vuupt, fica fora do incremento -- {motivo}")
+    return False
 
 
 def main(modo_teste: bool = False):
@@ -957,6 +971,10 @@ def main(modo_teste: bool = False):
 
                 if modo_teste:
                     alocado_em_existente = True
+                    break
+
+                if nucleo_pool.eh_sem_servico(pedido["id"]) and not _garantir_servico(pedido, vuupt, config):
+                    pular_pedido = True
                     break
 
                 try:

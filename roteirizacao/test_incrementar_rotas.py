@@ -252,6 +252,43 @@ class TestMainComRascunho(unittest.TestCase):
         self.assertTrue(all(s.get("_data_automatica") for s in vistos))
 
 
+class TestIncrementoSemServico(unittest.TestCase):
+    """Pool direto da Stokki (Task 5): pedido de id sintetico ganha o servico na Vuupt antes de
+    adicionar_atividades; quem falha na materializacao fica fora (nunca vai id negativo pra rota)."""
+    _rodar = TestMainComRascunho._rodar
+
+    def _rota(self):
+        return {"id": 50, "name": "Planejamento - 06/10/2026 - #1", "start_at": "2099-10-06T09:00:00Z",
+                "status": "not_started", "agent_id": None, "vehicle_id": None, "services": {"data": []}}
+
+    def _pool(self):
+        return [{"id": -7, "code": "#PS-7", "address": "Rua 7, São Paulo - SP", "dimension_3": 1, "sender_id": 1}]
+
+    def test_incremento_materializa_antes_de_adicionar(self):
+        vistos = []
+
+        def materializar(itens, vuupt, config):
+            vistos.extend(s["id"] for s in itens)
+            return inc.materializar.ResultadoMaterializacao(ok={"PS-7": 901})
+        with mock.patch.object(inc.materializar, "materializar_servicos", side_effect=materializar):
+            self._rodar([self._rota()], [], pool=self._pool())
+        self.assertEqual(vistos, [-7])
+        self.adicionar.assert_called_once()
+        self.assertEqual(self.adicionar.call_args.args[2], [901])
+
+    def test_incremento_pula_quem_nao_materializa(self):
+        res = inc.materializar.ResultadoMaterializacao(falhas={"PS-7": "pedido PS-7 esta CANCELADO no nucleo"})
+        with mock.patch.object(inc.materializar, "materializar_servicos", return_value=res):
+            self._rodar([self._rota()], [], pool=self._pool())
+        self.adicionar.assert_not_called()
+
+    def test_incremento_com_id_real_nao_materializa(self):
+        with mock.patch.object(inc.materializar, "materializar_servicos") as m:
+            self._rodar([self._rota()], [], pool=[_servico(1)])
+        m.assert_not_called()
+        self.assertEqual(self.adicionar.call_args.args[2], [1])
+
+
 class TestRetornandoNoIncremento(unittest.TestCase):
     """Editar rota enviada (10/11): pedido Retornando (no carro do motorista) nao e encaixado.
     Classe propria (reusa o _rodar) pra nao ser herdada pelas subclasses de TestMainComRascunho."""

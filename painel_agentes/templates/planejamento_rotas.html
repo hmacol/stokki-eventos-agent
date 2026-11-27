@@ -6257,15 +6257,20 @@
     const avisoNaoProntos = naoProntos.length
       ? ` -- ${naoProntos.length} pedido(s) em espera na Stokki (retrato de ${resultado.retrato_stokki_em || "?"}) voltaram pro pool, NÃO foram enviados: ${naoProntos.join(", ")}`
       : "";
+    // pool direto da Stokki: o serviço na VUUPT nasce no envio; quem não ganhou serviço voltou pro pool com o motivo
+    const semServico = Object.entries(resultado.codigos_sem_servico || {});
+    const avisoSemServico = semServico.length
+      ? ` -- ${semServico.length} pedido(s) sem serviço na VUUPT voltaram pro pool, NÃO foram enviados: ${semServico.map(([c, m]) => `${c} (${m})`).join("; ")}`
+      : "";
     if (resultado.ok) {
       let msg = `Enviada à VUUPT (rota #${resultado.vuupt_route_id})`;
       if (resultado.codigos_removidos && resultado.codigos_removidos.length) {
         msg += ` -- ${resultado.codigos_removidos.length} pedido(s) já estavam em outra rota e voltaram pro pool: ${resultado.codigos_removidos.join(", ")}`;
       }
-      msg += avisoNaoProntos;
+      msg += avisoNaoProntos + avisoSemServico;
       if (statusEl) statusEl.innerHTML = `<div class="status-envio ok">${escaparHtml(msg)}</div>`;
     } else if (statusEl) {
-      statusEl.innerHTML = `<div class="status-envio erro">Falha no envio: ${escaparHtml(resultado.erro + avisoNaoProntos)}</div>`;
+      statusEl.innerHTML = `<div class="status-envio erro">Falha no envio: ${escaparHtml(resultado.erro + avisoNaoProntos + avisoSemServico)}</div>`;
     }
   }
 
@@ -6348,6 +6353,15 @@
         });
         const retrato = (comNaoProntos.find(r => r.retrato_stokki_em) || {}).retrato_stokki_em || "?";
         alert(`Atenção: ${comNaoProntos.reduce((n, r) => n + r.codigos_nao_prontos.length, 0)} pedido(s) em espera na Stokki (retrato de ${retrato}) voltaram pro pool, NÃO foram enviados:\n${linhas.join("\n")}`);
+      }
+      // idem pros pedidos que não ganharam serviço na VUUPT no envio (pool direto da Stokki), com o motivo
+      const comSemServico = resp.resultados.filter(r => r.codigos_sem_servico && Object.keys(r.codigos_sem_servico).length);
+      if (comSemServico.length) {
+        const linhas = comSemServico.flatMap(r => {
+          const nome = (RASCUNHOS.find(x => x.id === r.rascunho_id) || {}).nome || `rota ${r.rascunho_id}`;
+          return Object.entries(r.codigos_sem_servico).map(([c, m]) => `• ${nome}: ${c} -- ${m}`);
+        });
+        alert(`Atenção: ${linhas.length} pedido(s) não ganharam serviço na VUUPT e voltaram pro pool, NÃO foram enviados:\n${linhas.join("\n")}`);
       }
       // trava de carro desligada (planejamento.trava_sem_carro): rota saiu sem carro, só avisa
       const semCarro = resp.resultados.filter(r => r.ok && r.aviso);

@@ -25,6 +25,7 @@ import re
 import statistics
 import sys
 import threading
+import time
 from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
@@ -302,15 +303,22 @@ def confirmar_envio_rascunhos(rascunho_ids: list, config: dict) -> list[dict]:
     placas = placas_veiculos_vuupt(config)
     trava = veiculos_regras.trava_sem_carro_ligada(config)
     resultados = []
+    inicio = time.monotonic()
     for rid in rascunho_ids:
         erro_carro = veiculos_regras.verificar_carro(rascunhos_rota.buscar_rascunho(rid) or {}, placas)
         if erro_carro and trava:
             resultados.append({"ok": False, "rascunho_id": rid, "erro": erro_carro})
             continue
+        # cada resultado ja traz codigos_sem_servico {codigo: motivo} (pool direto da Stokki: o servico
+        # na Vuupt nasce no envio e quem falha volta ao pool com o motivo)
         resultado = rascunhos_rota.enviar_rascunho(rid, token)
         if erro_carro:
             resultado = {**resultado, "aviso": erro_carro}
         resultados.append(resultado)
+    sem_servico = sum(len(r.get("codigos_sem_servico") or {}) for r in resultados)
+    logger.info(f"Envio de {len(rascunho_ids)} rascunho(s) em {time.monotonic() - inicio:.1f}s: "
+                f"{sum(1 for r in resultados if r.get('ok'))} ok"
+                + (f", {sem_servico} pedido(s) sem servico na Vuupt voltaram ao pool" if sem_servico else ""))
     return resultados
 
 
