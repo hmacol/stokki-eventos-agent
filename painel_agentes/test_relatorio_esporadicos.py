@@ -89,13 +89,40 @@ class TestRelatorioEsporadicos(unittest.TestCase):
         self.assertIn("A definir", rel.csv_detalhe(r))
 
 
+    def test_fonte_do_km_e_rotas_sem_gps(self):
+        self.motorista(1, "Ana", "ESPORADICO")
+        self.rota(1, "2026-11-10", combinado=100.0, motivo="a")                    # GPS_APP
+        outra = self.rota(1, "2026-11-11", combinado=100.0, motivo="b")
+        self.conn.execute("UPDATE nucleo_rotas SET km_fonte = 'INFORMADO' WHERE id = ?", (outra,))
+        self.conn.commit()
+        r = rel.gerar("2026-11-01", "2026-11-30", conn=self.conn)
+        self.assertEqual(r["rotas_sem_gps"], 1)
+        self.assertEqual(r["motoristas"][0]["rotas_sem_gps"], 1)
+        detalhe = rel.csv_detalhe(r)
+        self.assertIn("GPS do app", detalhe)
+        self.assertIn("Informado pelo motorista", detalhe)
+
+    def test_csv_neutraliza_formula_mas_preserva_pix_telefone(self):
+        self.assertEqual(rel._txt("=HYPERLINK(\"http://x\")"), "'=HYPERLINK(\"http://x\")")
+        self.assertEqual(rel._txt("@cmd"), "'@cmd")
+        self.assertEqual(rel._txt("-1+1|cmd"), "'-1+1|cmd")
+        self.assertEqual(rel._txt("+5511999998888"), "+5511999998888")
+        self.assertEqual(rel._txt("ana@pix.com"), "ana@pix.com")
+        self.motorista(1, "=cmd|calc", "ESPORADICO")
+        self.rota(1, "2026-11-10", combinado=10.0, motivo="=1+1")
+        r = rel.gerar("2026-11-01", "2026-11-30", conn=self.conn)
+        for csv_ in (rel.csv_detalhe(r), rel.csv_resumo(r)):
+            self.assertNotIn(";=cmd", csv_)
+            self.assertTrue(csv_.splitlines()[1].startswith("'=cmd|calc;"))
+        self.assertIn(";'=1+1;", rel.csv_detalhe(r))
+
     def test_tela_renderiza_com_dados(self):
         import painel_agentes
         self.motorista(1, "Ana", "ESPORADICO")
         self.rota(1, "2026-11-10", combinado=500.0, motivo="Diaria acordada")
         r = rel.gerar("2026-11-01", "2026-11-30", conn=self.conn)
         with painel_agentes.app.test_request_context("/financeiro/esporadicos"):
-            html = painel_agentes.render_template("relatorio_esporadicos.html", rel=r)
+            html = painel_agentes.render_template("relatorio_esporadicos.html", rel=r, fonte_km=rel.fonte_km)
         self.assertIn("Ana", html)
         self.assertIn("Combinado: Diaria acordada", html)
         self.assertIn("500,00", html)

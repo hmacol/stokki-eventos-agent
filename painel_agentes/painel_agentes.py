@@ -4962,7 +4962,8 @@ def _periodo_esporadicos() -> tuple[str, str]:
 @requer_auth(niveis=NIVEIS_ESPORADICOS)
 def relatorio_esporadicos():
     de, ate = _periodo_esporadicos()
-    return render_template("relatorio_esporadicos.html", rel=relatorio_esporadicos_mod.gerar(de, ate))
+    return render_template("relatorio_esporadicos.html", rel=relatorio_esporadicos_mod.gerar(de, ate),
+                           fonte_km=relatorio_esporadicos_mod.fonte_km)
 
 
 @app.route("/financeiro/esporadicos.csv")

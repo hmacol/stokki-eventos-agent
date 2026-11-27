@@ -26,6 +26,7 @@
   table.t th, table.t td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--borda); white-space: nowrap; }
   table.t th { color: var(--texto-suave); font-weight: 700; }
   table.t td.n, table.t th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .sem-gps { color: var(--erro, #b3261e); font-weight: 600; }
   .vazio { color: var(--texto-suave); padding: 24px 0; }
 </style>
 {% endblock %}
@@ -50,6 +51,9 @@
   <div><b>R$ {{ '%.2f'|format(rel.total)|replace('.', ',') }}</b><span>total a pagar (rotas + pedágio aprovado)</span></div>
   <div><b>R$ {{ '%.2f'|format(rel.pedagio_pendente)|replace('.', ',') }}</b><span>pedágio pendente (fora do total)</span></div>
 </div>
+{% if rel.rotas_sem_gps %}
+<div class="aviso"><strong>{{ rel.rotas_sem_gps }} rota(s) sem km medido pelo GPS do app</strong> (km informado pelo motorista ou estimado). O valor delas pode mudar quando o km for conferido; ficam destacadas abaixo.</div>
+{% endif %}
 {% if rel.rotas_sem_valor %}
 <div class="aviso"><strong>{{ rel.rotas_sem_valor }} rota(s) sem valor definido</strong> (veículo sem tarifa e sem valor combinado). Ficam de fora do total até o valor ser combinado.</div>
 {% endif %}
@@ -57,18 +61,20 @@
 <details class="mot">
   <summary>
     <strong>{{ m.nome }}</strong>
+    {% if m.rotas_sem_gps %}<span class="meta sem-gps">{{ m.rotas_sem_gps }} sem GPS</span>{% endif %}
     <span class="meta">CPF {{ m.cpf or '—' }} · PIX {{ m.pix or 'não informado' }}{% if m.veiculo %} · {{ m.veiculo }}{% endif %} · {{ m.rotas }} rota(s)</span>
     <span class="total">R$ {{ '%.2f'|format(m.total)|replace('.', ',') }}</span>
   </summary>
   <div class="tabela-wrap">
     <table class="t">
-      <thead><tr><th>Data</th><th>Rota</th><th class="n">Km</th><th>Valor</th><th class="n">Rota (R$)</th><th class="n">Pedágio aprovado</th><th class="n">Pedágio pendente</th></tr></thead>
+      <thead><tr><th>Data</th><th>Rota</th><th class="n">Km</th><th>Fonte do km</th><th>Valor</th><th class="n">Rota (R$)</th><th class="n">Pedágio aprovado</th><th class="n">Pedágio pendente</th></tr></thead>
       <tbody>
       {% for l in m.linhas %}
         <tr>
           <td>{{ l.data_rota }}</td>
           <td>{{ l.nome or l.rota_id }}</td>
-          <td class="n">{{ '%.1f'|format(l.km or 0)|replace('.', ',') }}{% if l.km_provisorio %}*{% endif %}</td>
+          <td class="n">{{ '%.1f'|format(l.km or 0)|replace('.', ',') }}</td>
+          <td{% if l.km_fonte != 'GPS_APP' %} class="sem-gps"{% endif %}>{{ fonte_km(l) }}</td>
           <td>{% if l.valor_combinado %}Combinado{% if l.valor_combinado_motivo %}: {{ l.valor_combinado_motivo }}{% endif %}{% elif l.sem_tarifa %}A definir{% else %}Tarifa{% endif %}</td>
           <td class="n">{% if l.valor is not none %}{{ '%.2f'|format(l.valor)|replace('.', ',') }}{% else %}—{% endif %}</td>
           <td class="n">{{ '%.2f'|format(l.pedagio_aprovado)|replace('.', ',') }}</td>
@@ -80,7 +86,6 @@
   </div>
 </details>
 {% endfor %}
-<p class="vazio" style="padding:0">* km provisório (estimado, sem GPS).</p>
 {% else %}
 <p class="vazio">Nenhum motorista esporádico teve rota entre {{ rel.inicio }} e {{ rel.fim }}.</p>
 {% endif %}
