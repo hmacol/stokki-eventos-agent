@@ -268,6 +268,16 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              - o serviço nasce na Vuupt SÓ ao enviar a rota: rascunhos_rota
                                                (enviar_rascunho, incremento, adicionar parada em rota enviada)
                                                chama nucleo/materializar.materializar_servicos (ver seção do núcleo);
+                                               EXCEÇÃO: a fila de réplica do freshhub (pipeline.py --fila-freshhub,
+                                               _materializar_pela_fila em atender_fila_freshhub) materializa na
+                                               importação, porque a fila exige o id da Vuupt (spec item 8 permite).
+                                               Decisão pendente do Hugo: confirmar essa exceção;
+                                             - enviar_rascunho trava o rascunho em rascunho_envio_trava (1 envio por
+                                               rascunho; o 2º clique volta "envio deste rascunho ja em andamento" sem
+                                               mexer em nada; trava de processo morto expira em 15 min);
+                                             - enquanto o pedido não tem serviço, os campos marcados em
+                                               edicao_local_json ficam protegidos: mudança legítima da Stokki no
+                                               mesmo campo é ignorada até materializar (hoje viraria PUT);
                                              - portal, Torre, feriado, laboratório e vigia leem o pool do núcleo;
                                                ações do pool em pedido sem servico (cancelar, reagendar, alterar
                                                endereço/janela) são LOCAIS (edicao_local_json), sem chamar a Vuupt.
@@ -1311,9 +1321,14 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
  pool.py                   listar_pool_not_assigned: pool vem da Vuupt ou do
                            núcleo conforme config planejamento.fonte_pool.
                            listar_pool(incluir_sem_servico=True) = fonte stokki (id -id_pool).
- adocao_servico.py         adotar_servico(conn, codigo, service_id): troca o id sintético pelo real
-                           em UM lugar (nucleo_pedidos + tabelas que guardam o id); chamado pelo
-                           sync, registrar_importacao com id novo, fila freshhub e materialização.
+ adocao_servico.py         adotar_servico(conn, codigo, service_id): grava o id real em
+                           nucleo_pedidos e troca o sintético pelo real SÓ em rascunhos_parada e
+                           rascunhos_plano_original; chamado pelo sync, registrar_importacao com id
+                           novo, fila freshhub e materialização. Ficam com o id NEGATIVO (não são
+                           reescritas): agendamentos_origem.service_id, pedidos_dedicados.service_id,
+                           ciencias_dedicado.service_id, pedidos_area_notificada.service_id e o
+                           dados.service_id dos eventos do freshhub; todos esses consumidores casam
+                           também (ou só) pelo código do pedido.
  materializar.py           materializar_servicos(itens, vuupt, config, ...) (e materializar_lote):
                            cria o serviço na Vuupt SÓ ao enviar a rota, por pedido sem servico.
                            Trava por código em nucleo_materializacao (idempotente; trava ocupada =
@@ -2371,6 +2386,8 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
                              nome_anterior, renomeado_em). Fora da bd_motoristas de propósito (não mexe no
                              espelho BD_MOTORISTAS.xlsx, que o freshhub lê).
    rascunhos_rota, rascunhos_parada  painel_agentes/rascunhos_rota.py  (coluna turno: NULL = manha, TARDE)
+   rascunho_envio_trava      painel_agentes/rascunhos_rota.py (27/11, pool-stokki): 1 linha por rascunho em
+                             envio (rascunho_id PK, iniciado_em, processo); solta no fim; velha após 15 min.
    painel_execucoes          painel_agentes/executor.py
    wms_*                     painel_agentes/wms*.py
    wms_caixas, wms_caixa_eventos, wms_contadores   painel_agentes/wms_caixas.py
@@ -2495,7 +2512,20 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
      * Homologação não prova a criação do serviço: lá a Vuupt é só GET e a Stokki nunca.
      * Área não atendida: dedupe por pedidos_area_notificada.codigo vale TAMBÉM com a chave desligada
        (serviço recriado com o mesmo código não reavisa o cliente).
-     * DEPLOY: reiniciar painel-agentes E portal-cliente (os dois importam nucleo/pool.py).
+     * DEPLOY (colunas novas id_pool/edicao_local_json em nucleo_pedidos, tabela quente):
+         1. depois de `git pull --no-rebase` + chown, ANTES de reiniciar qualquer coisa, migrar 1x como www-data:
+            sudo -u www-data venv/bin/python -c "from nucleo import banco; banco.conectar().close()"
+            (o ALTER tolera a corrida "duplicate column name" desde a revisão final, mas migrar antes evita
+            processo antigo gravando no meio);
+         2. reiniciar painel-agentes, portal-cliente, motorista-api (nucleo/operacao.py chama
+            pedidos.upsert_pedido: código velho grava linha com id_pool NULL, que o pool pula com WARNING
+            pool.sem_id_pool) e portal-cliente-entradas (--loop; importa o núcleo sob demanda pelo
+            enviar_stokki). atendimento-central e confirmacao-motoristas não importam o núcleo;
+         3. os timers (pipeline, sync, comparar_pool...) pegam o código novo sozinhos.
+     * Pedido sem serviço com campo editado no Planejamento (edicao_local_json): a mudança legítima da Stokki
+       nesse campo é ignorada até o serviço nascer (hoje viraria PUT na Vuupt).
+     * Fila freshhub (pipeline --fila-freshhub) materializa na importação, exceção ao "só no envio"
+       (decisão pendente do Hugo).
 
  - Login concorrente na Stokki derruba a outra sessão (401). Use
    stokki/sessao_uso.py. Não chute URL da Stokki: gera login em cascata.
