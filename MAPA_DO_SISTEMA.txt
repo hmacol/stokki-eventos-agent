@@ -545,7 +545,8 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  07:40                       comparar-vuupt                  nucleo/comparar_vuupt.py
  07-20h xx:25                comparar-pool                   nucleo/comparar_pool.py (sombra Vuupt x núcleo e, desde
                                                              25/10, Vuupt x freshhub com --fonte freshhub e,
-                                                             desde 27/11, Vuupt x núcleo+sem servico com --fonte stokki)
+                                                             --fonte stokki só à mão, sem timer: a unit só roda nucleo e
+                                                             freshhub; criar timer da stokki é decisão do Hugo)
  07:15-08:45 (15 min)        resumo-email-whatsapp           resumo_email_whatsapp.py (lê no Gmail o "Resumo do
                                                              e-mail · DD/MM" que a rotina na nuvem manda ~07:07
                                                              e encaminha pro grupo grupo_resumo_email_id; 1x/dia)
@@ -1327,6 +1328,8 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            Chama a materialização por id negativo, não pela chave fonte_pool.
                            Testes: nucleo/test_materializar.py, test_adocao_servico.py,
                            test_id_pool.py, test_edicao_local.py (+ test_pipeline_sem_servico.py,
+                           test_pipeline_fila_freshhub.py, test_reagendar_feriado.py,
+                           test_atualizar_agendamentos_confirmados.py (todos na RAIZ do repo),
                            painel_agentes/test_planejamento_sem_servico.py,
                            portal_cliente/test_pool_stokki_portal.py).
  Colunas/tabelas do pool stokki (nucleo/banco.py, migração sob demanda):

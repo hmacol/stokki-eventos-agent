@@ -11,7 +11,7 @@ Spec: `docs/superpowers/specs/2026-11-26-pool-direto-da-stokki-design.md`. Mapa:
 4. Em homologacao a Vuupt e so GET e a Stokki nunca: **a criacao do servico na Vuupt NAO se prova la**.
    - Em homologacao prova-se o que e local: pool com pedido sem servico (id negativo), rascunho, edicao local,
      cancelar, portal, /pedidos. No "Confirmar e enviar" a materializacao deve ser **recusada/bloqueada pela guarda**
-     (nada sai); isso e o comportamento esperado.
+     (nada sai) -- a confirmar (nao verificado).
    - A materializacao se prova por mock/`--modo-teste`: `py -3.11 -m unittest nucleo.test_materializar nucleo.test_adocao_servico`
      (Vuupt falsa, banco temporario) e `--modo-teste` nos scripts de lote (nao escreve na Vuupt/Stokki; lembrar que
      `--modo-teste` pode mandar e-mail real: `forcar_destino`).
@@ -28,8 +28,9 @@ Na VPS, como `www-data`, com a chave ainda em `nucleo`/`vuupt`:
 - Pedido do nucleo sem servico na Vuupt aparece como "sem servico" (informativo, fora do placar).
 - Divergencia = pedido que a Vuupt tem e o nucleo nao, pedido so no nucleo COM servico, ou campo diferente
   (endereco, coordenadas, caixas, janela, data, dia fixo).
-- Timer: o timer existente e `infra/stokki-comparar-pool.*` (roda a fonte nucleo); a fonte stokki NAO ganhou timer neste ramo: rodar a mao ou criar um par
-  com `--fonte stokki` se o Hugo aprovar).
+- Timer: o timer existente e `infra/stokki-comparar-pool.*` (a unit existente roda nucleo e freshhub, nao inclui a fonte stokki); a fonte stokki NAO ganhou timer neste ramo:
+  rodar a mao ou criar um par com `--fonte stokki` se o Hugo aprovar.
+- Pedido sem servico que JA existe na Vuupt com o mesmo codigo segue a comparacao normal (id difere = divergencia), por desenho.
 
 ## 3. Passos de prova (homologacao, depois producao supervisionada)
 
