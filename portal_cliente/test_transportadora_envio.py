@@ -106,5 +106,35 @@ class Confirmar(Base):
         self.assertEqual([o["id"] for o in te.opcoes(self.conn)], [1, 2])
 
 
+class ColunaDaPlanilha(unittest.TestCase):
+    def setUp(self):
+        import sqlite3
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.execute("CREATE TABLE transportadoras (id INTEGER, nome TEXT, tipo TEXT, situacao TEXT, cnpj TEXT)")
+        self.conn.executemany("INSERT INTO transportadoras VALUES (?,?,?,?,?)", [
+            (1, "RAPIDA SA", "ENTREGA", "ATIVA", "44.555.666/0001-81"),
+            (2, "RAPIDA SUL LTDA", "ENTREGA", "ATIVA", ""),
+            (3, "João & Cia", "ENTREGA", "ATIVA", ""),
+            (4, "ANTIGA", "ENTREGA", "INATIVA", "")])
+
+    def test_por_nome_sem_acento_e_caixa_e_por_cnpj(self):
+        self.assertEqual(te.achar_por_texto(self.conn, "joao cia")["id"], 3)
+        self.assertEqual(te.achar_por_texto(self.conn, "44555666000181")["id"], 1)
+        self.assertEqual(te.achar_por_texto(self.conn, "rapida sa")["id"], 1)
+
+    def test_nao_acha_inativa_nem_desconhecida_e_ambigua_pede_cnpj(self):
+        for txt in ("antiga", "ninguem"):
+            with self.assertRaisesRegex(te.ErroTransportadora, "não encontrada"):
+                te.achar_por_texto(self.conn, txt)
+        with self.assertRaisesRegex(te.ErroTransportadora, "mais de uma"):
+            te.achar_por_texto(self.conn, "rapida")
+
+    def test_casar_opcao_da_stokki_nunca_chuta(self):
+        ops = [("", "Selecione"), ("10", "Rapida SA"), ("11", "Rapida Sul Ltda"), ("12", "Joao e Cia")]
+        self.assertEqual(te.casar_opcao_stokki(ops, {"nome": "RAPIDA SA"}), "10")
+        self.assertEqual(te.casar_opcao_stokki(ops, {"nome": "Outra"}), "")
+        self.assertEqual(te.casar_opcao_stokki([("10", "Rapida SA"), ("11", "Rapida SA Filial")], {"nome": "Rapida"}), "")
+
+
 if __name__ == "__main__":
     unittest.main()

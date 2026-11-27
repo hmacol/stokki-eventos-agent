@@ -448,9 +448,22 @@ def executar_wizard_excel(cfg: dict, usuario: str, senha: str, envios: list[dict
             if not carrier:
                 raise RuntimeError("O wizard Excel da Stokki exige transportadora (carrier_id) e o cliente não tem nenhuma cadastrada -- "
                                    "cadastre na Stokki ou informe portal_cliente.stokki_padrao.carrier_id.")
+            opcoes_carrier = None   # lista do select, lida 1x se algum pedido tem transportadora escolhida na planilha
             for e in envios:
                 chave = e["chave_nfe"]
                 arquivo = arquivos[chave]
+                carrier_pedido = carrier
+                transp = transportadora_envio.da_linha(e)
+                if transp:
+                    if opcoes_carrier is None:
+                        opcoes_carrier = page.evaluate("() => Array.from(document.querySelectorAll('#carrier_id option')).map(o => [o.value, o.textContent.trim()])")
+                    carrier_pedido = transportadora_envio.casar_opcao_stokki(opcoes_carrier, transp)
+                    if not carrier_pedido:
+                        erro = (f'A transportadora "{transp["nome"]}" (coluna Transportadora da planilha) não está disponível '
+                                "na Stokki para este embarcador -- peça à Fresh Log para liberá-la ou envie sem essa coluna.")
+                        resultados.append({"arquivo": arquivo.name, "criado": False, "erro": erro})
+                        respostas[chave] = {"status": 0, "body": erro}
+                        continue
                 dest_id, erro = _resolver_destinatario(page, cfg["client_id"], e, token_csrf)
                 if not dest_id:
                     resultados.append({"arquivo": arquivo.name, "criado": False, "erro": erro})
@@ -463,7 +476,7 @@ def executar_wizard_excel(cfg: dict, usuario: str, senha: str, envios: list[dict
                     "_token": token_csrf, "position": "0", "motion": "sale", "client_id": cfg["client_id"],
                     "origin_id": cfg["warehouse_id"], "po": (e.get("referencia") or "")[:60], "destination_id": dest_id,
                     "type_transport": cfg["tipo_transporte"], "packaging": cfg["embalagem"], "delivery": cfg.get("prioridade") or "",
-                    "carrier_id": carrier, "expedition_date": "/".join(reversed(data_exp.split("-"))), "check_declaration": "0",
+                    "carrier_id": carrier_pedido, "expedition_date": "/".join(reversed(data_exp.split("-"))), "check_declaration": "0",
                     "file_excel[]": {"name": arquivo.name,
                                      "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                      "buffer": arquivo.read_bytes()},

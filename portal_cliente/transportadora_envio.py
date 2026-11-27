@@ -9,6 +9,7 @@ nunca no XML original do cliente. Mesmo padrão do endereço de entrega
 (endereco_entrega.py)."""
 import json
 import re
+import unicodedata
 from xml.sax.saxutils import escape
 
 
@@ -40,6 +41,46 @@ def resolver(conn, transportadora_id) -> dict:
         if o["id"] == tid:
             return o
     raise ErroTransportadora("transportadora não encontrada no cadastro.")
+
+
+def _norm(texto) -> str:
+    t = unicodedata.normalize("NFKD", str(texto or "")).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", t)).strip()
+
+
+def achar_por_texto(conn, texto) -> dict:
+    """Transportadora ATIVA do cadastro que a coluna "Transportadora" da planilha
+    indica (nome ou CNPJ). Nome: igual, ou contido no outro quando só uma casa.
+    Erro diz o que foi lido e por que não serve."""
+    bruto = str(texto or "").strip()
+    cadastro = opcoes(conn)
+    doc = _so_digitos(bruto)
+    if len(doc) in (11, 14):
+        achadas = [o for o in cadastro if _so_digitos(o["cnpj"]) == doc]
+    else:
+        alvo = _norm(bruto)
+        achadas = [o for o in cadastro if _norm(o["nome"]) == alvo]
+        if not achadas and len(alvo) >= 4:
+            achadas = [o for o in cadastro if alvo in _norm(o["nome"]) or _norm(o["nome"]) in alvo]
+    if len(achadas) == 1:
+        return achadas[0]
+    if not achadas:
+        raise ErroTransportadora(f'transportadora "{bruto[:60]}" não encontrada no cadastro -- confira o nome ou o CNPJ.')
+    raise ErroTransportadora(f'transportadora "{bruto[:60]}" casa com mais de uma do cadastro '
+                             f'({", ".join(o["nome"] for o in achadas[:4])}) -- use o CNPJ.')
+
+
+def casar_opcao_stokki(opcoes_stokki: list, transp: dict) -> str:
+    """Valor do <option> de #carrier_id (wizard Excel da Stokki; lista própria
+    por cliente) cujo texto é a transportadora escolhida; "" se não há (ou se
+    há mais de uma possível: nunca chuta). `opcoes_stokki` = [(valor, texto)]."""
+    alvo = _norm(transp.get("nome"))
+    if not alvo:
+        return ""
+    cand = [(v, t) for v, t in opcoes_stokki if v and _norm(t) == alvo]
+    if not cand:
+        cand = [(v, t) for v, t in opcoes_stokki if v and len(_norm(t)) >= 4 and (alvo in _norm(t) or _norm(t) in alvo)]
+    return str(cand[0][0]) if len(cand) == 1 else ""
 
 
 def aplicar_no_nfe(nfe: dict, transp: dict) -> dict:
