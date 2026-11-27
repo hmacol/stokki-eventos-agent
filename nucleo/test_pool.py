@@ -17,7 +17,7 @@ from unittest import mock
 _RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_RAIZ))
 
-from nucleo import banco, pool, sincronizar_servicos_vuupt as sinc
+from nucleo import banco, pedidos, pool, sincronizar_servicos_vuupt as sinc
 from nucleo.normalizacao import local_para_vuupt, normalizar_codigo, vuupt_para_local
 
 
@@ -133,6 +133,78 @@ class TestFonte(unittest.TestCase):
             self.assertEqual(pool.listar_pool_not_assigned({"planejamento": {"fonte_pool": "nucleo"}}, vuupt), [{"id": 2}])
             lp.assert_called_once_with()
         vuupt.listar_servicos.assert_called_once()   # não chamou a Vuupt de novo
+
+
+class TestFonteStokki(_Base):
+    """fonte_pool = stokki: pedido sem servico entra com id negativo (-id_pool)."""
+
+    def _sem_servico(self, codigo="PS-900"):
+        pedidos.upsert_pedido(self.conn, codigo, {"titulo": f"{codigo} - X", "endereco": "Rua B, 2"},
+                              banco.ORIGEM_PIPELINE)
+        self.conn.commit()
+        return self.conn.execute("SELECT id_pool FROM nucleo_pedidos WHERE codigo=?", (codigo,)).fetchone()[0]
+
+    def test_stokki_inclui_pedido_sem_servico_com_id_negativo(self):
+        idp = self._sem_servico()
+        itens = pool.listar_pool(self.conn, incluir_sem_servico=True)
+        self.assertEqual(len(itens), 1)
+        self.assertEqual(itens[0]["id"], -idp)
+        self.assertTrue(itens[0]["_sem_servico_vuupt"])
+        self.assertTrue(pool.eh_sem_servico(itens[0]["id"]))
+        self.assertFalse(pool.eh_sem_servico(5001))
+        # default continua como antes: sem servico fica fora
+        self.assertEqual(pool.listar_pool(self.conn), [])
+
+    def test_stokki_nao_chama_vuupt(self):
+        vuupt = mock.Mock()
+        with mock.patch.object(pool, "listar_pool", return_value=[{"id": -1}]) as lp:
+            r = pool.listar_pool_not_assigned({"planejamento": {"fonte_pool": "stokki"}}, vuupt)
+        self.assertEqual(r, [{"id": -1}])
+        lp.assert_called_once_with(incluir_sem_servico=True)
+        self.assertEqual(vuupt.mock_calls, [])
+
+    def test_pedido_com_servico_mantem_id_real(self):
+        sinc.sincronizar_servicos([_servico()], self.conn)
+        idp = self._sem_servico()
+        itens = {s["code"]: s for s in pool.listar_pool(self.conn, incluir_sem_servico=True)}
+        self.assertEqual(itens["#PS-100"]["id"], 5001)
+        self.assertFalse(itens["#PS-100"].get("_sem_servico_vuupt", False))
+        self.assertEqual(itens["#PS-900"]["id"], -idp)
+
+    def test_varios_sem_servico_nao_se_fundem_nem_colidem(self):
+        a, b = self._sem_servico("PS-901"), self._sem_servico("PS-902")
+        ids = sorted(s["id"] for s in pool.listar_pool(self.conn, incluir_sem_servico=True))
+        self.assertEqual(ids, sorted([-a, -b]))
+
+    def test_ficam_fora_retirada_e_excluido_mesmo_sem_servico(self):
+        self._sem_servico("PS-903")
+        self.conn.execute("INSERT INTO nucleo_pedidos (codigo, status, origem, id_pool, excluido_em) "
+                          "VALUES ('PS-904', 'ABERTO', 'PIPELINE', 9001, '2026-09-16 10:00:00')")
+        self.conn.execute("INSERT INTO nucleo_pedidos (codigo, status, origem, id_pool, fluxo) "
+                          "VALUES ('PS-905', 'ABERTO', 'PIPELINE', 9002, ?)", (banco.FLUXO_RETIRADA,))
+        self.conn.commit()
+        self.assertEqual([s["code"] for s in pool.listar_pool(self.conn, incluir_sem_servico=True)], ["#PS-903"])
+
+    def test_fonte_desconhecida_loga_warning(self):
+        pool._FONTES_AVISADAS.clear()
+        cfg = {"planejamento": {"fonte_pool": "banana"}}
+        vuupt = mock.Mock()
+        vuupt.listar_servicos.return_value = []
+        with self.assertLogs("nucleo.pool", level="WARNING") as cap:
+            pool.listar_pool_not_assigned(cfg, vuupt)
+        self.assertTrue(any("banana" in m for m in cap.output))
+        vuupt.listar_servicos.assert_called_once()   # fallback pra vuupt
+        # so uma vez por processo e por valor
+        with self.assertNoLogs("nucleo.pool", level="WARNING"):
+            pool.listar_pool_not_assigned(cfg, vuupt)
+
+    def test_vuupt_e_nucleo_seguem_iguais(self):
+        sinc.sincronizar_servicos([_servico()], self.conn)
+        self._sem_servico()
+        vuupt = mock.Mock()
+        vuupt.listar_servicos.return_value = [{"id": 1}]
+        self.assertEqual(pool.listar_pool_not_assigned({"planejamento": {"fonte_pool": "vuupt"}}, vuupt), [{"id": 1}])
+        self.assertEqual([s["id"] for s in pool.listar_pool(self.conn)], [5001])
 
 
 class TestEquivalenciaComATela(_Base):
