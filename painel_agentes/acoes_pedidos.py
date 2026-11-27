@@ -22,6 +22,7 @@ for _p in (_RAIZ, _AQUI):
         sys.path.insert(0, str(_p))
 
 from nucleo import banco  # noqa: E402
+from nucleo.pool import eh_sem_servico  # noqa: E402
 import torre_controle  # noqa: E402
 import tratativas  # noqa: E402
 
@@ -109,6 +110,8 @@ def reenviar(service_id: int, motivo: str, usuario: str, *, vuupt=None, stokki=s
     motivo = (motivo or "").strip()
     if not 5 <= len(motivo) <= 200:
         return _erro("Informe o motivo do reenvio (de 5 a 200 caracteres).")
+    if eh_sem_servico(service_id):
+        return _erro("pedido ainda aberto e sem serviço na Vuupt: reenvio só vale depois de finalizado.")
     vuupt = vuupt or _vuupt_padrao()
 
     servico = vuupt.buscar_servico_por_id(service_id)
@@ -184,6 +187,9 @@ def _conferir_e_criar(service_id, codigo, base, servico, grupo, insucesso, motiv
 def _codigo_do_servico(service_id: int) -> str:
     conn = banco.conectar()
     try:
+        if eh_sem_servico(service_id):   # pedido sem servico na Vuupt: id sintetico
+            from nucleo.pedidos import codigo_por_id_sintetico
+            return codigo_por_id_sintetico(conn, service_id) or ""
         r = conn.execute("SELECT codigo FROM nucleo_pedidos WHERE vuupt_service_id = ?", (service_id,)).fetchone()
         return r["codigo"] if r else ""
     finally:
@@ -208,6 +214,8 @@ def cancelar_vuupt(service_id: int, usuario: str, *, token: str, agent_lalamove:
     pularia a guarda de andamento."""
     if cancelar is None:
         from roteirizacao.cancelar_servico import cancelar_servico_completo as cancelar
+    if eh_sem_servico(service_id):
+        return _cancelar_sem_servico(service_id, usuario, token, cancelar)
     vuupt = vuupt or _vuupt_padrao()
     atual = vuupt.buscar_servico_por_id(service_id)
     if not atual:
@@ -234,6 +242,18 @@ def cancelar_vuupt(service_id: int, usuario: str, *, token: str, agent_lalamove:
                                     service_id=service_id,
                                     texto=f"{usuario}: cancelado na Vuupt pela tela Pedidos")
     return {"ok": True, "ja_estava": bool(r.get("ja_estava")), "erro": "", "aviso": aviso}
+
+
+def _cancelar_sem_servico(service_id: int, usuario: str, token: str, cancelar) -> dict:
+    """Pedido sem servico na Vuupt (id sintetico): cancelar_servico_completo fecha LOCAL no nucleo e tira dos
+    rascunhos nao enviados; nada vai pra Vuupt (nem a leitura do status)."""
+    r = cancelar(token, service_id)
+    if not r.get("ok"):
+        return {"ok": False, "ja_estava": False, "erro": r.get("erro") or "Falha ao cancelar.", "aviso": ""}
+    if not r.get("ja_estava"):
+        tratativas.registrar_evento(_codigo_do_servico(service_id), "PEDIDOS", "CANCELADO_MANUAL",
+                                    texto=f"{usuario}: cancelado no nucleo pela tela Pedidos (sem servico na Vuupt)")
+    return {"ok": True, "ja_estava": bool(r.get("ja_estava")), "erro": "", "aviso": ""}
 
 
 def cancelar_stokki(codigo: str, motivo: str, usuario: str) -> dict:
@@ -313,6 +333,11 @@ def andamento_expedicao(execucao: dict | None, token: str, pasta) -> dict:
     return {"ok": True, "estado": "fim", "resultados": resultados}
 
 
+def _id_real(service_id: int):
+    """Id da Vuupt pra tratativa; pedido sem servico (id sintetico) vai so pelo codigo."""
+    return None if eh_sem_servico(service_id) else service_id
+
+
 def _servico_vivo(service_id: int, vuupt):
     """(servico, erro): relê o status na Vuupt; erro se sumiu ou não está mais vivo (done/insucesso/cancelado/excluído)."""
     servico = (vuupt or _vuupt_padrao()).buscar_servico_por_id(service_id)
@@ -327,7 +352,7 @@ def alterar_endereco(service_id: int, endereco: str, usuario: str, *, vuupt=None
     endereco = (endereco or "").strip()
     if not endereco:
         return {"ok": False, "erro": "Informe o novo endereço."}
-    servico, erro = _servico_vivo(service_id, vuupt)
+    servico, erro = ({}, "") if eh_sem_servico(service_id) else _servico_vivo(service_id, vuupt)
     if erro:
         return {"ok": False, "erro": erro}
     from roteirizacao import cancelar_servico
@@ -337,7 +362,7 @@ def alterar_endereco(service_id: int, endereco: str, usuario: str, *, vuupt=None
     if not r.get("ok"):
         return {"ok": False, "erro": r.get("erro") or "Falha ao alterar o endereço."}
     tratativas.registrar_evento(servico.get("code") or _codigo_do_servico(service_id), "PEDIDOS",
-                                "ENDERECO_ALTERADO", service_id=service_id,
+                                "ENDERECO_ALTERADO", service_id=_id_real(service_id),
                                 texto=f"{usuario}: endereço alterado para {endereco}")
     return {"ok": True, "erro": ""}
 
@@ -349,7 +374,7 @@ def agendar(service_id: int, data: str, hora_inicio: str, hora_fim: str, usuario
         return {"ok": False, "erro": "Data inválida (use AAAA-MM-DD)."}
     if d.date() < date.today():   # o painel roda em America/Sao_Paulo
         return {"ok": False, "erro": "data no passado: escolha hoje ou um dia depois."}
-    servico, erro = _servico_vivo(service_id, vuupt)
+    servico, erro = ({}, "") if eh_sem_servico(service_id) else _servico_vivo(service_id, vuupt)
     if erro:
         return {"ok": False, "erro": erro}
     import planejamento_rotas
@@ -357,7 +382,7 @@ def agendar(service_id: int, data: str, hora_inicio: str, hora_fim: str, usuario
     if not r.get("ok"):
         return {"ok": False, "erro": r.get("erro") or "Falha ao agendar."}
     tratativas.registrar_evento(servico.get("code") or _codigo_do_servico(service_id), "PEDIDOS", "REAGENDADO",
-                                service_id=service_id,
+                                service_id=_id_real(service_id),
                                 texto=f"{usuario}: agendado {d:%d/%m} {hora_inicio}–{hora_fim}")
     return {"ok": True, "erro": ""}
 

@@ -53,8 +53,50 @@ def rascunho_do_servico(service_id: int) -> tuple[int | None, str | None]:
         conn.close()
 
 
+def cancelar_sem_servico_local(service_id: int, motivo: str, origem: str) -> dict:
+    """Pedido sem servico na Vuupt (id sintetico negativo, fonte stokki): CANCELADO no nucleo e
+    fora dos rascunhos nao enviados (RASCUNHO/ERRO_ENVIO). Nunca chama a Vuupt. Mesmo retorno de
+    cancelar_servico_completo; ja cancelado = ok com ja_estava."""
+    from nucleo import banco, pedidos
+    from roteirizacao.conferir_pool import tirar_dos_rascunhos
+    conn = banco.conectar()
+    try:
+        codigo = pedidos.codigo_por_id_sintetico(conn, service_id)
+        if not codigo:
+            return {"ok": False, "ja_estava": False,
+                    "erro": f"pedido {service_id} nao encontrado no nucleo: recarregue a tela"}
+        ja_estava = False
+        if not pedidos.cancelar_sem_servico(codigo, motivo, origem, conn=conn):
+            linha = pedidos.buscar_pedido(codigo, conn=conn)
+            if linha["vuupt_service_id"] is not None:
+                return {"ok": False, "ja_estava": False,
+                        "erro": f"pedido {codigo} ja tem o servico {linha['vuupt_service_id']} na Vuupt: "
+                                f"recarregue a tela e cancele de novo"}
+            if linha["status"] != banco.PEDIDO_CANCELADO:
+                return {"ok": False, "ja_estava": False,
+                        "erro": f"pedido {codigo} esta {linha['status']} no nucleo: nao da pra cancelar"}
+            ja_estava = True
+    finally:
+        conn.close()
+    try:
+        rascunhos = tirar_dos_rascunhos(service_id)
+    except Exception as e:  # noqa: BLE001 -- o cancelamento ja vale; a tela diz o que falta
+        logger.warning(f"{codigo}: cancelado no nucleo, mas nao saiu dos rascunhos ({e})")
+        return {"ok": False, "ja_estava": ja_estava,
+                "erro": f"pedido {codigo} cancelado, mas nao saiu do rascunho ({e}): remova a parada a mao"}
+    logger.info(f"{codigo}: cancelado no nucleo (sem servico na Vuupt){' ja estava' if ja_estava else ''}; "
+                f"rascunhos mexidos: {rascunhos}")
+    return {"ok": True, "ja_estava": ja_estava, "erro": ""}
+
+
 def cancelar_servico_completo(token: str, service_id: int, vuupt=None) -> dict:
-    """Devolve {"ok", "ja_estava", "erro"}. `vuupt` injetavel pra teste."""
+    """Devolve {"ok", "ja_estava", "erro"}. `vuupt` injetavel pra teste. Id negativo (pedido sem
+    servico na Vuupt) cancela local no nucleo (cancelar_sem_servico_local)."""
+    from nucleo import pool
+    if pool.eh_sem_servico(service_id):
+        from nucleo import banco
+        return cancelar_sem_servico_local(service_id, "cancelado pelo painel (cancelar_servico_completo)",
+                                          banco.ORIGEM_PAINEL)
     vuupt = vuupt or VuuptClient(token)
     try:
         atual = vuupt.buscar_servico_por_id(service_id) or {}

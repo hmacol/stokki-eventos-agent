@@ -80,6 +80,54 @@ class CancelarServicoCompleto(unittest.TestCase):
         cs.ressincronizar_ids.assert_not_called()
 
 
+class CancelarSemServico(unittest.TestCase):
+    """Pool direto da Stokki (Task 6): id sintetico negativo cancela LOCAL, nunca chama a Vuupt."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        from nucleo import banco, pedidos
+        from nucleo.test_materializar import _payload
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        mock.patch.object(banco, "DB_PATH", Path(tmp.name) / "t.db").start()
+        self.addCleanup(mock.patch.stopall)
+        self.vuupt_cls = mock.patch.object(cs, "VuuptClient").start()
+        mock.patch.object(cs, "ressincronizar_ids").start()
+        self.tirar = mock.patch("roteirizacao.conferir_pool.tirar_dos_rascunhos", return_value=[7]).start()
+        conn = banco.conectar()
+        try:
+            pedidos.registrar_importacao(_payload("PS-1"), None, "nucleo_sem_servico", conn=conn)
+            self.sid = pedidos.id_sintetico(pedidos.buscar_pedido("PS-1", conn=conn))
+        finally:
+            conn.close()
+        self.banco, self.pedidos = banco, pedidos
+
+    def test_id_negativo_cancela_no_nucleo_sem_vuupt(self):
+        vuupt = mock.Mock()
+        r = cs.cancelar_servico_completo("tok", self.sid, vuupt=vuupt)
+        self.assertEqual(r, {"ok": True, "ja_estava": False, "erro": ""})
+        self.assertEqual(self.pedidos.buscar_pedido("PS-1")["status"], self.banco.PEDIDO_CANCELADO)
+        self.tirar.assert_called_once_with(self.sid)
+        self.assertEqual(vuupt.mock_calls, [])
+        self.vuupt_cls.assert_not_called()
+        cs.ressincronizar_ids.assert_not_called()
+
+    def test_id_negativo_desconhecido_recusa_com_motivo(self):
+        r = cs.cancelar_servico_completo("tok", -999)
+        self.assertFalse(r["ok"])
+        self.assertIn("nao encontrado no nucleo", r["erro"])
+        self.tirar.assert_not_called()
+        self.vuupt_cls.assert_not_called()
+
+    def test_falha_ao_tirar_do_rascunho_diz_o_que_falta(self):
+        self.tirar.side_effect = RuntimeError("database is locked")
+        r = cs.cancelar_servico_completo("tok", self.sid)
+        self.assertFalse(r["ok"])
+        self.assertIn("remova a parada a mao", r["erro"])
+        self.assertEqual(self.pedidos.buscar_pedido("PS-1")["status"], self.banco.PEDIDO_CANCELADO)
+
+
 class RascunhoDoServico(unittest.TestCase):
     def test_acha_o_rascunho_vivo_mais_recente(self):
         import sqlite3
