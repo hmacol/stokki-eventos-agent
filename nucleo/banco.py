@@ -289,6 +289,15 @@ CREATE TABLE IF NOT EXISTS nucleo_rotas_trajeto (
     criado_em               TEXT NOT NULL
 );
 
+-- Trava da materializacao (26/11, pool direto da Stokki): um pedido sem servico na Vuupt
+-- so ganha o servico por UM processo de cada vez (clique duplo, "enviar todas" x incremento).
+-- Linha existe so enquanto alguem cria; trava velha (processo morto) expira (nucleo/materializar.py).
+CREATE TABLE IF NOT EXISTS nucleo_materializacao (
+    codigo                  TEXT PRIMARY KEY,
+    iniciado_em             TEXT NOT NULL,
+    processo                TEXT NOT NULL
+);
+
 -- Ponte nucleo -> Vuupt (12/11): o que o motorista faz no nosso app numa rota
 -- da Vuupt e repetido la por nucleo/ponte_vuupt.py. Uma linha por acao.
 CREATE TABLE IF NOT EXISTS nucleo_ponte_vuupt (
