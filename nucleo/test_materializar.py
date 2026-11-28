@@ -464,6 +464,60 @@ class ErroHttpDaVuuptTest(_Base):
         self.assertIsNone(pedidos.buscar_pedido("PS-1", conn=self.conn)["vuupt_service_id"])
 
 
+class ErroLocalSistemicoTest(_Base):
+    """Onda 4 round 1 (L4 parcial): o MESMO erro local de dado em TODOS os pedidos do lote (>= 2) e nenhum
+    sucesso e provavel bug nosso de codigo/formato, nao do pedido: lote inteiro transitorio, nada removido."""
+
+    def _customer_nulo(self, codigo):
+        # payload do pipeline com customer null: montar_payload estoura TypeError ao gravar o nome
+        self.conn.execute("UPDATE nucleo_pedidos SET dados_json = json_set(dados_json, '$.payload.customer', "
+                          "json('null')), destinatario_nome = 'DEST' WHERE codigo = ?", (codigo,))
+        self.conn.commit()
+
+    def _malformado(self, codigo):
+        self.conn.execute("UPDATE nucleo_pedidos SET agendamento_inicio = 'amanha cedo' WHERE codigo = ?", (codigo,))
+        self.conn.commit()
+
+    def _lote(self, estragos):
+        ids = []
+        for n, estrago in enumerate(estragos, 1):
+            ids.append(self._pedido(f"PS-{n}"))
+            if estrago:
+                estrago(f"PS-{n}")
+        return materializar.materializar_servicos([{"id": i} for i in ids], FakeVuupt(), {}, self.conn)
+
+    def test_todos_com_o_mesmo_typeerror_viram_transitorios(self):
+        res = self._lote([self._customer_nulo] * 3)
+        self.assertEqual(res.ok, {})
+        self.assertEqual(set(res.transitorios), {"PS-1", "PS-2", "PS-3"})
+        for texto in ("possivel problema sistemico", "TypeError", "nada foi removido", "avise o Hugo"):
+            self.assertIn(texto, res.falhas["PS-1"])
+
+    def test_um_malformado_so_segue_a_regra_normal(self):
+        res = self._lote([self._malformado])
+        self.assertEqual(res.transitorios, {})
+        self.assertIn("dado invalido no nucleo", res.falhas["PS-1"])
+
+    def test_dois_malformados_e_um_ok_tira_so_os_dois(self):
+        res = self._lote([self._malformado, self._malformado, None])
+        self.assertEqual(set(res.ok), {"PS-3"})
+        self.assertEqual(res.transitorios, {})
+        self.assertEqual(set(res.falhas), {"PS-1", "PS-2"})
+
+    def test_tipos_de_erro_diferentes_seguem_a_regra_normal(self):
+        res = self._lote([self._customer_nulo, self._malformado, self._customer_nulo])
+        self.assertEqual(res.transitorios, {})
+        self.assertEqual(set(res.falhas), {"PS-1", "PS-2", "PS-3"})
+
+    def test_erro_local_misturado_com_recusa_da_vuupt_segue_a_regra_normal(self):
+        a, b = self._pedido("PS-1"), self._pedido("PS-2")
+        self._customer_nulo("PS-1")
+        res = materializar.materializar_servicos([{"id": a}, {"id": b}], _VuuptQueRecusa({"PS-2": 422}), {},
+                                                 self.conn)
+        self.assertEqual(res.transitorios, {})
+        self.assertEqual(set(res.falhas), {"PS-1", "PS-2"})
+
+
 class DadoLocalInvalidoTest(_Base):
     """Onda 4 (L4): ValueError/TypeError ao montar o payload (dado do nucleo malformado) e erro LOCAL
     deterministico: recusa com o motivo (a parada sai), nunca transitorio (travaria a rota toda rodada)."""

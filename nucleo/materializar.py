@@ -70,6 +70,15 @@ class _Recusa(Exception):
     done/canceled...); a mensagem e o motivo mostrado na tela e no log. So ela tira a parada do envio."""
 
 
+class _RecusaDadoLocal(_Recusa):
+    """Recusa por dado do nucleo malformado (ValueError/TypeError ao montar o payload). `tipo_erro` entra
+    na regra do erro sistemico: o mesmo erro local em todo o lote e bug nosso, nao do pedido."""
+
+    def __init__(self, mensagem: str, tipo_erro: str):
+        super().__init__(mensagem)
+        self.tipo_erro = tipo_erro
+
+
 class _Ocupado(_Recusa):
     """Outro envio segura a trava do pedido: nao e recusa do pedido, e "tente de novo"."""
 
@@ -176,7 +185,9 @@ def materializar_servicos(itens: list[dict], vuupt, config: dict | None, conn: s
     conn = conn or banco.conectar()
     try:
         vistos: set[str] = set()
-        recusas_http: dict[str, tuple[int, str]] = {}   # codigo -> (status, mensagem) das recusas da Vuupt
+        # codigo -> (status, mensagem) das recusas da Vuupt; recusa por dado local entra com status 0 e o
+        # tipo do erro como mensagem (regra do erro sistemico)
+        recusas_http: dict[str, tuple[int, str]] = {}
         for item in itens or []:
             sid = _id_do_item(item)
             if sid is not None and sid > 0:
@@ -218,6 +229,8 @@ def materializar_servicos(itens: list[dict], vuupt, config: dict | None, conn: s
                 http = _erro_http_vuupt(e)
                 if tipo == FALHA_RECUSA and http:
                     recusas_http[codigo] = http
+                elif isinstance(e, _RecusaDadoLocal):
+                    recusas_http[codigo] = (0, e.tipo_erro)
                 logger.warning(f"materializar {codigo}: servico NAO criado -- {e}")
         _aplicar_erro_sistemico(resultado, recusas_http)
     finally:
@@ -229,16 +242,23 @@ def materializar_servicos(itens: list[dict], vuupt, config: dict | None, conn: s
 def _aplicar_erro_sistemico(resultado: ResultadoMaterializacao, recusas_http: dict[str, tuple[int, str]]) -> None:
     """Todas as falhas do lote sao recusas da Vuupt com o MESMO status (>= MINIMO_LOTE_SISTEMICO pedidos)
     e nenhum pedido deu certo: o lote inteiro vira transitorio (nada sai do rascunho/pool)."""
+    # chave: o status HTTP; recusa por dado local (status 0) conta pelo tipo do erro
+    chaves = {(s, m if s == 0 else None) for s, m in recusas_http.values()}
     if (resultado.ok or len(recusas_http) < MINIMO_LOTE_SISTEMICO or set(resultado.falhas) != set(recusas_http)
-            or len({s for s, _ in recusas_http.values()}) != 1):
+            or len(chaves) != 1):
         return
     status, mensagem = next(iter(recusas_http.values()))
-    texto = (f"a Vuupt recusou todos os pedidos com o mesmo erro (Status {status}: {mensagem}): possivel problema "
-             f"sistemico, nada foi removido, avise o Hugo")
+    if status == 0:
+        texto = (f"todos os pedidos falharam com o mesmo erro local ao montar o servico ({mensagem}): possivel "
+                 f"problema sistemico: {mensagem}; nada foi removido, avise o Hugo")
+    else:
+        texto = (f"a Vuupt recusou todos os pedidos com o mesmo erro (Status {status}: {mensagem}): possivel "
+                 f"problema sistemico, nada foi removido, avise o Hugo")
     for codigo in recusas_http:
         resultado.falhas[codigo] = resultado.transitorios[codigo] = texto
-    logger.error(f"materializar: {len(recusas_http)} pedido(s) recusado(s) pela Vuupt com Status {status} -- "
-                 f"tratado como erro sistemico (nada removido): {', '.join(recusas_http)}")
+    logger.error(f"materializar: {len(recusas_http)} pedido(s) recusado(s) com o mesmo erro "
+                 f"({'Status ' + str(status) if status else mensagem}) -- tratado como erro sistemico (nada removido): "
+                 f"{', '.join(recusas_http)}")
 
 
 def materializar_lote(itens: list[dict], vuupt, config: dict | None, conn: sqlite3.Connection | None = None,
@@ -409,8 +429,8 @@ def _criar_ou_adotar(conn: sqlite3.Connection, codigo: str, linha, vuupt, passo=
     except (ValueError, TypeError) as e:
         # dado do nucleo malformado (ex. agendamento_* que nao e data) e erro LOCAL deterministico: tentar de
         # novo nao resolve, entao e recusa com o motivo (a parada sai), nunca transitorio (travaria a rota)
-        raise _Recusa(f"pedido {codigo} com dado invalido no nucleo ({e}): servico nao criado; corrigir o "
-                      f"pedido (data/endereco) e montar de novo") from e
+        raise _RecusaDadoLocal(f"pedido {codigo} com dado invalido no nucleo ({e}): servico nao criado; corrigir "
+                               f"o pedido (data/endereco) e montar de novo", type(e).__name__) from e
     passo()
     resposta, acao = vuupt.criar_ou_atualizar_servico(payload)
     servico = pedidos.servico_da_resposta(resposta)

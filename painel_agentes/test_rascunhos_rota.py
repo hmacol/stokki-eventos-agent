@@ -155,6 +155,25 @@ class EnviarRascunhoSemServicoTest(_Base):
         self.assertIn("erro 422 da Vuupt", resultado["codigos_sem_servico"]["#PS-2"])
         self.assertEqual(resultado["codigos_pendentes_tecnico"], {})
 
+    def test_mesmo_erro_local_em_todos_nao_remove_nada(self):
+        """Onda 4 round 1: bug de formato que faz montar_payload estourar em TODOS = sistemico, nada sai."""
+        ids = [self._sem_servico(c) for c in ("PS-1", "PS-2", "PS-3")]
+        conn = banco.conectar()
+        try:
+            conn.execute("UPDATE nucleo_pedidos SET dados_json = json_set(dados_json, '$.payload.customer', "
+                         "json('null')), destinatario_nome = 'DEST'")
+            conn.commit()
+        finally:
+            conn.close()
+        rid = _inserir_rascunho([(i, f"#PS-{n}") for n, i in enumerate(ids, 1)])
+        resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertFalse(resultado["ok"])
+        self.criar_rota.assert_not_called()
+        self.assertEqual(_paradas(rid), [(i, f"#PS-{n}") for n, i in enumerate(ids, 1)])
+        self.assertEqual(resultado["codigos_sem_servico"], {})
+        self.assertIn("possivel problema sistemico", resultado["erro"])
+        self.assertEqual(rascunhos_rota.buscar_rascunho(rid)["status"], rascunhos_rota.STATUS_ERRO_ENVIO)
+
     def test_agendamento_malformado_tira_so_essa_parada_e_a_rota_sai(self):
         """Onda 4 (L4): dado local invalido nao trava o rascunho inteiro em ERRO_ENVIO."""
         a, b, c = self._sem_servico("PS-1"), self._sem_servico("PS-2"), self._sem_servico("PS-3")
