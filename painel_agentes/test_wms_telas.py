@@ -175,5 +175,43 @@ class TestCaixasNaTela(unittest.TestCase):
         self.assertIn("Caixas desligadas", _WMS)
 
 
+class TestTelaEtiquetar(unittest.TestCase):
+    """Etiqueta de volume de todo pedido da Stokki (28/11): a tela Etiquetar entra pelo Inicio
+    (escolha do Hugo: botao no Inicio, tudo numa tela) e fala com /api/wms/etiquetar/*."""
+
+    def test_tela_etiquetar_usa_as_rotas_novas(self):
+        self.assertIn("TELAS.etiquetar", _WMS)
+        self.assertIn('data-ir="etiquetar"', _WMS)
+        for rota in ("/etiquetar/pedido", "/etiquetar/reimprimir", "/etiquetar/prontos"):
+            self.assertIn(rota, _WMS)
+        self.assertIn("confirmado: true", _WMS)
+
+    def test_nao_virou_aba_na_barra_de_baixo(self):
+        self.assertNotIn('data-aba="etiquetar"', _WMS)
+
+    def test_pedido_desconhecido_avisa_mas_deixa_imprimir(self):
+        self.assertIn("Não achei esse pedido no nosso sistema", _WMS)
+
+    def test_pdf_abre_direto_depois_de_imprimir(self):
+        """Hugo, 28/11: a tela e usada no computador; o PDF abre na hora e, se o navegador
+        bloquear a aba, o botao 'Abrir PDF' fica na tela. Abrir marca o trabalho como impresso."""
+        self.assertIn("window.open(API + '/etiquetar/pdf/'", _WMS)
+        self.assertIn("/etiquetar/impresso", _WMS)
+        self.assertIn("Abrir PDF", _WMS)
+
+    def test_bipe_sem_foco_no_campo_continua_na_tela_etiquetar(self):
+        """Revisao final: no celular o campo nao ganha foco sozinho e o leitor cai no handler
+        global (lerCodigo), que levava o bipe pra Consultar ou pro cadastro de produto."""
+        self.assertIn("S.tela === 'etiquetar') && S.ctx.bipar) return S.ctx.bipar(codigo);", _WMS)
+        self.assertIn("S.ctx.bipar = buscar;", _WMS)
+
+    def test_imprimir_guarda_o_pedido_antes_de_esperar_o_servidor(self):
+        """Revisao final: com rede lenta o operador bipava o pedido B enquanto o POST do A estava
+        no ar, e o reenvio confirmado ia com o codigo do B e o total do A."""
+        self.assertIn("const codigo = atual.codigo", _WMS)
+        self.assertNotIn("codigo: atual.codigo, total: total", _WMS)
+        self.assertIn("{ codigo: codigo, total: total, confirmado: true }", _WMS)
+
+
 if __name__ == "__main__":
     unittest.main()

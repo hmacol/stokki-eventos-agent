@@ -105,11 +105,16 @@ def desenhar_etiqueta_volume(dados: dict):
 
 
 def gerar_pdf_volumes(conn, itens: list) -> bytes:
-    """PDF com uma etiqueta 10x15 por item da fila (cada item e o QR `FV|PS|n|total`)."""
+    """PDF com uma etiqueta 10x15 por item da fila. Cada item e o QR: `FV|PS|n|total` (piloto do
+    galpao, wms_separacao) ou `FV|PS|n|total|id` (todo pedido da Stokki, expedicao_volumes)."""
+    import expedicao_volumes
     import wms_separacao
     artes = []
     for conteudo in itens or []:
-        dados = wms_separacao.dados_do_volume(conn, conteudo)
+        if str(conteudo).count("|") == 4:
+            dados = expedicao_volumes.dados_da_etiqueta(conn, conteudo)
+        else:
+            dados = wms_separacao.dados_do_volume(conn, conteudo)
         if not dados:
             raise wms.ErroWMS(f"Etiqueta de volume invalida: {conteudo}")
         artes.append(desenhar_etiqueta_volume(dados))

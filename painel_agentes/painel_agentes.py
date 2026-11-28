@@ -120,6 +120,7 @@ import wms_separacao
 import wms_lotes_planilha
 import wms_etiqueta_volume
 import wms_fila_impressao
+import expedicao_volumes
 import wms_faltas_recebimento
 import acesso_telas
 import avisos_pendencias
@@ -7610,6 +7611,67 @@ def api_wms_separacao_volumes(pedido_id):
 def api_wms_separacao_volume_reimprimir(pedido_id, numero):
     op = _wms_exige_operador()
     return _sep_chamar(lambda conn: wms_separacao.reimprimir_volume(conn, pedido_id, numero, op.get("nome", "")))
+
+
+# ── Galpão: etiqueta de volume de TODO pedido finalizado na Stokki (28/11) ───
+# O operador bipa/digita o PS, informa as caixas e as etiquetas 10x15 saem pela fila.
+# Regras em expedicao_volumes.py (sem Flask); nunca chama a Stokki.
+
+@app.route("/api/wms/etiquetar/pedido")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_etiquetar_consultar():
+    codigo = request.args.get("codigo", "")
+    return _sep_chamar(lambda conn: expedicao_volumes.situacao(conn, codigo))
+
+
+@app.route("/api/wms/etiquetar/pedido", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_etiquetar_pedido():
+    op = _wms_exige_operador()
+    corpo = _sep_corpo()
+    return _sep_chamar(lambda conn: expedicao_volumes.etiquetar(
+        conn, corpo.get("codigo"), corpo.get("total"), op, confirmado=corpo.get("confirmado") is True))
+
+
+@app.route("/api/wms/etiquetar/reimprimir", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_etiquetar_reimprimir():
+    op = _wms_exige_operador()
+    corpo = _sep_corpo()
+    return _sep_chamar(lambda conn: expedicao_volumes.reimprimir(conn, corpo.get("codigo"), op, corpo.get("numero")))
+
+
+@app.route("/api/wms/etiquetar/pdf/<int:impressao_id>")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_etiquetar_pdf(impressao_id):
+    """PDF das etiquetas pra tela abrir direto no computador (Hugo, 28/11). So trabalhos da
+    propria tela Etiquetar: a fila da estacao (/etiquetas/fila) continua fechada pro galpao."""
+    conn = wms_separacao.conectar()
+    try:
+        pdf = expedicao_volumes.pdf_do_trabalho(conn, impressao_id)
+    except wms.ErroWMS as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+    return Response(pdf, mimetype="application/pdf",
+                    headers={"Content-Disposition": f"inline; filename=etiquetas-{impressao_id}.pdf"})
+
+
+@app.route("/api/wms/etiquetar/impresso", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_etiquetar_impresso():
+    op = _wms_exige_operador()
+    impressao_id = _sep_corpo().get("impressao_id")
+    return _sep_chamar(lambda conn: expedicao_volumes.marcar_impresso(conn, impressao_id, op))
+
+
+@app.route("/api/wms/etiquetar/prontos")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_etiquetar_prontos():
+    return _sep_chamar(lambda conn: expedicao_volumes.prontos_sem_etiqueta(conn))
 
 
 # Escritório: montar onda, decidir falta e acompanhar (níveis total e operador).

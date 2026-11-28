@@ -1,0 +1,10 @@
+[Unit]
+Description=Dispara stokki-volumes-prontos.service de hora em hora (dia util, 08:25 as 17:25), 20 min depois do pipeline horario
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 08..17:25:00
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

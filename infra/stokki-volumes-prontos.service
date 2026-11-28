@@ -1,0 +1,11 @@
+[Unit]
+Description=Stokki Eventos - Volumes conferidos dos pedidos em aguardando transportador (atualizar_volumes_conferidos.py --prontos)
+OnFailure=stokki-alerta-falha@%n.service
+
+[Service]
+Type=oneshot
+User=www-data
+WorkingDirectory=/opt/stokki-eventos/roteirizacao
+# teto de 15 min: no maximo 80 pedidos por rodada (--limite)
+TimeoutStartSec=900
+ExecStart=/opt/stokki-eventos/venv/bin/python /opt/stokki-eventos/roteirizacao/atualizar_volumes_conferidos.py --prontos

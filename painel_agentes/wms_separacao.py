@@ -151,6 +151,8 @@ def garantir_tabelas(conn) -> None:
     for sql in _DDL:
         conn.execute(sql)
     wms_lotes_planilha.garantir_tabela(conn)   # wms_lotes_cliente (o portal tambem grava nela)
+    import expedicao_volumes                   # aqui dentro: ele importa este modulo
+    expedicao_volumes.garantir_tabela(conn)    # etiqueta de volume de todo pedido da Stokki (28/11)
     for tabela, colunas in _COLUNAS_EXTRAS.items():
         existentes = {r[1] for r in conn.execute(f"PRAGMA table_info({tabela})")}
         for nome, tipo in colunas.items():
