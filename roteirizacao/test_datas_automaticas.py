@@ -124,6 +124,8 @@ class TestDatasAutomaticas(unittest.TestCase):
                                                  "agendamento_inicio": "2026-11-10 00:00:00",
                                                  "agendamento_fim": "2026-11-10 23:59:00"},
                                   banco.ORIGEM_PIPELINE)
+            # pedido sem servico LEGITIMO (onda 4): nasceu pelo caminho sem servico do pipeline
+            conn.execute("UPDATE nucleo_pedidos SET nasceu_sem_servico = 1 WHERE codigo = ?", (codigo,))
             conn.commit()
             return pool.pedido_para_servico(dict(conn.execute(
                 "SELECT * FROM nucleo_pedidos WHERE codigo = ?", (codigo,)).fetchone()))
