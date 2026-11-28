@@ -241,12 +241,30 @@ MAX_PEDIDOS_PIX_IP_HORA = 10
 MAX_PEDIDOS_PIX_CPF_HORA = 3
 
 
-def pedir_pix(conn: sqlite3.Connection, cpf, pix, ip: str | None = None) -> dict:
-    """Link único /motorista/pix: motorista ativo informa CPF + chave nova. Só registra o pedido
-    (PENDENTE); quem troca o PIX é a equipe, em decidir_pix. Pedido novo do mesmo CPF substitui o anterior."""
+def _nascimento_iso(valor) -> str | None:
+    """'AAAA-MM-DD' ou 'DD/MM/AAAA' -> 'AAAA-MM-DD'; None se não for data."""
+    v = str(valor or "").strip()[:10]
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(v, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return None
+
+
+def pedir_pix(conn: sqlite3.Connection, cpf, pix, nascimento, ip: str | None = None) -> dict:
+    """Link único /motorista/pix: motorista ativo informa CPF + data de nascimento + chave nova. Só
+    registra o pedido (PENDENTE); quem troca o PIX é a equipe, em decidir_pix. Pedido novo do mesmo CPF
+    substitui o anterior. A data de nascimento é um 2º fator (o CPF sozinho não é segredo): tem que bater
+    com a da ficha aprovada; sem data na ficha ou divergente, responde igual ao sucesso e não grava."""
     cpf = _digitos(cpf)
     if not cad.cpf_valido(cpf):
         raise cad.CadastroInvalido("CPF inválido.")
+    if not str(nascimento or "").strip():
+        raise cad.CadastroInvalido("Informe a data de nascimento.")
+    nascimento = _nascimento_iso(nascimento)
+    if not nascimento:
+        raise cad.CadastroInvalido("Data de nascimento inválida.")
     pix = cad.validar_pix(pix)
     if not pix:
         raise cad.CadastroInvalido("Informe a chave PIX.")
@@ -265,7 +283,14 @@ def pedir_pix(conn: sqlite3.Connection, cpf, pix, ip: str | None = None) -> dict
     pessoa = next((p for p in pessoas(conn) if p["cpf"] == cpf and p["ativo"]), None)
     if not pessoa:
         return resposta
-    atual = pix_vigente(conn, pessoa, _ficha_vigente_ids(conn, pessoa["ids"], cpf))
+    ficha = _ficha_vigente_ids(conn, pessoa["ids"], cpf)
+    if _nascimento_iso((ficha or {}).get("data_nascimento")) != nascimento:
+        # sem data na ficha ou data diferente: nada gravado, resposta igual (sem oracle). Fica no log
+        # com o id (nunca CPF/data) pra equipe ver quando o motorista disser que "enviou e nada aconteceu".
+        logger.info("pedido de PIX sem conferir a data de nascimento descartado (bd_motoristas id=%s, ficha com data=%s)",
+                    pessoa["principal_id"], bool(_nascimento_iso((ficha or {}).get("data_nascimento"))))
+        return resposta
+    atual = pix_vigente(conn, pessoa, ficha)
     if atual and atual.strip().lower() == pix.lower():
         return resposta
     agora = banco.agora()

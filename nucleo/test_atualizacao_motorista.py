@@ -903,13 +903,21 @@ class TestAtualizacaoMotorista(unittest.TestCase):
 
     # ── Link único de PIX (/motorista/pix) ────────────────────────────────
 
+    NASC = "1990-05-17"
+
+    def _motorista_com_nascimento(self, nome="Fulano", cpf=None, agent=7, nasc="1990-05-17", **extra):
+        """Motorista ativo + ficha aprovada com data de nascimento (o 2o fator do link de PIX)."""
+        lid = self._linha(nome, cpf=cpf or CPF_X, agent=agent, **extra)
+        self._ficha(agent_id=agent, bd_id=lid, cpf=cpf or CPF_X, data_nascimento=nasc)
+        return lid
+
     def _pedidos_pix(self):
         return [dict(r) for r in self.conn.execute("SELECT * FROM motoristas_pix_pedidos ORDER BY id")]
 
     def test_pedir_pix_registra_pendente_e_nao_troca_na_hora(self):
-        lid = self._linha("Fulano de Tal", cpf=CPF_X, agent=7)
+        lid = self._motorista_com_nascimento("Fulano de Tal")
         self._login(CPF_X, agent_id=7, chave_pix="pix-B")
-        r = atu.pedir_pix(self.conn, "529.982.247-25", " pix-D ", ip="1.2.3.4")
+        r = atu.pedir_pix(self.conn, "529.982.247-25", " pix-D ", "17/05/1990", ip="1.2.3.4")
         self.assertEqual(r, {"ok": True})
         (p,) = self._pedidos_pix()
         self.assertEqual((p["cpf"], p["pix_novo"], p["pix_anterior"], p["status"], p["bd_motorista_id"], p["ip_origem"]),
@@ -919,39 +927,40 @@ class TestAtualizacaoMotorista(unittest.TestCase):
         self.assertTrue(atu.pendencias(self.conn, self._pessoa(lid))["pix_pendente"])
 
     def test_pedir_pix_recusa_so_cpf_invalido_e_responde_igual_nos_demais_casos(self):
-        self._linha("Ativo", cpf=CPF_X, agent=7)
-        self._linha("Inativo", cpf=CPF_Y, agent=8, ativo="NAO")
+        self._motorista_com_nascimento("Ativo")
+        self._motorista_com_nascimento("Inativo", cpf=CPF_Y, agent=8, ativo="NAO")
         self._login(CPF_X, agent_id=7, chave_pix="pix-B")
-        for cpf, pix in (("123", "p"), (CPF_X, "  ")):
+        for cpf, pix, nasc in (("123", "p", self.NASC), (CPF_X, "  ", self.NASC),
+                               (CPF_X, "p", ""), (CPF_X, "p", "31/02/1990"), (CPF_X, "p", "lixo")):
             with self.assertRaises(cad.CadastroInvalido) as cx:
-                atu.pedir_pix(self.conn, cpf, pix)
+                atu.pedir_pix(self.conn, cpf, pix, nasc)
             self.assertEqual(cx.exception.codigo, 400)
         # desconhecido, inativo e mesma chave: resposta idêntica e nada registrado (sem enumeração)
         for cpf, pix in ((CPF_Z, "p"), (CPF_Y, "p"), (CPF_X, "PIX-b")):
-            self.assertEqual(atu.pedir_pix(self.conn, cpf, pix), {"ok": True})
+            self.assertEqual(atu.pedir_pix(self.conn, cpf, pix, self.NASC), {"ok": True})
         self.assertEqual(self._pedidos_pix(), [])
 
     def test_pedir_pix_de_novo_substitui_o_anterior_e_tem_freios_por_cpf_e_por_ip(self):
-        self._linha("Fulano", cpf=CPF_X, agent=7)
-        atu.pedir_pix(self.conn, CPF_X, "pix-1", ip="9.9.9.9")
-        atu.pedir_pix(self.conn, CPF_X, "pix-2", ip="9.9.9.9")
+        self._motorista_com_nascimento()
+        atu.pedir_pix(self.conn, CPF_X, "pix-1", self.NASC, ip="9.9.9.9")
+        atu.pedir_pix(self.conn, CPF_X, "pix-2", self.NASC, ip="9.9.9.9")
         self.assertEqual([p["status"] for p in self._pedidos_pix()], ["SUBSTITUIDO", "PENDENTE"])
-        atu.pedir_pix(self.conn, CPF_X, "pix-3", ip="9.9.9.9")
+        atu.pedir_pix(self.conn, CPF_X, "pix-3", self.NASC, ip="9.9.9.9")
         # 4o do mesmo CPF na hora: mesma resposta do sucesso, sem gravar (nao vira oracle de CPF)
-        self.assertEqual(atu.pedir_pix(self.conn, CPF_X, "pix-4", ip="8.8.8.8"), {"ok": True})
+        self.assertEqual(atu.pedir_pix(self.conn, CPF_X, "pix-4", self.NASC, ip="8.8.8.8"), {"ok": True})
         self.assertEqual(len(self._pedidos_pix()), 3)
         self.conn.execute("UPDATE motoristas_pix_pedidos SET cpf = '0'")   # IP: 3 gravados, completa o teto
         for _ in range(atu.MAX_PEDIDOS_PIX_IP_HORA - 3):
             self.conn.execute("INSERT INTO motoristas_pix_pedidos (cpf, pix_novo, criado_em, ip_origem) VALUES ('0','x',?,'9.9.9.9')",
                               (banco.agora(),))
         self.conn.commit()
-        self.assertEqual(atu.pedir_pix(self.conn, CPF_X, "pix-z", ip="9.9.9.9"), {"ok": True})
+        self.assertEqual(atu.pedir_pix(self.conn, CPF_X, "pix-z", self.NASC, ip="9.9.9.9"), {"ok": True})
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM motoristas_pix_pedidos WHERE cpf = ?", (CPF_X,)).fetchone()[0], 0)
 
     def test_aprovar_pedido_do_link_unico_grava_no_login_e_fecha_o_pedido(self):
-        lid = self._linha("Fulano", cpf=CPF_X, agent=7)
+        lid = self._motorista_com_nascimento()
         self._login(CPF_X, agent_id=7, chave_pix="pix-B")
-        atu.pedir_pix(self.conn, CPF_X, "pix-D")
+        atu.pedir_pix(self.conn, CPF_X, "pix-D", self.NASC)
         self.assertEqual(atu.decidir_pix(self.conn, lid, True, "hugo"), {"ok": True, "aprovado": True})
         self.assertEqual(self._pix_login(), "pix-D")
         p = self._pedidos_pix()[0]
@@ -961,12 +970,37 @@ class TestAtualizacaoMotorista(unittest.TestCase):
             atu.decidir_pix(self.conn, lid, True, "hugo")
 
     def test_recusar_pedido_do_link_unico_mantem_o_pix(self):
-        lid = self._linha("Fulano", cpf=CPF_X, agent=7)
+        lid = self._motorista_com_nascimento()
         self._login(CPF_X, agent_id=7, chave_pix="pix-B")
-        atu.pedir_pix(self.conn, CPF_X, "pix-D")
+        atu.pedir_pix(self.conn, CPF_X, "pix-D", self.NASC)
         atu.decidir_pix(self.conn, lid, False, "hugo")
         self.assertEqual(self._pix_login(), "pix-B")
         self.assertEqual(self._pedidos_pix()[0]["status"], "RECUSADO")
+
+    def test_pedir_pix_so_grava_se_a_data_de_nascimento_bate_com_a_ficha(self):
+        self._motorista_com_nascimento()
+        self._login(CPF_X, agent_id=7, chave_pix="pix-B")
+        # data errada: resposta igual ao sucesso, nada gravado
+        self.assertEqual(atu.pedir_pix(self.conn, CPF_X, "pix-D", "1990-05-18"), {"ok": True})
+        self.assertEqual(self._pedidos_pix(), [])
+        # formatos AAAA-MM-DD e DD/MM/AAAA valem
+        atu.pedir_pix(self.conn, CPF_X, "pix-D", "1990-05-17")
+        atu.pedir_pix(self.conn, CPF_X, "pix-E", "17/05/1990")
+        self.assertEqual([p["status"] for p in self._pedidos_pix()], ["SUBSTITUIDO", "PENDENTE"])
+
+    def test_pedir_pix_sem_data_na_ficha_ou_sem_ficha_nao_grava(self):
+        lid = self._linha("Sem ficha", cpf=CPF_X, agent=7)
+        self.assertEqual(atu.pedir_pix(self.conn, CPF_X, "pix-D", self.NASC), {"ok": True})
+        self._ficha(agent_id=7, bd_id=lid, cpf=CPF_X)   # ficha aprovada, mas sem data_nascimento
+        self.assertEqual(atu.pedir_pix(self.conn, CPF_X, "pix-D", self.NASC), {"ok": True})
+        self.assertEqual(self._pedidos_pix(), [])
+
+    def test_pedido_com_data_errada_nao_substitui_o_pendente_do_motorista(self):
+        self._motorista_com_nascimento()
+        atu.pedir_pix(self.conn, CPF_X, "pix-do-motorista", self.NASC)
+        atu.pedir_pix(self.conn, CPF_X, "pix-do-atacante", "2000-01-01")
+        (p,) = self._pedidos_pix()
+        self.assertEqual((p["pix_novo"], p["status"]), ("pix-do-motorista", "PENDENTE"))
 
 
 if __name__ == "__main__":

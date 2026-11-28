@@ -22,10 +22,12 @@
 <body>
 <main>
   <h1>Atualizar chave PIX</h1>
-  <p>Informe seu CPF e a nova chave. A equipe da Fresh Log confere e confirma com você antes da troca valer.</p>
+  <p>Informe seu CPF, sua data de nascimento e a nova chave. A equipe da Fresh Log confere e confirma com você antes da troca valer.</p>
   <form id="f" autocomplete="off">
     <label for="cpf">CPF</label>
     <input id="cpf" inputmode="numeric" maxlength="14" placeholder="000.000.000-00" required>
+    <label for="nasc">Data de nascimento</label>
+    <input id="nasc" type="date" min="1900-01-01" required>
     <label for="pix">Nova chave PIX</label>
     <input id="pix" maxlength="120" placeholder="CPF, telefone, e-mail ou chave aleatória" required>
     <button id="b" type="submit">Enviar</button>
@@ -39,12 +41,12 @@
     e.preventDefault();
     b.disabled = true; msg.className = ""; msg.textContent = "Enviando...";
     fetch(URL_PIX, {method: "POST", headers: {"Content-Type": "application/json"},
-                    body: JSON.stringify({cpf: f.cpf.value, chave_pix: f.pix.value})})
+                    body: JSON.stringify({cpf: f.cpf.value, data_nascimento: f.nasc.value, chave_pix: f.pix.value})})
       .then(function (r) { return r.json().then(function (d) { return {ok: r.ok, d: d}; }); })
       .then(function (x) {
         if (x.ok) {
           f.style.display = "none"; msg.className = "ok";
-          msg.textContent = "Pedido recebido! Se o CPF for de um motorista ativo, a Fresh Log vai confirmar " +
+          msg.textContent = "Pedido recebido! Se os dados conferirem com o cadastro de um motorista ativo, a Fresh Log vai confirmar " +
             "com você antes de trocar o PIX. Sem retorno em 2 dias úteis, fale com a equipe.";
         } else { msg.className = "erro"; msg.textContent = x.d.erro || "Não foi possível enviar."; b.disabled = false; }
       })

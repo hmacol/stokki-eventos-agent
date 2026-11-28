@@ -489,8 +489,10 @@ def criar_app(config: dict | None = None) -> Flask:
     def pix_novo():
         if not _pix_ativo():
             raise cadastro.CadastroInvalido(MSG_LINK_OFF, 503)
+        _freio("pix")   # sem login: sem freio, CPF valido em loop faz pessoas() (le toda a bd_motoristas) a cada POST
         d = corpo()
-        return jsonify(atualizacao.pedir_pix(conn(), d.get("cpf"), d.get("chave_pix"), ip=request.remote_addr or "?")), 201
+        return jsonify(atualizacao.pedir_pix(conn(), d.get("cpf"), d.get("chave_pix"), d.get("data_nascimento"),
+                                             ip=request.remote_addr or "?")), 201
 
     @app.post("/api/push-token")
     @requer_motorista

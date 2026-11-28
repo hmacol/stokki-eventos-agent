@@ -718,5 +718,40 @@ class TestApiMotorista(unittest.TestCase):
         self.assertFalse(self._login(cpf="98765432100", pin="482913").get_json()["motorista"]["trocar_pin"])
 
 
+class TestApiPixLinkUnico(unittest.TestCase):
+    """/api/pix (link unico de troca de PIX): flag, data de nascimento obrigatoria e freio por IP."""
+    CPF_VALIDO = "52998224725"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self._patch_db = mock.patch.object(banco, "DB_PATH", Path(self._tmp.name) / "t.db")
+        self._patch_db.start()
+
+    def tearDown(self):
+        self._patch_db.stop()
+        self._tmp.cleanup()
+
+    def _cli_pix(self, ativo=True):
+        cfg = {"api_motorista": {"secret_key": "segredo-de-teste", "pasta_comprovantes": "x", "gcs_ativo": False}}
+        if ativo:
+            cfg["pix_motoristas"] = {"ativo": True}
+        return api_motorista.criar_app(cfg).test_client()
+
+    def test_pix_desligado_responde_503(self):
+        r = self._cli_pix(ativo=False).post("/api/pix", json={"cpf": self.CPF_VALIDO, "chave_pix": "p", "data_nascimento": "1990-05-17"})
+        self.assertEqual(r.status_code, 503)
+
+    def test_pix_exige_data_de_nascimento(self):
+        r = self._cli_pix().post("/api/pix", json={"cpf": self.CPF_VALIDO, "chave_pix": "p"})
+        self.assertEqual((r.status_code, r.get_json()["erro"]), (400, "Informe a data de nascimento."))
+
+    def test_pix_tem_freio_por_ip_mesmo_com_cpf_que_nao_e_de_motorista(self):
+        cli = self._cli_pix()
+        corpo = {"cpf": self.CPF_VALIDO, "chave_pix": "p", "data_nascimento": "1990-05-17"}
+        for _ in range(60):   # LIMITE_ROTA_IP_HORA
+            self.assertEqual(cli.post("/api/pix", json=corpo).status_code, 201)
+        self.assertEqual(cli.post("/api/pix", json=corpo).status_code, 429)
+
+
 if __name__ == "__main__":
     unittest.main()

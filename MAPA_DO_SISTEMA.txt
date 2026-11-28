@@ -260,7 +260,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              motorista ATIVO + chave nova viram pedido PENDENTE em motoristas_pix_pedidos (10/IP/h, 3/CPF/h; resposta igual p/ CPF desconhecido: sem enumeração);
                                              nunca troca na hora. A equipe aprova/recusa no mesmo selo "PIX novo aguardando
                                              aprovação" da /motoristas (pix_pendente/decidir_pix). Config: pix_motoristas.ativo
-                                             (ausente = 503).
+                                             (ausente = 503). 2o fator (28/11): data de nascimento tem que bater com a da ficha aprovada
+                                             (sem data na ficha ou divergente = resposta igual, nada gravado, log com o id); POST /api/pix
+                                             passa por _freio("pix") (60/IP/h).
  Pool do planejamento (Vuupt x núcleo) ..... nucleo/pool.py (config planejamento.fonte_pool: vuupt | nucleo | freshhub)
    fonte freshhub (plano 1.2 do novo) ..... GET /api/pool da API nova via nucleo/freshhub_client.py (config
                                              freshhub_api.url = http://127.0.0.1:8100 e freshhub_api.token, token
