@@ -207,8 +207,9 @@ def etiquetar(conn, texto, total, operador: dict | None, *, confirmado: bool = F
         dados = dados_do_pedido(conn, codigo)
         ativos = _ativos(conn, codigo)
         if ativos and len(ativos) == total and ativos[0]["total"] == total:
+            feitos = sorted({a["impressao_id"] for a in ativos if a["impressao_id"]})
             return {"codigo": codigo, "total": total, "impressao_id": ativos[0]["impressao_id"],
-                    "trabalhos": len({a["impressao_id"] for a in ativos}),
+                    "impressao_ids": feitos, "trabalhos": len(feitos),
                     "repetido": True, "anuladas": 0, "conhecido": dados["conhecido"]}
         if not confirmado:
             avisos = []
@@ -238,8 +239,9 @@ def etiquetar(conn, texto, total, operador: dict | None, *, confirmado: bool = F
             "INSERT INTO expedicao_volumes (id_caixa, codigo, numero, total, impressao_id, criado_em, criado_por) "
             "VALUES (?,?,?,?,?,?,?)",
             [(c["id_caixa"], codigo, c["numero"], total, trabalhos[i], ts, nome) for i, c in enumerate(caixas)])
-    return {"codigo": codigo, "total": total, "impressao_id": trabalhos[0], "trabalhos": len(set(trabalhos)),
-            "repetido": False, "anuladas": len(ativos), "conhecido": dados["conhecido"]}
+    feitos = sorted(set(trabalhos))
+    return {"codigo": codigo, "total": total, "impressao_id": feitos[0], "impressao_ids": feitos,
+            "trabalhos": len(feitos), "repetido": False, "anuladas": len(ativos), "conhecido": dados["conhecido"]}
 
 
 def reimprimir(conn, texto, operador: dict | None, numero=None) -> dict:
@@ -282,6 +284,37 @@ def dados_da_etiqueta(conn, conteudo: str) -> dict | None:
             "qr": conteudo_qr(caixa["codigo"], caixa["numero"], caixa["total"], caixa["id_caixa"]),
             "embarcador": p["embarcador"], "destinatario": p["destinatario"], "endereco": p["endereco"],
             "cidade": p["cidade"], "uf": p["uf"], "nf": p["nf"]}
+
+
+def _trabalho_da_tela(conn, impressao_id) -> dict:
+    """O trabalho da fila, so se for de etiqueta de volume DESTE modulo (QR de 5 campos). O login do
+    galpao nao entra na fila da estacao (/etiquetas/fila): pela tela ele so alcanca o que e daqui."""
+    try:
+        trabalho = wms_fila_impressao.obter(conn, int(impressao_id))
+    except (TypeError, ValueError):
+        trabalho = None
+    nosso = bool(trabalho) and trabalho["tipo"] == "VOLUME" and all(
+        str(i).upper().startswith("FV|") and str(i).count("|") == 4 for i in trabalho["itens"])
+    if not nosso:
+        raise wms.ErroWMS(f"Trabalho de impressao {impressao_id} nao e de etiqueta de volume de pedido.")
+    return trabalho
+
+
+def pdf_do_trabalho(conn, impressao_id) -> bytes:
+    """PDF das etiquetas de um trabalho, pra tela Etiquetar abrir direto no computador (Hugo, 28/11)."""
+    import wms_etiqueta_volume   # aqui dentro: ele importa este modulo
+    trabalho = _trabalho_da_tela(conn, impressao_id)
+    if trabalho["situacao"] == "CANCELADO":
+        raise wms.ErroWMS(f"Trabalho de impressao {impressao_id} foi cancelado (o total de caixas mudou). "
+                          "Bipe o pedido de novo e use Reimprimir.")
+    return wms_etiqueta_volume.gerar_pdf_volumes(conn, trabalho["itens"])
+
+
+def marcar_impresso(conn, impressao_id, operador: dict | None) -> dict:
+    """A tela abriu o PDF: o trabalho sai da fila da estacao, pra ninguem imprimir de novo."""
+    trabalho = _trabalho_da_tela(conn, impressao_id)
+    feito = wms_fila_impressao.marcar_impresso(conn, trabalho["id"], wms_separacao._op(operador)[1])
+    return {"impressao_id": feito["id"], "situacao": feito["situacao"]}
 
 
 def prontos_sem_etiqueta(conn, limite: int = 50) -> dict:

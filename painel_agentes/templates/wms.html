@@ -1888,8 +1888,8 @@
         }
         const naTela = atual && atual.codigo === codigo;
         if (r.repetido) { toast(r.codigo + ' já tem ' + r.total + ' etiqueta(s). Use Reimprimir se precisar.', true); if (naTela) buscar(r.codigo); return; }
-        toast(r.total + ' etiqueta(s) do ' + r.codigo + ' enviadas pra fila de impressão' + (r.trabalhos > 1 ? ' (em ' + r.trabalhos + ' trabalhos)' : '')); bip(true);
-        if (naTela) limpar();
+        toast(r.total + ' etiqueta(s) do ' + r.codigo + (naTela ? ' prontas' : ' enviadas pra fila de impressão')); bip(true);
+        if (naTela) mostrarProntas(r.codigo, r.total, r.impressao_ids);
         carregarProntos();
       } catch (e) { if (e.message !== 'sem operador') { toast(e.message, true); bip(false); } }
       finally { const b = document.getElementById('etq-imprimir'); if (b) b.disabled = false; }
@@ -1898,9 +1898,27 @@
       if (!atual) return;
       try {
         const r = await etqPost('/etiquetar/reimprimir', numero ? { codigo: atual.codigo, numero: numero } : { codigo: atual.codigo });
-        toast(r.quantidade + ' etiqueta(s) do ' + r.codigo + ' enviadas pra fila de impressão'); bip(true);
-        buscar(r.codigo);
+        toast(r.quantidade + ' etiqueta(s) do ' + r.codigo + ' prontas'); bip(true);
+        mostrarProntas(r.codigo, r.quantidade, r.impressao_ids);
       } catch (e) { if (e.message !== 'sem operador') { toast(e.message, true); bip(false); } }
+    }
+    // A tela é usada no computador (Hugo, 28/11): o PDF abre direto em outra aba. Se o navegador
+    // bloquear a aba, o botão "Abrir PDF" fica na tela. Abrir marca o trabalho como impresso, pra
+    // ele sair da fila da estação e ninguém imprimir de novo; se a impressão falhar, é Reimprimir.
+    function marcarImpresso(id) { etqPost('/etiquetar/impresso', { impressao_id: id }).catch(() => { /* fica pendente na fila da estação */ }); }
+    function mostrarProntas(codigo, quantidade, ids) {
+      atual = null; campo.value = '';
+      area.innerHTML = `
+        <div class="cartao ok">
+          <div class="rotulo">Etiquetas prontas</div>
+          <div class="valor mono">${esc(codigo)} · ${quantidade} ${quantidade === 1 ? 'etiqueta' : 'etiquetas'}</div>
+          <div class="sub">O PDF abre em outra aba: mande pra impressora de etiquetas 10×15. Se não abriu, use o botão.${ids.length > 1 ? ' São ' + ids.length + ' arquivos (até 50 etiquetas cada): abra um de cada vez.' : ''}</div>
+          <div class="botoes" style="margin:8px 0 0">${ids.map((id, i) => `<a class="botao${i ? ' secundario' : ''}" target="_blank" rel="noopener" data-pdf="${id}" href="${API}/etiquetar/pdf/${id}">Abrir PDF${ids.length > 1 ? ' ' + (i + 1) + ' de ' + ids.length : ''}</a>`).join('')}</div>
+        </div>`;
+      area.querySelectorAll('[data-pdf]').forEach((a) => a.addEventListener('click', () => marcarImpresso(Number(a.dataset.pdf))));
+      const aba = window.open(API + '/etiquetar/pdf/' + ids[0], '_blank');
+      if (aba) marcarImpresso(ids[0]);
+      if (!('ontouchstart' in window)) campo.focus();
     }
     async function carregarProntos() {
       try {

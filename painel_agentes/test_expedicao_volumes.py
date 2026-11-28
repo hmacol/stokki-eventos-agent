@@ -252,5 +252,42 @@ class TestPdf(Base):
             vol.gerar_pdf_volumes(self.conn, itens)
 
 
+class TestPdfNaTela(Base):
+    """Hugo, 28/11: a tela e usada no computador e o PDF abre direto depois do Imprimir, com o
+    login do galpao (que nao entra na fila /etiquetas/fila). Abrir pela tela marca como impresso,
+    pra o trabalho nao ficar pendente na fila e alguem imprimir de novo."""
+
+    def test_etiquetar_e_reimprimir_devolvem_todos_os_trabalhos(self):
+        r = ev.etiquetar(self.conn, "PS-45352", 3, ANA)
+        self.assertEqual(r["impressao_ids"], [r["impressao_id"]])
+        self.assertEqual(ev.etiquetar(self.conn, "PS-45352", 3, ANA)["impressao_ids"], r["impressao_ids"])   # repetido
+        grande = ev.etiquetar(self.conn, "PS-7", 120, ANA, confirmado=True)
+        self.assertEqual((len(grande["impressao_ids"]), grande["impressao_ids"][0]), (3, grande["impressao_id"]))
+
+    def test_pdf_do_trabalho_so_serve_o_que_e_da_tela(self):
+        r = ev.etiquetar(self.conn, "PS-45352", 2, ANA)
+        self.assertTrue(ev.pdf_do_trabalho(self.conn, r["impressao_id"]).startswith(b"%PDF"))
+        piloto = fila.enfileirar(self.conn, tipo="VOLUME", tamanho="10x15", itens=["FV|PS-44009|1|1"], titulo="piloto")
+        caixa = fila.enfileirar(self.conn, tipo="CAIXA", tamanho="10x5", itens=["FL|X|L1||1"], titulo="caixa")
+        self.conn.commit()
+        for alheio in (piloto, caixa, 99999):
+            with self.assertRaisesRegex(wms.ErroWMS, "nao e de etiqueta de volume"):
+                ev.pdf_do_trabalho(self.conn, alheio)
+        ev.etiquetar(self.conn, "PS-45352", 3, ANA, confirmado=True)          # o total mudou: o antigo foi cancelado
+        with self.assertRaisesRegex(wms.ErroWMS, "cancelado"):
+            ev.pdf_do_trabalho(self.conn, r["impressao_id"])
+
+    def test_marcar_impresso_so_o_que_e_da_tela(self):
+        r = ev.etiquetar(self.conn, "PS-45352", 2, ANA)
+        m = ev.marcar_impresso(self.conn, r["impressao_id"], ANA)
+        self.assertEqual((m["impressao_id"], m["situacao"]), (r["impressao_id"], "IMPRESSO"))
+        self.assertEqual(fila.obter(self.conn, r["impressao_id"])["impresso_por"], "Ana")
+        piloto = fila.enfileirar(self.conn, tipo="VOLUME", tamanho="10x15", itens=["FV|PS-44009|1|1"], titulo="piloto")
+        self.conn.commit()
+        with self.assertRaises(wms.ErroWMS):
+            ev.marcar_impresso(self.conn, piloto, ANA)
+        self.assertEqual(fila.obter(self.conn, piloto)["situacao"], "PENDENTE")
+
+
 if __name__ == "__main__":
     unittest.main()

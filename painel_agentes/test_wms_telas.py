@@ -192,6 +192,13 @@ class TestTelaEtiquetar(unittest.TestCase):
     def test_pedido_desconhecido_avisa_mas_deixa_imprimir(self):
         self.assertIn("Não achei esse pedido no nosso sistema", _WMS)
 
+    def test_pdf_abre_direto_depois_de_imprimir(self):
+        """Hugo, 28/11: a tela e usada no computador; o PDF abre na hora e, se o navegador
+        bloquear a aba, o botao 'Abrir PDF' fica na tela. Abrir marca o trabalho como impresso."""
+        self.assertIn("window.open(API + '/etiquetar/pdf/'", _WMS)
+        self.assertIn("/etiquetar/impresso", _WMS)
+        self.assertIn("Abrir PDF", _WMS)
+
     def test_bipe_sem_foco_no_campo_continua_na_tela_etiquetar(self):
         """Revisao final: no celular o campo nao ganha foco sozinho e o leitor cai no handler
         global (lerCodigo), que levava o bipe pra Consultar ou pro cadastro de produto."""

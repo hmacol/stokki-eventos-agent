@@ -184,6 +184,11 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              conferido + "Waiting for Carrier" (volumes_conferidos). Rotas
                                              /api/wms/etiquetar/pedido (GET consulta, POST etiqueta), /reimprimir e
                                              /prontos (prontos na Stokki sem etiqueta, de vigia_stokki_abertos).
+                                             A tela é usada no COMPUTADOR: depois do Imprimir o PDF abre direto em
+                                             outra aba (/api/wms/etiquetar/pdf/<id>, só trabalhos desta tela; o
+                                             login do galpão continua sem a fila /etiquetas/fila) e a tela marca o
+                                             trabalho como impresso (/api/wms/etiquetar/impresso), pra ele não
+                                             ficar pendente na fila da estação. Pedido grande: trabalhos de até 50.
                                              Sem trava: nada na rota/romaneio depende da etiqueta (etapa 1 de 3;
                                              bipagem no carregamento e app do motorista vêm depois).
                                              Spec: docs/superpowers/specs/2026-11-28-etiqueta-volume-pedidos-stokki-design.md
@@ -545,7 +550,7 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                                              tela Etiquetar do galpão sugerir o total conferido.
                                                              UNIT NOVA: infra/stokki-volumes-prontos.*, ainda NÃO
                                                              instalada na VPS — só no deploy, a pedido do Hugo)
- 04:00                       romaneios-manha                roteirizacao/gerar_pdf_romaneios.py --data hoje
+ 04:00                       romaneios-manha                 roteirizacao/gerar_pdf_romaneios.py --data hoje
  04:10                       notificar-transportadoras       notificacao_transportadoras/notificar_transportadoras.py
  06:43                       vigia-documentos                documentos_pedido/vigia_documentos.py (só lê; e-mail diário)
  07:00                       notificar-nfs-em-rota           notificar_nfs_em_rota.py --data hoje

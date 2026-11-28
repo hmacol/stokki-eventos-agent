@@ -7643,6 +7643,31 @@ def api_wms_etiquetar_reimprimir():
     return _sep_chamar(lambda conn: expedicao_volumes.reimprimir(conn, corpo.get("codigo"), op, corpo.get("numero")))
 
 
+@app.route("/api/wms/etiquetar/pdf/<int:impressao_id>")
+@requer_auth(niveis=_NIVEIS_WMS)
+def api_wms_etiquetar_pdf(impressao_id):
+    """PDF das etiquetas pra tela abrir direto no computador (Hugo, 28/11). So trabalhos da
+    propria tela Etiquetar: a fila da estacao (/etiquetas/fila) continua fechada pro galpao."""
+    conn = wms_separacao.conectar()
+    try:
+        pdf = expedicao_volumes.pdf_do_trabalho(conn, impressao_id)
+    except wms.ErroWMS as e:
+        return _wms_json_erro(e)
+    finally:
+        conn.close()
+    return Response(pdf, mimetype="application/pdf",
+                    headers={"Content-Disposition": f"inline; filename=etiquetas-{impressao_id}.pdf"})
+
+
+@app.route("/api/wms/etiquetar/impresso", methods=["POST"])
+@requer_auth(niveis=_NIVEIS_WMS)
+@exige_mesma_origem
+def api_wms_etiquetar_impresso():
+    op = _wms_exige_operador()
+    impressao_id = _sep_corpo().get("impressao_id")
+    return _sep_chamar(lambda conn: expedicao_volumes.marcar_impresso(conn, impressao_id, op))
+
+
 @app.route("/api/wms/etiquetar/prontos")
 @requer_auth(niveis=_NIVEIS_WMS)
 def api_wms_etiquetar_prontos():

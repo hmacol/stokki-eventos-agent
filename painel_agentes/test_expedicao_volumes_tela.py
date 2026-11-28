@@ -92,5 +92,45 @@ class TestRotas(Base):
         self.assertTrue(pdf.data.startswith(b"%PDF"))
 
 
+class TestPdfDiretoNaTela(Base):
+    """Hugo, 28/11: no computador o PDF abre direto depois do Imprimir, com o login do galpao."""
+
+    def test_galpao_abre_o_pdf_e_marca_impresso(self):
+        c = self.cliente("galpao")
+        with self.operador(ANA):
+            r = self.post(c, "/api/wms/etiquetar/pedido", {"codigo": "45352", "total": 2}).get_json()
+            self.assertEqual(r["impressao_ids"], [r["impressao_id"]])
+            pdf = c.get(f"/api/wms/etiquetar/pdf/{r['impressao_id']}")
+            self.assertEqual((pdf.status_code, pdf.mimetype), (200, "application/pdf"))
+            self.assertTrue(pdf.data.startswith(b"%PDF"))
+            m = self.post(c, "/api/wms/etiquetar/impresso", {"impressao_id": r["impressao_id"]})
+            self.assertEqual((m.status_code, m.get_json()["situacao"]), (200, "IMPRESSO"))
+        pendentes = self.cliente("expedicao").get("/api/etiquetas/fila").get_json()["trabalhos"]
+        self.assertEqual(pendentes, [])                                   # saiu da fila da estacao
+
+    def test_a_fila_da_estacao_continua_fechada_pro_galpao(self):
+        c = self.cliente("galpao")
+        with self.operador(ANA):
+            r = self.post(c, "/api/wms/etiquetar/pedido", {"codigo": "45352", "total": 2}).get_json()
+            self.assertEqual(c.get(f"/etiquetas/fila/{r['impressao_id']}.pdf").status_code, 403)
+            self.assertEqual(self.cliente("expedicao").get(f"/api/wms/etiquetar/pdf/{r['impressao_id']}").status_code, 403)
+
+    def test_trabalho_que_nao_e_da_tela_e_recusado_com_o_motivo(self):
+        import wms_fila_impressao as fila
+        conn = sep.conectar()
+        piloto = fila.enfileirar(conn, tipo="VOLUME", tamanho="10x15", itens=["FV|PS-44009|1|1"], titulo="piloto")
+        conn.commit()
+        conn.close()
+        c = self.cliente("galpao")
+        with self.operador(ANA):
+            r = c.get(f"/api/wms/etiquetar/pdf/{piloto}")
+            self.assertEqual(r.status_code, 400)
+            self.assertIn("nao e de etiqueta de volume", r.get_json()["erro"])
+            self.assertEqual(self.post(c, "/api/wms/etiquetar/impresso", {"impressao_id": piloto}).status_code, 400)
+            self.assertEqual(self.post(c, "/api/wms/etiquetar/impresso", {"impressao_id": "x"}).status_code, 400)
+        with self.operador(None):
+            self.assertEqual(self.post(c, "/api/wms/etiquetar/impresso", {"impressao_id": piloto}).status_code, 409)
+
+
 if __name__ == "__main__":
     unittest.main()

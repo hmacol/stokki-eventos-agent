@@ -163,6 +163,14 @@ Só existe **um conjunto ativo** por pedido (todos com o mesmo `total`, numerado
 - `gerar_pdf_volumes` passa a aceitar também o item com cinco campos e busca os dados pela
   ordem acima; o item de quatro campos segue pelo caminho atual (`wms_separacao.dados_do_volume`).
 
+**PDF direto na tela (Hugo, 28/11):** a tela é usada no computador. Depois do Imprimir (e do
+Reimprimir) o PDF abre sozinho em outra aba, com o login do galpão; se o navegador bloquear a
+aba, o botão "Abrir PDF" fica na tela. Abrir pela tela marca o trabalho como impresso, para
+ele não ficar pendente na fila da estação e alguém imprimir de novo; se a impressão falhar,
+o operador usa Reimprimir. A rota do PDF só serve trabalhos desta tela: a fila
+`/etiquetas/fila` continua fechada para o login do galpão. Pedido com mais de 50 caixas vira
+mais de um arquivo; só o primeiro abre sozinho, os outros pelo botão.
+
 ### Lista "prontos na Stokki sem etiqueta"
 
 - Fonte: `vigia_stokki_abertos` com status "Waiting for Carrier" (o retrato que o pipeline
