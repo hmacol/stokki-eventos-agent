@@ -110,20 +110,54 @@ CREATE TABLE IF NOT EXISTS pagamentos_esporadicos_rotas (
 );
 """
 
-FILTROS = ("pendentes", "pagos", "todos")
+FILTROS = ("pendentes", "enviados", "pagos", "rejeitados", "todos")
 
 
 class ErroPagamento(ValueError):
     """Mensagem pronta pra tela (o JSON devolve em `erro`)."""
 
 
+_COLUNAS_REMESSA = [("situacao", "TEXT NOT NULL DEFAULT 'PAGO'"),   # PAGO | ENVIADO | REJEITADO
+                    ("remessa_id", "INTEGER"), ("ocorrencia", "TEXT"), ("motivo", "TEXT")]
+
+_SCHEMA_REMESSAS = """
+CREATE TABLE IF NOT EXISTS remessas_itau (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    gerada_em      TEXT NOT NULL,
+    gerada_por     TEXT,
+    data_pagamento TEXT,
+    qtd            INTEGER,
+    valor_total    REAL,
+    arquivo_nome   TEXT,
+    arquivo_sha256 TEXT,
+    baixada_em     TEXT,
+    baixada_por    TEXT,
+    retorno_em     TEXT,
+    retorno_por    TEXT,
+    retorno_sha256 TEXT
+);
+"""
+
+
 def _garantir_tabelas(conn) -> None:
     conn.executescript(_SCHEMA)
+    existentes = {r[1] for r in conn.execute("PRAGMA table_info(pagamentos_esporadicos)")}
+    for coluna, tipo in _COLUNAS_REMESSA:        # tabela criada antes da remessa Itau
+        if coluna not in existentes:
+            conn.execute(f"ALTER TABLE pagamentos_esporadicos ADD COLUMN {coluna} {tipo}")
+    conn.executescript(_SCHEMA_REMESSAS)
 
 
 def _valor_linha(l: dict) -> float:
     """O que a rota vale no pagamento: rota + pedagio aprovado. Sem valor definido nao se paga."""
     return 0.0 if l["valor"] is None else round(l["valor"] + l["pedagio_aprovado"], 2)
+
+
+def _visivel(l: dict, filtro: str) -> bool:
+    """Que rotas cada filtro mostra. Rota de pagamento REJEITADO ja foi solta: volta a ser pendente."""
+    livre = not l["pago"] and not l["enviado"]
+    return {"todos": True, "pendentes": livre, "rejeitados": livre,
+            "pagos": bool(l["pago"]), "enviados": bool(l["enviado"])}[filtro]
 
 
 def gerar(data_ini: str, data_fim: str, filtro: str = "pendentes", conn=None, quem: str = "todos") -> dict:
@@ -137,10 +171,18 @@ def gerar(data_ini: str, data_fim: str, filtro: str = "pendentes", conn=None, qu
     conn = conn or banco.conectar()
     try:
         _garantir_tabelas(conn)
-        pagas = {r["rota_id"]: {"pagamento_id": r["pagamento_id"], "pago_em": r["pago_em"], "pago_por": r["pago_por"]}
-                 for r in conn.execute(
-                     "SELECT pr.rota_id, p.id AS pagamento_id, p.pago_em, p.pago_por FROM pagamentos_esporadicos_rotas pr "
-                     "JOIN pagamentos_esporadicos p ON p.id = pr.pagamento_id WHERE p.desfeito_em IS NULL")}
+        presas = {r["rota_id"]: {"pagamento_id": r["pagamento_id"], "pago_em": r["pago_em"], "pago_por": r["pago_por"],
+                                 "situacao": r["situacao"], "remessa_id": r["remessa_id"]}
+                  for r in conn.execute(
+                      "SELECT pr.rota_id, p.id AS pagamento_id, p.pago_em, p.pago_por, p.situacao, p.remessa_id "
+                      "FROM pagamentos_esporadicos_rotas pr JOIN pagamentos_esporadicos p ON p.id = pr.pagamento_id "
+                      "WHERE p.desfeito_em IS NULL")}
+        rejeitados: dict[str, list] = {}
+        for r in conn.execute(
+                "SELECT id, chave, valor, pago_em, pago_por, motivo, ocorrencia, remessa_id FROM pagamentos_esporadicos "
+                "WHERE situacao = 'REJEITADO' AND desfeito_em IS NULL AND periodo_ini <= ? AND periodo_fim >= ? ORDER BY id",
+                (data_fim, data_ini)):
+            rejeitados.setdefault(r["chave"], []).append(dict(r))
         motoristas = []
         for p in _motoristas(conn):
             if (quem == "esporadicos" and p["posicao"] != "ESPORADICO") or (quem == "fixos" and p["posicao"] == "ESPORADICO"):
@@ -149,33 +191,39 @@ def gerar(data_ini: str, data_fim: str, filtro: str = "pendentes", conn=None, qu
             for agent_id, tipo in p["agentes"].items():
                 todas += financeiro.extrato_motorista(agent_id, data_ini, data_fim, tipo, conn=conn)["linhas"]
             for l in todas:
-                l["pago"] = pagas.get(l["rota_id"])
-            linhas = [l for l in todas if filtro == "todos" or (l["pago"] is None) == (filtro == "pendentes")]
-            if not linhas:
+                presa = presas.get(l["rota_id"])
+                l["pago"] = presa if presa and presa["situacao"] == "PAGO" else None
+                l["enviado"] = presa if presa and presa["situacao"] == "ENVIADO" else None
+            rej = rejeitados.get(p["chave"], [])
+            linhas = [l for l in todas if _visivel(l, filtro)]
+            if not linhas and not (filtro == "rejeitados" and rej):
                 continue
             linhas.sort(key=lambda l: (l["data_rota"] or "", l["rota_id"] or 0))
             total_pago = round(sum(_valor_linha(l) for l in linhas if l["pago"]), 2)
-            total_pendente = round(sum(_valor_linha(l) for l in linhas if not l["pago"]), 2)
-            ids_pag = sorted({l["pago"]["pagamento_id"] for l in linhas if l["pago"]})
+            total_enviado = round(sum(_valor_linha(l) for l in linhas if l["enviado"]), 2)
+            total_pendente = round(sum(_valor_linha(l) for l in linhas if not l["pago"] and not l["enviado"]), 2)
+            ids_pag = sorted({l[k]["pagamento_id"] for l in linhas for k in ("pago", "enviado") if l[k]})
             pagamentos = [dict(r) for r in conn.execute(
-                f"SELECT id, valor, pago_em, pago_por, observacao FROM pagamentos_esporadicos "
+                f"SELECT id, valor, pago_em, pago_por, observacao, situacao, remessa_id FROM pagamentos_esporadicos "
                 f"WHERE id IN ({','.join('?' * len(ids_pag))}) ORDER BY id", ids_pag)] if ids_pag else []
             motoristas.append({
                 "chave": p["chave"], "nome": p["nome"], "cpf": p["cpf"], "pix": p["pix"], "posicao": p["posicao"],
                 "veiculo": ", ".join(sorted({t for t in p["agentes"].values() if t})),
-                "linhas": linhas, "rotas": len(linhas), "pagamentos": pagamentos,
+                "linhas": linhas, "rotas": len(linhas), "pagamentos": pagamentos, "rejeitados": rej,
                 "total_rotas": round(sum(l["valor"] or 0 for l in linhas), 2),
                 "pedagio_aprovado": round(sum(l["pedagio_aprovado"] for l in linhas if l["valor"] is not None), 2),
                 "pedagio_pendente": round(sum(l["pedagio_pendente"] for l in linhas), 2),
-                "total": round(total_pago + total_pendente, 2), "total_pago": total_pago, "total_pendente": total_pendente,
+                "total": round(total_pago + total_enviado + total_pendente, 2), "total_pago": total_pago,
+                "total_enviado": total_enviado, "total_pendente": total_pendente,
                 "rotas_sem_valor": sum(1 for l in linhas if l["valor"] is None),
                 "rotas_sem_gps": sum(1 for l in linhas if l["km_fonte"] != "GPS_APP"),
-                "pode_pagar": any(l["valor"] is not None and not l["pago"] for l in linhas),
+                "pode_pagar": any(l["valor"] is not None and not l["pago"] and not l["enviado"] for l in linhas),
             })
         return {
             "inicio": str(data_ini), "fim": str(data_fim), "filtro": filtro, "quem": quem, "motoristas": motoristas,
             "total": round(sum(m["total"] for m in motoristas), 2),
             "total_pago": round(sum(m["total_pago"] for m in motoristas), 2),
+            "total_enviado": round(sum(m["total_enviado"] for m in motoristas), 2),
             "total_pendente": round(sum(m["total_pendente"] for m in motoristas), 2),
             "pedagio_pendente": round(sum(m["pedagio_pendente"] for m in motoristas), 2),
             "rotas_sem_valor": sum(m["rotas_sem_valor"] for m in motoristas),
@@ -222,7 +270,7 @@ def desfazer_pago(pagamento_id: int, usuario: str, conn=None) -> None:
     try:
         _garantir_tabelas(conn)
         cur = conn.execute("UPDATE pagamentos_esporadicos SET desfeito_em = ?, desfeito_por = ? "
-                           "WHERE id = ? AND desfeito_em IS NULL", (banco.agora(), usuario, pagamento_id))
+                           "WHERE id = ? AND desfeito_em IS NULL AND situacao = 'PAGO'", (banco.agora(), usuario, pagamento_id))
         if cur.rowcount != 1:
             raise ErroPagamento("Pagamento nao encontrado ou ja desfeito.")
         conn.execute("DELETE FROM pagamentos_esporadicos_rotas WHERE pagamento_id = ?", (pagamento_id,))
@@ -272,6 +320,8 @@ def _data_br(iso: str) -> str:
 def _situacao(l: dict) -> str:
     if l["pago"]:
         return f"Pago em {_data_br(l['pago']['pago_em'])}"
+    if l["enviado"]:
+        return "Enviado ao banco"
     return "A definir" if l["valor"] is None else "Pendente"
 
 

@@ -127,6 +127,8 @@ from galpao3d import banco as galpao3d_banco, estado as galpao3d_estado
 import retornos
 import pagamentos_pontuais
 import relatorio_esporadicos as relatorio_esporadicos_mod
+import remessa_itau as remessa_itau_mod
+import remessa_itau_db as remessa_itau_db_mod
 import compras
 
 def _carregar_config() -> dict:
@@ -4972,14 +4974,50 @@ def _filtro_esporadicos() -> str:
     return f if f in relatorio_esporadicos_mod.FILTROS else "pendentes"
 
 
+NIVEIS_REMESSA = ("total",)       # remessa Itau move dinheiro: so o administrador
+PASTA_REMESSAS_ITAU = _RAIZ / "dados" / "remessas_itau"
+
+
+def _config_itau() -> dict | None:
+    """Secao itau_remessa do config.yaml quando `ativo`; None = recurso desligado (a tela nao mostra nada)."""
+    try:
+        cfg = _carregar_config().get("itau_remessa") or {}
+    except OSError:
+        return None
+    return cfg if cfg.get("ativo") else None
+
+
+def _conta_itau(cfg: dict):
+    """ContaPagadora a partir do config; None se faltar algum dado da conta."""
+    campos = {k: str(cfg.get(k) or "").strip() for k in ("cnpj", "agencia", "conta", "dac", "nome_empresa")}
+    if not all(campos.values()):
+        return None
+    return remessa_itau_mod.ContaPagadora(**campos, tipo_pagamento=str(cfg.get("tipo_pagamento") or "20").strip())
+
+
+def _contexto_itau(rel) -> dict | None:
+    """Dados da remessa para a tela: so nivel total e so com itau_remessa.ativo."""
+    if g.nivel_acesso not in NIVEIS_REMESSA:
+        return None
+    cfg = _config_itau()
+    if cfg is None:
+        return None
+    from regras import feriados
+    return {
+        "conta_ok": _conta_itau(cfg) is not None,
+        "data_padrao": feriados.proximo_dia_util(date.today()).isoformat(),
+        "elegibilidade": {m["chave"]: remessa_itau_db_mod.elegibilidade(m)[1] for m in rel["motoristas"] if m["pode_pagar"]},
+        "remessas": remessa_itau_db_mod.listar_remessas(),
+    }
+
+
 @app.route("/financeiro/esporadicos")
 @requer_auth(niveis=NIVEIS_ESPORADICOS)
 def relatorio_esporadicos():
     de, ate = _periodo_esporadicos()
-    return render_template("relatorio_esporadicos.html",
-                           rel=relatorio_esporadicos_mod.gerar(de, ate, _filtro_esporadicos(), quem=_quem_esporadicos()),
-                           fonte_km=relatorio_esporadicos_mod.fonte_km,
-                           ciclos=relatorio_esporadicos_mod.ciclos_recentes(date.today()))
+    rel = relatorio_esporadicos_mod.gerar(de, ate, _filtro_esporadicos(), quem=_quem_esporadicos())
+    return render_template("relatorio_esporadicos.html", rel=rel, fonte_km=relatorio_esporadicos_mod.fonte_km,
+                           ciclos=relatorio_esporadicos_mod.ciclos_recentes(date.today()), itau=_contexto_itau(rel))
 
 
 @app.route("/financeiro/esporadicos.csv")
@@ -5024,6 +5062,116 @@ def api_esporadicos_desfazer(pagamento_id: int):
     except relatorio_esporadicos_mod.ErroPagamento as e:
         return jsonify({"erro": str(e)}), 400
     logging.getLogger(__name__).info("esporadicos.desfeito id=%s por=%s", pagamento_id, _usuario_pagamento())
+    return jsonify({"ok": True})
+
+
+def _itau_conta_ou_resposta():
+    """(conta, None) ou (None, resposta). Recurso desligado = 404; config sem todos os dados = 400."""
+    cfg = _config_itau()
+    if cfg is None:
+        abort(404)
+    conta = _conta_itau(cfg)
+    if conta is None:
+        return None, (jsonify({"erro": "Configuração itau_remessa incompleta no servidor (cnpj, agencia, conta, dac, nome_empresa)."}), 400)
+    return conta, None
+
+
+def _itau_ligado_ou_404() -> None:
+    if _config_itau() is None:
+        abort(404)
+
+
+@app.route("/api/financeiro/esporadicos/remessa", methods=["POST"])
+@requer_auth(niveis=NIVEIS_REMESSA)
+@exige_mesma_origem
+def api_remessa_criar():
+    conta, erro = _itau_conta_ou_resposta()
+    if erro:
+        return erro
+    dados = request.get_json(silent=True) or {}
+    try:
+        de = date.fromisoformat(str(dados.get("de") or "")).isoformat()
+        ate = date.fromisoformat(str(dados.get("ate") or "")).isoformat()
+        data_pagamento = date.fromisoformat(str(dados.get("data_pagamento") or ""))
+    except ValueError:
+        return jsonify({"erro": "Datas inválidas."}), 400
+    chaves = [str(c) for c in (dados.get("chaves") or [])]
+    try:
+        res = remessa_itau_db_mod.criar_remessa(chaves, de, ate, data_pagamento, _usuario_pagamento(), conta,
+                                                PASTA_REMESSAS_ITAU)
+    except remessa_itau_db_mod.ErroRemessa as e:
+        return jsonify({"erro": str(e)}), 400
+    logging.getLogger(__name__).info("remessa_itau.criada id=%s qtd=%s por=%s", res["remessa_id"], res["qtd"], _usuario_pagamento())
+    return jsonify({"ok": True, **res, "url": url_for("api_remessa_arquivo", remessa_id=res["remessa_id"])})
+
+
+@app.route("/financeiro/esporadicos/remessa/<int:remessa_id>/arquivo")
+@requer_auth(niveis=NIVEIS_REMESSA)
+def api_remessa_arquivo(remessa_id: int):
+    _itau_ligado_ou_404()
+    try:
+        dados = remessa_itau_db_mod.ler_arquivo(remessa_id, PASTA_REMESSAS_ITAU, _usuario_pagamento())
+        nome = remessa_itau_db_mod.nome_arquivo(remessa_id)
+    except remessa_itau_db_mod.ErroRemessa as e:
+        return jsonify({"erro": str(e)}), 404
+    logging.getLogger(__name__).info("remessa_itau.baixada id=%s por=%s", remessa_id, _usuario_pagamento())
+    return Response(dados, mimetype="text/plain", headers={"Content-Disposition": f'attachment; filename="{nome}"'})
+
+
+@app.route("/api/financeiro/esporadicos/remessa/<int:remessa_id>/cancelar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_REMESSA)
+@exige_mesma_origem
+def api_remessa_cancelar(remessa_id: int):
+    _itau_ligado_ou_404()
+    try:
+        remessa_itau_db_mod.cancelar_remessa(remessa_id, _usuario_pagamento())
+    except remessa_itau_db_mod.ErroRemessa as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True})
+
+
+@app.route("/api/financeiro/esporadicos/remessa/<int:remessa_id>/retorno", methods=["POST"])
+@requer_auth(niveis=NIVEIS_REMESSA)
+@exige_mesma_origem
+def api_remessa_retorno(remessa_id: int):
+    _itau_ligado_ou_404()
+    arquivo = request.files.get("arquivo")
+    if arquivo is None or not arquivo.filename:
+        return jsonify({"erro": "Envie o arquivo de retorno do Itaú."}), 400
+    conteudo = arquivo.read(2 * 1024 * 1024 + 1)
+    if len(conteudo) > 2 * 1024 * 1024:
+        return jsonify({"erro": "Arquivo grande demais para um retorno (limite 2 MB)."}), 400
+    try:
+        res = remessa_itau_db_mod.aplicar_retorno(conteudo.decode("latin-1"), remessa_id, _usuario_pagamento())
+    except remessa_itau_db_mod.ErroRemessa as e:
+        return jsonify({"erro": str(e)}), 400
+    logging.getLogger(__name__).info("remessa_itau.retorno id=%s pagos=%s rejeitados=%s por=%s", remessa_id,
+                                     res["pagos"], res["rejeitados"], _usuario_pagamento())
+    return jsonify({"ok": True, **res})
+
+
+@app.route("/api/financeiro/esporadicos/<int:pagamento_id>/confirmar-pago", methods=["POST"])
+@requer_auth(niveis=NIVEIS_REMESSA)
+@exige_mesma_origem
+def api_esporadicos_confirmar_pago(pagamento_id: int):
+    _itau_ligado_ou_404()
+    try:
+        remessa_itau_db_mod.confirmar_pago_manual(pagamento_id, _usuario_pagamento())
+    except remessa_itau_db_mod.ErroRemessa as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True})
+
+
+@app.route("/api/financeiro/esporadicos/<int:pagamento_id>/rejeitar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_REMESSA)
+@exige_mesma_origem
+def api_esporadicos_rejeitar(pagamento_id: int):
+    _itau_ligado_ou_404()
+    dados = request.get_json(silent=True) or {}
+    try:
+        remessa_itau_db_mod.rejeitar_manual(pagamento_id, str(dados.get("motivo") or ""), _usuario_pagamento())
+    except remessa_itau_db_mod.ErroRemessa as e:
+        return jsonify({"erro": str(e)}), 400
     return jsonify({"ok": True})
 
 

@@ -38,6 +38,17 @@
   .acoes-pag .pg .btn { height: 28px; padding: 0 10px; font-size: 12px; }
   .erro-pag { color: var(--erro, #b3261e); font-size: 12.5px; }
   .vazio { color: var(--texto-suave); padding: 24px 0; }
+  .remessa { background: var(--superficie); border: 1px solid var(--borda); border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+  .remessa h2 { font-size: 15px; margin: 0 0 6px; }
+  .remessa p { margin: 0 0 10px; font-size: 12.5px; color: var(--texto-suave); max-width: 720px; line-height: 1.45; }
+  .linha-remessa { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 10px 0; }
+  .linha-remessa input[type="date"] { height: 36px; padding: 0 10px; border: 1px solid var(--borda); border-radius: 7px; background: var(--fundo); color: var(--texto); font-size: 13.5px; font-family: inherit; }
+  .inelegivel { font-size: 12.5px; color: var(--erro, #b3261e); }
+  .rejeitado { font-size: 12.5px; color: var(--erro, #b3261e); font-weight: 600; }
+  .env { color: #7A4B00; font-weight: 600; }
+  .sel { font-size: 13px; display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+  table.remessas { margin-top: 8px; }
+  table.remessas form { display: inline-flex; gap: 6px; align-items: center; }
 </style>
 {% endblock %}
 {% block conteudo %}
@@ -58,7 +69,9 @@
   <div class="campo"><label for="filtro">Mostrar</label>
     <select id="filtro" name="filtro">
       <option value="pendentes"{% if rel.filtro == 'pendentes' %} selected{% endif %}>Pendentes</option>
+      <option value="enviados"{% if rel.filtro == 'enviados' %} selected{% endif %}>Enviados ao banco</option>
       <option value="pagos"{% if rel.filtro == 'pagos' %} selected{% endif %}>Pagos</option>
+      <option value="rejeitados"{% if rel.filtro == 'rejeitados' %} selected{% endif %}>Rejeitados pelo banco</option>
       <option value="todos"{% if rel.filtro == 'todos' %} selected{% endif %}>Todos</option>
     </select></div>
   <div class="campo"><label for="quem">Quem</label>
@@ -72,10 +85,60 @@
   <a class="btn" href="{{ url_for('relatorio_esporadicos_csv', de=rel.inicio, ate=rel.fim, filtro=rel.filtro, quem=rel.quem, tipo='detalhe') }}">Baixar por rota (CSV)</a>
 </form>
 
+{% if itau %}
+<section class="remessa" id="remessa-itau">
+  <h2>Remessa Itaú (Pix)</h2>
+  {% if not itau.conta_ok %}
+  <div class="aviso">Configuração <code>itau_remessa</code> incompleta no servidor (cnpj, agencia, conta, dac, nome_empresa): a remessa não pode ser gerada.</div>
+  {% else %}
+  <p>Marque os motoristas pendentes abaixo, escolha a data de pagamento e gere o arquivo. Suba o arquivo no Itaú Empresas: quem tem alçada aprova lá.
+     Só depois do retorno do banco (ou da sua confirmação) o pagamento passa a "pago".</p>
+  <div class="aviso">Atenção: o valor dos motoristas <b>fixos</b> sai da tarifa por km, que pode não ser o acerto real deles. Confira antes de subir o arquivo.</div>
+  <div class="linha-remessa">
+    <label for="data-remessa"><b>Data de pagamento</b></label>
+    <input type="date" id="data-remessa" value="{{ itau.data_padrao }}">
+    <button type="button" class="btn primario" id="js-gerar-remessa">Gerar remessa Itaú</button>
+    <span id="sel-resumo" class="meta"></span>
+    <span class="erro-pag" id="erro-remessa" role="alert"></span>
+  </div>
+  {% endif %}
+  {% if itau.remessas %}
+  <div class="tabela-wrap" style="padding:0">
+    <table class="t remessas">
+      <thead><tr><th>Remessa</th><th>Gerada</th><th>Pagamento</th><th class="n">Qtd</th><th class="n">Total (R$)</th><th>Situação</th><th>Ações</th></tr></thead>
+      <tbody>
+      {% for rm in itau.remessas %}
+        <tr>
+          <td>#{{ rm.id }} {{ rm.arquivo_nome }}</td>
+          <td>{{ rm.gerada_em[8:10] }}/{{ rm.gerada_em[5:7] }} {{ rm.gerada_em[11:16] }} · {{ rm.gerada_por or '—' }}</td>
+          <td>{{ rm.data_pagamento[8:10] }}/{{ rm.data_pagamento[5:7] }}/{{ rm.data_pagamento[:4] }}</td>
+          <td class="n">{{ rm.qtd }}</td>
+          <td class="n">{{ '%.2f'|format(rm.valor_total or 0)|replace('.', ',') }}</td>
+          <td>{% for sit, n in rm.situacoes.items() %}{{ n }} {{ sit|lower }}{% if not loop.last %}, {% endif %}{% endfor %}{% if rm.baixada_em %} · arquivo baixado{% endif %}</td>
+          <td>
+            <a class="btn" href="{{ url_for('api_remessa_arquivo', remessa_id=rm.id) }}">Baixar</a>
+            {% if not rm.baixada_em and rm.situacoes.get('ENVIADO') %}<button type="button" class="btn js-cancelar-remessa" data-url="{{ url_for('api_remessa_cancelar', remessa_id=rm.id) }}">Cancelar remessa</button>{% endif %}
+            {% if rm.situacoes.get('ENVIADO') %}
+            <form class="js-retorno" data-url="{{ url_for('api_remessa_retorno', remessa_id=rm.id) }}">
+              <input type="file" name="arquivo" aria-label="Arquivo de retorno do Itaú" required>
+              <button type="submit" class="btn">Enviar retorno</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
 {% if rel.motoristas %}
 <div class="resumo">
   <div><b>{{ rel.motoristas|length }}</b><span>motoristas</span></div>
   <div><b>R$ {{ '%.2f'|format(rel.total_pendente)|replace('.', ',') }}</b><span>pendente de pagamento (rotas + pedágio aprovado)</span></div>
+  {% if rel.total_enviado %}<div><b>R$ {{ '%.2f'|format(rel.total_enviado)|replace('.', ',') }}</b><span>enviado ao banco (aguardando retorno)</span></div>{% endif %}
   <div><b>R$ {{ '%.2f'|format(rel.total_pago)|replace('.', ',') }}</b><span>já pago</span></div>
   <div><b>R$ {{ '%.2f'|format(rel.pedagio_pendente)|replace('.', ',') }}</b><span>pedágio pendente (fora do total)</span></div>
 </div>
@@ -92,16 +155,28 @@
     <span class="selo {{ 'esp' if m.posicao == 'ESPORADICO' else 'fixo' }}">{{ 'Esporádico' if m.posicao == 'ESPORADICO' else 'Fixo' }}</span>
     {% if m.rotas_sem_gps %}<span class="meta sem-gps">{{ m.rotas_sem_gps }} sem GPS</span>{% endif %}
     <span class="meta">CPF {{ m.cpf or '—' }} · PIX {{ m.pix or 'não informado' }}{% if m.veiculo %} · {{ m.veiculo }}{% endif %} · {{ m.rotas }} rota(s)</span>
-    <span class="total">{% if m.total_pendente %}R$ {{ '%.2f'|format(m.total_pendente)|replace('.', ',') }}{% elif m.total_pago %}<span class="pago">Pago · R$ {{ '%.2f'|format(m.total_pago)|replace('.', ',') }}</span>{% else %}<span class="meta">Sem valor definido</span>{% endif %}</span>
+    <span class="total">{% if m.total_pendente %}R$ {{ '%.2f'|format(m.total_pendente)|replace('.', ',') }}{% elif m.total_enviado %}<span class="env">Enviado ao banco · R$ {{ '%.2f'|format(m.total_enviado)|replace('.', ',') }}</span>{% elif m.total_pago %}<span class="pago">Pago · R$ {{ '%.2f'|format(m.total_pago)|replace('.', ',') }}</span>{% else %}<span class="meta">Sem valor definido</span>{% endif %}</span>
   </summary>
   <div class="acoes-pag">
+    {% if itau and itau.conta_ok and m.pode_pagar %}
+      {% set motivo_fora = itau.elegibilidade.get(m.chave) %}
+      {% if motivo_fora %}<span class="inelegivel">Fora da remessa Itaú: {{ motivo_fora }}</span>
+      {% else %}<label class="sel"><input type="checkbox" class="js-sel-remessa" data-chave="{{ m.chave }}" data-valor="{{ m.total_pendente }}"> Incluir na remessa Itaú · R$ {{ '%.2f'|format(m.total_pendente)|replace('.', ',') }}</label>{% endif %}
+    {% endif %}
+    {% for rj in m.rejeitados %}<span class="rejeitado">Rejeitado pelo banco{% if rj.ocorrencia %} ({{ rj.ocorrencia }}){% endif %}: {{ rj.motivo or 'sem motivo informado' }}</span>{% endfor %}
     {% if m.pode_pagar %}
     <input type="text" class="obs" maxlength="300" placeholder="Observação / nº do comprovante (opcional)" aria-label="Observação do pagamento">
-    <button type="button" class="btn primario js-pagar" data-chave="{{ m.chave }}" data-nome="{{ m.nome }}" data-valor="{{ '%.2f'|format(m.total_pendente)|replace('.', ',') }}">Marcar como pago · R$ {{ '%.2f'|format(m.total_pendente)|replace('.', ',') }}</button>
+    <button type="button" class="btn{% if not itau %} primario{% endif %} js-pagar" data-chave="{{ m.chave }}" data-nome="{{ m.nome }}" data-valor="{{ '%.2f'|format(m.total_pendente)|replace('.', ',') }}">{{ 'Marcar como pago (fora do Itaú)' if itau else 'Marcar como pago' }} · R$ {{ '%.2f'|format(m.total_pendente)|replace('.', ',') }}</button>
     {% endif %}
     {% for pg in m.pagamentos %}
+    {% if pg.situacao == 'ENVIADO' %}
+    <span class="pg"><span class="env">Enviado ao Itaú (remessa #{{ pg.remessa_id }})</span> · R$ {{ '%.2f'|format(pg.valor)|replace('.', ',') }}
+      {% if itau %}<button type="button" class="btn js-confirmar" data-url="{{ url_for('api_esporadicos_confirmar_pago', pagamento_id=pg.id) }}">Confirmar pago</button>
+      <button type="button" class="btn js-rejeitar" data-url="{{ url_for('api_esporadicos_rejeitar', pagamento_id=pg.id) }}">Marcar rejeitado</button>{% endif %}</span>
+    {% else %}
     <span class="pg">Pago em {{ pg.pago_em[8:10] }}/{{ pg.pago_em[5:7] }}/{{ pg.pago_em[:4] }} por {{ pg.pago_por or '—' }} · R$ {{ '%.2f'|format(pg.valor)|replace('.', ',') }}{% if pg.observacao %} · {{ pg.observacao }}{% endif %}
-      <button type="button" class="btn js-desfazer" data-url="{{ url_for('api_esporadicos_desfazer', pagamento_id=pg.id) }}">Desfazer</button></span>
+      {% if not pg.remessa_id %}<button type="button" class="btn js-desfazer" data-url="{{ url_for('api_esporadicos_desfazer', pagamento_id=pg.id) }}">Desfazer</button>{% endif %}</span>
+    {% endif %}
     {% endfor %}
     <span class="erro-pag" role="alert"></span>
   </div>
@@ -113,7 +188,7 @@
         <tr>
           <td>{{ l.data_rota }}</td>
           <td>{{ l.nome or l.rota_id }}</td>
-          <td>{% if l.pago %}<span class="pago">Pago em {{ l.pago.pago_em[8:10] }}/{{ l.pago.pago_em[5:7] }}</span>{% elif l.valor is none %}A definir{% else %}Pendente{% endif %}</td>
+          <td>{% if l.pago %}<span class="pago">Pago em {{ l.pago.pago_em[8:10] }}/{{ l.pago.pago_em[5:7] }}</span>{% elif l.enviado %}<span class="env">Enviado ao banco</span>{% elif l.valor is none %}A definir{% else %}Pendente{% endif %}</td>
           <td class="n">{{ '%.1f'|format(l.km or 0)|replace('.', ',') }}</td>
           <td{% if l.km_fonte != 'GPS_APP' %} class="sem-gps"{% endif %}>{{ fonte_km(l) }}</td>
           <td>{% if l.valor_combinado %}Combinado{% if l.valor_combinado_motivo %}: {{ l.valor_combinado_motivo }}{% endif %}{% elif l.sem_tarifa %}A definir{% else %}Tarifa{% endif %}</td>
@@ -155,6 +230,58 @@
     if (!confirm('Marcar como pago R$ ' + b.dataset.valor + ' de ' + b.dataset.nome + ' (rotas pendentes de ' + DE + ' a ' + ATE + ')?')) return;
     enviar(URL_PAGAR, { chave: b.dataset.chave, de: DE, ate: ATE, observacao: caixa.querySelector('.obs').value }, caixa, b);
   }));
+{% if itau %}
+  const selecionados = () => Array.from(document.querySelectorAll('.js-sel-remessa:checked'));
+  const resumoSel = () => {
+    const el = document.getElementById('sel-resumo'); if (!el) return;
+    const sel = selecionados(); const total = sel.reduce((t, c) => t + parseFloat(c.dataset.valor || '0'), 0);
+    el.textContent = sel.length ? sel.length + ' motorista(s) · R$ ' + total.toFixed(2).replace('.', ',') : '';
+  };
+  document.querySelectorAll('.js-sel-remessa').forEach(c => c.addEventListener('change', resumoSel));
+  const gerar = document.getElementById('js-gerar-remessa');
+  if (gerar) gerar.addEventListener('click', async () => {
+    const erro = document.getElementById('erro-remessa'); erro.textContent = '';
+    const sel = selecionados();
+    if (!sel.length) { erro.textContent = 'Marque ao menos um motorista.'; return; }
+    const dataPag = document.getElementById('data-remessa').value;
+    const total = sel.reduce((t, c) => t + parseFloat(c.dataset.valor || '0'), 0).toFixed(2).replace('.', ',');
+    if (!confirm('Gerar remessa Itaú com ' + sel.length + ' motorista(s), total R$ ' + total + ', para pagamento em ' + dataPag + '?')) return;
+    gerar.disabled = true;
+    try {
+      const r = await fetch({{ url_for('api_remessa_criar')|tojson }}, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chaves: sel.map(c => c.dataset.chave), de: DE, ate: ATE, data_pagamento: dataPag }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { erro.textContent = j.erro || 'Não deu certo. Tente de novo.'; gerar.disabled = false; return; }
+      window.location.href = j.url;                       // baixa o arquivo
+      setTimeout(() => location.reload(), 1500);
+    } catch (e) { erro.textContent = 'Sem conexão com o painel. Tente de novo.'; gerar.disabled = false; }
+  });
+  document.querySelectorAll('.js-cancelar-remessa').forEach(b => b.addEventListener('click', () => {
+    if (!confirm('Cancelar esta remessa? As rotas voltam a ficar pendentes.')) return;
+    enviar(b.dataset.url, {}, document.getElementById('remessa-itau'), b);
+  }));
+  document.querySelectorAll('.js-confirmar').forEach(b => b.addEventListener('click', () => {
+    if (!confirm('Confirmar que o Itaú EFETUOU este pagamento? Confira no Itaú antes.')) return;
+    enviar(b.dataset.url, {}, b.closest('.acoes-pag'), b);
+  }));
+  document.querySelectorAll('.js-rejeitar').forEach(b => b.addEventListener('click', () => {
+    const motivo = prompt('Motivo da rejeição (o que o Itaú informou):');
+    if (!motivo || !motivo.trim()) return;
+    enviar(b.dataset.url, { motivo: motivo }, b.closest('.acoes-pag'), b);
+  }));
+  document.querySelectorAll('form.js-retorno').forEach(f => f.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const erro = document.getElementById('erro-remessa'); if (erro) erro.textContent = '';
+    try {
+      const r = await fetch(f.dataset.url, { method: 'POST', body: new FormData(f) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { if (erro) erro.textContent = j.erro || 'Retorno não aceito.'; alert(j.erro || 'Retorno não aceito.'); return; }
+      alert('Retorno aplicado: ' + j.pagos + ' pago(s), ' + j.rejeitados + ' rejeitado(s), ' + j.agendados + ' agendado(s)' +
+            (j.repetido ? ' (arquivo já aplicado antes)' : '') + (j.ignorados.length ? '\nIgnorados:\n' + j.ignorados.join('\n') : ''));
+      location.reload();
+    } catch (e) { alert('Sem conexão com o painel.'); }
+  }));
+{% endif %}
   document.querySelectorAll('.js-desfazer').forEach(b => b.addEventListener('click', () => {
     if (!confirm('Desfazer este pagamento? As rotas voltam a ficar pendentes.')) return;
     enviar(b.dataset.url, {}, b.closest('.acoes-pag'), b);

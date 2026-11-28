@@ -1,0 +1,2590 @@
+
+===== PAGINA 1 =====
+SISPAG
+SISTEMA DE CONTAS A PAGAR ITAÚ
+Intercâmbio Eletrônico de Arquivos
+Layout de Arquivos
+CNAB - Versão 085
+===== PAGINA 2 =====
+Índice
+1. Noções Básicas ............................................................................................................................ 3
+1.1 – Noções básicas ................................................................................................................ 4
+2. Informações Técnicas .................................................................................................................. 6
+2.1 – Intercâmbio de Informações ............................................................................................. 7
+2.2 – Explicações gerais sobre o arquivo .................................................................................. 7
+2.2.1 – Arquivo remessa .................................................................................................. 9
+2.2.2 – Arquivo retorno .................................................................................................... 9
+3. Layout do Arquivo ..................................................................................................................... 11
+4. Notas ........................................................................................................................................... 44
+5. Implantação ................................................................................................................................ 62
+6. Anexo A ...................................................................................................................................... 64
+Informações sobre o código de barras Bloquetos de Cobrança ...................................................
+7. Anexo B ...................................................................................................................................... 65
+Informações sobre o código de barra Concessionárias e IPTU ...................................................
+8. Anexo C ...................................................................................................................................... 71
+Informações para pagamentos de Tributos .................................................................................
+9. Anexo D ...................................................................................................................................... 76
+Informações para Holerite – Demonstrativo Salários e Informe de Rendimentos ........................
+Atenção
+Validação de layout de arquivos
+Após o desenvolvimento do seu arquivo utilize o Validador de Layout de Arquivos (o resultado da
+validação é on-line). Acesse: Itaú Empresas na Internet > Transmissão de arquivos > Validação >
+Enviar arquivo para validação de layout.
+Para maiores detalhes consulte o item 5. Implantação.
+Qualquer dúvida sobre o conteúdo deste manual consulte o Itaú Empresas no Telefone: 4090 1685
+outubro/2020 2
+===== PAGINA 3 =====
+CAPÍTULO 1
+noções básicas
+outubro/2020 3
+===== PAGINA 4 =====
+1 – Noções Básicas
+O Banco Itaú S.A. adota o Intercâmbio Eletrônico de Arquivos para fornecer maior comodidade, rapidez
+e segurança nos serviços prestados aos seus clientes. Com ele sua empresa encontrará grandes
+vantagens, tais como: maior confiabilidade, velocidade no processamento, eliminação de controles
+manuais e redução de custos.
+Este manual esclarece tecnicamente o Intercâmbio Eletrônico de Arquivos do SISPAG - Sistema de
+Contas a Pagar Itaú, e estabelece as condições básicas para sua utilização.
+O SISPAG é um serviço destinado a executar diversos tipos de pagamentos de sua empresa nas várias
+formas em que estes podem se apresentar, conforme demonstra o quadro abaixo:
+TIPOS DE PAGAMENTOS X FORMAS DE PAGAMENTOS POSSÍVEIS
+FORMAS
+TIPOS Salários Dividendos D s J e o u r b e b r ê o s r n e s t u D V e ia s j d p a e e n s te a s s V R e e n p d r e e d s o e r n e t. s Forn re e s c edoBenefícios Si S n e is g tr u o r o d e In F v u n e d n t s o e d t s i o m s e Diversos Tributos
+Conta Corrente - Outro titular X X X X X X X X X X
+Conta Corrente - Mesmo Titular X X
+Conta Corrente-Cartão Salário (1) X
+Conta Poupança X X X X X
+Cheque Pagamento X X X X X X X X X X
+DOC 'C' - Outro Titular (1) X X X X X X X
+DOC 'D' - Mesmo Titular X X
+OP - Ordem de Pagamento X X X X X X X X X X
+Boleto do Itaú X X
+Boleto de Outros Bancos X X
+Nota Fiscal – Liquidação Eletrônica X X
+Contas de Concessionárias X X
+DARF Normal X
+DARF Simples X
+GARE – SP ICMS X
+GNRE e Tributos Estaduais X
+GPS - Guia da Previdência Social X
+FGTS X
+IPTU X
+IPVA (2) X
+DPVAT (2) X
+TED – Outro Titular (1) X X X X X X X
+TED – Mesmo Titular X X
+PIX Transferência X X
+PIX QR-CODE X X
+(1) A utilização destas formas de pagamento para o tipo “Salários” deve ser previamente negociada
+junto ao Banco.
+(2) Atualmente essas formas estão disponíveis para pagamento de IPVA e DPVAT somente de
+veículos de Minas Gerais e São Paulo.
+outubro/2020 4
+===== PAGINA 5 =====
+PRAZOS MÍNIMOS PARA ENVIO DOS ARQUIVOS (1)
+FORMA DE PAGAMENTO 30 Horas / Teleprocessamento
+CRÉDITO EM CONTA CORRENTE/POUPANÇA MESMO DIA (2)
+SALÁRIO MESMO DIA (2)
+DOC - DOCUMENTO DE CRÉDITO MESMO DIA (2)
+ORDEM DE PAGAMENTO À DISPOSIÇÃO 1 DIA ÚTIL
+CHEQUE PAGAMENTO 4 DIAS ÚTEIS
+QUITAÇÃO DE COBRANÇA NO ITAÚ MESMO DIA (2)
+QUITAÇÃO DE COBRANÇA EM OUTRO BANCO MESMO DIA (2)
+QUITAÇÃO DE CONCESSIONÁRIAS MESMO DIA (2)
+QUITAÇÃO DE TRIBUTOS MESMO DIA (2)
+NF – LIQUIDAÇÃO ELETRÔNICA MESMO DIA (2)
+TED – TRANSFERÊNCIA ELETRÔNICA DISPONÍVEL MESMO DIA ATÉ 15:00 HS (3)
+(1) Prazo mínimo de antecedência para inclusão, alteração ou exclusão de pagamentos, devendo ser
+observado o floating negociado comercialmente;
+(2) Para as inclusões efetuadas no “mesmo dia”, poderá ser realizada alteração / exclusão também
+no “mesmo dia”, desde que os pagamentos não tenham sido efetuados nas rotinas previstas
+durante o dia. Já para as inclusões efetuadas até um dia antes do pagamento, as alterações /
+exclusões devem ocorrer também no máximo até um dia antes do pagamento.
+(3) Para esta forma de pagamento serão realizados processamentos específicos para garantir que os
+valores sejam debitados em tempo real e enviados ao banco favorecido, na data indicada, até o
+horário-limite das clearings envolvidas.
+outubro/2020 5
+===== PAGINA 6 =====
+CAPÍTULO 2
+informações técnicas
+outubro/2020 6
+===== PAGINA 7 =====
+2.1 – Intercâmbio de informações
+Recomenda-se o teleprocessamento como melhor alternativa para troca de arquivos, por ser
+um meio moderno de comunicação com processos automatizados e pela alta confiabilidade,
+rapidez e segurança.
+Para sua implantação, basta sua empresa possuir um microcomputador compatível com a linha
+PC, com acesso à web.
+O arquivo deve ser do tipo texto, contendo um registro por linha. Não deve ser utilizado nenhum
+tipo de compactador de arquivos.
+O Itaú tem condições de refazer um arquivo em cinco dias úteis, desde que não decorridos
+mais de trinta dias da data original.
+2.2 – Explicações gerais sobre o arquivo
+O layout do arquivo segue padronização estabelecida pelo CNAB (Centro Nacional de
+Automação Bancária - versão 04.0 de 19.11.99), órgão técnico da FEBRABAN (Federação
+Brasileira de Bancos), contendo algumas adaptações às necessidades do Itaú.
+Cada arquivo é composto dos seguintes registros:
+• Um header de arquivo
+• Lotes de serviço
+• Um trailer de arquivo
+Um único arquivo poderá conter diversos lotes de serviços.
+Um lote de serviço é constituído de:
+• Um registro Header de Lote
+• Registros de Detalhe (Pagamento)
+• Um registro Trailer de Lote
+Um lote de serviço só pode conter pagamentos de um único tipo e uma única forma.
+Observação: Os lotes de serviços de pagamentos na forma de PIX devem ser enviados
+obrigatoriamente em arquivo separado das demais formas de pagamento. Assim, para PIX a
+estrutura do arquivo remessa deve ser:
+Header de arquivo
+Header de lote (forma de pgto PIX)
+Registros de Detalhe
+Trailer de Lote
+Trailer de arquivo
+Existem os seguintes tipos de registro de detalhe conforme a forma de pagamento:
+• Pagamento através de Cheque, OP, DOC, TED, PIX Transferência ou crédito em conta
+corrente:
+- Segmento A - (Obrigatório)
+- Segmento B - (Opcional, quando for necessária emissão de aviso ao favorecido ou
+quando contratado o envio de Demonstrativo de Pagamentos via e-mail. Obrigatório
+para a forma PIX Transferência no modelo “Chave”)
+- Segmento C – (Opcional. Necessário quando contratado o serviço de Demonstrativo
+de Pagamentos via web / e-mail)
+- Segmento D, E F – (Opcionais. Necessário quando contratado o serviço de Holerite
+– Demonstrativo de Pagamentos / Informe de Rendimentos via 30 Horas / Auto
+Atendimento)
+outubro/2020 7
+===== PAGINA 8 =====
+- Segmento Z – (Opcional – Informado somente no arquivo retorno, quando contratado
+junto ao Banco a opção de Autenticação Eletrônica de Pagamentos por arquivo)
+• Liquidação de títulos (boletos) em cobrança no Itaú e em outros bancos e QR Codes Itaú e
+outros bancos.
+- Segmento J – (Obrigatório)
+- Segmento J-52 – (Obrigatório)
+- Segmento J-52 PIX (Obrigatório)
+- Segmento B – (Opcional. Necessário quando tiver sido contratado o envio de
+Demonstrativo de Pagamentos via e-mail)
+- Segmento C – (Opcional. Necessário quando contratado o serviço de Demonstrativo
+de Pagamentos via web / e-mail)
+- Segmento Z – (Opcional – Informado somente no arquivo retorno, quando contratado
+junto ao Banco a opção de Autenticação Eletrônica de Pagamentos por arquivo)
+• Pagamento de Concessionárias e Tributos com código de barras:
+- Segmento O - (Obrigatório)
+- Segmento Z – (Opcional – Informado somente no arquivo retorno, quando contratado
+junto ao Banco a opção de Autenticação Eletrônica de Pagamentos por arquivo)
+• Pagamento de Tributos sem código de barras e FGTS:
+- Segmento N - (Obrigatório)
+- Segmento B - (Opcional, quando for necessária a indicação de informações
+complementares na guia do tributo)
+- Segmento W - (Opcional, quando for necessária a indicação de informações
+complementares na GARE – SP ICMS)
+- Segmento Z – (Opcional – Informado somente no arquivo retorno, quando contratado
+junto ao Banco a opção de Autenticação Eletrônica de Pagamentos por arquivo)
+- Representado graficamente, o arquivo é composto da seguinte maneira, onde o
+número entre chaves indica o tipo de registro:
+outubro/2020 8
+===== PAGINA 9 =====
+Registro Header do Arquivo => { Reg. = 0 }
+| Registro Header do Lote => { Reg. = 1 }
+| Registro de Detalhe => { Reg. = 3 } Segmento A (obrig)
+Segmento B (opc)
+Segmento C (opc)
+Segmento D (opc)
+Segmento E (opc)
+Segmento F (opc)
+Segmento Z (opc)
+| Registro Trailer do Lote => { Reg. = 5 }
+| Registro Header do Lote => { Reg. = 1 }
+| Registro de Detalhe => {Reg. = 3 } Segmento J (obrig)
+Segmento J-52 (obrig)
+Segmento B (opc)
+Arquivo Lotes
+Segmento C (opc)
+Segmento Z (opc)
+| Registro Trailer do Lote = > { Reg. = 5 }
+| Registro Header do Lote => { Reg. = 1 }
+| Registro de Detalhe => {Reg. = 3 } Segmento O (obrig)
+Segmento Z (opc)
+| Registro Trailer do Lote => { Reg. = 5 }
+| Registro Header do Lote => { Reg. = 1 }
+| Registro de Detalhe => {Reg. = 3 } Segmento N (obrig)
+Segmento B (opc)
+Segmento W (opc)
+Segmento Z (opc)
+| Registro Trailer do Lote => { Reg. = 5 }
+Registro Trailer do Arquivo => { Reg. = 9 }
+Cada registro é formado por campos que são apresentados em dois formatos:
+• Alfanumérico (picture X): alinhados à esquerda com brancos à direita. Preferencialmente,
+todos os caracteres devem ser maiúsculos. Aconselha-se a não utilização de caracteres
+especiais (ex.: “Ç”, “?”, etc.) e acentuação gráfica (ex.: “Á”, “É”, “Ê”, etc.). Campos não
+utilizados devem ser preenchidos com brancos;
+• Numérico (picture 9): alinhado a direita com zeros à esquerda. Campos não utilizados
+devem ser preenchidos com zeros.
+• Vírgula assumida (picture V): indica a posição da vírgula dentro de um campo numérico.
+Exemplo: num campo com picture “9(5)V9(2)”, o número “876,54” será representado por
+“0087654”.
+2.2.1. Arquivo remessa
+É o arquivo enviado ao Itaú, contendo as informações dos pagamentos /
+demonstrativos a serem efetuados. Podem ser enviados vários arquivos num mesmo
+dia.
+O layout do arquivo remessa é semelhante ao do arquivo retorno, contendo apenas
+algumas diferenças relativas ao resultado do processamento.
+2.2.2. Arquivo retorno
+É o arquivo disponibilizado pelo Itaú ao cliente para informar:
+• Pagamentos/Demonstrativos agendados;
+outubro/2020 9
+===== PAGINA 10 =====
+• Pagamentos/Demonstrativos rejeitados, com indicação de motivo (por exemplo:
+conta do favorecido inválida, data inválida, etc.);
+• Pagamentos/Demonstrativos efetuados, conforme informações prestadas pela
+empresa;
+• Pagamento não efetuado, com indicação de motivo (por exemplo: pagamento
+cancelado por falta de autorização).
+É importante o tratamento do Arquivo retorno. Caso se observe a ausência de algum
+arquivo, contatar imediatamente o Itaú.
+Caso seja necessário o back-up do arquivo retorno, o banco possui os últimos 90
+dias.
+outubro/2020 10
+===== PAGINA 11 =====
+CAPÍTULO 3
+layout do arquivo
+outubro/2020 11
+===== PAGINA 12 =====
+ARQUIVO REGISTRO HEADER DE ARQUIVO TAMANHO DO REGISTRO = 240 Bytes
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO DO BCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) 0000
+TIPO DE REGISTRO REGISTRO HEADER DE ARQUIVO 008 008 9(01) 0
+BRANCOS COMPLEMENTO DE REGISTRO 009 014 X(06)
+LAYOUT DE ARQUIVO N DA VERSÃO DO LAYOUT DO ARQUIVO 015 017 9(03) 080
+EMPRESA – INSCRIÇÃO TIPO DE INSCRIÇÃO DA EMPRESA 018 018 9(01) 1 = CPF
+2 = CNPJ
+INSCRIÇÃO NÚMERO CNPJ EMPRESA DEBITADA 019 032 9(14) NOTA 1
+BRANCOS COMPLEMENTO DE REGISTRO 033 052 X(20)
+AGÊNCIA NÚMERO AGÊNCIA DEBITADA 053 057 9(05) NOTA 1
+BRANCOS COMPLEMENTO DE REGISTRO 058 058 X(01)
+CONTA NÚMERO DE C/C DEBITADA 059 070 9(12) NOTA 1
+BRANCOS COMPLEMENTO DE REGISTRO 071 071 X(01)
+DAC DAC DA AGÊNCIA/CONTA DEBITADA 072 072 9(01) NOTA 1
+NOME DA EMPRESA NOME DA EMPRESA 073 102 X(30)
+NOME DO BANCO NOME DO BANCO 103 132 X(30)
+BRANCOS COMPLEMENTO DE REGISTRO 133 142 X(10)
+ARQUIVO-CÓDIGO CÓDIGO REMESSA/RETORNO 143 143 9(01) 1=REMESSA
+2=RETORNO
+DATA DE GERAÇÃO DATA DE GERAÇÃO DO ARQUIVO 144 151 9(08) DDMMAAAA
+HORA DA GERAÇÃO HORA DE GERAÇÃO DO ARQUIVO 152 157 9(06) HHMMSS
+ZEROS COMPLEMENTO DE REGISTRO 158 166 9(09)
+UNIDADE DE DENSIDADE DENSIDADE DE GRAVAÇÃO DO ARQUIVO 167 171 9(05) NOTA 2
+BRANCOS COMPLEMENTO DE REGISTRO 172 240 X(69)
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+outubro/2020 12
+===== PAGINA 13 =====
+ARQUIVO REGISTRO HEADER DE LOTE TAMANHO DO REGISTRO = 240 Bytes
+Pagamentos através de cheque, OP, DOC, TED, PIX Transferência e crédito em conta corrente
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE IDENTIFICAÇÃO DE PAGTOS 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO HEADER DE LOTE 008 008 9(01) 1
+(1) TIPO DE OPERAÇÃO TIPO DA OPERAÇÃO 009 009 X(01) C=CRÉDITO
+(3) TIPO DE PAGAMENTO TIPO DE PAGTO 010 011 9(02) NOTA 4
+(3) FORMA DE PAGAMENTO FORMA DE PAGAMENTO 012 013 9(02) NOTA 5
+LAYOUT DO LOTE N DA VERSÃO DO LAYOUT DO LOTE 014 016 9(03) 040
+BRANCOS COMPLEMENTO DE REGISTRO 017 017 X(01)
+EMPRESA – INSCRIÇÃO TIPO INSCRIÇÃO EMPRESA DEBITADA 018 018 9(01) 1 = CPF
+2 = CNPJ
+INSCRIÇÃO NÚMERO CNPJ EMPRESA DEBITADA 019 032 9(14) NOTA 1
+IDENTIFICAÇÃO DO IDENTIFICAÇÃO DO LANÇAMENTO NO EXTRATO DO
+033 036 X(04) NOTA 13
+LANÇAMENTO FAVORECIDO
+BRANCOS COMPLEMENTO DE REGISTRO 037 052 X(16)
+AGÊNCIA NÚMERO AGÊNCIA DEBITADA 053 057 9(05) NOTA 1
+BRANCOS COMPLEMENTO DE REGISTRO 058 058 X(01)
+CONTA NÚMERO DE C/C DEBITADA 059 070 9(12) NOTA 1
+BRANCOS COMPLEMENTO DE REGISTRO 071 071 X(01)
+DAC DAC DA AGÊNCIA/CONTA DEBITADA 072 072 9(01) NOTA 1
+NOME DA EMPRESA NOME DA EMPRESA DEBITADA 073 102 X(30)
+(2) FINALIDADE DO LOTE FINALIDADE DOS PAGTOS DO LOTE 103 132 X(30) NOTA 6
+HISTÓRICO DE C/C COMPLEMENTO HISTÓRICO C/C DEBITADA 133 142 X(10) NOTA 7
+ENDEREÇO DA EMPRESA NOME DA RUA, AV, PÇA, ETC... 143 172 X(30)
+NÚMERO NÚMERO DO LOCAL 173 177 9(05)
+COMPLEMENTO. CASA, APTO, SALA, ETC... 178 192 X(15)
+CIDADE NOME DA CIDADE 193 212 X(20)
+CEP CEP 213 220 9(08)
+ESTADO SIGLA DO ESTADO 221 222 X(02)
+BRANCOS COMPLEMENTO DE REGISTRO 223 230 X(08)
+(*) OCORRÊNCIAS CÓDIGO OCORRÊNCIAS P/RETORNO 231 240 X(10) NOTA 8
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(*) Campos que constam apenas no arquivo retorno. Na remessa, devem ser informados com brancos
+ou zeros, conforme a picture de cada campo.
+(1) Quando se tratar de lote para financiamento de Bens e Serviços (COMPROR/FINABS) ou Desconto
+de NPR (Crédito Rural), previamente contratado junto ao banco, o conteúdo deste campo deve ser
+identificado pela letra "F". Esta sistemática só se aplica ao Pagamento de Fornecedores, tipo 20,
+cuja forma seja crédito em Conta Corrente, DOC e TED.
+(2) Sempre que o serviço for referente à “Holerite - Demonstrativo de Pagamentos / Informe de
+Rendimentos” e débito em Conta Investimento, deverá ser indicado na posição 103 a 104 o código
+correspondente, conforme Nota 6 deste manual;
+outubro/2020 13
+===== PAGINA 14 =====
+(3) Quando se tratar de “Informe de Rendimentos”, utilizar nestes campos conteúdo “30” para Tipo de
+Pagamento e “01” para Forma de Pagamento. Para operações de débito/crédito em Conta
+Investimento utilizar somente Formas de Pagamento “06” (crédito em conta de mesma titularidade)
+ou “43” (TED – mesmo titular). Especificamente para movimentações envolvendo Conta
+Investimento, os pagamentos na forma de TED de mesma titularidade podem ser de qualquer valor,
+inclusive inferior ao limite estabelecido pelo Banco Central do Brasil.
+outubro/2020 14
+===== PAGINA 15 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO A - OBRIGATÓRIO
+Pagamentos através de cheque, OP, DOC, TED, PIX Transferência e crédito em conta corrente
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DE LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQUENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) A
+TIPO DE MOVIMENTO TIPO DE MOVIMENTO 015 017 9(03) NOTA 10
+CÂMARA CÓDIGO DA CÂMARA CENTRALIZADORA 018 020 9(03) NOTA 35
+BANCO FAVORECIDO CÓDIGO BANCO FAVORECIDO 021 023 9(03)
+AGÊNCIA CONTA AGÊNCIA CONTA FAVORECIDO 024 043 X(20) NOTA 11
+NOME DO FAVORECIDO NOME DO FAVORECIDO 044 073 X(30) NOTA 34
+SEU NÚMERO Nº DOCTO ATRIBUÍDO PELA EMPRESA 074 093 X(20)
+(1) DATA DE PAGTO DATA PREVISTA PARA PAGTO 094 101 9(08) DDMMAAAA
+MOEDA – TIPO TIPO DA MOEDA 102 104 X(03) REA OU 009
+CÓDIGO ISPB IDENTIFICAÇÃO DA INSTITUIÇÃO PARA O SPB 105 112 X(08) NOTA 35
+IDENTI. TRANSFERENCIA CONTA PAGAMENTO / PIX 113 114 X(02) NOTA 36
+ZEROS COMPLEMENTO DE REGISTRO 115 119 9 (05)
+(1) VALOR DO PAGTO VALOR PREVISTO DO PAGTO 120 134 9(13)V9(02)
+(*) NOSSO NÚMERO Nº DOCTO ATRIBUÍDO PELO BANCO 135 149 X(15) NOTA 12
+BRANCOS COMPLEMENTO DE REGISTRO 150 154 X(05) NOTA 42
+(*) DATA EFETIVA DATA REAL EFETIVAÇÃO DO PAGTO 155 162 9(08) DDMMAAAA
+(*) VALOR EFETIVO VALOR REAL EFETIVAÇÃO DO PAGTO 163 177 9(13)V9(02)
+FINALIDADE DETALHE INFORMAÇÃO COMPLEMENTAR P/ HIST. DE C/C 178 197 X(20) NOTA 13
+(*) N DO DOCUMENTO Nº DO DOC/TED/ OP/ CHEQUE NO RETORNO 198 203 9(6) NOTA 14
+N DE INSCRIÇÃO N DE INSCRIÇÃO DO FAVORECIDO (CPF/CNPJ) 204 217 9(14) NOTA 15
+FINALIDADE DOC E FINALIDADE DO DOC E STATUS DO FUNCIONÁRIO NA
+218 219 X(02) NOTA 30
+STATUS FUNCIONÁRIO EMPRESA
+(2) FINALIDADE TED FINALIDADE DA TED 220 224 X(05) NOTA 26
+BRANCOS COMPLEMENTO DE REGISTRO 225 229 X(05)
+AVISO AVISO AO FAVORECIDO 230 230 X(01) NOTA 16
+(*) OCORRÊNCIAS CÓDIGO OCORRÊNCIAS NO RETORNO 231 240 X(10) NOTA 8
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(*) Campos que constam apenas no arquivo retorno. Na remessa, devem ser informados com
+brancos ou zeros, conforme a picture de cada campo.
+(1) Quando se tratar especificamente de “Informe de Rendimentos”, o campo “DATA DE PGTO” deve
+ser preenchido com uma data maior ou igual à de envio do arquivo ao Banco (limitado a 360 dias);
+e o campo “VALOR DO PAGTO” deve ser informado com zeros.
+(2) Para Conta Investimento utilizar Finalidade “00016”, conforme descrito na Nota 26, inclusive
+quando se tratar de pagamento na forma de crédito em conta corrente de mesma titularidade.
+outubro/2020 15
+===== PAGINA 16 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO A - OBRIGATÓRIO
+Pagamentos através de Nota Fiscal – Liquidação Eletrônica
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DE LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQUENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) A
+TIPO DE MOVIMENTO TIPO DE MOVIMENTO 015 017 9(03) NOTA 10
+ZEROS COMPLEMENTO DE REGISTRO 018 020 9(03)
+BANCO FAVORECIDO CÓDIGO BANCO FAVORECIDO 021 023 9(03)
+AGÊNCIA CONTA AGÊNCIA CONTA FAVORECIDO 024 043 X(20) NOTA 11
+NOME DO FAVORECIDO NOME DO FAVORECIDO 044 073 X(30) NOTA 34
+SEU NÚMERO Nº DOCTO ATRIBUÍDO PELA EMPRESA 074 093 X(20)
+DATA DE PAGTO DATA PREVISTA PARA PAGTO 094 101 9(08) DDMMAAAA
+MOEDA – TIPO TIPO DA MOEDA 102 104 X(03) REA OU 009
+ZEROS COMPLEMENTO DE REGISTRO 105 119 9(15)
+VALOR DO PAGTO VALOR PREVISTO DO PAGTO 120 134 9(13)V9(02)
+(*) NOSSO NÚMERO Nº DOCTO ATRIBUÍDO PELO BANCO 135 149 X(15) NOTA 12
+BRANCOS COMPLEMENTO DE REGISTRO 150 154 X(05)
+(*) DATA EFETIVA DATA REAL EFETIVAÇÃO DO PAGTO 155 162 9(08) DDMMAAAA
+(*) VALOR EFETIVO VALOR REAL EFETIVAÇÃO DO PAGTO 163 177 9(13)V9(02)
+Nº NOTA FISCAL/CNPJ NÚMERO DA NOTA FISCAL/CNPJ 178 191 9(14) NOTA 31
+BRANCOS COMPLEMENTO DE REGISTRO 192 197 X(06)
+(*) N DO DOCUMENTO Nº DO DOC/TED/ OP/ CHEQUE NO RETORNO 198 203 9(06) NOTA 14
+N DE INSCRIÇÃO N DE INSCRIÇÃO DO FAVORECIDO (CPF/CNPJ) 204 217 9(14) NOTA 15
+TIPO DE IDENTIFICAÇÃO TIPO DE IDENTIFICAÇÃO DA LIQUIDAÇÃO 218 218 N9O(0T1A) 32
+BRANCOS COMPLEMENTO DE REGISTRO 219 229 X(11)
+AVISO AVISO AO FAVORECIDO 230 230 X(01) NOTA 16
+(*) OCORRÊNCIAS CÓDIGO OCORRÊNCIAS NO RETORNO 231 240 X(10) NOTA 8
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(*) Campos que constam apenas no arquivo retorno. Na remessa, devem ser informados com
+brancos ou zeros, conforme a picture de cada campo.
+outubro/2020 16
+===== PAGINA 17 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO - B (OPCIONAL)
+Pagamentos através de cheque, OP, DOC, TED e crédito em conta corrente
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DO LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQUENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+CÓDIGO DO SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) B
+BRANCOS COMPLEMENTO DE REGISTRO 015 017 X(03)
+1 = CPF
+EMPRESA – INSCRIÇÃO TIPO INSCRIÇÃO DO FAVORECIDO 018 018 9(01)
+2 = CNPJ
+Nº DE INSCRIÇÃO Nº DE INSCRIÇÃO DO FAVORECIDO (CPF/CNPJ) 019 032 9(14) NOTA 15
+ENDEREÇO NOME DA RUA, AV, PÇA, ETC 033 062 X(30)
+NÚMERO NÚMERO DO LOCAL 063 067 9(05)
+COMPLEMENTO CASA, APTO, ETC 068 082 X(15)
+BAIRRO BAIRRO 083 097 X(15)
+CIDADE NOME DA CIDADE 098 117 X(20)
+CEP CEP 118 125 9(08)
+ESTADO SIGLA DO ESTADO 126 127 X(02)
+E-MAIL ENDEREÇO DE E-MAIL 128 227 X(100) NOTA 23
+BRANCOS COMPLEMENTO DE REGISTRO 228 230 X(03)
+(*) OCORRÊNCIAS CÓDIGO DE OCORRÊNCIAS NO RETORNO 231 240 X (10) NOTA 8
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(*) Para pagamento através de TED para Corretoras, por determinação do BACEN é obrigatória a
+identificação da Câmara e do Código ISPB na remessa conforme descrito na Nota 35.
+Para pagamento através de TED para Conta Pagamento, por determinação do BACEN é obrigatória
+identificação do Código ISPB na remessa conforme descrito na Nota 35 e Complemento de Registro
+conforme descrito na Nota 36.
+Por se tratar de complemento, este registro pode ser apresentado na remessa e não constará no arquivo
+retorno, exceto quando utilizado o serviço de “Demonstrativo de Pagamentos”.
+Observações:
+• Este segmento é obrigatório quando:
+o Houver a necessidade de emissão de aviso ao favorecido, conforme definido no
+Segmento A (posição 230 igual a 3 ou 5 - ver nota 16); ou
+o For contratado junto ao Banco o serviço de envio de “Demonstrativo de Pagamentos”
+via web / e-mail e de “Informe de Rendimentos”.
+• Este segmento constará do arquivo retorno sempre que for enviado algum registro “C”.
+• Quando contratado o serviço de “Demonstrativo de Pagamentos” via web / e-mail e de
+“Informe de Rendimentos”, a informação do CPF/CNPJ do favorecido deve obrigatoriamente
+ser indicada neste segmento.
+outubro/2020 17
+===== PAGINA 18 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO - B (OBRIGATÓRIO PARA PIX)
+Pagamentos através de PIX Transferência
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DO LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQUENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+CÓDIGO DO SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) B
+TIPO CHAVE TIPO IDENTIFICAÇÃO DE CHAVE PIX 015 016 X(02) NOTA 37
+BRANCOS COMPLEMENTO DE REGISTRO 017 017 X(01)
+1 = CPF
+EMPRESA – INSCRIÇÃO TIPO INSCRIÇÃO DO FAVORECIDO 018 018 9(01)
+2 = CNPJ
+Nº DE INSCRIÇÃO Nº DE INSCRIÇÃO DO FAVORECIDO (CPF/CNPJ) 019 032 9(14) NOTA 15
+BRANCOS COMPLEMENTO DE REGISTRO 033 062 X(30)
+INFORMAÇÕS ENTRE
+INFORMAÇÃO ENTRE USUÁRIOS 063 127 9(65) NOTA 39
+USUÁRIOS
+CHAVE PIX CHAVE DE ENDEREÇAMENTO 128 227 X(100) NOTA 40
+BRANCOS COMPLEMENTO DE REGISTRO 228 230 X(03)
+(*) OCORRÊNCIAS CÓDIGO DE OCORRÊNCIAS NO RETORNO 231 240 X (10) NOTA 8
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+outubro/2020 18
+===== PAGINA 19 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO - C (OPCIONAL)
+Pagamentos através de cheque, OP, DOC, TED e crédito em conta corrente
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DO LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQÜENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+CÓDIGO DO SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) C
+VALOR C.S.L.L. VALOR DA CONTRIBUIÇÃO SOBRE O LUCRO LÍQUIDO 015 029 9(13)V9(02)
+BRANCOS COMPLEMENTO DE REGISTRO 030 037 X(08)
+VENCIMENTO DATA DE VENCIMENTO 038 045 X(08) DDMMAAAA
+VALOR DOCUMENTO VALOR NOMINAL DO DOCUMENTO 046 060 9(13)V9(02)
+VALOR PIS VALOR PROGRAMA DE INTEGRAÇÃO SOCIAL 061 075 9(13)V9(02)
+VALOR I.R. VALOR DO IMPOSTO DE RENDA 076 090 9(13)V9(02)
+VALOR I.S.S. VALOR DO IMPOSTO SOBRE SERVIÇOS 091 105 9(13)V9(02)
+VALOR COFINS VALOR CONTRIBUIÇÃO FINALIDADE SOCIAL 106 120 9(13)V9(02)
+DESCONTO VALOR DO DESCONTO 121 135 9(13)V9(02)
+ABATIMENTO VALOR DO ABATIMENTO 136 150 9(13)V9(02)
+OUTRAS DEDUÇÕES VALOR DE OUTRAS DEDUÇÕES 151 165 9(13)V9(02)
+MORA VALOR DA MORA 166 180 9(13)V9(02)
+MULTA VALOR DA MULTA 181 195 9(13)V9(02)
+OUTROS ACRÉSCIMOS VALOR DE OUTROS ACRÉSCIMOS 196 210 9(13)V9(02)
+FATURA/DOCUMENTO NÚMERO DA FATURA/DOCUMENTO 211 230 X(20)
+BRANCOS COMPLEMENTO DE REGISTRO 231 240 X(10)
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+Observação:
+Este segmento só é obrigatório quando for contratado junto ao Banco o serviço “Demonstrativo de
+Pagamentos” por e-mail / web.
+Um pagamento informado através do segmento “A” poderá conter quantos registros “C” forem
+necessários, até que a soma dos valores informados em “C” totalize o valor informado para pagamento
+em “A”.
+outubro/2020 19
+===== PAGINA 20 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO – D (OPCIONAL)
+Pagamentos de Salários através de crédito em conta corrente (Holerite)
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DO LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQÜENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+CÓDIGO DO SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) D
+BRANCOS COMPLEMENTO DE REGISTRO 015 017 X(03)
+PERÍODO/COMPETÊNCIA MÊS / ANO DO PAGAMENTO 018 023 9(06) MMAAAA
+CENTRO DE CUSTO ÓRGÃO / CENTRO DE CUSTO 024 038 X(15)
+CÓDIGO FUNCIONÁRIO CÓDIGO DO FUNCIONÁRIO 039 053 X(15)
+CARGO CARGO DO FUNCIONÁRIO 054 083 X(30)
+FÉRIAS PERÍODO DE FÉRIAS “DE” 084 091 9(08) DDMMAAAA
+FÉRIAS PERÍODO DE FÉRIAS “ATÉ” 092 099 9(08) DDMMAAAA
+DEPENDENTES I.R. QUANTIDADE DE DEPENDENTES IMP.DE RENDA 100 101 9(02)
+DEPENDENTES S.F. QUANTIDADE DE DEPENDENTES SALÁRIO FAMÍLIA 102 103 9(02)
+HORAS HORAS SEMANAIS 104 105 9(02)
+SALÁRIO CONTRIBUIÇÃO VALOR DO SALÁRIO CONTRIBUIÇÃO 106 120 9(13)V9(02)
+F.G.T.S. VALOR DO F.G.T.S. 121 135 9(13)V9(02)
+VALOR CRÉDITOS VALOR TOTAL DOS CRÉDITOS 136 150 9(13)V9(02)
+VALOR DÉBITO VALOR TOTAL DOS DÉBITOS 151 165 9(13)V9(02)
+VALOR LÍQUIDO VALOR LIQUIDO DO PAGAMENTO 166 180 9(13)V9(02)
+VALOR FIXO / BASE VALOR DO SALÁRIO FIXO / BASE 181 195 9(13)V9(02)
+BASE DE CÁLCULO
+VALOR DA BASE DO I.R.R.F. 196 210 9(13)V9(02)
+I.R.R.F.
+BASE DE CÁLCULO
+VALOR DA BASE DO F.G.T.S. 211 225 9(13)V9(02)
+F.G.T.S.
+DISPONIBILIZAÇÃO PRAZO PARA DISPONIBILIZAÇÃO DO HOLERITE 226 227 X(02) NOTA 27
+BRANCOS COMPLEMENTO DE REGISTRO 228 230 X(03)
+(*) OCORRÊNCIAS CÓDIGO OCORRÊNCIA PARA RETORNO 231 240 X(10)
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(*) Campos que constam apenas no arquivo retorno. Na remessa, devem ser informados com
+brancos ou zeros, conforme a picture de cada campo.
+Observação:
+Este segmento só é obrigatório quando for contratado junto ao Banco o serviço “Holerite - Demonstrativo
+de Pagamento de Salários”.
+outubro/2020 20
+===== PAGINA 21 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO – E (OPCIONAL)
+Pagamentos de Salários através de crédito em conta corrente (Holerite)
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DO LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQÜENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+CÓDIGO DO SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) E
+BRANCOS COMPLEMENTO DE REGISTRO 015 017 X(03)
+MOVIMENTO TIPO DE MOVIMENTO 018 018 X(01) NOTA 24
+INFORMAÇÕES INFORMAÇÕES COMPLEMENTARES PARA HOLERITE
+019 218 X(200) ANEXO D
+COMPLEMENTARES OU INFORME DE RENDIMENTOS
+BRANCOS COMPLEMENTO DE REGISTRO 219 230 X(12)
+(*) OCORRÊNCIAS CÓDIGO OCORRÊNCIA PARA RETORNO 231 240 X(10)
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(*) Campos que constam apenas no arquivo retorno. Na remessa, devem ser informados com
+brancos ou zeros, conforme a picture de cada campo.
+Observação:
+Este segmento só é obrigatório quando for contratado junto ao Banco o serviço “Holerite - Demonstrativo
+de Pagamento de Salários / Informe de Rendimentos”.
+Um pagamento de salários informado através do segmento “A” poderá conter quantos registros “E” forem
+necessários, até que a soma dos valores informados (créditos e débitos) totalizem o “valor do
+pagamento” informado para pagamento em “A”.
+O arquivo de “Informe de Rendimentos” poderá conter mais de um registro “E”, para cada beneficiário
+informado nos segmentos “A” e “B” (vide limitação no Anexo D).
+outubro/2020 21
+===== PAGINA 22 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO – F (OPCIONAL)
+Pagamentos de Salários através de crédito em conta corrente (Holerite)
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DO LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQÜENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+CÓDIGO DO SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) F
+BRANCOS COMPLEMENTO DE REGISTRO 015 017 X(03)
+MENSAGEM /
+DESCRIÇÃO DA MENSAGEM / INFORMAÇÕES
+INFORMAÇÕES 018 161 X(144) NOTA 25
+COMPLEMENTARES
+COMPLEMENTARES
+BRANCOS COMPLEMENTO DE REGISTRO 162 230 X(69)
+(*) OCORRÊNCIAS CÓDIGO OCORRÊNCIA PARA RETORNO 231 240 X(10)
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(*) Campos que constam apenas no arquivo retorno. Na remessa, devem ser informados com
+brancos ou zeros, conforme a picture de cada campo.
+Observação:
+Este segmento é opcional e só se aplica aos clientes que possuem contratado o serviço de “Holerite -
+Demonstrativo de Pagamentos / Informe de Rendimentos” junto ao Banco Itaú SA.
+Poderá ser enviado no máximo um (01) registro “F”, para cada “Holerite - Demonstrativo de Pagamentos”
+e até trinta (30) registros “F”, para compor as Informações Complementares do “Informe de Rendimentos”
+(consulte Nota 25).
+outubro/2020 22
+===== PAGINA 23 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO – Z (OPCIONAL)
+Pagamentos através de cheque, OP, DOC, TED, PIX Transferência e crédito em conta corrente
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DO LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQUENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+CÓDIGO DO SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) Z
+AUTENTICAÇÃO AUTENTICAÇÃO ELETRÔNICA DO PAGAMENTO 015 078 X(64)
+SEU NÚMERO Nº DOCTO ATRIBUÍDO PELA EMPRESA 079 098 X(20)
+BRANCOS COMPLEMENTO DE REGISTRO 099 103 X(05)
+NOSSO NÚMERO Nº DOCTO ATRIBUÍDO PELO BANCO 104 118 X(15)
+BRANCOS COMPLEMENTO DE REGISTRO 119 240 X(122)
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+Observações:
+Registro opcional de complemento que apresenta a Autenticação Eletrônica do Pagamento;
+Este segmento somente constará do arquivo retorno quando contratado junto ao Banco e é exclusivo
+para pagamentos com a ocorrência “00” – Pagamento Efetuado.
+outubro/2020 23
+===== PAGINA 24 =====
+ARQUIVO REGISTRO TRAILER DE LOTE TAMANHO DO REGISTRO = 240 BYTES
+Pagamentos através de cheque, OP, DOC, TED, PIX Transferência e crédito em conta corrente
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO TRAILER DE LOTE 008 008 9(01) 5
+BRANCOS COMPLEMENTO DE REGISTRO 009 017 X(09)
+TOTAL QTDE REGISTROS QTDE REGISTROS DO LOTE 018 023 9(06) NOTA 17
+(1) TOTAL VALOR PAGTOS SOMA VALOR DOS PGTOS DO LOTE 024 041 9(16)V9(2) NOTA 17
+ZEROS COMPLEMENTO DE REGISTRO 042 059 9(18)
+BRANCOS COMPLEMENTO DE REGISTRO 060 230 X(171)
+(*) OCORRÊNCIAS CÓDIGOS OCORRÊNCIAS P/ RETORNO 231 240 X(10) NOTA 8
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(*) Campos que constam apenas no arquivo retorno. Na remessa, devem ser informados com
+brancos ou zeros, conforme a picture de cada campo.
+(1) Quando se tratar de “Informe de Rendimentos”, informar este campo com zeros.
+outubro/2020 24
+===== PAGINA 25 =====
+ARQUIVO REGISTRO HEADER DE LOTE TAMANHO DO REGISTRO = 240 Bytes
+Liquidação de títulos (boletos) em cobrança no Itaú e em outros Bancos, PIX QR CODE
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE IDENTIFICAÇÃO DE PAGTOS 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO HEADER DE LOTE 008 008 9(01) 1
+(1) TIPO DE OPERAÇÃO TIPO DA OPERAÇÃO 009 009 X(01) C =CRÉDITO
+TIPO DE PAGAMENTO TIPO DE PAGTO 010 011 9(02) NOTA 4
+FORMA DE PAGAMENTO FORMA DE PAGAMENTO 012 013 9(02) NOTA 5
+LAYOUT DO LOTE N DA VERSÃO DO LAYOUT DO LOTE 014 016 9(03) 030
+BRANCOS COMPLEMENTO DE REGISTRO 017 017 X(01)
+EMPRESA - INSCRIÇÃO TIPO INSCRIÇÃO EMPRESA DEBITADA 018 018 9(01) 1= CPF
+2 = CNPJ
+INSCRIÇÃO NÚMERO CNPJ EMPRESA OU CPF DEBITADO 019 032 9(14) NOTA 1
+BRANCOS COMPLEMENTO DE REGISTRO 033 052 X(20)
+AGÊNCIA NÚMERO AGÊNCIA DEBITADA 053 057 9(05) NOTA 1
+BRANCOS COMPLEMENTO DE REGISTRO 058 058 X(01)
+CONTA NÚMERO DE C/C DEBITADA 059 070 9(12) NOTA 1
+BRANCOS COMPLEMENTO DE REGISTRO 071 071 X(01)
+DAC DAC DA AGÊNCIA/CONTA DEBITADA 072 072 9(01) NOTA 1
+NOME DA EMPRESA NOME DA EMPRESA DEBITADA 073 102 X(30)
+FINALIDADE DO LOTE FINALIDADE DOS PAGTOS DO LOTE 103 132 X(30) NOTA 6
+HISTÓRICO DE C/C COMPLEMENTO HISTÓRICO C/C DEBITADA 133 142 X(10) NOTA 7
+ENDEREÇO DA EMPRESA NOME DA RUA, AV, PÇA, ETC... 143 172 X(30)
+NÚMERO NÚMERO DO LOCAL 173 177 9(05)
+COMPLEMENTO. CASA, APTO, SALA, ETC... 178 192 X(15)
+CIDADE NOME DA CIDADE 193 212 X(20)
+CEP CEP 213 220 9(08)
+ESTADO SIGLA DO ESTADO 221 222 X(02)
+BRANCOS COMPLEMENTO DE REGISTRO 223 230 X(08)
+(*) OCORRÊNCIAS CÓDIGO OCORRÊNCIAS P/RETORNO 231 240 X(10) NOTA 8
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(*) Campos que constam apenas no arquivo retorno. Na remessa, devem ser informados com
+brancos ou zeros, conforme a picture de cada campo.
+(1) Quando se tratar de lote para financiamento de Bens e Serviços (COMPROR/FINABS) ou Desconto
+de NPR (Crédito Rural), previamente contratado junto ao banco, o conteúdo deste campo deve ser
+identificado pela letra "F". Esta sistemática só se aplica ao Pagamento de Fornecedores, tipo 20.
+outubro/2020 25
+===== PAGINA 26 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO J - OBRIGATÓRIO
+Liquidação de títulos (boletos) em cobrança no Itaú e em outros Bancos, PIX QR CODE
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DE LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQUENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) J
+TIPO DE MOVIMENTO TIPO DE MOVIMENTO 015 017 9(03) NOTA 10
+BANCO FAVORECIDO CÓD. DE BARRAS – CÓDIGO BANCO FAVORECIDO 018 020 9(03) NOTA 18
+MOEDA CÓD. DE BARRAS – CÓDIGO DA MOEDA 021 021 9(01) NOTA 18
+DV CÓD. DE BARRAS – DÍGITO VERIF. DO CÓD. BARRAS 022 022 9(01) NOTA 18
+VENCIMENTO CÓD. DE BARRAS – FATOR DE VENCIMENTO 023 026 9(04) NOTA 18
+VALOR CÓD. DE BARRAS – VALOR 027 036 9(08)V9(02) NOTA 18
+CAMPO LIVRE CÓD. DE BARRAS - 'CAMPO LIVRE' 037 061 9(25) NOTA 18
+NOME DO FAVORECIDO NOME DO FAVORECIDO 062 091 X(30)
+DATA VENCTO DATA DO VENCIMENTO (NOMINAL) 092 099 9(08) DDMMAAAA
+VALOR DO TÍTULO VALOR DO TÍTULO (NOMINAL) 100 114 9(13)V9(02)
+DESCONTOS VALOR DO DESCONTO + ABATIMENTO 115 129 9(13)V9(02)
+ACRÉSCIMOS VALOR DA MORA + MULTA 130 144 9(13)V9(02)
+DATA PAGAMENTO DATA DO PAGAMENTO 145 152 9(08) DDMMAAAA
+VALOR PAGAMENTO VALOR DO PAGAMENTO 153 167 9(13)V9(02)
+ZEROS COMPLEMENTO DE REGISTRO 168 182 9(15)
+SEU NÚMERO Nº DOCTO ATRIBUÍDO PELA EMPRESA 183 202 X(20)
+BRANCOS COMPLEMENTO DE REGISTRO 203 215 X(13)
+(*) NOSSO NÚMERO NÚMERO ATRIBUÍDO PELO BANCO 216 230 X(15) NOTA 12
+(*) OCORRÊNCIAS CÓDIGO DE OCORRÊNCIAS P/ RETORNO 231 240 X(10) NOTA 8
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(*) Campos que constam apenas no arquivo retorno. Na remessa, devem ser informados com brancos
+ou zeros, conforme a picture de cada campo.
+outubro/2020 26
+===== PAGINA 27 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO J-52 – OBRIGATÓRIO
+Liquidação de títulos (BOLETO ON-LINE) – boletos de outros Bancos
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DE LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQUENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) J
+TIPO DE MOVIMENTO TIPO DE MOVIMENTO 015 017 9(03) NOTA 10
+CÓDIGO DO REGISTRO IDENTIFICAÇÃO DO REGISTRO OPCIONAL 018 019 9(02) 52
+1 = CPF
+TIPO INSCRIÇÃO SACADO TIPO DE INSCRIÇÃO DO SACADO 020 020 9(01)
+2 = CNPJ
+NÚMERO INSCRIÇÃO
+NÚMERO DE INSCRIÇÃO DO SACADO 021 035 9(15)
+SACADO
+NOME SACADO NOME DO SACADO 036 075 X(40)
+TIPO DE INSCRIÇÃO 1 = CPF
+TIPO DE INSCRIÇÃO DO CEDENTE 076 076 9(01)
+CEDENTE 2 = CNPJ
+NÚMERO INSCRIÇÃO
+NÚMERO DE INSCRIÇÃO DO CEDENTE 077 091 9(15)
+CEDENTE
+NOME CEDENTE NOME DO CEDENTE 092 131 X(40)
+TIPO INSCRIÇÃO 1 = CPF
+TIPO DE INSCRIÇÃO DO SACADOR AVALISTA 132 132 9(01)
+SACADOR 2 = CNPJ
+NÚMERO INSCRIÇÃO
+NÚMERO DE INSCRIÇÃO DO SACADOR AVALISTA 133 147 9(15)
+SACADOR
+NOME SACADOR NOME DO SACADOR AVALISTA 148 187 X(40)
+BRANCOS COMPLEMENTO DE REGISTRO 188 240 X(53)
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+Observações:
+O registro detalhe J-52 é obrigatório para pagamentos de boletos emitidos pelo Itaú e por outros bancos
+(formas “30 – Boletos Itaú” e “31 – Boletos outros Bancos”).
+Deve vir sempre após o respectivo segmento J. Caso utilize o segmento B e C obedecer a ordem dos registros
+(J, J-52, B, C).
+Caso não seja informado o Número de Inscrição do Sacado (posições 021 a 035), será assumido o número
+do CNPJ do pagador informado no registro Header de Lote.
+Os campos Tipo e Número de Inscrição do Cedente (posições 076 a 091) são de preenchimento obrigatório,
+caso não informados o pagamento será rejeitado (ocorrência “BI” – Para inconsistências específicas do J52
+que são os dados do cedente e sacado). Também será motivo de rejeição nos casos de o Tipo de Inscrição
+não corresponder com o Número de Inscrição apresentado.
+outubro/2020 27
+===== PAGINA 28 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO J-52 PIX – OBRIGATÓRIO
+Liquidação de QR-CODES Dinâmicos e Estáticos
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DE LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQUENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) J
+TIPO DE MOVIMENTO TIPO DE MOVIMENTO 015 017 9(03) NOTA 10
+CÓDIGO DO REGISTRO IDENTIFICAÇÃO DO REGISTRO OPCIONAL 018 019 9(02) 52
+1 = CPF
+TIPO INSCRIÇÃO SACADO TIPO DE INSCRIÇÃO DO SACADO 020 020 9(01)
+2 = CNPJ
+NÚMERO INSCRIÇÃO
+NÚMERO DE INSCRIÇÃO DO SACADO 021 035 9(15)
+SACADO
+NOME SACADO NOME DO SACADO 036 075 X(40)
+TIPO DE INSCRIÇÃO 1 = CPF
+TIPO DE INSCRIÇÃO DO CEDENTE 076 076 9(01)
+CEDENTE 2 = CNPJ
+NÚMERO INSCRIÇÃO
+NÚMERO DE INSCRIÇÃO DO CEDENTE 077 091 9(15)
+CEDENTE
+NOME CEDENTE NOME DO CEDENTE 092 131 X(40)
+CHAVE DE PAGAMENTO URL / CHAVE PIX 132 208 X(77) NOTA 41
+TXID CÓDIGO DE IDENTIFICAÇÃO DO QR-CODE 209 240 X(32) NOTA 38
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+outubro/2020 28
+===== PAGINA 29 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO B - OPCIONAL
+Liquidação de títulos (boletos) em cobrança no Itaú e em outros Bancos
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DO LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQÜENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+CÓDIGO DO SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) B
+BRANCOS COMPLEMENTO DE REGISTRO 015 017 X(03)
+1 = CPF
+EMPRESA – INSCRIÇÃO TIPO INSCRIÇÃO DO FAVORECIDO 018 018 9(01)
+2 = CNPJ
+Nº DE INSCRIÇÃO Nº DE INSCRIÇÃO DO FAVORECIDO (CPF/CNPJ) 019 032 9(14) NOTA 15
+ENDEREÇO NOME DA RUA, AV., PÇA, ETC 033 062 X(30)
+NÚMERO NÚMERO DO LOCAL 063 067 9(05)
+COMPLEMENTO. CASA, APTO, ETC... 068 082 X(15)
+BAIRRO BAIRRO 083 097 X(15)
+CIDADE NOME DA CIDADE 098 117 X(20)
+CEP CEP 118 125 9(08)
+ESTADO SIGLA DO ESTADO 126 127 X(02)
+E-MAIL ENDEREÇO DE E-MAIL 128 227 X(100) NOTA 23
+BRANCOS COMPLEMENTO DE REGISTRO 228 230 X(03)
+(*) OCORRÊNCIAS CÓDIGO DE OCORRÊNCIAS NO RETORNO 231 240 X(10) NOTA 8
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(*) Campos que constam apenas no arquivo retorno. Na remessa, devem ser informados com
+brancos ou zeros, conforme a picture de cada campo.
+Observações:
+• Este segmento é obrigatório quando for contratado junto ao Banco o serviço de envio de
+“Demonstrativo de Pagamentos” via web/e-mail.
+• Este seguimento constará do arquivo retorno sempre que for enviado algum registro “C”;
+• Quando contratado o serviço de “Demonstrativo de Pagamentos” via web/e-mail, a informação do
+CPF/CNPJ do favorecido deve obrigatoriamente ser indicada neste segmento.
+outubro/2020 29
+===== PAGINA 30 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO C - OPCIONAL
+Liquidação de títulos (boletos) em cobrança no Itaú e em outros Bancos
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DO LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQÜENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+CÓDIGO DO SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) C
+VALOR C.S.L.L. VALOR DA CONTRIBUIÇÃO SOBRE O LUCRO LÍQUIDO 015 029 9(13)V9(02)
+BRANCOS COMPLEMENTO DE REGISTRO 030 037 X(08)
+VENCIMENTO DATA DE VENCIMENTO 038 045 X(08) DDMMAAAA
+VALOR DOCUMENTO VALOR NOMINAL DO DOCUMENTO 046 060 9(13)V9(02)
+VALOR PIS VALOR PROGRAMA DE INTEGRAÇÃO SOCIAL 061 075 9(13)V9(02)
+VALOR I.R. VALOR DO IMPOSTO DE RENDA 076 090 9(13)V9(02)
+VALOR I.S.S. VALOR DO IMPOSTO SOBRE SERVIÇOS 091 105 9(13)V9(02)
+VALOR COFINS VALOR CONTRIBUIÇÃO FINALIDADE SOCIAL 106 120 9(13)V9(02)
+DESCONTO VALOR DO DESCONTO 121 135 9(13)V9(02)
+ABATIMENTO VALOR DO ABATIMENTO 136 150 9(13)V9(02)
+OUTRAS DEDUÇÕES VALOR DE OUTRAS DEDUÇÕES 151 165 9(13)V9(02)
+MORA VALOR DA MORA 166 180 9(13)V9(02)
+MULTA VALOR DA MULTA 181 195 9(13)V9(02)
+OUTROS ACRÉSCIMOS VALOR DE OUTROS ACRÉSCIMOS 196 210 9(13)V9(02)
+FATURA/DOCUMENTO NÚMERO DA FATURA/DOCUMENTO 211 230 X(20)
+(*) OCORRÊNCIAS COMPLEMENTO DE REGISTRO 231 240 X(10)
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(*) Campos que constam apenas no arquivo retorno. Na remessa, devem ser informados com
+brancos ou zeros, conforme a picture de cada campo.
+Observação:
+Este segmento só é obrigatório quando for contratado junto ao Banco o serviço “Demonstrativo de
+Pagamentos” por e-mail / web.
+Um pagamento informado através do segmento “J” poderá conter quantos registros “C” forem
+necessários, até que a soma dos valores informados em “C” totalize o valor informado para pagamento
+em “J”.
+outubro/2020 30
+===== PAGINA 31 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO – Z (OPCIONAL)
+Liquidação de títulos (boletos) em cobrança no Itaú e em outros Bancos, PIX QR CODE
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DO LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQUENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+CÓDIGO DO SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) Z
+AUTENTICAÇÃO AUTENTICAÇÃO ELETRÔNICA DO PAGAMENTO 015 078 X(64)
+SEU NÚMERO Nº DOCTO ATRIBUÍDO PELA EMPRESA 079 098 X(20)
+BRANCOS COMPLEMENTO DE REGISTRO 099 103 X(05)
+NOSSO NÚMERO Nº DOCTO ATRIBUÍDO PELO BANCO 104 118 X(15)
+BRANCOS COMPLEMENTO DE REGISTRO 119 240 X(122)
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+Observações:
+Registro opcional de complemento que apresenta a Autenticação Eletrônica do Pagamento;
+Este segmento somente constará do arquivo retorno quando contratado junto ao Banco e é exclusivo
+para pagamentos com a ocorrência “00” – Pagamento Efetuado.
+outubro/2020 31
+===== PAGINA 32 =====
+ARQUIVO REGISTRO TRAILER DE LOTE TAMANHO DO REGISTRO = 240 BYTES
+Liquidação de títulos (boletos) em cobrança no Itaú e em outros Bancos, PIX QR CODE
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO TRAILER DE LOTE 008 008 9(01) 5
+BRANCOS COMPLEMENTO DE REGISTRO 009 017 X(09)
+TOTAL QTDE REGISTROS QTDE REGISTROS DO LOTE 018 023 9(06) NOTA 17
+TOTAL VALOR PAGTOS SOMA VALOR DOS PGTOS DO LOTE 024 041 9(16)V9(2) NOTA 17
+ZEROS COMPLEMENTO DE REGISTRO 042 059 9(18)
+BRANCOS COMPLEMENTO DE REGISTRO 060 230 X(171)
+(*) OCORRÊNCIAS CÓDIGOS OCORRÊNCIAS P/ RETORNO 231 240 X(10) NOTA 8
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(*) Campos que constam apenas no arquivo retorno. Na remessa, devem ser informados com brancos
+ou zeros, conforme a picture de cada campo.
+outubro/2020 32
+===== PAGINA 33 =====
+ARQUIVO REGISTRO HEADER DE LOTE TAMANHO DO REGISTRO = 240 Bytes
+Pagamento de Contas de Concessionárias e Tributos com código de barras
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE IDENTIFICAÇÃO DE PAGTOS 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO HEADER DE LOTE 008 008 9(01) 1
+TIPO DE OPERAÇÃO TIPO DA OPERAÇÃO 009 009 X(01) C =CRÉDITO
+TIPO DE PAGAMENTO TIPO DE PAGTO 010 011 9(02) NOTA 4
+FORMA DE PAGAMENTO FORMA DE PAGAMENTO 012 013 9(02) NOTA 5
+LAYOUT DO LOTE N DA VERSÃO DO LAYOUT DO LOTE 014 016 9(03) 030
+BRANCOS COMPLEMENTO DE REGISTRO 017 017 X(01)
+1= CPF
+EMPRESA - INSCRIÇÃO TIPO INSCRIÇÃO EMPRESA DEBITADA 018 018 9(01)
+2 = CNPJ
+INSCRIÇÃO NÚMERO CNPJ EMPRESA OU CPF DEBITADO 019 032 9(14) NOTA 1
+BRANCOS COMPLEMENTO DE REGISTRO 033 052 X(20)
+AGÊNCIA NÚMERO AGÊNCIA DEBITADA 053 057 9(05) NOTA 1
+BRANCOS COMPLEMENTO DE REGISTRO 058 058 X(01)
+CONTA NÚMERO DE C/C DEBITADA 059 070 9(12) NOTA 1
+BRANCOS COMPLEMENTO DE REGISTRO 071 071 X(01)
+DAC DAC DA AGÊNCIA/CONTA DEBITADA 072 072 9(01) NOTA 1
+NOME DA EMPRESA NOME DA EMPRESA DEBITADA 073 102 X(30)
+FINALIDADE DO LOTE FINALIDADE DOS PAGTOS DO LOTE 103 132 X(30) NOTA 6
+HISTÓRICO DE C/C COMPLEMENTO HISTÓRICO C/C DEBITADA 133 142 X(10) NOTA 7
+ENDEREÇO DA EMPRESA NOME DA RUA, AV, PÇA, ETC... 143 172 X(30)
+NÚMERO NÚMERO DO LOCAL 173 177 9(05)
+COMPLEMENTO. CASA, APTO, SALA, ETC... 178 192 X(15)
+CIDADE NOME DA CIDADE 193 212 X(20)
+CEP CEP 213 220 9(08)
+ESTADO SIGLA DO ESTADO 221 222 X(02)
+BRANCOS COMPLEMENTO DE REGISTRO 223 230 X(08)
+(*) OCORRÊNCIAS CÓDIGO OCORRÊNCIAS P/RETORNO 231 240 X(10) NOTA 8
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(*) Campos que constam apenas no arquivo retorno. Na remessa, devem ser informados com
+brancos ou zeros, conforme a picture de cada campo.
+outubro/2020 33
+===== PAGINA 34 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO O – OBRIGATÓRIO
+Pagamento de Contas de Concessionárias e Tributos com código de barras
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DE LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQUENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) O
+TIPO DE MOVIMENTO TIPO DE MOVIMENTO 015 017 9(03) NOTA 10
+CÓDIGO DE BARRAS CÓDIGO DE BARRAS 018 065 X(48) NOTA 18
+NOME NOME DA CONCESSIONÁRIA / CONTRIBUINTE 066 095 X(30)
+DATA VENCTO DATA DO VENCIMENTO (NOMINAL) 096 103 9(08) DDMMAAAA
+MOEDA TIPO DE MOEDA 104 106 X(03) REA
+QUANTIDADE MOEDA QUANTIDADE DE MOEDA 107 121 9(07)V9(08) NOTA 19
+VALOR A PAGAR VALOR PREVISTO DO PAGAMENTO 122 136 9(13)V9(02)
+DATA PAGAMENTO DATA DO PAGAMENTO 137 144 9(08) DDMMAAAA
+(*) VALOR PAGO VALOR DE EFETIVAÇÃO DO PAGAMENTO 145 159 9(13)V9(02)
+BRANCOS COMPLEMENTO DE REGISTRO 160 162 X(03)
+NOTA FISCAL NÚMERO DA NOTA FISCAL 163 171 9(09) NOTA 33
+BRANCOS COMPLEMENTO DE REGISTRO 172 174 X(03)
+SEU NÚMERO Nº DOCTO ATRIBUÍDO PELA EMPRESA 175 194 X(20)
+BRANCOS COMPLEMENTO DE REGISTRO 195 215 X(21)
+(*) NOSSO NÚMERO NÚMERO ATRIBUÍDO PELO BANCO 216 230 X(15) NOTA 12
+(*) OCORRÊNCIAS CÓDIGO DE OCORRÊNCIAS P/ RETORNO 231 240 X(10) NOTA 8
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(*) Campos que constam apenas no arquivo retorno. Na remessa, devem ser informados com
+brancos ou zeros, conforme a picture de cada campo.
+Observação:
+Este segmento não se aplica para pagamento do tributo FGTS-GRF/GRRF/GRDE. Não é possível pagar
+FGTS-GRF/GRRF/GRDE sem código de barras através de arquivo. Para pagamento de FGTS-
+GRF/GRRF/GRDE utilizar obrigatoriamente o segmento N de acordo com as especificações
+apresentadas neste manual.
+outubro/2020 34
+===== PAGINA 35 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO – Z (OPCIONAL)
+Pagamento de Contas de Concessionárias e Tributos com código de barras
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DO LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQUENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+CÓDIGO DO SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) Z
+AUTENTICAÇÃO AUTENTICAÇÃO ELETRÔNICA DO PAGAMENTO 015 078 X(64)
+SEU NÚMERO Nº DOCTO ATRIBUÍDO PELA EMPRESA 079 098 X(20)
+BRANCOS COMPLEMENTO DE REGISTRO 099 103 X(05)
+NOSSO NÚMERO Nº DOCTO ATRIBUÍDO PELO BANCO 104 118 X(15)
+BRANCOS COMPLEMENTO DE REGISTRO 119 240 X(122)
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+Observações:
+Registro opcional de complemento que apresenta a Autenticação Eletrônica do Pagamento;
+Este segmento somente constará do arquivo retorno quando contratado junto ao Banco e é exclusivo
+para pagamentos com a ocorrência “00” – Pagamento Efetuado.
+outubro/2020 35
+===== PAGINA 36 =====
+ARQUIVO REGISTRO TRAILER DE LOTE TAMANHO DO REGISTRO = 240 BYTES
+Pagamento de Contas de Concessionárias e Tributos com código de barras
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO TRAILER DE LOTE 008 008 9(01) 5
+BRANCOS COMPLEMENTO DE REGISTRO 009 017 X(09)
+TOTAL QTDE REGISTROS QTDE REGISTROS DO LOTE 018 023 9(06) NOTA 17
+TOTAL VALOR PAGTOS SOMA VALOR DOS PGTOS DO LOTE 024 041 9(16)V9(02) NOTA 17
+TOTAL QTDE MOEDA SOMA DA QUANTIDADE DE MOEDA DO LOTE 042 056 9(07)V9(08) NOTA 17
+BRANCOS COMPLEMENTO DE REGISTRO 057 230 X(174)
+(*) OCORRÊNCIAS CÓDIGOS OCORRÊNCIAS P/ RETORNO 231 240 X(10) NOTA 8
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(*) Campos que constam apenas no arquivo retorno. Na remessa, devem ser informados com brancos
+ou zeros, conforme a picture de cada campo.
+outubro/2020 36
+===== PAGINA 37 =====
+ARQUIVO REGISTRO HEADER DE LOTE TAMANHO DO REGISTRO = 240 Bytes
+Pagamento de Tributos sem código de barras e FGTS-GRF/GRRF/GRDE com código de barras
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE IDENTIFICAÇÃO DE PAGTOS 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO HEADER DE LOTE 008 008 9(01) 1
+TIPO DE OPERAÇÃO TIPO DA OPERAÇÃO 009 009 X(01) C =CRÉDITO
+TIPO DE PAGAMENTO TIPO DE PAGTO 010 011 9(02) NOTA 4
+FORMA DE PAGAMENTO FORMA DE PAGAMENTO 012 013 9(02) NOTA 5
+LAYOUT DO LOTE N DA VERSÃO DO LAYOUT DO LOTE 014 016 9(03) 030
+BRANCOS COMPLEMENTO DE REGISTRO 017 017 X(01)
+1 = CPF
+EMPRESA - INSCRIÇÃO TIPO INSCRIÇÃO EMPRESA DEBITADA 018 018 9(01)
+2 = CNPJ
+INSCRIÇÃO NÚMERO CNPJ EMPRESA OU CPF DEBITADO 019 032 9(14) NOTA 1
+BRANCOS COMPLEMENTO DE REGISTRO 033 052 X(20)
+AGÊNCIA NÚMERO AGÊNCIA DEBITADA 053 057 9(05) NOTA 1
+BRANCOS COMPLEMENTO DE REGISTRO 058 058 X(01)
+CONTA NÚMERO DE C/C DEBITADA 059 070 9(12) NOTA 1
+BRANCOS COMPLEMENTO DE REGISTRO 071 071 X(01)
+DAC DAC DA AGÊNCIA/CONTA DEBITADA 072 072 9(01) NOTA 1
+NOME DA EMPRESA NOME DA EMPRESA DEBITADA 073 102 X(30)
+FINALIDADE DO LOTE FINALIDADE DOS PAGTOS DO LOTE 103 132 X(30) NOTA 6
+HISTÓRICO DE C/C COMPLEMENTO HISTÓRICO C/C DEBITADA 133 142 X(10) NOTA 7
+ENDEREÇO DA EMPRESA NOME DA RUA, AV, PÇA, ETC... 143 172 X(30)
+NÚMERO NÚMERO DO LOCAL 173 177 9(05)
+COMPLEMENTO. CASA, APTO, SALA, ETC... 178 192 X(15)
+CIDADE NOME DA CIDADE 193 212 X(20)
+CEP CEP 213 220 9(08)
+ESTADO SIGLA DO ESTADO 221 222 X(02)
+BRANCOS COMPLEMENTO DE REGISTRO 223 230 X(08)
+(*) OCORRÊNCIAS CÓDIGO OCORRÊNCIAS P/RETORNO 231 240 X(10) NOTA 8
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(*) Campos que constam apenas no arquivo retorno. Na remessa, devem ser informados com
+brancos ou zeros, conforme a picture de cada campo.
+outubro/2020 37
+===== PAGINA 38 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO N – OBRIGATÓRIO
+Pagamento de Tributos sem código de barras e FGTS-GRF/GRRF/GRDE com código de barras
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DE LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQUENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) 'N'
+TIPO DE MOVIMENTO TIPO DE MOVIMENTO 015 017 9(03) NOTA 10
+DADOS DO TRIBUTO DADOS DE IDENTIFICAÇÃO DO TRIBUTO 018 195 X(178) ANEXO "C"
+SEU NÚMERO Nº DOCTO ATRIBUÍDO PELA EMPRESA 196 215 X(20)
+(*) NOSSO NÚMERO NÚMERO ATRIBUÍDO PELO BANCO 216 230 X(15) NOTA 12
+(*) OCORRÊNCIAS CÓDIGO DE OCORRÊNCIAS P/ RETORNO 231 240 X(10) NOTA 8
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(*) Campos que constam apenas no arquivo retorno. Na remessa, devem ser informados com brancos
+ou zeros, conforme a picture de cada campo.
+Observação:
+Este segmento deve necessariamente ser utilizado para pagamento do tributo FGTS-GRF/GRRF/GRDE.
+Não é possível pagar FGTS-GRF/GRRF/GRDE sem código de barras através de arquivo.
+outubro/2020 38
+===== PAGINA 39 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO - B (OPCIONAL)
+Pagamento de Tributos sem código de barras e FGTS-GRF/GRRF/GRDE com código de barras – informações complementares
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DO LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQUENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+CÓDIGO DO SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) B
+BRANCOS COMPLEMENTO DE REGISTRO 015 032 X(18) BRANCOS
+ENDEREÇO NOME DA RUA, AV, PÇA, ETC 033 062 X(30)
+NÚMERO NÚMERO DO LOCAL 063 067 9(05)
+COMPLEMENTO. CASA, APTO, ETC 068 082 X(15)
+BAIRRO BAIRRO 083 097 X(15)
+CIDADE NOME DA CIDADE 098 117 X(20)
+CEP CEP 118 125 9(08)
+ESTADO SIGLA DO ESTADO 126 127 X(02)
+(1) TELEFONE DDD E NÚMERO DO TELEFONE 128 138 X (11)
+(2) ACRÉSCIMOS VALOR DO ACRÉSCIMO 139 152 9(12)V(02)
+(1) HONORÁRIOS VALOR DO HONORÁRIO 153 166 9(12)V(02)
+BRANCOS COMPLEMENTO DE REGISTRO 167 240 X(74) BRANCOS
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(1) Campos exclusivos para pagamento de GARE – SP ICMS, demais Tributos devem ser preenchidos
+com brancos ou zeros, de acordo com a picture.
+(2) Campo exclusivo para pagamento de GARE – SP ICMS, demais Tributos devem ser preenchidos
+com brancos ou zeros, de acordo com a picture.
+Observação:
+Este segmento deve ser utilizado quando houver a necessidade de indicação destas informações na
+guia de GPS e GARE – SP ICMS.
+Quando o Tributo for “GPS”, para que o conteúdo deste segmento seja impresso no comprovante de
+pagamento da Guia, o campo “USO DA EMPRESA”, posição 116 a 165 do segmento “N” deve ser
+informado com brancos.
+outubro/2020 39
+===== PAGINA 40 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO - W (OPCIONAL)
+Pagamento de Tributos sem código de barras e FGTS-GRF/GRRF/GRDE com código de barras – informações complementares
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DO LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQÜENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+CÓDIGO DO SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) W
+BRANCOS COMPLEMENTO DE REGISTRO 015 016 X(02) BRANCOS
+INFORMAÇÃO 1 INFORMAÇÃO COMPLEMENTAR 1 017 056 X(40)
+INFORMAÇÃO 2 INFORMAÇÃO COMPLEMENTAR 2 057 096 X(40)
+INFORMAÇÃO 3 INFORMAÇÃO COMPLEMENTAR 3 097 136 X(40)
+INFORMAÇÃO 4 INFORMAÇÃO COMPLEMENTAR 4 137 176 X(40)
+BRANCOS COMPLEMENTO DE REGISTRO 177 240 X(64)
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+Observação:
+Este segmento deve ser utilizado quando houver a necessidade de impressão de informações
+complementares na GARE – SP ICMS (Guia/comprovante de pagamento) e não consta no arquivo
+retorno.
+outubro/2020 40
+===== PAGINA 41 =====
+ARQUIVO REGISTRO DETALHE TAMANHO DO REGISTRO = 240 Bytes
+SEGMENTO – Z (OPCIONAL)
+Pagamento de Tributos sem código de barras e FGTS-GRF/GRRF/GRDE com código de barras
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO DETALHE DO LOTE 008 008 9(01) 3
+NÚMERO DO REGISTRO Nº SEQUENCIAL REGISTRO NO LOTE 009 013 9(05) NOTA 9
+CÓDIGO DO SEGMENTO CÓDIGO SEGMENTO REG. DETALHE 014 014 X(01) Z
+AUTENTICAÇÃO AUTENTICAÇÃO ELETRÔNICA DO PAGAMENTO 015 078 X(64)
+SEU NÚMERO Nº DOCTO ATRIBUÍDO PELA EMPRESA 079 098 X(20)
+BRANCOS COMPLEMENTO DE REGISTRO 099 103 X(05)
+NOSSO NÚMERO Nº DOCTO ATRIBUÍDO PELO BANCO 104 118 X(15)
+BRANCOS COMPLEMENTO DE REGISTRO 119 240 X(122)
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+Observações:
+Registro opcional de complemento que apresenta a Autenticação Eletrônica do Pagamento;
+Este segmento somente constará do arquivo retorno quando contratado junto ao Banco e é exclusivo
+para pagamentos com a ocorrência “00” – Pagamento Efetuado.
+outubro/2020 41
+===== PAGINA 42 =====
+ARQUIVO REGISTRO TRAILER DE LOTE TAMANHO DO REGISTRO = 240 BYTES
+Pagamento de Tributos sem código de barras e FGTS-GRF/GRRF/GRDE com código de barras
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) NOTA 3
+TIPO DE REGISTRO REGISTRO TRAILER DE LOTE 008 008 9(01) 5
+BRANCOS COMPLEMENTO DE REGISTRO 009 017 X(09)
+TOTAL QTDE REGISTROS QTDE REGISTROS DO LOTE 018 023 9(06) NOTA 17
+TOTAL VALOR PRINCIPAL SOMA VALOR PRINCIPAL DOS PGTOS DO LOTE 024 037 9(12)V9(02) NOTA 17
+(1) TOTAL OUTRAS ENTIDAD. SOMA VALORES DE OUTRAS ENTIDADES DO LOTE 038 051 9(12)V9(02) NOTA 17
+TOTAL VAL. ACRESCIMOS SOMA VALORES ATUALIZ. MONET/MULTA/MORA 052 065 9(12)V9(02) NOTA 17
+TOTAL VALOR ARRECAD. SOMA VALOR DOS PAGAMENTOS DO LOTE 066 079 9(12)V9(02) NOTA 17
+BRANCOS COMPLEMENTO DE REGISTRO 080 230 X(151)
+(*) OCORRÊNCIAS CÓDIGOS OCORRÊNCIAS P/ RETORNO 231 240 X(10) NOTA 8
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+(*) Campos que constam apenas no arquivo retorno. Na remessa, devem ser informados com
+brancos ou zeros, conforme a picture de cada campo.
+(1) Este campo deve ser utilizado para informar o somatório dos pagamentos do tributo GPS – Guia
+da Previdência Social, e o somatório do campo “DESCONTO” quando se tratar de pagamentos
+de IPVA.
+outubro/2020 42
+===== PAGINA 43 =====
+ARQUIVO REGISTRO TRAILER DE ARQUIVO TAMANHO DO REGISTRO = 240 Bytes
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CÓDIGO DO BANCO CÓDIGO BANCO NA COMPENSAÇÃO 001 003 9(03) 341
+CÓDIGO DO LOTE LOTE DE SERVIÇO 004 007 9(04) 9999
+TIPO DE REGISTRO REGISTRO TRAILER DE ARQUIVO 008 008 9(01) 9
+BRANCOS COMPLEMENTO DE REGISTRO 009 017 X(09)
+TOTAL QTDE DE LOTES QTDE LOTES DO ARQUIVO 018 023 9(06) NOTA 17
+TOTAL QTDE REGISTROS Q T D E R E G I S T R O S D O A R Q U I V O 0 2 4 0 2 9 9 ( 0 6 ) N O T A 1 7
+BRANCOS COMPLEMENTO DE REGISTRO 030 240 X(211)
+X = ALFANUMÉRICO 9 = NUMÉRICO V = VÍRGULA DECIMAL ASSUMIDA
+outubro/2020 43
+===== PAGINA 44 =====
+CAPÍTULO 4
+notas
+outubro/2020 44
+===== PAGINA 45 =====
+(1) IDENTIFICAÇÃO DO CNPJ E AG/CONTA
+Num mesmo arquivo podem ser comandados débitos em diferentes contas da empresa /
+grupo:
+• No registro Header de Arquivo identificar a empresa "Mãe" do grupo ou a matriz;
+• No registro Header de Lote identificar a empresa e a agência/conta que receberá o débito;
+• A identificação deve se repetir quando for única.
+(2) UNIDADE DE DENSIDADE
+Para teleprocessamento esse campo deverá conter zeros.
+(3) CÓDIGO DO LOTE
+Identifica o Lote de Pagamentos.
+É sequencial, iniciando-se em 0001. Todos os pagamentos de um lote devem ter o mesmo
+"Código de Lote".
+(4) TIPO DE PAGAMENTO
+Indica o tipo de pagamento que o lote contém.
+10 DIVIDENDOS
+15 DEBÊNTURES
+20 FORNECEDORES
+22 TRIBUTOS
+30 SALÁRIOS
+40 FUNDOS DE INVESTIMENTOS
+50 SINISTROS DE SEGUROS
+60 DESPESAS VIAJANTE EM TRÂNSITO
+80 REPRESENTANTES AUTORIZADOS
+90 BENEFÍCIOS
+98 DIVERSOS
+(5) FORMA DE PAGAMENTO
+Indica a forma de pagamento que o lote contém.
+Verifique na tabela da página 4 a compatibilidade entre o tipo e a forma de pagamento.
+01 CRÉDITO EM CONTA CORRENTE NO ITAÚ
+02 CHEQUE PAGAMENTO/ADMINISTRATIVO
+03 DOC “C”
+05 CRÉDITO EM CONTA POUPANÇA NO ITAÚ
+06 CRÉDITO EM CONTA CORRENTE DE MESMA TITULARIDADE
+07 DOC “D”
+10 ORDEM DE PAGAMENTO À DISPOSIÇÃO
+13 PAGAMENTO DE CONCESSIONÁRIAS
+16 DARF NORMAL
+17 GPS - GUIA DA PREVIDÊNCIA SOCIAL
+18 DARF SIMPLES
+19 IPTU/ISS/OUTROS TRIBUTOS MUNICIPAIS
+22 GARE – SP ICMS
+25 IPVA
+27 DPVAT
+30 PAGAMENTO DE TÍTULOS EM COBRANÇA NO ITAÚ
+31 PAGAMENTO DE TÍTULOS EM COBRANÇA EM OUTROS BANCOS
+32 NOTA FISCAL – LIQUIDAÇÃO ELETRÔNICA
+35 FGTS
+41 TED – OUTRO TITULAR
+43 TED – MESMO TITULAR
+outubro/2020 45
+===== PAGINA 46 =====
+45 PIX TRANSFERÊNCIA
+47 PIX QR-CODE
+60 CARTÃO SALÁRIO
+91 GNRE E TRIBUTOS COM CÓDIGO DE BARRAS
+Observação: Normalmente pagamentos inconsistentes são rejeitados, conforme nota 8.
+Excepcionalmente, na contratação pode ser acertada a geração de uma Ordem de
+Pagamento destinada à agência debitada, quando um pagamento (exceto pagamento de
+títulos, concessionárias, DARF, DARF Simples, DARJ, GARE – SP ICMS, GPS, IPTU, IPVA
+e DPVAT) tiver sido rejeitado pelo Itaú; neste caso, no arquivo retorno, este campo será
+preenchido com o código 11 - Ordem de Pagamento para Acerto.
+Para o tipo de pagamento “30 salário” deverá utilizar exclusivamente a forma TEF
+(transferência entre contas). Caso envie pagamentos de salários via DOC, TED, OP e Cheque
+OP, os mesmos serão rejeitados e o arquivo retorno seguirá com a seguinte descrição (tabela
+nota 08):
+Código Descrição
+IM TIPO X FORMA NÃO COMPATIVEL
+(6) FINALIDADE DO LOTE
+Na contratação, não tendo sido acertada a sua utilização, este campo deverá ser
+obrigatoriamente preenchido com brancos.
+Se contratado, a mensagem constará em todos os avisos e documentos originados do lote,
+desde que seja solicitado aviso ao favorecido conforme nota 16.
+Quando se tratar de Conta de Investimento ou o tipo de pagamento for SISPAG Salários e tiver
+sido contratado o serviço Holerite – Demonstrativo de Pagamentos / Informe de Rendimentos,
+via 30 Horas / Auto-Atendimento, deverá ser indicado nas posições 103 a 104 o código
+correspondente, conforme tabela abaixo:
+Código Descrição
+01 Folha Mensal
+02 Folha Quinzenal
+03 Folha Complementar
+04 13º Salário
+05 Participação de Resultados
+06 Informe de Rendimentos
+07 Férias
+08 Rescisão
+09 Rescisão Complementar
+10 Outros
+85 Débito Conta Investimento
+Para pagamentos que envolvam Conta Investimento os campos Finalidade do Lote (Posições
+103 e 104 do Registro Header de Lote) e Finalidade TED (Posições 220 a 224 do Registro
+Detalhe Segmento A - Nota 26), devem apresentar os seguintes conteúdos, de acordo com a
+operação:
+DÉBITO CRÉDITO FINALIDADE DO LOTE FINALIDADE TED
+CONTA CORRENTE
+CONTA CORRENTE “00” “00000” ou brancos
+(forma de pagamento “06”)
+CONTA CORRENTE
+CONTA INVESTIMENTO “00” “00016”
+(formas de pagamento “06” ou “43”)
+CONTA INVESTIMENTO
+CONTA CORRENTE “85” “00000” ou brancos
+(formas de pagamento “06” ou “43”)
+CONTA INVESTIMENTO
+CONTA INVESTIMENTO “85” “00016”
+(formas de pagamento “06” ou “43”)
+outubro/2020 46
+===== PAGINA 47 =====
+(7) HISTÓRICO DE C/C DEBITADA
+Na contratação, não tendo sido acertada a sua utilização, este campo deverá ser
+obrigatoriamente preenchido com brancos.
+Se na contratação tiver sido determinado que a conta corrente receberá um débito por lote de
+serviço, este campo permite complementar o histórico do lançamento no extrato de conta
+corrente debitada da empresa, facilitando sua conciliação.
+(8) OCORRÊNCIAS
+Campo utilizado no arquivo retorno para informação das ocorrências detectadas no
+processamento do arquivo remessa, enviado pela empresa, e também para confirmar a
+execução dos pagamentos.
+Pode-se informar até cinco ocorrências em sequência, cada uma delas codificada em dois
+dígitos, conforme relação abaixo:
+Obs. CÓDIGO SIGNIFICADO
+00 PAGAMENTO EFETUADO
+AE DATA DE PAGAMENTO ALTERADA
+AG NÚMERO DO LOTE INVÁLIDO
+AH NÚMERO SEQUENCIAL DO REGISTRO NO LOTE INVÁLIDO
+AI PRODUTO DEMONSTRATIVO DE PAGAMENTO NÃO CONTRATADO
+AJ TIPO DE MOVIMENTO INVÁLIDO
+AL CÓDIGO DO BANCO FAVORECIDO INVÁLIDO
+AM AGÊNCIA DO FAVORECIDO INVÁLIDA
+AN CONTA CORRENTE DO FAVORECIDO INVÁLIDA
+AO NOME DO FAVORECIDO INVÁLIDO
+DATA DE PAGAMENTO / DATA DE VALIDADE / HORA DE LANÇAMENTO /
+AP
+ARRECADAÇÃO / APURAÇÃO INVÁLIDA
+AQ QUANTIDADE DE REGISTROS MAIOR QUE 999999
+AR VALOR ARRECADADO / LANÇAMENTO INVÁLIDO
+BC NOSSO NÚMERO INVÁLIDO
+BD PAGAMENTO AGENDADO
+BE PAGAMENTO AGENDADO COM FORMA ALTERADA PARA OP
+CNPJ / CPF DO FAVORECIDO NO SEGMENTO J-52 ou B INVÁLIDO / DOCUMENTO
+BI
+FAVORECIDO INVÁLIDO PIX
+BL VALOR DA PARCELA INVÁLIDO
+CD CNPJ / CPF INFORMADO DIVERGENTE DO CADASTRADO
+CE PAGAMENTO CANCELADO
+CF VALOR DO DOCUMENTO INVÁLIDO / VALOR DIVERGENTE DO QR CODE
+CG VALOR DO ABATIMENTO INVÁLIDO
+CH VALOR DO DESCONTO INVÁLIDO
+CNPJ / CPF / IDENTIFICADOR / INSCRIÇÃO ESTADUAL / INSCRIÇÃO NO CAD / ICMS
+CI
+INVÁLIDO
+CJ VALOR DA MULTA INVÁLIDO
+CK TIPO DE INSCRIÇÃO INVÁLIDA
+CL VALOR DO INSS INVÁLIDO
+CM VALOR DO COFINS INVÁLIDO
+CN CONTA NÃO CADASTRADA
+CO VALOR DE OUTRAS ENTIDADES INVÁLIDO
+B CP CONFIRMAÇÃO DE OP CUMPRIDA
+CQ SOMA DAS FATURAS DIFERE DO PAGAMENTO
+CR VALOR DO CSLL INVÁLIDO
+CS DATA DE VENCIMENTO DA FATURA INVÁLIDA
+DA NÚMERO DE DEPEND. SALÁRIO FAMILIA INVALIDO
+DB NÚMERO DE HORAS SEMANAIS INVÁLIDO
+DC SALÁRIO DE CONTRIBUIÇÃO INSS INVÁLIDO
+DD SALÁRIO DE CONTRIBUIÇÃO FGTS INVÁLIDO
+DE VALOR TOTAL DOS PROVENTOS INVÁLIDO
+DF VALOR TOTAL DOS DESCONTOS INVÁLIDO
+outubro/2020 47
+===== PAGINA 48 =====
+DG VALOR LÍQUIDO NÃO NUMÉRICO
+DH VALOR LIQ. INFORMADO DIFERE DO CALCULADO
+DI VALOR DO SALÁRIO-BASE INVÁLIDO
+DJ BASE DE CÁLCULO IRRF INVÁLIDA
+DK BASE DE CÁLCULO FGTS INVÁLIDA
+DL FORMA DE PAGAMENTO INCOMPATÍVEL COM HOLERITE
+DM E-MAIL DO FAVORECIDO INVÁLIDO
+A DV DOC / TED DEVOLVIDO PELO BANCO FAVORECIDO
+D0 FINALIDADE DO HOLERITE INVÁLIDA
+D1 MÊS DE COMPETENCIA DO HOLERITE INVÁLIDA
+D2 DIA DA COMPETENCIA DO HOLETITE INVÁLIDA
+D3 CENTRO DE CUSTO INVÁLIDO
+D4 CAMPO NUMÉRICO DA FUNCIONAL INVÁLIDO
+D5 DATA INÍCIO DE FÉRIAS NÃO NUMÉRICA
+D6 DATA INÍCIO DE FÉRIAS INCONSISTENTE
+D7 DATA FIM DE FÉRIAS NÃO NUMÉRICO
+D8 DATA FIM DE FÉRIAS INCONSISTENTE
+D9 NÚMERO DE DEPENDENTES IR INVÁLIDO
+B EM CONFIRMAÇÃO DE OP EMITIDA
+B EX DEVOLUÇÃO DE OP NÃO SACADA PELO FAVORECIDO
+E0 TIPO DE MOVIMENTO HOLERITE INVÁLIDO
+E1 VALOR 01 DO HOLERITE / INFORME INVÁLIDO
+E2 VALOR 02 DO HOLERITE / INFORME INVÁLIDO
+E3 VALOR 03 DO HOLERITE / INFORME INVÁLIDO
+E4 VALOR 04 DO HOLERITE / INFORME INVÁLIDO
+FC PAGAMENTO EFETUADO ATRAVÉS DE FINANCIAMENTO COMPROR
+FD PAGAMENTO EFETUADO ATRAVÉS DE FINANCIAMENTO DESCOMPROR
+HÁ ERRO NO LOTE
+HM ERRO NO REGISTRO HEADER DE ARQUIVO
+IB VALOR DO DOCUMENTO INVÁLIDO
+IC VALOR DO ABATIMENTO INVÁLIDO
+ID VALOR DO DESCONTO INVÁLIDO
+IE VALOR DA MORA INVÁLIDO
+IF VALOR DA MULTA INVÁLIDO
+IG VALOR DA DEDUÇÃO INVÁLIDO
+IH VALOR DO ACRÉSCIMO INVÁLIDO
+II DATA DE VENCIMENTO INVÁLIDA / QR CODE EXPIRADO
+IJ COMPETÊNCIA / PERÍODO REFERÊNCIA / PARCELA INVÁLIDA
+IK TRIBUTO NÃO LIQUIDÁVEL VIA SISPAG OU NÃO CONVENIADO COM ITAÚ
+IL CÓDIGO DE PAGAMENTO / EMPRESA /RECEITA INVÁLIDO
+IM TIPO X FORMA NÃO COMPATÍVEL
+IN BANCO/AGÊNCIA NÃO CADASTRADOS
+DAC / VALOR / COMPETÊNCIA / IDENTIFICADOR DO LACRE INVÁLIDO /
+IO
+IDENTIFICAÇÃO DO QR CODE INVÁLIDO
+IP DAC DO CÓDIGO DE BARRAS INVÁLIDO / ERRO NA VALIDAÇÃO DO QR CODE
+IQ DÍVIDA ATIVA OU NÚMERO DE ETIQUETA INVÁLIDO
+IR PAGAMENTO ALTERADO
+IS CONCESSIONÁRIA NÃO CONVENIADA COM ITAÚ
+IT VALOR DO TRIBUTO INVÁLIDO
+IU VALOR DA RECEITA BRUTA ACUMULADA INVÁLIDO
+IV NÚMERO DO DOCUMENTO ORIGEM / REFERÊNCIA INVÁLIDO
+IX CÓDIGO DO PRODUTO INVÁLIDO
+LA DATA DE PAGAMENTO DE UM LOTE ALTERADA
+LC LOTE DE PAGAMENTOS CANCELADO
+NA PAGAMENTO CANCELADO POR FALTA DE AUTORIZAÇÃO
+NB IDENTIFICAÇÃO DO TRIBUTO INVÁLIDA
+NC EXERCÍCIO (ANO BASE) INVÁLIDO
+ND CÓDIGO RENAVAM NÃO ENCONTRADO/INVÁLIDO
+NE UF INVÁLIDA
+outubro/2020 48
+===== PAGINA 49 =====
+NF CÓDIGO DO MUNICÍPIO INVÁLIDO
+NG PLACA INVÁLIDA
+NH OPÇÃO/PARCELA DE PAGAMENTO INVÁLIDA
+NI TRIBUTO JÁ FOI PAGO OU ESTÁ VENCIDO
+NR OPERAÇÃO NÃO REALIZADA
+AQUISIÇÃO CONFIRMADA (EQUIVALE A OCORRÊNCIA 02 NO LAYOUT DE RISCO
+PD
+SACADO)
+RJ REGISTRO REJEITADO
+PAGAMENTO DISPONÍVEL PARA ANTECIPAÇÃO NO RISCO SACADO – MODALIDADE
+RS
+RISCO SACADO PÓS AUTORIZADO
+PAGAMENTO CANCELADO POR INSUFICIÊNCIA DE SALDO / LIMITE DIÁRIO DE
+SS
+PAGTO EXCEDIDO
+TA LOTE NÃO ACEITO - TOTAIS DO LOTE COM DIFERENÇA
+TI TITULARIDADE INVÁLIDA
+X1 FORMA INCOMPATÍVEL COM LAYOUT 010
+X2 NÚMERO DA NOTA FISCAL INVÁLIDO
+X3 IDENTIFICADOR DE NF/CNPJ INVÁLIDO
+X4 FORMA 32 INVÁLIDA
+( A ) A devolução do DOC será informada no arquivo retorno desde que seja feita pelo banco
+favorecido em até 3 dias úteis após o envio pelo Itaú. A devolução da TED somente
+será informada quando ocorrer no próprio dia.
+( B ) Necessita cadastramento junto ao banco (prazo mínimo de 10 dias e máximo de 365
+dias).
+(9) N.º DO REGISTRO DETALHE
+Número sequencial de um pagamento dentro do lote.
+O primeiro registro de um lote recebe o nº '00001' e assim consecutivamente. Para o
+Segmento “J-52”, "B", “C”, “D”, “E”, “F”, “W” e “Z”, por se tratar de complemento de
+informações, conterá o mesmo número atribuído no Segmento "A", “J” e “N” correspondente.
+(10) TIPO DE MOVIMENTO
+Indica o tipo de movimentação a que o detalhe se destina:
+Código Tipo de Movimento Observações
+000 Inclusão de pagamento
+001 CPF
+Utilizar somente quando tiver interesse que o banco verifique
+002 (1) CNPJ (completo) se o CPF/CNPJ informado nas posições 204 a 217 do
+segmento “A” pertence à Conta Corrente de Crédito no Itaú.
+003 (2) CNPJ (raiz)
+Para incluir o “Demonstrativo de Pagamentos/Holerite”, de um
+pagamento que já foi efetuado ou que se encontra agendado,
+deve-se informar:
+Inclusão de Demonstrativo de • Segmento “A”: Todas as informações do pagamento e
+004 (4) Pagamento/Holerite Nosso Número;
+• Segmentos “D” e “E”: Todos os campos do
+Demonstrativo;
+• Segmento “F”: Informar apenas se houver mensagem a
+ser exibida.
+Para alterar (5) um “Demonstrativo de Pagamentos/Holerite”,
+de um pagamento que já se encontra agendado ou já foi
+efetuado, deve-se informar:
+Alteração do Demonstrativo de • Segmento “A”: Todas as informações do pagamento e
+512 (4) Pagamentos/Holerite Nosso Número;
+• Segmentos “D” e “E”: Todos os campos do
+Demonstrativo;
+• Segmento “F”: Informar apenas se houver mensagem a
+ser exibida.
+outubro/2020 49
+===== PAGINA 50 =====
+Para comandar a alteração do Valor de um pagamento
+(código 517), deve-se informar no registro de detalhe
+(Segmentos A, J, N ou O) os campos Código do Banco,
+517 (3) Alteração de Valor do Pagamento
+Código do Lote, Tipo de Registro, Número do Registro,
+Segmento, Tipo de Movimento, novo valor do pagamento e
+Nosso Número.
+Para comandar a alteração da data de um pagamento (código
+519), deve-se informar no registro de detalhe (Segmentos A,
+519 (3) Alteração da Data de Pagamento J, N ou O) os campos Código do Banco, Código do Lote, Tipo
+de Registro, Número do Registro, Segmento, Tipo de
+Movimento, nova Data de Pagamento e Nosso Número.
+Para comandar a exclusão de um “Demonstrativo de
+Pagamentos/Holerite”, de um pagamento que já se encontra
+agendado ou já foi efetuado, deve-se informar:
+Exclusão do Demonstrativo de • Segmento “A”: Todas as informações do pagamento e
+998 (4) Pagamentos/Holerite Nosso Número;
+• Segmentos “D” e “E”: Todos os campos do
+Demonstrativo;
+• Segmento “F”: Informar apenas se houver mensagem a
+ser exibida.
+Para comandar uma exclusão (código 999), devem-se
+informar no registro detalhe (Segmentos A, J, N ou O), os
+Exclusão de pagamento incluído
+999 (3) campos Código do Banco, Código do Lote, Tipo de Registro,
+anteriormente
+Número do Registro, Segmento, Tipo de Movimento e Nosso
+Número.
+(1) Devem ser informadas todas as 14 posições do CNPJ a ser verificado (raiz + variação +
+DV);
+(2) Serão consistidos apenas os 8 primeiros dígitos do CNPJ (ocupando as posições 204 a
+211), demais posições deverá ser zerado. Não se aplica os pagamentos cuja forma seja
+através de DOC/TED e OP;
+(3) Para os códigos 517, 519 e 999 informar os campos obrigatórios devendo os demais
+campos ser preenchidos com brancos ou zeros, conforme sua picture.
+(4) Estes códigos destinam-se exclusivamente ao produto Demonstrativo de
+Pagamentos/Holerite, que deve previamente ser negociado com o Banco;
+(5) Será disponibilizada no campo observações do Demonstrativo de Pagamentos/Holerite a
+informação: “Este demonstrativo substitui o Anterior”
+(11) CONTA CORRENTE DO FAVORECIDO
+a) Quando o banco favorecido for 341 (Banco Itaú) ou 409 (Unibanco) este campo deverá
+ser preenchido da seguinte forma:
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+ZEROS COMPLEMENTO DE REGISTRO 024 024 9(01)
+AGÊNCIA NÚMERO AGÊNCIA CREDITADA 025 028 9(04)
+BRANCOS COMPLEMENTO DE REGISTRO 029 029 X(01)
+ZEROS COMPLEMENTO DE REGISTRO 030 035 9(06)
+CONTA NÚMERO DE C/C CREDITADA 036 041 9(06)
+BRANCOS COMPLEMENTO DE REGISTRO 042 042 X(01)
+DAC DAC DA AGÊNCIA/CONTA CREDITADA 043 043 9(01)
+Os campos Conta e DAC devem ser preenchidos com zeros quando a forma de
+pagamento for 02 ou 10 (Cheque ou Ordem de Pagamento). O lote de cheques ficará à
+disposição do representante legal do pagador na agência favorecida indicada.
+b) Quando o banco favorecido não for 341 ou 409 (portanto as formas de pagamento são 03-
+DOC C, 07-DOC D, 41-TED/outro titular e 43-TED/mesmo titular ) os campos deverão ser
+preenchidos da seguinte forma:
+outubro/2020 50
+===== PAGINA 51 =====
+Conta Corrente – Outros Bancos
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+AGÊNCIA NÚMERO AGÊNCIA CREDITADA 024 028 9(05)
+BRANCOS COMPLEMENTO DE REGISTRO 029 029 X(01)
+CONTA NÚMERO DE C/C CREDITADA 030 041 9(12)
+BRANCOS COMPLEMENTO DE REGISTRO 042 042 X(01)
+DAC DAC DA AGÊNCIA/CONTA CREDITADA 043 043 X(01)
+Observações:
+• Preencher os campos com zeros à esquerda;
+• Não coloque o DAC da agência no campo "AGÊNCIA". Isto poderá acarretar envio
+do DOC ou da TED para local indevido;
+• Se o DAC tiver dois caracteres, coloque o primeiro na posição 042 e o segundo na
+posição 043.
+Conta Pagamento – Outros Bancos
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+CONTA NÚMERO DA CONTA PAGAMENTO 024 043 9(20)
+Observações:
+• Preencher os campos com zeros à esquerda;
+• No caso de Conta Pagamento verificar NOTA 36
+Quando se tratar de uma transferência via PIX (“Código de Compensação 009”), deve-se
+tratar o campo CONTA CORRENTE DO FAVORECIDO da seguinte forma:
+Se o campo "COMPLEMENTO DE REGISTRO" estiver preenchido com "01", "PG", "03"
+(Conta Corrente, Conta Pagamento, Conta Poupança, respectivamente) nas posições 113 a
+114, esse campo é obrigatório o preenchimento para envio do PIX.
+Caso o campo "COMPLEMENTO DE REGISTRO" estiver preenchido com "04"(Chave Pix)
+nas posições 113 a 114, esse campo é Opcional, e caso esteja preenchido será utilizado para
+validação contra os dados bancários resgatados da chave Pix no DICT.
+(12) NOSSO NÚMERO
+Na inclusão de um novo pagamento, deve ser preenchido com brancos.
+No arquivo retorno, a cada pagamento incluído, o Itaú atribuirá o 'Nosso Número'.
+No cancelamento ou alteração de data de pagamento é necessário que a empresa informe o
+'Nosso Número'.
+(13) FINALIDADE DETALHE / HISTÓRICO VARIÁVEL
+Não tendo sido acertado a sua utilização este campo deverá ser preenchido com brancos. Caso
+contrário, deverá seguir as regras conforme indicado a seguir:
+Tipo de Pagamento “20” (Fornecedores) e Forma de Pagamento “01” (Crédito em Conta
+Corrente no Itaú)
+O histórico do extrato de conta corrente do favorecido constará uma mensagem fixa (“SISPAG
+“) seguido do complemento informado nas posições 178 a 192 do segmento A. Caso o
+complemento seja informado com brancos será assumida a mensagem fixa (“SISPAG “) mais
+o nome da empresa pagadora.
+outubro/2020 51
+===== PAGINA 52 =====
+Tipo de Pagamento “20” (Fornecedores) e Forma de Pagamento “41” (TED - Outro
+Titular)
+Para a Finalidade de TED “00100” (Depósito Judicial), informada nas posições 220 a 224 do
+segmento A, este campo deverá ser utilizado para informar o respectivo Código Identificador
+da Transação (CIT).
+Tipo de Pagamento “30” (Salários) e Formas de Pagamentos “01” (Crédito em Conta
+Corrente no Itaú) ou “60” (Cartão Salário)
+Para utilizar histórico variável, adotar os seguintes critérios para informação no arquivo de
+pagamentos:
+Registro HEADER DE LOTE
+Nas posições 33 a 36 (Identificação do Lançamento no Extrato do Favorecido) informar o
+conteúdo “1707”.
+Registro SEGMENTO A
+Nas posições 178 a 181 informar um dos códigos da tabela abaixo, de acordo com a
+identificação desejada:
+Código Histórico Variável Identificação no extrato do favorecido
+HP01 PAGTO SALÁRIO
+HP02 PAGTO FERIAS
+HP03 PAGTO 13. SALÁRIO
+HP04 PAGTO BONUS
+HP05 PAGTO COMISSOES
+HP06 PAGTO ADIANT SALARIAL
+HP07 PAGTO RESCIS CONTRATUAL
+HP08 PAGTO VALE TRANSPORTE
+HP09 PAGTO AUXILIO ALIMENT
+HP10 PAGTO PENSAO ALIMENTICIA
+HP11 PAGTO BOLSA ESTAGIO
+HP12 PAGTO BOLSA AUXILIO
+HP13 PAGTO EM CONTA CORRENTE
+HP14 PAGTO REMUNERACAO
+ATENÇÃO:
+- Se a empresa NÃO informar o código 1707 no HEADER DE LOTE, o sistema assumirá o
+histórico padrão REMUNERAÇÃO/SALÁRIO nos extratos dos favorecidos.
+- Quando a empresa informar o código 1707 no HEADER DE LOTE e NÃO informar um dos
+códigos válidos de Histórico Variável nos registros de Segmento A, o sistema assumirá o
+histórico REMUNERAÇÃO/SALÁRIO nos extratos dos favorecidos.
+- O retorno do arquivo para a empresa conterá as informações enviadas pela empresa na
+remessa, exceto quando a empresa informar o código 1707 no HEADER DE LOTE e
+NÃO informar um dos códigos válidos de Histórico Variável nos registros de Segmento
+A, onde será informado no retorno do segmento A o código HP01.
+(14) NÚMERO DE DOC/TED/OP/CHEQUE
+Para DOC, TED e OP, o número do documento é atribuído no agendamento / efetivação do
+pagamento e informado no arquivo retorno. Para cheques, o número será atribuído somente
+na efetivação do pagamento, constando apenas no arquivo retorno de pagamentos efetuados.
+(15) NÚMERO DE INSCRIÇÃO DO FAVORECIDO
+Para pagamentos através de DOC, TED, PIX Transferência Itaú e Outros Bancos e Ordem de
+Pagamento, por determinação do BACEN é obrigatória a identificação do CNPJ/CPF do
+favorecido.
+outubro/2020 52
+===== PAGINA 53 =====
+O número de inscrição do favorecido (CPF/CNPJ) pode ser informado tanto no segmento ‘A’
+quanto no segmento ‘B’, com as seguintes condições:
+- Se ambos estiverem consistentes/válidos, será considerado o conteúdo indicado no
+segmento ‘B’;
+- Se o CPF/CNPJ do favorecido indicado em um dos segmentos ‘A’ ou ‘B’ estiver
+inconsistente/inválido, será considerado o conteúdo que estiver correto, independente do
+segmento;
+- Se ambos estiverem inconsistentes / inválidos, o pagamento será rejeitado.
+- Quando contratado o serviço de “Demonstrativo de Pagamentos” via web / e-mail ou
+“Informe de Rendimentos”, a informação do CPF/CNPJ do favorecido deve
+obrigatoriamente ser indicada no segmento. “B”.
+Este campo deve ser informado com zeros quando o favorecido for isento de CPF/CNPJ,
+sendo obrigatório o preenchimento do campo ‘Nome do Favorecido’. Nesta situação, cabe ao
+Banco destinatário confirmar se o favorecido é ou não isento de CPF/CNPJ.
+No caso de PIX Transferência Itaú para contas correntes, contas pagamentos e contas
+poupança, será validado se a conta creditada está vinculada ao número de inscrição do
+favorecido (CPF/CNPJ) informado.
+Para checagem do CPF/CNPJ do favorecido de pagamentos através de Crédito em Conta
+Corrente/Poupança no Itaú, proceder conforme nota 10 deste manual.
+Para a forma de pagamento Nota Fiscal – Liquidação Eletrônica, este campo é obrigatório
+desde que a identificação da liquidação seja por CNPJ do cedente, código 1, conforme nota 32
+deste manual.
+Para as demais formas de pagamentos, este conteúdo, apesar de recomendável, é opcional e
+se informado não será realizada nenhuma consistência pelo banco.
+OBS.: Quando o CNPJ do favorecido for iniciado com 5 zeros (00000), deve-se acrescentar o
+segmento B do arquivo de pagamentos para confirmar que se trata de um CNPJ e não um
+CPF. Caso o pagamento seja efetuado com complemento apenas do segmento A, o pagamento
+será rejeitado, pois o sistema irá considerar que se trata de CPF e não de CNPJ.
+(16) AVISO
+Se igual a ‘0’ não emite aviso ao favorecido;
+Se igual a ‘3’ emite aviso ao favorecido quando do agendamento do pagamento, sendo
+obrigatória a existência de um registro com segmento B.
+Se igual a ‘5’ emite aviso ao favorecido após pagamento efetuado, sendo obrigatória a
+existência de um registro com segmento B.
+Se igual a ‘9’ emite aviso ao favorecido tanto no agendamento quanto após o pagamento, sendo
+obrigatória a existência de um registro com segmento B.
+Observação: Apenas serão emitidos avisos para os tipos de pagamentos 20 (fornecedores)
+ou 98 (diversos) e para as formas abaixo, conforme segue:
+Emite
+Forma (NOTA 5)
+No Agendamento Após Pagamento
+01 SIM SIM
+02 SIM SIM
+03 SIM SIM
+05 SIM NÃO
+06 SIM NÃO
+07 SIM NÃO
+10 SIM NÃO
+41 SIM SIM
+43 SIM SIM
+outubro/2020 53
+===== PAGINA 54 =====
+(17) TOTAIS
+a. Total da quantidade de registros:
+• Trailer de Lote: total de registros de tipo 1, 3 e 5 no lote. Se o arquivo contiver os
+segmentos A, B, C, D, E, F e Z; ou J, J-52, B, C e Z; ou O e Z; ou N, B, W e Z, devem
+ser considerados todos os registros do lote na somatória;
+• Trailer de Arquivo:
+- Quantidade de lotes do arquivo = somatória dos registros tipo 1;
+- Quantidade total de registros no arquivo = somatória dos registros tipo 0, 1, 3, 5 e 9.
+b. Valor total de pagamentos / Quantidade de moedas / Valor total Acréscimos:
+• Somatório dos registros com tipo de movimento “000”, “001”, “002”, ou “003” - Inclusão
+(vide nota 10). Não soma os registros com movimento tipo 519 - Alteração da Data de
+Pagamento ou 999 - Exclusão de Pagamento.
+• Quando se tratar de pagamento de Tributos, deverá ser informado no campo “TOTAL
+VAL. ACRESCIMOS” a somatória dos valores referentes a mora, multa, atualização
+monetária, juros, encargos, etc., conforme tributo que está sendo pago.
+(18) CÓDIGO DE BARRAS
+Boletos de Cobrança (Segmento J) - Campo obrigatório constante na margem esquerda inferior
+da ficha de compensação dos boletos de cobrança. Sua captura pode ser realizada através de
+leitura ótica, ou da digitação da representação numérica constante na margem superior
+atentando-se à checagem do dígito verificador dos campos, conforme indicado no anexo “A”
+deste manual.
+Pagamento de Contas - Concessionárias e Tributos com código de barras (Segmento O) -
+Campo obrigatório, constante na parte superior direita e ou no centro da parte inferior do
+documento de recebimento. Sua captura pode ser realizada através de leitura ótica, ou da
+digitação da representação numérica constante nos boxes localizados na parte superior do
+código de barras, atentando-se à checagem do dígito verificador dos campos, conforme
+indicado no anexo "B" deste manual.
+Para pagamentos através de QR Code - preencher com zeros os campos “Banco favorecido”,
+“MOEDA”, “DV”, “Vencimento”, “VALOR” e “CAMPO LIVRE”.
+(19) QUANTIDADE DE MOEDA
+Caso a moeda seja o "Real", indicar o valor a ser pago no campo "VALOR A PAGAR". Caso a
+moeda seja diferente de "Real", indicar o valor em unidades no campo "QUANTIDADE DE
+MOEDA".
+(20) CÓDIGO DE PAGAMENTO
+A tabela abaixo contém apenas os códigos de pagamentos mais utilizados. Eventuais dúvidas
+no preenchimento da GPS, ou informações relativas a outros códigos de pagamentos, devem
+ser obtidas através do "Manual de Preenchimento da GPS", que pode ser encontrado no site
+do INSS através do endereço http://www.mpas.gov.br.
+CÓDIGO DESCRIÇÃO
+1007 Contribuinte Individual - Recolhimento Mensal - NIT/PIS/PASEP
+1104 Contribuinte Individual - Recolhimento Trimestral - NIT/PIS/PASEP
+1406 Securado Facultativo - Recolhimento Mensal - NIT/PIS/PASEP
+1457 Securado Facultativo - Recolhimento Trimestral - NIT/PIS/PASEP
+1503 Securado Especial - Recolhimento Mensal – NIT/PIS/PASEP
+1554 Securado Especial - Recolhimento Trimestral - NIT/PIS/PASEP
+2003 Empresas Optantes pelo Simples – CNPJ
+2100 Empresas em Geral – CNPJ
+outubro/2020 54
+===== PAGINA 55 =====
+2208 Empresas em Geral – CEI
+2631 Contribuição retida sobre a NF / Fatura da empresa prestadora de serviço – CNPJ
+2909 Reclamatória Trabalhista – CNPJ
+(21) INFORMAÇÕES COMPLEMENTARES
+Campo não obrigatório, de livre utilização pela empresa, cuja informação não é consistida pelo
+Itaú. O conteúdo deste campo será impresso no comprovante de pagamento da Guia GPS
+(obtido através do 30 Horas Empresa e/ou 30 Horas Empresa Plus) e apresentado no arquivo
+retorno com as mesmas informações da entrada.
+Para que seja impresso na guia o conteúdo indicado no segmento “B”, este campo deverá ser
+informado com brancos.
+(22) NOME DO CONTRIBUINTE
+Campo destinado à identificação do nome do contribuinte, cujo conteúdo será impresso no
+comprovante de pagamento da Guia DARF, DARF SIMPLES, DARJ, GARE – SP ICMS, GPS,
+IPVA ou DPVAT e apresentado no arquivo retorno com as mesmas informações da entrada.
+(23) E-MAIL
+As informações deste campo somente serão consideradas se tiver sido contratado junto ao
+Banco o serviço de “Demonstrativo de Pagamentos” via e-mail. Caso contrário, serão
+ignoradas.
+(24) MOVIMENTO
+Quando o tipo de pagamento for Sispag Salários e tiver sido contratado o serviço “Holerite -
+Demonstrativo de Pagamentos” ou “Informe de Rendimentos” via 30 Horas / Auto Atendimento,
+deverá ser indicado na posição “018” o código correspondente, conforme tabela abaixo:
+1 = Crédito Obrigatórios para este serviço definem em qual
+campo (Crédito/Débito) a informação correspondente
+2 = Débito ao “valor” deve ser disponibilizada no Holerite –
+Demonstrativo de Pagamento
+3 = Acumulado Opcional - deve ser utilizado somente quando se
+desejar incluir no “Holerite - Demonstrativo de
+Pagamentos”, as informações acumuladas dos
+valores pagos (Ex: Liquido de Pagamento,
+Contribuição, Pensão, IRRF, Despesas Médicas /
+Odontológicas, etc.).
+4 = Rendimentos Tributáveis,
+Deduções e IRRF
+5 = Rendimentos Isentos e não
+Tributáveis Opcional – deve ser utilizado somente quando se
+6 = Rendimentos Sujeitos à Tributação desejar emitir o “Informe de Rendimentos” anual para
+Exclusiva Imposto de Renda (Nota 6, código = 6).
+9 = Rendimentos Recebidos
+Acumuladamente
+7 = Informações Complementares
+(25) MENSAGEM
+O conteúdo desse campo será diferenciado de acordo com a Finalidade do Lote indicada no
+registro Header de Lote (posições 103 e 104 – Nota 6).
+outubro/2020 55
+===== PAGINA 56 =====
+Para Finalidade do Lote ‘01’, ‘02’, ‘03’, ‘04’, ‘05’, ‘07’, ‘08’, ‘09’ ou ‘10’, será considerado
+como mensagem de “Holerite – Demonstrativo de Pagamentos” e, portanto, deve ser
+informado na estrutura:
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+MENSAGEM 1 DESCRIÇÃO DA MENSAGEM 1 018 065 X(48)
+MENSAGEM 2 DESCRIÇÃO DA MENSAGEM 2 066 113 X(48)
+MENSAGEM 3 DESCRIÇÃO DA MENSAGEM 3 114 161 X(48)
+Observação: Estas informações são de inteira responsabilidade da empresa pagadora e serão
+disponibilizadas no Campo “Mensagem” do corpo do “Holerite – Demonstrativo de
+Pagamentos”.
+Para Finalidade do Lote ‘06’, será considerado como “Informe de Rendimentos” e deve ser
+informado na estrutura:
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+MENSAGEM DESCRIÇÃO DA MENSAGEM 018 099 X(82)
+BRANCOS COMPLEMENTO DE REGISTRO 100 161 X(62)
+Observação:
+• Estas informações são de inteira responsabilidade da empresa pagadora e serão
+disponibilizadas no campo “Informações Complementares” do corpo do “Informe de
+Rendimentos”;
+• Pode-se utilizar até 30 registros segmento “F” seguidos, para compor as informações que
+devem ser apresentadas no campo “Informações Complementares” do corpo do “Informe de
+Rendimentos”, inclusive linhas que devem ficar em branco;
+• As mensagens não podem conter caracteres especiais (palavras acentuadas, “Ç”, etc.).
+(26) FINALIDADE DA TED
+Campo que possibilita a identificação da finalidade da TED, conforme códigos descritos abaixo.
+Caso o campo não seja preenchido ou não apresente um conteúdo válido, será assumido o
+código “00010 – Crédito em Conta Corrente ou Conta Poupança”. O conteúdo desta tabela
+poderá ser modificado a qualquer momento, sem prévio aviso, visto que estes códigos e suas
+descrições são de responsabilidade do Banco Central do Brasil:
+Código Descrição
+00001 Pagamento de Impostos, Tributos e Taxas
+00002 Pagamento a Concessionárias de Serviço Público
+00003 Pagamento de Dividendos
+00004 Pagamento de Salários
+00005 Pagamento de Fornecedores
+00006 Pagamento de Honorários
+00007 Pagamento de Aluguéis e Taxas e Condomínio
+00008 Pagamento de Duplicatas e Títulos
+00009 Pagamento de Mensalidades Escolares
+00010 Crédito em Conta Corrente ou Conta Poupança
+00011 Pagamento a Corretoras
+00015 Liquidação Financeira Operadora Cartão de Crédito
+00016 Crédito em Conta Investimento
+00043 Lei Rouanet – Patrocínio
+00044 Lei Rouanet – Doação
+00100 Depósito Judicial
+00101 Pensão Alimentícia
+00200 Transferência Internacional de Reais
+00201 Ajuste Posição Mercado Futuro
+00204 Compra/Venda de Ações – Bolsas de Valores e Mercado de Balcão
+outubro/2020 56
+===== PAGINA 57 =====
+00205 Contrato referenciado em Ações/Índices de Ações – BV/BMF
+00300 Restituição de Imposto de Renda
+00500 Restituição de Prêmio de Seguros
+00501 Pagamento de indenização de Sinistro de Seguro
+00502 Pagamento de Prêmio de Co-seguro
+00503 Restituição de prêmio de Co-seguro
+00504 Pagamento de indenização de Co-seguro
+00505 Pagamento de prêmio de Resseguro
+00506 Restituição de prêmio de Resseguro
+00507 Pagamento de Indenização de Sinistro de Resseguro
+00508 Restituição de Indenização de Sinistro de Resseguro
+00509 Pagamento de Despesas com Sinistros
+00510 Pagamento de Inspeções/Vistorias Prévias
+00511 Pagamento de Resgate de Título de Capitalização
+00512 Pagamento de Sorteio de Título de Capitalização
+00513 Pagamento de Devolução de Mensalidade de Título de Capitalização
+00514 Restituição de Contribuição de Plano Previdenciário
+00515 Pagamento de Benefício Previdenciário de Pecúlio
+00516 Pagamento de Benefício Previdenciário de Pensão
+00517 Pagamento de Benefício Previdenciário de Aposentadoria
+00518 Pagamento de Resgate Previdenciário
+00519 Pagamento de Comissão de Corretagem
+00520 Pagamento de Transferências/Portabilidade de Reserva de Seguro/Previdência
+Para a finalidade de TED 00100 (Depósito Judicial), o Código de Identificação de Transação
+(CIT) deve ser informado no campo Finalidade Detalhe nas posições 178 a 197 do segmento
+A.
+O Banco Itaú não se responsabiliza pelo tratamento dado a esta informação pelo Banco
+recebedor da TED. Também, não cabe ao Banco Itaú assegurar que a finalidade utilizada pelo
+pagador esteja em conformidade com qualquer regulamentação que lhe seja aplicada em
+função da sua atividade ou de acordos com os favorecidos.
+(27) PRAZO PARA DISPONIBILIZAÇÃO DO HOLERITE
+Campo que possibilita indicar com quantos dias úteis de antecedência da data de pagamento,
+o holerite deve estar disponível para consulta:
+PRAZO DESCRIÇÃO
+00
+Disponibiliza o holerite na data de pagamento.
+(zero)
+01 a 10 Disponibiliza o holerite XX dias úteis antes da data de pagamento, onde o prazo (XX)
+será a quantidade indicada.
+OBS.: Para qualquer conteúdo apresentado, diferente dos prazos descritos, o holerite será
+disponibilizado dentro do prazo máximo de antecedência de 10 (dez) dias úteis.
+Atenção para arquivos remessa Sispag Holerite transmitidos para processamento em
+ambiente de TESTE:
+Recomenda-se gerar arquivo remessa contendo holerite somente para favorecidos
+previamente selecionados e que tenham conhecimento do processo de teste.
+Os arquivos remessa processados com sucesso em ambiente de TESTE, geram normalmente
+o holerite o qual fica disponível para consulta e impressão nos caixas eletrônicos e internet (30
+Horas) por um período de 7 (sete) dias corridos a contar da data de pagamento indicada.
+Neste caso, como se trata de holerite para validação do teste, o campo destinado ao nome do
+funcionário no holerite apresentará o conteúdo “EM TESTE ATE DD/MM/AAAA”, onde
+“DD/MM/AAAA” será a data de pagamento acrescida de 7 (sete) dias corridos.
+outubro/2020 57
+===== PAGINA 58 =====
+(28) OPÇÃO DE PAGAMENTO
+Indica as opções para quitação do imposto:
+Código Descrição
+0 Pagamento de DPVAT
+1 Parcela Única com desconto
+2 Parcela Única sem desconto
+3 Parcela Nº 1
+4 Parcela Nº 2
+5 Parcela Nº 3
+6 Parcela Nº 4
+7 Parcela Nº 5
+8 Parcela Nº 6
+OBS.: O código de opção “2” não se aplica para pagamentos do IPVA MG.
+(29) VALOR DO IPVA/DPVAT, VALOR DO DESCONTO, VALOR DO PAGAMENTO E DATA DE
+VENCIMENTO DO IPVA
+São campos obrigatórios no arquivo remessa, pois serão comparados com os dados
+fornecidos pelo Detran ao Banco, podendo ser rejeitados no caso de divergência. No arquivo
+retorno, constarão as mesmas informações enviadas na remessa.
+(30) FINALIDADE DO DOC E STATUS DO FUNCIONARIO NA EMPRESA
+Campo que possibilita a identificação da finalidade do DOC, e também do status atual do
+funcionário na Empresa.
+Para a informação da finalidade do DOC, utilizar os códigos conforme tabela 1 abaixo, apenas
+quando se tratar de forma de pagamento ‘03’ (DOC C).
+Código Descrição
+01 Crédito em Conta
+02 Pagamento de Aluguel / Condomínio
+03 Pagamento de Duplicata / Títulos
+04 Pagamento de Dividendos
+05 Pagamento de Mensalidade Escolar
+06 Pagamento de Salários
+07 Pagamento de Fornecedores / Honorários
+08 Operações de Câmbio / Fundos
+09 Repasse de Arrecadação / Pagamento de Tributos
+10 Transferência Internacional de Reais
+11 DOC para Poupança
+12 DOC para Depósito Judicial
+13 Pensão Alimentícia
+99 Outros
+Tabela 1 – Códigos de Finalidade do DOC
+Para a informação do Status atual do Funcionário na Empresa, utilizar os códigos conforme
+tabela 2 abaixo, apenas quando se tratar de Tipo ‘30’ (pagamento de salários) e Forma ‘01’
+(crédito em conta corrente no Banco Itaú).
+Código Descrição
+21 Efetivo Privado
+22 Efetivo Público Estatutário
+23 Efetivo Público CLT
+25 Efetivo Militar
+31 Autônomo Privado
+34 Autônomo Público Desvinculado
+outubro/2020 58
+===== PAGINA 59 =====
+41 Temporário Privado
+42 Temporário Público Estatutário
+43 Temporário Público CLT
+44 Temporário e Público Desvinculado
+45 Temporário Militar
+51 Estagiário Privado
+54 Estagiário Público Desvinculado
+61 Aposentado Privado
+65 Aposentado Militar
+66 Aposentado Público Inativo
+71 Pensionista Privado
+75 Pensionista Militar
+76 Pensionista Público Inativo
+81 Comissionado e Privado
+82 Comissionado e Público Estatutário
+83 Comissionado e Público CLT
+84 Comissionado e Público Desvinculado
+85 Comissionado e Público Militar
+86 Comissionado e Público Inativo
+Tabela 2 – Códigos de Status do Funcionário e Tipo de Empresa
+(31) NÚMERO DE NOTA FISCAL/CNPJ
+Para a forma de pagamento Nota Fiscal – Liquidação Eletrônica, este campo é obrigatório
+desde que a identificação da liquidação seja por número de nota fiscal ou por número do CNPJ
+de terceiros/filial, códigos 2 e 3 respectivamente, conforme nota 32 deste manual.
+• Para identificação por número de nota fiscal usar apenas as 8 primeiras posições do
+campo, da posição 178 a 185, preenchendo com BRANCOS as posições 186 a 191. Neste
+caso, a informação da agência/conta do favorecido é obrigatória.
+• Para a identificação por número do CNPJ de terceiros/filial (diferente do CNPJ pagador),
+usar todas as 14 posições. Nesse caso a agência/conta do favorecido é opcional.
+(32) TIPO DE IDENTIFICAÇÃO DA LIQUIDAÇÃO
+Para a forma de pagamento Nota Fiscal – Liquidação Eletrônica informar o tipo de
+identificação da liquidação:
+Código Descrição
+1 Identificação por CNPJ do cedente
+2 Identificação por número de nota fiscal
+3 Identificação por CNPJ de Terceiros/Filial
+(33) NÚMERO DA NOTA FISCAL
+Campo de preenchimento obrigatório para pagamento na forma de GNRE-SP com código de
+receita 10009.9 – Substituição Tributária por Operação. Para demais pagamentos de
+tributos com código de barras ou GNRE-SP com outros códigos de receita, este campo deverá
+ser preenchido com zeros ou brancos.
+(34) NOME DO FAVORECIDO
+Quando a forma de pagamento for Crédito em Conta no Itaú (conta corrente ou poupança) e
+na contratação do serviço a empresa tiver optado pela validação do nome do favorecido, a
+informação desse campo será assumida conforme cadastro de contas do Banco,
+independente do conteúdo informado na remessa. Este procedimento não causará a rejeição
+do pagamento. No arquivo retorno será apresentado o nome do favorecido conforme cadastro
+de contas do Banco.
+outubro/2020 59
+===== PAGINA 60 =====
+(35) CÂMARA e CÓDIGO ISPB (código adotado pelo Banco Central do Brasil para
+identificação das instituições no Sistema de Pagamentos Brasileiro)
+Para pagamento através de TED para Conta Pagamento, por determinação do BACEN é
+obrigatória identificação do Código ISPB.
+Para pagamento através de TED para Corretoras, por determinação do Banco Central do
+Brasil é obrigatória a identificação da Câmara e do Código ISPB.
+Neste caso, o Código da Câmara Centralizadora deve ser informado no segmento ’A’
+(posições 18 a 20) com o conteúdo “888”.
+O número do Código ISPB pode ser informado tanto no segmento ‘A’ (posições 105 a 112)
+quanto no segmento ‘B (posições 233 a 240)’, com as seguintes condições:
+• Se ambos estiverem consistentes/válidos, será considerado o conteúdo indicado no
+segmento ‘B’;
+• Se o Código ISPB indicado em um dos segmentos ‘A’ ou ‘B’ estiver inconsistente/inválido,
+será considerado o conteúdo que estiver correto, independente do segmento;
+• Se ambos estiverem inconsistentes / inválidos, o pagamento será rejeitado.
+Para as demais formas de pagamentos e diferente de TED para Corretora, os campos
+referentes ao número da Câmara e Código ISPB devem ser informados com zeros ou brancos
+de acordo com sua picture.
+A informação do Código ISPB pode ser obtida por meio do site do Banco Central do Brasil
+(www.bacen.gov.br), na área destinada ao Sistema de Pagamentos Brasileiro (opção STR –
+Sistema de Transferência de Reservas – Relação de participantes do STR).
+Para pagamento através de PIX Transferência deve ser informado no segmento ‘A’ (posição
+18 a 20) com o conteúdo “009” – PIX (SPI).
+(36) IDENTIFICAÇÃO DO TIPO DE TRANSFERÊNCIA
+Quando se tratar de uma transferência via PIX (“Código de Compensação 009”), deve ser
+informado nas posições 113 a 114 o tipo de transferência:
+01 - Conta corrente
+PG - Conta Pagamento
+03 – Conta Poupança
+04 – Chave Pix
+(37) TIPO IDENTIFICAÇÃO DE CHAVE PIX
+Quando se tratar de uma transferência via PIX (“Código de Compensação 009”),deve-se
+informar o Tipo de chave de endereçamento (Chave PIX). Campo obrigatório para o modelo
+de transferência via “Chave Pix” - Opção “4” preenchido nas posições 113 a 114 do segmento
+A.
+01 – Telefone
+02 – E-mail
+03 – CPF/CNPJ
+04 – Chave Aleatória
+(38) CÓDIGO DE IDENTIFICAÇÃO DO QR-CODE (TXID)
+Deve ser preenchido com a informação do TXID, opcional, que determina o identificador da
+transação. O objetivo desse campo é ser um elemento que possibilite ao PSP do recebedor
+apresentar ao usuário recebedor a funcionalidade de conciliação de pagamentos.
+outubro/2020 60
+===== PAGINA 61 =====
+(39) INFORMAÇÃO ENTRE USUÁRIOS
+Essas posições 63 a 127 devem ser destinadas para envio de mensagem para o recebedor,
+opcional, quando o pagador desejar utilizar esse conjunto de posições para envio de
+mensagens entre os usuários.
+(40) CHAVE DE ENDEREÇAMENTO – CHAVE PIX
+Chave de identificação dos dados do cliente na base única de registro do BACEN. Deve ser
+preenchido com as informações da chave PIX do recebedor (CNPJ/CPF, Número de
+Celular, endereço de E-mail ou Chave Aleatória). Conforme padrão descrito abaixo:
+Tipo Formato Descrição
+inicia com "+", seguido do código do país, DDD, e
+Número de telefone +XXXXXXXXXXXXX
+número de celular com nove dígitos.
+Endereço de e-mail xxxxxxxx@xxxxxxx.xxx(.xx) contém "@", e o tamanho máximo é de 77 caracteres.
+contém 11 números, incluindo os dígitos verificadores.
+CPF XXXXXXXXXXX
+Deve ser informado sem pontos ou traços.
+contém 14 números, incluindo os dígitos verificadores.
+CNPJ XXXXXXXXXXXXXX
+Deve ser informado sem pontos ou traços.
+número hexadecimal de 32 posições, divido em 5
+XXXXXXXX-XXXX-XXXX-
+Chave aleatória blocos separados por um “-“. Deve ser informado com
+XXXX-XXXXXXXXXXXX
+os traços, ou seja com as 36 posições totais.
+(41) URL / CHAVE DE ENDEREÇAMENTO – CHAVE PIX
+Obrigatório, quando se tratar de QR CODE dinâmico / personalizado, deve ser informada a
+URL capturada a partir da leitura do QR CODE. A URL deverá ser informada sem o
+“https://”.
+Obrigatório, quando se tratar de QR Code estático / simples, deve ser informada a chave Pix
+capturada a partir da leitura do QR Code.
+Ao capturar um QR Code estático é possível identificar a chave Pix vinculada a ele. Para
+identificar corretamente o tipo de chave, consulte a nota 40.
+(42) COMPLEMENTO DE REGISTRO
+Número de Agência para conta pagamento (opcional).
+outubro/2020 61
+===== PAGINA 62 =====
+CAPÍTULO 5
+Implantação
+outubro/2020 62
+===== PAGINA 63 =====
+Para se assegurar o perfeito funcionamento do sistema, devem ser transmitidos ao banco, arquivos
+de teste de pagamentos, formatados conforme layout descrito neste manual.
+Caso o arquivo apresente erros de formatação, será realizado contato com o cliente para sanar todas
+as irregularidades que ocorreram.
+A fase de testes será considerada concluída após terem sido esclarecidas todas as dúvidas e
+irregularidades. Para operar em produção, se o meio de transmissão for pelo Itaú Empresas na
+internet, ao transferir o arquivo, basta selecionar o ambiente ‘Produção’. Se o meio de transmissão for
+diferente do Itaú Empresas na internet, o cliente deve contatar o gerente de sua conta e solicitar o
+tombamento para produção.
+É possível enviar arquivo de teste mesmo estando em produção, desde que se utilize o 30 Horas
+como meio de transmissão.
+outubro/2020 63
+===== PAGINA 64 =====
+ANEXO A
+Informações Complementares sobre o código de barras
+Boletos de Cobrança
+outubro/2020 64
+===== PAGINA 65 =====
+1. Composição do Código de Barras (parte inferior da ficha de compensação)
+Considerando a seguinte composição:
+34196166700000123451101234567880057123457000
+Temos:
+Conteúdo Significado Posição
+341= Código do Banco favorecido 18 a 20
+9= Código da Moeda 21 a 21
+6= DV do Código de Barras (a) 22 a 22
+1667= Fator de Vencimento (ex.: 01/05/2002) (b) 23 a 26
+0000012345= Valor do Título 27 a 36
+1101234567880057123457000= Campo Livre 37 a 61
+2. Composição da representação numérica do código de barras (parte superior da ficha de
+compensação)
+Considerando a seguinte composição:
+34191.1012 1 34567.88005 8 71234.57000 1 6 16670000012345
+Campo 1 Dv Campo 2 dv Campo 3 dv dv geral Campo 5
+Campo 4
+Temos:
+Conteúdo Significado Posição
+341= Código do Banco 18 a 20
+9= Código da Moeda 21 a 21
+1101234567880057123457000= Campo Livre 37 a 61
+6= DV do Código de Barras (a) 22 a 22
+1667= Fator de Vencimento (ex.: 01/05/2002) (b) 23 a 26
+0000012345= Valor do Título 27 a 36
+Observações
+Os dados obtidos a partir do Código de Barras ou da digitação da sua representação numérica
+devem ser alocados nas posições indicadas no layout, sem qualquer alteração em seu conteúdo,
+devendo-se apenas consistir na integridade destes dados, conforme indicado adiante.
+Para garantir a integridade dos dados obtidos a partir da representação numérica do Código de
+Barras, os campos 1, 2 e 3, devem ter seu conteúdo consistido pelo módulo 10, conforme o item
+4 a seguir. A sequência de dados deve ser recomposta na mesma ordem do código de barras,
+ignorando os dígitos de verificação dos campos 1, 2 e 3 e calculando o dígito verificador deste
+conjunto, conforme o item 3 a seguir.
+(a) Para garantir a correta decodificação da representação gráfica do código de barras, calcula-
+se o dígito verificador, conforme o item 3;
+(b) Se preenchido com número inferior a “1000”, o conteúdo destas posições compõe o campo
+“Valor do Título”; se preenchido com número igual o superior a “1000”, refere-se à data de
+vencimento do título, codificada, e será tratado como tal pelos sistemas do Itaú, prevalecendo,
+inclusive, sobre a data de vencimento expressa no documento.
+3. Cálculo do DV-Geral do código de barras ( módulo 11)
+• Tomando-se os 43 algarismos que compõem o Código de Barras (sem considerar a 5ª posição),
+multiplique-os, iniciando-se da direita para a esquerda, pela seqüência numérica de 2 a 9 (2, 3,
+4, 5, 6, 7, 8, 9, 2, 3, 4... e assim por diante);
+• Some o resultado de cada produto efetuado e determine o total como (N);
+• Divida o total (N) por 11 e determine o resto obtido da divisão como Mod 11(N);
+• Calcule o dígito verificador (DV) através da expressão:
+DV = 11 - Mod 11(N)
+OBS.: Se o resultado desta for igual a 0, 1, 10 ou 11, considerem DV = 1.
+Exemplo
+Considerando o seguinte conteúdo do código de barras:
+3419?166700000123451101234567880057123457000
+outubro/2020 65
+===== PAGINA 66 =====
+1º Multiplica-se a seqüência do código de barras pelo módulo 11:
+3419166700000123451101234567880057123457000
+X 4329876543298765432987654329876543298765432
+2º Soma-se o resultado dos produtos obtidos no item “a” acima:
+12 + 12 + 2 + 81 + 8 + 42 + 36 + 35 + 0 + 0 + 0 + 0 + 0 + 7 + 12 + 15 + 16 + 15 + 2 + 9 + 0
++ 7 + 12 + 15 + 16 + 15 + 12 + 63 + 64 + 56 + 0 + 0 + 20 + 21 + 2 + 18 + 24 + 28 + 30 + 35
++ 0 + 0 + 0 = 742
+3º Determinando o resultado da divisão: 742  11 = 67, resto (R) = 5
+4º Calculando o DV  11 - 5 = 6
+Portanto, a sequência correta do código de barras será:
+34196166700000123451101234567880057123457000
+
+(DV)
+4. Cálculo dos DV’s de campos da Representação Numérica (módulo 10)
+• Multiplica-se cada algarismo do campo pela seqüência de multiplicadores 2, 1, 2, 1...,
+posicionados da direita para a esquerda;
+• Some os algarismos dos resultados dos produtos;
+• Divida o total encontrado por 10;
+• Encontre o DV por campo através da diferença entre o divisor (10) e o resto da divisão:
+DV = 10 - (Resto da Divisão)
+Observação: se o resultado da etapa acima for 10, faça DV = 0
+Considerando-se a seguinte representação numérica do código de barras:
+34191.1012? 34567.88005? 71234.57000? 6 16670000012345
+Campo 1 Campo 2 Campo 3 Campo 4 Campo 5
+a) Multiplicando a seqüência dos campos pelo módulo 10:
+Campo 1 341911012 Campo 2 3456788005 Campo 3 7123457000
+X 212121212 X 1212121212 X 1212121212
+Observação: Os campos 4 e 5 não são consistidos por este método.
+b) Some, individualmente, os algarismos dos resultados dos produtos:
+Campo 1  6 + 4 + 2 + 9 + 2 + 1 + 0 + 1 + 4 = 29
+Campo 2  3 + 8 + 5 + 1 + 2 + 7 + 1 + 6 + 8 + 0 + 0 + 1 + 0 = 42
+Campo 3  7 + 2 + 2 + 6 + 4 + 1 + 0 + 7 + 0 + 0 + 0 = 29
+c) Divida o total encontrado por 10, a fim de determinar o resto da divisão:
+Campo 1  29  10 = 2, resto 9
+Campo 2  42  10 = 4, resto 2
+Campo 3  29  10 = 2, resto 9
+d) Calculando o DV:
+Campo 1  DV = 10 - 9  DV = 1
+Campo 2  DV = 10 - 2  DV = 8
+Campo 3  DV = 10 - 9  DV = 1
+Portanto, a sequência correta da linha digitável será:
+34191.10121 34567.880058 71234.570001 6 16670000012345
+  
+outubro/2020 66
+===== PAGINA 67 =====
+ANEXOB
+Informações Complementares sobre o código de barras
+Concessionárias e IPTU
+outubro/2020 67
+===== PAGINA 68 =====
+1. Composição do Código de Barras
+Considerando a seguinte composição:
+84610000000362700060002000102000000457986595
+Temos:
+Conteúdo Significado Posição
+8= Identificação do Produto 18 a 18
+4= Identificação do Segmento 19 a 19
+1 = Prefeituras (IPTU)
+2 = Saneamento
+3 = Energia Elétrica e Gás
+4 = Telecomunicações
+6= Identificação do valor real ou referência 20 a 20
+6 = Reais
+7 = Moeda Variável
+1= DV do Código de Barras 21 a 21
+00000003627= Valor do Documento 22 a 32
+0006= Identificação da Empresa / Órgão 33 a 36
+0002000102000000457986595= Campo Livre 37 a 61
+2. Composição da representação numérica do código de barras (parte superior do código de barras)
+Considerando a seguinte composição:
+84610000000 5 36270006000 1 20001020000 0 00457986595 9
+Campo 1 Dv Campo 2 dv Campo 3 Dv Campo 4 dv
+Temos:
+Campo Conteúdo Significado Posição
+8= Identificação do Produto 18 a 18
+4= Identificação do Segmento 19 a 19
+6= Identificação do valor real ou referência 20 a 20
+1
+1= DV Geral do Código de Barras 21 a 21
+0000000= Valor do Documento 22 a 28
+5= DV do Campo 1 29 a 29
+3627= Valor do documento 30 a 33
+0006= Identificação da Empresa / Órgão 34 a 37
+2
+000= Campo Livre 38 a 40
+1= DV do Campo 2 41 a 41
+20001020000= Campo Livre 42 a 52
+3
+0= DV do Campo 3 53 a 53
+00457986595= Campo Livre 54 a 64
+4
+9= DV do Campo 4 65 a 65
+Observações
+Os dados obtidos a partir do Código de Barras ou da digitação da sua representação numérica, devem
+ser alocados nas posições indicadas no layout, sem qualquer alteração em seu conteúdo, devendo-
+se apenas consistir na integridade destes dados, conforme indicado adiante.
+Para garantir a integridade dos dados obtidos a partir da representação numérica do Código de Barras,
+cada campo tem seu conteúdo consistido pelo módulo 10, conforme o item 4 a seguir. A seqüência
+de dados deve ser recomposta na mesma ordem do código de barras, ignorando os dígitos de
+verificação dos campos 1, 2, 3 e 4 calculando o dígito verificador deste conjunto, conforme o item 3 a
+seguir.
+3. Cálculo do DV-Geral do código de barras
+outubro/2020 68
+===== PAGINA 69 =====
+3.1 Campo “Identificação do valor real ou referência” (terceira posição do conteúdo do código de
+barras ou de sua representação numérica) com conteúdo igual a “6” ou “7” (cálculo - Módulo
+10)
+• Tomando-se os 43 algarismos que compõem o Código de Barras (sem considerar a 4ª posição),
+multiplique-os, iniciando-se da direita para a esquerda, pela seqüência numérica de 2 1 2 1.....;
+• Some os algarismos dos resultados dos produtos;
+• Divida o total encontrado por 10;
+• Encontre o DV por campo através da diferença entre o divisor (10) e o resto da divisão:
+DV = 10 - (Resto da Divisão)
+Observação: se o resultado da etapa acima for 10, faça DV = 0
+Exemplo
+Considerando o seguinte conteúdo do código de barras:
+846?0000000362700060002000102000000457986595
+1º Multiplica-se a seqüência do código de barras pelo módulo 10:
+8460000000362700060002000102000000457986595
+X 2121212121212121212121212121212121212121212
+2º Soma-se o resultado dos produtos obtidos no item “a” acima:
+(1 + 6) + 4 + (1 + 2) +0 + 0 + 0 + 0 + 0 + 0 + 0 + 6 + 6 + 4 + 7 + 0 + 0 + 0 + 6 + 0 + 0 + 0 + 2 + 0
++ 0 + 0 + 1 + 0 + 2 + 0 + 0 + 0 + 0 + 0 + 0 + 8 + 5 + (1 + 4) + 9 + (1 + 6) + 6 + (1 + 0) + 9 + (1 +
+0) = 99
+3º Determinando o resultado da divisão: 99  10 = , resto (R) = 9
+4º Calculando o DV  10 - 9 = 1
+Portanto, a sequência correta do código de barras será:
+84610000000362700060002000102000000457986595
+
+(DV)
+3.2 Campo “Identificação do valor real ou referência” (terceira posição do conteúdo do código de
+barras ou de sua representação numérica) com conteúdo igual a “8” ou “9” (cálculo - Módulo
+11)
+• Tomando-se os 43 algarismos que compõem o Código de Barras (sem considerar a 4ª posição),
+multiplique-os, iniciando-se da direita para a esquerda, pela seqüência numérica de 2 a 9 ( 2, 3, 4, 5, 6,
+7, 8, 9, 2, 3, 4... e assim por diante);
+• Some o resultado de cada produto efetuado e determine o total como (N);
+• Divida o total (N) por 11 e determine o resto obtido da divisão como Mod 11(N);
+• Calcule o dígito verificador (DAC) através da expressão:
+DAC = 11 - Mod 11(N)
+OBS.: Se o resultado desta for igual a 0, 1, 10 ou 11, considere DAC = 1.
+Exemplo:
+Considerando o seguinte conteúdo do Código de Barras:
+849?0000000362700060002000102000000457986595
+1º Multiplica-se a seqüência do código de barras pelo módulo 11
+8490000000362700060002000102000000457986595
+X 4329876543298765432987654329876543298765432
+2º Soma-se o resultado dos produtos obtidos no item “a” acima:
+32 + 12 + 18 + 0 + 0 + 0 + 0 + 0 + 0 + 0 + 6 + 54 + 16 + 49 + 0 + 0 + 0 + 18 + 0 + 0 + 0 + 14 + 0
++ 0 + 0 + 3 + 0 + 18 + 0 + 0 + 0 + 0 + 0 + 0 + 8 + 45 + 56 + 63 + 48 + 30 + 20 + 27 + 10 = 547
+3º Determinando o resultado da divisão: 547  11 = 49, resto (R) = 8
+outubro/2020 69
+===== PAGINA 70 =====
+4º Calculando o DV  11 - 8 = 3
+Portanto, a sequência correta do código de barras será:
+84930000000362700060002000102000000457986595
+
+(DV)
+4. Cálculo dos DV’s de campos da Representação Numérica (módulo 10)
+• Multiplica-se cada algarismo do campo pela seqüência de multiplicadores 2, 1, 2, 1...,
+posicionados da direita para a esquerda;
+• Some os algarismos dos resultados dos produtos;
+• Divida o total encontrado por 10;
+• Encontre o DV por campo através da diferença entre o divisor (10) e o resto da divisão:
+DV = 10 - (Resto da Divisão)
+Observação: se o resultado da etapa acima for 10, faça DV = 0
+Considerando-se a seguinte representação numérica do código de barras:
+84610000000 5 3627000600 1 2000102000 0 00457986595 9
+Campo 1 Cam0p o 2 Cam0p o 3 Campo 4
+a) Multiplicando a seqüência dos campos pelo módulo 10:
+Campo 1 84610000000 Campo 2 36270006000 Campo 3 20001020000 Campo 4 00457986595
+X 21212121212 X 21212121212 X 21212121212 X 21212121212
+b) Some, individualmente, os algarismos dos resultados dos produtos:
+Campo 1  1 + 6 + 4 + 1 + 2 +1 + 0 + 0 + 0 + 0 + 0 + 0 + 0 = 15
+Campo 2  6 + 6 + 4 + 7 + 0 + 0 + 0 + 6 + 0 + 0 + 0 = 29
+Campo 3  4 + 0 + 0 +0 + 2 + 0 + 4 + 0 + 0 + 0 + 0 = 10
+Campo 4  0 + 0 + 8 + 5 + 1 + 4 + 9 + 1 + 6 + 6 + 1 + 0 + 9 + 1 + 0 = 51
+c) Divida o total encontrado por 10, a fim de determinar o resto da divisão:
+Campo 1  15  10 = 1, resto 5
+Campo 2  29  10 = 2, resto 9
+Campo 3  10  10 = 1, resto 0
+Campo 4  51  10 = 5, resto 1
+d) Calculando o DV:
+Campo 1  DV = 10 - 5  DV = 5
+Campo 2  DV = 10 - 9  DV = 1
+Campo 3  DV = 10 - 0  DV = 0
+Campo 4  DV = 10 - 1  DV = 9
+Portanto, a seqüência correta da linha digitável será:
+84610000000 5 36270006000 1 20001020000 0 00457986595 9
+outubro/2020 70
+===== PAGINA 71 =====
+ANEXO C
+Informações Complementares para pagamento de
+Tributos
+outubro/2020 71
+===== PAGINA 72 =====
+1. Composição dos dados para pagamento de GPS
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+TRIBUTO IDENTIFICAÇÃO DO TRIBUTO 018 019 9(02) 01 = GPS
+CÓDIGO DE PAGTO CÓDIGO DE PAGAMENTO 020 023 9(04) NOTA 20
+COMPETÊNCIA MÊS E ANO DA COMPETÊNCIA 024 029 9(06) MMAAAA
+IDENTIFICADOR
+IDENTIFICAÇÃO CNPJ/CEI/NIT/PIS DO
+030 043 9(14)
+CONTRIBUINTE
+VALOR DO TRIBUTO VALOR PREVISTO DO PAGAMENTO DO INSS 044 057 9(12)V9(02)
+VALOR OUTR.ENTIDADE VALOR DE OUTRAS ENTIDADES 058 071 9(12)V9(02)
+ATUALIZ. MONETÁRIA ATUALIZAÇÃO MONETÁRIA 072 085 9(12)V9 (02)
+VALOR ARRECADADO VALOR ARRECADADO 086 099 9(12)V9(02)
+DATA ARRECADAÇÃO
+DATA DA ARRECADAÇÃO/ EFETIVAÇÃO DO
+100 107 9(08) DDMMAAAA
+PAGAMENTO
+BRANCOS COMPLEMENTO DO REGISTRO 108 115 X(08)
+USO EMPRESA INFORMAÇÕES COMPLEMENTARES 116 165 X(50) NOTA 21
+CONTRIBUINTE NOME DO CONTRIBUINTE 166 195 X(30) NOTA 22
+Observação:
+É vedada a utilização da GPS para recolhimento de Receita de valor total inferior ao estipulado pela Resolução
+INSS/PR vigente.
+A receita que resultar valor inferior deverá ser adicionada à contribuição ou importância correspondente aos
+meses subsequentes, até que o total seja igual ou superior ao valor mínimo fixado.
+Eventuais dúvidas no preenchimento da GPS, ou informações relativas a outros códigos de pagamento devem
+ser obtidas através do "Manual de Preenchimento da GPS", disponível nas agências do INSS ou através site
+http://www.mpas.gov.br
+2. Composição dos dados para pagamento de DARF
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+TRIBUTO IDENTIFICAÇÃO DO TRIBUTO 018 019 9(02) 02 = DARF
+RECEITA CÓDIGO DA RECEITA 020 023 9(04)
+1 = CPF
+(1) EMPRESA – INSCRIÇÃO TIPO DE INSCRIÇÃO DO CONTRIBUINTE 024 024 9(01)
+2 = CNPJ
+(1) INSCRIÇÃO NÚMERO CPF OU CNPJ DO CONTRIBUINTE 025 038 X(14)
+PERÍODO PERÍODO DE APURAÇÃO 039 046 9(08) DDMMAAAA
+REFERÊNCIA NÚMERO DE REFERÊNCIA 047 063 9(17)
+VALOR PRINCIPAL VALOR PRINCIPAL 064 077 9(12)V9(02)
+MULTA VALOR DA MULTA 078 091 9(12)V9(02)
+JUROS/ENCARGOS VALOR DOS JUROS/ENCARGOS 092 105 9(12)V9(02)
+VALOR TOTAL VALOR TOTAL A SER PAGO 106 119 9(12)V9(02)
+DATA VENCIMENTO DATA DE VENCIMENTO 120 127 9(08) DDMMAAAA
+DATA PAGAMENTO DATA DO PAGAMENTO 128 135 9(08) DDMMAAAA
+BRANCOS COMPLEMENTO DE REGISTRO 136 165 X(30)
+CONTRIBUINTE NOME DO CONTRIBUINTE 166 195 X(30) NOTA 22
+Observação:
+(1) Quando o Tipo de Inscrição do Contribuinte for CPF (Empresa – Inscrição = 1) informar os 11 dígitos do número
+do CPF nas posições 025 a 038 alinhados à esquerda complementando com três brancos à direita. Para CNPJ
+informar os 14 dígitos alinhados à direita e complementando com zeros à esquerda quando necessário.
+outubro/2020 72
+===== PAGINA 73 =====
+É vedado o recolhimento de tributos e contribuições cujo valor seja inferior ao mínimo estipulado pela Secretaria
+da Receita Federal.
+Eventuais dúvidas no preenchimento do DARF, ou informações relativas a outros códigos de receita devem ser
+obtidas nas agências da Secretaria da Receita Federal ou através do site http://www.receita.fazenda.gov.br
+3. Composição dos dados para pagamento de DARF SIMPLES
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+TRIBUTO IDENTIFICAÇÃO DO TRIBUTO 018 019 9(02) 03=DARF SIMP
+RECEITA CÓDIGO DA RECEITA 020 023 9(04)
+1 = CPF
+(1) EMPRESA – INSCRIÇÃO TIPO DE INSCRIÇÃO DO CONTRIBUINTE 024 024 9(01)
+2 = CNPJ
+(1) INSCRIÇÃO NÚMERO CPF OU CNPJ DO CONTRIBUINTE 025 038 X(14)
+PERÍODO PERÍODO DE APURAÇÃO 039 046 9(08) DDMMAAAA
+RECEITA BRUTA VALOR DA RECEITA BRUTA ACUMULADA 047 055 9(07)V9(02)
+PERCENTUAL
+PERCENTUAL SOBRE A RECEITA BRUTA
+056 059 9(02)V9(02)
+ACUM.
+BRANCOS COMPLEMENTO DE REGISTRO 060 063 X(04)
+VALOR PRINCIPAL VALOR PRINCIPAL 064 077 9(12)V9(02)
+MULTA VALOR DA MULTA 078 091 9(12)V9(02)
+JUROS/ENCARGOS VALOR DOS JUROS/ENCARGOS 092 105 9(12)V9(02)
+VALOR TOTAL VALOR TOTAL A SER PAGO 106 119 9(12)V9(02)
+DATA VENCIMENTO DATA DE VENCIMENTO 120 127 9(08) DDMMAAAA
+DATA PAGAMENTO DATA DO PAGAMENTO 128 135 9(08) DDMMAAAA
+BRANCOS COMPLEMENTO DE REGISTRO 136 165 X(30)
+CONTRIBUINTE NOME DO CONTRIBUINTE 166 195 X(30) NOTA 22
+Observação:
+(1) Quando o Tipo de Inscrição do Contribuinte for CPF (Empresa – Inscrição = 1) informar os 11 dígitos do número
+do CPF nas posições 025 a 038 alinhados à esquerda complementando com três brancos à direita. Para CNPJ
+informar os 14 dígitos alinhados à direita e complementando com zeros à esquerda quando necessário.
+É vedado o recolhimento de tributos e contribuições cujo valor seja inferior ao mínimo estipulado pela Secretaria
+da Receita Federal.
+Eventuais dúvidas no preenchimento do DARF SIMPLES, ou informações relativas a outros códigos de receita
+devem ser obtidas nas agências da Secretaria da Receita Federal ou através site
+http://www.receita.fazenda.gov.br
+4. Composição dos dados para pagamento de GARE – SP ICMS
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+TRIBUTO IDENTIFICAÇÃO DO TRIBUTO 018 019 9(02) 05=ICMS
+RECEITA CÓDIGO DA RECEITA 020 023 9(04)
+1 = CPF
+TIPO IDENT.CONTRIB. TIPO DE INSCRIÇÃO DO CONTRIBUINTE 024 024 9(01)
+2 = CNPJ
+INSCRIÇÃO NÚMERO CPF OU CNPJ DO CONTRIBUINTE 025 038 9(14)
+INSCRIÇÃO INSCRIÇÃO ESTADUAL 039 050 9(12)
+DIVIDA ATIVA/ETIQUETA DIVIDA ATIVA/Nº ETIQUETA 051 063 9(13)
+REFERÊNCIA MÊS/ANO DE REFERÊNCIA 064 069 9(06) MMAAAA
+PARCELA/NOTIFICAÇÃO NÚMERO PARCELA/NOTIFICAÇÃO 070 082 9(13)
+RECEITA VALOR DA RECEITA 083 096 9(12)V9(02)
+outubro/2020 73
+===== PAGINA 74 =====
+JUROS VALOR DOS JUROS 097 110 9(12)V9(02)
+MULTA VALOR DA MULTA 111 124 9(12)V9(02)
+VALOR PAGAMENTO VALOR DO PAGAMENTO 125 138 9(12)V9(02)
+DATA VENCIMENTO DATA DE VENCIMENTO 139 146 9(08) DDMMAAAA
+DATA PAGAMENTO DATA DE PAGAMENTO 147 154 9(08) DDMMAAAA
+BRANCOS COMPLEMENTO DE REGISTRO 155 165 X(11)
+CONTRIBUINTE NOME DO CONTRIBUINTE 166 195 X(30) NOTA 22
+Observação:
+Eventuais dúvidas no preenchimento da GARE – SP ICMS, ou informações relativas a códigos de
+receita devem ser obtidas nas agências da Secretaria da Receita Federal ou através site
+http://www.receita.fazenda.gov.br.
+5. Composição dos dados para pagamento de IPVA – DPVAT
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+07 – IPVA
+TRIBUTO IDENTIFICAÇÃO DO TRIBUTO 018 019 9(02)
+08 – DPVAT
+BRANCOS COMPLEMENTO DE REGISTRO 020 023 X(04)
+1 = CPF
+TIPO IDENT.CONTRIB. TIPO DE INSCRIÇÃO DO CONTRIBUINTE 024 024 9(01)
+2 = CNPJ
+INSCRIÇÃO NÚMERO CPF OU CNPJ DO CONTRIBUINTE 025 038 9(14)
+EXERCÍCIO ANO BASE 039 042 9(04) AAAA
+(5) RENAVAM (9 DÍGITOS) CÓDIGO RENAVAM COM 9 DÍGITOS 043 051 9(09)
+(1) UF UNIDADE DA FEDERAÇÃO 052 053 X(02) MG / SP
+(2) CÓDIGO MUNICÍPIO CÓDIGO DO MUNICÍPIO 054 058 9(05)
+PLACA PLACA DO VEÍCULO 059 065 X(07)
+OPÇÃO PAGTO OPÇÃO DE PAGAMENTO 066 066 X(01) NOTA 28
+(3) IPVA/DPVAT VALOR DO IPVA/DPVAT 067 080 9(12)V9(02) NOTA 29
+(4) DESCONTO VALOR DO DESCONTO 081 094 9(12)V9(02) NOTA 29
+(3) VALOR PAGAMENTO VALOR DO PAGAMENTO 095 108 9(12)V9(02) NOTA 29
+(2) DATA VENCIMENTO DATA DE VENCIMENTO 109 116 9(08) NOTA 29
+DATA PAGAMENTO DATA DO PAGAMENTO 117 124 9(08) DDMMAAAA
+BRANCOS COMPLEMENTO DE REGISTRO 125 153 X(29)
+(5) RENAVAM (12 DÍGITOS) CÓDIGO RENAVAM COM 12 DÍGITOS 154 165 9(12)
+CONTRIBUINTE NOME DO CONTRIBUINTE 166 195 X(30) NOTA 22
+Observação:
+(1) Atualmente as formas de pagamento de IPVA e DPVAT estão disponíveis somente para veículos de Minas
+Gerais e São Paulo.
+(2) Os campos 'CÓDIGO MUNICIPIO' e 'DATA VENCIMENTO' não são obrigatórios para pagamento de DPVAT.
+(3) Para DPVAT, o conteúdo do campo 'VALOR PAGAMENTO' deve ser o mesmo do campo 'IPVA/DPVAT'.
+(4) O campo 'DESCONTO' é exclusivo para pagamento de IPVA e quando utilizado, o seu somatório deve constar
+no registro Trailer de Lote.
+(5) Campo RENAVAM:
+RENAVAM com 9 dígitos – data de fabricação do veículo anterior a 01/04/2013 utilize o campo RENAVAM (9
+DÍGITOS) posições 043 a 051;
+outubro/2020 74
+===== PAGINA 75 =====
+RENAVAM com 12 dígitos – data de fabricação do veículo a partir de 01/04/2013 utilize o campo RENAVAM (12
+DÍGITOS) posições 154 a 165;
+a) O número do RENAVAM deve ser informado alinhado à direita, complementando com zeros à esquerda
+quando necessário;
+b) No arquivo retorno os dois campos apresentarão o número do RENAVAM, independente de como foi informado
+no arquivo remessa de agendamento do pagamento. Nas posições 043 a 051 será apresentado os 9 primeiros
+dígitos do número do RENAVAM caso o mesmo possua mais de 9 dígitos.
+6. Composição dos dados para pagamento de FGTS-GRF/GRRF/GRDE
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+TRIBUTO IDENTIFICAÇÃO DO TRIBUTO 018 019 9(02) 11=FGTS
+RECEITA CÓDIGO DA RECEITA 020 023 9(04)
+TIPO TIPO DE INSCRIÇÃO DO 1 = CNPJ
+024 024 9(01)
+IDENT.CONTRIB. CONTRIBUINTE 2 = CEI
+INSCRIÇÃO
+CPF OU CNPJ DO CONTRIBUINTE 025 038 9(14)
+NÚMERO
+COD.BARRAS CODIGO DE BARRAS 039 086 X(48)
+IDENTIFICADOR IDENTIFICADOR DO FGTS 087 102 9(16)
+LACRE LACRE DE CONECTIVIDADE SOCIAL 103 111 9(09)
+DIGITO DO LACRE DE
+DIGITO DO LACRE 112 113 9(02)
+CONECTIVIDADE SOC.
+NOME
+NOME DO CONTRIBUINTE 114 143 X(30)
+CONTRIBUINTE
+DATA PAGAMENTO DATA DO PAGAMENTO 144 151 9(08) DDMMAAAA
+VALOR
+VALOR DO PAGAMENTO 152 165 9(12)V9(02)
+PAGAMENTO
+BRANCOS COMPLEMENTO DE REGISTRO 166 195 X ( 3 0 )
+Observação:
+Eventuais dúvidas no preenchimento FGTS-GRF/GRRF/GRDE, ou outras informações devem ser
+obtidas através do site http://www.caixa.gov.br/pj/fgts/
+outubro/2020 75
+===== PAGINA 76 =====
+ANEXO D
+Informações Complementares para Holerite –
+Demonstrativo de Pagamentos de Salários e
+Informe de Rendimentos (segmento “E”)
+outubro/2020 76
+===== PAGINA 77 =====
+1. Composição dos dados para HOLERITE – DEMONSTRATIVO DE PAGAMENTOS DE
+SALÁRIOS
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+DESCRIÇÃO (1) DESCRIÇÃO DO CRÉDITO / DESCONTO (1) 019 048 X(30)
+BRANCOS COMPLEMENTO DE REGISTRO 049 053 X(05)
+VALOR (1) VALOR DO CRÉDITO / DESCONTO (1) 054 068 9(13)V9(02)
+DESCRIÇÃO (2) DESCRIÇÃO DO CRÉDITO / DESCONTO (2) 069 098 X(30)
+BRANCOS COMPLEMENTO DE REGISTRO 099 103 X(05)
+VALOR (2) VALOR DO CRÉDITO / DESCONTO (2) 104 118 9(13)V9(02)
+DESCRIÇÃO (3) DESCRIÇÃO DO CRÉDITO / DESCONTO (3) 119 148 X(30)
+BRANCOS COMPLEMENTO DE REGISTRO 149 153 X(05)
+VALOR (3) VALOR DO CRÉDITO / DESCONTO (3) 154 168 9(13)V9(02)
+DESCRIÇÃO (4) DESCRIÇÃO DO CRÉDITO / DESCONTO (4) 169 198 X(30)
+BRANCOS COMPLEMENTO DE REGISTRO 199 203 X(05)
+VALOR (4) VALOR DO CRÉDITO / DESCONTO (4) 204 218 9(13)V9(02)
+2. Composição dos dados para INFORME DE RENDIMENTOS
+NOME DO CAMPO SIGNIFICADO POSIÇÃO PICTURE CONTEÚDO
+DESCRIÇÃO IR (1) DESCRIÇÃO DO INFORME (1) 019 068 X(50)
+VALOR IR (1) VALOR DO INFORME (1) 069 083 9(13)V9(02)
+DESCRIÇÃO IR (2) DESCRIÇÃO DO INFORME (2) 084 133 X(50)
+VALOR IR (2) VALOR DO INFORME (2) 134 148 9(13)V9(02)
+DESCRIÇÃO IR (3) DESCRIÇÃO DO INFORME (3) 149 198 X(50)
+VALOR IR (3) VALOR DO INFORME (3) 199 213 9(13)V9(02)
+ANO BASE ANO BASE DO INFORME DE RENDIMENTO 214 217 9(04)
+BRANCOS COMPLEMENTO DE REGISTRO 218 218 X(01)
+outubro/2020 77
+===== PAGINA 78 =====
+Para facilitar entendimento da estrutura do arquivo de “Informe de Rendimentos”, abaixo indicação do
+limite de registros e linhas de descrições permitidas por Tipo de Movimento:
+Registro Header de Arquivo
+Registro Header de Lote (Finalidade do Lote = “06”)
+Registro Detalhe Segmento “A”
+Registro Detalhe Segmento “B”
+Até 3 (três) Registros Detalhe Segmento “E”, com no máximo 9 (nove) descrições, para
+Tipo de Movimento “4” (monta quadro com informações dos “Rendimentos Tributáveis,
+Deduções e IRRF”)
+Até 4 (quatro) Registros Detalhe Segmento “E”, com no máximo 10 (dez) descrições, para
+Tipo de Movimento “5” (monta quadro com informações dos “Rendimentos Isentos e
+não Tributáveis”)
+Até 3 (três) Registros Detalhe Segmento “E”, com no máximo 9 (nove) descrições, para
+Tipo de Movimento “6” (monta quadro com informações dos “Rendimentos Sujeitos a
+Tributação Exclusiva”)
+Até 4 (quatro) Registros Detalhe Segmento “E”, com no máximo 10 (dez) descrições, para
+Tipo de Movimento “9” (monta quadro dos “Rendimentos Recebidos Acumuladamente
+– Art. 12-A / Lei 71713 / (sujeito à tributação exclusiva)”)
+Até 30 (trinta) Registros Detalhe Segmento “F” (monta quadro das “Informações
+Complementares”)
+Registro Trailer de Lote
+Registro Trailer de Arquivo
+O arquivo pode apresentar vários lotes, sendo que cada lote pode conter quantos conjuntos de
+registros segmentos “A”, “B”, “E” e “F” forem necessários, conforme limites mencionados acima.
+outubro/2020 78

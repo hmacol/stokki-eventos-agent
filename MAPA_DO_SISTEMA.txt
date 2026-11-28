@@ -1849,6 +1849,14 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                              desfeito_em/por; filtro ?filtro=pendentes|pagos|todos (tambem no CSV);
                              POST /api/financeiro/esporadicos/pagar e /<id>/desfazer. Pedagio aprovado depois do pagamento
                              nao reabre a rota. Testes: painel_agentes/test_relatorio_esporadicos.py.
+                             REMESSA ITAU (Pix, Sispag CNAB 240; DESLIGADA por padrao: config itau_remessa.ativo, so nivel total):
+                             remessa_itau.py (puro: classificar chave Pix, montar arquivo 240 colunas, ler retorno, tabela de
+                             ocorrencias) e remessa_itau_db.py (remessas_itau; estados de pagamentos_esporadicos.situacao
+                             PAGO/ENVIADO/REJEITADO; criar/baixar/cancelar remessa, confirmar/rejeitar manual, aplicar_retorno).
+                             Arquivos em dados/remessas_itau/ (PIX_AAAAMMDD_NN.REM, SHA-256 conferido); cancelar so antes de baixar.
+                             Config (so na VPS): itau_remessa: {ativo, cnpj, agencia, conta, dac, nome_empresa, tipo_pagamento: 20}.
+                             Layout: docs/referencias/itau-sispag-cnab240-2020.txt. Spec/plano: docs/superpowers/*/2026-11-27-remessa-itau-*.
+                             Testes: painel_agentes/test_remessa_itau.py e test_remessa_itau_db.py (retorno sintetico, sem arquivo real do Itau).
    /canhotos                  canhotos.html
    /  (agentes), /execucao/<id>, /historico   index.html, execucao.html, historico.html
    APIs em /api/<tela>/...

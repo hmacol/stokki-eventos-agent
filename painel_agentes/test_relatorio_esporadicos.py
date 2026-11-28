@@ -4,6 +4,7 @@ Relatorio de pagamento dos esporadicos (/financeiro/esporadicos).
 
     py -3.11 -m unittest test_relatorio_esporadicos   (de dentro de painel_agentes/)
 """
+import io
 import sys
 import tempfile
 import unittest
@@ -279,6 +280,168 @@ class TestRotasEsporadicos(unittest.TestCase):
         d = fin.post(f"/api/financeiro/esporadicos/{r.get_json()['id']}/desfazer", headers=origem)
         self.assertEqual(d.status_code, 200)
         self.assertEqual(fin.post("/api/financeiro/esporadicos/999/desfazer", headers=origem).status_code, 400)
+
+
+class TestRotasRemessa(unittest.TestCase):
+    """Remessa Itau pela web: so nivel total, so com itau_remessa.ativo, CSRF, tela e fluxo completo."""
+
+    ITAU = {"itau_remessa": {"ativo": True, "cnpj": "12345678000195", "agencia": "1234", "conta": "123456",
+                             "dac": "7", "nome_empresa": "FRESH LOG TRANSPORTES LTDA", "tipo_pagamento": "20"}}
+
+    def setUp(self):
+        from pathlib import Path as _P
+        from unittest import mock
+        import acesso_telas
+        import painel_agentes
+        self.pa = painel_agentes
+        self._tmp = tempfile.TemporaryDirectory()
+        base = _P(self._tmp.name)
+        self.db = base / "dados.db"
+        c = banco.conectar(self.db)
+        for agente, nome, cpf, pos, pix in ((1, "Ana Silva", "52998224725", "ESPORADICO", "ana@pix.com"),
+                                            (2, "Bruno Lima", "12345678909", "FIXO", None)):
+            c.execute("INSERT INTO bd_motoristas (NOME_MOTORISTA, AGENT_ID_VUUPT, ATIVO, CPF_MOTORISTA, TIPO_VEICULO, POSICAO, "
+                      "criado_em, atualizado_em) VALUES (?, ?, 'TRUE', ?, 'FIORINO', ?, 'x', 'x')", (nome, agente, cpf, pos))
+            if pix:
+                c.execute("INSERT INTO motoristas (cpf, nome, pin_hash, pin_salt, chave_pix) VALUES (?, ?, 'x', 'x', ?)", (cpf, nome, pix))
+            c.execute("INSERT INTO nucleo_rotas (data_rota, nome, agent_id, km_real, km_fonte, valor_combinado, valor_combinado_motivo) "
+                      "VALUES ('2026-11-10', 'R', ?, 10, 'GPS_APP', ?, 'a')", (agente, 500.0 if agente == 1 else 300.0))
+        c.commit()
+        c.close()
+        self.config = dict(self.ITAU)
+        original = banco.conectar
+        config_real = painel_agentes._carregar_config
+        self._ps = [
+            mock.patch.object(acesso_telas, "DB_PATH", base / "acesso.db"),
+            mock.patch.object(rel.banco, "conectar", lambda *a, **k: original(self.db)),
+            mock.patch.object(painel_agentes, "_carregar_config", lambda: {**config_real(), **self.config}),
+            mock.patch.object(painel_agentes, "PASTA_REMESSAS_ITAU", base / "rem"),
+        ]
+        for p in self._ps:
+            p.start()
+        conn = acesso_telas.conectar()
+        try:
+            acesso_telas.importar_do_config(conn, {"usuarios_extras": [
+                {"usuario": "tot", "senha": "s0", "nivel": "total"},
+                {"usuario": "fin", "senha": "s1", "nivel": "atendimento"}]})
+        finally:
+            conn.close()
+        painel_agentes.app.config["TESTING"] = True
+        self.app = painel_agentes.app
+        self.origem = {"Origin": "http://localhost"}
+        self.q = "?de=2026-11-01&ate=2026-11-27"
+
+    def tearDown(self):
+        for p in self._ps:
+            p.stop()
+        self._tmp.cleanup()
+
+    def consulta(self, sql):
+        c = banco.conectar(self.db)
+        try:
+            return c.execute(sql).fetchone()[0]
+        finally:
+            c.close()
+
+    def cliente(self, usuario, senha):
+        c = self.app.test_client()
+        self.assertEqual(c.post("/login", data={"usuario": usuario, "senha": senha}).status_code, 302)
+        return c
+
+    def gerar_remessa(self, c, chaves=("52998224725",)):
+        from datetime import date as _d, timedelta
+        corpo = {"chaves": list(chaves), "de": "2026-11-01", "ate": "2026-11-27",
+                 "data_pagamento": (_d.today() + timedelta(days=1)).isoformat()}
+        return c.post("/api/financeiro/esporadicos/remessa", json=corpo, headers=self.origem)
+
+    def test_desligado_a_tela_nao_mostra_remessa_e_a_api_da_404(self):
+        self.config = {"itau_remessa": {}}
+        tot = self.cliente("tot", "s0")
+        html = tot.get("/financeiro/esporadicos" + self.q).get_data(as_text=True)
+        self.assertNotIn("Gerar remessa", html)
+        self.assertEqual(self.gerar_remessa(tot).status_code, 404)
+        self.assertEqual(tot.get("/financeiro/esporadicos/remessa/1/arquivo").status_code, 404)
+
+    def test_so_nivel_total_atendimento_nao_ve_nem_gera(self):
+        fin = self.cliente("fin", "s1")
+        html = fin.get("/financeiro/esporadicos" + self.q).get_data(as_text=True)
+        self.assertNotIn("Gerar remessa", html)
+        self.assertEqual(self.gerar_remessa(fin).status_code, 403)
+        self.assertEqual(fin.get("/financeiro/esporadicos/remessa/1/arquivo").status_code, 403)
+        for caminho in ("remessa/1/cancelar", "remessa/1/retorno", "1/confirmar-pago", "1/rejeitar"):
+            self.assertEqual(fin.post("/api/financeiro/esporadicos/" + caminho, headers=self.origem).status_code, 403, caminho)
+
+    def test_post_sem_origin_e_barrado(self):
+        tot = self.cliente("tot", "s0")
+        r = tot.post("/api/financeiro/esporadicos/remessa", json={"chaves": ["52998224725"]})
+        self.assertEqual(r.status_code, 403)
+
+    def test_tela_lista_elegiveis_inelegiveis_com_motivo_e_data_padrao(self):
+        from datetime import date as _d
+        from regras import feriados
+        tot = self.cliente("tot", "s0")
+        html = tot.get("/financeiro/esporadicos" + self.q).get_data(as_text=True)
+        self.assertIn("Gerar remessa", html)
+        self.assertEqual(html.count('class="js-sel-remessa"'), 1)              # so a Ana tem caixa de marcacao
+        self.assertIn('class="js-sel-remessa" data-chave="52998224725"', html)
+        self.assertIn("sem chave Pix cadastrada", html)                        # Bruno: motivo na tela
+        self.assertIn(feriados.proximo_dia_util(_d.today()).isoformat(), html)
+        self.assertIn("tarifa por km", html)                                   # aviso dos fixos
+
+    def test_config_incompleta_avisa_e_nao_gera(self):
+        self.config = {"itau_remessa": {"ativo": True, "cnpj": "12345678000195"}}
+        tot = self.cliente("tot", "s0")
+        r = self.gerar_remessa(tot)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("incompleta", r.get_json()["erro"])
+
+    def test_fluxo_completo_gerar_baixar_retorno_pago(self):
+        from test_remessa_itau_db import retorno_de
+        tot = self.cliente("tot", "s0")
+        r = self.gerar_remessa(tot)
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        dados = r.get_json()
+        self.assertEqual((dados["qtd"], dados["valor_total"]), (1, 500.0))
+        arq = tot.get(f"/financeiro/esporadicos/remessa/{dados['remessa_id']}/arquivo")
+        self.assertEqual(arq.status_code, 200)
+        self.assertIn("attachment", arq.headers["Content-Disposition"])
+        texto = arq.get_data().decode("ascii")
+        self.assertEqual(len(texto.split(chr(13) + chr(10))) - 1, 6)         # 0,1,A,B,5,9
+        # depois de baixar nao cancela
+        c = tot.post(f"/api/financeiro/esporadicos/remessa/{dados['remessa_id']}/cancelar", headers=self.origem)
+        self.assertEqual(c.status_code, 400)
+        self.assertIn("baixad", c.get_json()["erro"])
+        # retorno do banco (sintetico): 00 -> pago
+        pid = self.consulta("SELECT id FROM pagamentos_esporadicos")
+        retorno = retorno_de(texto, {pid: ("00", "30112026", 50000)})
+        up = tot.post(f"/api/financeiro/esporadicos/remessa/{dados['remessa_id']}/retorno", headers=self.origem,
+                      data={"arquivo": (io.BytesIO(retorno.encode("ascii")), "retorno.ret")}, content_type="multipart/form-data")
+        self.assertEqual(up.status_code, 200, up.get_data(as_text=True))
+        self.assertEqual(up.get_json()["pagos"], 1)
+        html = tot.get("/financeiro/esporadicos" + self.q + "&filtro=pagos").get_data(as_text=True)
+        self.assertIn("Ana Silva", html)
+
+    def test_cancelar_antes_de_baixar_e_confirmar_rejeitar_manuais(self):
+        tot = self.cliente("tot", "s0")
+        rid = self.gerar_remessa(tot).get_json()["remessa_id"]
+        self.assertEqual(tot.post(f"/api/financeiro/esporadicos/remessa/{rid}/cancelar", headers=self.origem).status_code, 200)
+        rid2 = self.gerar_remessa(tot).get_json()["remessa_id"]
+        pid = self.consulta("SELECT id FROM pagamentos_esporadicos WHERE situacao = 'ENVIADO'")
+        sem_motivo = tot.post(f"/api/financeiro/esporadicos/{pid}/rejeitar", json={"motivo": " "}, headers=self.origem)
+        self.assertEqual(sem_motivo.status_code, 400)
+        ok = tot.post(f"/api/financeiro/esporadicos/{pid}/confirmar-pago", headers=self.origem)
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(tot.post(f"/api/financeiro/esporadicos/{pid}/confirmar-pago", headers=self.origem).status_code, 400)
+        self.assertGreater(rid2, rid)
+
+    def test_retorno_sem_arquivo_ou_ilegivel_da_400(self):
+        tot = self.cliente("tot", "s0")
+        rid = self.gerar_remessa(tot).get_json()["remessa_id"]
+        sem = tot.post(f"/api/financeiro/esporadicos/remessa/{rid}/retorno", headers=self.origem)
+        self.assertEqual(sem.status_code, 400)
+        ruim = tot.post(f"/api/financeiro/esporadicos/remessa/{rid}/retorno", headers=self.origem,
+                        data={"arquivo": (io.BytesIO(b"lixo"), "x.ret")}, content_type="multipart/form-data")
+        self.assertEqual(ruim.status_code, 400)
 
 
 if __name__ == "__main__":
