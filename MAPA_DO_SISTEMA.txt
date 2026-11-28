@@ -1082,7 +1082,7 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
                             Registrada como AUTOMATICO em agendamentos_origem: nunca vira
                             dedicado (nao e data do cliente).
  corte_roteirizacao.py      Horario de corte UNICO da roteirizacao (padrao 14:15; tabela
-                            roteirizacao_config no dados.db). Editavel no /planejamento so por
+                            corte_roteirizacao_config no dados.db). Editavel no /planejamento so por
                             nivel "total" (POST /api/planejamento/corte); lido por
                             agendamento_automatico.data_automatica e criar_rotas_diarias.
                             Ate o corte = pedido do dia; depois = agendado (dia seguinte).
