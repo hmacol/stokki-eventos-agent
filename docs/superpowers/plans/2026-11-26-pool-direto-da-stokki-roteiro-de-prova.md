@@ -45,11 +45,22 @@ coluna `codigo` em `pedidos_area_notificada` e a tabela `rascunho_envio_trava`. 
 
    (o ALTER tolera a corrida "duplicate column name" entre dois processos, mas migrar antes evita processo velho
    gravando no meio.)
-3. Reiniciar `painel-agentes`, `portal-cliente`, `motorista-api` (o `nucleo/operacao.py` chama `upsert_pedido`:
-   codigo velho grava linha com `id_pool` NULL, que o pool pula com WARNING `pool.sem_id_pool`) e
-   `portal-cliente-entradas` (`--loop`; importa o nucleo sob demanda pelo `enviar_stokki`). `atendimento-central`
-   e `confirmacao-motoristas` nao importam o nucleo.
+3. Reiniciar JUNTOS, logo depois da migracao, todos os processos de longa duracao que gravam `nucleo_pedidos`:
+   `painel-agentes`, `portal-cliente`, `motorista-api` (o `nucleo/operacao.py` chama `upsert_pedido`: codigo velho
+   grava linha com `id_pool` NULL, que o pool pula com WARNING `pool.sem_id_pool`) e `portal-cliente-entradas`
+   (`--loop`; importa o nucleo sob demanda pelo `enviar_stokki`). Conferido no codigo: `atendimento-central`
+   (`atendimento/`) so cita o nucleo em comentario e a copia do repo de `confirmacao_motoristas/` nao importa o
+   nucleo; a copia manual em `/opt/confirmacao-motoristas` nao da pra conferir daqui (conferir la antes:
+   `grep -rn nucleo /opt/confirmacao-motoristas/*.py`).
 4. Os timers (pipeline, sync, comparar_pool...) pegam o codigo novo sozinhos.
+5. Verificacao pos-deploy (somente leitura), tem que dar 0:
+
+       SELECT COUNT(*) FROM nucleo_pedidos WHERE id_pool IS NULL;
+
+   Se der > 0 algum processo velho ainda grava: achar e reiniciar. Enquanto isso o `conectar()` nao cai (revisao de
+   seguranca M2): com o banco travado no `BEGIN IMMEDIATE` do backfill ele loga 1 WARNING por processo ("backfill
+   do id_pool adiado, banco travado") e segue; o `upsert_pedido` preenche o id_pool linha a linha e a proxima
+   conexao tenta de novo.
 
 ## 2. Sombra (portao, parte 1)
 
@@ -232,6 +243,24 @@ AVISO AO HUGO
 
 Ruling
 - Subir em homologacao exige push do ramo: nao feito; depende do Hugo.
+
+Revisao de seguranca do PR #92 (onda 4)
+- Guarda unica (M1/L1): `nucleo.pedidos.eh_sem_servico_legitimo(conn, codigo_ou_linha)` = sem `vuupt_service_id`,
+  `nasceu_sem_servico = 1` e fora de servico agrupado vivo (`servicos_que_agrupam`). Vale em tudo que age LOCAL
+  pelo id sintetico: `cancelar_sem_servico` (False), `editar_sem_servico`/`gravar_agendamento_sem_servico`
+  (ValueError "tratar pela operacao"), `cancelar_sem_servico_local`, portal (`com_id_sintetico`,
+  `servico_sem_servico`), `/pedidos` (`tabela_pedidos.listar(id_sintetico)`), `cancelar_cancelados_stokki` e o
+  fechamento do pipeline (pede revisao). Linha orfa (servico agrupado/renomeado/apagado na Vuupt) segue o fluxo de
+  sempre: o cancelamento do cliente vai pra OPERACAO. Vale tambem com a chave desligada (as acoes do painel por id
+  sintetico nao leem a chave).
+- L3: id fora da faixa do INTEGER do SQLite (ex. `/api/pedidos/-99999999999999999999/alteracao`) = 404, nao 500.
+- L4: dado do nucleo malformado ao montar o payload (ValueError/TypeError) e recusa do pedido ("dado invalido no
+  nucleo"): sai so aquela parada; banco/rede seguem transitorios.
+- M2: ver secao 1a item 5.
+- ACEITO (L2): o id sintetico (-id_pool) e um contador global; um cliente que ve os proprios ids no portal pode
+  estimar o volume total de pedidos da plataforma. Informacao de baixo valor, sem acesso a dado de outro cliente.
+- ACEITO (L5): a materializacao roda sincrona dentro do request do painel ("enviar todas"); com 429 pode segurar
+  threads do waitress por minutos. As travas (rascunho 15 min, pedido 10 min com heartbeat) impedem duplicar.
 
 Limitacao conhecida (fora desta onda)
 - Base do payload: a materializacao parte de `dados_json["payload"]`, que o `upsert_pedido` mescla por `json_patch`

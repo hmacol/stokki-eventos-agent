@@ -279,7 +279,12 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                                caminho sem serviço do pipeline, nunca teve serviço). Linha ABERTA
                                                sem id por serviço renomeado/apagado na Vuupt ou "pulado" antigo
                                                fica fora (log pool.sem_servico_legado), é recusada na
-                                               materialização e o pipeline pede revisão dela;
+                                               materialização e o pipeline pede revisão dela. GUARDA ÚNICA das
+                                               ações locais por id sintético (cancelar, reagendar, editar, portal,
+                                               /pedidos, cancelar_cancelados_stokki, fechamento do pipeline):
+                                               nucleo/pedidos.eh_sem_servico_legitimo (sem id, nasceu_sem_servico
+                                               = 1, fora de serviço agrupado); a linha órfã vai pra operação,
+                                               também com a chave desligada;
                                              - pipeline.py grava só no núcleo (nucleo_pedidos); não cria mais o
                                                serviço na Vuupt na importação;
                                              - o serviço nasce na Vuupt SÓ ao enviar a rota: rascunhos_rota
@@ -1383,7 +1388,9 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            (nasceu_sem_servico) ou código com serviço em nucleo_servicos, id
                            sintético inexistente, serviço achado em done/canceled/atribuído.
                            VuuptAPIError 400/404/409/410/422 (status lido do texto "Status NNN")
-                           também é recusa ("a Vuupt recusou o pedido (Status NNN): ...").
+                           também é recusa ("a Vuupt recusou o pedido (Status NNN): ..."), e
+                           ValueError/TypeError ao montar o payload (dado do núcleo malformado)
+                           também ("dado invalido no nucleo": sai só aquela parada).
                            Qualquer outra exceção (rede, 408/425/429/5xx, 401/403 com mensagem
                            própria, banco, modo teste, resposta sem id) é falha técnica:
                            ResultadoMaterializacao.transitorios (classificar_falha), a parada fica. `pulso` = heartbeat de quem chama (EnvioInterrompido sobe).
@@ -2603,8 +2610,11 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
          2. reiniciar painel-agentes, portal-cliente, motorista-api (nucleo/operacao.py chama
             pedidos.upsert_pedido: código velho grava linha com id_pool NULL, que o pool pula com WARNING
             pool.sem_id_pool) e portal-cliente-entradas (--loop; importa o núcleo sob demanda pelo
-            enviar_stokki). atendimento-central e confirmacao-motoristas não importam o núcleo;
-         3. os timers (pipeline, sync, comparar_pool...) pegam o código novo sozinhos.
+            enviar_stokki), TODOS JUNTOS logo depois da migração. atendimento-central não importa o núcleo;
+            a cópia do repo de confirmacao_motoristas também não (a de /opt/confirmacao-motoristas conferir lá);
+         3. os timers (pipeline, sync, comparar_pool...) pegam o código novo sozinhos;
+         4. pós-deploy: SELECT COUNT(*) FROM nucleo_pedidos WHERE id_pool IS NULL tem que dar 0. Banco travado
+            no backfill (processo velho gravando) não derruba o conectar(): 1 WARNING por processo e segue.
      * Pedido sem serviço com campo editado no Planejamento (edicao_local_json): a mudança legítima da Stokki
        nesse campo é ignorada até o serviço nascer (hoje viraria PUT na Vuupt).
      * Fila freshhub (pipeline --fila-freshhub) materializa na importação, exceção ao "só no envio"
