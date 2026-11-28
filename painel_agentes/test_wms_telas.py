@@ -175,5 +175,23 @@ class TestCaixasNaTela(unittest.TestCase):
         self.assertIn("Caixas desligadas", _WMS)
 
 
+class TestTelaEtiquetar(unittest.TestCase):
+    """Etiqueta de volume de todo pedido da Stokki (28/11): a tela Etiquetar entra pelo Inicio
+    (escolha do Hugo: botao no Inicio, tudo numa tela) e fala com /api/wms/etiquetar/*."""
+
+    def test_tela_etiquetar_usa_as_rotas_novas(self):
+        self.assertIn("TELAS.etiquetar", _WMS)
+        self.assertIn('data-ir="etiquetar"', _WMS)
+        for rota in ("/etiquetar/pedido", "/etiquetar/reimprimir", "/etiquetar/prontos"):
+            self.assertIn(rota, _WMS)
+        self.assertIn("confirmado: true", _WMS)
+
+    def test_nao_virou_aba_na_barra_de_baixo(self):
+        self.assertNotIn('data-aba="etiquetar"', _WMS)
+
+    def test_pedido_desconhecido_avisa_mas_deixa_imprimir(self):
+        self.assertIn("Não achei esse pedido no nosso sistema", _WMS)
+
+
 if __name__ == "__main__":
     unittest.main()

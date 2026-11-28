@@ -320,7 +320,7 @@
     if (empilhar !== false && S.tela !== tela) S.pilha.push({ tela: S.tela, ctx: S.ctx });
     if (S.pilha.length > 12) S.pilha.shift();
     S.tela = tela; S.ctx = ctx || {}; S.aguardando = null;
-    const abaDe = { onda: 'separar', conferir: 'separar', conferencia: 'separar', conferenciaFim: 'separar', volumes: 'separar', separarReserva: 'separar', separacao: 'separar' };
+    const abaDe = { onda: 'separar', conferir: 'separar', conferencia: 'separar', conferenciaFim: 'separar', volumes: 'separar', separarReserva: 'separar', separacao: 'separar', etiquetar: 'inicio' };
     document.querySelectorAll('.aba').forEach((a) => a.classList.toggle('on', a.dataset.aba === (abaDe[tela] || tela)));
     render();
     window.scrollTo(0, 0);
@@ -366,6 +366,7 @@
     </div>
     <div class="acoes">
       <button class="primario" data-ir="receber" style="grid-column:1 / -1"><b>Receber</b><span id="ini-receber">entradas esperadas da Stokki</span></button>
+      <button data-ir="etiquetar" style="grid-column:1 / -1"><b>Etiquetar</b><span id="ini-etiquetar">pedido finalizado na Stokki: etiquetas das caixas</span></button>
       <button class="primario" data-ir="mov" data-tipo="ENTRADA"><b>Entrada</b><span>produto chega na posição</span></button>
       <button data-ir="busca"><b>Consultar</b><span>onde está / o que tem</span></button>
       <button data-ir="mov" data-tipo="TRANSFERENCIA"><b>Mover</b><span>de uma posição a outra</span></button>
@@ -390,6 +391,10 @@
     api('/recebimentos?estado=ESPERADO').then((r) => {
       const el = document.getElementById('ini-receber'); const n = (r.recebimentos || []).length;
       if (el) el.textContent = n ? n + (n === 1 ? ' entrada esperada' : ' entradas esperadas') + ' · encerre ao terminar' : 'nenhuma entrada esperada agora';
+    }).catch(() => { /* sem rede: fica o texto padrão */ });
+    api('/etiquetar/prontos').then((r) => {
+      const el = document.getElementById('ini-etiquetar');
+      if (el && r.total) el.textContent = r.total + (r.total === 1 ? ' pedido pronto' : ' pedidos prontos') + ' na Stokki sem etiqueta';
     }).catch(() => { /* sem rede: fica o texto padrão */ });
   };
 
@@ -1798,6 +1803,118 @@
       } catch (e) { el.innerHTML = '<div class="vazio">' + esc(e.message) + '</div>'; }
     }
     carregar();
+  };
+
+  // Etiquetar (28/11): etiqueta de volume de QUALQUER pedido finalizado na Stokki, cross incluído.
+  // O operador bipa/digita o PS, informa as caixas e as 10x15 saem na fila de impressão.
+  // Regras no servidor (expedicao_volumes.py): cada caixa tem um id único no QR e mudar o
+  // total anula as etiquetas antigas. Tudo aqui exige rede.
+  TELAS.etiquetar = () => `
+    <button class="voltar" id="btn-voltar">‹ Início</button>
+    <h1>Etiquetar<small>pedido finalizado na Stokki: informe as caixas e imprima</small></h1>
+    <div class="leitura">
+      <input type="text" id="etq-campo" data-foco placeholder="Número do pedido (PS)" autocomplete="off">
+      <button type="button" class="btn-cam" id="etq-cam" title="Ler com a câmera">📷</button>
+      <div class="dica">digite o número do pedido, ou bipe uma etiqueta dele</div>
+    </div>
+    <div id="etq-pedido"></div>
+    <div class="sep-titulo" id="etq-prontos-titulo">Prontos na Stokki sem etiqueta</div>
+    <div class="lista" id="etq-prontos"><div class="vazio">Carregando…</div></div>
+    <div class="vazio" style="padding-top:0">a lista atualiza a cada rodada do sistema, não na hora</div>`;
+  TELAS_POS.etiquetar = () => {
+    document.getElementById('btn-voltar').addEventListener('click', () => ir('inicio', {}, false));
+    const campo = document.getElementById('etq-campo'), area = document.getElementById('etq-pedido');
+    let atual = null;   // o pedido que está na tela (resposta de GET /etiquetar/pedido)
+    function limpar() { atual = null; area.innerHTML = ''; campo.value = ''; if (!('ontouchstart' in window)) campo.focus(); }
+    async function etqPost(caminho, corpo) {
+      if (!S.operador) { toast('Identifique o operador primeiro', true); ir('operador'); throw new Error('sem operador'); }
+      if (!navigator.onLine) throw new Error('Sem conexão. Tente de novo quando a rede voltar.');
+      try { return await api(caminho, { method: 'POST', body: corpo }); }
+      catch (e) { if (e.status === 409 && e.dados && e.dados.sem_operador) { S.operador = null; ir('operador'); e.message = 'sem operador'; } throw e; }
+    }
+    async function buscar(texto) {
+      try { mostrar(await api('/etiquetar/pedido?codigo=' + encodeURIComponent(texto))); campo.value = ''; }
+      catch (e) { atual = null; area.innerHTML = ''; toast(e.message, true); bip(false); }
+    }
+    function mostrar(p) {
+      atual = p;
+      const v = p.volumes;
+      const quem = [p.embarcador, p.destinatario].filter(Boolean).map(esc).join(' → ');
+      const lugar = [p.cidade, p.uf].filter(Boolean).map(esc).join(' - ') || esc(p.endereco || '');
+      area.innerHTML = `
+        <div class="cartao ${p.cancelado ? 'erro' : (p.conhecido ? 'ok' : 'atencao')}">
+          <div class="rotulo">Pedido</div>
+          <div class="valor mono">${esc(p.codigo)}${p.cancelado ? ' <span class="badge badge-erro">cancelado no nosso sistema</span>' : ''}</div>
+          <div class="sub">${p.conhecido ? (quem || 'sem destinatário no nosso sistema') + (lugar ? '<br>' + lugar : '') : 'Não achei esse pedido no nosso sistema: confira o número. Dá pra imprimir mesmo assim.'}</div>
+        </div>
+        ${v ? `<div class="cartao">
+          <div class="rotulo">Já etiquetado</div>
+          <div class="valor">${v.total} ${v.total === 1 ? 'caixa' : 'caixas'}</div>
+          <div class="sub">${esc(dataHoraBr(v.criado_em))}${v.criado_por ? ' · ' + esc(v.criado_por) : ''}${v.reimpressoes ? ' · reimpresso ' + v.reimpressoes + 'x' : ''}</div>
+          <div class="botoes linha" style="margin:8px 0 0"><button class="botao neutro" id="etq-reimp-todas">Reimprimir todas</button><button class="botao neutro" id="etq-reimp-uma">Reimprimir uma</button></div>
+        </div>` : ''}
+        <div class="campo">
+          <label for="etq-total">${v ? 'Mudar o total de caixas' : 'Quantas caixas?'}</label>
+          <input type="number" id="etq-total" inputmode="numeric" min="1" max="300" step="1" value="${v ? '' : (p.sugestao || '')}" placeholder="${v ? 'novo total' : ''}">
+          ${!v && p.sugestao ? `<div class="ajuda">sugestão: ${p.sugestao} conferidas na Stokki. Confira e troque se for diferente.</div>` : ''}
+          ${v ? '<div class="ajuda">mudar o total anula as etiquetas antigas: todas as caixas recebem etiqueta nova.</div>' : ''}
+        </div>
+        <div class="botoes"><button class="botao" id="etq-imprimir">${v ? 'Trocar o total e imprimir' : 'Imprimir etiquetas'}</button></div>`;
+      const total = document.getElementById('etq-total');
+      total.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); imprimir(); } });
+      document.getElementById('etq-imprimir').addEventListener('click', imprimir);
+      const todas = document.getElementById('etq-reimp-todas'), uma = document.getElementById('etq-reimp-uma');
+      if (todas) todas.addEventListener('click', () => reimprimir(null));
+      if (uma) uma.addEventListener('click', () => {
+        const n = pedirQuantidade('Qual caixa do ' + p.codigo + ' reimprimir? (1 a ' + v.total + ')');
+        if (n !== null) reimprimir(n);
+      });
+      if (!v) total.focus();
+    }
+    async function imprimir() {
+      if (!atual) return;
+      const bruto = document.getElementById('etq-total').value.trim();
+      if (!/^\d+$/.test(bruto) || Number(bruto) < 1) { toast('Informe quantas caixas o pedido tem', true); return; }
+      const total = Number(bruto), botao = document.getElementById('etq-imprimir');
+      botao.disabled = true;   // toque duplo: o servidor também devolve "repetido" em vez de imprimir de novo
+      try {
+        let r = await etqPost('/etiquetar/pedido', { codigo: atual.codigo, total: total });
+        if (r.confirmar) {
+          if (!confirm(r.confirmar.join('\n\n'))) return;
+          r = await etqPost('/etiquetar/pedido', { codigo: atual.codigo, total: total, confirmado: true });
+        }
+        if (r.repetido) { toast(r.codigo + ' já tem ' + r.total + ' etiqueta(s). Use Reimprimir se precisar.', true); buscar(r.codigo); return; }
+        toast(r.total + ' etiqueta(s) do ' + r.codigo + ' enviadas pra fila de impressão'); bip(true);
+        limpar(); carregarProntos();
+      } catch (e) { if (e.message !== 'sem operador') { toast(e.message, true); bip(false); } }
+      finally { const b = document.getElementById('etq-imprimir'); if (b) b.disabled = false; }
+    }
+    async function reimprimir(numero) {
+      if (!atual) return;
+      try {
+        const r = await etqPost('/etiquetar/reimprimir', numero ? { codigo: atual.codigo, numero: numero } : { codigo: atual.codigo });
+        toast(r.quantidade + ' etiqueta(s) do ' + r.codigo + ' enviadas pra fila de impressão'); bip(true);
+        buscar(r.codigo);
+      } catch (e) { if (e.message !== 'sem operador') { toast(e.message, true); bip(false); } }
+    }
+    async function carregarProntos() {
+      try {
+        const r = await api('/etiquetar/prontos');
+        const el = document.getElementById('etq-prontos'), titulo = document.getElementById('etq-prontos-titulo');
+        if (!el) return;   // o operador já saiu da tela
+        titulo.textContent = 'Prontos na Stokki sem etiqueta (' + r.total + ')';
+        el.innerHTML = r.itens.map((p) => `
+          <div class="item" data-pronto="${esc(p.codigo)}" style="grid-template-columns:1fr">
+            <div class="cod mono">${esc(p.codigo)}</div>
+            <div class="meta">${esc(p.embarcador || 'sem embarcador')}${p.desde ? ' · em aberto desde ' + esc(dataHoraBr(p.desde)) : ''}</div>
+          </div>`).join('') || '<div class="vazio">Nenhum pedido pronto esperando etiqueta.</div>';
+        if (r.total > r.itens.length) el.insertAdjacentHTML('beforeend', '<div class="vazio">mostrando os ' + r.itens.length + ' mais novos de ' + r.total + '</div>');
+        el.querySelectorAll('[data-pronto]').forEach((x) => x.addEventListener('click', () => { window.scrollTo(0, 0); buscar(x.dataset.pronto); }));
+      } catch (e) { const el = document.getElementById('etq-prontos'); if (el) el.innerHTML = '<div class="vazio">' + esc(e.message) + '</div>'; }
+    }
+    campo.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); const t = campo.value.trim(); if (t) buscar(t); } });
+    document.getElementById('etq-cam').addEventListener('click', () => abrirCamera(buscar));
+    carregarProntos();
   };
 
   // Produto manual
