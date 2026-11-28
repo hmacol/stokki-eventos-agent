@@ -354,6 +354,11 @@ def _conectar_ajustes() -> sqlite3.Connection:
             atualizado_em               TEXT NOT NULL
         )
     """)
+    # Dias da semana em que o cliente recebe (Hugo, 27/11): "0,1,2,3,4" com
+    # 0=segunda ... 6=domingo (datetime.weekday()). NULL = todos os dias.
+    colunas = {r["name"] for r in conn.execute("PRAGMA table_info(ajustes_complexidade_cliente)")}
+    if "dias_semana" not in colunas:
+        conn.execute("ALTER TABLE ajustes_complexidade_cliente ADD COLUMN dias_semana TEXT")
     conn.commit()
     return conn
 
@@ -369,6 +374,7 @@ def carregar_ajustes_manuais() -> dict[str, dict]:
                 "nivel_dificuldade": row["nivel_dificuldade"],
                 "horario_atendimento_inicio": row["horario_atendimento_inicio"],
                 "horario_atendimento_fim": row["horario_atendimento_fim"],
+                "dias_semana": row["dias_semana"],
             }
             for row in conn.execute("SELECT * FROM ajustes_complexidade_cliente")
         }
@@ -376,31 +382,94 @@ def carregar_ajustes_manuais() -> dict[str, dict]:
         conn.close()
 
 
-def definir_ajuste_manual(documento: str, nivel: int, horario_inicio: str, horario_fim: str) -> None:
+def definir_ajuste_manual(documento: str, nivel: int, horario_inicio: str, horario_fim: str,
+                          dias_semana: list[int] | None = None) -> None:
     """Grava (upsert) o ajuste manual de um cliente -- opção "Nível /
-    horário de atendimento" do menu de contexto da tela de Planejamento."""
+    horário de atendimento" do menu de contexto da tela de Planejamento.
+
+    dias_semana: dias em que o cliente recebe (0=segunda ... 6=domingo).
+    None mantém o que já estava gravado; lista vazia é erro."""
     doc = _so_digitos(documento)
     if not doc:
         raise ValueError("Documento (CNPJ/CPF) vazio -- não dá pra gravar ajuste manual sem saber de qual cliente.")
     if nivel not in NIVEIS_VALIDOS:
         raise ValueError(f"Nível inválido: {nivel!r} (válidos: {sorted(NIVEIS_VALIDOS)}).")
+    dias_txt = None
+    if dias_semana is not None:
+        dias = sorted({int(d) for d in dias_semana})
+        if not dias or any(d not in range(7) for d in dias):
+            raise ValueError("Dias da semana inválidos: marque ao menos um dia (0=segunda a 6=domingo).")
+        dias_txt = ",".join(str(d) for d in dias)
 
     conn = _conectar_ajustes()
     try:
         conn.execute("""
             INSERT INTO ajustes_complexidade_cliente (
                 documento, nivel_dificuldade, horario_atendimento_inicio,
-                horario_atendimento_fim, atualizado_em
-            ) VALUES (?, ?, ?, ?, datetime('now', 'localtime'))
+                horario_atendimento_fim, dias_semana, atualizado_em
+            ) VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
             ON CONFLICT(documento) DO UPDATE SET
                 nivel_dificuldade = excluded.nivel_dificuldade,
                 horario_atendimento_inicio = excluded.horario_atendimento_inicio,
                 horario_atendimento_fim = excluded.horario_atendimento_fim,
+                dias_semana = COALESCE(excluded.dias_semana, ajustes_complexidade_cliente.dias_semana),
                 atualizado_em = excluded.atualizado_em
-        """, (doc, nivel, horario_inicio, horario_fim))
+        """, (doc, nivel, horario_inicio, horario_fim, dias_txt))
         conn.commit()
     finally:
         conn.close()
+
+
+def dias_efetivos(documento: str, ajustes_manuais: dict[str, dict]) -> list[int]:
+    """Dias da semana em que o cliente recebe (0=segunda ... 6=domingo).
+    Sem ajuste gravado = todos os dias."""
+    ajuste = ajustes_manuais.get(_so_digitos(documento)) or {}
+    txt = ajuste.get("dias_semana")
+    if not txt:
+        return list(range(7))
+    return [int(d) for d in str(txt).split(",") if d.strip().isdigit()]
+
+
+NOMES_DIAS = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
+
+
+def _data_agendada_do_servico(servico: dict) -> datetime.date | None:
+    try:
+        return datetime.datetime.fromisoformat(servico.get("scheduled_start") or "").date()
+    except (ValueError, TypeError):
+        return None
+
+
+def aviso_dia_fechado(servico: dict, data: datetime.date, ajustes_manuais: dict[str, dict]) -> str | None:
+    """"Não recebe sábado (recebe: Seg, Ter, ...)" quando o cliente do serviço
+    não recebe no dia da semana de `data`; None caso contrário. Data de
+    agendamento do próprio pedido igual a `data` vence (alguém escolheu o dia)."""
+    documento = (servico.get("customer") or {}).get("code", "")
+    dias = dias_efetivos(documento, ajustes_manuais)
+    if data.weekday() in dias or _data_agendada_do_servico(servico) == data:
+        return None
+    recebe = ", ".join(NOMES_DIAS[d][:3] for d in dias)
+    return f"Não recebe {NOMES_DIAS[data.weekday()].lower()} (recebe: {recebe})"
+
+
+def separar_dia_fechado(servicos: list[dict], data: datetime.date,
+                        ajustes_manuais: dict[str, dict]) -> tuple[list[dict], list[dict]]:
+    """(abertos, fechados): tira da roteirização os pedidos cujo cliente não
+    recebe no dia da semana de `data`. Os fechados continuam no pool."""
+    abertos, fechados = [], []
+    for s in servicos:
+        (fechados if aviso_dia_fechado(s, data, ajustes_manuais) else abertos).append(s)
+    return abertos, fechados
+
+
+def proximo_dia_atendido(data: datetime.date, dias: list[int], eh_dia_util) -> datetime.date:
+    """Primeiro dia a partir de `data` que é dia útil e em que o cliente
+    recebe (até 14 dias à frente; sem achar, devolve `data`)."""
+    for i in range(15):
+        d = data + datetime.timedelta(days=i)
+        if d.weekday() in dias and eh_dia_util(d):
+            return d
+    return data
 
 
 def nivel_efetivo(documento: str, mapa_niveis: dict[str, int], ajustes_manuais: dict[str, dict]) -> int:

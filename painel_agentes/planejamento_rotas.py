@@ -48,7 +48,7 @@ from regioes_dia_fixo import (DIAS_NOMES, data_valida_na_regiao, descricao_dias,
                               regiao_da_cidade, regra_dia_fixo_do_servico)
 from regras.complexidade_entrega import (
     carregar_niveis, carregar_horarios, carregar_ajustes_manuais,
-    definir_ajuste_manual, nivel_efetivo, horario_efetivo, NIVEIS_VALIDOS,
+    definir_ajuste_manual, nivel_efetivo, horario_efetivo, dias_efetivos, aviso_dia_fechado, NIVEIS_VALIDOS,
 )
 from regras.preferencias_motoristas import CatalogoMotoristas
 from regras.confirmacao_rotas import listar_do_dia as listar_confirmacoes_do_dia
@@ -1057,6 +1057,13 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         if aviso:
             fora_dia_fixo[s["id"]] = aviso
 
+    # Cliente que não recebe neste dia da semana (Hugo, 27/11): só rotula.
+    cliente_fechado: dict[int, str] = {}
+    for s in servicos_brutos:
+        aviso = aviso_dia_fechado(s, data_alvo, ajustes_manuais)
+        if aviso:
+            cliente_fechado[s["id"]] = aviso
+
     # Pool é sempre a FOTO AO VIVO do not_assigned na VUUPT -- não existe
     # "pool de um dia passado" (pedido do Hugo, 23/08: plano de dia
     # anterior a hoje é só consulta, sem editar/cancelar nem oferecer
@@ -1075,6 +1082,7 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         ]
         for p in pool:
             p["fora_dia_fixo"] = fora_dia_fixo.get(p["service_id"])
+            p["cliente_fechado"] = cliente_fechado.get(p["service_id"])
             p["segurado"] = segurados_por_id.get(p["service_id"])
             r = retornando_por_id.get(p["service_id"])
             p["retornando"] = ({"motorista_nome": r.get("motorista_nome"), "motivo": r.get("motivo"),
@@ -1144,6 +1152,7 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         "tipos_area_por_service_id": tipos_area,
         "dedicados_por_service_id": dedicados_por_id,
         "fora_dia_fixo_por_service_id": fora_dia_fixo,
+        "cliente_fechado_por_service_id": cliente_fechado,
     }
 
 
@@ -1243,6 +1252,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
     tipos_area = pool_e_agendados["tipos_area_por_service_id"]
     dedicados_rascunho = pool_e_agendados.get("dedicados_por_service_id") or {}
     fora_dia_fixo_rascunho = pool_e_agendados.get("fora_dia_fixo_por_service_id") or {}
+    cliente_fechado_rascunho = pool_e_agendados.get("cliente_fechado_por_service_id") or {}
     # NF: mesmo princípio, mas casada pelo código do pedido (não muda
     # com o envio) -- pedido do Hugo, 14/08: buscar pedido pela NF
     # também dentro de rotas já montadas, não só no pool
@@ -1259,6 +1269,7 @@ def buscar_dados_planejamento(data_alvo: date | None = None) -> dict:
             p["tipo_area"] = tipos_area.get(p["service_id"])
             p["dedicado"] = dedicados_rascunho.get(p["service_id"])
             p["fora_dia_fixo"] = fora_dia_fixo_rascunho.get(p["service_id"])
+            p["cliente_fechado"] = cliente_fechado_rascunho.get(p["service_id"])
             p["numero_nf"] = ", ".join(filter(None, (
                 nf_por_codigo_rascunho.get(c, "") for c in _codigos_base_lista(p["codigo"])
             )))
@@ -2400,8 +2411,40 @@ def editar_endereco_pedido(service_id: int, endereco: str, rascunho_id: int | No
     return {"ok": True}
 
 
+def _documento_do_pedido(service_id: int) -> tuple[str, str | None]:
+    """(documento do destinatário, erro). Busca o serviço vivo na VUUPT só
+    pra descobrir customer.code -- não grava nada lá."""
+    config = _carregar_config()
+    token = config.get("vuupt_api", {}).get("token", "")
+    vuupt = VuuptClient(token)
+    try:
+        servico = vuupt.buscar_servico_por_id(service_id)
+        customer_id = (servico or {}).get("customer_id")
+        customer = vuupt.buscar_customer_por_id(customer_id) if customer_id else None
+    except Exception as e:
+        return "", str(e)
+    # buscar_customer_por_id devolve o JSON cru da API, com o contato
+    # aninhado sob a chave "customer" (diferente de buscar_servico_por_id,
+    # que já desembrulha "service") -- achado 22/08 testando com dado real.
+    customer = (customer or {}).get("customer", customer)
+    documento = (customer or {}).get("code", "")
+    if not documento:
+        return "", "Pedido sem CNPJ/CPF de destinatário cadastrado -- não dá pra saber de qual cliente é."
+    return documento, None
+
+
+def dias_atendimento_pedido(service_id: int) -> dict:
+    """Dias da semana em que o cliente do pedido recebe (0=segunda ...
+    6=domingo) -- pré-preenche o modal "Nível / horário de atendimento"."""
+    documento, erro = _documento_do_pedido(service_id)
+    if erro:
+        return {"ok": False, "erro": erro}
+    return {"ok": True, "dias": dias_efetivos(documento, carregar_ajustes_manuais())}
+
+
 def editar_nivel_horario_pedido(service_id: int, nivel: int, horario_inicio: str,
-                                 horario_fim: str, rascunho_id: int | None = None) -> dict:
+                                 horario_fim: str, rascunho_id: int | None = None,
+                                 dias_semana: list[int] | None = None) -> dict:
     """
     Corrige o nível de dificuldade e/ou horário de atendimento (padrão de
     recebimento) do DESTINATÁRIO de um pedido -- opção "Nível / horário
@@ -2433,30 +2476,12 @@ def editar_nivel_horario_pedido(service_id: int, nivel: int, horario_inicio: str
     if not re.match(r"^\d{2}:\d{2}$", horario_inicio or "") or not re.match(r"^\d{2}:\d{2}$", horario_fim or ""):
         return {"ok": False, "erro": "Horário inválido (use HH:MM)."}
 
-    config = _carregar_config()
-    token = config.get("vuupt_api", {}).get("token", "")
-    vuupt = VuuptClient(token)
+    documento, erro = _documento_do_pedido(service_id)
+    if erro:
+        return {"ok": False, "erro": erro}
 
     try:
-        servico = vuupt.buscar_servico_por_id(service_id)
-        customer_id = (servico or {}).get("customer_id")
-        customer = vuupt.buscar_customer_por_id(customer_id) if customer_id else None
-    except Exception as e:
-        return {"ok": False, "erro": str(e)}
-
-    # buscar_customer_por_id devolve o JSON cru da API, com o contato
-    # aninhado sob a chave "customer" (diferente de buscar_servico_por_id,
-    # que já desembrulha "service") -- mesmo idioma de desembrulho usado
-    # em vuupt_client.py (ex: "customer = atualizado.get('customer',
-    # atualizado)"). Achado 22/08 testando com dado real: sem isto,
-    # documento sempre vinha vazio.
-    customer = (customer or {}).get("customer", customer)
-    documento = (customer or {}).get("code", "")
-    if not documento:
-        return {"ok": False, "erro": "Pedido sem CNPJ/CPF de destinatário cadastrado -- não dá pra saber de qual cliente é."}
-
-    try:
-        definir_ajuste_manual(documento, nivel, horario_inicio, horario_fim)
+        definir_ajuste_manual(documento, nivel, horario_inicio, horario_fim, dias_semana)
     except ValueError as e:
         return {"ok": False, "erro": str(e)}
 

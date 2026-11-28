@@ -78,7 +78,7 @@ from planejamento_rotas import (
     carregar_documentos_do_rascunho, roteirizar_selecionados, incrementar_rascunhos_com_selecionados,
     alocar_motoristas_rascunhos, desalocar_motoristas_rascunhos, cancelar_pedido, reagendar_pedido,
     reagendar_pedidos, checar_reagendamento_dia_fixo, editar_endereco_pedido, editar_endereco_pedidos,
-    editar_nivel_horario_pedido, editar_transportadora_pedidos, listar_transportadoras_terceiros,
+    editar_nivel_horario_pedido, dias_atendimento_pedido, editar_transportadora_pedidos, listar_transportadoras_terceiros,
     marcar_dedicados, remover_dedicados,
     salvar_disponibilidade_dia, marcar_disponibilidade_periodo, limpar_disponibilidade_dia,
     publicar_oferta_rascunho, publicar_ofertas_em_lote, despublicar_oferta_rascunho, despublicar_ofertas_em_lote,
@@ -6330,11 +6330,32 @@ def api_editar_nivel_horario():
         return jsonify({"erro": str(e)}), 400
     rascunho_id = body.get("rascunho_id")
     rascunho_id = int(rascunho_id) if rascunho_id is not None else None
+    # dias da semana em que o cliente recebe (0=segunda..6=domingo); ausente = não mexe
+    dias_semana = body.get("dias_semana")
+    try:
+        dias_semana = [int(d) for d in dias_semana] if dias_semana is not None else None
+    except (TypeError, ValueError) as e:
+        return jsonify({"erro": f"dias_semana inválido: {e}"}), 400
 
-    resultado = editar_nivel_horario_pedido(service_id, nivel, horario_inicio, horario_fim, rascunho_id)
+    resultado = editar_nivel_horario_pedido(service_id, nivel, horario_inicio, horario_fim, rascunho_id, dias_semana)
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400
     return jsonify({"ok": True})
+
+
+@app.route("/api/planejamento/dias-atendimento", methods=["GET"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+def api_dias_atendimento():
+    """Dias da semana em que o cliente do pedido recebe -- pré-preenche o
+    modal "Nível / horário de atendimento"."""
+    try:
+        service_id = int(request.args["service_id"])
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    resultado = dias_atendimento_pedido(service_id)
+    if not resultado["ok"]:
+        return jsonify({"erro": resultado["erro"]}), 400
+    return jsonify({"dias": resultado["dias"]})
 
 
 @app.route("/api/planejamento/editar-endereco-lote", methods=["POST"])

@@ -1541,6 +1541,18 @@
     font-size: 12.5px; background: var(--fundo); color: var(--texto);
   }
   .modal-nivel-horario select { width: 100%; }
+  .modal-nivel-horario .linha-dias { display: flex; gap: 4px; }
+  .modal-nivel-horario .linha-dias label { flex: 1; margin: 0; font-weight: 400; cursor: pointer; }
+  .modal-nivel-horario .linha-dias input { position: absolute; opacity: 0; pointer-events: none; }
+  .modal-nivel-horario .linha-dias span {
+    display: block; text-align: center; padding: 6px 0; min-height: 30px; box-sizing: border-box;
+    border: 1px solid var(--borda); border-radius: 6px; font-size: 12px;
+    background: var(--fundo); color: var(--texto-suave);
+  }
+  .modal-nivel-horario .linha-dias input:checked + span {
+    background: var(--acento); color: #06170F; border-color: var(--acento); font-weight: 700;
+  }
+  .modal-nivel-horario .linha-dias input:focus-visible + span { outline: 2px solid var(--acento); outline-offset: 1px; }
   .modal-nivel-horario .acoes { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
   .modal-nivel-horario .acoes button { padding: 7px 14px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
   .modal-nivel-horario .acoes button.confirmar { background: var(--acento); color: #06170F; border: none; font-weight: 700; }
@@ -2452,6 +2464,18 @@
       <input type="number" id="caixas-de" class="campo-busca" min="0" placeholder="Caixas: mín">
       <input type="number" id="caixas-ate" class="campo-busca" min="0" placeholder="Caixas: máx">
     </div>
+    <div class="campo-reagendar">
+      <label>Dias que recebe</label>
+      <div class="linha-dias" id="nivel-horario-dias">
+        <label><input type="checkbox" value="0" checked><span>Seg</span></label>
+        <label><input type="checkbox" value="1" checked><span>Ter</span></label>
+        <label><input type="checkbox" value="2" checked><span>Qua</span></label>
+        <label><input type="checkbox" value="3" checked><span>Qui</span></label>
+        <label><input type="checkbox" value="4" checked><span>Sex</span></label>
+        <label><input type="checkbox" value="5" checked><span>Sáb</span></label>
+        <label><input type="checkbox" value="6" checked><span>Dom</span></label>
+      </div>
+    </div>
     <div class="acoes">
       <button type="button" class="cancelar" id="botao-fechar-filtros-pool">Fechar</button>
       <button type="button" class="confirmar" id="botao-aplicar-filtros-pool">Aplicar</button>
@@ -3202,6 +3226,10 @@
       // motivo (Hugo, 03/10): marcado sozinho por data fora do dia fixo da região
       const motivo = p.dedicado.motivo ? ` · ${p.dedicado.motivo}` : "";
       partes.push(`<span class="badge-dedicado"${titulo}>🚚 Dedicado · R$ ${brl(p.dedicado.valor)}${motivo}</span>`);
+    }
+    // cliente não recebe neste dia da semana (Hugo, 27/11): fica fora da rota automática
+    if (p.cliente_fechado) {
+      partes.push(`<span class="badge-dedicado" title="${escaparHtml(p.cliente_fechado)}. Fica fora da rota automática; pode ser colocado em rota à mão.">📅 ${escaparHtml(p.cliente_fechado)}</span>`);
     }
     // segurado (Hugo, 29/09): rota fraca adiada pra juntar com o volume do dia seguinte
     if (p.segurado) {
@@ -7246,7 +7274,23 @@
     document.getElementById("nivel-horario-nivel").value = li.dataset.nivelDificuldade || "1";
     document.getElementById("nivel-horario-hora-inicio").value = li.dataset.horarioInicio || "00:00";
     document.getElementById("nivel-horario-hora-fim").value = li.dataset.horarioFim || "23:59";
-    nivelHorarioPendente = { serviceId, rascunhoId };
+    const pendente = { serviceId, rascunhoId, diasCarregados: false };
+    nivelHorarioPendente = pendente;
+    // dias da semana: vêm do servidor (a parada em rota não guarda o documento
+    // do cliente). Até chegar, Salvar fica travado pra não gravar dias errados.
+    const caixasDias = document.querySelectorAll("#nivel-horario-dias input");
+    caixasDias.forEach(c => { c.checked = true; });
+    const botaoSalvar = document.getElementById("botao-confirmar-nivel-horario");
+    botaoSalvar.disabled = true;
+    fetch(`${BASE_PATH}/api/planejamento/dias-atendimento?service_id=${serviceId}`)
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(d => {
+        if (nivelHorarioPendente !== pendente) return;
+        caixasDias.forEach(c => { c.checked = d.dias.includes(Number(c.value)); });
+        pendente.diasCarregados = true;
+      })
+      .catch(() => {})  // sem os dias, salva só nível/horário (não mexe nos dias)
+      .finally(() => { if (nivelHorarioPendente === pendente) botaoSalvar.disabled = false; });
     document.getElementById("modal-nivel-horario").classList.add("aberto");
   }
 
@@ -7257,6 +7301,8 @@
     const horaInicio = document.getElementById("nivel-horario-hora-inicio").value;
     const horaFim = document.getElementById("nivel-horario-hora-fim").value;
     if (!horaInicio || !horaFim) { alert("Preencha a janela de horário."); return; }
+    const dias = [...document.querySelectorAll("#nivel-horario-dias input:checked")].map(c => Number(c.value));
+    if (pendente.diasCarregados && !dias.length) { alert("Marque ao menos um dia da semana."); return; }
     const original = botao.textContent;
     botao.disabled = true;
     botao.textContent = "Salvando...";
@@ -7264,6 +7310,7 @@
       await postJSON("/api/planejamento/editar-nivel-horario", {
         service_id: pendente.serviceId, nivel, horario_inicio: horaInicio, horario_fim: horaFim,
         rascunho_id: pendente.rascunhoId,
+        dias_semana: pendente.diasCarregados ? dias : null,
       });
       document.getElementById("modal-nivel-horario").classList.remove("aberto");
       // recarrega -- a correção vale pro cliente inteiro (mesmo CNPJ/CPF),
