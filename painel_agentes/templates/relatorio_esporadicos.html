@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block titulo %}Pagamento dos esporádicos{% endblock %}
+{% block titulo %}Pagamento dos motoristas{% endblock %}
 {% block estilo_extra %}
 <style>
   .cabecalho-pagina h1 { font-size: 21px; margin: 0; letter-spacing: -0.2px; }
@@ -27,28 +27,56 @@
   table.t th { color: var(--texto-suave); font-weight: 700; }
   table.t td.n, table.t th.n { text-align: right; font-variant-numeric: tabular-nums; }
   .sem-gps { color: var(--erro, #b3261e); font-weight: 600; }
+  .filtro select { height: 36px; padding: 0 10px; border: 1px solid var(--borda); border-radius: 7px; background: var(--fundo); color: var(--texto); font-size: 13.5px; font-family: inherit; }
+  .selo { font-size: 11.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--borda); color: var(--texto-suave); }
+  .selo.esp { background: #FFF3D6; color: #7A4B00; border-color: #F0C36A; }
+  html.tema-escuro .selo.esp { background: #3A2D0E; color: #F5CF7A; border-color: #6B5320; }
+  .pago { color: var(--sucesso, #1b7a46); font-weight: 600; }
+  .acoes-pag { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 0 14px 10px; }
+  .acoes-pag .obs { height: 36px; padding: 0 10px; border: 1px solid var(--borda); border-radius: 7px; background: var(--fundo); color: var(--texto); font-size: 13px; font-family: inherit; min-width: 260px; flex: 1 1 260px; max-width: 420px; }
+  .acoes-pag .pg { font-size: 12.5px; color: var(--texto-suave); display: inline-flex; gap: 8px; align-items: center; }
+  .acoes-pag .pg .btn { height: 28px; padding: 0 10px; font-size: 12px; }
+  .erro-pag { color: var(--erro, #b3261e); font-size: 12.5px; }
   .vazio { color: var(--texto-suave); padding: 24px 0; }
 </style>
 {% endblock %}
 {% block conteudo %}
 <div class="cabecalho-pagina">
-  <h1>Pagamento dos esporádicos</h1>
-  <p>Rotas do período por motorista esporádico, com o valor de cada uma, o pedágio/despesa aprovado e os dados de pagamento.
+  <h1>Pagamento dos motoristas</h1>
+  <p>Rotas do período por motorista (fixos e esporádicos), com o valor de cada uma, o pedágio/despesa aprovado e os dados de pagamento.
      É o mesmo cálculo do extrato que o motorista vê no app. O período vale pela data da rota.</p>
 </div>
 
 <form class="filtro" method="get" action="{{ url_for('relatorio_esporadicos') }}">
+  <div class="campo"><label for="ciclo">Ciclo</label>
+    <select id="ciclo">
+      <option value="">Personalizado</option>
+      {% for c in ciclos %}<option value="{{ c.de }}|{{ c.ate }}"{% if c.de == rel.inicio and c.ate == rel.fim %} selected{% endif %}>{{ c.rotulo }}</option>{% endfor %}
+    </select></div>
   <div class="campo"><label for="de">De</label><input type="date" id="de" name="de" value="{{ rel.inicio }}"></div>
   <div class="campo"><label for="ate">Até</label><input type="date" id="ate" name="ate" value="{{ rel.fim }}"></div>
+  <div class="campo"><label for="filtro">Mostrar</label>
+    <select id="filtro" name="filtro">
+      <option value="pendentes"{% if rel.filtro == 'pendentes' %} selected{% endif %}>Pendentes</option>
+      <option value="pagos"{% if rel.filtro == 'pagos' %} selected{% endif %}>Pagos</option>
+      <option value="todos"{% if rel.filtro == 'todos' %} selected{% endif %}>Todos</option>
+    </select></div>
+  <div class="campo"><label for="quem">Quem</label>
+    <select id="quem" name="quem">
+      <option value="todos"{% if rel.quem == 'todos' %} selected{% endif %}>Todos</option>
+      <option value="esporadicos"{% if rel.quem == 'esporadicos' %} selected{% endif %}>Esporádicos</option>
+      <option value="fixos"{% if rel.quem == 'fixos' %} selected{% endif %}>Fixos</option>
+    </select></div>
   <button class="btn primario" type="submit">Ver relatório</button>
-  <a class="btn" href="{{ url_for('relatorio_esporadicos_csv', de=rel.inicio, ate=rel.fim, tipo='resumo') }}">Baixar resumo (CSV)</a>
-  <a class="btn" href="{{ url_for('relatorio_esporadicos_csv', de=rel.inicio, ate=rel.fim, tipo='detalhe') }}">Baixar por rota (CSV)</a>
+  <a class="btn" href="{{ url_for('relatorio_esporadicos_csv', de=rel.inicio, ate=rel.fim, filtro=rel.filtro, quem=rel.quem, tipo='resumo') }}">Baixar resumo (CSV)</a>
+  <a class="btn" href="{{ url_for('relatorio_esporadicos_csv', de=rel.inicio, ate=rel.fim, filtro=rel.filtro, quem=rel.quem, tipo='detalhe') }}">Baixar por rota (CSV)</a>
 </form>
 
 {% if rel.motoristas %}
 <div class="resumo">
   <div><b>{{ rel.motoristas|length }}</b><span>motoristas</span></div>
-  <div><b>R$ {{ '%.2f'|format(rel.total)|replace('.', ',') }}</b><span>total a pagar (rotas + pedágio aprovado)</span></div>
+  <div><b>R$ {{ '%.2f'|format(rel.total_pendente)|replace('.', ',') }}</b><span>pendente de pagamento (rotas + pedágio aprovado)</span></div>
+  <div><b>R$ {{ '%.2f'|format(rel.total_pago)|replace('.', ',') }}</b><span>já pago</span></div>
   <div><b>R$ {{ '%.2f'|format(rel.pedagio_pendente)|replace('.', ',') }}</b><span>pedágio pendente (fora do total)</span></div>
 </div>
 {% if rel.rotas_sem_gps %}
@@ -61,18 +89,31 @@
 <details class="mot">
   <summary>
     <strong>{{ m.nome }}</strong>
+    <span class="selo {{ 'esp' if m.posicao == 'ESPORADICO' else 'fixo' }}">{{ 'Esporádico' if m.posicao == 'ESPORADICO' else 'Fixo' }}</span>
     {% if m.rotas_sem_gps %}<span class="meta sem-gps">{{ m.rotas_sem_gps }} sem GPS</span>{% endif %}
     <span class="meta">CPF {{ m.cpf or '—' }} · PIX {{ m.pix or 'não informado' }}{% if m.veiculo %} · {{ m.veiculo }}{% endif %} · {{ m.rotas }} rota(s)</span>
-    <span class="total">R$ {{ '%.2f'|format(m.total)|replace('.', ',') }}</span>
+    <span class="total">{% if m.total_pendente %}R$ {{ '%.2f'|format(m.total_pendente)|replace('.', ',') }}{% elif m.total_pago %}<span class="pago">Pago · R$ {{ '%.2f'|format(m.total_pago)|replace('.', ',') }}</span>{% else %}<span class="meta">Sem valor definido</span>{% endif %}</span>
   </summary>
+  <div class="acoes-pag">
+    {% if m.pode_pagar %}
+    <input type="text" class="obs" maxlength="300" placeholder="Observação / nº do comprovante (opcional)" aria-label="Observação do pagamento">
+    <button type="button" class="btn primario js-pagar" data-chave="{{ m.chave }}" data-nome="{{ m.nome }}" data-valor="{{ '%.2f'|format(m.total_pendente)|replace('.', ',') }}">Marcar como pago · R$ {{ '%.2f'|format(m.total_pendente)|replace('.', ',') }}</button>
+    {% endif %}
+    {% for pg in m.pagamentos %}
+    <span class="pg">Pago em {{ pg.pago_em[8:10] }}/{{ pg.pago_em[5:7] }}/{{ pg.pago_em[:4] }} por {{ pg.pago_por or '—' }} · R$ {{ '%.2f'|format(pg.valor)|replace('.', ',') }}{% if pg.observacao %} · {{ pg.observacao }}{% endif %}
+      <button type="button" class="btn js-desfazer" data-url="{{ url_for('api_esporadicos_desfazer', pagamento_id=pg.id) }}">Desfazer</button></span>
+    {% endfor %}
+    <span class="erro-pag" role="alert"></span>
+  </div>
   <div class="tabela-wrap">
     <table class="t">
-      <thead><tr><th>Data</th><th>Rota</th><th class="n">Km</th><th>Fonte do km</th><th>Valor</th><th class="n">Rota (R$)</th><th class="n">Pedágio aprovado</th><th class="n">Pedágio pendente</th></tr></thead>
+      <thead><tr><th>Data</th><th>Rota</th><th>Pagamento</th><th class="n">Km</th><th>Fonte do km</th><th>Valor</th><th class="n">Rota (R$)</th><th class="n">Pedágio aprovado</th><th class="n">Pedágio pendente</th></tr></thead>
       <tbody>
       {% for l in m.linhas %}
         <tr>
           <td>{{ l.data_rota }}</td>
           <td>{{ l.nome or l.rota_id }}</td>
+          <td>{% if l.pago %}<span class="pago">Pago em {{ l.pago.pago_em[8:10] }}/{{ l.pago.pago_em[5:7] }}</span>{% elif l.valor is none %}A definir{% else %}Pendente{% endif %}</td>
           <td class="n">{{ '%.1f'|format(l.km or 0)|replace('.', ',') }}</td>
           <td{% if l.km_fonte != 'GPS_APP' %} class="sem-gps"{% endif %}>{{ fonte_km(l) }}</td>
           <td>{% if l.valor_combinado %}Combinado{% if l.valor_combinado_motivo %}: {{ l.valor_combinado_motivo }}{% endif %}{% elif l.sem_tarifa %}A definir{% else %}Tarifa{% endif %}</td>
@@ -87,6 +128,37 @@
 </details>
 {% endfor %}
 {% else %}
-<p class="vazio">Nenhum motorista esporádico teve rota entre {{ rel.inicio }} e {{ rel.fim }}.</p>
+<p class="vazio">Nenhum motorista teve rota entre {{ rel.inicio }} e {{ rel.fim }}.</p>
 {% endif %}
+<script>
+(function () {
+  const ciclo = document.getElementById('ciclo');
+  if (ciclo) ciclo.addEventListener('change', () => {
+    if (!ciclo.value) return;
+    const [de, ate] = ciclo.value.split('|');
+    document.getElementById('de').value = de; document.getElementById('ate').value = ate;
+    ciclo.form.submit();
+  });
+  const URL_PAGAR = {{ url_for('api_esporadicos_pagar')|tojson }};
+  const DE = {{ rel.inicio|tojson }}, ATE = {{ rel.fim|tojson }};
+  async function enviar(url, corpo, caixa, botao) {
+    const erro = caixa.querySelector('.erro-pag'); erro.textContent = ''; botao.disabled = true;
+    try {
+      const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo || {}) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { erro.textContent = j.erro || 'Não deu certo. Tente de novo.'; botao.disabled = false; return; }
+      location.reload();
+    } catch (e) { erro.textContent = 'Sem conexão com o painel. Tente de novo.'; botao.disabled = false; }
+  }
+  document.querySelectorAll('.js-pagar').forEach(b => b.addEventListener('click', () => {
+    const caixa = b.closest('.acoes-pag');
+    if (!confirm('Marcar como pago R$ ' + b.dataset.valor + ' de ' + b.dataset.nome + ' (rotas pendentes de ' + DE + ' a ' + ATE + ')?')) return;
+    enviar(URL_PAGAR, { chave: b.dataset.chave, de: DE, ate: ATE, observacao: caixa.querySelector('.obs').value }, caixa, b);
+  }));
+  document.querySelectorAll('.js-desfazer').forEach(b => b.addEventListener('click', () => {
+    if (!confirm('Desfazer este pagamento? As rotas voltam a ficar pendentes.')) return;
+    enviar(b.dataset.url, {}, b.closest('.acoes-pag'), b);
+  }));
+})();
+</script>
 {% endblock %}

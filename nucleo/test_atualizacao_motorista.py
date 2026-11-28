@@ -901,6 +901,73 @@ class TestAtualizacaoMotorista(unittest.TestCase):
         ultima = self._ficha(agent_id=9, bd_id=sem, cpf=CPF_Z)
         self.assertEqual(atu.ficha_vigente(self.conn, sem)["id"], ultima)
 
+    # ── Link único de PIX (/motorista/pix) ────────────────────────────────
+
+    def _pedidos_pix(self):
+        return [dict(r) for r in self.conn.execute("SELECT * FROM motoristas_pix_pedidos ORDER BY id")]
+
+    def test_pedir_pix_registra_pendente_e_nao_troca_na_hora(self):
+        lid = self._linha("Fulano de Tal", cpf=CPF_X, agent=7)
+        self._login(CPF_X, agent_id=7, chave_pix="pix-B")
+        r = atu.pedir_pix(self.conn, "529.982.247-25", " pix-D ", ip="1.2.3.4")
+        self.assertEqual(r, {"ok": True})
+        (p,) = self._pedidos_pix()
+        self.assertEqual((p["cpf"], p["pix_novo"], p["pix_anterior"], p["status"], p["bd_motorista_id"], p["ip_origem"]),
+                         (CPF_X, "pix-D", "pix-B", "PENDENTE", lid, "1.2.3.4"))
+        self.assertEqual(self._pix_login(), "pix-B")
+        self.assertEqual(atu.pix_pendente(self.conn, self._pessoa(lid))["novo"], "pix-D")
+        self.assertTrue(atu.pendencias(self.conn, self._pessoa(lid))["pix_pendente"])
+
+    def test_pedir_pix_recusa_so_cpf_invalido_e_responde_igual_nos_demais_casos(self):
+        self._linha("Ativo", cpf=CPF_X, agent=7)
+        self._linha("Inativo", cpf=CPF_Y, agent=8, ativo="NAO")
+        self._login(CPF_X, agent_id=7, chave_pix="pix-B")
+        for cpf, pix in (("123", "p"), (CPF_X, "  ")):
+            with self.assertRaises(cad.CadastroInvalido) as cx:
+                atu.pedir_pix(self.conn, cpf, pix)
+            self.assertEqual(cx.exception.codigo, 400)
+        # desconhecido, inativo e mesma chave: resposta idêntica e nada registrado (sem enumeração)
+        for cpf, pix in ((CPF_Z, "p"), (CPF_Y, "p"), (CPF_X, "PIX-b")):
+            self.assertEqual(atu.pedir_pix(self.conn, cpf, pix), {"ok": True})
+        self.assertEqual(self._pedidos_pix(), [])
+
+    def test_pedir_pix_de_novo_substitui_o_anterior_e_tem_freios_por_cpf_e_por_ip(self):
+        self._linha("Fulano", cpf=CPF_X, agent=7)
+        atu.pedir_pix(self.conn, CPF_X, "pix-1", ip="9.9.9.9")
+        atu.pedir_pix(self.conn, CPF_X, "pix-2", ip="9.9.9.9")
+        self.assertEqual([p["status"] for p in self._pedidos_pix()], ["SUBSTITUIDO", "PENDENTE"])
+        atu.pedir_pix(self.conn, CPF_X, "pix-3", ip="9.9.9.9")
+        # 4o do mesmo CPF na hora: mesma resposta do sucesso, sem gravar (nao vira oracle de CPF)
+        self.assertEqual(atu.pedir_pix(self.conn, CPF_X, "pix-4", ip="8.8.8.8"), {"ok": True})
+        self.assertEqual(len(self._pedidos_pix()), 3)
+        self.conn.execute("UPDATE motoristas_pix_pedidos SET cpf = '0'")   # IP: 3 gravados, completa o teto
+        for _ in range(atu.MAX_PEDIDOS_PIX_IP_HORA - 3):
+            self.conn.execute("INSERT INTO motoristas_pix_pedidos (cpf, pix_novo, criado_em, ip_origem) VALUES ('0','x',?,'9.9.9.9')",
+                              (banco.agora(),))
+        self.conn.commit()
+        self.assertEqual(atu.pedir_pix(self.conn, CPF_X, "pix-z", ip="9.9.9.9"), {"ok": True})
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM motoristas_pix_pedidos WHERE cpf = ?", (CPF_X,)).fetchone()[0], 0)
+
+    def test_aprovar_pedido_do_link_unico_grava_no_login_e_fecha_o_pedido(self):
+        lid = self._linha("Fulano", cpf=CPF_X, agent=7)
+        self._login(CPF_X, agent_id=7, chave_pix="pix-B")
+        atu.pedir_pix(self.conn, CPF_X, "pix-D")
+        self.assertEqual(atu.decidir_pix(self.conn, lid, True, "hugo"), {"ok": True, "aprovado": True})
+        self.assertEqual(self._pix_login(), "pix-D")
+        p = self._pedidos_pix()[0]
+        self.assertEqual((p["status"], p["decidido_por"]), ("APROVADO", "hugo"))
+        self.assertIsNone(atu.pix_pendente(self.conn, self._pessoa(lid)))
+        with self.assertRaises(atu.LinkInvalido):
+            atu.decidir_pix(self.conn, lid, True, "hugo")
+
+    def test_recusar_pedido_do_link_unico_mantem_o_pix(self):
+        lid = self._linha("Fulano", cpf=CPF_X, agent=7)
+        self._login(CPF_X, agent_id=7, chave_pix="pix-B")
+        atu.pedir_pix(self.conn, CPF_X, "pix-D")
+        atu.decidir_pix(self.conn, lid, False, "hugo")
+        self.assertEqual(self._pix_login(), "pix-B")
+        self.assertEqual(self._pedidos_pix()[0]["status"], "RECUSADO")
+
 
 if __name__ == "__main__":
     unittest.main()

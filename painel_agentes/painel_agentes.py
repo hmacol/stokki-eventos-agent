@@ -78,7 +78,7 @@ from planejamento_rotas import (
     carregar_documentos_do_rascunho, roteirizar_selecionados, incrementar_rascunhos_com_selecionados,
     alocar_motoristas_rascunhos, desalocar_motoristas_rascunhos, cancelar_pedido, reagendar_pedido,
     reagendar_pedidos, checar_reagendamento_dia_fixo, editar_endereco_pedido, editar_endereco_pedidos,
-    editar_nivel_horario_pedido, editar_transportadora_pedidos, listar_transportadoras_terceiros,
+    editar_nivel_horario_pedido, dias_atendimento_pedido, editar_transportadora_pedidos, listar_transportadoras_terceiros,
     marcar_dedicados, remover_dedicados,
     salvar_disponibilidade_dia, marcar_disponibilidade_periodo, limpar_disponibilidade_dia,
     publicar_oferta_rascunho, publicar_ofertas_em_lote, despublicar_oferta_rascunho, despublicar_ofertas_em_lote,
@@ -4945,39 +4945,84 @@ NIVEIS_ESPORADICOS = ("total", "atendimento")    # CPF e PIX dos motoristas: sem
 
 
 def _periodo_esporadicos() -> tuple[str, str]:
-    """de/ate da query (ISO); invalido ou ausente = 1o do mes ate hoje."""
+    """de/ate da query (ISO); invalido ou ausente = o ciclo de pagamento de hoje (10-24 / 25-09)."""
     hoje = date.today()
+    ciclo = relatorio_esporadicos_mod.ciclo_atual(hoje)
 
     def _d(chave, padrao):
         try:
             return date.fromisoformat((request.args.get(chave) or "").strip())
         except ValueError:
             return padrao
-    de, ate = _d("de", hoje.replace(day=1)), _d("ate", hoje)
+    de, ate = _d("de", ciclo[0]), _d("ate", ciclo[1])
     if de > ate:
         de, ate = ate, de
     return de.isoformat(), ate.isoformat()
+
+
+def _quem_esporadicos() -> str:
+    q = (request.args.get("quem") or "todos").lower()
+    return q if q in relatorio_esporadicos_mod.QUEM else "todos"
+
+
+def _filtro_esporadicos() -> str:
+    f = (request.args.get("filtro") or "pendentes").lower()
+    return f if f in relatorio_esporadicos_mod.FILTROS else "pendentes"
 
 
 @app.route("/financeiro/esporadicos")
 @requer_auth(niveis=NIVEIS_ESPORADICOS)
 def relatorio_esporadicos():
     de, ate = _periodo_esporadicos()
-    return render_template("relatorio_esporadicos.html", rel=relatorio_esporadicos_mod.gerar(de, ate),
-                           fonte_km=relatorio_esporadicos_mod.fonte_km)
+    return render_template("relatorio_esporadicos.html",
+                           rel=relatorio_esporadicos_mod.gerar(de, ate, _filtro_esporadicos(), quem=_quem_esporadicos()),
+                           fonte_km=relatorio_esporadicos_mod.fonte_km,
+                           ciclos=relatorio_esporadicos_mod.ciclos_recentes(date.today()))
 
 
 @app.route("/financeiro/esporadicos.csv")
 @requer_auth(niveis=NIVEIS_ESPORADICOS)
 def relatorio_esporadicos_csv():
     de, ate = _periodo_esporadicos()
-    rel = relatorio_esporadicos_mod.gerar(de, ate)
+    rel = relatorio_esporadicos_mod.gerar(de, ate, _filtro_esporadicos(), quem=_quem_esporadicos())
     detalhe = request.args.get("tipo") == "detalhe"
     corpo = (relatorio_esporadicos_mod.csv_detalhe if detalhe else relatorio_esporadicos_mod.csv_resumo)(rel)
-    nome = f"esporadicos_{'rotas' if detalhe else 'resumo'}_{de}_a_{ate}.csv"
+    nome = f"esporadicos_{'rotas' if detalhe else 'resumo'}_{rel['quem']}_{rel['filtro']}_{de}_a_{ate}.csv"
     # BOM: o Excel pt-BR abre em UTF-8 sem baguncar os acentos
-    return Response("﻿" + corpo, mimetype="text/csv; charset=utf-8",
+    return Response(chr(0xFEFF) + corpo, mimetype="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f'attachment; filename="{nome}"'})
+
+
+@app.route("/api/financeiro/esporadicos/pagar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_ESPORADICOS)
+@exige_mesma_origem
+def api_esporadicos_pagar():
+    """Marca como pago o que esta pendente de um motorista no periodo. O valor e recalculado aqui."""
+    dados = request.get_json(silent=True) or {}
+    try:
+        de = date.fromisoformat(str(dados.get("de") or "")).isoformat()
+        ate = date.fromisoformat(str(dados.get("ate") or "")).isoformat()
+    except ValueError:
+        return jsonify({"erro": "Periodo invalido."}), 400
+    try:
+        res = relatorio_esporadicos_mod.marcar_pago(str(dados.get("chave") or ""), de, ate, _usuario_pagamento(),
+                                                    str(dados.get("observacao") or ""))
+    except relatorio_esporadicos_mod.ErroPagamento as e:
+        return jsonify({"erro": str(e)}), 400
+    logging.getLogger(__name__).info("esporadicos.pago id=%s rotas=%s por=%s", res["id"], res["rotas"], _usuario_pagamento())
+    return jsonify({"ok": True, **res})
+
+
+@app.route("/api/financeiro/esporadicos/<int:pagamento_id>/desfazer", methods=["POST"])
+@requer_auth(niveis=NIVEIS_ESPORADICOS)
+@exige_mesma_origem
+def api_esporadicos_desfazer(pagamento_id: int):
+    try:
+        relatorio_esporadicos_mod.desfazer_pago(pagamento_id, _usuario_pagamento())
+    except relatorio_esporadicos_mod.ErroPagamento as e:
+        return jsonify({"erro": str(e)}), 400
+    logging.getLogger(__name__).info("esporadicos.desfeito id=%s por=%s", pagamento_id, _usuario_pagamento())
+    return jsonify({"ok": True})
 
 
 def _resposta_pagamento(conn, pagamento_id: int, evento: str | None):
@@ -6289,11 +6334,33 @@ def api_editar_nivel_horario():
         return jsonify({"erro": str(e)}), 400
     rascunho_id = body.get("rascunho_id")
     rascunho_id = int(rascunho_id) if rascunho_id is not None else None
+    # dias da semana em que o cliente recebe (0=segunda..6=domingo); ausente = não mexe
+    dias_semana = body.get("dias_semana")
+    try:
+        dias_semana = [int(d) for d in dias_semana] if dias_semana is not None else None
+    except (TypeError, ValueError) as e:
+        return jsonify({"erro": f"dias_semana inválido: {e}"}), 400
 
-    resultado = editar_nivel_horario_pedido(service_id, nivel, horario_inicio, horario_fim, rascunho_id)
+    resultado = editar_nivel_horario_pedido(service_id, nivel, horario_inicio, horario_fim, rascunho_id, dias_semana,
+                                            usuario=_usuario_da_sessao())
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "realocacao": resultado.get("realocacao")})
+
+
+@app.route("/api/planejamento/dias-atendimento", methods=["GET"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+def api_dias_atendimento():
+    """Dias da semana em que o cliente do pedido recebe -- pré-preenche o
+    modal "Nível / horário de atendimento"."""
+    try:
+        service_id = int(request.args["service_id"])
+    except (KeyError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    resultado = dias_atendimento_pedido(service_id)
+    if not resultado["ok"]:
+        return jsonify({"erro": resultado["erro"]}), 400
+    return jsonify({"dias": resultado["dias"]})
 
 
 @app.route("/api/planejamento/editar-endereco-lote", methods=["POST"])

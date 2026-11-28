@@ -51,7 +51,8 @@ from historico import registrar_execucao
 from email_utils import notificacoes_automaticas_ativas
 from telefone_origem import indexar_xmls, telefone_correto
 from regras.complexidade_entrega import (
-    carregar_ajustes_manuais, carregar_horarios, carregar_niveis, classificar_nivel)
+    carregar_ajustes_manuais, carregar_horarios, carregar_niveis, classificar_nivel,
+    dias_efetivos, proximo_dia_atendido)
 from regras.agendamento_automatico import A_PARTIR_DE, data_automatica, janela_automatica
 from regras import alteracoes_entrega
 from regras.clientes_agendamento import carregar_clientes_agendamento, tem_agendamento
@@ -552,7 +553,10 @@ def agendamento_automatico(servico_existente, horario_mensagem, documento, data_
         return _data_automatica_ja_gravada(servico_existente, db_path)
     if inicio_rodada is None or inicio_rodada.date() < A_PARTIR_DE:
         return None
-    data = data_automatica(inicio_rodada, data_saida, lancado_em=lancado_em).strftime("%d/%m/%Y")
+    data_d = data_automatica(inicio_rodada, data_saida, lancado_em=lancado_em)
+    # cliente que não recebe naquele dia da semana: vai pro próximo dia em que recebe
+    data_d = proximo_dia_atendido(data_d, dias_efetivos(documento, ajustes_manuais or {}), feriados.eh_dia_util)
+    data = data_d.strftime("%d/%m/%Y")
     ini, fim = janela_automatica(horario_mensagem, documento, mapa_horarios, ajustes_manuais)
     par = (_converter_data_para_iso(f"{data} {ini}"), _converter_data_para_iso(f"{data} {fim}"))
     return par if all(par) else None

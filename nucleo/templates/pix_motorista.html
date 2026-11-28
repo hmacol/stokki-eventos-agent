@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Atualizar PIX - Fresh Log</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 24px 16px; background: #f5f6f7; color: #1c2024; }
+  main { max-width: 420px; margin: 0 auto; background: #fff; border-radius: 12px; padding: 24px 20px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  p { font-size: 15px; line-height: 1.45; margin: 0 0 16px; color: #4a5560; }
+  label { display: block; font-size: 15px; font-weight: 600; margin: 14px 0 6px; }
+  input { width: 100%; box-sizing: border-box; font-size: 17px; padding: 12px; border: 1px solid #b8c0c8; border-radius: 8px; }
+  button { width: 100%; margin-top: 20px; font-size: 17px; font-weight: 600; padding: 14px; border: 0; border-radius: 8px;
+           background: #1a7f45; color: #fff; }
+  button:disabled { opacity: .6; }
+  #msg { margin-top: 16px; font-size: 15px; line-height: 1.4; }
+  .erro { color: #b3261e; }
+  .ok { color: #1a7f45; font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Atualizar chave PIX</h1>
+  <p>Informe seu CPF e a nova chave. A equipe da Fresh Log confere e confirma com você antes da troca valer.</p>
+  <form id="f" autocomplete="off">
+    <label for="cpf">CPF</label>
+    <input id="cpf" inputmode="numeric" maxlength="14" placeholder="000.000.000-00" required>
+    <label for="pix">Nova chave PIX</label>
+    <input id="pix" maxlength="120" placeholder="CPF, telefone, e-mail ou chave aleatória" required>
+    <button id="b" type="submit">Enviar</button>
+  </form>
+  <div id="msg" role="status"></div>
+</main>
+<script>
+  var URL_PIX = {{ url_for('pix_novo')|tojson }};
+  var f = document.getElementById("f"), msg = document.getElementById("msg"), b = document.getElementById("b");
+  f.addEventListener("submit", function (e) {
+    e.preventDefault();
+    b.disabled = true; msg.className = ""; msg.textContent = "Enviando...";
+    fetch(URL_PIX, {method: "POST", headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({cpf: f.cpf.value, chave_pix: f.pix.value})})
+      .then(function (r) { return r.json().then(function (d) { return {ok: r.ok, d: d}; }); })
+      .then(function (x) {
+        if (x.ok) {
+          f.style.display = "none"; msg.className = "ok";
+          msg.textContent = "Pedido recebido! Se o CPF for de um motorista ativo, a Fresh Log vai confirmar " +
+            "com você antes de trocar o PIX. Sem retorno em 2 dias úteis, fale com a equipe.";
+        } else { msg.className = "erro"; msg.textContent = x.d.erro || "Não foi possível enviar."; b.disabled = false; }
+      })
+      .catch(function () { msg.className = "erro"; msg.textContent = "Sem conexão. Tente de novo."; b.disabled = false; });
+  });
+</script>
+</body>
+</html>

@@ -21,7 +21,7 @@ _CHAVE = "corte_roteirizacao"
 def _conectar(db_path=DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), timeout=10)
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS roteirizacao_config ("
+        "CREATE TABLE IF NOT EXISTS corte_roteirizacao_config ("
         "chave TEXT PRIMARY KEY, valor TEXT NOT NULL, alterado_por TEXT, alterado_em TEXT)")
     return conn
 
@@ -34,7 +34,7 @@ def obter_corte(db_path=DB_PATH) -> time:
     try:
         conn = _conectar(db_path)
         try:
-            linha = conn.execute("SELECT valor FROM roteirizacao_config WHERE chave = ?",
+            linha = conn.execute("SELECT valor FROM corte_roteirizacao_config WHERE chave = ?",
                                  (_CHAVE,)).fetchone()
         finally:
             conn.close()
@@ -51,7 +51,7 @@ def detalhe_corte(db_path=DB_PATH) -> dict:
     try:
         conn = _conectar(db_path)
         try:
-            linha = conn.execute("SELECT alterado_por, alterado_em FROM roteirizacao_config "
+            linha = conn.execute("SELECT alterado_por, alterado_em FROM corte_roteirizacao_config "
                                  "WHERE chave = ?", (_CHAVE,)).fetchone()
         finally:
             conn.close()
@@ -70,7 +70,7 @@ def definir_corte(hhmm: str, usuario: str, db_path=DB_PATH) -> str:
     conn = _conectar(db_path)
     try:
         conn.execute(
-            "INSERT INTO roteirizacao_config (chave, valor, alterado_por, alterado_em) VALUES (?, ?, ?, ?) "
+            "INSERT INTO corte_roteirizacao_config (chave, valor, alterado_por, alterado_em) VALUES (?, ?, ?, ?) "
             "ON CONFLICT (chave) DO UPDATE SET valor = excluded.valor, "
             "alterado_por = excluded.alterado_por, alterado_em = excluded.alterado_em",
             (_CHAVE, hhmm, usuario or "", datetime.now().strftime("%Y-%m-%d %H:%M:%S")))

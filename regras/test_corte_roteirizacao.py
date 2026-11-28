@@ -39,6 +39,20 @@ class CorteConfiguravel(unittest.TestCase):
         # sabado nunca e "hoje"
         self.assertEqual(aa.data_automatica(datetime(2026, 11, 14, 9, 0), corte=time(23, 0)), date(2026, 11, 17))
 
+    def test_convive_com_tabela_roteirizacao_config_antiga(self):
+        """Producao tem roteirizacao_config (tarifas) com outras colunas: o corte nao pode colidir."""
+        import sqlite3
+        conn = sqlite3.connect(str(self.db))
+        conn.execute("CREATE TABLE roteirizacao_config (chave TEXT PRIMARY KEY, valor TEXT, "
+                     "descricao TEXT, atualizado_em TEXT)")
+        conn.execute("INSERT INTO roteirizacao_config VALUES ('valor_base', '340.00', 'x', 'y')")
+        conn.commit(); conn.close()
+        cr.definir_corte("15:45", "Fulano", self.db)
+        self.assertEqual(cr.obter_corte(self.db), time(15, 45))
+        conn = sqlite3.connect(str(self.db))
+        self.assertEqual(conn.execute("SELECT count(*) FROM roteirizacao_config").fetchone()[0], 1)
+        conn.close()
+
     def test_corte_pela_hora_de_lancamento(self):
         corte = time(14, 15)
         rodada = datetime(2026, 11, 9, 14, 30)  # segunda, rodada depois do corte
