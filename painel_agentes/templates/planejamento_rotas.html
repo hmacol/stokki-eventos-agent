@@ -1984,6 +1984,9 @@
   .corte-agora { margin-left: auto; padding: 2px 10px; border-radius: 999px; font-weight: 700; font-size: 12px; color: #fff; }
   .corte-agora.hoje { background: #1f9d6b; }
   .corte-agora.agendado { background: #b7791f; }
+  .selo-corte { display: inline-block; padding: 1px 8px; border-radius: 999px; font-weight: 700; font-size: 11px; color: #fff; margin-top: 3px; }
+  .selo-corte-hoje { background: #1f9d6b; }
+  .selo-corte-agendado { background: #b7791f; }
 </style>
 <script>
   (function () {
@@ -3206,7 +3209,7 @@
 
   const ROTULO_TIPO_AREA = { sp_nao_atendido: "Fora da área (SP)", fora_sp: "Fora de SP" };
 
-  function badgesPedidoHtml(p) {
+  function badgesPedidoHtml(p, opts = {}) {
     // agendamento + alerta de pedido grande (> LIMITE_ALERTA_CAIXAS caixas)
     const partes = [];
     // Retornando (10/11): tirado de rota já iniciada, ainda no carro do
@@ -3244,6 +3247,16 @@
       partes.push(`<span class="badge-fora-area">⚠ ${ROTULO_TIPO_AREA[p.tipo_area] || "Fora de área"}</span>`);
     }
     if (p.situacao_stokki) partes.push(badgeSeparacaoHtml(p));
+    // Corte da roteirização (28/11): no pool, o pedido que sai hoje leva o selo verde HOJE e o
+    // agendado pra depois o selo laranja AGENDADO (mesmas cores da legenda do filtro).
+    const noPool = !opts.emRota && !opts.enviada;
+    const corteHhmm = (document.getElementById("corte-roteirizacao") || { dataset: {} }).dataset.corte || "";
+    const aposCorte = corteHhmm ? ` Pedido lançado depois das ${corteHhmm} (ou com data do cliente) vai pra agendamento.` : "";
+    const agendadoDepois = !!p.agendado_para && p.agendado_para > DATA_ALVO_ISO;
+    const foraDaRotaAutomatica = p.tipo_area || p.dedicado || p.cliente_fechado || p.segurado || p.pausado_cliente || p.retornando || p.fora_dia_fixo;
+    if (noPool && !agendadoDepois && !foraDaRotaAutomatica) {
+      partes.push(`<span class="selo-corte selo-corte-hoje" title="Finaliza hoje: pode ser roteirizado normalmente.${escaparHtml(aposCorte)}">HOJE · roteirizável</span>`);
+    }
     if (p.agendado_para) {
       const [ano, mes, dia] = p.agendado_para.split("-");
       if (p.agendado_para < DATA_ALVO_ISO) {
@@ -3254,7 +3267,9 @@
         // agendado pra depois de hoje -- pool passou a mostrar (Hugo,
         // 14/08), marcação neutra pra não competir visualmente com o
         // que precisa sair hoje; segue alocável normalmente
-        partes.push(`<span class="agendamento futuro">Agendado ${dia}/${mes}</span>`);
+        partes.push(noPool
+          ? `<span class="agendamento futuro selo-corte selo-corte-agendado" title="Não entra na rota de hoje: agendado pra ${dia}/${mes}. Segue alocável à mão.${escaparHtml(aposCorte)}">AGENDADO p/ ${dia}/${mes}</span>`
+          : `<span class="agendamento futuro">Agendado ${dia}/${mes}</span>`);
       }
     }
     if ((p.volume_caixas || 0) > LIMITE_ALERTA_CAIXAS) {
@@ -3317,7 +3332,7 @@
     // no pool ou ordem na rota -- o MESMO número do ponto no mapa)
     return `${checkSelecao}${botaoCancelar}<span class="numero"></span><span class="codigo">${escaparHtml(p.codigo)}</span>${nf}${statusVuupt}<br>
       <span class="remetente">${escaparHtml(p.remetente_nome || p.remetente)}</span>${destinatario}<br>
-      <span class="endereco">${escaparHtml(p.endereco)}</span>${badgesPedidoHtml(p)}`;
+      <span class="endereco">${escaparHtml(p.endereco)}</span>${badgesPedidoHtml(p, opts)}`;
   }
 
   function cepDoEndereco(endereco) {

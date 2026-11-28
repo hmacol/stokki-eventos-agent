@@ -1096,6 +1096,8 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
                             Ate o corte = pedido do dia; depois = agendado (dia seguinte).
                             Compara com a hora de LANCAMENTO (created_at da listagem da Stokki,
                             pipeline._lancado_em_da_linha); sem hora ou data antiga, cai no inicio da rodada.
+                            No pool do /planejamento (planejamento_rotas.html, badgesPedidoHtml) o card leva o selo HOJE (verde)
+                            ou AGENDADO p/ DD/MM (laranja), mesmas cores da legenda do filtro; dentro de rota nao muda.
  feriados.py                Calendário de feriados (nacionais, Carnaval, Corpus
                             Christi, 09/07, 25/01; móveis pela Páscoa) e as
                             funções de dia útil usadas por rota do dia, dia
