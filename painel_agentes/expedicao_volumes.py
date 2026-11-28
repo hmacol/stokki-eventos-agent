@@ -14,9 +14,17 @@ O piloto do galpao (wms_volumes, QR de 4 campos) continua em wms_separacao.py.
 Spec: docs/superpowers/specs/2026-11-28-etiqueta-volume-pedidos-stokki-design.md
 """
 import re
+import secrets
 import sqlite3
 
 import wms
+import wms_fila_impressao
+import wms_separacao
+
+MAX_CAIXAS = 300
+CONFIRMAR_ACIMA_DE = 99
+_ALFABETO_ID = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"   # sem 0/O e 1/I: da pra ler e digitar
+_TAMANHO_ID = 8
 
 _DDL = (
     """
@@ -63,18 +71,22 @@ def codigo_base(texto) -> str:
     return f"PS-{int(m.group(1))}"
 
 
-def _ler(conn, sql: str, params: tuple):
-    """Primeira linha como dict, ou None. Tabela/coluna de outro modulo que nao existe = None."""
+def _linhas(conn, sql: str, params: tuple = ()) -> list[dict]:
+    """Linhas como dict (nao depende de row_factory). Tabela/coluna de outro modulo que nao existe = []."""
     try:
         cur = conn.execute(sql, params)
-        row = cur.fetchone()
+        colunas = [c[0] for c in cur.description]
+        return [dict(zip(colunas, r)) for r in cur.fetchall()]
     except sqlite3.OperationalError as e:
         if "no such table" in str(e).lower() or "no such column" in str(e).lower():
-            return None
+            return []
         raise
-    if row is None:
-        return None
-    return dict(zip([c[0] for c in cur.description], row))
+
+
+def _ler(conn, sql: str, params: tuple):
+    """Primeira linha como dict, ou None."""
+    linhas = _linhas(conn, sql, params)
+    return linhas[0] if linhas else None
 
 
 def dados_do_pedido(conn, codigo: str) -> dict:
@@ -113,3 +125,142 @@ def dados_do_pedido(conn, codigo: str) -> dict:
             if lido and lido["fonte"] == "conferencia" and lido["volumes"]:
                 d["sugestao"] = int(lido["volumes"])
     return d
+
+
+# ---------------------------------------------------------------------------
+# Etiquetar
+# ---------------------------------------------------------------------------
+
+def conteudo_qr(codigo: str, numero: int, total: int, id_caixa: str) -> str:
+    """Os 4 primeiros campos sao os do QR do piloto; o 5o e a identidade da caixa."""
+    return f"FV|{codigo}|{int(numero)}|{int(total)}|{id_caixa}"
+
+
+def _ativos(conn, codigo: str) -> list[dict]:
+    return _linhas(conn, "SELECT * FROM expedicao_volumes WHERE codigo = ? AND anulado_em IS NULL ORDER BY numero",
+                   (codigo,))
+
+
+def _validar_total(total) -> int:
+    if isinstance(total, int) and not isinstance(total, bool):
+        n = total
+    elif isinstance(total, str) and total.strip().isdigit():
+        n = int(total.strip())
+    else:
+        n = 0
+    if not 1 <= n <= MAX_CAIXAS:
+        raise wms.ErroWMS(f"Quantidade de caixas deve ficar entre 1 e {MAX_CAIXAS}.")
+    return n
+
+
+def _novos_ids(conn, quantidade: int) -> list[str]:
+    ids: list[str] = []
+    while len(ids) < quantidade:
+        novo = "".join(secrets.choice(_ALFABETO_ID) for _ in range(_TAMANHO_ID))
+        if novo in ids or conn.execute("SELECT 1 FROM expedicao_volumes WHERE id_caixa = ?", (novo,)).fetchone():
+            continue
+        ids.append(novo)
+    return ids
+
+
+def situacao(conn, texto) -> dict:
+    """O que a tela mostra ao bipar o pedido: os dados dele e, se ja foi etiquetado, o conjunto ativo."""
+    codigo = codigo_base(texto)
+    d = dados_do_pedido(conn, codigo)
+    ativos = _ativos(conn, codigo)
+    d["volumes"] = None
+    if ativos:
+        d["volumes"] = {"total": ativos[0]["total"], "criado_em": ativos[0]["criado_em"],
+                        "criado_por": ativos[0]["criado_por"],
+                        "reimpressoes": max(a["reimpressoes"] for a in ativos)}
+    return d
+
+
+def etiquetar(conn, texto, total, operador: dict | None, *, confirmado: bool = False) -> dict:
+    """Cria as caixas 1..total do pedido e manda as etiquetas 10x15 pra fila.
+    Mesmo total de novo = nada muda (repetido). Devolve {"confirmar": [...]} sem gravar
+    quando falta o operador confirmar (muitas caixas, pedido cancelado, troca de total)."""
+    codigo = codigo_base(texto)
+    total = _validar_total(total)
+    nome = wms_separacao._op(operador)[1]
+    with wms_separacao._tx(conn):   # le dentro da transacao: toque duplo nao cria duas levas
+        dados = dados_do_pedido(conn, codigo)
+        ativos = _ativos(conn, codigo)
+        if ativos and len(ativos) == total and ativos[0]["total"] == total:
+            return {"codigo": codigo, "total": total, "impressao_id": ativos[0]["impressao_id"],
+                    "repetido": True, "anuladas": 0, "conhecido": dados["conhecido"]}
+        if not confirmado:
+            avisos = []
+            if total > CONFIRMAR_ACIMA_DE:
+                avisos.append(f"Sao mesmo {total} caixas?")
+            if dados["cancelado"]:
+                avisos.append(f"{codigo} esta CANCELADO no nosso sistema. Etiquetar mesmo assim?")
+            if ativos:
+                n = len(ativos)
+                avisos.append(f"{codigo} ja tem {n} etiquetas. As {n} antigas deixam de valer: "
+                              f"troque todas pelas {total} novas.")
+            if avisos:
+                return {"confirmar": avisos}
+        ts = wms.agora()
+        if ativos:
+            conn.execute("UPDATE expedicao_volumes SET anulado_em = ?, anulado_por = ? "
+                         "WHERE codigo = ? AND anulado_em IS NULL", (ts, nome, codigo))
+            # o trabalho antigo que ainda nao saiu da impressora nao deve mais sair
+            trabalhos = sorted({a["impressao_id"] for a in ativos if a["impressao_id"]})
+            if trabalhos:
+                conn.execute("UPDATE wms_fila_impressao SET situacao = 'CANCELADO' WHERE situacao = 'PENDENTE' "
+                             f"AND id IN ({','.join('?' * len(trabalhos))})", trabalhos)
+        ids = _novos_ids(conn, total)
+        itens = [conteudo_qr(codigo, n, total, ids[n - 1]) for n in range(1, total + 1)]
+        impressao_id = wms_fila_impressao.enfileirar(
+            conn, tipo="VOLUME", tamanho="10x15", itens=itens,
+            titulo=f"{codigo} · {total} volume(s)", pedido_por=nome)
+        conn.executemany(
+            "INSERT INTO expedicao_volumes (id_caixa, codigo, numero, total, impressao_id, criado_em, criado_por) "
+            "VALUES (?,?,?,?,?,?,?)",
+            [(ids[n - 1], codigo, n, total, impressao_id, ts, nome) for n in range(1, total + 1)])
+    return {"codigo": codigo, "total": total, "impressao_id": impressao_id, "repetido": False,
+            "anuladas": len(ativos), "conhecido": dados["conhecido"]}
+
+
+def reimprimir(conn, texto, operador: dict | None, numero=None) -> dict:
+    """Manda de novo pra fila as etiquetas ativas (todas, ou so a caixa `numero`), com os mesmos QRs."""
+    codigo = codigo_base(texto)
+    nome = wms_separacao._op(operador)[1]
+    with wms_separacao._tx(conn):
+        ativos = _ativos(conn, codigo)
+        if not ativos:
+            raise wms.ErroWMS(f"{codigo} ainda nao tem etiqueta. Informe a quantidade de caixas e imprima.")
+        alvo = ativos
+        if numero not in (None, ""):
+            try:
+                n = int(numero)
+            except (TypeError, ValueError):
+                raise wms.ErroWMS("Numero da caixa invalido.")
+            alvo = [a for a in ativos if a["numero"] == n]
+            if not alvo:
+                raise wms.ErroWMS(f"{codigo} nao tem a caixa {numero} (sao {len(ativos)} caixas).")
+        itens = [conteudo_qr(codigo, a["numero"], a["total"], a["id_caixa"]) for a in alvo]
+        impressao_id = wms_fila_impressao.enfileirar(
+            conn, tipo="VOLUME", tamanho="10x15", itens=itens,
+            titulo=f"{codigo} · reimpressao de {len(alvo)} volume(s)", pedido_por=nome)
+        conn.executemany("UPDATE expedicao_volumes SET reimpressoes = reimpressoes + 1 WHERE id_caixa = ?",
+                         [(a["id_caixa"],) for a in alvo])
+    return {"codigo": codigo, "quantidade": len(alvo), "impressao_id": impressao_id}
+
+
+def prontos_sem_etiqueta(conn, limite: int = 50) -> dict:
+    """Pedidos em aguardando transportador na Stokki (retrato do pipeline, atrasado ate a proxima
+    rodada) que ainda nao tem etiqueta nossa: total e os `limite` mais novos. So cobranca."""
+    com_etiqueta = {r["codigo"] for r in _linhas(
+        conn, "SELECT DISTINCT codigo FROM expedicao_volumes WHERE anulado_em IS NULL")}
+    itens = []
+    for r in _linhas(conn, "SELECT codigo, embarcador, primeira_vez_em FROM vigia_stokki_abertos "
+                           "WHERE status_stokki = ? ORDER BY primeira_vez_em DESC, codigo", (STATUS_PRONTO_STOKKI,)):
+        try:
+            codigo = codigo_base(r["codigo"])
+        except wms.ErroWMS:
+            continue   # codigo que nao e um pedido so: fora da lista
+        if codigo not in com_etiqueta:
+            itens.append({"codigo": codigo, "embarcador": r["embarcador"] or "", "desde": r["primeira_vez_em"] or ""})
+    return {"total": len(itens), "itens": itens[:max(0, int(limite))]}

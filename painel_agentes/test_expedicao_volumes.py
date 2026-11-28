@@ -101,5 +101,110 @@ class TestTabela(Base):
         self.assertIsNotNone(self.conn.execute("SELECT name FROM sqlite_master WHERE name = 'expedicao_volumes'").fetchone())
 
 
+ALFABETO = r"^[2-9A-HJ-NP-Z]{8}$"
+
+
+class TestEtiquetar(Base):
+    def ativos(self, codigo="PS-45352"):
+        return self.conn.execute("SELECT * FROM expedicao_volumes WHERE codigo = ? AND anulado_em IS NULL ORDER BY numero",
+                                 (codigo,)).fetchall()
+
+    def test_cria_as_caixas_e_um_trabalho_na_fila(self):
+        r = ev.etiquetar(self.conn, "45352", 3, ANA)
+        self.assertEqual((r["codigo"], r["total"], r["repetido"], r["anuladas"], r["conhecido"]), ("PS-45352", 3, False, 0, False))
+        linhas = self.ativos()
+        self.assertEqual([l["numero"] for l in linhas], [1, 2, 3])
+        self.assertEqual(len({l["id_caixa"] for l in linhas}), 3)
+        for l in linhas:
+            self.assertRegex(l["id_caixa"], ALFABETO)
+            self.assertEqual(l["criado_por"], "Ana")
+        t = fila.obter(self.conn, r["impressao_id"])
+        self.assertEqual((t["tipo"], t["tamanho"], t["pedido_por"], t["titulo"]), ("VOLUME", "10x15", "Ana", "PS-45352 · 3 volume(s)"))
+        self.assertEqual(t["itens"], [ev.conteudo_qr("PS-45352", l["numero"], 3, l["id_caixa"]) for l in linhas])
+        self.assertEqual(t["itens"][1], f"FV|PS-45352|2|3|{linhas[1]['id_caixa']}")
+
+    def test_repetir_mesmo_total(self):
+        a = ev.etiquetar(self.conn, "PS-45352", 3, ANA)
+        b = ev.etiquetar(self.conn, "#ps-45352", 3, ANA)
+        self.assertTrue(b["repetido"])
+        self.assertEqual(b["impressao_id"], a["impressao_id"])
+        self.assertEqual(len(fila.listar(self.conn)), 1)
+
+    def test_trocar_total(self):
+        a = ev.etiquetar(self.conn, "PS-45352", 3, ANA)
+        antigos = {l["id_caixa"] for l in self.ativos()}
+        pede = ev.etiquetar(self.conn, "PS-45352", 4, ANA)
+        self.assertEqual(pede, {"confirmar": ["PS-45352 ja tem 3 etiquetas. As 3 antigas deixam de valer: troque todas pelas 4 novas."]})
+        self.assertEqual(len(self.ativos()), 3)                       # nada mudou
+        r = ev.etiquetar(self.conn, "PS-45352", 4, {"id": "2", "nome": "Bia"}, confirmado=True)
+        self.assertEqual((r["total"], r["anuladas"]), (4, 3))
+        self.assertEqual(len(self.ativos()), 4)
+        self.assertFalse(antigos & {l["id_caixa"] for l in self.ativos()})
+        anuladas = self.conn.execute("SELECT anulado_por FROM expedicao_volumes WHERE anulado_em IS NOT NULL").fetchall()
+        self.assertEqual([x[0] for x in anuladas], ["Bia"] * 3)
+        self.assertEqual(fila.obter(self.conn, a["impressao_id"])["situacao"], "CANCELADO")
+
+    def test_trabalho_ja_impresso_nao_vira_cancelado(self):
+        a = ev.etiquetar(self.conn, "PS-45352", 3, ANA)
+        fila.marcar_impresso(self.conn, a["impressao_id"], "estacao")
+        ev.etiquetar(self.conn, "PS-45352", 2, ANA, confirmado=True)
+        self.assertEqual(fila.obter(self.conn, a["impressao_id"])["situacao"], "IMPRESSO")
+
+    def test_mais_de_99_e_cancelado_pedem_confirmacao(self):
+        _nucleo(self.conn)
+        self.conn.execute("INSERT INTO nucleo_pedidos VALUES ('PS-9','X','Y','Z','CANCELADO',NULL)")
+        self.assertEqual(ev.etiquetar(self.conn, "PS-9", 120, ANA)["confirmar"],
+                         ["Sao mesmo 120 caixas?", "PS-9 esta CANCELADO no nosso sistema. Etiquetar mesmo assim?"])
+        self.assertEqual(self.ativos("PS-9"), [])
+        self.assertEqual(ev.etiquetar(self.conn, "PS-9", 120, ANA, confirmado=True)["total"], 120)
+        self.assertEqual(ev.etiquetar(self.conn, "PS-8", 99, ANA)["total"], 99)       # 99 nao pergunta
+        self.assertEqual(ev.etiquetar(self.conn, "PS-7", "300", ANA, confirmado=True)["total"], 300)
+
+    def test_quantidade_invalida(self):
+        for ruim in (0, -1, 301, 5.5, "abc", "", None, "5,0"):
+            with self.assertRaises(wms.ErroWMS):
+                ev.etiquetar(self.conn, "PS-45352", ruim, ANA, confirmado=True)
+        self.assertEqual(self.ativos(), [])
+
+    def test_situacao(self):
+        self.assertIsNone(ev.situacao(self.conn, "45352")["volumes"])
+        ev.etiquetar(self.conn, "45352", 3, ANA)
+        v = ev.situacao(self.conn, "FV|PS-45352|1|3")["volumes"]
+        self.assertEqual((v["total"], v["criado_por"], v["reimpressoes"]), (3, "Ana", 0))
+
+
+class TestReimprimir(Base):
+    def test_todas_e_uma_so(self):
+        ev.etiquetar(self.conn, "PS-45352", 3, ANA)
+        originais = fila.listar(self.conn)[0]["itens"]
+        r = ev.reimprimir(self.conn, "PS-45352", ANA)
+        self.assertEqual((r["quantidade"], fila.obter(self.conn, r["impressao_id"])["itens"]), (3, originais))
+        r2 = ev.reimprimir(self.conn, "PS-45352", ANA, numero=2)
+        self.assertEqual(fila.obter(self.conn, r2["impressao_id"])["itens"], [originais[1]])
+        self.assertEqual([x[0] for x in self.conn.execute("SELECT reimpressoes FROM expedicao_volumes ORDER BY numero")], [1, 2, 1])
+
+    def test_sem_etiqueta_ou_numero_que_nao_existe(self):
+        with self.assertRaises(wms.ErroWMS):
+            ev.reimprimir(self.conn, "PS-45352", ANA)
+        ev.etiquetar(self.conn, "PS-45352", 3, ANA)
+        with self.assertRaises(wms.ErroWMS):
+            ev.reimprimir(self.conn, "PS-45352", ANA, numero=9)
+
+
+class TestProntos(Base):
+    def test_so_pronto_na_stokki_e_sem_etiqueta(self):
+        self.assertEqual(ev.prontos_sem_etiqueta(self.conn), {"total": 0, "itens": []})    # sem a tabela
+        _vigia(self.conn)
+        self.conn.executemany("INSERT INTO vigia_stokki_abertos VALUES (?,?,?,?,?,?,?)", [
+            ("PS-1", 1, "FABENNE", "Waiting for Carrier", "aguardando_transportador", "2026-11-28 10:00:00", "x"),
+            ("PS-2", 2, "FABENNE", "Open", "prioritario", "2026-11-28 11:00:00", "x"),
+            ("PS-3", 3, "MARCHEF", "Waiting for Carrier", "prioritario", "2026-11-28 12:00:00", "x"),
+            ("PS-4", 4, "MARCHEF", "Waiting for Carrier", "prioritario", "2026-11-28 13:00:00", "x")])
+        ev.etiquetar(self.conn, "PS-3", 2, ANA)
+        r = ev.prontos_sem_etiqueta(self.conn, limite=1)
+        self.assertEqual(r["total"], 2)
+        self.assertEqual(r["itens"], [{"codigo": "PS-4", "embarcador": "MARCHEF", "desde": "2026-11-28 13:00:00"}])
+
+
 if __name__ == "__main__":
     unittest.main()
