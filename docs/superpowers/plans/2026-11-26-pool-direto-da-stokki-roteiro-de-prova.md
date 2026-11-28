@@ -266,6 +266,11 @@ Revisao de seguranca do PR #92 (onda 4)
   estimar o volume total de pedidos da plataforma. Informacao de baixo valor, sem acesso a dado de outro cliente.
 - ACEITO (L5): a materializacao roda sincrona dentro do request do painel ("enviar todas"); com 429 pode segurar
   threads do waitress por minutos. As travas (rascunho 15 min, pedido 10 min com heartbeat) impedem duplicar.
+- LACUNA CONHECIDA (apos o merge com o master, commit 6d6d1fd): ao SALVAR os dias que o cliente recebe no modal
+  (`realocar_pedidos_do_cliente`, `painel_agentes/planejamento_rotas.py` ~:2650-2662), os pedidos desse cliente
+  que ainda NAO tem servico na Vuupt nao sao realocados na hora (so as rodadas seguintes fazem). Se alguem
+  enviar um rascunho a mao antes da proxima rodada, o servico nasce para um dia que o cliente nao recebe.
+  Correcao futura: listar tambem os pedidos sem servico legitimos como `-id_pool` nessa funcao. Decisao do Hugo.
 
 Limitacao conhecida (fora desta onda)
 - Base do payload: a materializacao parte de `dados_json["payload"]`, que o `upsert_pedido` mescla por `json_patch`
