@@ -249,6 +249,25 @@ def reimprimir(conn, texto, operador: dict | None, numero=None) -> dict:
     return {"codigo": codigo, "quantidade": len(alvo), "impressao_id": impressao_id}
 
 
+def dados_da_etiqueta(conn, conteudo: str) -> dict | None:
+    """FV|PS|n|total|id -> o que vai na arte (as mesmas chaves de wms_separacao.dados_do_volume).
+    None se o texto nao for desse formato ou o id nao for daquele pedido. Caixa anulada nao imprime.
+    Numero e total saem da linha gravada, nao do texto."""
+    partes = str(conteudo or "").strip().split("|")
+    if len(partes) != 5 or partes[0].upper() != "FV":
+        return None
+    caixa = _ler(conn, "SELECT * FROM expedicao_volumes WHERE id_caixa = ?", (partes[4].strip().upper(),))
+    if not caixa or caixa["codigo"] != partes[1].strip().upper():
+        return None
+    if caixa["anulado_em"]:
+        raise wms.ErroWMS(f"{caixa['codigo']}: etiqueta anulada (o total de caixas mudou). Imprima o trabalho novo.")
+    p = dados_do_pedido(conn, caixa["codigo"])
+    return {"codigo_ps": caixa["codigo"], "numero": caixa["numero"], "total": caixa["total"],
+            "qr": conteudo_qr(caixa["codigo"], caixa["numero"], caixa["total"], caixa["id_caixa"]),
+            "embarcador": p["embarcador"], "destinatario": p["destinatario"], "endereco": p["endereco"],
+            "cidade": p["cidade"], "uf": p["uf"], "nf": p["nf"]}
+
+
 def prontos_sem_etiqueta(conn, limite: int = 50) -> dict:
     """Pedidos em aguardando transportador na Stokki (retrato do pipeline, atrasado ate a proxima
     rodada) que ainda nao tem etiqueta nossa: total e os `limite` mais novos. So cobranca."""

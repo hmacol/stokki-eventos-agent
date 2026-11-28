@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 
 import wms  # noqa: E402
+import wms_etiqueta_volume as vol  # noqa: E402
 import wms_fila_impressao as fila  # noqa: E402
 import wms_separacao as sep  # noqa: E402
 import expedicao_volumes as ev  # noqa: E402
@@ -204,6 +205,33 @@ class TestProntos(Base):
         r = ev.prontos_sem_etiqueta(self.conn, limite=1)
         self.assertEqual(r["total"], 2)
         self.assertEqual(r["itens"], [{"codigo": "PS-4", "embarcador": "MARCHEF", "desde": "2026-11-28 13:00:00"}])
+
+
+class TestPdf(Base):
+    def test_dados_da_etiqueta(self):
+        _nucleo(self.conn)
+        self.conn.execute("INSERT INTO nucleo_pedidos VALUES ('PS-45352','Mercado Bom','Rua A, 10','FABENNE','ABERTO',NULL)")
+        r = ev.etiquetar(self.conn, "PS-45352", 3, ANA)
+        item = fila.obter(self.conn, r["impressao_id"])["itens"][1]
+        d = ev.dados_da_etiqueta(self.conn, item)
+        self.assertEqual((d["codigo_ps"], d["numero"], d["total"], d["qr"], d["destinatario"], d["embarcador"]),
+                         ("PS-45352", 2, 3, item, "Mercado Bom", "FABENNE"))
+        self.assertIsNone(ev.dados_da_etiqueta(self.conn, "FV|PS-45352|2|3|ZZZZZZZZ"))
+        self.assertIsNone(ev.dados_da_etiqueta(self.conn, "FV|PS-45352|2|3"))
+        outro = item.replace("PS-45352", "PS-1")
+        self.assertIsNone(ev.dados_da_etiqueta(self.conn, outro))          # id de outro pedido
+
+    def test_pdf_mistura_piloto_e_novo(self):
+        r = ev.etiquetar(self.conn, "PS-45352", 2, ANA)
+        itens = fila.obter(self.conn, r["impressao_id"])["itens"] + ["FV|PS-44009|1|1"]
+        self.assertTrue(vol.gerar_pdf_volumes(self.conn, itens).startswith(b"%PDF"))
+
+    def test_pdf_recusa_anulada(self):
+        a = ev.etiquetar(self.conn, "PS-45352", 2, ANA)
+        itens = fila.obter(self.conn, a["impressao_id"])["itens"]
+        ev.etiquetar(self.conn, "PS-45352", 3, ANA, confirmado=True)
+        with self.assertRaisesRegex(wms.ErroWMS, "anulada"):
+            vol.gerar_pdf_volumes(self.conn, itens)
 
 
 if __name__ == "__main__":
