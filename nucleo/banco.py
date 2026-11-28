@@ -618,6 +618,22 @@ CREATE TABLE IF NOT EXISTS motoristas_links_atualizacao (
 );
 CREATE INDEX IF NOT EXISTS idx_links_atualizacao_mot ON motoristas_links_atualizacao(bd_motorista_id);
 
+-- Pedido de troca de PIX pelo link único /motorista/pix (CPF + chave nova). Nunca vale na hora:
+-- fica PENDENTE até a equipe decidir na /motoristas (atualizacao_motorista.decidir_pix).
+CREATE TABLE IF NOT EXISTS motoristas_pix_pedidos (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    cpf              TEXT NOT NULL,
+    bd_motorista_id  INTEGER,
+    pix_novo         TEXT NOT NULL,
+    pix_anterior     TEXT,
+    criado_em        TEXT NOT NULL,
+    ip_origem        TEXT,
+    status           TEXT NOT NULL DEFAULT 'PENDENTE',   -- PENDENTE | APROVADO | RECUSADO | SUBSTITUIDO
+    decidido_em      TEXT,
+    decidido_por     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pix_pedidos_cpf ON motoristas_pix_pedidos(cpf, status);
+
 CREATE TABLE IF NOT EXISTS motoristas_grupos_whatsapp (
     bd_motorista_id  INTEGER PRIMARY KEY,
     grupo_id         TEXT NOT NULL,

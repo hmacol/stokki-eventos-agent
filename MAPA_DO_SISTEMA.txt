@@ -255,6 +255,12 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              PIN: nucleo/acoes_motorista.py. Tudo nasce DESLIGADO. Config:
                                              atualizacao_motoristas.{ativo, forcar_destino_whatsapp, teto_diario (15),
                                              validade_dias (15), renomear_grupos} (ver seção 17).
+ Link único de troca de PIX ................ app.freshhub.com.br/motorista/pix (nucleo/api_motorista.py GET /pix + POST /api/pix,
+                                             nucleo/templates/pix_motorista.html) -> atualizacao_motorista.pedir_pix: CPF de
+                                             motorista ATIVO + chave nova viram pedido PENDENTE em motoristas_pix_pedidos (10/IP/h, 3/CPF/h; resposta igual p/ CPF desconhecido: sem enumeração);
+                                             nunca troca na hora. A equipe aprova/recusa no mesmo selo "PIX novo aguardando
+                                             aprovação" da /motoristas (pix_pendente/decidir_pix). Config: pix_motoristas.ativo
+                                             (ausente = 503).
  Pool do planejamento (Vuupt x núcleo) ..... nucleo/pool.py (config planejamento.fonte_pool: vuupt | nucleo | freshhub)
    fonte freshhub (plano 1.2 do novo) ..... GET /api/pool da API nova via nucleo/freshhub_client.py (config
                                              freshhub_api.url = http://127.0.0.1:8100 e freshhub_api.token, token

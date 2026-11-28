@@ -473,6 +473,25 @@ def criar_app(config: dict | None = None) -> Flask:
         _freio("atualizacao")
         return jsonify(atualizacao.concluir(conn(), app.config["CONFIG_PROJETO"], token, corpo().get("chave_envio")))
 
+    # ── Link único de troca de PIX (CPF + chave nova; vira pedido pendente) ──
+    # Atrás de pix_motoristas.ativo. A equipe aprova na /motoristas.
+    def _pix_ativo() -> bool:
+        from regras.preferencias_motoristas import _parse_bool
+        return _parse_bool((app.config["CONFIG_PROJETO"].get("pix_motoristas") or {}).get("ativo"))
+
+    @app.get("/pix")
+    def pix_pagina():
+        if not _pix_ativo():
+            return _pagina_simples(MSG_LINK_OFF, 503)
+        return render_template("pix_motorista.html")
+
+    @app.post("/api/pix")
+    def pix_novo():
+        if not _pix_ativo():
+            raise cadastro.CadastroInvalido(MSG_LINK_OFF, 503)
+        d = corpo()
+        return jsonify(atualizacao.pedir_pix(conn(), d.get("cpf"), d.get("chave_pix"), ip=request.remote_addr or "?")), 201
+
     @app.post("/api/push-token")
     @requer_motorista
     def push_token():

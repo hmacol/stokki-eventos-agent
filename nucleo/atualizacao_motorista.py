@@ -176,7 +176,12 @@ def pendencias(conn: sqlite3.Connection, pessoa: dict) -> dict:
 
 
 def pix_pendente(conn: sqlite3.Connection, pessoa: dict) -> dict | None:
-    """Troca de PIX pedida pelo link e ainda sem decisão da equipe (a mais recente da pessoa)."""
+    """Troca de PIX pedida pelo link e ainda sem decisão da equipe (a mais recente da pessoa).
+    O link único /motorista/pix (motoristas_pix_pedidos) vem primeiro; sem ele, o link pessoal."""
+    p = conn.execute("SELECT id, pix_novo, criado_em FROM motoristas_pix_pedidos WHERE cpf = ? AND status = 'PENDENTE' "
+                     "ORDER BY id DESC LIMIT 1", (pessoa["cpf"] or "-",)).fetchone()
+    if p:
+        return {"link_id": None, "pedido_id": p["id"], "novo": p["pix_novo"], "pedido_em": p["criado_em"]}
     marcas = ",".join("?" * len(pessoa["ids"]))
     r = conn.execute(f"SELECT id, pix_pendente, concluido_em FROM motoristas_links_atualizacao "
                      f"WHERE bd_motorista_id IN ({marcas}) AND COALESCE(pix_pendente, '') <> '' "
@@ -195,14 +200,21 @@ def decidir_pix(conn: sqlite3.Connection, bd_motorista_id: int, aprovar: bool, u
         conn.commit()
     conn.execute("BEGIN IMMEDIATE")
     try:
-        cur = conn.execute("UPDATE motoristas_links_atualizacao SET pix_pendente = NULL WHERE id = ? AND pix_pendente = ?",
-                           (pedido["link_id"], pedido["novo"]))
+        if pedido.get("pedido_id"):
+            cur = conn.execute("UPDATE motoristas_pix_pedidos SET status = ?, decidido_em = ?, decidido_por = ? "
+                               "WHERE id = ? AND status = 'PENDENTE'",
+                               ("APROVADO" if aprovar else "RECUSADO", banco.agora(), usuario, pedido["pedido_id"]))
+        else:
+            cur = conn.execute("UPDATE motoristas_links_atualizacao SET pix_pendente = NULL WHERE id = ? AND pix_pendente = ?",
+                               (pedido["link_id"], pedido["novo"]))
         if cur.rowcount != 1:   # outro clique decidiu antes
             raise LinkInvalido(MSG_SEM_PIX_PENDENTE, 404)
         # pedidos mais antigos da mesma pessoa caem junto: vale a decisão sobre o mais recente
         marcas = ",".join("?" * len(pessoa["ids"]))
         conn.execute(f"UPDATE motoristas_links_atualizacao SET pix_pendente = NULL WHERE bd_motorista_id IN ({marcas})",
                      pessoa["ids"])
+        conn.execute("UPDATE motoristas_pix_pedidos SET status = 'SUBSTITUIDO', decidido_em = ?, decidido_por = ? "
+                     "WHERE cpf = ? AND status = 'PENDENTE'", (banco.agora(), usuario, pessoa["cpf"] or "-"))
         if aprovar:
             agora = banco.agora()
             ficha = _ficha_vigente_ids(conn, pessoa["ids"], pessoa["cpf"]) or {}
@@ -223,6 +235,54 @@ def decidir_pix(conn: sqlite3.Connection, bd_motorista_id: int, aprovar: bool, u
     logger.info("troca de PIX pelo link %s por %s (bd_motoristas id=%s, link #%s)",
                 "aprovada" if aprovar else "recusada", usuario, pessoa["principal_id"], pedido["link_id"])
     return {"ok": True, "aprovado": bool(aprovar)}
+
+
+MAX_PEDIDOS_PIX_IP_HORA = 10
+MAX_PEDIDOS_PIX_CPF_HORA = 3
+
+
+def pedir_pix(conn: sqlite3.Connection, cpf, pix, ip: str | None = None) -> dict:
+    """Link único /motorista/pix: motorista ativo informa CPF + chave nova. Só registra o pedido
+    (PENDENTE); quem troca o PIX é a equipe, em decidir_pix. Pedido novo do mesmo CPF substitui o anterior."""
+    cpf = _digitos(cpf)
+    if not cad.cpf_valido(cpf):
+        raise cad.CadastroInvalido("CPF inválido.")
+    pix = cad.validar_pix(pix)
+    if not pix:
+        raise cad.CadastroInvalido("Informe a chave PIX.")
+    if ip:
+        hora = (datetime.now() - timedelta(hours=1)).strftime(_FMT)
+        if conn.execute("SELECT COUNT(*) FROM motoristas_pix_pedidos WHERE ip_origem = ? AND criado_em >= ?",
+                        (ip, hora)).fetchone()[0] >= MAX_PEDIDOS_PIX_IP_HORA:
+            raise cad.CadastroInvalido("Muitos pedidos. Tente de novo mais tarde.", 429)
+    if conn.execute("SELECT COUNT(*) FROM motoristas_pix_pedidos WHERE cpf = ? AND criado_em >= ?",
+                    (cpf, (datetime.now() - timedelta(hours=1)).strftime(_FMT))).fetchone()[0] >= MAX_PEDIDOS_PIX_CPF_HORA:
+        raise cad.CadastroInvalido("Muitos pedidos. Tente de novo mais tarde.", 429)
+    # Resposta igual para CPF desconhecido, inativo ou chave já cadastrada: não revela quem é motorista
+    # nem o PIX dele. Nesses casos nada é registrado.
+    resposta = {"ok": True}
+    pessoa = next((p for p in pessoas(conn) if p["cpf"] == cpf and p["ativo"]), None)
+    if not pessoa:
+        return resposta
+    atual = pix_vigente(conn, pessoa, _ficha_vigente_ids(conn, pessoa["ids"], cpf))
+    if atual and atual.strip().lower() == pix.lower():
+        return resposta
+    agora = banco.agora()
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("UPDATE motoristas_pix_pedidos SET status = 'SUBSTITUIDO', decidido_em = ? "
+                     "WHERE cpf = ? AND status = 'PENDENTE'", (agora, cpf))
+        conn.execute("INSERT INTO motoristas_pix_pedidos (cpf, bd_motorista_id, pix_novo, pix_anterior, criado_em, ip_origem) "
+                     "VALUES (?, ?, ?, ?, ?, ?)", (cpf, pessoa["principal_id"], pix, atual, agora, ip))
+        conn.commit()
+    except BaseException:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+    logger.info("pedido de troca de PIX registrado (bd_motoristas id=%s)", pessoa["principal_id"])
+    return resposta
 
 
 # ── Link pessoal ──────────────────────────────────────────────────────────────
