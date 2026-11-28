@@ -1407,7 +1407,9 @@ def api_planejamento_corte():
     """Salva o horario de corte da roteirizacao (so administrador)."""
     body = request.get_json(force=True, silent=True) or {}
     try:
-        hhmm = corte_roteirizacao.definir_corte(body.get("corte"), g.get("nome_usuario") or "admin")
+        # auditoria: nome da conta; sem nome (login legado), o login da sessao
+        quem = g.get("nome_usuario") or session.get("usuario") or "admin"
+        hhmm = corte_roteirizacao.definir_corte(body.get("corte"), quem)
     except ValueError as e:
         return jsonify({"erro": str(e)}), 400
     return jsonify({"ok": True, **corte_roteirizacao.detalhe_corte(), "hhmm": hhmm})
