@@ -174,6 +174,17 @@
      roteirização (notificar_area_nao_atendida.py), então só aparecem
      aqui pra decisão manual (cotação dedicada / redespacho / etc). */
   .secao-pool-alerta .cabecalho-secao-pool { color: var(--erro-texto); }
+  /* Visao "Nova" do pool (opt-in, guardada por aparelho): bloco Atrasados
+     no topo e chave Todos / So elegiveis. Na Classica nada disso aparece. */
+  #secao-pool-atrasados, #controles-visao-nova { display: none; }
+  html.visao-nova #secao-pool-atrasados { display: block; }
+  html.visao-nova #controles-visao-nova { display: flex; }
+  .secao-pool-atrasados .cabecalho-secao-pool { color: var(--erro-texto); }
+  html.visao-nova.pool-so-elegiveis #secao-pool-separacao,
+  html.visao-nova.pool-so-elegiveis #secao-pool-futuro,
+  html.visao-nova.pool-so-elegiveis #secao-pool-fora-area { display: none; }
+  .seletor-visao { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; font-size: 12px; color: var(--texto-suave); }
+  .seletor-visao button[aria-pressed="true"] { font-weight: 700; background: var(--acento-fundo, var(--borda)); }
   /* 4º bloco, "A retirar no galpão" (Hugo, 28/08): só leitura -- cards
      sem cursor de arrasto, com o status do acompanhamento como badge. */
   .secao-pool-retirada { margin-top: 10px; border-top: 1px dashed var(--borda); padding-top: 4px; }
@@ -1925,6 +1936,86 @@
   {% endif %}
 </form>
 
+{# Horario de corte da roteirizacao: visivel pra todos, editavel so por administrador (nivel total) #}
+<div class="corte-roteirizacao" id="corte-roteirizacao" data-corte="{{ corte.hhmm }}">
+  <div class="corte-titulo">
+    ⏱ Corte da roteirização:
+    {% if pode_editar_corte %}
+    <input type="time" id="corte-input" value="{{ corte.hhmm }}" step="60">
+    <button type="button" class="botao" id="corte-salvar">Salvar</button>
+    <span id="corte-msg" class="corte-msg"></span>
+    {% else %}
+    <strong id="corte-valor">{{ corte.hhmm }}</strong>
+    <span class="corte-msg" title="Só o administrador altera">(só o administrador altera)</span>
+    {% endif %}
+    <span class="corte-agora" id="corte-agora"></span>
+  </div>
+  <div class="corte-legenda">
+    <span class="corte-etq corte-hoje">HOJE</span> pedido lançado <strong>até <span class="corte-hhmm">{{ corte.hhmm }}</span></strong>:
+    finaliza hoje e pode ser roteirizado normalmente.
+    <span class="corte-etq corte-agendado">AGENDADO</span> pedido lançado <strong>depois das <span class="corte-hhmm">{{ corte.hhmm }}</span></strong>:
+    vai automaticamente para agendamento no dia seguinte ou no próximo dia de rota da região.
+  </div>
+  {% if corte.alterado_por %}
+  <div class="corte-msg">Última alteração: {{ corte.alterado_por }} em {{ corte.alterado_em }}</div>
+  {% endif %}
+</div>
+<style>
+  .corte-roteirizacao { background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 10px 18px; margin: 10px 0; font-size: 13px; }
+  .corte-titulo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 600; }
+  .corte-titulo input[type=time] { background: var(--fundo); color: var(--texto); border: 1px solid var(--borda); border-radius: 6px; padding: 3px 6px; }
+  .corte-legenda { margin-top: 6px; line-height: 1.9; }
+  .corte-msg { color: var(--texto-suave); font-weight: 400; font-size: 12px; }
+  .corte-etq { display: inline-block; padding: 1px 8px; border-radius: 999px; font-weight: 700; font-size: 11px; color: #fff; }
+  .corte-hoje { background: #1f9d6b; }
+  .corte-agendado { background: #b7791f; }
+  .corte-agora { margin-left: auto; padding: 2px 10px; border-radius: 999px; font-weight: 700; font-size: 12px; color: #fff; }
+  .corte-agora.hoje { background: #1f9d6b; }
+  .corte-agora.agendado { background: #b7791f; }
+</style>
+<script>
+  (function () {
+    const raiz = document.getElementById('corte-roteirizacao');
+    if (!raiz) return;
+    let corte = raiz.dataset.corte;
+    const agoraEl = document.getElementById('corte-agora');
+    function horaBrasilia() {
+      return new Intl.DateTimeFormat('pt-BR', {timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hour12: false}).format(new Date());
+    }
+    function atualizar() {
+      const agora = horaBrasilia();
+      const dentro = agora <= corte;
+      agoraEl.textContent = dentro
+        ? `Agora ${agora}: pedidos novos entram como HOJE`
+        : `Agora ${agora}: pedidos novos entram como AGENDADOS`;
+      agoraEl.className = 'corte-agora ' + (dentro ? 'hoje' : 'agendado');
+    }
+    atualizar();
+    setInterval(atualizar, 30000);
+    const botao = document.getElementById('corte-salvar');
+    if (!botao) return;
+    botao.addEventListener('click', async () => {
+      const msg = document.getElementById('corte-msg');
+      try {
+        const resp = await fetch(BASE_PATH + '/api/planejamento/corte', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({corte: document.getElementById('corte-input').value}),
+        });
+        const dados = await resp.json();
+        if (!resp.ok) throw new Error(dados.erro || 'Falha ao salvar o corte');
+        corte = dados.hhmm;
+        raiz.dataset.corte = corte;
+        document.querySelectorAll('.corte-hhmm').forEach(e => { e.textContent = corte; });
+        msg.textContent = 'Salvo.';
+        atualizar();
+      } catch (e) {
+        msg.textContent = e.message;
+      }
+    });
+  })();
+</script>
+
 {# Aba "Mais" do modo celular (Opção A, 04/09): atalhos que no desktop
    moram na sidebar (tema, sair, outras telas) + densidade dos cards; os
    blocos de agentes/importação/expedição/resumo de agendados logo abaixo
@@ -1972,6 +2063,11 @@
     if (salvar !== false) { try { localStorage.setItem("planejamento.topoRecolhido", recolher ? "1" : "0"); } catch (e) {} }
   }
   try { if (localStorage.getItem("planejamento.topoRecolhido") === "1") alternarTopoPlanejamento(true, false); } catch (e) {}
+  // visao do pool (Classica = padrao; Nova = Atrasados + chave Todos/So elegiveis)
+  try {
+    if (localStorage.getItem("planejamento.visao") === "nova") document.documentElement.classList.add("visao-nova");
+    if (localStorage.getItem("planejamento.poolSoElegiveis") === "1") document.documentElement.classList.add("pool-so-elegiveis");
+  } catch (e) {}
 </script>
 
 <div class="barra-agentes-planejamento" id="barra-agentes-planejamento"></div>
@@ -2107,6 +2203,26 @@
     <div class="acoes">
       <button type="button" class="cancelar" id="botao-cancelar-disponibilidade">Fechar</button>
       <button type="button" class="confirmar" id="botao-salvar-disponibilidade">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay-reagendar" id="modal-publicar-oferta">
+  <div class="modal-reagendar" role="dialog" aria-modal="true" aria-labelledby="titulo-modal-publicar-oferta">
+    <h2 id="titulo-modal-publicar-oferta">Publicar para motoristas</h2>
+    <p class="subtitulo">Publique agora ou agende o dia e a hora da publicação. A data de entrega da rota não muda.</p>
+    <div class="campo-reagendar">
+      <label for="publicar-data">Dia da publicação</label>
+      <input type="date" id="publicar-data" style="width:100%;">
+    </div>
+    <div class="campo-reagendar">
+      <label for="publicar-hora">Hora (clique ou digite HH:MM)</label>
+      <input type="time" id="publicar-hora" style="width:100%;">
+    </div>
+    <div class="acoes">
+      <button type="button" class="cancelar" id="botao-publicar-cancelar">Cancelar</button>
+      <button type="button" class="cancelar" id="botao-publicar-agora">Publicar agora</button>
+      <button type="button" class="confirmar" id="botao-publicar-agendar">Agendar</button>
     </div>
   </div>
 </div>
@@ -2730,6 +2846,16 @@
       <p><strong>Mapa:</strong> "Não alocados" mostra o pool em vermelho; "Alocados" e "Enviadas" mostram ou escondem as rotas; "Futuros" mostra os agendados pra depois (escondidos por padrão); "Em separação" mostra os que ainda não estão prontos na Stokki (escondidos por padrão). "Selecionar área" laça só o que está aparecendo no mapa: cada clique é um vértice, duplo clique conclui, Esc cancela.</p>
     </div>
     <button id="botao-atualizar-pool" type="button" class="botao" style="width:100%;margin-bottom:10px;">Atualizar (buscar novos pedidos)</button>
+    <div class="seletor-visao" id="seletor-visao" role="group" aria-label="Visão do pool">
+      Visão:
+      <button type="button" class="botao-mini" data-visao="classica" aria-pressed="true">Clássica</button>
+      <button type="button" class="botao-mini" data-visao="nova" aria-pressed="false" title="Mostra os atrasados num bloco próprio e permite alternar entre todos os pedidos e só os elegíveis na data">Nova</button>
+      <span id="controles-visao-nova" style="gap:6px;align-items:center;">
+        ·
+        <button type="button" class="botao-mini" data-pool-filtro="todos" aria-pressed="true">Todos</button>
+        <button type="button" class="botao-mini" data-pool-filtro="elegiveis" aria-pressed="false" title="Esconde Em separação, Agendados pra depois e Fora da área; sobra só o que pode entrar na rota da data">Só elegíveis</button>
+      </span>
+    </div>
     <div class="linha-busca-pool">
       <input type="text" id="busca-pool" class="campo-busca" placeholder="Buscar por código, NF, remetente, destinatário ou endereço...">
       <button type="button" id="botao-filtros-pool" class="botao-filtros" title="Mais filtros: precisa sair no dia, faixa de CEP e faixa de caixas. Valem no pool e na seção A retirar no galpão">
@@ -2752,6 +2878,14 @@
       <select id="select-adicionar-rota" disabled title="Adiciona os pedidos selecionados ao fim de uma rota já existente"><option value="">Adicionar à rota…</option></select>
     </div>
     <div id="lista-pool">
+      <div class="secao-pool secao-pool-atrasados" data-secao="atrasados" id="secao-pool-atrasados">
+        <div class="cabecalho-secao-pool">
+          <span class="seta-secao">▾</span>
+          <span class="titulo-secao-pool">Atrasados (<span id="contagem-secao-atrasados">0</span>)</span>
+          <button type="button" class="botao-mini botao-selecionar-secao" data-secao="atrasados" title="Seleciona só os pedidos visíveis desta seção: agendamento anterior à data em edição">Selecionar</button>
+        </div>
+        <ul class="lista-paradas pool" id="lista-pool-atrasados" data-list-id="pool"></ul>
+      </div>
       <div class="secao-pool" data-secao="hoje" id="secao-pool-hoje">
         <div class="cabecalho-secao-pool">
           <span class="seta-secao">▾</span>
@@ -3573,12 +3707,15 @@
         ${(bloqueada || !PODE_EDITAR) ? "" : `
         <button type="button" class="botao-otimizar" data-rascunho-id="${rascunho.id}">Otimizar sequência</button>
         <button type="button" class="botao-inverter" data-rascunho-id="${rascunho.id}" title="Inverte a ordem de execução das paradas (roda de trás pra frente)">Inverter rota</button>
-        ${rascunho.paradas.length ? `<button type="button" class="botao-publicar-oferta" data-rascunho-id="${rascunho.id}" ${rascunho.agent_id ? "hidden" : ""} title="Publica a rota (sem revelar endereços) pro grupo de motoristas elegível escolher">Publicar para motoristas</button>` : ""}
+        ${(rascunho.oferta_agendada_em && !rascunho.agent_id) ? `<span class="oferta-agendada-situacao">Publicação agendada ${rascunho.oferta_agendada_em.slice(0, 10) === new Date().toLocaleDateString("sv-SE") ? "às" : escaparHtml(rascunho.oferta_agendada_em.slice(8, 10) + "/" + rascunho.oferta_agendada_em.slice(5, 7)) + " às"} ${escaparHtml(rascunho.oferta_agendada_em.slice(11, 16))}</span><button type="button" class="botao-cancelar-agendamento-oferta perigo" data-rascunho-id="${rascunho.id}">Cancelar agendamento</button>` : ""}
+        ${rascunho.oferta_agendada_erro ? `<span class="oferta-agendada-situacao" style="color:var(--perigo,#b00020)">Agendamento não publicou: ${escaparHtml(rascunho.oferta_agendada_erro)}</span>` : ""}
+        ${rascunho.paradas.length ? `<button type="button" class="botao-publicar-oferta" data-rascunho-id="${rascunho.id}" ${rascunho.agent_id ? "hidden" : ""} title="Publica a rota (sem revelar endereços) pro grupo de motoristas elegível escolher. Você pode agendar o dia e a hora da publicação.">Publicar para motoristas</button>` : ""}
         <button type="button" class="botao-enviar" data-rascunho-id="${rascunho.id}">Confirmar e enviar</button>
         <button type="button" class="botao-descartar perigo" data-rascunho-id="${rascunho.id}">Descartar</button>`}
         ${(ofertada && PODE_EDITAR) ? `<button type="button" class="botao-despublicar-oferta perigo" data-rascunho-id="${rascunho.id}" title="Tira a rota do marketplace -- volta a ser rascunho editável (se ninguém já tiver escolhido)">Despublicar</button>` : ""}
         ${(enviada && PODE_EDITAR) ? `<button type="button" class="botao-cancelar-rota perigo" data-rascunho-id="${rascunho.id}" title="Cancela essa rota na VUUPT -- só funciona se o motorista ainda não iniciou o deslocamento; a rota volta a ser rascunho editável, pronta pra ajustar e reenviar">Cancelar rota</button>` : ""}
         ${(enviada && PODE_EDITAR) ? `<button type="button" class="botao-cancelar-notificar perigo" data-rascunho-id="${rascunho.id}" title="Cancela a rota na VUUPT (mesma regra do Cancelar rota) e avisa o grupo Rotas canceladas do Atendimento e os embarcadores dos pedidos, pelo chat do portal">Cancelar e notificar</button>` : ""}
+        ${(enviada && PODE_EDITAR) ? botoesOfertaEnviadaHtml(rascunho) : ""}
         ${PODE_EDITAR ? `<button type="button" class="botao-duplicar" data-rascunho-id="${rascunho.id}">Duplicar rota</button>` : ""}
         <button type="button" class="botao-imprimir" data-rascunho-id="${rascunho.id}">Imprimir rota</button>
       </div>
@@ -4373,6 +4510,11 @@
     // ainda não pronto na Stokki (Hugo, 19/10): só tira do "hoje" -- agendado
     // pra depois continua no bloco da data, fora de área continua vencendo
     if (li.dataset.situacaoStokki) return document.getElementById("lista-pool-separacao");
+    // visao Nova: atrasado ganha bloco próprio (separação continua vencendo:
+    // pedido que o galpão ainda não liberou não dá pra rotear)
+    if (li.dataset.urgencia === "atrasado" && document.documentElement.classList.contains("visao-nova")) {
+      return document.getElementById("lista-pool-atrasados");
+    }
     return document.getElementById("lista-pool-hoje");
   }
 
@@ -4596,6 +4738,8 @@
     const elForaArea = document.getElementById("contagem-secao-fora-area");
     const elFuturo = document.getElementById("contagem-secao-futuro");
     const elSeparacao = document.getElementById("contagem-secao-separacao");
+    const elAtrasados = document.getElementById("contagem-secao-atrasados");
+    if (elAtrasados) elAtrasados.textContent = document.getElementById("lista-pool-atrasados").children.length;
     if (elSeparacao) elSeparacao.textContent = document.getElementById("lista-pool-separacao").children.length;
     if (elHoje) elHoje.textContent = document.getElementById("lista-pool-hoje").children.length;
     if (elForaArea) elForaArea.textContent = document.getElementById("lista-pool-fora-area").children.length;
@@ -4613,6 +4757,7 @@
     secoesPoolColapsadas = {};
   }
   if (secoesPoolColapsadas.hoje === undefined) secoesPoolColapsadas.hoje = false;
+  if (secoesPoolColapsadas.atrasados === undefined) secoesPoolColapsadas.atrasados = false;
   if (secoesPoolColapsadas.separacao === undefined) secoesPoolColapsadas.separacao = false;
   if (secoesPoolColapsadas["fora-area"] === undefined) secoesPoolColapsadas["fora-area"] = false;
   if (secoesPoolColapsadas.futuro === undefined) secoesPoolColapsadas.futuro = true;
@@ -5930,10 +6075,53 @@
     return linhas.length ? "\n\nAviso: " + linhas.join(" ") : "";
   }
 
+  // Abre o modal; resolve null (cancelou), "" (publicar agora) ou "AAAA-MM-DD HH:MM".
+  function escolherQuandoPublicar() {
+    return new Promise((resolve) => {
+      const modal = document.getElementById("modal-publicar-oferta");
+      const campoData = document.getElementById("publicar-data");
+      const campoHora = document.getElementById("publicar-hora");
+      const hoje = new Date().toLocaleDateString("sv-SE");
+      campoData.min = hoje;
+      campoData.value = hoje;
+      campoHora.value = "";
+      const botoes = ["botao-publicar-cancelar", "botao-publicar-agora", "botao-publicar-agendar"].map((id) => document.getElementById(id));
+      const fechar = (valor) => {
+        modal.classList.remove("aberto");
+        botoes[0].onclick = botoes[1].onclick = botoes[2].onclick = null;
+        resolve(valor);
+      };
+      botoes[0].onclick = () => fechar(null);
+      botoes[1].onclick = () => fechar("");
+      botoes[2].onclick = () => {
+        if (!campoData.value || !campoHora.value) { alert("Informe o dia e a hora, ou use \"Publicar agora\"."); return; }
+        fechar(`${campoData.value} ${campoHora.value}`);
+      };
+      modal.classList.add("aberto");
+      setTimeout(() => campoHora.focus(), 50);  // depois do foco automático do diálogo (acessibilidade)
+    });
+  }
+
   async function publicarOferta(rascunhoId, botao) {
     // publica 1 rota pro marketplace de escolha aberta (Hugo, 22/08) --
     // recarrega a página no sucesso, mesmo padrão de confirmarEnvio/
     // cancelarRota (o card muda de status/controles disponíveis)
+    // Horário opcional (Hugo, 25/11): vazio = agora; HH:MM = hoje nessa hora (timer publica).
+    // Dia + hora escolhidos num modal com calendário/relógio (e dá pra digitar) -- Hugo, 25/11.
+    const escolha = await escolherQuandoPublicar();
+    if (escolha === null) return;
+    if (escolha) {
+      botao.disabled = true;
+      try {
+        const r = await postJSON("/api/planejamento/agendar-oferta", { rascunho_id: rascunhoId, horario: escolha });
+        if (!r.ok) { alert(`Não deu pra agendar: ${r.erro}`); botao.disabled = false; return; }
+        location.reload();
+      } catch (e) {
+        alert(`Não deu pra agendar: ${e.message}`);
+        botao.disabled = false;
+      }
+      return;
+    }
     const original = botao.textContent;
     botao.disabled = true;
     botao.textContent = "Publicando...";
@@ -6340,6 +6528,63 @@
 
   // "Cancelar e notificar" (Hugo, 27/10): mesmo cancelamento do botão
   // acima + aviso no grupo Rotas canceladas e no chat de cada embarcador.
+  // Oferta da rota ja enviada (Hugo, 21/11): a equipe oferta, retira, e confirma ou recusa quem
+  // pegou -- o Confirmar troca o motorista na Vuupt sozinho (nucleo/ofertas_rota_enviada.py).
+  const ACOES_OFERTA_ENVIADA = {
+    ofertar: { url: "/api/planejamento/ofertar-rota", fazendo: "Ofertando...",
+      pergunta: "Ofertar essa rota pros motoristas?\nSai aviso no grupo Rotas FRESHLOG em até 2 minutos da hora escolhida e, se ninguém pegar, mensagem particular em etapas.",
+      hora: true },
+    retirar: { url: "/api/planejamento/retirar-oferta", fazendo: "Retirando...",
+      pergunta: "Retirar a oferta?\nEla some do app dos motoristas e não dá pra ofertar essa rota de novo." },
+    confirmar: { url: "/api/planejamento/confirmar-escolha", fazendo: "Confirmando...",
+      pergunta: "Confirmar esse motorista?\nA rota troca de motorista na Vuupt e passa pra ele no app agora." },
+    recusar: { url: "/api/planejamento/recusar-escolha", fazendo: "Recusando...",
+      pergunta: "Recusar esse motorista?\nA rota volta pra oferta e ele não vê mais essa rota." },
+  };
+
+  function botoesOfertaEnviadaHtml(rascunho) {
+    const o = rascunho.oferta_enviada;
+    const botao = (acao, texto, title, classe = "") =>
+      `<button type="button" class="botao-oferta-enviada ${classe}" data-acao="${acao}" data-rascunho-id="${rascunho.id}" title="${title}">${texto}</button>`;
+    if (!o) return botao("ofertar", "Ofertar para motoristas", "Abre a rota pros outros motoristas: aviso no grupo Rotas FRESHLOG e, se ninguém pegar, mensagem particular em etapas");
+    if (o.status === "AGENDADA") {
+      return `<span class="oferta-enviada-situacao">Oferta agendada para ${escaparHtml(o.publicar_em || "")}</span>`
+        + botao("retirar", "Cancelar agendamento", "A rota não será ofertada no horário; não dá pra ofertar de novo", "perigo");
+    }
+    if (o.status === "ESCOLHIDA") {
+      return `<span class="oferta-enviada-situacao"><strong>${escaparHtml(o.escolhido_nome || "Um motorista")}</strong> quer esta rota</span>`
+        + botao("confirmar", "Confirmar motorista", "Troca o motorista na Vuupt e passa a rota pra ele no app")
+        + botao("recusar", "Recusar", "A rota volta pra oferta; esse motorista não vê mais essa rota", "perigo");
+    }
+    if (o.status === "ABERTA") {
+      return `<span class="oferta-enviada-situacao">Ofertada${o.motivo === "RECUSA" ? " (motorista recusou)" : ""}</span>`
+        + (o.motivo === "EQUIPE" ? botao("retirar", "Retirar oferta", "Tira a rota do app dos motoristas; não dá pra ofertar de novo", "perigo") : "");
+    }
+    return `<span class="oferta-enviada-situacao">${o.status === "APLICADA" ? "Oferta confirmada" : "Oferta encerrada"}</span>`;
+  }
+
+  async function acaoOfertaEnviada(rascunhoId, acao, botaoOrigem) {
+    const cfg = ACOES_OFERTA_ENVIADA[acao];
+    if (!cfg) return;
+    let hora = "";
+    if (cfg.hora) {
+      // Vazio = agora; HH:MM = publica hoje nessa hora (a rota fica Agendada ate la).
+      const r = prompt(cfg.pergunta + "\n\nHorário pra publicar hoje (HH:MM). Deixe em branco pra ofertar agora:", "");
+      if (r === null) return;
+      hora = r.trim();
+    } else if (!confirm(cfg.pergunta)) return;
+    const textoOriginal = botaoOrigem.textContent;
+    botaoOrigem.disabled = true; botaoOrigem.textContent = cfg.fazendo;
+    try {
+      const resp = await postJSON(cfg.url, { rascunho_id: rascunhoId, hora });
+      if (resp.aviso) alert(resp.aviso);
+      location.reload();
+    } catch (e) {
+      alert(`Não deu certo: ${e.message}`);
+      botaoOrigem.disabled = false; botaoOrigem.textContent = textoOriginal;
+    }
+  }
+
   async function cancelarENotificar(rascunhoId, botaoOrigem) {
     const motivo = (prompt("Motivo do cancelamento (vai para o grupo Rotas canceladas e para os embarcadores dos pedidos):\nEx.: motorista não conseguiu realizar a coleta") || "").trim();
     if (!motivo) return;
@@ -7744,9 +7989,52 @@
       secaoDoItem(li).appendChild(li);
     });
     iniciarSortable(listaPoolHoje);
+    iniciarSortable(document.getElementById("lista-pool-atrasados"));
     iniciarSortable(listaPoolSeparacao);
     iniciarSortable(listaPoolForaArea);
     iniciarSortable(listaPoolFuturo);
+
+    // Seletor de visao do pool (Classica/Nova) e chave Todos/So elegiveis.
+    // Guardado por aparelho (localStorage), mesmo padrao da densidade dos cards.
+    (function() {
+      const raiz = document.documentElement;
+      const seletor = document.getElementById("seletor-visao");
+      if (!seletor) return;
+      function pintarBotoes() {
+        const nova = raiz.classList.contains("visao-nova");
+        const soEleg = raiz.classList.contains("pool-so-elegiveis");
+        seletor.querySelectorAll("[data-visao]").forEach(b => b.setAttribute("aria-pressed", String((b.dataset.visao === "nova") === nova)));
+        seletor.querySelectorAll("[data-pool-filtro]").forEach(b => b.setAttribute("aria-pressed", String((b.dataset.poolFiltro === "elegiveis") === soEleg)));
+      }
+      function reencaixarPool() {
+        document.querySelectorAll("#lista-pool .lista-paradas.pool > .item-parada").forEach(li => {
+          const destino = secaoDoItem(li);
+          if (destino && li.parentElement !== destino) destino.appendChild(li);
+        });
+        atualizarContagensSecoesPool();
+      }
+      seletor.addEventListener("click", (e) => {
+        const b = e.target.closest("button");
+        if (!b) return;
+        try {
+          if (b.dataset.visao) {
+            const nova = b.dataset.visao === "nova";
+            raiz.classList.toggle("visao-nova", nova);
+            try { localStorage.setItem("planejamento.visao", nova ? "nova" : "classica"); } catch (e2) {}
+            reencaixarPool();
+            // na visao Nova os agendados pra depois aparecem abertos
+            const futuro = document.getElementById("secao-pool-futuro");
+            if (nova && futuro) definirColapsoSecaoPool(futuro, false);
+          } else if (b.dataset.poolFiltro) {
+            const so = b.dataset.poolFiltro === "elegiveis";
+            raiz.classList.toggle("pool-so-elegiveis", so);
+            try { localStorage.setItem("planejamento.poolSoElegiveis", so ? "1" : "0"); } catch (e2) {}
+          }
+        } catch (err) {}
+        pintarBotoes();
+      });
+      pintarBotoes();
+    })();
     inicializarSecoesPool();
     atualizarContagensSecoesPool();
     renderizarRetiradas(POOL_RETIRADAS);
@@ -8026,6 +8314,8 @@
         cancelarRota([Number(e.target.dataset.rascunhoId)], e.target);
       } else if (e.target.classList.contains("botao-cancelar-notificar")) {
         cancelarENotificar(Number(e.target.dataset.rascunhoId), e.target);
+      } else if (e.target.classList.contains("botao-oferta-enviada")) {
+        acaoOfertaEnviada(Number(e.target.dataset.rascunhoId), e.target.dataset.acao, e.target);
       } else if (e.target.classList.contains("botao-lancar-lalamove")) {
         lancarLalamove(Number(e.target.dataset.rascunhoId), e.target);
       } else if (e.target.classList.contains("botao-lalamove-horario-limpar")) {
@@ -8033,6 +8323,11 @@
         definirHorarioLalamove(Number(box.dataset.rascunhoId), "", box.querySelector(".lalamove-horario"));
       } else if (e.target.classList.contains("botao-publicar-oferta")) {
         publicarOferta(Number(e.target.dataset.rascunhoId), e.target);
+      } else if (e.target.classList.contains("botao-cancelar-agendamento-oferta")) {
+        e.target.disabled = true;
+        postJSON("/api/planejamento/agendar-oferta", { rascunho_id: Number(e.target.dataset.rascunhoId), horario: "" })
+          .then(() => location.reload())
+          .catch(err => { alert(`Não deu pra cancelar: ${err.message}`); e.target.disabled = false; });
       } else if (e.target.classList.contains("botao-despublicar-oferta")) {
         despublicarOferta(Number(e.target.dataset.rascunhoId), e.target);
       } else if (e.target.classList.contains("botao-fundir")) {

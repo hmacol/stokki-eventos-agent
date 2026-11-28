@@ -20,13 +20,18 @@ const CHAVE_ULTIMO_ERRO = 'motorista.fila.ultimoerro.v1';
 // Itens que NÃO precisam manter a ordem: se falharem por rede/servidor
 // vão pro fim da fila e os eventos de parada atrás deles seguem (11/09:
 // uma foto de pedágio travada segurou todas as chegadas do teste do Hugo).
-const TIPOS_REORDENAVEIS = new Set<ItemFila['tipo']>(['COMPROVANTE', 'PEDAGIO', 'GPS']);
+const TIPOS_REORDENAVEIS = new Set<ItemFila['tipo']>(['COMPROVANTE', 'COMPROVANTE_LOTE', 'PEDAGIO', 'GPS']);
 
 export type UltimoErro = { em: string; tipo: ItemFila['tipo']; uuid: string; mensagem: string; status?: number };
+
+export type ItemLote = { paradaId: number; uuid: string };
 
 export type ItemFila =
   | { uuid: string; tipo: 'EVENTO_PARADA'; paradaId: number; corpo: Record<string, unknown>; criadoEm: string; tentativas: number }
   | { uuid: string; tipo: 'COMPROVANTE'; paradaId: number; uri: string; tipoComprovante: string; capturadoEm: string; criadoEm: string; tentativas: number; nf?: string | null }
+  // Baixa em grupo (26/11): um evento por pedido (uuid do item) e UMA foto ligada a todos.
+  | { uuid: string; tipo: 'EVENTO_LOTE'; itens: ItemLote[]; corpo: Record<string, unknown>; criadoEm: string; tentativas: number }
+  | { uuid: string; tipo: 'COMPROVANTE_LOTE'; itens: ItemLote[]; uri: string; tipoComprovante: string; capturadoEm: string; criadoEm: string; tentativas: number }
   | { uuid: string; tipo: 'PEDAGIO'; rotaId: number; uri: string; valor: number; capturadoEm: string; criadoEm: string; tentativas: number;
       tipoDespesa?: TipoDespesa; descricao?: string | null; paradaId?: number | null; origem?: 'camera' | 'galeria' }
   | { uuid: string; tipo: 'GPS'; pontos: object[]; criadoEm: string; tentativas: number }
@@ -143,6 +148,8 @@ export async function listar(): Promise<{ uuid: string; tipo: ItemFila['tipo']; 
     uuid: i.uuid, tipo: i.tipo, criadoEm: i.criadoEm, tentativas: i.tentativas ?? 0,
     detalhe: i.tipo === 'EVENTO_PARADA' ? `${String(i.corpo.tipo ?? '')} parada ${i.paradaId}`
       : i.tipo === 'COMPROVANTE' ? `${i.tipoComprovante}${i.nf ? ` NF ${i.nf}` : ''} parada ${i.paradaId}`
+      : i.tipo === 'EVENTO_LOTE' ? `${String(i.corpo.tipo ?? '')} em grupo (${i.itens.length} pedidos)`
+      : i.tipo === 'COMPROVANTE_LOTE' ? `${i.tipoComprovante} em grupo (${i.itens.length} pedidos)`
       : i.tipo === 'PEDAGIO' ? `${i.tipoDespesa && i.tipoDespesa !== 'PEDAGIO' ? `${i.tipoDespesa.toLowerCase()} ` : ''}R$ ${i.valor.toFixed(2).replace('.', ',')} rota ${i.rotaId}`
       : i.tipo === 'GPS' ? `${i.pontos.length} ponto(s)`
       : `${i.acao} rota ${i.rotaId}`,
@@ -172,6 +179,13 @@ async function enviar(item: ItemFila): Promise<void> {
       return;
     case 'COMPROVANTE':
       await api.enviarComprovante(item.paradaId, item.uri, item.tipoComprovante, item.uuid, item.capturadoEm, item.nf);
+      return;
+    case 'EVENTO_LOTE':
+      await api.eventoLote({ ...item.corpo, uuid: item.uuid, itens: item.itens.map((i) => ({ parada_id: i.paradaId, uuid: i.uuid })) });
+      return;
+    case 'COMPROVANTE_LOTE':
+      await api.enviarComprovanteLote(item.uri, item.tipoComprovante, item.uuid, item.capturadoEm,
+        item.itens.map((i) => ({ parada_id: i.paradaId, uuid: i.uuid })));
       return;
     case 'PEDAGIO':
       await api.enviarPedagio(item.rotaId, item.uri, item.valor, item.uuid, item.capturadoEm,

@@ -347,6 +347,10 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              DESLIGADOS por padrao: compras.ativo (envio, desligado = so previa na
                                              tela) e compras.aprovacao_ativa (fluxo de aprovacao: demanda nasce
                                              AGUARDANDO_APROVACAO e so o nivel total aprova/recusa).
+                                             Cadastros (22/11): itens (nome+unidade) e areas (nome) na propria tela; item e
+                                             area da demanda saem da lista (area obrigatoria); quem tem a tela cadastra,
+                                             so o total de verdade inativa/reativa (nao vale o total "emprestado" pela
+                                             lista de telas do /acessos, nem pra aprovar).
  Justificativas sem canhoto ................ nucleo/justificativas_sem_canhoto.py: lista fixa de justificativas (codigo -> rotulo) e validar()
                                               usada pela API da Torre/Planejamento e pela tela /baixa-sem-app (checklist Vuupt pelas telas).
  Baixa de motorista sem app (iPhone) ....... nucleo/baixa_sem_app.py: item "aguardando baixa" na Torre,
@@ -616,14 +620,16 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
  xx:15 e xx:45               nucleo-sincronizar-vuupt        nucleo/sincronizar_vuupt.py
  30 s após cada rodada       ponte-vuupt                     nucleo/ponte_vuupt.py (repete na Vuupt o que o
                                                              motorista fez no app próprio; sem fila = sai na hora)
- 2 min após cada rodada      ofertar-rotas-sem-aceite        nucleo/ofertas_rota_enviada.py (rota recusada ou sem aceite
-                                                             até 05h30 vira oferta no app + aviso no grupo Rotas FRESHLOG; desligada = sai na hora)
+ 2 min após cada rodada      ofertar-rotas-sem-aceite        nucleo/ofertas_rota_enviada.py (rota recusada pelo motorista ou
+                                                             ofertada pela equipe: aviso no grupo Rotas FRESHLOG + mensagem particular em etapas; desligada = sai na hora)
  a cada 15 min               sincronizar-confirmacoes        roteirizacao/sincronizar_respostas_confirmacao.py
  a cada 15 min               sincronizar-lalamove            nucleo/sincronizar_lalamove.py
  07-22h a cada 15 min        cancelar-cancelados-stokki      roteirizacao/cancelar_cancelados_stokki.py (cancelado
                                                              no galpão + vivo no núcleo: cancela na Vuupt só no
                                                              pool; em rota só e-mail interno)
  a cada minuto               lancar-lalamove                 nucleo/lancar_lalamove_programados.py
+ a cada minuto               publicar-ofertas-agendadas      painel_agentes/publicar_ofertas_agendadas.py (Publicar para motoristas com
+                                                             horario de hoje; coluna rascunhos_rota.oferta_agendada_em; falha em oferta_agendada_erro)
  a cada 15 min               wms-reservar-pedidos            sincronizar_pedidos_wms.py
  xx:09 e xx:39               wms-recebimentos                sincronizar_recebimentos_wms.py
  xx:07 e xx:37               wms-sincronizar-produtos        sincronizar_produtos_stokki.py
@@ -925,6 +931,10 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
  --- Lalamove ---
  lalamove_client.py      Cliente API v3 (HMAC, cotação, pedido).
  lalamove_integracao.py  Liga o /planejamento à Lalamove (lançar, sincronizar).
+ lalamove_erros.py       Nomenclatura das falhas de lançamento (LAL-01..LAL-11, LAL-99 = não
+                         classificada): "LAL-04 título -- o que fazer [texto cru]" em lalamove_erro
+                         (card do /planejamento e log). Tabela _REGRAS = ordem de prioridade.
+                         Teste: py -3.11 -m unittest test_lalamove_erros
 
  --- Tratativas ---
  tratativas.py           Log append-only de tratativas por pedido.
@@ -1116,6 +1126,13 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
                             (mensagem da Stokki > horario do destinatario > dia todo).
                             Registrada como AUTOMATICO em agendamentos_origem: nunca vira
                             dedicado (nao e data do cliente).
+ corte_roteirizacao.py      Horario de corte UNICO da roteirizacao (padrao 14:15; tabela
+                            corte_roteirizacao_config no dados.db). Editavel no /planejamento so por
+                            nivel "total" (POST /api/planejamento/corte); lido por
+                            agendamento_automatico.data_automatica e criar_rotas_diarias.
+                            Ate o corte = pedido do dia; depois = agendado (dia seguinte).
+                            Compara com a hora de LANCAMENTO (created_at da listagem da Stokki,
+                            pipeline._lancado_em_da_linha); sem hora ou data antiga, cai no inicio da rodada.
  feriados.py                Calendário de feriados (nacionais, Carnaval, Corpus
                             Christi, 09/07, 25/01; móveis pela Páscoa) e as
                             funções de dia útil usadas por rota do dia, dia
@@ -1343,8 +1360,12 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            aviso ("Rota confirmada", sem paradas/nome) e recusa aceitar/recusar/
                            iniciar/evento com 409; abre inteira às 00h do dia da rota
                            (operacao.rota_liberada, vale pra qualquer provedor).
- ofertas_rota_enviada.py   Rota enviada sem aceite vira oferta no app (17/11). Gatilhos: motorista
-                           recusou no app, ou passou das 05h30 sem aceite (nem aqui nem na Vuupt).
+ ofertas_rota_enviada.py   Rota enviada aberta pros outros motoristas (17/11). Só dois gatilhos, nunca por
+                           horário (21/11; o prazo das 05h30 saiu): motorista recusou no app (RECUSA) ou a
+                           equipe clicou "Ofertar para motoristas" no card da rota enviada do planejamento
+                           (EQUIPE; "Retirar oferta" enquanto ninguém pegou, não reabre).
+                           Horário opcional (HH:MM de hoje) agenda: status AGENDADA, publicar_em; a rodada
+                           de 2 min abre quando chega a hora (abrir_agendadas) e "Cancelar agendamento" retira.
                            Publica em nucleo_ofertas_rota pra todo motorista com login no app
                            (menos o original; sem filtro de elegíveis, a equipe seleciona ao
                            confirmar -- 18/11), que vê na aba Ofertas (id = 1.000.000.000 +
@@ -1358,11 +1379,32 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            página pública com resumo, local de coleta fixo (base Rua Zilda),
                            horário de coleta = saída da rota + alerta de janela >= 12h,
                            pagamento "Alinhar no WhatsApp", botão do app e do /cadastro.
-                           Escolha NÃO troca o motorista: avisa
-                           a equipe, que troca na Vuupt; o sync vira APLICADA. Quem recusou deixa
-                           de ver a rota; no prazo o original ainda aceita se ninguém pegou.
-                           Liga em api_motorista.rota_sem_aceite (ativo, horario_limite, todos,
-                           grupo_id, link); desligada por padrão. --situacao / --modo-teste.
+                           Etapas (21/11), contadas do aviso no grupo, só enquanto ninguém pegou:
+                           15 min = mensagem particular (WhatsApp) pra quem está perto de terminar
+                           (rota de hoje com até 2 paradas pendentes, ou concluída); +10 min = fixos
+                           (bd_motoristas.POSICAO); +10 min = esporádicos. Etapa vazia é pulada; uma
+                           mensagem por motorista e oferta (nucleo_ofertas_rota_mensagens); máx. 5
+                           tentativas por rodada; antes da 1ª etapa refaz o sync das rotas do dia na
+                           Vuupt. Falha de envio tenta de novo até 3 vezes e desiste (não segura as
+                           etapas); teto do dia, canal em pausa ou chave desligada não gravam nada:
+                           o motorista recebe quando o canal voltar. Grupo primeiro de verdade: o
+                           aviso do grupo só conta quando SAIU (senão tenta de novo enquanto a rota
+                           for de hoje em diante) e sem ele ninguém recebe particular.
+                           Envio: notificar_whatsapp.avisar_motorista_oferta (origem
+                           oferta_rota_motorista, teto rota_sem_aceite.teto_mensagens = 60, piloto
+                           rota_sem_aceite.forcar_destino_whatsapp: número = só pra lá, "" = real,
+                           ausente = clientes.forcar_destino).
+                           Escolha espera a equipe: o card mostra "Fulano quer esta rota" com
+                           "Confirmar motorista" (confirmar_escolha: o painel troca na Vuupt por
+                           rascunhos_rota.trocar_motorista e, só depois do ok, aplicar_escolha passa a
+                           rota pra ele no app e fecha a oferta; Vuupt recusou = nada muda; Vuupt
+                           trocou e o banco estava ocupado = tenta de novo e pede novo clique) ou
+                           "Recusar" (volta pra oferta; o recusado não vê mais). Endpoints /api/planejamento/ofertar-rota, retirar-oferta,
+                           confirmar-escolha, recusar-escolha. Quem recusou a rota deixa de vê-la;
+                           na oferta da equipe o original segue com a rota até a confirmação.
+                           Liga em api_motorista.rota_sem_aceite (ativo, todos, grupo_id, link,
+                           teto_mensagens, forcar_destino_whatsapp); desligada por padrão.
+                           --situacao / --modo-teste.
  comparar_pool.py          Sombra: pool Vuupt x núcleo.
  comparar_vuupt.py         Rotas Vuupt x núcleo.
  exportar_historico_vuupt.py  Exporta histórico da Vuupt para o GCS.
@@ -1673,7 +1715,7 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            saiu tem "Reenviar aviso". Testes: test_pagamentos_pontuais.py.
  compras.py                Demandas de compra (19/11): PENDENTE -> COMPRADA | CANCELADA; com
                            aprovacao ligada: AGUARDANDO_APROVACAO -> PENDENTE | RECUSADA. Tabela
-                           compras_demandas. Aviso (criacao, aprovacao, recusa, compra, cancelamento) por
+                           compras_demandas (+ compras_itens, compras_areas, coluna area). Aviso (criacao, aprovacao, recusa, compra, cancelamento) por
                            notificar_whatsapp.despachar em thread (origem 'compras', cai no teto interno
                            padrao: se ligar o envio, dar balde proprio como o pagamento_pontual). Config:
                            compras.{ativo, aprovacao_ativa, grupo_id}. Testes: test_compras.py.
@@ -1716,7 +1758,8 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
    /expedicao                 expedicao.html
    /expedicao/coletas         coletas_expedicao.html (+ /api/expedicao/coletas/...: folha,
                               estado (a lista recarrega quando outro aparelho confirma),
-                              /expedicao/coletas/<id> = tela de UMA coleta, destino do QR;
+                              /expedicao/coletas/<id> = tela de UMA coleta, destino do QR
+                              (sem login: /login?proximo=coleta<id> e volta pra coleta, 16/11);
                               <id>/confirmar|cancelar|tentar-de-novo|retirar|andamento;
                               <id>/folha.pdf e <id>/foto). Ver: total, operador, leitura,
                               atendimento, logistica, expedicao, galpao. Agir: total,
@@ -1833,6 +1876,16 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                               que chama /api/motoristas/<id>/resetar-pin)
    /financeiro/pedagios       pedagios.html
    /financeiro/pagamentos     pagamentos_pontuais.html (Adiantamento/Descarga/Frete avulso)
+  /financeiro/esporadicos    relatorio_esporadicos.html (+ .csv ?tipo=resumo|detalhe): fechamento dos motoristas
+                             (fixos e esporadicos; ?quem=todos|esporadicos|fixos) por periodo (data da rota) = nucleo/financeiro.extrato_motorista
+                             + CPF/PIX; painel_agentes/relatorio_esporadicos.py. Niveis total+atendimento.
+                             Nao inclui pagamentos pontuais; banco/agencia nao existem no cadastro (so PIX).
+                             Cada rota mostra a fonte do km (GPS do app / informado / estimado) e as sem GPS sao contadas.
+                             Marcar como pago = por motorista (paga as rotas pendentes COM valor, valor recalculado no servidor):
+                             tabelas pagamentos_esporadicos + pagamentos_esporadicos_rotas (rota_id UNIQUE), Desfazer guarda
+                             desfeito_em/por; filtro ?filtro=pendentes|pagos|todos (tambem no CSV);
+                             POST /api/financeiro/esporadicos/pagar e /<id>/desfazer. Pedagio aprovado depois do pagamento
+                             nao reabre a rota. Testes: painel_agentes/test_relatorio_esporadicos.py.
    /canhotos                  canhotos.html
    /  (agentes), /execucao/<id>, /historico   index.html, execucao.html, historico.html
    APIs em /api/<tela>/...
@@ -2077,7 +2130,18 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
                            desmarcar paradas com motivo) -> POST /api/rotas/<id>/carregamento.
  app/parada/[id].tsx       Entregue / Parcial / Não entregue / Reagendar,
                            checklist e fotos.
- app/mapa/[id].tsx         Mapa da rota (botão "Mapa" na tela da rota): pinos numerados,
+                           BAIXA EM GRUPO (26/11): pedidos pendentes da rota com a mesma chave
+                           (embarcador + destinatário + endereço; operacao.chave_grupo_baixa,
+                           campo `grupo_baixa` da parada, só dado interno) ganham o atalho
+                           "Baixar juntos" na rota -> /parada/<id>?rota=..&grupo=<ids>: um resultado
+                           e UM comprovante pra todos (entregue/parcial/insucesso; sem Reagendar).
+                           Fila: EVENTO_LOTE + COMPROVANTE_LOTE -> POST /api/paradas/lote/eventos e
+                           /lote/comprovantes (operacao.registrar_evento_lote/_comprovante_lote): 1 evento
+                           por PS, 1 foto em disco e 1 linha de nucleo_comprovantes por PS, sempre SEM
+                           leitura da IA (resultado_validacao NULL = "Sem conferência" em /canhotos).
+                           O servidor reconfere o grupo (409 se misturar embarcador/destinatário/endereço);
+                           queda no meio: reenviar com os mesmos uuids termina o resto.
+ app/mapa/[id].tsx        Mapa da rota (botão "Mapa" na tela da rota): pinos numerados,
                            linha do trajeto e cartão com os passos (Deslizar). Entregue /
                            Não entregue abrem app/parada/[id].tsx?fluxo=... Peças em src/mapa/.
  src/trajeto.ts            GET /api/rotas/<id>/trajeto; guarda o do Google por rota

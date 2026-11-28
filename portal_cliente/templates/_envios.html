@@ -13,22 +13,25 @@
   @media (max-width: 1280px) { .env-grade { grid-template-columns: minmax(0, 1fr); } }
   /* Tabela de envios (19/11): colunas com largura pensada pra caber sem cortar "Ações" */
   /* Prévia do envio: título clicável ordena (A→Z, de novo Z→A); borda do título arrasta pra mudar a largura */
-  #previa-tabela th, #env-tabela th { position: relative; cursor: pointer; user-select: none; padding-right: 16px; }
-  #previa-tabela th select, #env-tabela th select { cursor: default; }
-  #previa-tabela th .seta, #env-tabela th .seta { margin-left: 4px; font-size: 9px; }
-  #previa-tabela th .grip, #env-tabela th .grip { position: absolute; top: 0; right: 0; width: 8px; height: 100%; cursor: col-resize; }
-  #previa-tabela th .grip:hover, #env-tabela th .grip:hover, #previa-tabela th .grip.arrastando, #env-tabela th .grip.arrastando { background: var(--borda); }
-  #previa-tabela.fixa, #env-tabela.fixa { table-layout: fixed; }
-  #previa-tabela.fixa td, #env-tabela.fixa td { overflow-wrap: anywhere; }
-  #previa-tabela.fixa td.nw, #env-tabela.fixa td.nw { white-space: normal; }
-  #previa-tabela.fixa select, #env-tabela.fixa select, #previa-tabela.fixa input, #env-tabela.fixa input { max-width: 100%; }
+  #previa-tabela th, #env-tabela th, #tabela th { position: relative; cursor: pointer; user-select: none; padding-right: 16px; }
+  #previa-tabela th select, #env-tabela th select, #tabela th select { cursor: default; }
+  #previa-tabela th .seta, #env-tabela th .seta, #tabela th .seta { margin-left: 4px; font-size: 9px; }
+  #previa-tabela th .grip, #env-tabela th .grip, #tabela th .grip { position: absolute; top: 0; right: 0; width: 8px; height: 100%; cursor: col-resize; }
+  #previa-tabela th .grip:hover, #env-tabela th .grip:hover, #previa-tabela th .grip.arrastando, #env-tabela th .grip.arrastando, #tabela th .grip:hover, #tabela th .grip.arrastando { background: var(--borda); }
+  #previa-tabela.fixa, #env-tabela.fixa, #tabela.fixa { table-layout: fixed; }
+  #previa-tabela.fixa td, #env-tabela.fixa td, #tabela.fixa td { overflow-wrap: anywhere; }
+  #previa-tabela.fixa td.nw, #env-tabela.fixa td.nw, #tabela.fixa td.nw { white-space: normal; }
+  #previa-tabela.fixa select, #env-tabela.fixa select, #previa-tabela.fixa input, #env-tabela.fixa input, #tabela.fixa select, #tabela.fixa input { max-width: 100%; }
   #env-tabela.fixa td { min-width: 0 !important; }
+  #tabela.fixa td { min-width: 0 !important; }
   #env-tabela th, #env-tabela td { padding-left: 8px; padding-right: 8px; }
-  #env-tabela td:nth-child(1) { white-space: normal; width: 84px; }
-  #env-tabela td:nth-child(3) { min-width: 220px; }
-  #env-tabela th:nth-child(4), #env-tabela td:nth-child(4) { width: 1%; }
-  #env-tabela td:nth-child(7) { white-space: normal; min-width: 96px; }
-  #env-tabela td:nth-child(8) { min-width: 170px; }
+  /* data-i = posição original da coluna (o botão Colunas muda a ordem e esconde colunas, então nth-child não serve) */
+  #env-tabela td[data-i="0"] { white-space: normal; width: 84px; }
+  #env-tabela td[data-i="2"] { min-width: 220px; }
+  #env-tabela th[data-i="3"], #env-tabela td[data-i="3"] { width: 1%; }
+  #env-tabela td[data-i="6"] { white-space: normal; min-width: 96px; }
+  #env-tabela td[data-i="7"] { min-width: 170px; }
+  th[hidden], td[hidden] { display: none !important; }
   #env-tabela .acoes-linha { max-width: 230px; }
   .zona { border: 2px dashed var(--borda); border-radius: 10px; padding: 26px 18px; text-align: center; color: var(--texto-suave); cursor: pointer; transition: border-color .15s, background .15s; }
   .zona:hover, .zona.sobre { border-color: var(--acento); background: var(--sucesso-bg); color: var(--texto); }
@@ -236,6 +239,7 @@
   <div class="modal" id="modal-caixa"></div>
 </div>
 
+{% include "_colunas_tabela.html" %}
 <script>
 (function () {
   const BASE = {{ request.script_root | tojson }};
@@ -382,6 +386,7 @@
     btLote.classList.toggle('oculto', !(PODE_ENVIAR && aba === 'erros' && nErros >= 2));
     btLote.textContent = `Reenviar todos (${nErros})`;
     if (colEnvios.reordenar) colEnvios.reordenar();  // o tbody foi refeito: reaplica a ordem escolhida
+    if (typeof aplicarColunasEnvios === 'function') aplicarColunasEnvios();  // e as colunas do botão Colunas
   }
 
   function renderLateral() {
@@ -550,7 +555,7 @@
       `<th>Destinatário</th><th>${p.entrega_ativa ? 'Endereço de entrega' : 'Endereço'}</th><th>Transportadora</th><th style="text-align:center">Vol.</th><th style="text-align:right">Peso</th><th style="text-align:right">Valor</th><th>Documentos</th><th>Agendamento</th></tr>`;
     // Transportadora da nota; no XML o embarcador pode trocar por uma do cadastro (o servidor reescreve o <transporta>)
     const celulaTransportadora = (it, lista) => {
-      if (it.origem === 'planilha') return '<span style="color:var(--texto-suave)">—</span>';
+      if (it.origem === 'planilha') return it.transportadora_nome ? `<div>${esc(it.transportadora_nome)}</div>` : '<span style="color:var(--texto-suave)">—</span>';
       const nome = `<div>${esc(it.transportadora_nome || 'não informada na nota')}</div>`;
       if (!lista.length) return nome;
       return nome + `<select class="tp" aria-label="Trocar a transportadora do pedido"><option value="">manter a da nota</option>${lista.map(t => `<option value="${t.id}" data-tipo="${esc(t.tipo || '')}">${esc(t.nome)}</option>`).join('')}</select>`;
@@ -603,16 +608,16 @@
     const tbody = tb.querySelector('tbody');
     const ths = [...tb.querySelectorAll('thead th')];
     ths.forEach(th => { th.dataset.k = th.firstChild.textContent.trim(); });
-    const aplicarLarg = () => {
+    const aplicarLarg = col.aplicarLarg = () => {
       tb.classList.add('fixa');
       let soma = 0;
-      ths.forEach(th => { const w = col.larg[th.dataset.k]; th.style.boxSizing = 'border-box'; th.style.width = w + 'px'; soma += w; });
+      ths.forEach(th => { const w = col.larg[th.dataset.k] || 120; th.style.boxSizing = 'border-box'; th.style.width = w + 'px'; if (!th.hidden) soma += w; });
       tb.style.width = soma + 'px';
     };
     if (ths.every(th => col.larg[th.dataset.k])) aplicarLarg();
     else { col.larg = {}; tb.classList.remove('fixa'); tb.style.width = ''; }
     const chave = (tr, n) => {
-      const c = tr.children[n].cloneNode(true);
+      const c = ([...tr.children].find(x => x.dataset.i == n) || tr.children[n]).cloneNode(true);  // data-i: a coluna pode ter mudado de lugar (seletorColunasPortal)
       c.querySelectorAll('select').forEach(s => s.replaceWith(s.value ? s.selectedOptions[0].textContent : ''));
       return c.textContent.replace(/\s+/g, ' ').trim();
     };
@@ -636,7 +641,7 @@
         if (e.target.closest('select, .grip')) return;
         const dir = col.ord && col.ord.k === th.dataset.k && col.ord.dir === 1 ? -1 : 1;
         col.ord = { k: th.dataset.k, dir };
-        ordenar(n, dir);
+        if (col.ordenarDados) col.ordenarDados(); else ordenar(n, dir);  // ordenarDados: tabela paginada, ordena os dados e redesenha
       });
       grip.addEventListener('click', e => e.stopPropagation());
       grip.addEventListener('pointerdown', e => {
@@ -650,9 +655,15 @@
       });
     });
     col.reordenar = () => { if (col.ord) { const n = ths.findIndex(th => th.dataset.k === col.ord.k); if (n >= 0) ordenar(n, col.ord.dir); } };
-    col.reordenar();
+    if (col.ordenarDados) {
+      const th = col.ord && ths.find(t => t.dataset.k === col.ord.k);
+      if (th) th.querySelector('.seta').textContent = col.ord.dir > 0 ? '▲' : '▼';
+    } else col.reordenar();
   }
+  window.ajustarColunasPortal = ajustarColunas;  // a tabela de acompanhamento (acompanhamento.html) usa a mesma
   ajustarColunas($('env-tabela'), colEnvios);
+
+  const aplicarColunasEnvios = window.seletorColunasPortal($('env-tabela'), colEnvios);
 
   // ── Documentos dos pedidos (PDF) -- 11/11, anexos_pedido.py ─────────────────
   // previa.anexos: [{token, nome, tipo, numero_nf, pedido (token do item ou

@@ -526,19 +526,42 @@
     return `<tr class="tentativas"><td colspan="${ncols}"><ul>${itens}</ul></td></tr>`;
   }
 
+  // Ordem pelo título da coluna (clique: A→Z, de novo Z→A). Ordena os DADOS, não as linhas da tela:
+  // a tabela é paginada (rola pra ver mais) e tem faixas de dia. Largura e ordem vêm de ajustarColunasPortal (_envios.html).
+  const colTabela = { larg: {}, ord: null };
+  colTabela.ordenarDados = () => { mostrando = LOTE; renderTabela(); };
+  function ordenarLista(lista) {
+    const c = colTabela.ord && COLUNAS.find(x => x.rotulo === colTabela.ord.k);
+    if (!c) return lista;
+    const dir = colTabela.ord.dir;
+    const chave = p => c.id === 'situacao' ? (p.situacao_rotulo || '')
+      : c.id === 'motorista' ? (p.motorista || '')
+      : c.id === 'comprovante' ? (p.situacao || '')
+      : c.id === 'ordem' ? (p.ordem || 0)
+      : c.id === 'volumes' ? (Number(p.volumes) || 0)
+      : (p[c.id] == null ? '' : p[c.id]);
+    return [...lista].sort((a, b) => {
+      const x = chave(a), y = chave(b);
+      return (typeof x === 'number' ? x - y : String(x).localeCompare(String(y), 'pt-BR', { numeric: true, sensitivity: 'base' })) * dir;
+    });
+  }
+
   function renderTabela() {
-    const lista = pedidosFiltrados();
+    const lista = ordenarLista(pedidosFiltrados());
     const total = lista.length;
     if (mostrando > total) mostrando = Math.max(LOTE, Math.ceil(total / LOTE) * LOTE);
     const fatia = lista.slice(0, mostrando);
     const cols = visiveis.map(id => COLUNAS.find(c => c.id === id));
     $('tabela').querySelector('thead').innerHTML = `<tr>${cols.map(c => `<th${c.id === 'volumes' ? ' style="text-align:center;"' : ''}>${esc(c.rotulo)}</th>`).join('')}</tr>`;
+    window.ajustarColunasPortal($('tabela'), colTabela);
 
     // Faixa separando os dias, como na Torre -- só quando a lista de fato
     // atravessa mais de um dia. Conta na lista INTEIRA, não no lote à
     // mostra: com 50 pedidos só de hoje o primeiro lote é de um dia só, e
     // sem isso a lista começava sem nenhuma faixa.
-    const varios = new Set(lista.map(p => p.data)).size > 1;
+    // (ordenando por outra coluna as faixas de dia não fazem sentido: somem)
+    const ordData = !colTabela.ord || colTabela.ord.k === (COLUNAS.find(x => x.id === 'data') || {}).rotulo;
+    const varios = ordData && new Set(lista.map(p => p.data)).size > 1;
     let ultimo = null;
     const linhas = fatia.map(p => {
       let faixa = '';

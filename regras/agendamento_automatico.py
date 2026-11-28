@@ -12,8 +12,9 @@ from datetime import date, datetime, time
 
 from regras import feriados
 from regras.complexidade_entrega import horario_efetivo
+from regras.corte_roteirizacao import obter_corte
 
-CORTE_RODADA = time(14, 15)
+CORTE_RODADA = time(14, 15)  # padrao; o valor vigente vem de corte_roteirizacao (editavel no /planejamento)
 A_PARTIR_DE = date(2026, 11, 3)
 DIA_TODO = ("00:00", "23:59")
 _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -28,11 +29,27 @@ def _parse_saida(texto: str):
     return None
 
 
-def data_automatica(inicio_rodada: datetime, data_saida: str = "") -> date:
-    """Proximo dia util (antes do corte) ou o seguinte (depois do corte)."""
+def data_automatica(inicio_rodada: datetime, data_saida: str = "", corte: time | None = None,
+                    lancado_em: datetime | None = None) -> date:
+    """Proximo dia util (antes do corte) ou o seguinte (depois do corte).
+    O corte compara com a hora de LANCAMENTO do pedido (lancado_em, da listagem da
+    Stokki) quando ela existe e e coerente; senao, com o inicio da rodada."""
+    if corte is None:
+        corte = obter_corte()
+    if lancado_em is not None:
+        lancado = lancado_em.replace(tzinfo=None)
+        rodada = inicio_rodada.replace(tzinfo=None)
+        if lancado <= rodada:
+            data = _data_pelo_corte(lancado, data_saida, corte)
+            if data > rodada.date():  # nunca data passada/de hoje: pedido antigo cai na regra da rodada
+                return data
+    return _data_pelo_corte(inicio_rodada, data_saida, corte)
+
+
+def _data_pelo_corte(inicio_rodada: datetime, data_saida: str, corte: time) -> date:
     hoje = inicio_rodada.date()
     d1 = feriados.proximo_dia_util(hoje)
-    if feriados.eh_dia_util(hoje) and inicio_rodada.time() <= CORTE_RODADA:
+    if feriados.eh_dia_util(hoje) and inicio_rodada.time() <= corte:
         data = d1
     else:
         data = feriados.proximo_dia_util(d1)

@@ -16,18 +16,17 @@
   .campo { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
   .campo.largo { grid-column: 1 / -1; }
   .campo[hidden] { display: none; }
-  .campo label, .campo .rotulo { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--texto-suave); }
+  .campo label, .campo .rotulo { font-size: 12px; font-weight: 700; color: var(--texto-suave); }
   .campo input[type="text"], .campo select, .campo textarea { height: 36px; padding: 0 10px; border: 1px solid var(--borda); border-radius: 7px; background: var(--fundo); color: var(--texto); font-size: 13.5px; font-family: inherit; width: 100%; box-sizing: border-box; }
   .campo textarea { height: 58px; padding: 8px 10px; resize: vertical; }
   .campo input:focus, .campo select:focus, .campo textarea:focus { outline: none; border-color: var(--acento); box-shadow: 0 0 0 3px color-mix(in srgb, var(--acento) 22%, transparent); }
-  .campo .dica { font-size: 11.5px; color: var(--texto-suave); line-height: 1.4; }
+  .campo .dica { font-size: 12px; color: var(--texto-suave); line-height: 1.4; }
   .campo.invalido input, .campo.invalido select, .campo.invalido .segmentos { border-color: var(--erro); }
 
-  .segmentos { display: inline-flex; border: 1px solid var(--borda); border-radius: 8px; overflow: hidden; background: var(--fundo); width: fit-content; }
+  .segmentos { display: inline-flex; border: 1px solid var(--borda); border-radius: 10px; overflow: hidden; background: var(--fundo); width: fit-content; padding: 3px; gap: 2px; }
   .campo .segmentos label { cursor: pointer; text-transform: none; letter-spacing: 0; font-size: inherit; font-weight: inherit; color: inherit; }
   .segmentos input { position: absolute; opacity: 0; pointer-events: none; }
-  .segmentos span { display: inline-flex; align-items: center; height: 34px; padding: 0 16px; white-space: nowrap; font-size: 13px; font-weight: 600; color: var(--texto-suave); border-right: 1px solid var(--borda); }
-  .segmentos label:last-child span { border-right: none; }
+  .segmentos span { display: inline-flex; align-items: center; height: 30px; padding: 0 16px; white-space: nowrap; font-size: 13px; font-weight: 600; color: var(--texto-suave); border-radius: 7px; }
   .segmentos input:checked + span { background: var(--primaria); color: #fff; }
   html.tema-escuro .segmentos input:checked + span { background: var(--acento); color: #06170F; }
   .segmentos input:focus-visible + span { box-shadow: inset 0 0 0 2px var(--acento); }
@@ -60,7 +59,7 @@
   .item.destaque { border-color: var(--acento); box-shadow: 0 0 0 3px color-mix(in srgb, var(--acento) 18%, transparent); }
   .item .topo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .item .numero { font-weight: 800; font-variant-numeric: tabular-nums; }
-  .chip { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; padding: 2px 8px; border-radius: 100px; background: var(--nunca-bg); color: var(--texto-suave); }
+  .chip { display: inline-block; font-size: 11.5px; font-weight: 700; letter-spacing: 0.3px; text-transform: uppercase; padding: 2px 8px; border-radius: 100px; background: var(--nunca-bg); color: var(--texto-suave); }
   .chip.descarga { background: var(--interrompido-bg); color: var(--interrompido-texto); }
   .chip.adiantamento { background: var(--rodando-bg); color: var(--rodando-texto); }
   .chip.frete_avulso { background: var(--sucesso-bg); color: var(--sucesso); }
@@ -139,6 +138,10 @@
       <label for="f-valor" id="l-valor">Valor</label>
       <div class="grupo-valor"><span>R$</span><input type="text" id="f-valor" name="valor" inputmode="decimal" placeholder="0,00" autocomplete="off"></div>
     </div>
+    <div class="campo" id="c-data_combinada" hidden>
+      <label for="f-data-combinada">Data combinada para pagamento <span style="text-transform:none;font-weight:500">(opcional)</span></label>
+      <input type="date" id="f-data-combinada" name="data_combinada">
+    </div>
     <div class="campo" id="c-valor_cobrado" hidden>
       <label for="f-valor-cobrado">Valor cobrado do cliente</label>
       <div class="grupo-valor"><span>R$</span><input type="text" id="f-valor-cobrado" name="valor_cobrado" inputmode="decimal" placeholder="0,00" autocomplete="off"></div>
@@ -207,6 +210,7 @@
       <div class="detalhes">
         <strong>{{ p.motorista_nome }}</strong>{% if p.motorista_placa %} · {{ p.motorista_placa }}{% endif %}
         {% if p.descricao %}<br>Frete: {{ p.descricao }}{% endif %}
+        {% if p.data_combinada %}<br>Data combinada para pagamento: <strong>{{ pp.data_br(p.data_combinada) }}</strong>{% endif %}
         {% if p.valor_cobrado is not none %}{% set mg = pp.margem(p) %}<br>Cobrado do cliente: {{ moeda(p.valor_cobrado) }} · margem <span class="{{ 'margem negativa' if mg < 0 else '' }}">{{ '-' if mg < 0 else '' }}{{ moeda(mg|abs) }}</span>{% endif %}
         {% if p.favorecido == 'LOCAL' %}<br>Pagar ao local: <strong>{{ p.local_nome }}</strong> · {{ p.local_pagamento }}{% elif p.motorista_pix %}<br>PIX: {{ p.motorista_pix }}{% endif %}
         {% if p.observacao %}<br>Obs: {{ p.observacao }}{% endif %}
@@ -299,7 +303,7 @@
     cFav.hidden = !descarga;
     blocoLocal.classList.toggle("aberto", aoLocal);
     document.getElementById("c-pix").hidden = aoLocal;
-    for (const id of ["c-descricao", "c-valor_cobrado", "c-anexo"]) document.getElementById(id).hidden = !frete;
+    for (const id of ["c-descricao", "c-valor_cobrado", "c-data_combinada", "c-anexo"]) document.getElementById(id).hidden = !frete;
     document.getElementById("l-valor").textContent = frete ? "Valor a pagar ao motorista" : "Valor";
     atualizarMargem();
   }
@@ -333,6 +337,7 @@
       observacao: valorDe("observacao"), local_nome: valorDe("local_nome"), local_pagamento: valorDe("local_pagamento"),
       local_endereco: valorDe("local_endereco"), local_documento: valorDe("local_documento"),
       pix: valorDe("pix"), descricao: valorDe("descricao"), valor_cobrado: valorDe("valor_cobrado"),
+      data_combinada: valorDe("data_combinada"),
     };
     const frete = corpo.tipo === "FRETE_AVULSO";
     const aoLocal = corpo.tipo === "DESCARGA" && corpo.favorecido === "LOCAL";

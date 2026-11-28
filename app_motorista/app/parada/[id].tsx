@@ -22,6 +22,7 @@ import { conferirPermissao } from '../../src/permissoes';
 import { Botao, Cartao, Carregando } from '../../src/componentes';
 import { cores, hoje } from '../../src/tema';
 import { codigoComNf } from '../../src/textos';
+import { ehPendente } from '../../src/paradaPasso';
 import type { CampoChecklist, Checklist, Parada, SituacaoParada } from '../../src/tipos';
 
 type Fluxo = 'ENTREGUE' | 'PARCIAL' | 'NAO_ENTREGUE' | 'REAGENDAR';
@@ -84,10 +85,19 @@ function horaMaisMinutos(min: number): string {
 }
 
 export default function RegistroParada() {
-  const { id, rota: rotaParam, fluxo: fluxoParam } = useLocalSearchParams<{ id: string; rota: string; fluxo?: string | string[] }>();
+  const { id, rota: rotaParam, fluxo: fluxoParam, grupo: grupoParam } = useLocalSearchParams<{ id: string; rota: string; fluxo?: string | string[]; grupo?: string }>();
   const paradaId = Number(id);
   const rotaId = Number(rotaParam);
   const router = useRouter();
+  // Baixa em grupo (26/11): ?grupo=12,13,14 -- mesmos embarcador, destinatario e endereco,
+  // um resultado e UM comprovante pra todos. Pedido que o motorista tira do grupo segue
+  // pendente pra baixa normal. A foto do grupo nao passa pela leitura automatica: vai
+  // pra conferencia manual (decisao do Hugo).
+  const grupoIds = typeof grupoParam === 'string' && grupoParam ? grupoParam.split(',').map(Number).filter((n) => n > 0) : [];
+  const emGrupo = grupoIds.length >= 2;
+  const [grupoParadas, setGrupoParadas] = useState<Parada[]>([]);
+  const [foraDoGrupo, setForaDoGrupo] = useState<number[]>([]);
+  const grupoDoRascunho = emGrupo ? grupoParam! : null;
   const [parada, setParada] = useState<Parada | null>(null);
   const [checklist, setChecklist] = useState<Checklist | null>(null);
   const [fluxo, setFluxo] = useState<Fluxo | null>(null);
@@ -112,11 +122,15 @@ export default function RegistroParada() {
   const finalizado = useRef(false);
   const fluxoAplicado = useRef(false);
 
+  const selecionados = grupoParadas.filter((p) => !foraDoGrupo.includes(p.id));
+
   const escolherComConfirmacao = (f: Fluxo) =>
     new Promise<void>((resolve) => {
       Alert.alert(
         `Finalizar como "${TITULO_FLUXO[f]}"?`,
-        'Tem certeza que quer finalizar este pedido? Depois disso o checklist é aberto.',
+        emGrupo
+          ? `Tem certeza que quer finalizar estes ${selecionados.length} pedidos de uma vez? Depois disso o checklist é aberto.`
+          : 'Tem certeza que quer finalizar este pedido? Depois disso o checklist é aberto.',
         [
           { text: 'Voltar', style: 'cancel', onPress: () => resolve() },
           { text: 'Sim, finalizar', onPress: () => { setFluxo(f); resolve(); } },
@@ -130,16 +144,22 @@ export default function RegistroParada() {
     const rota = r.rotas.find((x) => x.id === rotaId);
     const achada = rota?.paradas.find((p) => p.id === paradaId) ?? null;
     setParada(achada);
+    if (emGrupo) {
+      // So os que ainda estao pendentes (outro aparelho/painel pode ter baixado algum)
+      setGrupoParadas((rota?.paradas ?? []).filter((p) => grupoIds.includes(p.id) && ehPendente(p)));
+    }
     setChecklist(await carregarChecklist());
     // Retoma o que já estava preenchido se o Android fechou o app com a
     // câmera aberta, e recupera a foto que a câmera entregou nesse meio.
     const salvo = await rascunho.ler();
     // Rascunho vazio (gravado so por abrir a tela) nao conta: so o que tem estado.
-    const temRascunho = !!salvo && salvo.paradaId === paradaId && (
+    // Rascunho de parada so nunca vale pro grupo (e vice-versa): o `grupo` tem que bater.
+    const mesmoRascunho = !!salvo && salvo.paradaId === paradaId && (salvo.grupo ?? null) === grupoDoRascunho;
+    const temRascunho = !!salvo && mesmoRascunho && (
       salvo.fluxo != null || salvo.motivoId != null || salvo.cameraAberta != null
       || Object.keys(salvo.respostas).length > 0 || Object.keys(salvo.fotos).length > 0
     );
-    if (salvo && salvo.paradaId === paradaId) {
+    if (salvo && mesmoRascunho) {
       const fotosSalvas = { ...salvo.fotos };
       if (salvo.cameraAberta) {
         const { chave, substituir } = salvo.cameraAberta;
@@ -167,14 +187,14 @@ export default function RegistroParada() {
         void escolherComConfirmacao(fluxoParam);
       }
     }
-  }, [rotaId, paradaId, fluxoParam]);
+  }, [rotaId, paradaId, fluxoParam, grupoDoRascunho, grupoParam]);
   useEffect(() => { void carregar(); }, [carregar]);
 
   // Guarda o rascunho a cada mudança (só depois de restaurar, pra não
   // gravar a tela vazia por cima do que estava salvo).
   const gravarRascunho = useCallback(
-    () => rascunho.salvar({ paradaId, rotaId, fluxo, respostas, fotos, motivoId, cameraAberta: cameraAberta.current }),
-    [paradaId, rotaId, fluxo, respostas, fotos, motivoId],
+    () => rascunho.salvar({ paradaId, rotaId, grupo: grupoDoRascunho, fluxo, respostas, fotos, motivoId, cameraAberta: cameraAberta.current }),
+    [paradaId, rotaId, grupoDoRascunho, fluxo, respostas, fotos, motivoId],
   );
   useEffect(() => {
     if (restaurado && !finalizado.current) void gravarRascunho();
@@ -185,7 +205,8 @@ export default function RegistroParada() {
   // Conferência automática das fotos: só existe se o servidor disser que
   // está ligada (config api_motorista.validacao_fotos.ativo). Desligada,
   // a tela se comporta exatamente como antes.
-  const validacaoAtiva = checklist.validacao_fotos?.ativo === true;
+  // No grupo a foto nunca passa pela leitura: um documento com muitas notas vai pra conferência manual.
+  const validacaoAtiva = !emGrupo && checklist.validacao_fotos?.ativo === true;
 
   const guardarFoto = (chave: string, uri: string, substituir: boolean) =>
     setFotos((f) => ({ ...f, [chave]: substituir ? [uri] : [...(f[chave] ?? []), uri] }));
@@ -263,7 +284,7 @@ export default function RegistroParada() {
   // Um canhoto por NF (Hugo, 12/09): pedido com mais de uma nota vira um
   // bloco de canhoto por nota. Com uma NF só (ou nenhuma conhecida) fica
   // o bloco único de sempre, que já aceita várias fotos.
-  const nfsPedido = parada.nfs ?? [];
+  const nfsPedido = emGrupo ? [] : parada.nfs ?? [];   // grupo: um canhoto só, não um por NF
   const campos: CampoChecklist[] = nfsPedido.length > 1
     ? camposBase.flatMap((c) => (c.chave !== 'foto_canhoto' ? [c] : nfsPedido.map((nf) => ({
         ...c,
@@ -306,7 +327,45 @@ export default function RegistroParada() {
     return null;
   };
 
+  // Baixa em grupo: um EVENTO_LOTE (cada pedido ganha o próprio evento no servidor) e uma
+  // COMPROVANTE_LOTE por foto, ligada a todos. Uuids novos por item e por envio: reenviar
+  // da fila nunca duplica.
+  const confirmarGrupo = async () => {
+    const falta = validar();
+    if (falta) return Alert.alert('Quase lá', falta);
+    if (selecionados.length < 2) {
+      return Alert.alert('Grupo', 'Deixe pelo menos 2 pedidos no grupo. Para um pedido só, volte e use a baixa normal.');
+    }
+    setEnviando(true);
+    try {
+      const pos = await gps.posicaoAtual();
+      const agora = fila.agoraIso();
+      const tipoEvento = fluxo === 'NAO_ENTREGUE' ? 'INSUCESSO' : fluxo;
+      const situacao: SituacaoParada = tipoEvento === 'INSUCESSO' ? 'INSUCESSO' : tipoEvento === 'PARCIAL' ? 'PARCIAL' : 'ENTREGUE';
+      const itens = (): fila.ItemLote[] => selecionados.map((p) => ({ paradaId: p.id, uuid: fila.novoUuid() }));
+      for (const p of selecionados) await local.marcarParada(p.id, situacao);
+      const { vinculo_outro, ...demais } = respostas;
+      const fotosQtd = Object.fromEntries(Object.entries(fotos).filter(([, lista]) => lista.length > 0).map(([chave, lista]) => [chave, lista.length]));
+      await fila.enfileirar({
+        uuid: fila.novoUuid(), tipo: 'EVENTO_LOTE', itens: itens(), criadoEm: agora, tentativas: 0,
+        corpo: { tipo: tipoEvento, ocorrido_em: agora, ...pos, motivo_id: motivoId, observacoes: respostas.observacoes ?? null,
+                 checklist: { ...demais, ...(pedeVinculoOutro ? { vinculo_outro } : {}), fotos: Object.keys(fotosQtd), fotos_qtd: fotosQtd, assinatura: false, grupo: selecionados.length } },
+      });
+      for (const [chave, lista] of Object.entries(fotos)) {
+        for (const uri of lista) {
+          await fila.enfileirar({ uuid: fila.novoUuid(), tipo: 'COMPROVANTE_LOTE', itens: itens(), uri, tipoComprovante: TIPO_COMPROVANTE[chaveBase(chave)] ?? 'CANHOTO', capturadoEm: agora, criadoEm: agora, tentativas: 0 });
+        }
+      }
+      finalizado.current = true;
+      await rascunho.limpar();
+      router.back();
+    } finally {
+      setEnviando(false);
+    }
+  };
+
   const confirmarEntrega = async () => {
+    if (emGrupo) return confirmarGrupo();
     const falta = validar();
     if (falta) return Alert.alert('Quase lá', falta);
     setEnviando(true);
@@ -363,11 +422,32 @@ export default function RegistroParada() {
 
   return (
     <ScrollView style={s.tela} contentContainerStyle={{ padding: 16, paddingBottom: 60 }} keyboardShouldPersistTaps="handled">
-      <Cartao>
-        <Text style={s.titulo}>{parada.ordem}. {parada.destinatario_nome || parada.titulo}</Text>
-        <Text style={s.sub}>{parada.endereco}</Text>
-        <Text style={s.sub}>{codigoComNf(parada)}{parada.volume_caixas ? ` · ${parada.volume_caixas} caixa(s)` : ''}{parada.tentativas > 0 ? ` · ${parada.tentativas}ª tentativa já feita` : ''}</Text>
-      </Cartao>
+      {emGrupo ? (
+        <Cartao>
+          <Text style={s.titulo}>Baixa em grupo · {selecionados.length} pedido(s)</Text>
+          <Text style={s.sub}>{parada.destinatario_nome || parada.titulo}</Text>
+          <Text style={s.sub}>{parada.endereco}</Text>
+          <Text style={s.sub}>Um resultado e um comprovante para todos. A foto vai para conferência manual.</Text>
+          {grupoParadas.map((p) => {
+            const fora = foraDoGrupo.includes(p.id);
+            return (
+              <Pressable key={p.id} onPress={() => setForaDoGrupo((f) => (fora ? f.filter((x) => x !== p.id) : [...f, p.id]))}
+                style={s.linhaGrupo} accessibilityRole="checkbox" accessibilityState={{ checked: !fora }}>
+                <Text style={[s.sub, { marginTop: 0, flex: 1 }, fora && { textDecorationLine: 'line-through' }]}>
+                  {fora ? '☐' : '☑'}  {codigoComNf(p)}{p.volume_caixas ? ` · ${p.volume_caixas} caixa(s)` : ''}
+                </Text>
+              </Pressable>
+            );
+          })}
+          <Text style={s.sub}>Toque num pedido para tirá-lo do grupo; ele segue pendente para a baixa normal.</Text>
+        </Cartao>
+      ) : (
+        <Cartao>
+          <Text style={s.titulo}>{parada.ordem}. {parada.destinatario_nome || parada.titulo}</Text>
+          <Text style={s.sub}>{parada.endereco}</Text>
+          <Text style={s.sub}>{codigoComNf(parada)}{parada.volume_caixas ? ` · ${parada.volume_caixas} caixa(s)` : ''}{parada.tentativas > 0 ? ` · ${parada.tentativas}ª tentativa já feita` : ''}</Text>
+        </Cartao>
+      )}
 
       {!fluxo ? (
         <View style={{ gap: 12 }}>
@@ -375,7 +455,7 @@ export default function RegistroParada() {
           <Deslizar titulo="Entregue" icone="checkmark" cor={cores.acento} onConfirmar={() => escolherComConfirmacao('ENTREGUE')} />
           <Deslizar titulo="Entregue parcial" icone="remove-circle" cor={cores.alerta} onConfirmar={() => escolherComConfirmacao('PARCIAL')} />
           <Deslizar titulo="Não entregue" icone="close" cor={cores.perigo} onConfirmar={() => escolherComConfirmacao('NAO_ENTREGUE')} />
-          <Deslizar titulo="Reagendar (voltar depois)" icone="time" cor={cores.primaria} onConfirmar={() => { setFluxo('REAGENDAR'); }} />
+          {emGrupo ? null : <Deslizar titulo="Reagendar (voltar depois)" icone="time" cor={cores.primaria} onConfirmar={() => { setFluxo('REAGENDAR'); }} />}
         </View>
       ) : fluxo === 'REAGENDAR' ? (
         <>
@@ -484,6 +564,7 @@ const s = StyleSheet.create({
   tela: { flex: 1, backgroundColor: cores.fundo },
   titulo: { fontSize: 18, fontWeight: '800', color: cores.texto },
   sub: { color: cores.textoSuave, marginTop: 4 },
+  linhaGrupo: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, minHeight: 44 },
   instrucao: { color: cores.textoSuave, marginBottom: 4, textAlign: 'center' },
   trocar: { color: cores.info, fontWeight: '600', marginBottom: 10 },
   rotulo: { fontWeight: '700', color: cores.texto, marginBottom: 8, fontSize: 15 },

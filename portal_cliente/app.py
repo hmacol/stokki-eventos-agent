@@ -1233,6 +1233,12 @@ def api_envios_analisar():
                         emp = ped["emitente_cnpj"]
                         v = envios.validar_item(conn, ped, emp, _outras_empresas_envio())
                         erros_sku, avisos_sku = envios.validar_skus(conn, ped, ctx(emp)["cfg"])
+                        if ped.get("transportadora_texto"):   # coluna "Transportadora" da planilha
+                            try:
+                                t_plan = transportadora_envio.achar_por_texto(conn, ped["transportadora_texto"])
+                                ped["transportadora_id"], ped["transportadora_nome"] = t_plan["id"], t_plan["nome"]
+                            except transportadora_envio.ErroTransportadora as err_t:
+                                erros_sku = [*erros_sku, f"Coluna Transportadora: {err_t}"]
                         if not v["ok"] or erros_sku:
                             rejeitados.append({"arquivo": nome, "rotulo": rotulo, "erro": " ".join(v["erros"] + erros_sku)})
                             continue

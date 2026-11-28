@@ -86,6 +86,7 @@ from planejamento_rotas import (
     placas_veiculos_vuupt, seletor_veiculos, confirmar_envio_rascunhos,
 )
 from regras import veiculos as veiculos_regras
+from regras import corte_roteirizacao
 from avisar_motoristas_rotas import notificar_oferta_motoristas, push_ofertas_vps
 from motoristas import dados_pagina_motoristas, url_app_motorista, listar_agentes_vuupt_nao_cadastrados, cadastrar_motorista, editar_motorista, MotoristaNaoEncontrado
 from expedicao import listar_rotas_do_dia, gerar_romaneio_rota, excluir_pedido_da_rota, MOTIVOS_EXCLUSAO
@@ -129,6 +130,7 @@ import avisos_pendencias
 from galpao3d import banco as galpao3d_banco, estado as galpao3d_estado
 import retornos
 import pagamentos_pontuais
+import relatorio_esporadicos as relatorio_esporadicos_mod
 import compras
 
 def _carregar_config() -> dict:
@@ -313,6 +315,9 @@ def requer_auth(f=None, *, niveis=("total",)):
             if nivel is None:
                 if request.path.startswith(f"{request.script_root}/api/"):
                     return jsonify({"erro": "Sessão expirada -- faça login de novo."}), 401
+                # QR code da folha de coleta (16/11, Hugo): o celular da doca entra e volta pra coleta
+                if request.endpoint == "expedicao_coleta_tela":
+                    return redirect(url_for("login", proximo=f"coleta{request.view_args['coleta_id']}"))
                 return redirect(url_for("login"))
             # "Derrubar todas as sessoes" (24/10, /acessos): sessao de rodada
             # anterior cai, de qualquer login.
@@ -541,6 +546,10 @@ def login():
             # Exceção: o link da aula (WhatsApp da equipe) volta pros vídeos.
             if request.args.get("proximo") == "aula":
                 return redirect(url_for("aula_equipe"))
+            # E o QR code da folha de coleta volta pra coleta (so o numero vem do link).
+            volta = re.fullmatch(r"coleta(\d{1,9})", request.args.get("proximo") or "")
+            if volta:
+                return redirect(url_for("expedicao_coleta_tela", coleta_id=int(volta[1])))
             # Todo acesso cai no Inicio (24/10, Hugo), nao na tela que a pessoa
             # tentava abrir. Galpao, expedicao e personalizado sem o Inicio
             # vao pra tela deles (_pagina_inicial).
@@ -1390,7 +1399,22 @@ def planejamento():
         motivos_exclusao=MOTIVOS_EXCLUSAO,
         # selo "sem carro" recalculado no card depois de trocar motorista/carro
         agentes_sem_carro=sorted(veiculos_regras.AGENTES_SEM_CARRO),
+        # corte da roteirizacao: todos veem, so "total" (administrador) edita
+        corte=corte_roteirizacao.detalhe_corte(),
+        pode_editar_corte=g.nivel_acesso == "total",
     )
+
+
+@app.route("/api/planejamento/corte", methods=["POST"])
+@requer_auth(niveis=("total",))
+def api_planejamento_corte():
+    """Salva o horario de corte da roteirizacao (so administrador)."""
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        hhmm = corte_roteirizacao.definir_corte(body.get("corte"), g.get("nome_usuario") or "admin")
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True, **corte_roteirizacao.detalhe_corte(), "hhmm": hhmm})
 
 
 @app.route("/planejamento/mobile")
@@ -4042,6 +4066,95 @@ def api_trocar_motorista():
     return jsonify(resposta)
 
 
+def _oferta_rota_enviada(acao):
+    """Botoes de oferta do card da rota enviada (Hugo, 21/11). `acao(ofertas, conn, rota, rascunho,
+    config, usuario)` devolve o dict da resposta; ValueError vira 400 com o texto."""
+    from nucleo import banco as nucleo_banco, ofertas_rota_enviada as ofertas
+    try:
+        rascunho = rascunhos_rota.buscar_rascunho(int(request.get_json(force=True)["rascunho_id"]))
+    except (KeyError, TypeError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    if not rascunho or rascunho["status"] != rascunhos_rota.STATUS_ENVIADO:
+        return jsonify({"erro": "Rota enviada não encontrada."}), 404
+    config = _carregar_config()
+    conn = nucleo_banco.conectar()
+    try:
+        rota = ofertas.rota_do_rascunho(conn, rascunho["id"])
+        if rota is None:
+            return jsonify({"erro": "A rota ainda não chegou ao sistema dos motoristas. Tente de novo em 1 minuto."}), 404
+        try:
+            resultado = acao(ofertas, conn, rota, rascunho, config, session.get("usuario") or g.nivel_acesso)
+        except ValueError as e:
+            return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+    if not resultado.get("ok"):
+        return jsonify({"erro": resultado.get("erro") or "Não foi possível."}), 400
+    return jsonify(resultado)
+
+
+@app.route("/api/planejamento/ofertar-rota", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_ofertar_rota():
+    """ "Ofertar para motoristas": abre a rota enviada pros outros motoristas (aviso no grupo
+    Rotas FRESHLOG na rodada seguinte do timer, depois mensagem particular em etapas)."""
+    def acao(ofertas, conn, rota, rascunho, config, usuario):
+        if not ofertas.config_ofertas(config)["ativo"]:
+            raise ValueError("Divulgação de rotas desligada no config (api_motorista.rota_sem_aceite.ativo).")
+        publicar_em = None
+        hora = str((request.get_json(force=True) or {}).get("hora") or "").strip()
+        if hora:        # "HH:MM", hoje, horario local do servidor (America/Sao_Paulo)
+            try:
+                h, m = hora.split(":")
+                publicar_em = datetime.now().replace(hour=int(h), minute=int(m), second=0, microsecond=0)
+            except ValueError:
+                raise ValueError("Horário inválido. Use HH:MM, por exemplo 18:30.")
+            if publicar_em <= datetime.now():
+                raise ValueError(f"{hora} de hoje já passou. Deixe o horário em branco pra ofertar agora.")
+        return ofertas.ofertar_pela_equipe(conn, rota["id"], usuario, config.get("google_maps", {}).get("api_key", ""),
+                                           publicar_em=publicar_em)
+    return _oferta_rota_enviada(acao)
+
+
+@app.route("/api/planejamento/retirar-oferta", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_retirar_oferta():
+    """ "Retirar oferta": so a oferta da equipe que ninguem pegou; nao reabre."""
+    return _oferta_rota_enviada(lambda ofertas, conn, rota, rascunho, config, usuario:
+                                ofertas.retirar_pela_equipe(conn, rota["id"], usuario))
+
+
+@app.route("/api/planejamento/confirmar-escolha", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_confirmar_escolha():
+    """ "Confirmar motorista": troca motorista e carro na Vuupt (mesma troca do card) e, so depois
+    do ok dela, passa a rota pra quem pegou no app e fecha a oferta. Vuupt recusou = nada muda."""
+    def acao(ofertas, conn, rota, rascunho, config, usuario):
+        def trocar(escolha):
+            return rascunhos_rota.trocar_motorista(
+                rascunho["id"], escolha["agent_id"], escolha["vehicle_id"], escolha["nome"],
+                token=config.get("vuupt_api", {}).get("token", ""), placas=placas_veiculos_vuupt(config),
+                trava_sem_carro=veiculos_regras.trava_sem_carro_ligada(config))
+        return ofertas.confirmar_escolha(conn, rota["id"], usuario, trocar)
+    return _oferta_rota_enviada(acao)
+
+
+@app.route("/api/planejamento/recusar-escolha", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_recusar_escolha():
+    """ "Recusar": a rota volta pra oferta e quem foi recusado deixa de ve-la."""
+    return _oferta_rota_enviada(lambda ofertas, conn, rota, rascunho, config, usuario:
+                                ofertas.recusar_escolha(conn, rota["id"], usuario))
+
+
 @app.route("/api/planejamento/lalamove-veiculo", methods=["POST"])
 @requer_auth(niveis=("total", "operador", "logistica"))
 @exige_mesma_origem
@@ -4179,6 +4292,22 @@ def api_publicar_oferta():
         "elegiveis": [{"agent_id": m.agent_id, "nome": m.nome} for m in resultado["elegiveis"]],
         "aviso": aviso,
     })
+
+
+@app.route("/api/planejamento/agendar-oferta", methods=["POST"])
+@requer_auth(niveis=("total", "operador", "logistica"))
+@exige_mesma_origem
+@bloqueia_planejamento_passado
+def api_agendar_oferta():
+    """"Publicar para motoristas" com horário (Hugo, 25/11): HH:MM de hoje ou "AAAA-MM-DD HH:MM" / "DD/MM HH:MM"; o timer
+    nucleo/publicar_ofertas_agendadas.py publica e avisa quando a hora chega.
+    horario vazio cancela o agendamento."""
+    body = request.get_json(force=True)
+    try:
+        quando = rascunhos_rota.agendar_oferta(int(body["rascunho_id"]), body.get("horario"))
+    except (KeyError, TypeError, ValueError) as e:
+        return jsonify({"erro": str(e)}), 400
+    return jsonify({"ok": True, "agendada_em": quando, "rascunho": _rascunho_ou_404(int(body["rascunho_id"]))})
 
 
 @app.route("/api/planejamento/publicar-ofertas-lote", methods=["POST"])
@@ -4816,6 +4945,90 @@ def pagamentos():
                            motoristas=motoristas, pp=pp, envio_ligado=pp.config_pagamentos(config)["ativo"])
 
 
+NIVEIS_ESPORADICOS = ("total", "atendimento")    # CPF e PIX dos motoristas: sem logistica
+
+
+def _periodo_esporadicos() -> tuple[str, str]:
+    """de/ate da query (ISO); invalido ou ausente = o ciclo de pagamento de hoje (10-24 / 25-09)."""
+    hoje = date.today()
+    ciclo = relatorio_esporadicos_mod.ciclo_atual(hoje)
+
+    def _d(chave, padrao):
+        try:
+            return date.fromisoformat((request.args.get(chave) or "").strip())
+        except ValueError:
+            return padrao
+    de, ate = _d("de", ciclo[0]), _d("ate", ciclo[1])
+    if de > ate:
+        de, ate = ate, de
+    return de.isoformat(), ate.isoformat()
+
+
+def _quem_esporadicos() -> str:
+    q = (request.args.get("quem") or "todos").lower()
+    return q if q in relatorio_esporadicos_mod.QUEM else "todos"
+
+
+def _filtro_esporadicos() -> str:
+    f = (request.args.get("filtro") or "pendentes").lower()
+    return f if f in relatorio_esporadicos_mod.FILTROS else "pendentes"
+
+
+@app.route("/financeiro/esporadicos")
+@requer_auth(niveis=NIVEIS_ESPORADICOS)
+def relatorio_esporadicos():
+    de, ate = _periodo_esporadicos()
+    return render_template("relatorio_esporadicos.html",
+                           rel=relatorio_esporadicos_mod.gerar(de, ate, _filtro_esporadicos(), quem=_quem_esporadicos()),
+                           fonte_km=relatorio_esporadicos_mod.fonte_km,
+                           ciclos=relatorio_esporadicos_mod.ciclos_recentes(date.today()))
+
+
+@app.route("/financeiro/esporadicos.csv")
+@requer_auth(niveis=NIVEIS_ESPORADICOS)
+def relatorio_esporadicos_csv():
+    de, ate = _periodo_esporadicos()
+    rel = relatorio_esporadicos_mod.gerar(de, ate, _filtro_esporadicos(), quem=_quem_esporadicos())
+    detalhe = request.args.get("tipo") == "detalhe"
+    corpo = (relatorio_esporadicos_mod.csv_detalhe if detalhe else relatorio_esporadicos_mod.csv_resumo)(rel)
+    nome = f"esporadicos_{'rotas' if detalhe else 'resumo'}_{rel['quem']}_{rel['filtro']}_{de}_a_{ate}.csv"
+    # BOM: o Excel pt-BR abre em UTF-8 sem baguncar os acentos
+    return Response(chr(0xFEFF) + corpo, mimetype="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{nome}"'})
+
+
+@app.route("/api/financeiro/esporadicos/pagar", methods=["POST"])
+@requer_auth(niveis=NIVEIS_ESPORADICOS)
+@exige_mesma_origem
+def api_esporadicos_pagar():
+    """Marca como pago o que esta pendente de um motorista no periodo. O valor e recalculado aqui."""
+    dados = request.get_json(silent=True) or {}
+    try:
+        de = date.fromisoformat(str(dados.get("de") or "")).isoformat()
+        ate = date.fromisoformat(str(dados.get("ate") or "")).isoformat()
+    except ValueError:
+        return jsonify({"erro": "Periodo invalido."}), 400
+    try:
+        res = relatorio_esporadicos_mod.marcar_pago(str(dados.get("chave") or ""), de, ate, _usuario_pagamento(),
+                                                    str(dados.get("observacao") or ""))
+    except relatorio_esporadicos_mod.ErroPagamento as e:
+        return jsonify({"erro": str(e)}), 400
+    logging.getLogger(__name__).info("esporadicos.pago id=%s rotas=%s por=%s", res["id"], res["rotas"], _usuario_pagamento())
+    return jsonify({"ok": True, **res})
+
+
+@app.route("/api/financeiro/esporadicos/<int:pagamento_id>/desfazer", methods=["POST"])
+@requer_auth(niveis=NIVEIS_ESPORADICOS)
+@exige_mesma_origem
+def api_esporadicos_desfazer(pagamento_id: int):
+    try:
+        relatorio_esporadicos_mod.desfazer_pago(pagamento_id, _usuario_pagamento())
+    except relatorio_esporadicos_mod.ErroPagamento as e:
+        return jsonify({"erro": str(e)}), 400
+    logging.getLogger(__name__).info("esporadicos.desfeito id=%s por=%s", pagamento_id, _usuario_pagamento())
+    return jsonify({"ok": True})
+
+
 def _resposta_pagamento(conn, pagamento_id: int, evento: str | None):
     aviso = pagamentos_pontuais.disparar_aviso(conn, pagamento_id, evento, _carregar_config()) if evento else None
     return jsonify({"ok": True, "id": pagamento_id, "pagamento": pagamentos_pontuais.obter(conn, pagamento_id),
@@ -4924,7 +5137,10 @@ def _usuario_compras() -> str:
 
 
 def _pode_aprovar_compras() -> bool:
-    return g.nivel_acesso == "total"
+    # Login com lista de telas personalizada vira "total" dentro das telas liberadas
+    # (requer_auth), entao o nivel sozinho nao basta: aprovar e so de quem e total de
+    # verdade, sem lista personalizada.
+    return g.nivel_acesso == "total" and g.get("telas_liberadas") is None
 
 
 @app.route("/compras")
@@ -4943,7 +5159,13 @@ def compras_tela():
     for d in itens:
         d["pode_reenviar"] = compras.pode_reenviar(d)
     cfg = compras.config_compras(config)
+    conn = compras.conectar()
+    try:
+        cad_itens, cad_areas = compras.listar_cadastro(conn, "itens"), compras.listar_cadastro(conn, "areas")
+    finally:
+        conn.close()
     return render_template("compras.html", itens=itens, situacao=situacao, contagem=contagem, c=compras,
+                           cad_itens=cad_itens, cad_areas=cad_areas,
                            envio_ligado=cfg["ativo"], aprovacao_ligada=cfg["aprovacao_ativa"],
                            pode_aprovar=_pode_aprovar_compras(), hoje=date.today().isoformat())
 
@@ -4979,6 +5201,45 @@ def api_compras_criar():
         return jsonify({"erro": str(e)}), 400
     finally:
         conn.close()
+
+
+def _cadastro_compra(func):
+    conn = compras.conectar()
+    try:
+        novo_id = func(conn)
+        return jsonify({"ok": True, "id": novo_id})
+    except compras.ErroCompra as e:
+        return jsonify({"erro": str(e)}), 400
+    finally:
+        conn.close()
+
+
+@app.route("/api/compras/itens", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COMPRAS)
+@exige_mesma_origem
+def api_compras_item_novo():
+    dados = request.get_json(silent=True) or {}
+    return _cadastro_compra(lambda conn: compras.cadastrar_item(conn, dados, _usuario_compras()))
+
+
+@app.route("/api/compras/areas", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COMPRAS)
+@exige_mesma_origem
+def api_compras_area_nova():
+    dados = request.get_json(silent=True) or {}
+    return _cadastro_compra(lambda conn: compras.cadastrar_area(conn, dados, _usuario_compras()))
+
+
+@app.route("/api/compras/<cadastro>/<int:registro_id>/ativo", methods=["POST"])
+@requer_auth(niveis=NIVEIS_COMPRAS)
+@exige_mesma_origem
+def api_compras_cadastro_ativo(cadastro, registro_id):
+    if cadastro not in ("itens", "areas"):
+        return jsonify({"erro": "Cadastro inválido."}), 404
+    if not _pode_aprovar_compras():            # so o total de verdade inativa/reativa
+        return jsonify({"erro": "Só o nível total inativa ou reativa cadastros."}), 403
+    ativo = bool((request.get_json(silent=True) or {}).get("ativo"))
+    return _cadastro_compra(lambda conn: (compras.definir_ativo(conn, cadastro, registro_id, ativo), registro_id)[1])
 
 
 @app.route("/api/compras/<int:demanda_id>/aprovar", methods=["POST"])

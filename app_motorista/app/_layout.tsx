@@ -56,7 +56,7 @@ function Guarda() {
     if (retomou.current || !motorista || motorista.trocar_pin || segments[0] !== '(tabs)') return;
     retomou.current = true;
     void rascunho.ler().then((r) => {
-      if (r?.cameraAberta) router.push(`/parada/${r.paradaId}?rota=${r.rotaId}`);
+      if (r?.cameraAberta) router.push(`/parada/${r.paradaId}?rota=${r.rotaId}${r.grupo ? `&grupo=${r.grupo}` : ''}`);
     });
   }, [motorista, segments, router]);
 

@@ -22,9 +22,11 @@ Regras fixas:
 - Todo evento que vem do app carrega `uuid` gerado no aparelho: a fila
   offline reenvia à vontade, o banco ignora repetido.
 """
+import hashlib
 import json
 import math
 import sqlite3
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
 
 from nucleo import banco, duplicidade_recibo, nf_pedido, ofertas_rota_enviada, pedidos as nucleo_pedidos, ponte_vuupt, tempos, validacao_fotos
@@ -198,7 +200,30 @@ def montar_parada(conn: sqlite3.Connection, p: sqlite3.Row, mapa_nf: dict | None
     if mapa_nf is None:
         mapa_nf = nf_pedido.nf_por_codigo([p["codigo"]], conn) if p["codigo"] else {}
     d["nf"] = nf_pedido.nf_do_codigo(p["codigo"], mapa_nf) if p["codigo"] else ""
+    d["grupo_baixa"] = chave_grupo_baixa(conn, d)
     return d
+
+
+def _so_alnum(txt) -> str:
+    sem_acento = unicodedata.normalize("NFKD", str(txt or "")).encode("ascii", "ignore").decode()
+    return "".join(c for c in sem_acento.lower() if c.isalnum())
+
+
+def chave_grupo_baixa(conn: sqlite3.Connection, p) -> str | None:
+    """Chave da baixa em grupo (Hugo, 26/11): pedidos da MESMA rota com o mesmo
+    embarcador + destinatario + endereco entregam juntos, com um comprovante so
+    (redespacho: 30-40 pedidos pro mesmo local, 1 documento de volta). So dado
+    interno do nucleo, nada da Vuupt. Embarcador diferente NUNCA junta. Falta
+    algum dos tres = None (parada fica de fora)."""
+    embarcador = p["sender_id"] or _so_alnum(p["remetente_nome"])
+    destinatario = _so_alnum(p["destinatario_nome"])
+    if not destinatario and p["codigo"]:
+        ped = conn.execute("SELECT destinatario_nome FROM nucleo_pedidos WHERE codigo = ?", (p["codigo"],)).fetchone()
+        destinatario = _so_alnum(ped["destinatario_nome"]) if ped else ""
+    endereco = _so_alnum(p["endereco"])
+    if not (embarcador and destinatario and endereco):
+        return None
+    return hashlib.sha1(f"{embarcador}|{destinatario}|{endereco}".encode()).hexdigest()[:12]
 
 
 # ── Pedágio (Hugo, 11/09: reembolso à parte, foto + valor, aprovação no painel) ──
@@ -610,6 +635,95 @@ def registrar_evento_parada(conn: sqlite3.Connection, parada_id: int, agent_id: 
     p_novo = conn.execute("SELECT * FROM nucleo_paradas WHERE id = ?", (parada_id,)).fetchone()
     return {"ja_registrado": False, "parada": montar_parada(conn, p_novo), "rota_status": status_rota,
             "contadores": contadores}
+
+
+# ── Baixa em grupo (Hugo, 26/11) ───────────────────────────────────────────────
+
+TIPOS_EVENTO_LOTE = ("ENTREGUE", "PARCIAL", "INSUCESSO")
+_PARADA_FINAL = (banco.PARADA_ENTREGUE, banco.PARADA_PARCIAL, banco.PARADA_INSUCESSO)
+
+
+def itens_do_lote(brutos) -> list[dict]:
+    """[{parada_id, uuid}, ...] vindo do app (lista JSON ou texto JSON do multipart)."""
+    if isinstance(brutos, str):
+        try:
+            brutos = json.loads(brutos)
+        except ValueError:
+            raise OperacaoInvalida("Campo 'itens' deve ser uma lista JSON.")
+    if not isinstance(brutos, list) or len(brutos) < 2:
+        raise OperacaoInvalida("Baixa em grupo exige 2 ou mais pedidos.")
+    itens, vistos = [], set()
+    for b in brutos:
+        try:
+            parada_id, uuid = int(b["parada_id"]), str(b["uuid"]).strip()
+        except (KeyError, TypeError, ValueError):
+            raise OperacaoInvalida("Cada item do grupo precisa de parada_id e uuid.")
+        if not uuid or parada_id in vistos:
+            raise OperacaoInvalida("Item do grupo sem uuid ou repetido.")
+        vistos.add(parada_id)
+        itens.append({"parada_id": parada_id, "uuid": uuid})
+    return itens
+
+
+def validar_grupo_lote(conn: sqlite3.Connection, agent_id: int, itens: list[dict],
+                       exigir_abertas: bool = True) -> list[sqlite3.Row]:
+    """Confere no servidor (nao confia no app) que todos os pedidos sao da mesma
+    rota do motorista e tem a MESMA chave de grupo. Nada e gravado aqui."""
+    marcas = ",".join("?" * len(itens))
+    paradas = {p["id"]: p for p in conn.execute(
+        f"SELECT * FROM nucleo_paradas WHERE id IN ({marcas})", [i["parada_id"] for i in itens])}
+    if len(paradas) != len(itens):
+        raise OperacaoInvalida("Parada não encontrada.", 404)
+    ordenadas = [paradas[i["parada_id"]] for i in itens]
+    if len({p["rota_id"] for p in ordenadas}) != 1:
+        raise OperacaoInvalida("Os pedidos do grupo precisam ser da mesma rota.", 409)
+    rota_do_motorista(conn, ordenadas[0]["rota_id"], agent_id)
+    chaves = {chave_grupo_baixa(conn, p) for p in ordenadas}
+    if None in chaves or len(chaves) != 1:
+        raise OperacaoInvalida("Só dá pra baixar junto pedido do mesmo embarcador, destinatário e endereço.", 409)
+    if exigir_abertas:
+        for item, p in zip(itens, ordenadas):
+            if p["situacao"] in _PARADA_FINAL and not conn.execute(
+                    "SELECT 1 FROM nucleo_eventos WHERE uuid = ?", (item["uuid"],)).fetchone():
+                raise OperacaoInvalida(f"O pedido {p['codigo']} já tem resultado; tire-o do grupo.", 409)
+    return ordenadas
+
+
+def registrar_evento_lote(conn: sqlite3.Connection, agent_id: int, dados: dict) -> dict:
+    """Mesmo resultado (ENTREGUE | PARCIAL | INSUCESSO), motivo, checklist e GPS
+    pra todos os pedidos do grupo; cada pedido ganha o PROPRIO evento (uuid do
+    item), entao a rastreabilidade por PS nao muda. Tudo e validado antes de
+    gravar. Se cair no meio, o reenvio com os mesmos uuids pula o que ja foi e
+    termina o resto (registrar_evento_parada e idempotente por uuid)."""
+    tipo = str(dados.get("tipo") or "").upper()
+    if tipo not in TIPOS_EVENTO_LOTE:
+        raise OperacaoInvalida("Baixa em grupo só aceita ENTREGUE, PARCIAL ou INSUCESSO.")
+    if tipo in ("INSUCESSO", "PARCIAL") and dados.get("motivo_id") is None:
+        raise OperacaoInvalida("Insucesso/parcial exige motivo_id.")
+    itens = itens_do_lote(dados.get("itens"))
+    validar_grupo_lote(conn, agent_id, itens)
+    base = {k: v for k, v in dados.items() if k not in ("itens", "uuid")}
+    resultados = [registrar_evento_parada(conn, i["parada_id"], agent_id, {**base, "uuid": i["uuid"]}) for i in itens]
+    ultimo = resultados[-1]
+    return {"ja_registrado": all(r["ja_registrado"] for r in resultados),
+            "itens": [{"parada_id": i["parada_id"], "ja_registrado": r["ja_registrado"]} for i, r in zip(itens, resultados)],
+            "rota_status": ultimo["rota_status"], "contadores": ultimo.get("contadores")}
+
+
+def registrar_comprovante_lote(conn: sqlite3.Connection, agent_id: int, tipo: str, uuid_lote: str, itens: list[dict],
+                               caminho_local: str, sha256: str, tamanho_bytes: int, capturado_em: str | None,
+                               caminho_gcs: str | None = None) -> dict:
+    """Uma foto so no disco, uma linha de comprovante por pedido apontando pra ela.
+    Sempre vai pra conferencia humana (Hugo, 26/11): um documento de 30-40 notas
+    nao passa pela leitura automatica. Fica sem `resultado_validacao`, entao
+    aparece em "Sem conferencia" na tela Canhotos."""
+    validacao = {"revisao_humana": True, "grupo": uuid_lote, "pedidos_no_grupo": len(itens),
+                 "motivo": "Baixa em grupo: um comprovante para vários pedidos, conferir manualmente."}
+    resultados = [{"parada_id": i["parada_id"],
+                   **registrar_comprovante(conn, i["parada_id"], agent_id, tipo, i["uuid"], caminho_local, sha256,
+                                           tamanho_bytes, capturado_em, caminho_gcs, validacao=validacao)}
+                  for i in itens]
+    return {"ja_registrado": all(r["ja_registrado"] for r in resultados), "itens": resultados}
 
 
 def _concluir(conn: sqlite3.Connection, rota_id: int, agent_id: int, ocorrido_em: str,

@@ -169,6 +169,18 @@ class TestValidacao(Base):
                          ("FRETE_AVULSO", 400.0, 650.0, "MOTORISTA", None))
         self.assertEqual(pp.margem(p), 250.0)
 
+    def test_frete_avulso_data_combinada(self):
+        sem = pp.obter(self.conn, self.lancar_frete())
+        self.assertIsNone(sem["data_combinada"])
+        self.assertNotIn("Data combinada", pp.texto_lancamento(sem))
+        com = pp.obter(self.conn, self.lancar_frete(data_combinada="2026-11-30"))
+        self.assertEqual(com["data_combinada"], "2026-11-30")
+        self.assertIn("Data combinada para pagamento: *30/11/2026*", pp.texto_lancamento(com))
+        with self.assertRaises(pp.ErroPagamento):
+            self.lancar_frete(data_combinada="30/11/2026")
+        outro = pp.obter(self.conn, self.lancar(data_combinada="2026-11-30"))
+        self.assertIsNone(outro["data_combinada"])
+
     def test_campos_do_frete_ignorados_nos_outros_tipos(self):
         p = pp.obter(self.conn, self.lancar(descricao="x", valor_cobrado="99"))
         self.assertEqual((p["descricao"], p["valor_cobrado"]), (None, None))

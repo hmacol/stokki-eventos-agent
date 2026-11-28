@@ -41,6 +41,20 @@ def _endereco_texto(t: dict) -> str:
     return " - ".join(x for x in (rua, t.get("bairro"), cidade, t.get("cep")) if x)
 
 
+def _fora_da_area(endereco: dict, config: dict) -> bool:
+    """Mesma regra de area da roteirizacao/portal (classificar_area_envio). Qualquer
+    falha deixa passar, como no resto do sistema: nunca segura por falta de dado."""
+    texto = ", ".join(p for p in (" ".join(x for x in (endereco["logradouro"], endereco["numero"]) if x),
+                                  f"{endereco['municipio']} - {endereco['uf']}", endereco["cep"]) if p)
+    api_key = ((config or {}).get("google_maps", {}) or {}).get("api_key") or ""
+    try:
+        import envio_pedidos as ep
+        return bool(ep._identificar_area([{"id": 0, "address": texto}], api_key))
+    except Exception as e:
+        logger.warning("checagem de area do redespacho falhou (%s); deixando passar", e)
+        return False
+
+
 def registrar(app, *, config: dict, secret: str, db_path=None):
     validade = ctr.config_consulta(config)["validade_dias"]
 
@@ -90,7 +104,7 @@ def registrar(app, *, config: dict, secret: str, db_path=None):
                 return _pagina("ok", erro=None, **ctx)
 
             f = {k: (request.form.get(k) or "").strip()[:_MAX_CAMPO]
-                 for k in ("opcao", "nome", "email_transportadora") + _CAMPOS_ENDERECO}
+                 for k in ("opcao", "nome") + _CAMPOS_ENDERECO}
             f["nome"] = f["nome"][:_MAX_NOME]
             ctx["form"] = f
             if f["opcao"] not in _OPCOES:
@@ -107,9 +121,15 @@ def registrar(app, *, config: dict, secret: str, db_path=None):
                 endereco["uf"] = endereco["uf"].upper()
                 endereco["cep"] = ct.formatar_cep(endereco["cep"])
             por = f"{f['nome']} ({ctr.nome_embarcador(conn, emb)}) pelo link"
+            if tipo == "TERCEIROS" and _fora_da_area(endereco, config):
+                # revisao 24/10 (M2): endereco livre nao fura o bloqueio de area; a equipe decide na ficha
+                tc.registrar_sugestao(conn, transp["id"], _endereco_texto(endereco), por)
+                logger.warning("consulta %s: redespacho fora da area (%s) segurado pra equipe", cid, _endereco_texto(endereco))
+                return _pagina("ok", erro="Esse endereço fica fora da nossa área de atendimento. Anotamos sua resposta e a "
+                                          "equipe Fresh Log vai analisar e falar com você.", **ctx)
             try:
-                novo = ctr.responder(conn, transp["id"], tipo, endereco,
-                                     f["email_transportadora"] if tipo == "TERCEIROS" else "", por, "link")
+                # revisao 24/10 (M1): e-mail da transportadora nunca vem do link publico (so a equipe preenche na ficha)
+                novo = ctr.responder(conn, transp["id"], tipo, endereco, "", por, "link")
             except tc.ErroCadastro as e:
                 if "ja respondida" in str(e):  # outra pessoa respondeu entre o GET e o POST
                     return _definida(tc.buscar(conn, transp["id"]))
