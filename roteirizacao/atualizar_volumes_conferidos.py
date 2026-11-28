@@ -18,6 +18,9 @@ fonte 'nfe' (o romaneio marca com *); sem nenhum dos dois, volumes NULL.
 COMO USAR:
     py -3.11 roteirizacao/atualizar_volumes_conferidos.py --data hoje
     py -3.11 roteirizacao/atualizar_volumes_conferidos.py --data 16/11/2026 --rota 5041749
+    py -3.11 roteirizacao/atualizar_volumes_conferidos.py --prontos [--limite 80]
+        (28/11, de hora em hora: pedidos em aguardando transportador sem leitura,
+         pra tela Etiquetar do galpao sugerir o total conferido; nao chama a Vuupt)
 """
 import argparse
 import logging
@@ -147,6 +150,55 @@ def main(data_str: str, rota_id: int | None) -> int:
     return 1 if cont["falhas"] == len(ids) else 0
 
 
+# --- modo --prontos (28/11): sugestao de caixas da etiqueta de volume --------------------------
+# A tela Etiquetar do galpao (painel_agentes/expedicao_volumes.py) sugere o total CONFERIDO
+# quando o pedido esta em "aguardando transportador". A leitura das 03h50 so cobre as rotas
+# do dia; este modo roda de hora em hora e le os prontos que ainda nao tem leitura nenhuma.
+
+STATUS_PRONTO_STOKKI = "Waiting for Carrier"
+
+
+def ids_prontos_sem_leitura(db_path=DB_PATH, limite: int = 80) -> list[int]:
+    """id da Stokki dos pedidos em aguardando transportador (retrato vigia_stokki_abertos) sem
+    linha em volumes_conferidos, os mais novos primeiro. Tabela ausente ou banco fora = []."""
+    try:
+        con = sqlite3.connect(db_path, timeout=30)
+        try:
+            _garantir_tabela(con)
+            return [r[0] for r in con.execute(
+                "SELECT a.id_stokki FROM vigia_stokki_abertos a "
+                "LEFT JOIN volumes_conferidos v ON v.id_pedido = a.id_stokki "
+                "WHERE a.status_stokki = ? AND a.id_stokki IS NOT NULL AND v.id_pedido IS NULL "
+                "ORDER BY a.primeira_vez_em DESC, a.id_stokki DESC LIMIT ?",
+                (STATUS_PRONTO_STOKKI, int(limite)))]
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        logger.debug(f"prontos sem leitura indisponivel: {e}")
+        return []
+
+
+def main_prontos(db_path=DB_PATH, sessao=None, limite: int = 80) -> int:
+    """Le na Stokki os prontos sem leitura e grava. Nao chama a Vuupt. Quem ja tem linha
+    (mesmo so com o volume da NF-e) nao e relido aqui: as 03h50 releem as rotas do dia."""
+    inicio = time.time()
+    ids = ids_prontos_sem_leitura(db_path, limite)
+    logger.info(f"{len(ids)} pedido(s) pronto(s) na Stokki sem leitura de volumes (teto {limite}).")
+    if not ids:
+        return 0
+    if sessao is None:
+        sys.path.insert(0, str(_RAIZ_PROJETO))
+        sys.path.insert(0, str(_RAIZ_LOCAL))
+        from avisar_motoristas_rotas import _carregar_config
+        from stokki.auth import StokkiSession
+        sessao = StokkiSession(_carregar_config())
+    cont = atualizar(sessao, ids, db_path)
+    logger.info(f"Concluido em {time.time() - inicio:.0f}s: {cont['conferencia']} conferido(s), "
+                f"{cont['nfe']} so com volume da NF-e, {cont['sem_numero']} sem numero, "
+                f"{cont['falhas']} falha(s).")
+    return 1 if cont["falhas"] == len(ids) else 0
+
+
 if __name__ == "__main__":
     (_RAIZ_LOCAL / "dados").mkdir(parents=True, exist_ok=True)
     if hasattr(sys.stdout, "reconfigure"):
@@ -164,5 +216,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Le na Stokki os volumes conferidos dos pedidos das rotas do dia")
     parser.add_argument("--data", default="hoje", help="'hoje' (padrao), 'amanha' ou DD/MM/AAAA")
     parser.add_argument("--rota", type=int, default=None, help="route_id da Vuupt: so os pedidos dessa rota")
+    parser.add_argument("--prontos", action="store_true",
+                        help="le os pedidos em aguardando transportador sem leitura (em vez das rotas do dia)")
+    parser.add_argument("--limite", type=int, default=80, help="com --prontos: maximo de pedidos por rodada")
     args = parser.parse_args()
+    if args.prontos:
+        sys.exit(main_prontos(limite=args.limite))
     sys.exit(main(args.data, args.rota))

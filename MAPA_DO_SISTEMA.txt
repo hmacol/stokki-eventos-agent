@@ -538,7 +538,14 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                                              (só LÊ a Stokki: volume conferido pelo galpão de cada
                                                              pedido das rotas do dia -> tabela volumes_conferidos;
                                                              o romaneio das 04h espera terminar, teto 15 min)
- 04:00                       romaneios-manha                 roteirizacao/gerar_pdf_romaneios.py --data hoje
+ seg-sex 08:25..17:25 (xx:25) volumes-prontos                roteirizacao/atualizar_volumes_conferidos.py --prontos
+                                                             (28/11; só LÊ a Stokki, não chama a Vuupt: pedidos em
+                                                             "Waiting for Carrier" no vigia_stokki_abertos sem linha
+                                                             em volumes_conferidos, até 80 por rodada; é o que faz a
+                                                             tela Etiquetar do galpão sugerir o total conferido.
+                                                             UNIT NOVA: infra/stokki-volumes-prontos.*, ainda NÃO
+                                                             instalada na VPS — só no deploy, a pedido do Hugo)
+ 04:00                       romaneios-manha                roteirizacao/gerar_pdf_romaneios.py --data hoje
  04:10                       notificar-transportadoras       notificacao_transportadoras/notificar_transportadoras.py
  06:43                       vigia-documentos                documentos_pedido/vigia_documentos.py (só lê; e-mail diário)
  07:00                       notificar-nfs-em-rota           notificar_nfs_em_rota.py --data hoje
