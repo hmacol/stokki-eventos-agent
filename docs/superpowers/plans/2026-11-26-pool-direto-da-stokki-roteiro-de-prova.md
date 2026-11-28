@@ -59,8 +59,10 @@ coluna `codigo` em `pedidos_area_notificada` e a tabela `rascunho_envio_trava`. 
 
    Se der > 0 algum processo velho ainda grava: achar e reiniciar. Enquanto isso o `conectar()` nao cai (revisao de
    seguranca M2): com o banco travado no `BEGIN IMMEDIATE` do backfill ele loga 1 WARNING por processo ("backfill
-   do id_pool adiado, banco travado") e segue; o `upsert_pedido` preenche o id_pool linha a linha e a proxima
-   conexao tenta de novo.
+   do id_pool adiado, banco travado") e segue; o `upsert_pedido` preenche o id_pool linha a linha (se a 1a
+   migracao foi a adiada e o contador `nucleo_contadores` ainda nao existe, grava o pedido SEM id_pool: o pool pula
+   essa linha com WARNING `pool.sem_id_pool` ate a proxima conexao sem lock completar) e a proxima conexao tenta de
+   novo.
 
 ## 2. Sombra (portao, parte 1)
 
@@ -201,6 +203,9 @@ Medir no 1o dia; se estourar: limite de pedidos por clique ou execucao em segund
   recusou todos os pedidos com o mesmo erro (Status NNN: ...): possivel problema sistemico, nada foi removido, avise
   o Hugo"): rascunho em ERRO_ENVIO com tudo dentro; criacao direta adia a rota. Com 1 pedido so (incremento, fila,
   adicionar parada) segue a regra normal; status diferentes no lote, recusa de regra no meio ou 1 sucesso tambem.
+  O mesmo vale pro erro LOCAL de dado (onda 4 round 1): todos os pedidos do lote (>= 2) com o mesmo tipo de erro ao
+  montar o servico (ValueError/TypeError, ex. bug de formato no payload) = "possivel problema sistemico: <TipoErro>;
+  nada foi removido, avise o Hugo"; um malformado so, tipos misturados ou algum sucesso = so o malformado sai.
 - Trava velha por pedido: se o processo morre no meio do envio (restart do painel), a trava do pedido em
   `nucleo_materializacao` fica ate **10 minutos**; nesse tempo cada nova tentativa espera ate **30 s por pedido**
   travado e devolve "tente de novo" (nada e descartado). A mensagem ao operador e "tente de novo"; depois de 10 min a

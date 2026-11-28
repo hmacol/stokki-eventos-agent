@@ -188,6 +188,19 @@ class TestMigracaoComBancoTravado(_Base):
         banco.conectar().close()
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM nucleo_pedidos WHERE id_pool IS NULL").fetchone()[0], 0)
 
+    def test_upsert_tolera_contador_ausente_na_janela_do_backfill_adiado(self):
+        """Onda 4 round 1: 1a migracao adiada pelo lock = nucleo_contadores pode nao existir (ou estar sem a linha
+        'id_pool'); o upsert grava o pedido sem id_pool e a proxima conexao completa."""
+        for estrago in ("DROP TABLE nucleo_contadores", "DELETE FROM nucleo_contadores"):
+            codigo = "PS-81" if estrago.startswith("DROP") else "PS-82"
+            self.conn.execute(estrago)
+            self.conn.commit()
+            pedidos.upsert_pedido(self.conn, codigo, {"titulo": "x"}, banco.ORIGEM_PIPELINE)
+            self.conn.commit()
+            self.assertIsNone(self._id(codigo))
+            banco.conectar().close()   # sem lock: o backfill cria o contador e preenche
+            self.assertIsNotNone(self._id(codigo))
+
     def test_outro_erro_continua_subindo(self):
         class _Quebrado(_ConnComLock):
             def execute(self, sql, *args):

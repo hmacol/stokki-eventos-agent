@@ -1396,7 +1396,8 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            ResultadoMaterializacao.transitorios (classificar_falha), a parada fica. `pulso` = heartbeat de quem chama (EnvioInterrompido sobe).
                            Erro sistêmico (_aplicar_erro_sistemico): >= MINIMO_LOTE_SISTEMICO (2)
                            pedidos, todos recusados com o MESMO status 4xx permanente e nenhum ok
-                           = o lote inteiro vira transitório (nada removido). materializar_lote
+                           = o lote inteiro vira transitório (nada removido); idem se todos falham
+                           com o MESMO erro local de dado (_RecusaDadoLocal, mesmo tipo). materializar_lote
                            devolve (prontos, falhas, pendentes técnicos).
                            Serviço já not_assigned com o mesmo code é adotado.
                            Payload vem do núcleo (janela/telefone/edição local); o fingerprint da
@@ -2614,7 +2615,8 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
             a cópia do repo de confirmacao_motoristas também não (a de /opt/confirmacao-motoristas conferir lá);
          3. os timers (pipeline, sync, comparar_pool...) pegam o código novo sozinhos;
          4. pós-deploy: SELECT COUNT(*) FROM nucleo_pedidos WHERE id_pool IS NULL tem que dar 0. Banco travado
-            no backfill (processo velho gravando) não derruba o conectar(): 1 WARNING por processo e segue.
+            no backfill (processo velho gravando) não derruba o conectar(): 1 WARNING por processo e segue;
+            sem o contador (1ª migração adiada) o upsert_pedido grava sem id_pool e a próxima conexão completa.
      * Pedido sem serviço com campo editado no Planejamento (edicao_local_json): a mudança legítima da Stokki
        nesse campo é ignorada até o serviço nascer (hoje viraria PUT na Vuupt).
      * Fila freshhub (pipeline --fila-freshhub) materializa na importação, exceção ao "só no envio"

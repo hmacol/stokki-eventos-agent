@@ -110,10 +110,10 @@ def upsert_pedido(conn: sqlite3.Connection, codigo: str, campos: dict, origem: s
     # pedido que GANHA servico (id NULL -> real): rascunhos trocam o id sintetico pelo real
     ganha_servico = existente is not None and existente[1] is None and vuupt_service_id is not None
     if existente is None or existente[0] is None:
-        conn.execute("UPDATE nucleo_contadores SET valor = valor + 1 WHERE nome = 'id_pool'")
-        id_pool = conn.execute("SELECT valor FROM nucleo_contadores WHERE nome = 'id_pool'").fetchone()[0]
-        if existente is not None:
+        id_pool = _proximo_id_pool(conn)
+        if existente is not None and id_pool is not None:
             conn.execute("UPDATE nucleo_pedidos SET id_pool = ? WHERE codigo = ?", (id_pool, codigo))
+        if existente is not None:
             id_pool = None
     conn.execute(f"""
         INSERT INTO nucleo_pedidos (codigo, vuupt_service_id, {", ".join(colunas)}, tipo, status,
@@ -151,6 +151,19 @@ def nasceu_sem_servico(pedido) -> bool:
         return bool(pedido["nasceu_sem_servico"])
     except (IndexError, KeyError):
         return False
+
+
+def _proximo_id_pool(conn: sqlite3.Connection) -> int | None:
+    """Proximo id do contador; None se o contador ainda nao existe (1a migracao adiada pelo banco
+    travado, banco._garantir_id_pool): a linha fica sem id_pool e a proxima conexao completa."""
+    try:
+        conn.execute("UPDATE nucleo_contadores SET valor = valor + 1 WHERE nome = 'id_pool'")
+        row = conn.execute("SELECT valor FROM nucleo_contadores WHERE nome = 'id_pool'").fetchone()
+    except sqlite3.OperationalError as e:
+        if "no such table" not in str(e):
+            raise
+        return None
+    return row[0] if row else None
 
 
 def id_sintetico(pedido) -> int:
