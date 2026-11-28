@@ -6546,6 +6546,11 @@ def _wms_marcar_chegada(conn, rec: dict, etapas=None) -> None:
     rec["chegada_estado"] = wms_chegada.estado_do_recebimento(conn, rec["id"])
     if rec["usa_etapas"] and rec["chegada_estado"] == "SEM_CHEGADA" and _wms_ja_em_conferencia(conn, rec["id"]):
         rec["chegada_estado"] = "JA_EM_CONFERENCIA"   # vai para Conferir Recebimento, nao para o Receber
+    recusada = conn.execute(   # sem chegada viva, a ultima pode ter sido "nao recebida" (encerrar sem receber)
+        "SELECT c.nao_recebida_motivo FROM wms_chegada_recebimentos cr JOIN wms_chegadas c ON c.id = cr.chegada_id "
+        "WHERE cr.recebimento_id = ? AND c.estado = 'NAO_RECEBIDA' ORDER BY c.id DESC LIMIT 1",
+        (rec["id"],)).fetchone() if rec["chegada_estado"] == "SEM_CHEGADA" else None
+    rec["nao_recebida_motivo"] = recusada["nao_recebida_motivo"] if recusada else ""
     viva = conn.execute(
         "SELECT c.id FROM wms_chegada_recebimentos cr JOIN wms_chegadas c ON c.id = cr.chegada_id "
         "WHERE cr.recebimento_id = ? AND c.estado != 'NAO_RECEBIDA' ORDER BY c.id DESC LIMIT 1",

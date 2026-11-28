@@ -171,6 +171,20 @@ class Trava(Base):
         r, _ = self.encerrar(rid)
         self.assertEqual(r.status_code, 200, r.get_json())
 
+    def test_recebimento_traz_o_motivo_da_carga_nao_recebida(self):
+        # a tela de encerrar sem receber preenche a observacao com ele
+        rid, cid = self.aguardando()
+        rec = self.cliente.get(f"/api/wms/recebimentos/{rid}").get_json()["recebimento"]
+        self.assertEqual(rec["nao_recebida_motivo"], "")
+        self.enviar(f"/api/wms/chegadas/{cid}/nao-receber", {"motivo": "carga quente"})
+        rec = self.cliente.get(f"/api/wms/recebimentos/{rid}").get_json()["recebimento"]
+        self.assertEqual((rec["chegada_estado"], rec["nao_recebida_motivo"]), ("SEM_CHEGADA", "carga quente"))
+        rec = self.cliente.get("/api/wms/recebimentos").get_json()["recebimentos"][0]
+        self.assertEqual(rec["nao_recebida_motivo"], "carga quente")
+        self.abrir(rid, uuid="u-de-novo")   # chegou de novo: chegada viva, sem motivo
+        rec = self.cliente.get(f"/api/wms/recebimentos/{rid}").get_json()["recebimento"]
+        self.assertEqual((rec["chegada_estado"], rec["nao_recebida_motivo"]), ("RASCUNHO", ""))
+
     def test_escritorio_nao_encerra_com_chegada_viva(self):
         rid, cid = self.aguardando()
         r, m = self.encerrar(rid)
@@ -472,6 +486,17 @@ class TelasNoHtml(Base):
         self.entrar("galpao")
         h = self.cliente.get("/wms").get_data(as_text=True)
         self.assertIn("['LIBERADA', 'JA_EM_CONFERENCIA'].includes(x.chegada_estado)", h)
+
+    def test_encerrar_sem_receber_so_para_o_escritorio(self):
+        self.entrar("galpao")
+        h = self.cliente.get("/wms").get_data(as_text=True)
+        self.assertIn("Encerrar sem receber", h)
+        self.assertIn("S.podeAdministrar && x.chegada_estado === 'SEM_CHEGADA'", h)
+        self.assertIn("ev.stopPropagation(); encerrarSemReceber(", h)   # nao marca o item da lista
+        self.assertIn("Este recebimento será encerrado sem conferência. O que não foi conferido conta como "
+                      "falta e o cliente recebe o relatório de faltas.", h)
+        self.assertIn("'Carga não recebida: ' + r.recebimento.nao_recebida_motivo", h)
+        self.assertIn('value="${esc(ctx.observacao || \'\')}"', h)
 
     def test_descartar_nas_duas_telas(self):
         self.entrar("galpao")

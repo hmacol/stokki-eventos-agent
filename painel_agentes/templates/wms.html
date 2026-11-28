@@ -907,8 +907,10 @@
         const nota = livre ? (outro ? 'outro embarcador: faça um Receber separado' : (marcados.has(x.id) ? 'marcado' : (dono ? '+ outro recebimento no mesmo caminhão' : 'toque para marcar'))) : (x.chegada_estado === 'RASCUNHO' ? 'toque para continuar' : 'toque para ver');
         return `<div class="item ${marcados.has(x.id) ? 'escolhido' : ''}" data-rec="${x.id}" style="grid-template-columns:1fr;${outro ? 'opacity:.5;cursor:not-allowed' : ''}">
           <div class="cod">${esc(x.codigo)}</div>
-          <div class="meta">${curto(x.embarcador)} · ${x.itens} item(ns) ${selo[x.chegada_estado] || ''}<span>${nota}</span></div></div>`;
+          <div class="meta">${curto(x.embarcador)} · ${x.itens} item(ns) ${selo[x.chegada_estado] || ''}<span>${nota}</span></div>
+          ${S.podeAdministrar && x.chegada_estado === 'SEM_CHEGADA' ? `<div><button class="voltar" type="button" data-enc-sem="${x.id}" style="margin:6px 0 0;font-size:13px;color:var(--texto-suave);text-decoration:underline">Encerrar sem receber</button></div>` : ''}</div>`;
       }).join('') || '<div class="vazio">Nenhuma carga esperando o Receber.</div>';
+      el.querySelectorAll('[data-enc-sem]').forEach((b) => b.addEventListener('click', (ev) => { ev.stopPropagation(); encerrarSemReceber(Number(b.dataset.encSem)); }));
       btn.disabled = !marcados.size;
       btn.textContent = marcados.size > 1 ? 'Começar o Receber (' + marcados.size + ' cargas)' : 'Começar o Receber';
       el.querySelectorAll('[data-rec]').forEach((d) => d.addEventListener('click', () => {
@@ -1165,6 +1167,14 @@
       el.querySelectorAll('[data-rec]').forEach((x) => x.addEventListener('click', () => abrirRecebimento(Number(x.dataset.rec))));
     } catch (e) { el.innerHTML = '<div class="vazio">' + esc(e.message) + '</div>'; }
   };
+  // Escritório: recebimento que não veio ou foi recusado (sem chegada viva) encerra sem conferência
+  async function encerrarSemReceber(id) {
+    try {
+      const r = await api('/recebimentos/' + id);
+      ir('encerramento', { recebimento: Object.assign({}, r.recebimento, { itens: r.itens }), semConferencia: true,
+        observacao: r.recebimento.nao_recebida_motivo ? 'Carga não recebida: ' + r.recebimento.nao_recebida_motivo : '' });
+    } catch (e) { toast(e.status ? e.message : 'Sem rede: não consegui abrir o recebimento.', true); }
+  }
   async function abrirRecebimento(id) {
     try {
       const r = await api('/recebimentos/' + id);
@@ -1276,6 +1286,7 @@
     const etapasPorLinha = {}; (r.itens || []).forEach((x) => { if (x.usa_etapas) etapasPorLinha[x.linha] = true; });
     const nConferidos = res.linhas.filter((l) => l.recebido > 0 && etapasPorLinha[l.linha]).length;   // só linhas de embarcador com etapas vão pra Guarda
     el.innerHTML = `
+      ${ctx.semConferencia ? '<div class="cartao atencao"><div class="sub">Este recebimento será encerrado sem conferência. O que não foi conferido conta como falta e o cliente recebe o relatório de faltas.</div></div>' : ''}
       <div class="cartao ${res.divergente ? 'atencao' : 'ok'}">
         <div class="rotulo">${res.divergente ? 'Com divergência' : 'Tudo bateu'}</div>
         <table class="encerra"><tr><th>Produto</th><th style="text-align:right">Anunc.</th><th style="text-align:right">Receb.</th><th style="text-align:right">Dif.</th><th></th></tr>
@@ -1288,7 +1299,7 @@
       ${nConferidos ? '<div class="cartao"><div class="sub">' + (nConferidos === 1 ? 'O item conferido vai para a fila Guardar.' : 'Os ' + nConferidos + ' itens conferidos vão para a fila Guardar.') + '</div></div>' : ''}
       ${res.sem_cadastro ? '<div class="cartao"><div class="sub">' + res.sem_cadastro + ' linha(s) sem produto no catálogo: não contam como falta, ficam registradas como pendência.</div></div>' : ''}
       <div class="campo"><label>Observação${res.faltas ? ' (vai no e-mail do cliente)' : ''}</label>
-        <input type="text" id="enc-obs" maxlength="300" placeholder="${res.divergente ? 'ex.: 2 caixas chegaram avariadas' : 'opcional'}"></div>
+        <input type="text" id="enc-obs" maxlength="300" value="${esc(ctx.observacao || '')}" placeholder="${res.divergente ? 'ex.: 2 caixas chegaram avariadas' : 'opcional'}"></div>
       <div class="botoes"><button class="botao" type="button" id="btn-enc-confirmar">Confirmar encerramento</button></div>`;
     document.getElementById('btn-enc-confirmar').addEventListener('click', async (ev) => {
       if (!S.operador) { toast('Identifique o operador primeiro', true); return ir('operador'); }
@@ -1306,7 +1317,7 @@
             ? feito + '. Relatório de faltas ' + (envio.enviado ? 'enviado para ' + (envio.destinos || []).join(', ') : 'já havia sido enviado')
             : feito + ', mas o relatório NÃO foi enviado (' + (envio.motivo || 'motivo desconhecido') + '). Avise a equipe.', !ok);
         }
-        S.pilha = []; ir('receber', {}, false);
+        S.pilha = []; ir(ctx.semConferencia ? 'receberChegada' : 'receber', {}, false);
       } catch (e) {
         if (e.status === 409 && e.dados && e.dados.sem_operador) { S.operador = null; toast(e.message, true); ir('operador'); }
         else { toast(e.message, true); btn.disabled = false; }
