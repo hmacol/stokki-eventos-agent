@@ -143,5 +143,60 @@ class TestMigracaoConcorrente(_Base):
             banco._migrar_colunas(self.conn, "tabela_que_nao_existe", [("x", "TEXT")])
 
 
+class _ConnComLock:
+    """Conexao de verdade, mas o BEGIN IMMEDIATE da migracao do id_pool acha o banco travado (processo
+    antigo escrevendo na janela do deploy)."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, *args):
+        if sql.strip().upper().startswith("BEGIN IMMEDIATE"):
+            raise sqlite3.OperationalError("database is locked")
+        return self._conn.execute(sql, *args)
+
+    def __getattr__(self, nome):
+        return getattr(self._conn, nome)
+
+
+class TestMigracaoComBancoTravado(_Base):
+    """Onda 4 (revisao de seguranca M2): linha sem id_pool gravada por processo antigo + banco travado no
+    BEGIN IMMEDIATE da migracao nao pode derrubar o conectar() (500 no portal, timer falhando)."""
+
+    def setUp(self):
+        super().setUp()
+        self.conn.execute("INSERT INTO nucleo_pedidos (codigo, criado_em) VALUES ('PS-77', '2026-11-27 10:00:00')")
+        self.conn.commit()   # linha de codigo antigo: id_pool NULL
+        banco._AVISOU_ID_POOL_TRAVADO = False
+
+    def test_conectar_segue_com_warning_uma_vez_e_o_upsert_preenche_a_linha(self):
+        real = sqlite3.connect
+        with mock.patch.object(banco.sqlite3, "connect", side_effect=lambda *a, **k: _ConnComLock(real(*a, **k))):
+            with self.assertLogs(banco.logger, "WARNING") as logs:
+                c1 = banco.conectar()
+                c2 = banco.conectar()   # tenta de novo, mas nao repete o aviso
+            try:
+                self.assertEqual(sum("id_pool" in m and "travado" in m for m in logs.output), 1)
+                self.assertIsNone(c1.execute("SELECT id_pool FROM nucleo_pedidos WHERE codigo='PS-77'").fetchone()[0])
+                pedidos.upsert_pedido(c1, "PS-77", {"titulo": "x"}, banco.ORIGEM_PIPELINE)   # por linha
+                c1.commit()
+                self.assertIsNotNone(self._id("PS-77"))
+            finally:
+                c1.close()
+                c2.close()
+        # sem o lock, a proxima conexao migra o que faltar
+        banco.conectar().close()
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM nucleo_pedidos WHERE id_pool IS NULL").fetchone()[0], 0)
+
+    def test_outro_erro_continua_subindo(self):
+        class _Quebrado(_ConnComLock):
+            def execute(self, sql, *args):
+                if sql.strip().upper().startswith("BEGIN IMMEDIATE"):
+                    raise sqlite3.OperationalError("disk I/O error")
+                return self._conn.execute(sql, *args)
+        with self.assertRaises(sqlite3.OperationalError):
+            banco._garantir_id_pool(_Quebrado(self.conn))
+
+
 if __name__ == "__main__":
     unittest.main()

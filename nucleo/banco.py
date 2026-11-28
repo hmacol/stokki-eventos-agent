@@ -658,6 +658,9 @@ def _migrar_colunas(conn: sqlite3.Connection, tabela: str, colunas: list[tuple[s
             logger.info(f"nucleo: coluna {tabela}.{nome} adicionada.")
 
 
+_AVISOU_ID_POOL_TRAVADO = False   # 1 WARNING por processo quando o backfill acha o banco travado
+
+
 def _garantir_id_pool(conn: sqlite3.Connection):
     """id_pool: id inteiro estavel por pedido (o pool mostra -id_pool quando o
     pedido ainda nao tem servico na Vuupt). Contador proprio em
@@ -675,8 +678,21 @@ def _garantir_id_pool(conn: sqlite3.Connection):
 
     if not _precisa_migrar():
         return
+    global _AVISOU_ID_POOL_TRAVADO
     if not conn.in_transaction:
-        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError as e:
+            # janela do deploy (revisao de seguranca M2): processo antigo ainda grava linha sem id_pool e
+            # segura o banco; a conexao NAO cai por isso (portal/timers seguem). upsert_pedido preenche o
+            # id_pool linha a linha e a proxima conexao tenta a migracao de novo.
+            if "locked" not in str(e):
+                raise
+            if not _AVISOU_ID_POOL_TRAVADO:
+                _AVISOU_ID_POOL_TRAVADO = True
+                logger.warning("nucleo: backfill do id_pool adiado, banco travado (%s); a proxima conexao tenta "
+                               "de novo. Reiniciar todos os processos que gravam nucleo_pedidos.", e)
+            return
     # dentro do lock: outro processo pode ter migrado enquanto esperavamos
     conn.execute("CREATE TABLE IF NOT EXISTS nucleo_contadores (nome TEXT PRIMARY KEY, valor INTEGER NOT NULL)")
     base = conn.execute("SELECT COALESCE(MAX(id_pool), 0) FROM nucleo_pedidos").fetchone()[0]
