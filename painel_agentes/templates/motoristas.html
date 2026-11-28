@@ -830,8 +830,13 @@ const putJSON = (url, body) => postJSON(url, body, "PUT");
         const decidir = async (aprovar) => {
           if (!confirm(aprovar ? `Trocar o PIX de ${nome} para ${pp.novo}? Confirme com o motorista por outro canal antes.`
                                : `Recusar a troca de PIX de ${nome}? O PIX atual continua valendo.`)) return;
-          try { await postJSON(`/api/motoristas/${id}/pix-pendente`, { aprovar }); location.reload(); }
-          catch (e) { alert(`Falha: ${e.message}`); }
+          try {
+            await postJSON(`/api/motoristas/${id}/pix-pendente`, { aprovar, pix_visto: pp.novo, pedido_visto: pp.pedido_id });
+            location.reload();
+          } catch (e) {
+            alert(`Falha: ${e.message}`);
+            if (/mudou/.test(e.message)) location.reload();   // 409: pedido trocado; a ficha reabre com a chave nova
+          }
         };
         const sim = el("button", { type: "button", class: "botao" }, "Aprovar troca");
         const nao = el("button", { type: "button", class: "botao-sec" }, "Recusar");

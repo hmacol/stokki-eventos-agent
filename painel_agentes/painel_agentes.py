@@ -5767,7 +5767,8 @@ def api_motorista_ficha(motorista_id):
         # PIX vigente = o do login do app (trocado em "Meus dados"); o da ficha é o reserva
         ficha = {c: (pix if c == "chave_pix" else ficha.get(c)) for c in campos}
     return jsonify({"nome": pessoa["nome"], "ficha": ficha, "pendencias": pend, "documentos_visiveis": total,
-                    "pix_pendente": ({"novo": pedido_pix["novo"], "atual": pix, "pedido_em": pedido_pix["pedido_em"]}
+                    "pix_pendente": ({"novo": pedido_pix["novo"], "atual": pix, "pedido_em": pedido_pix["pedido_em"],
+                                      "pedido_id": pedido_pix.get("pedido_id")}
                                      if total and pedido_pix else None)})
 
 
@@ -5775,16 +5776,23 @@ def api_motorista_ficha(motorista_id):
 @requer_auth(niveis=("total",))
 @exige_mesma_origem
 def api_motorista_pix_pendente(motorista_id):
-    """Aprova ou recusa ({"aprovar": bool}) a troca de PIX que o motorista pediu pelo link."""
+    """Aprova ou recusa a troca de PIX que o motorista pediu pelo link. Corpo: {"aprovar": bool,
+    "pix_visto": "<chave exibida>", "pedido_visto": <id do pedido, quando a ficha trouxe>}: só vale
+    se o pedido pendente ainda for esse (senão 409)."""
     from nucleo import atualizacao_motorista as atu
     body = request.get_json(force=True, silent=True)
-    if not isinstance(body, dict) or not isinstance(body.get("aprovar"), bool):
-        return jsonify({"erro": "Corpo inválido: esperado {\"aprovar\": true|false}."}), 400
+    pedido_visto = body.get("pedido_visto") if isinstance(body, dict) else None
+    if (not isinstance(body, dict) or not isinstance(body.get("aprovar"), bool)
+            or not isinstance(body.get("pix_visto"), str) or not body["pix_visto"].strip()
+            or (pedido_visto is not None and (not isinstance(pedido_visto, int) or isinstance(pedido_visto, bool)))):
+        return jsonify({"erro": "Corpo inválido: esperado {\"aprovar\": true|false, \"pix_visto\": \"chave exibida\"} "
+                                "(e \"pedido_visto\" inteiro, quando houver)."}), 400
     conn = _cadastro_conn()
     try:
-        return jsonify(atu.decidir_pix(conn, motorista_id, body["aprovar"], session.get("usuario") or g.nivel_acesso))
+        return jsonify(atu.decidir_pix(conn, motorista_id, body["aprovar"], session.get("usuario") or g.nivel_acesso,
+                                       pix_visto=body["pix_visto"], pedido_visto=pedido_visto))
     except atu.LinkInvalido as exc:
-        return jsonify({"erro": str(exc)}), 404
+        return jsonify({"erro": str(exc)}), exc.codigo
     finally:
         conn.close()
 

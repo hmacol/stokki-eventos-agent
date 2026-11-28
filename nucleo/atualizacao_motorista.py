@@ -189,26 +189,42 @@ def pix_pendente(conn: sqlite3.Connection, pessoa: dict) -> dict | None:
     return {"link_id": r["id"], "novo": r["pix_pendente"], "pedido_em": r["concluido_em"]} if r else None
 
 
-def decidir_pix(conn: sqlite3.Connection, bd_motorista_id: int, aprovar: bool, usuario: str) -> dict:
+MSG_PIX_MUDOU = ("O pedido de PIX mudou desde que você abriu a ficha. "
+                 "Reabra a ficha e confira a chave nova antes de decidir.")
+
+
+def decidir_pix(conn: sqlite3.Connection, bd_motorista_id: int, aprovar: bool, usuario: str, *,
+                pix_visto: str, pedido_visto: int | None = None) -> dict:
     """Equipe (nível total) aprova ou recusa a troca de PIX pedida pelo link. Aprovar grava
-    no login do app (se existe) e na ficha vigente; recusar só apaga o pedido."""
+    no login do app (se existe) e na ficha vigente; recusar só apaga o pedido.
+    A decisão vale só pro pedido que o operador viu na tela: `pix_visto` (a chave exibida) e
+    `pedido_visto` (id em motoristas_pix_pedidos; o link pessoal não tem). Se o pedido pendente
+    mudou desde então (ex.: o link público o substituiu), 409 e nada é gravado."""
     pessoa = next((p for p in pessoas(conn) if bd_motorista_id in p["ids"]), None)
     pedido = pix_pendente(conn, pessoa) if pessoa else None
     if not pedido:
         raise LinkInvalido(MSG_SEM_PIX_PENDENTE, 404)
+    if not str(pix_visto or "") or pedido["novo"] != pix_visto or pedido.get("pedido_id") != pedido_visto:
+        raise LinkInvalido(MSG_PIX_MUDOU, 409)
     if conn.in_transaction:
         conn.commit()
     conn.execute("BEGIN IMMEDIATE")
     try:
+        # a chave gravada vem da linha, relida dentro da transação (nunca da requisição)
         if pedido.get("pedido_id"):
+            linha = conn.execute("SELECT pix_novo FROM motoristas_pix_pedidos WHERE id = ? AND status = 'PENDENTE'",
+                                 (pedido["pedido_id"],)).fetchone()
             cur = conn.execute("UPDATE motoristas_pix_pedidos SET status = ?, decidido_em = ?, decidido_por = ? "
-                               "WHERE id = ? AND status = 'PENDENTE'",
-                               ("APROVADO" if aprovar else "RECUSADO", banco.agora(), usuario, pedido["pedido_id"]))
+                               "WHERE id = ? AND status = 'PENDENTE' AND pix_novo = ?",
+                               ("APROVADO" if aprovar else "RECUSADO", banco.agora(), usuario, pedido["pedido_id"], pix_visto))
         else:
+            linha = conn.execute("SELECT pix_pendente AS pix_novo FROM motoristas_links_atualizacao WHERE id = ?",
+                                 (pedido["link_id"],)).fetchone()
             cur = conn.execute("UPDATE motoristas_links_atualizacao SET pix_pendente = NULL WHERE id = ? AND pix_pendente = ?",
-                               (pedido["link_id"], pedido["novo"]))
-        if cur.rowcount != 1:   # outro clique decidiu antes
-            raise LinkInvalido(MSG_SEM_PIX_PENDENTE, 404)
+                               (pedido["link_id"], pix_visto))
+        if cur.rowcount != 1 or not linha or linha["pix_novo"] != pix_visto:   # trocado entre a leitura e o UPDATE
+            raise LinkInvalido(MSG_PIX_MUDOU, 409)
+        pix_novo = linha["pix_novo"]
         # pedidos mais antigos da mesma pessoa caem junto: vale a decisão sobre o mais recente
         marcas = ",".join("?" * len(pessoa["ids"]))
         conn.execute(f"UPDATE motoristas_links_atualizacao SET pix_pendente = NULL WHERE bd_motorista_id IN ({marcas})",
@@ -222,11 +238,11 @@ def decidir_pix(conn: sqlite3.Connection, bd_motorista_id: int, aprovar: bool, u
             login = auth.buscar_motorista(conn, cpf) if cpf else None
             if login:
                 conn.execute("UPDATE motoristas SET chave_pix = ?, atualizado_em = ? WHERE cpf = ?",
-                             (pedido["novo"], agora, cpf))
+                             (pix_novo, agora, cpf))
                 conn.execute("INSERT INTO motoristas_alteracoes (cpf, campo, valor_antigo, valor_novo, alterado_em) "
-                             "VALUES (?, 'chave_pix', ?, ?, ?)", (cpf, login.get("chave_pix"), pedido["novo"], agora))
+                             "VALUES (?, 'chave_pix', ?, ?, ?)", (cpf, login.get("chave_pix"), pix_novo, agora))
             if ficha:
-                conn.execute("UPDATE motoristas_cadastros SET chave_pix = ? WHERE id = ?", (pedido["novo"], ficha["id"]))
+                conn.execute("UPDATE motoristas_cadastros SET chave_pix = ? WHERE id = ?", (pix_novo, ficha["id"]))
         conn.commit()
     except BaseException:
         if conn.in_transaction:
