@@ -73,6 +73,8 @@ def classificar_chave(chave, cpf_motorista) -> "ChavePix | str":
         return ChavePix(tipo, valor, cpf_m, 1)
 
     if "@" in v:
+        if not v.isascii():
+            return "formato inválido (e-mail com caracteres especiais/acentos: o arquivo do banco aceita só ASCII)"
         if not _EMAIL.match(v) or len(v) > 77:
             return "formato inválido (e-mail)"
         return com_doc_do_motorista("02", v)
@@ -127,6 +129,7 @@ class ItemRemessa:
     nome: str
     valor: Decimal
     chave: ChavePix
+    seu_numero: str = ""        # segmento A pos. 74-93; vazio = id do pagamento. Na remessa real: FH<remessa>P<pagamento>
 
 
 def limpar_nome(nome, n: int) -> str:
@@ -208,7 +211,7 @@ def montar_arquivo(conta: ContaPagadora, itens: list, data_pagamento: date, agor
         linhas.append(_reg([  # segmento A (p. 15)
             (1, 3, CODIGO_BANCO), (4, 7, "0001"), (8, 8, "3"), (9, 13, _num(seq, 5)), (14, 14, "A"),
             (15, 17, "000"), (18, 20, "009"), (21, 23, "000"),
-            (44, 73, _alfa(limpar_nome(it.nome, 30), 30)), (74, 93, _alfa(str(it.pagamento_id), 20)),
+            (44, 73, _alfa(limpar_nome(it.nome, 30), 30)), (74, 93, _alfa(it.seu_numero or str(it.pagamento_id), 20)),
             (94, 101, data_pagamento.strftime("%d%m%Y")), (102, 104, "REA"),
             (113, 114, "04"), (115, 119, "0" * 5), (120, 134, _num(cent, 15)),
             (155, 162, "0" * 8), (163, 177, "0" * 15), (198, 203, "0" * 6), (204, 217, doc), (230, 230, "0")]))
@@ -352,11 +355,14 @@ class RegistroRetorno:
     data_efetiva: "date | None"     # pos. 155-162
     valor_efetivo: "Decimal | None"  # pos. 163-177 (centavos)
     valor_previsto: Decimal         # pos. 120-134 (centavos)
+    remessa_id: "int | None" = None  # extraido do Seu Numero FH<remessa>P<pagamento>
+    documento: str = ""             # pos. 204-217 (CPF/CNPJ do favorecido)
+    seu_numero: str = ""
 
 
 def _linhas240(texto: str) -> list:
     linhas = []
-    for n, linha in enumerate(str(texto or "").splitlines(), 1):
+    for n, linha in enumerate(str(texto or "").replace(chr(26), "").splitlines(), 1):
         if not linha.strip():
             continue
         if len(linha) != 240:
@@ -388,13 +394,26 @@ def ler_retorno(texto: str) -> list:
     for linha in _linhas240(texto):
         if linha[7] == "3" and linha[13] == "A":
             seu = linha[73:93].strip()
+            m = re.fullmatch(r"FH(\d+)P(\d+)", seu)
             regs.append(RegistroRetorno(
-                pagamento_id=int(seu) if seu.isdigit() else None,
+                pagamento_id=int(m.group(2)) if m else None,
+                remessa_id=int(m.group(1)) if m else None,
+                documento=linha[203:217], seu_numero=seu,
                 ocorrencias=_codigos(linha[230:240]),
                 data_efetiva=_data_ddmmaaaa(linha[154:162]),
                 valor_efetivo=_reais(linha[162:177]),
                 valor_previsto=_reais(linha[119:134]) or Decimal("0")))
     return regs
+
+
+def cabecalho_retorno(texto: str):
+    """Header de arquivo (registro 0) do retorno: codigo de arquivo (pos. 143: 1 remessa, 2 retorno), banco,
+    CNPJ, agencia, conta e DAC da conta debitada. None se nao houver header."""
+    for linha in _linhas240(texto):
+        if linha[7] == "0":
+            return {"codigo": linha[142], "banco": linha[0:3], "cnpj": linha[18:32], "agencia": linha[52:57],
+                    "conta": linha[58:70], "dac": linha[71]}
+    return None
 
 
 def ocorrencias_de_lote(texto: str) -> list:

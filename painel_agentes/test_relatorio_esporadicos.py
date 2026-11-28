@@ -324,6 +324,9 @@ class TestRotasRemessa(unittest.TestCase):
             acesso_telas.importar_do_config(conn, {"usuarios_extras": [
                 {"usuario": "tot", "senha": "s0", "nivel": "total"},
                 {"usuario": "fin", "senha": "s1", "nivel": "atendimento"}]})
+            acesso_telas.importar_do_config(conn, {"usuarios_extras": [
+                {"usuario": "cust", "senha": "s2", "nivel": "atendimento"}]})
+            acesso_telas.salvar(conn, "cust", ["relatorio_esporadicos"], "teste")
         finally:
             conn.close()
         painel_agentes.app.config["TESTING"] = True
@@ -433,6 +436,66 @@ class TestRotasRemessa(unittest.TestCase):
         self.assertEqual(ok.status_code, 200)
         self.assertEqual(tot.post(f"/api/financeiro/esporadicos/{pid}/confirmar-pago", headers=self.origem).status_code, 400)
         self.assertGreater(rid2, rid)
+
+    def test_conta_com_telas_personalizadas_nao_e_total_de_verdade(self):
+        cust = self.cliente("cust", "s2")
+        self.assertEqual(cust.get("/financeiro/esporadicos" + self.q).status_code, 200)   # a tela do relatorio ela tem
+        html = cust.get("/financeiro/esporadicos" + self.q).get_data(as_text=True)
+        self.assertNotIn("Gerar remessa", html)
+        self.assertEqual(self.gerar_remessa(cust).status_code, 403)
+        self.assertEqual(cust.get("/financeiro/esporadicos/remessa/1/arquivo").status_code, 403)
+        for caminho in ("remessa/1/cancelar", "remessa/1/retorno", "1/confirmar-pago", "1/rejeitar"):
+            self.assertEqual(cust.post("/api/financeiro/esporadicos/" + caminho, headers=self.origem).status_code, 403, caminho)
+
+    def test_yaml_sem_aspas_e_recusado_com_mensagem_clara(self):
+        for campo, valor in (("agencia", 156), ("conta", 1234), ("dac", 0), ("cnpj", 12345678000195)):
+            with self.subTest(campo):
+                self.config = {"itau_remessa": {**self.ITAU["itau_remessa"], campo: valor}}
+                r = self.gerar_remessa(self.cliente("tot", "s0"))
+                self.assertEqual(r.status_code, 400)
+                self.assertIn("aspas", r.get_json()["erro"])
+                self.assertIn(campo, r.get_json()["erro"])
+
+    def test_valores_que_mudaram_desde_a_tela_recusam_a_remessa(self):
+        from datetime import date as _d, timedelta
+        tot = self.cliente("tot", "s0")
+        corpo = {"chaves": ["52998224725"], "de": "2026-11-01", "ate": "2026-11-27",
+                 "data_pagamento": (_d.today() + timedelta(days=1)).isoformat(), "esperados": {"52998224725": 12345}}
+        r = tot.post("/api/financeiro/esporadicos/remessa", json=corpo, headers=self.origem)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("valores mudaram", r.get_json()["erro"])
+
+    def test_gerar_nao_baixa_sozinho_e_a_tela_oferece_cancelar_e_avisos(self):
+        tot = self.cliente("tot", "s0")
+        self.assertEqual(self.gerar_remessa(tot).status_code, 200)
+        html = tot.get("/financeiro/esporadicos" + self.q + "&filtro=todos").get_data(as_text=True)
+        self.assertIn("js-cancelar-remessa", html)                      # ainda nao baixada: da pra cancelar
+        self.assertNotIn("window.location.href = j.url", html)          # o JS nao navega pro download sozinho
+        self.assertIn("NÃO está agendado", html)                        # confirmacao de rejeitar manual
+
+    def test_remessa_cancelada_some_o_baixar_e_mostra_cancelada(self):
+        tot = self.cliente("tot", "s0")
+        rid = self.gerar_remessa(tot).get_json()["remessa_id"]
+        self.assertEqual(tot.post(f"/api/financeiro/esporadicos/remessa/{rid}/cancelar", headers=self.origem).status_code, 200)
+        html = tot.get("/financeiro/esporadicos" + self.q).get_data(as_text=True)
+        self.assertNotIn(f"remessa/{rid}/arquivo", html)
+        self.assertIn("cancelada", html)
+        self.assertEqual(tot.get(f"/financeiro/esporadicos/remessa/{rid}/arquivo").status_code, 404)
+
+    def test_download_nao_fica_em_cache(self):
+        tot = self.cliente("tot", "s0")
+        rid = self.gerar_remessa(tot).get_json()["remessa_id"]
+        arq = tot.get(f"/financeiro/esporadicos/remessa/{rid}/arquivo")
+        self.assertIn("no-store", arq.headers.get("Cache-Control", ""))
+
+    def test_opcoes_enviados_e_rejeitados_so_para_quem_ve_a_remessa(self):
+        html_fin = self.cliente("fin", "s1").get("/financeiro/esporadicos" + self.q).get_data(as_text=True)
+        self.assertNotIn('value="enviados"', html_fin)
+        html_tot = self.cliente("tot", "s0").get("/financeiro/esporadicos" + self.q).get_data(as_text=True)
+        self.assertIn('value="enviados"', html_tot)
+        self.config = {"itau_remessa": {}}
+        html_off = self.cliente("tot", "s0").get("/financeiro/esporadicos" + self.q).get_data(as_text=True)
+        self.assertNotIn('value="rejeitados"', html_off)
 
     def test_retorno_sem_arquivo_ou_ilegivel_da_400(self):
         tot = self.cliente("tot", "s0")

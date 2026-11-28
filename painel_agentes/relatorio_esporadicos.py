@@ -118,7 +118,9 @@ class ErroPagamento(ValueError):
 
 
 _COLUNAS_REMESSA = [("situacao", "TEXT NOT NULL DEFAULT 'PAGO'"),   # PAGO | ENVIADO | REJEITADO
-                    ("remessa_id", "INTEGER"), ("ocorrencia", "TEXT"), ("motivo", "TEXT")]
+                    ("remessa_id", "INTEGER"), ("ocorrencia", "TEXT"), ("motivo", "TEXT"),
+                    ("documento", "TEXT")]                               # CPF/CNPJ enviado ao banco (confere no retorno)
+_COLUNAS_REMESSAS_TABELA = [("baixada_por", "TEXT"), ("cancelada_em", "TEXT"), ("cancelada_por", "TEXT")]
 
 _SCHEMA_REMESSAS = """
 CREATE TABLE IF NOT EXISTS remessas_itau (
@@ -132,6 +134,8 @@ CREATE TABLE IF NOT EXISTS remessas_itau (
     arquivo_sha256 TEXT,
     baixada_em     TEXT,
     baixada_por    TEXT,
+    cancelada_em   TEXT,
+    cancelada_por  TEXT,
     retorno_em     TEXT,
     retorno_por    TEXT,
     retorno_sha256 TEXT
@@ -146,6 +150,10 @@ def _garantir_tabelas(conn) -> None:
         if coluna not in existentes:
             conn.execute(f"ALTER TABLE pagamentos_esporadicos ADD COLUMN {coluna} {tipo}")
     conn.executescript(_SCHEMA_REMESSAS)
+    existentes = {r[1] for r in conn.execute("PRAGMA table_info(remessas_itau)")}
+    for coluna, tipo in _COLUNAS_REMESSAS_TABELA:
+        if coluna not in existentes:
+            conn.execute(f"ALTER TABLE remessas_itau ADD COLUMN {coluna} {tipo}")
 
 
 def _valor_linha(l: dict) -> float:
@@ -196,6 +204,8 @@ def gerar(data_ini: str, data_fim: str, filtro: str = "pendentes", conn=None, qu
                 l["enviado"] = presa if presa and presa["situacao"] == "ENVIADO" else None
             rej = rejeitados.get(p["chave"], [])
             linhas = [l for l in todas if _visivel(l, filtro)]
+            if filtro == "rejeitados" and not rej:
+                continue
             if not linhas and not (filtro == "rejeitados" and rej):
                 continue
             linhas.sort(key=lambda l: (l["data_rota"] or "", l["rota_id"] or 0))
@@ -270,9 +280,9 @@ def desfazer_pago(pagamento_id: int, usuario: str, conn=None) -> None:
     try:
         _garantir_tabelas(conn)
         cur = conn.execute("UPDATE pagamentos_esporadicos SET desfeito_em = ?, desfeito_por = ? "
-                           "WHERE id = ? AND desfeito_em IS NULL AND situacao = 'PAGO'", (banco.agora(), usuario, pagamento_id))
+                           "WHERE id = ? AND desfeito_em IS NULL AND situacao = 'PAGO' AND remessa_id IS NULL", (banco.agora(), usuario, pagamento_id))
         if cur.rowcount != 1:
-            raise ErroPagamento("Pagamento nao encontrado ou ja desfeito.")
+            raise ErroPagamento("Pagamento nao encontrado, ja desfeito ou efetivado pela remessa Itau (esse nao se desfaz).")
         conn.execute("DELETE FROM pagamentos_esporadicos_rotas WHERE pagamento_id = ?", (pagamento_id,))
         conn.commit()
     finally:

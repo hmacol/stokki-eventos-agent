@@ -4987,24 +4987,47 @@ def _config_itau() -> dict | None:
     return cfg if cfg.get("ativo") else None
 
 
+def _conta_itau_ou_motivo(cfg: dict):
+    """(ContaPagadora, None) ou (None, motivo). cnpj/agencia/conta/dac TEM que ser texto entre aspas no YAML:
+    sem aspas o YAML apaga zeros a esquerda (agencia: 0156 vira 110, octal) e o arquivo sairia com conta errada."""
+    campos = {}
+    for k in ("cnpj", "agencia", "conta", "dac"):
+        v = cfg.get(k)
+        if v is None or v == "":
+            return None, f"campo {k} ausente"
+        if not isinstance(v, str):
+            return None, f'campo {k} deve ficar entre aspas no config.yaml (ex.: {k}: "0156"), senão o YAML apaga zeros à esquerda'
+        campos[k] = v.strip()
+    nome = cfg.get("nome_empresa")
+    if not isinstance(nome, str) or not nome.strip():
+        return None, "campo nome_empresa ausente"
+    tipo = str(cfg.get("tipo_pagamento") or "20").strip()
+    return remessa_itau_mod.ContaPagadora(**campos, nome_empresa=nome.strip(), tipo_pagamento=tipo), None
+
+
 def _conta_itau(cfg: dict):
-    """ContaPagadora a partir do config; None se faltar algum dado da conta."""
-    campos = {k: str(cfg.get(k) or "").strip() for k in ("cnpj", "agencia", "conta", "dac", "nome_empresa")}
-    if not all(campos.values()):
-        return None
-    return remessa_itau_mod.ContaPagadora(**campos, tipo_pagamento=str(cfg.get("tipo_pagamento") or "20").strip())
+    return _conta_itau_ou_motivo(cfg)[0]
+
+
+def _exige_total_de_verdade() -> None:
+    """Remessa move dinheiro: so quem tem nivel total FIXO. Conta com lista personalizada de telas recebe
+    nivel total dentro das telas liberadas (acesso_telas), mas nao entra aqui."""
+    if g.telas_liberadas is not None or g.nivel_acesso not in NIVEIS_REMESSA:
+        abort(403, "A remessa Itaú é só para o nível total.")
 
 
 def _contexto_itau(rel) -> dict | None:
     """Dados da remessa para a tela: so nivel total e so com itau_remessa.ativo."""
-    if g.nivel_acesso not in NIVEIS_REMESSA:
+    if g.telas_liberadas is not None or g.nivel_acesso not in NIVEIS_REMESSA:
         return None
     cfg = _config_itau()
     if cfg is None:
         return None
     from regras import feriados
+    conta, motivo_conta = _conta_itau_ou_motivo(cfg)
     return {
-        "conta_ok": _conta_itau(cfg) is not None,
+        "conta_ok": conta is not None,
+        "conta_motivo": motivo_conta,
         "data_padrao": feriados.proximo_dia_util(date.today()).isoformat(),
         "elegibilidade": {m["chave"]: remessa_itau_db_mod.elegibilidade(m)[1] for m in rel["motoristas"] if m["pode_pagar"]},
         "remessas": remessa_itau_db_mod.listar_remessas(),
@@ -5067,16 +5090,18 @@ def api_esporadicos_desfazer(pagamento_id: int):
 
 def _itau_conta_ou_resposta():
     """(conta, None) ou (None, resposta). Recurso desligado = 404; config sem todos os dados = 400."""
+    _exige_total_de_verdade()
     cfg = _config_itau()
     if cfg is None:
         abort(404)
-    conta = _conta_itau(cfg)
+    conta, motivo = _conta_itau_ou_motivo(cfg)
     if conta is None:
-        return None, (jsonify({"erro": "Configuração itau_remessa incompleta no servidor (cnpj, agencia, conta, dac, nome_empresa)."}), 400)
+        return None, (jsonify({"erro": f"Configuração itau_remessa incompleta ou inválida no servidor: {motivo}."}), 400)
     return conta, None
 
 
 def _itau_ligado_ou_404() -> None:
+    _exige_total_de_verdade()
     if _config_itau() is None:
         abort(404)
 
@@ -5096,9 +5121,14 @@ def api_remessa_criar():
     except ValueError:
         return jsonify({"erro": "Datas inválidas."}), 400
     chaves = [str(c) for c in (dados.get("chaves") or [])]
+    esperados = dados.get("esperados")
+    try:
+        esperados = {str(k): int(v) for k, v in esperados.items()} if isinstance(esperados, dict) else None
+    except (TypeError, ValueError):
+        return jsonify({"erro": "Valores esperados inválidos."}), 400
     try:
         res = remessa_itau_db_mod.criar_remessa(chaves, de, ate, data_pagamento, _usuario_pagamento(), conta,
-                                                PASTA_REMESSAS_ITAU)
+                                                PASTA_REMESSAS_ITAU, esperados=esperados)
     except remessa_itau_db_mod.ErroRemessa as e:
         return jsonify({"erro": str(e)}), 400
     logging.getLogger(__name__).info("remessa_itau.criada id=%s qtd=%s por=%s", res["remessa_id"], res["qtd"], _usuario_pagamento())
@@ -5115,7 +5145,8 @@ def api_remessa_arquivo(remessa_id: int):
     except remessa_itau_db_mod.ErroRemessa as e:
         return jsonify({"erro": str(e)}), 404
     logging.getLogger(__name__).info("remessa_itau.baixada id=%s por=%s", remessa_id, _usuario_pagamento())
-    return Response(dados, mimetype="text/plain", headers={"Content-Disposition": f'attachment; filename="{nome}"'})
+    return Response(dados, mimetype="text/plain", headers={"Content-Disposition": f'attachment; filename="{nome}"',
+                                                           "Cache-Control": "no-store", "Pragma": "no-cache"})
 
 
 @app.route("/api/financeiro/esporadicos/remessa/<int:remessa_id>/cancelar", methods=["POST"])
@@ -5134,7 +5165,9 @@ def api_remessa_cancelar(remessa_id: int):
 @requer_auth(niveis=NIVEIS_REMESSA)
 @exige_mesma_origem
 def api_remessa_retorno(remessa_id: int):
-    _itau_ligado_ou_404()
+    conta, erro = _itau_conta_ou_resposta()
+    if erro:
+        return erro
     arquivo = request.files.get("arquivo")
     if arquivo is None or not arquivo.filename:
         return jsonify({"erro": "Envie o arquivo de retorno do Itaú."}), 400
@@ -5142,7 +5175,7 @@ def api_remessa_retorno(remessa_id: int):
     if len(conteudo) > 2 * 1024 * 1024:
         return jsonify({"erro": "Arquivo grande demais para um retorno (limite 2 MB)."}), 400
     try:
-        res = remessa_itau_db_mod.aplicar_retorno(conteudo.decode("latin-1"), remessa_id, _usuario_pagamento())
+        res = remessa_itau_db_mod.aplicar_retorno(conteudo.decode("latin-1"), remessa_id, _usuario_pagamento(), conta=conta)
     except remessa_itau_db_mod.ErroRemessa as e:
         return jsonify({"erro": str(e)}), 400
     logging.getLogger(__name__).info("remessa_itau.retorno id=%s pagos=%s rejeitados=%s por=%s", remessa_id,

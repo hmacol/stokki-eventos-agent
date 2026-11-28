@@ -98,6 +98,18 @@ class TestEstados(Base):
         with self.assertRaises(rel.ErroPagamento):
             rel.desfazer_pago(pid, "f", conn=self.conn)
 
+    def test_pagamento_efetivado_pela_remessa_nao_pode_ser_desfeito(self):
+        self.motorista(1, "Ana")
+        r = self.rota(1, "2026-11-10")
+        pid = self.pagamento(CPF_OK, [r], situacao="PAGO")
+        remessa = self.conn.execute("INSERT INTO remessas_itau (gerada_em) VALUES ('x')").lastrowid
+        self.conn.execute("UPDATE pagamentos_esporadicos SET remessa_id = ? WHERE id = ?", (remessa, pid))
+        self.conn.commit()
+        with self.assertRaises(rel.ErroPagamento):
+            rel.desfazer_pago(pid, "fin", conn=self.conn)
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM pagamentos_esporadicos_rotas").fetchone()[0], 1)
+        self.assertIsNone(self.conn.execute("SELECT desfeito_em FROM pagamentos_esporadicos WHERE id = ?", (pid,)).fetchone()[0])
+
     def test_rejeitado_libera_a_rota_e_aparece_em_rejeitados(self):
         self.motorista(1, "Ana")
         self.rota(1, "2026-11-10")
@@ -169,7 +181,7 @@ class TestCriarRemessa(BaseRemessa):
         sha = self.conn.execute("SELECT arquivo_sha256 FROM remessas_itau").fetchone()[0]
         self.assertEqual(hashlib.sha256(dados).hexdigest(), sha)
         texto = dados.decode("ascii")
-        self.assertIn(str(pags[0]["id"]).ljust(20), texto)           # Seu Numero = id do pagamento
+        self.assertIn(f"FH{res['remessa_id']}P{pags[0]['id']}".ljust(20), texto)   # Seu Numero = remessa + pagamento
         self.assertEqual(rel.gerar(*PERIODO, "pendentes", conn=self.conn)["motoristas"], [])
 
     def test_sequencial_do_dia_no_nome_do_arquivo(self):
@@ -272,9 +284,12 @@ def retorno_de(texto, por_pagamento, lote_ocorrencia=None):
     saida = []
     for linha in texto.split("\r\n")[:-1]:
         if linha[7] == "3" and linha[13] == "A":
-            pid = int(linha[73:93].strip())
+            seu = linha[73:93].strip()
+            pid = int(seu.split("P")[1]) if seu.startswith("FH") else int(seu)
             ocorr, data, cent = por_pagamento.get(pid, ("", "00000000", 0))
             linha = (linha[:154] + data + str(cent).rjust(15, "0") + linha[177:230] + ocorr.ljust(10))
+        elif linha[7] == "0":
+            linha = linha[:142] + "2" + linha[143:]                  # codigo de arquivo: 2 = retorno
         elif linha[7] == "1" and lote_ocorrencia:
             linha = linha[:230] + lote_ocorrencia.ljust(10)
         saida.append(linha)
@@ -360,10 +375,10 @@ class TestRetorno(BaseRemessa):
         self.conn.execute("UPDATE pagamentos_esporadicos SET remessa_id = ? WHERE id = ?", (outra, self.p2))
         self.conn.commit()
         texto = retorno_de(self.texto, {self.p1: ("00", "30112026", 50000), self.p2: ("00", "30112026", 30000)})
-        texto = texto.replace(str(self.p1).ljust(20), "99999".ljust(20))        # id inexistente
-        res = self.aplicar(texto)
-        self.assertEqual(res["pagos"], 0)
-        self.assertEqual(len(res["ignorados"]), 2)
+        texto = texto.replace(f"FH{self.res['remessa_id']}P{self.p1}".ljust(20),
+                              f"FH{self.res['remessa_id']}P99999".ljust(20))        # id inexistente
+        with self.assertRaises(rdb.ErroRemessa):              # nenhuma linha confere: recusado sem gravar nada (revisao 28/11)
+            self.aplicar(texto)
         self.assertEqual((self.estado(self.p1)["situacao"], self.estado(self.p2)["situacao"]), ("ENVIADO", "ENVIADO"))
 
     def test_foco5_ocorrencia_desconhecida_nunca_vira_pago(self):
@@ -410,6 +425,144 @@ class TestListagem(BaseRemessa):
         r2 = self.criar(chaves=(CPF_B,))
         lista = rdb.listar_remessas(limite=1, conn=self.conn)
         self.assertEqual([x["id"] for x in lista], [r2["remessa_id"]])
+
+
+CRLF = chr(13) + chr(10)
+
+
+def altera_campo(retorno, pagamento_id, ini, fim, novo):
+    """Troca as posicoes ini-fim (base 1) do segmento A do pagamento no retorno sintetico."""
+    saida = []
+    for linha in retorno.split(CRLF):
+        if len(linha) == 240 and linha[7] == "3" and linha[13] == "A" and linha[73:93].strip().endswith(f"P{pagamento_id}"):
+            linha = linha[:ini - 1] + novo + linha[fim:]
+        saida.append(linha)
+    return CRLF.join(saida)
+
+
+class TestCorrecoesRevisao(BaseRemessa):
+    """Achados da revisao final (Fable, 28/11): criticos 1-2 e importantes 3-8."""
+
+    def setUp(self):
+        super().setUp()
+        self.res = self.criar()
+        self.texto = (self.pasta / "remessas" / self.res["arquivo_nome"]).read_bytes().decode("ascii")
+        self.p1, self.p2 = [r[0] for r in self.conn.execute("SELECT id FROM pagamentos_esporadicos ORDER BY id")]
+        self.rid = self.res["remessa_id"]
+
+    def aplicar(self, texto, **kw):
+        return rdb.aplicar_retorno(texto, self.rid, "fin", conn=self.conn, **kw)
+
+    def retorno_ok(self):
+        return retorno_de(self.texto, {self.p1: ("00", "30112026", 50000), self.p2: ("00", "30112026", 30000)})
+
+    def situacao(self, pid):
+        return self.conn.execute("SELECT situacao FROM pagamentos_esporadicos WHERE id = ?", (pid,)).fetchone()[0]
+
+    # 1) remessa cancelada nao pode mais ser baixada
+    def test_remessa_cancelada_nao_e_mais_baixavel_e_pode_ser_refeita(self):
+        rdb.cancelar_remessa(self.rid, "hugo", conn=self.conn)
+        row = self.conn.execute("SELECT cancelada_em, cancelada_por FROM remessas_itau WHERE id = ?", (self.rid,)).fetchone()
+        self.assertTrue(row[0])
+        self.assertEqual(row[1], "hugo")
+        with self.assertRaises(rdb.ErroRemessa) as ctx:
+            rdb.ler_arquivo(self.rid, self.pasta / "remessas", "hugo", conn=self.conn)
+        self.assertIn("cancelada", str(ctx.exception))
+        with self.assertRaises(rdb.ErroRemessa):
+            rdb.cancelar_remessa(self.rid, "hugo", conn=self.conn)           # nao cancela duas vezes
+        self.assertEqual(self.criar()["qtd"], 2)                              # as rotas voltaram: nova remessa
+
+    # 7) cancelar com leitura desatualizada (corrida com o download) e barrado no UPDATE
+    def test_cancelar_com_leitura_desatualizada_e_barrado_no_update(self):
+        rdb.ler_arquivo(self.rid, self.pasta / "remessas", "hugo", conn=self.conn)
+        velha = dict(self.conn.execute("SELECT * FROM remessas_itau WHERE id = ?", (self.rid,)).fetchone())
+        velha["baixada_em"] = None
+        with mock.patch.object(rdb, "_remessa", return_value=velha):
+            with self.assertRaises(rdb.ErroRemessa):
+                rdb.cancelar_remessa(self.rid, "hugo", conn=self.conn)
+        self.assertEqual(self.contagens()[2], 2)
+        self.assertEqual((self.situacao(self.p1), self.situacao(self.p2)), ("ENVIADO", "ENVIADO"))
+
+    # 7) confirmar/rejeitar com leitura desatualizada nao passam
+    def test_confirmar_e_rejeitar_com_leitura_desatualizada_nao_passam(self):
+        rdb.confirmar_pago_manual(self.p1, "fin", conn=self.conn)
+        velho = dict(self.conn.execute("SELECT * FROM pagamentos_esporadicos WHERE id = ?", (self.p1,)).fetchone())
+        velho["situacao"] = "ENVIADO"
+        with mock.patch.object(rdb, "_enviado", return_value=velho):
+            with self.assertRaises(rdb.ErroRemessa):
+                rdb.rejeitar_manual(self.p1, "motivo", "fin", conn=self.conn)
+            with self.assertRaises(rdb.ErroRemessa):
+                rdb.confirmar_pago_manual(self.p1, "fin", conn=self.conn)
+        self.assertEqual(self.situacao(self.p1), "PAGO")
+        self.assertEqual(self.contagens()[2], 2)                              # rota do pago continua presa
+
+    # 3) retorno: identidade e conferencia
+    def test_arquivo_que_nao_e_retorno_e_recusado(self):
+        with self.assertRaises(rdb.ErroRemessa) as ctx:
+            self.aplicar(self.texto)                                          # a propria remessa (codigo de arquivo 1)
+        self.assertIn("não é um arquivo de retorno", str(ctx.exception))
+        self.assertIsNone(self.conn.execute("SELECT retorno_em FROM remessas_itau").fetchone()[0])
+
+    def test_retorno_de_outra_conta_e_recusado(self):
+        outra = ri.ContaPagadora(**{**CONTA.__dict__, "conta": "999999"})
+        with self.assertRaises(rdb.ErroRemessa) as ctx:
+            self.aplicar(self.retorno_ok(), conta=outra)
+        self.assertIn("outra conta", str(ctx.exception))
+        self.assertEqual((self.situacao(self.p1), self.situacao(self.p2)), ("ENVIADO", "ENVIADO"))
+        self.assertEqual(self.aplicar(self.retorno_ok(), conta=CONTA)["pagos"], 2)
+
+    def test_rejeicao_com_valor_ou_documento_diferentes_do_enviado_e_ignorada(self):
+        retorno = retorno_de(self.texto, {self.p1: ("NA", "00000000", 0), self.p2: ("NA", "00000000", 0)})
+        retorno = altera_campo(retorno, self.p1, 120, 134, "000000000009999")      # valor previsto diferente
+        retorno = altera_campo(retorno, self.p2, 204, 217, "00000000000000")       # documento diferente
+        with self.assertRaises(rdb.ErroRemessa):                                  # nenhum registro confere
+            self.aplicar(retorno)
+        self.assertEqual((self.situacao(self.p1), self.situacao(self.p2)), ("ENVIADO", "ENVIADO"))
+        self.assertEqual(self.contagens()[2], 2)
+
+    def test_registro_divergente_entre_os_validos_e_ignorado(self):
+        retorno = retorno_de(self.texto, {self.p1: ("NA", "00000000", 0), self.p2: ("00", "30112026", 30000)})
+        retorno = altera_campo(retorno, self.p1, 204, 217, "00000000000000")
+        res = self.aplicar(retorno)
+        self.assertEqual((res["pagos"], res["rejeitados"], len(res["ignorados"])), (1, 0, 1))
+        self.assertEqual((self.situacao(self.p1), self.situacao(self.p2)), ("ENVIADO", "PAGO"))
+
+    def test_seu_numero_de_outra_remessa_nao_casa_e_nada_e_gravado(self):
+        retorno = self.retorno_ok().replace(f"FH{self.rid}P", f"FH{self.rid + 1}P")      # mesmo tamanho
+        with self.assertRaises(rdb.ErroRemessa) as ctx:
+            self.aplicar(retorno)
+        self.assertIn("nenhum", str(ctx.exception).lower())
+        self.assertIsNone(self.conn.execute("SELECT retorno_em FROM remessas_itau").fetchone()[0])
+
+    def test_retorno_terminado_em_ctrl_z_e_aceito(self):
+        self.assertEqual(self.aplicar(self.retorno_ok() + chr(26))["pagos"], 2)
+
+    def test_seu_numero_do_arquivo_leva_remessa_e_pagamento(self):
+        a = self.texto.split(CRLF)[2]
+        self.assertEqual(a[73:93].strip(), f"FH{self.rid}P{self.p1}")
+
+    # 5) filtro rejeitados lista so quem teve rejeicao (menor 1 do relatorio)
+    def test_filtro_rejeitados_so_lista_quem_teve_rejeicao(self):
+        self.motorista(3, "Carla Souza", cpf="11144477735", pix="carla@pix.com")
+        self.rota(3, "2026-11-12", valor=200.0)                       # pendente, mas sem rejeicao
+        rdb.rejeitar_manual(self.p1, "teste", "fin", conn=self.conn)
+        rej = rel.gerar(*PERIODO, "rejeitados", conn=self.conn)["motoristas"]
+        self.assertEqual([m["nome"] for m in rej], ["Ana Silva"])
+
+
+class TestEsperados(BaseRemessa):
+    # 8) o valor que o usuario viu na tela e o que entra no arquivo
+    def test_valores_esperados_divergentes_recusam_a_remessa(self):
+        with self.assertRaises(rdb.ErroRemessa) as ctx:
+            rdb.criar_remessa([CPF_OK, CPF_B], *PERIODO, HOJE_MAIS, "hugo", CONTA, self.pasta / "remessas",
+                              conn=self.conn, agora=AGORA, esperados={CPF_OK: 50000, CPF_B: 99999})
+        self.assertIn("valores mudaram", str(ctx.exception))
+        self.assertEqual(self.contagens(), (0, 0, 0))
+
+    def test_valores_esperados_conferem(self):
+        res = rdb.criar_remessa([CPF_OK, CPF_B], *PERIODO, HOJE_MAIS, "hugo", CONTA, self.pasta / "remessas",
+                                conn=self.conn, agora=AGORA, esperados={CPF_OK: 50000, CPF_B: 30000})
+        self.assertEqual(res["valor_total"], 800.0)
 
 
 if __name__ == "__main__":

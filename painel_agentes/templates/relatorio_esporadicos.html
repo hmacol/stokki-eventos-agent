@@ -69,9 +69,9 @@
   <div class="campo"><label for="filtro">Mostrar</label>
     <select id="filtro" name="filtro">
       <option value="pendentes"{% if rel.filtro == 'pendentes' %} selected{% endif %}>Pendentes</option>
-      <option value="enviados"{% if rel.filtro == 'enviados' %} selected{% endif %}>Enviados ao banco</option>
+      {% if itau %}<option value="enviados"{% if rel.filtro == 'enviados' %} selected{% endif %}>Enviados ao banco</option>{% endif %}
       <option value="pagos"{% if rel.filtro == 'pagos' %} selected{% endif %}>Pagos</option>
-      <option value="rejeitados"{% if rel.filtro == 'rejeitados' %} selected{% endif %}>Rejeitados pelo banco</option>
+      {% if itau %}<option value="rejeitados"{% if rel.filtro == 'rejeitados' %} selected{% endif %}>Rejeitados pelo banco</option>{% endif %}
       <option value="todos"{% if rel.filtro == 'todos' %} selected{% endif %}>Todos</option>
     </select></div>
   <div class="campo"><label for="quem">Quem</label>
@@ -89,7 +89,7 @@
 <section class="remessa" id="remessa-itau">
   <h2>Remessa Itaú (Pix)</h2>
   {% if not itau.conta_ok %}
-  <div class="aviso">Configuração <code>itau_remessa</code> incompleta no servidor (cnpj, agencia, conta, dac, nome_empresa): a remessa não pode ser gerada.</div>
+  <div class="aviso">Configuração <code>itau_remessa</code> incompleta ou inválida no servidor ({{ itau.conta_motivo }}): a remessa não pode ser gerada.</div>
   {% else %}
   <p>Marque os motoristas pendentes abaixo, escolha a data de pagamento e gere o arquivo. Suba o arquivo no Itaú Empresas: quem tem alçada aprova lá.
      Só depois do retorno do banco (ou da sua confirmação) o pagamento passa a "pago".</p>
@@ -114,8 +114,9 @@
           <td>{{ rm.data_pagamento[8:10] }}/{{ rm.data_pagamento[5:7] }}/{{ rm.data_pagamento[:4] }}</td>
           <td class="n">{{ rm.qtd }}</td>
           <td class="n">{{ '%.2f'|format(rm.valor_total or 0)|replace('.', ',') }}</td>
-          <td>{% for sit, n in rm.situacoes.items() %}{{ n }} {{ sit|lower }}{% if not loop.last %}, {% endif %}{% endfor %}{% if rm.baixada_em %} · arquivo baixado{% endif %}</td>
+          <td>{% if rm.cancelada_em %}<span class="rejeitado">cancelada em {{ rm.cancelada_em[8:10] }}/{{ rm.cancelada_em[5:7] }} por {{ rm.cancelada_por or '—' }}</span>{% else %}{% for sit, n in rm.situacoes.items() %}{{ n }} {{ sit|lower }}{% if not loop.last %}, {% endif %}{% endfor %}{% if rm.baixada_em %} · arquivo baixado{% endif %}{% endif %}</td>
           <td>
+            {% if not rm.cancelada_em %}
             <a class="btn" href="{{ url_for('api_remessa_arquivo', remessa_id=rm.id) }}">Baixar</a>
             {% if not rm.baixada_em and rm.situacoes.get('ENVIADO') %}<button type="button" class="btn js-cancelar-remessa" data-url="{{ url_for('api_remessa_cancelar', remessa_id=rm.id) }}">Cancelar remessa</button>{% endif %}
             {% if rm.situacoes.get('ENVIADO') %}
@@ -123,6 +124,7 @@
               <input type="file" name="arquivo" aria-label="Arquivo de retorno do Itaú" required>
               <button type="submit" class="btn">Enviar retorno</button>
             </form>
+            {% endif %}
             {% endif %}
           </td>
         </tr>
@@ -163,7 +165,7 @@
       {% if motivo_fora %}<span class="inelegivel">Fora da remessa Itaú: {{ motivo_fora }}</span>
       {% else %}<label class="sel"><input type="checkbox" class="js-sel-remessa" data-chave="{{ m.chave }}" data-valor="{{ m.total_pendente }}"> Incluir na remessa Itaú · R$ {{ '%.2f'|format(m.total_pendente)|replace('.', ',') }}</label>{% endif %}
     {% endif %}
-    {% for rj in m.rejeitados %}<span class="rejeitado">Rejeitado pelo banco{% if rj.ocorrencia %} ({{ rj.ocorrencia }}){% endif %}: {{ rj.motivo or 'sem motivo informado' }}</span>{% endfor %}
+    {% for rj in m.rejeitados %}<span class="rejeitado">{% if rj.ocorrencia %}Rejeitado pelo banco ({{ rj.ocorrencia }}){% else %}Cancelado ou rejeitado manualmente{% endif %}: {{ rj.motivo or 'sem motivo informado' }}</span>{% endfor %}
     {% if m.pode_pagar %}
     <input type="text" class="obs" maxlength="300" placeholder="Observação / nº do comprovante (opcional)" aria-label="Observação do pagamento">
     <button type="button" class="btn{% if not itau %} primario{% endif %} js-pagar" data-chave="{{ m.chave }}" data-nome="{{ m.nome }}" data-valor="{{ '%.2f'|format(m.total_pendente)|replace('.', ',') }}">{{ 'Marcar como pago (fora do Itaú)' if itau else 'Marcar como pago' }} · R$ {{ '%.2f'|format(m.total_pendente)|replace('.', ',') }}</button>
@@ -249,11 +251,12 @@
     gerar.disabled = true;
     try {
       const r = await fetch({{ url_for('api_remessa_criar')|tojson }}, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chaves: sel.map(c => c.dataset.chave), de: DE, ate: ATE, data_pagamento: dataPag }) });
+        body: JSON.stringify({ chaves: sel.map(c => c.dataset.chave), de: DE, ate: ATE, data_pagamento: dataPag,
+          esperados: Object.fromEntries(sel.map(c => [c.dataset.chave, Math.round(parseFloat(c.dataset.valor || '0') * 100)])) }) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { erro.textContent = j.erro || 'Não deu certo. Tente de novo.'; gerar.disabled = false; return; }
-      window.location.href = j.url;                       // baixa o arquivo
-      setTimeout(() => location.reload(), 1500);
+      location.hash = 'remessa-itau';                     // nao baixa sozinho: confira a remessa e use Baixar (ou Cancelar)
+      location.reload();
     } catch (e) { erro.textContent = 'Sem conexão com o painel. Tente de novo.'; gerar.disabled = false; }
   });
   document.querySelectorAll('.js-cancelar-remessa').forEach(b => b.addEventListener('click', () => {
@@ -265,6 +268,7 @@
     enviar(b.dataset.url, {}, b.closest('.acoes-pag'), b);
   }));
   document.querySelectorAll('.js-rejeitar').forEach(b => b.addEventListener('click', () => {
+    if (!confirm('Marcar como REJEITADO solta a rota para ser paga de novo. Confirme que este pagamento NÃO está agendado nem aprovável no Itaú (cancele-o lá também). Continuar?')) return;
     const motivo = prompt('Motivo da rejeição (o que o Itaú informou):');
     if (!motivo || !motivo.trim()) return;
     enviar(b.dataset.url, { motivo: motivo }, b.closest('.acoes-pag'), b);

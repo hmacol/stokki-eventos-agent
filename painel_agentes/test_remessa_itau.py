@@ -80,6 +80,11 @@ class TestChave(unittest.TestCase):
         for ruim in ("1234567", "abc", "12345678901234567"):
             self.assertIn("formato inválido", ri.classificar_chave(ruim, CPF_OK), ruim)
 
+    def test_email_com_acento_nao_entra_e_diz_o_motivo(self):
+        r = ri.classificar_chave("josé@exemplo.com.br", CPF_OK)
+        self.assertIsInstance(r, str)
+        self.assertIn("caracteres", r)
+
     def test_motorista_sem_cpf_valido_nao_entra_mesmo_com_email(self):
         r = ri.classificar_chave("ana@pix.com", "")
         self.assertIsInstance(r, str)
