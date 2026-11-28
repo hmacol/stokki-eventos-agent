@@ -23,6 +23,7 @@ import wms_separacao
 
 MAX_CAIXAS = 300
 CONFIRMAR_ACIMA_DE = 99
+LOTE_IMPRESSAO = 50    # etiquetas por trabalho da fila: 300 artes num PDF so custavam ~700 MB no painel
 _ALFABETO_ID = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"   # sem 0/O e 1/I: da pra ler e digitar
 _TAMANHO_ID = 8
 
@@ -163,6 +164,25 @@ def _novos_ids(conn, quantidade: int) -> list[str]:
     return ids
 
 
+def _enfileirar(conn, codigo: str, caixas: list[dict], nome: str, reimpressao: bool = False) -> list[int]:
+    """Manda as etiquetas pra fila em trabalhos de ate LOTE_IMPRESSAO (o PDF de um trabalho monta
+    todas as artes na memoria). Devolve o id do trabalho de cada caixa, na ordem recebida."""
+    ids: list[int] = []
+    for i in range(0, len(caixas), LOTE_IMPRESSAO):
+        lote = caixas[i:i + LOTE_IMPRESSAO]
+        if len(caixas) <= LOTE_IMPRESSAO:
+            titulo = (f"{codigo} · reimpressao de {len(lote)} volume(s)" if reimpressao
+                      else f"{codigo} · {len(lote)} volume(s)")
+        else:
+            titulo = (f"{codigo} · {'reimpressao, ' if reimpressao else ''}volumes {lote[0]['numero']} a "
+                      f"{lote[-1]['numero']} de {lote[0]['total']}")
+        impressao_id = wms_fila_impressao.enfileirar(
+            conn, tipo="VOLUME", tamanho="10x15", titulo=titulo, pedido_por=nome,
+            itens=[conteudo_qr(codigo, c["numero"], c["total"], c["id_caixa"]) for c in lote])
+        ids.extend([impressao_id] * len(lote))
+    return ids
+
+
 def situacao(conn, texto) -> dict:
     """O que a tela mostra ao bipar o pedido: os dados dele e, se ja foi etiquetado, o conjunto ativo."""
     codigo = codigo_base(texto)
@@ -188,6 +208,7 @@ def etiquetar(conn, texto, total, operador: dict | None, *, confirmado: bool = F
         ativos = _ativos(conn, codigo)
         if ativos and len(ativos) == total and ativos[0]["total"] == total:
             return {"codigo": codigo, "total": total, "impressao_id": ativos[0]["impressao_id"],
+                    "trabalhos": len({a["impressao_id"] for a in ativos}),
                     "repetido": True, "anuladas": 0, "conhecido": dados["conhecido"]}
         if not confirmado:
             avisos = []
@@ -211,16 +232,14 @@ def etiquetar(conn, texto, total, operador: dict | None, *, confirmado: bool = F
                 conn.execute("UPDATE wms_fila_impressao SET situacao = 'CANCELADO' WHERE situacao = 'PENDENTE' "
                              f"AND id IN ({','.join('?' * len(trabalhos))})", trabalhos)
         ids = _novos_ids(conn, total)
-        itens = [conteudo_qr(codigo, n, total, ids[n - 1]) for n in range(1, total + 1)]
-        impressao_id = wms_fila_impressao.enfileirar(
-            conn, tipo="VOLUME", tamanho="10x15", itens=itens,
-            titulo=f"{codigo} · {total} volume(s)", pedido_por=nome)
+        caixas = [{"numero": n, "total": total, "id_caixa": ids[n - 1]} for n in range(1, total + 1)]
+        trabalhos = _enfileirar(conn, codigo, caixas, nome)
         conn.executemany(
             "INSERT INTO expedicao_volumes (id_caixa, codigo, numero, total, impressao_id, criado_em, criado_por) "
             "VALUES (?,?,?,?,?,?,?)",
-            [(ids[n - 1], codigo, n, total, impressao_id, ts, nome) for n in range(1, total + 1)])
-    return {"codigo": codigo, "total": total, "impressao_id": impressao_id, "repetido": False,
-            "anuladas": len(ativos), "conhecido": dados["conhecido"]}
+            [(c["id_caixa"], codigo, c["numero"], total, trabalhos[i], ts, nome) for i, c in enumerate(caixas)])
+    return {"codigo": codigo, "total": total, "impressao_id": trabalhos[0], "trabalhos": len(set(trabalhos)),
+            "repetido": False, "anuladas": len(ativos), "conhecido": dados["conhecido"]}
 
 
 def reimprimir(conn, texto, operador: dict | None, numero=None) -> dict:
@@ -240,13 +259,10 @@ def reimprimir(conn, texto, operador: dict | None, numero=None) -> dict:
             alvo = [a for a in ativos if a["numero"] == n]
             if not alvo:
                 raise wms.ErroWMS(f"{codigo} nao tem a caixa {numero} (sao {len(ativos)} caixas).")
-        itens = [conteudo_qr(codigo, a["numero"], a["total"], a["id_caixa"]) for a in alvo]
-        impressao_id = wms_fila_impressao.enfileirar(
-            conn, tipo="VOLUME", tamanho="10x15", itens=itens,
-            titulo=f"{codigo} · reimpressao de {len(alvo)} volume(s)", pedido_por=nome)
+        trabalhos = sorted(set(_enfileirar(conn, codigo, alvo, nome, reimpressao=True)))
         conn.executemany("UPDATE expedicao_volumes SET reimpressoes = reimpressoes + 1 WHERE id_caixa = ?",
                          [(a["id_caixa"],) for a in alvo])
-    return {"codigo": codigo, "quantidade": len(alvo), "impressao_id": impressao_id}
+    return {"codigo": codigo, "quantidade": len(alvo), "impressao_id": trabalhos[0], "impressao_ids": trabalhos}
 
 
 def dados_da_etiqueta(conn, conteudo: str) -> dict | None:

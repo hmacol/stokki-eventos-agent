@@ -1876,16 +1876,21 @@
       const bruto = document.getElementById('etq-total').value.trim();
       if (!/^\d+$/.test(bruto) || Number(bruto) < 1) { toast('Informe quantas caixas o pedido tem', true); return; }
       const total = Number(bruto), botao = document.getElementById('etq-imprimir');
+      // o pedido é o que estava na tela no toque: se o operador bipar outro enquanto o servidor
+      // responde, o reenvio confirmado não pode ir com o código do outro
+      const codigo = atual.codigo;
       botao.disabled = true;   // toque duplo: o servidor também devolve "repetido" em vez de imprimir de novo
       try {
-        let r = await etqPost('/etiquetar/pedido', { codigo: atual.codigo, total: total });
+        let r = await etqPost('/etiquetar/pedido', { codigo: codigo, total: total });
         if (r.confirmar) {
           if (!confirm(r.confirmar.join('\n\n'))) return;
-          r = await etqPost('/etiquetar/pedido', { codigo: atual.codigo, total: total, confirmado: true });
+          r = await etqPost('/etiquetar/pedido', { codigo: codigo, total: total, confirmado: true });
         }
-        if (r.repetido) { toast(r.codigo + ' já tem ' + r.total + ' etiqueta(s). Use Reimprimir se precisar.', true); buscar(r.codigo); return; }
-        toast(r.total + ' etiqueta(s) do ' + r.codigo + ' enviadas pra fila de impressão'); bip(true);
-        limpar(); carregarProntos();
+        const naTela = atual && atual.codigo === codigo;
+        if (r.repetido) { toast(r.codigo + ' já tem ' + r.total + ' etiqueta(s). Use Reimprimir se precisar.', true); if (naTela) buscar(r.codigo); return; }
+        toast(r.total + ' etiqueta(s) do ' + r.codigo + ' enviadas pra fila de impressão' + (r.trabalhos > 1 ? ' (em ' + r.trabalhos + ' trabalhos)' : '')); bip(true);
+        if (naTela) limpar();
+        carregarProntos();
       } catch (e) { if (e.message !== 'sem operador') { toast(e.message, true); bip(false); } }
       finally { const b = document.getElementById('etq-imprimir'); if (b) b.disabled = false; }
     }
@@ -1914,6 +1919,8 @@
     }
     campo.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); const t = campo.value.trim(); if (t) buscar(t); } });
     document.getElementById('etq-cam').addEventListener('click', () => abrirCamera(buscar));
+    // leitor sem foco no campo (celular não foca sozinho): o bipe continua nesta tela e abre o pedido
+    S.ctx.bipar = buscar;
     carregarProntos();
   };
 
@@ -1951,7 +1958,7 @@
   async function lerCodigo(codigo) {
     codigo = String(codigo || '').trim(); if (!codigo) return;
     if (S.tela === 'inventario' && BOOT.caixas_ativo) return invLer(codigo);
-    if ((S.tela === 'onda' || S.tela === 'conferencia') && S.ctx.bipar) return S.ctx.bipar(codigo);
+    if ((S.tela === 'onda' || S.tela === 'conferencia' || S.tela === 'etiquetar') && S.ctx.bipar) return S.ctx.bipar(codigo);
     const serialDigitado = serialDe(codigo);
     if (serialDigitado) {
       if (S.tela === 'recebimento') {

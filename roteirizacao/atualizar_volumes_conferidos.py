@@ -156,6 +156,7 @@ def main(data_str: str, rota_id: int | None) -> int:
 # do dia; este modo roda de hora em hora e le os prontos que ainda nao tem leitura nenhuma.
 
 STATUS_PRONTO_STOKKI = "Waiting for Carrier"
+MINIMO_PRA_ALERTA = 3
 
 
 def ids_prontos_sem_leitura(db_path=DB_PATH, limite: int = 80) -> list[int]:
@@ -174,7 +175,7 @@ def ids_prontos_sem_leitura(db_path=DB_PATH, limite: int = 80) -> list[int]:
         finally:
             con.close()
     except sqlite3.Error as e:
-        logger.debug(f"prontos sem leitura indisponivel: {e}")
+        logger.warning(f"prontos sem leitura indisponivel (banco ocupado ou fora): {e}")
         return []
 
 
@@ -196,6 +197,12 @@ def main_prontos(db_path=DB_PATH, sessao=None, limite: int = 80) -> int:
     logger.info(f"Concluido em {time.time() - inicio:.0f}s: {cont['conferencia']} conferido(s), "
                 f"{cont['nfe']} so com volume da NF-e, {cont['sem_numero']} sem numero, "
                 f"{cont['falhas']} falha(s).")
+    # De hora em hora sao poucos pedidos, e quem falha fica sem linha e e relido na rodada seguinte:
+    # um pedido com erro permanente nao pode virar alerta de falha toda hora. So trata como "Stokki
+    # fora" quando falham todos e sao pelo menos MINIMO_PRA_ALERTA (com a Stokki fora eles acumulam).
+    if cont["falhas"] == len(ids) and len(ids) < MINIMO_PRA_ALERTA:
+        logger.warning(f"{len(ids)} pedido(s) falharam na leitura; serao tentados de novo na proxima rodada.")
+        return 0
     return 1 if cont["falhas"] == len(ids) else 0
 
 

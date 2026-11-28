@@ -161,6 +161,24 @@ class TestEtiquetar(Base):
         self.assertEqual(ev.etiquetar(self.conn, "PS-8", 99, ANA)["total"], 99)       # 99 nao pergunta
         self.assertEqual(ev.etiquetar(self.conn, "PS-7", "300", ANA, confirmado=True)["total"], 300)
 
+    def test_pedido_grande_vai_pra_fila_em_lotes_de_50(self):
+        # revisao final: o PDF monta todas as artes na memoria (300 de uma vez = ~700 MB no painel)
+        r = ev.etiquetar(self.conn, "PS-45352", 120, ANA, confirmado=True)
+        trabalhos = fila.listar(self.conn)
+        self.assertEqual([len(t["itens"]) for t in trabalhos], [50, 50, 20])
+        self.assertEqual([t["titulo"] for t in trabalhos],
+                         ["PS-45352 · volumes 1 a 50 de 120", "PS-45352 · volumes 51 a 100 de 120",
+                          "PS-45352 · volumes 101 a 120 de 120"])
+        self.assertEqual((r["impressao_id"], r["trabalhos"]), (trabalhos[0]["id"], 3))
+        linhas = self.ativos()
+        self.assertEqual([linhas[0]["impressao_id"], linhas[50]["impressao_id"], linhas[119]["impressao_id"]],
+                         [t["id"] for t in trabalhos])
+        self.assertEqual(ev.etiquetar(self.conn, "PS-45352", 120, ANA)["trabalhos"], 3)        # repetido
+        self.assertEqual([len(fila.obter(self.conn, i)["itens"])
+                          for i in ev.reimprimir(self.conn, "PS-45352", ANA)["impressao_ids"]], [50, 50, 20])
+        ev.etiquetar(self.conn, "PS-45352", 2, ANA, confirmado=True)
+        self.assertEqual({fila.obter(self.conn, t["id"])["situacao"] for t in trabalhos}, {"CANCELADO"})
+
     def test_quantidade_invalida(self):
         for ruim in (0, -1, 301, 5.5, "abc", "", None, "5,0"):
             with self.assertRaises(wms.ErroWMS):

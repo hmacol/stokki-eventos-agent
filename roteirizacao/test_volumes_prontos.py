@@ -56,10 +56,22 @@ class TestProntosSemLeitura(Base):
         self.assertEqual(avc.ids_prontos_sem_leitura(self.db), [])
 
     def test_stokki_fora_sai_com_erro_e_nada_pra_ler_sai_bem(self):
+        con = sqlite3.connect(self.db)
+        con.execute("INSERT INTO vigia_stokki_abertos VALUES "
+                    "('PS-6', 6, 'A', 'Waiting for Carrier', 'prioritario', '2026-11-28 14:00:00', 'x')")
+        con.commit()
+        con.close()
         with patch("stokki.pedidos.obter_detalhe", side_effect=RuntimeError("500")):
-            self.assertEqual(avc.main_prontos(self.db, sessao=object(), limite=80), 1)
+            self.assertEqual(avc.main_prontos(self.db, sessao=object(), limite=80), 1)   # 3 de 3 falharam
         with patch("stokki.pedidos.obter_detalhe", side_effect=AssertionError("nao era pra ler")):
             self.assertEqual(avc.main_prontos(self.db_vazio, sessao=object(), limite=80), 0)
+
+    def test_um_ou_dois_pedidos_com_erro_nao_disparam_o_alerta_de_falha(self):
+        # revisao final: de hora em hora sao 1 a 3 pedidos; um pedido que da erro sempre (e por isso
+        # e relido toda rodada) viraria "falhou tudo" e alerta de falha a cada hora
+        with patch("stokki.pedidos.obter_detalhe", side_effect=RuntimeError("500")):
+            self.assertEqual(avc.main_prontos(self.db, sessao=object(), limite=80), 0)   # 2 de 2
+            self.assertEqual(avc.main_prontos(self.db, sessao=object(), limite=1), 0)    # 1 de 1
 
 
 if __name__ == "__main__":

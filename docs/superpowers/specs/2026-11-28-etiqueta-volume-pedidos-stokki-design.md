@@ -1,6 +1,9 @@
 # Etiqueta de volume para todo pedido finalizado na Stokki (etapa 1 de 3)
 
-Data: 28/11/2026. Pedido do Hugo. Estado: desenho para aprovação, nada implementado.
+Data: 28/11/2026. Pedido do Hugo. Estado: desenho aprovado e implementado no ramo
+`etiqueta-volume-stokki` (sem push nem deploy em 28/11). Tela: botão no Início do app do
+galpão, tudo numa tela (escolha do Hugo). Pedido grande vai pra fila em trabalhos de até 50
+etiquetas (o PDF de 300 de uma vez custava ~700 MB no painel).
 
 ## Por quê
 
