@@ -103,10 +103,15 @@ def candidatos(conn: sqlite3.Connection, incluir_sem_servico: bool = False) -> l
         if b in cancelados:
             saida.append({"codigo": r[0], "service_id": int(r[1]), "embarcador": cancelados[b]})
     if incluir_sem_servico:
+        from nucleo import pedidos as nucleo_pedidos
+        agrupados = nucleo_pedidos.servicos_que_agrupam(conn)
         for r in conn.execute("""
                 SELECT codigo, id_pool FROM nucleo_pedidos
                 WHERE status = 'ABERTO' AND excluido_em IS NULL AND vuupt_service_id IS NULL
-                  AND id_pool IS NOT NULL AND codigo GLOB 'PS-*'"""):
+                  AND id_pool IS NOT NULL AND codigo GLOB 'PS-*'""").fetchall():
+            # so pedido sem servico legitimo fecha local; a linha orfa (agrupada/renomeada) segue na Vuupt
+            if not nucleo_pedidos.eh_sem_servico_legitimo(conn, r[0], agrupados):
+                continue
             b = base_do_codigo(r[0])
             if b in cancelados:
                 saida.append({"codigo": r[0], "service_id": -int(r[1]), "embarcador": cancelados[b],

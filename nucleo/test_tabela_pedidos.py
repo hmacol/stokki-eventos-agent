@@ -510,7 +510,8 @@ class TestIdSintetico(_Base):
 
     def _sem_servico(self):
         self._pedido("PS-1", status="ABERTO")
-        self.conn.execute("UPDATE nucleo_pedidos SET id_pool = 7 WHERE codigo = 'PS-1'")
+        # PS-1 nasceu sem servico (pipeline com a chave ligada): pedido sem servico legitimo
+        self.conn.execute("UPDATE nucleo_pedidos SET id_pool = 7, nasceu_sem_servico = 1 WHERE codigo = 'PS-1'")
         self._pedido("PS-2", status="ABERTO")
         self.conn.execute("UPDATE nucleo_pedidos SET id_pool = 8, vuupt_service_id = 900 WHERE codigo = 'PS-2'")
         self.conn.commit()
@@ -530,6 +531,22 @@ class TestIdSintetico(_Base):
         self.conn.commit()
         linhas = {l["codigo"]: l for l in tp.listar({}, conn=self.conn, id_sintetico=True)["linhas"]}
         self.assertIsNone(linhas["PS-1"]["vuupt_service_id"])
+
+    def test_linha_orfa_nao_ganha_id_sintetico(self):
+        """Onda 4 (M1/L1): PS-3 ABERTA sem id mas nao nasceu sem servico (renomeada/pulada); PS-4 nasceu sem
+        servico mas esta dentro de um servico agrupado vivo da Vuupt. Nenhuma pode virar acao local."""
+        self._sem_servico()
+        self._pedido("PS-3", status="ABERTO")
+        self._pedido("PS-4", status="ABERTO")
+        self.conn.execute("UPDATE nucleo_pedidos SET id_pool = 9 WHERE codigo = 'PS-3'")
+        self.conn.execute("UPDATE nucleo_pedidos SET id_pool = 10, nasceu_sem_servico = 1 WHERE codigo = 'PS-4'")
+        self.conn.execute("INSERT INTO nucleo_pedidos (codigo, vuupt_service_id, status, id_pool) "
+                          "VALUES ('PS-4, PS-5', 950, 'EM_ROTA', 11)")
+        self.conn.commit()
+        linhas = {l["codigo"]: l for l in tp.listar({}, conn=self.conn, id_sintetico=True)["linhas"]}
+        self.assertEqual(linhas["PS-1"]["vuupt_service_id"], -7)
+        self.assertIsNone(linhas["PS-3"]["vuupt_service_id"])
+        self.assertIsNone(linhas["PS-4"]["vuupt_service_id"])
 
     def test_chave_desligada_igual_a_hoje(self):
         self._sem_servico()

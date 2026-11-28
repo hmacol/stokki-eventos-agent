@@ -209,6 +209,29 @@ class AlterarEntregaApiTest(unittest.TestCase):
         nucleo.assert_not_called()
         self.portal.dados.buscar_servico.assert_not_called()
 
+    def test_id_negativo_gigante_404_sem_estourar(self):
+        """Onda 4 (L3): -99999999999999999999 estourava o INTEGER do SQLite (OverflowError -> 500)."""
+        self._com(self._fakes())
+        with mock.patch.object(self.portal.dados, "servico_sem_servico",
+                               side_effect=OverflowError("Python int too large")) as nucleo, \
+                mock.patch.dict(self.portal._CONFIG, STOKKI):
+            for metodo in (self.cli.get, self.cli.post):
+                r = metodo("/api/pedidos/-99999999999999999999/alteracao", base_url=HTTPS, json={})
+                self.assertEqual(r.status_code, 404)
+        nucleo.assert_not_called()
+
+    def test_pedido_sem_servico_de_outro_embarcador_404(self):
+        """Revisao de seguranca (lacuna de teste): id negativo de pedido de OUTRO sender_id = 404."""
+        self._com(self._fakes())
+        alheio = _servico(id=-7, sender_id=999, status="not_assigned", route_id=None, customer_id=None)
+        with mock.patch.object(self.portal.dados, "servico_sem_servico", return_value=alheio), \
+                mock.patch.dict(self.portal._CONFIG, STOKKI):
+            self.assertEqual(self.cli.get("/api/pedidos/-7/alteracao", base_url=HTTPS).status_code, 404)
+            r = self.cli.post("/api/pedidos/-7/alteracao", json={"horario": {"inicio": "08:00", "fim": "12:00"}},
+                              base_url=HTTPS)
+            self.assertEqual(r.status_code, 404)
+        self.aplicar.assert_not_called()
+
     def test_pedido_sem_servico_que_nao_existe_404(self):
         self._com(self._fakes())
         with mock.patch.object(self.portal.dados, "servico_sem_servico", return_value=None), \

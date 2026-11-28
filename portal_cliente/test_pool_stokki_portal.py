@@ -125,6 +125,21 @@ class ListaDoPortal(_NucleoTemporario):
             self.assertIsNone(dc.buscar_servico_ou_nucleo("t", sid, "customer"))
         vuupt.assert_not_called()
 
+    def test_linha_orfa_nao_e_servida_pelo_id_sintetico(self):
+        """Onda 4 (M1): servico renomeado na Vuupt deixou a linha antiga ABERTA sem id; nao e pedido sem servico."""
+        from nucleo import sincronizar_servicos_vuupt as sinc
+        pedidos.registrar_importacao(_payload("PS-10"), {"id": 5010}, "criado", conn=self.nucleo)
+        sinc.sincronizar_servicos([{"id": 5010, "code": "#PS-10, #PS-20", "title": "x", "status": "assigned",
+                                    "sender_id": 100, "route_id": 77, "customer": {}}], self.nucleo)
+        sid = pedidos.id_sintetico(pedidos.buscar_pedido("PS-10", conn=self.nucleo))
+        self.assertIsNone(dc.servico_sem_servico(sid))
+        self.assertIsNone(dc.buscar_servico_ou_nucleo("t", sid, "customer", config=STOKKI))
+
+    def test_id_negativo_gigante_nao_estoura(self):
+        """Onda 4 (L3): -99999999999999999999 dava OverflowError (500) no SQLite."""
+        self.assertIsNone(dc.servico_sem_servico(-99999999999999999999))
+        self.assertIsNone(pedidos.codigo_por_id_sintetico(self.nucleo, -99999999999999999999))
+
     def test_pedido_fechado_nao_e_servido_pelo_id_sintetico(self):
         sid = self.sem_servico("PS-1")
         self.nucleo.execute("UPDATE nucleo_pedidos SET status = 'CANCELADO' WHERE codigo = 'PS-1'")
@@ -144,8 +159,10 @@ COLUNAS_ENVIO = ("id INTEGER PRIMARY KEY, cnpj_embarcador TEXT, status TEXT, cri
                  "data_expedicao TEXT, xml_path TEXT, itens_json TEXT, erro TEXT, bloqueio_motivo TEXT, origem TEXT")
 
 
-def conn_dados(status=ep.STATUS_CRIADO, sem_servico=True, id_pool=7):
-    """dados.db em memoria: portal_envios + nucleo_pedidos (com id_pool) + agendamentos_pedido."""
+def conn_dados(status=ep.STATUS_CRIADO, sem_servico=True, id_pool=7, nasceu=1, composto=None):
+    """dados.db em memoria: portal_envios + nucleo_pedidos (com id_pool) + agendamentos_pedido. `nasceu` =
+    nasceu_sem_servico da linha PS-39959 (1 = pedido sem servico legitimo); `composto` = codigo de um servico
+    agrupado vivo na Vuupt que contem o pedido (linha orfa do sync)."""
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.executescript(f"""
@@ -153,7 +170,8 @@ def conn_dados(status=ep.STATUS_CRIADO, sem_servico=True, id_pool=7):
         CREATE TABLE portal_solicitacoes (id INTEGER PRIMARY KEY, envio_id, cnpj_embarcador, tipo, detalhes, status,
                                           solicitado_por, criado_em, concluido_em, resposta);
         CREATE TABLE nucleo_pedidos (codigo TEXT, vuupt_service_id INTEGER, status TEXT, status_provedor TEXT,
-                                     vuupt_route_id INTEGER, excluido_em TEXT, id_pool INTEGER);
+                                     vuupt_route_id INTEGER, excluido_em TEXT, id_pool INTEGER,
+                                     nasceu_sem_servico INTEGER);
         CREATE TABLE nucleo_rotas (vuupt_route_id INTEGER, status TEXT, status_provedor TEXT, iniciada_em TEXT,
                                    agent_id INTEGER);
         CREATE TABLE agendamentos_pedido (id INTEGER PRIMARY KEY AUTOINCREMENT, pedido TEXT UNIQUE, cnpj_destinatario TEXT,
@@ -166,7 +184,10 @@ def conn_dados(status=ep.STATUS_CRIADO, sem_servico=True, id_pool=7):
                  "VALUES (50, '111', ?, datetime('now','localtime'), datetime('now','localtime'), '9959', 'PS-39959', "
                  "0, 0, 'DESTINO LTDA')", (status,))
     if sem_servico:
-        conn.execute("INSERT INTO nucleo_pedidos VALUES ('PS-39959', NULL, 'ABERTO', NULL, NULL, NULL, ?)", (id_pool,))
+        conn.execute("INSERT INTO nucleo_pedidos VALUES ('PS-39959', NULL, 'ABERTO', NULL, NULL, NULL, ?, ?)",
+                     (id_pool, nasceu))
+    if composto:
+        conn.execute("INSERT INTO nucleo_pedidos VALUES (?, 900, 'EM_ROTA', 'assigned', 77, NULL, 8, NULL)", (composto,))
     conn.commit()
     return conn
 
@@ -212,8 +233,28 @@ class CancelamentoDoPortal(unittest.TestCase):
         self.assertEqual(self.vuupt + self.stokki, [])
         self.assertIn("sem id da Vuupt", self.avisos[0])
 
-    def test_sem_id_pool_continua_indo_pra_operacao(self):
-        conn = conn_dados(id_pool=None)
+    def test_linha_orfa_sem_marca_continua_indo_pra_operacao(self):
+        """Onda 4 (M1): o estado real depois do backfill e linha COM id_pool; sem a marca nasceu_sem_servico
+        (servico renomeado/apagado, pulado antigo) ela nao e pedido sem servico: vai pra operacao."""
+        conn = conn_dados(nasceu=None)
+        r = self._rodar(conn, STOKKI)
+        self.assertEqual(r["operacao"], 1, self.avisos)
+        self.assertEqual(self.vuupt + self.stokki, [])
+        self.assertIn("sem id da Vuupt", self.avisos[0])
+
+    def test_orfa_agrupada_em_rota_iniciada_vai_pra_operacao_e_nada_e_cancelado(self):
+        """Onda 4 (M1, cenario da revisao): PS-39959 foi agrupado na Vuupt em "PS-39959, PS-40000" (rota iniciada);
+        o sync zerou o id da linha antiga. O cancelamento do cliente NAO pode virar cancelamento local + Stokki."""
+        conn = conn_dados(nasceu=None, composto="PS-39959, PS-40000")
+        r = self._rodar(conn, STOKKI)
+        self.assertEqual(r, {"cancelados": 0, "operacao": 1, "falhas": 0}, self.avisos)
+        self.assertEqual(self.vuupt + self.stokki, [])
+        self.assertEqual(conn.execute("SELECT status FROM nucleo_pedidos WHERE codigo = 'PS-39959'").fetchone()[0],
+                         "ABERTO")
+        self.assertNotEqual(envio(conn)["status"], ep.STATUS_CANCELADO)
+
+    def test_marcada_mas_agrupada_tambem_vai_pra_operacao(self):
+        conn = conn_dados(nasceu=1, composto="PS-39959, PS-40000")
         self.assertEqual(self._rodar(conn, STOKKI)["operacao"], 1)
         self.assertEqual(self.vuupt + self.stokki, [])
 

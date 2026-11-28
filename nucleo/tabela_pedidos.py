@@ -518,9 +518,13 @@ def listar(filtros: dict, pagina: int = 1, por_pagina: int = POR_PAGINA, ordem: 
         inicio, fim = periodo(filtros.get("de"), filtros.get("ate"))
         linhas = [{k: r[k] for k in r.keys() if k not in ("_n", "_cx", "_data")} for r in rows]
         if id_sintetico:
+            from nucleo import pedidos as nucleo_pedidos
+            agrupados = nucleo_pedidos.servicos_que_agrupam(conn)
             for l in linhas:
-                # so o pedido ABERTO e do pool; fechado sem servico fica sem id (as acoes dizem a causa real)
-                if l["vuupt_service_id"] is None and l["id_pool"] and l["status"] == "ABERTO":
+                # so o pedido ABERTO e do pool; fechado sem servico fica sem id (as acoes dizem a causa real);
+                # so linha sem servico LEGITIMA (nasceu sem servico, fora de agrupado): a orfa fica sem id
+                if (l["vuupt_service_id"] is None and l["id_pool"] and l["status"] == "ABERTO"
+                        and nucleo_pedidos.eh_sem_servico_legitimo(conn, l["codigo_servico"], agrupados)):
                     l["vuupt_service_id"] = -int(l["id_pool"])
         # Só a busca por código traz pedido de fora do período (_periodo_sql).
         fora = [r["codigo"] for r in rows if not inicio <= (r["_data"] or "") <= fim]

@@ -805,6 +805,10 @@ def _servico_alteravel(service_id: int) -> tuple[dict, dict]:
     """(serviço da Vuupt, empresa do login dona dele); 404 se a chave está
     desligada pra essa empresa ou o serviço não é do login. Id negativo = pedido
     ainda sem serviço na Vuupt (pool direto da Stokki): vem do núcleo, sem Vuupt."""
+    # id fora da faixa (ex. negativo gigante) estourava o INTEGER do SQLite: 500 -> 404 (revisão de
+    # segurança L3; o conversor do werkzeug não aceita min negativo)
+    if not -(2 ** 31) <= service_id <= 2 ** 63 - 1:
+        abort(404)
     token = _CONFIG.get("vuupt_api", {}).get("token", "")
     servico = dados.buscar_servico_ou_nucleo(token, service_id, incluir="checklistAnswers,customer",
                                              config=_CONFIG)

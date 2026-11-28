@@ -429,9 +429,11 @@ def servico_sem_servico(service_id) -> dict | None:
     try:
         codigo = nucleo_pedidos.codigo_por_id_sintetico(conn, service_id)
         linha = conn.execute("SELECT * FROM nucleo_pedidos WHERE codigo = ?", (codigo,)).fetchone() if codigo else None
+        # linha orfa (servico agrupado/renomeado na Vuupt) nao e pedido sem servico: o portal nao a serve
+        legitimo = linha is not None and nucleo_pedidos.eh_sem_servico_legitimo(conn, linha)
     finally:
         conn.close()
-    if linha is None or linha["vuupt_service_id"] is not None or linha["status"] != nucleo_banco.PEDIDO_ABERTO:
+    if not legitimo or linha["status"] != nucleo_banco.PEDIDO_ABERTO:
         return None
     return nucleo_pool.pedido_para_servico(linha)
 

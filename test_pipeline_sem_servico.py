@@ -76,6 +76,16 @@ class _Base(unittest.TestCase):
         return pedidos.buscar_pedido("PS-1")
 
     def _ja_no_nucleo_sem_servico(self):
+        """Pedido sem servico LEGITIMO, como o pipeline grava com a chave ligada."""
+        conn = banco.conectar()
+        try:
+            pedidos.registrar_importacao({"code": "#PS-1", "title": "PS-1 - X", "customer": {"address": "RUA A 1"}},
+                                         None, "nucleo_sem_servico", conn=conn)
+        finally:
+            conn.close()
+
+    def _linha_legada_sem_servico(self):
+        """Linha ABERTA sem id que NAO nasceu sem servico (pulado antigo / servico renomeado na Vuupt)."""
         conn = banco.conectar()
         try:
             pedidos.upsert_pedido(conn, "PS-1", {"titulo": "PS-1 - X", "endereco": "RUA A 1"},
@@ -162,7 +172,7 @@ class LinhaLegadaSemServicoTest(_Base):
     e pede revisao (senao sumiria calada do planejamento)."""
 
     def test_linha_legada_pede_revisao_e_fica_fora_do_pool(self):
-        self._ja_no_nucleo_sem_servico()   # upsert direto: nao nasceu pelo caminho sem servico
+        self._linha_legada_sem_servico()   # upsert direto: nao nasceu pelo caminho sem servico
         vuupt = self._vuupt()
         res = self._processar(vuupt)
         self.assertEqual(res["acao"], "gravado_nucleo")
@@ -327,6 +337,15 @@ class FecharSemServicoTest(_Base):
         self.assertIn("77", res["observacao"])
         self.assertEqual(self._linha()["status"], banco.PEDIDO_ABERTO)
         self.assertTrue(any("PS-1" in m and "77" in m for m in logs.output))
+
+    def test_linha_orfa_cancelada_na_stokki_nao_fecha_local_e_pede_revisao(self):
+        """Onda 4 (M1): linha que nao nasceu sem servico (renomeada/agrupada na Vuupt) nao fecha local."""
+        self._linha_legada_sem_servico()
+        self.detalhe = _detalhe("Cancelado")
+        res = self._processar(self._vuupt())
+        self.assertTrue(res["requer_revisao"])
+        self.assertIn("operacao", res["observacao"])
+        self.assertEqual(self._linha()["status"], banco.PEDIDO_ABERTO)
 
     def test_cancelado_na_stokki_modo_teste_nao_fecha(self):
         self._ja_no_nucleo_sem_servico()

@@ -68,6 +68,10 @@ def cancelar_sem_servico_local(service_id: int, motivo: str, origem: str) -> dic
         ja_estava = False
         if not pedidos.cancelar_sem_servico(codigo, motivo, origem, conn=conn):
             linha = pedidos.buscar_pedido(codigo, conn=conn)
+            if linha["vuupt_service_id"] is None and not pedidos.eh_sem_servico_legitimo(conn, codigo):
+                # linha orfa (servico agrupado/renomeado/apagado na Vuupt): nada e fechado local
+                return {"ok": False, "ja_estava": False,
+                        "erro": f"pedido {codigo} {pedidos.MOTIVO_SEM_SERVICO_ILEGITIMO}"}
             if linha["vuupt_service_id"] is not None:
                 return {"ok": False, "ja_estava": False,
                         "erro": f"pedido {codigo} ja tem o servico {linha['vuupt_service_id']} na Vuupt: "

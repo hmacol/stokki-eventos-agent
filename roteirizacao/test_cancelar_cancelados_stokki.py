@@ -145,8 +145,8 @@ class SemServicoNaVuupt(unittest.TestCase):
         self.cancelar = mock.patch.object(ccs.cs, "cancelar_servico_completo").start()
         self.remover = mock.patch.object(ccs.cs.rascunhos_rota, "remover_parada").start()
         self.conn.execute("INSERT INTO galpao_pedidos VALUES (1, 'PS-1', 'EMB', 'Cancelado')")
-        pedidos.upsert_pedido(self.conn, "PS-1", {"titulo": "x"}, banco.ORIGEM_PIPELINE)
-        self.conn.commit()
+        # pedido sem servico LEGITIMO, como o pipeline grava com a chave ligada (onda 4: so ele fecha local)
+        pedidos.registrar_importacao({"code": "#PS-1", "title": "x"}, None, "nucleo_sem_servico", conn=self.conn)
         self.neg = -self.conn.execute("SELECT id_pool FROM nucleo_pedidos WHERE codigo='PS-1'").fetchone()[0]
 
     def _status(self):
@@ -197,6 +197,36 @@ class Email(unittest.TestCase):
         self.assertEqual(assunto, "[Freshlog] Cancelados na Stokki: 1 cancelado(s) na Vuupt, 1 em rota")
         self.assertIn("&lt;b&gt;X&lt;/b&gt;", corpo)
         self.assertNotIn("<b>X</b>", corpo)
+
+
+class CandidatosSemServicoLegitimo(unittest.TestCase):
+    """Onda 4 (M1): so pedido sem servico LEGITIMO e candidato a fechar local; a linha orfa (agrupada,
+    renomeada, pulada) nao entra (seria fechada local enquanto a Vuupt segue com a parada)."""
+
+    def test_orfa_nao_e_candidata_sem_servico(self):
+        import tempfile
+        from pathlib import Path as _P
+        from nucleo import banco, pedidos, sincronizar_servicos_vuupt as sinc
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        with mock.patch.object(banco, "DB_PATH", _P(tmp.name) / "t.db"):
+            conn = banco.conectar()
+            try:
+                for c in ("PS-501", "PS-502"):
+                    pedidos.registrar_importacao({"code": f"#{c}", "title": "x"}, None, "nucleo_sem_servico", conn=conn)
+                pedidos.registrar_importacao({"code": "#PS-503", "title": "x"}, {"id": 5010}, "criado", conn=conn)
+                sinc.sincronizar_servicos([{"id": 5010, "code": "#PS-503, #PS-600", "title": "x", "status": "assigned",
+                                            "sender_id": 1, "route_id": 77, "customer": {}}], conn)
+                conn.execute("CREATE TABLE IF NOT EXISTS galpao_pedidos (id_stokki INTEGER PRIMARY KEY, codigo TEXT, "
+                             "embarcador TEXT, situacao TEXT)")
+                for n in (501, 502, 503):
+                    conn.execute("INSERT INTO galpao_pedidos VALUES (?, ?, 'EMB', 'Cancelado')", (n, f"PS-{n}"))
+                conn.commit()
+                saida = ccs.candidatos(conn, incluir_sem_servico=True)
+            finally:
+                conn.close()
+        sem = sorted(c["codigo"] for c in saida if c.get("sem_servico"))
+        self.assertEqual(sem, ["PS-501", "PS-502"])
 
 
 if __name__ == "__main__":

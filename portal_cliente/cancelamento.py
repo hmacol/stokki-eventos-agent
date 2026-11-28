@@ -105,15 +105,23 @@ def com_id_sintetico(conn: sqlite3.Connection, vivos: list[dict]) -> list[dict]:
     """So com sem_servico_local: linha do nucleo sem servico na Vuupt ganha o id sintetico
     (-id_pool) em vuupt_service_id. As acoes de producao que recebem esse id
     (cancelar_servico_completo, solicitacoes_execucao.reagendar_servico_vuupt e
-    _tirar_da_rota_real) gravam no nucleo e nunca chamam a Vuupt com ele. Sem id_pool a
-    linha fica como esta e cai na recusa "sem id da Vuupt" de sempre."""
+    _tirar_da_rota_real) gravam no nucleo e nunca chamam a Vuupt com ele. So linha que e pedido
+    sem servico LEGITIMO (pedidos.eh_sem_servico_legitimo: nasceu sem servico, fora de servico
+    agrupado); linha orfa (servico agrupado/renomeado/apagado na Vuupt) ou sem id_pool fica como
+    esta e cai na recusa "sem id da Vuupt" de sempre (operacao)."""
+    from nucleo import pedidos as nucleo_pedidos
+    agrupados = None
     for s in vivos:
         if s.get("vuupt_service_id") or not s.get("codigo"):
             continue
-        row = conn.execute("SELECT id_pool FROM nucleo_pedidos WHERE codigo = ? AND vuupt_service_id IS NULL",
+        row = conn.execute("SELECT codigo, id_pool FROM nucleo_pedidos WHERE codigo = ? AND vuupt_service_id IS NULL",
                            (s["codigo"],)).fetchone()
-        if row and row[0]:
-            s["vuupt_service_id"] = -int(row[0])
+        if not row or not row[1]:
+            continue
+        if agrupados is None:
+            agrupados = nucleo_pedidos.servicos_que_agrupam(conn)
+        if nucleo_pedidos.eh_sem_servico_legitimo(conn, row[0], agrupados):
+            s["vuupt_service_id"] = -int(row[1])
     return vivos
 
 

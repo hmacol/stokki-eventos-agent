@@ -149,5 +149,28 @@ class RascunhoDoServico(unittest.TestCase):
             self.assertEqual(cs.rascunho_do_servico(999), (None, None))
 
 
+class OrfaSemServicoTest(unittest.TestCase):
+    """Onda 4 (M1): cancelar local pelo id sintetico recusa a linha orfa com o motivo (operacao)."""
+
+    def test_orfa_recusa_com_motivo(self):
+        import tempfile
+        from pathlib import Path as _P
+        from nucleo import banco, pedidos
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        with mock.patch.object(banco, "DB_PATH", _P(tmp.name) / "t.db"):
+            conn = banco.conectar()
+            try:
+                pedidos.registrar_importacao({"code": "#PS-5", "title": "x"}, None, "pulado_sem_alteracao", conn=conn)
+                sid = pedidos.id_sintetico(pedidos.buscar_pedido("PS-5", conn=conn))
+            finally:
+                conn.close()
+            with mock.patch("roteirizacao.conferir_pool.tirar_dos_rascunhos", side_effect=AssertionError("rascunho")):
+                r = cs.cancelar_sem_servico_local(sid, "teste", banco.ORIGEM_PAINEL)
+            self.assertFalse(r["ok"])
+            self.assertIn("operacao", r["erro"])
+            self.assertEqual(pedidos.buscar_pedido("PS-5")["status"], banco.PEDIDO_ABERTO)
+
+
 if __name__ == "__main__":
     unittest.main()
