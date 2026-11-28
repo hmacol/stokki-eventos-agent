@@ -397,8 +397,8 @@ class GuardarNaTela(ConferirRecebimentoNaTela):
     def test_uuid_da_guarda_estavel_por_item_ate_o_sucesso(self):
         h = self.html()
         self.assertIn("uuid: uuidGuarda(it) });", h)
-        # sucesso e guarda ja feita (409), na tela e no envio da fila
-        self.assertEqual(h.count("soltarUuidGuarda(corpo);"), 4)
+        # sucesso e guarda ja feita (409), na tela e no envio da fila; e ao entrar na fila offline
+        self.assertEqual(h.count("soltarUuidGuarda(corpo);"), 5)
         self.assertNotIn("ctx.uuid = uuid()", h)   # trocar a posicao nao troca o uuid
 
     def test_guarda_ja_feita_solta_o_uuid_e_recarrega_o_item(self):
@@ -406,6 +406,18 @@ class GuardarNaTela(ConferirRecebimentoNaTela):
         self.assertIn("e.dados.guarda_ja_feita) { soltarUuidGuarda(corpo); return abrirGuardaItem(ctx.item, e.message); }", h)
         self.assertIn("Guarda já registrada", h)
         self.assertIn("if (e.dados && e.dados.guarda_ja_feita) soltarUuidGuarda(corpo);", h)   # fila offline
+
+    def test_guarda_na_fila_offline_solta_o_uuid(self):
+        # a fila guarda o corpo com o uuid; a proxima guarda do item e outra acao e leva uuid novo
+        self.assertIn("enfileirar(Object.assign({ tipo: 'guardar' }, corpo)); soltarUuidGuarda(corpo);", self.html())
+
+    def test_soltar_so_o_mesmo_uuid(self):
+        # 200/409 da fila nao apaga o uuid mais novo do mesmo item
+        self.assertIn("if (atual && atual !== x.uuid) return;", self.html())
+
+    def test_guardar_todas_manda_os_seriais_que_a_tela_mostrou(self):
+        self.assertIn("enviarGuarda(ctx, ctx.caixas ? Object.assign(base(), { seriais: ctx.caixas.map((c) => c.serial) }) : base());",
+                      self.html())
 
     def test_mover_nao_oferece_a_doca_como_origem(self):
         h = self.html()

@@ -1569,7 +1569,7 @@
       </div>`).join('') || '<div class="vazio">Nada na doca esperando lugar.</div>';
     lista.querySelectorAll('[data-gi]').forEach((el) => el.addEventListener('click', () => abrirGuardaItem(ctx.fila[Number(el.dataset.gi)])));
   };
-  // uuid da guarda por item (produto + lote + validade) até o servidor responder sucesso: reabrir o item
+  // uuid da guarda por item (produto + lote + validade) até o servidor responder sucesso (ou a guarda entrar na fila offline): reabrir o item
   // repete a MESMA guarda, nunca move de novo. Guarda diferente com o uuid preso (a anterior chegou e a
   // resposta se perdeu): o servidor recusa com 409 guarda_ja_feita, o uuid é solto e o item recarrega
   const GUARDA_UUID = {};
@@ -1580,7 +1580,13 @@
     if (!GUARDA_UUID[k]) { GUARDA_UUID[k] = uuid(); try { localStorage.setItem(k, GUARDA_UUID[k]); } catch (e) { /* idem */ } }
     return GUARDA_UUID[k];
   }
-  function soltarUuidGuarda(x) { const k = chaveGuarda(x); delete GUARDA_UUID[k]; try { localStorage.removeItem(k); } catch (e) { /* idem */ } }
+  // solta só se o uuid preso for o desta guarda: a resposta da fila não apaga o uuid mais novo do item
+  function soltarUuidGuarda(x) {
+    const k = chaveGuarda(x); let atual = GUARDA_UUID[k];
+    if (!atual) { try { atual = localStorage.getItem(k) || ''; } catch (e) { /* idem */ } }
+    if (atual && atual !== x.uuid) return;
+    delete GUARDA_UUID[k]; try { localStorage.removeItem(k); } catch (e) { /* idem */ }
+  }
   // aviso: mensagem da guarda já registrada; se o item saiu da doca, volta para a fila com ela
   async function abrirGuardaItem(it, aviso) {
     const q = '?produto_id=' + it.produto_id + '&lote=' + encodeURIComponent(it.lote || '') + '&validade=' + encodeURIComponent(it.validade || '');
@@ -1601,7 +1607,8 @@
       if (e.status === 409 && e.dados && e.dados.sem_operador) { S.operador = null; toast(e.message, true); return ir('operador'); }
       if (e.status === 409 && e.dados && e.dados.temperatura) { ctx.conflito = e.dados.temperatura; ctx.corpo = corpo; return render(); }
       if (e.status === 409 && e.dados && e.dados.guarda_ja_feita) { soltarUuidGuarda(corpo); return abrirGuardaItem(ctx.item, e.message); }
-      if (!e.status) { enfileirar(Object.assign({ tipo: 'guardar' }, corpo)); toast('Sem rede: guarda guardada na fila e será enviada quando a internet voltar.'); return voltar(); }
+      // a fila leva o corpo com este uuid (reenvio seguro); a próxima guarda do item é outra ação, com uuid novo
+      if (!e.status) { enfileirar(Object.assign({ tipo: 'guardar' }, corpo)); soltarUuidGuarda(corpo); toast('Sem rede: guarda guardada na fila e será enviada quando a internet voltar.'); return voltar(); }
       toast(e.message, true);
       render();
     }
@@ -1671,7 +1678,7 @@
     const outra = g('gi-outra'); if (outra) outra.addEventListener('click', () => { ctx.destino = ''; ctx.conflito = null; ctx.corpo = null; render(); });
     const mesmo = g('gi-mesmo'); if (mesmo) mesmo.addEventListener('click', () => { mesmo.disabled = true; const corpo = Object.assign({}, ctx.corpo, { confirmar_temperatura: true }); ctx.conflito = null; enviarGuarda(ctx, corpo); });
     const parte = g('gi-parte'); if (parte) parte.addEventListener('click', () => { ctx.modo = 'parcial'; render(); });
-    const todas = g('gi-todas'); if (todas) todas.addEventListener('click', () => { todas.disabled = true; enviarGuarda(ctx, base()); });
+    const todas = g('gi-todas'); if (todas) todas.addEventListener('click', () => { todas.disabled = true; enviarGuarda(ctx, ctx.caixas ? Object.assign(base(), { seriais: ctx.caixas.map((c) => c.serial) }) : base()); });   // as que a tela mostrou: reenvio tardio não leva caixa que chegou depois
     const ok = g('gi-ok');
     if (ok) ok.addEventListener('click', () => {
       if (!nCx) {
