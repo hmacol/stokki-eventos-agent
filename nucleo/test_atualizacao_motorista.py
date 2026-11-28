@@ -416,7 +416,7 @@ class TestAtualizacaoMotorista(unittest.TestCase):
         self.assertEqual(login["telefone"], "11998765432")   # mesmo repasse da edição pelo painel
         pessoa = next(p for p in atu.pessoas(self.conn) if lid in p["ids"])
         self.assertEqual(atu.pix_pendente(self.conn, pessoa)["novo"], "pix-novo@exemplo.com")
-        atu.decidir_pix(self.conn, lid, True, "hugo")
+        atu.decidir_pix(self.conn, lid, True, "hugo", pix_visto="pix-novo@exemplo.com")
         alt = self.conn.execute("SELECT valor_antigo, valor_novo FROM motoristas_alteracoes "
                                 "WHERE cpf = ? AND campo = 'chave_pix'", (CPF_X,)).fetchone()
         self.assertEqual(tuple(alt), ("pix-antigo", "pix-novo@exemplo.com"))
@@ -829,23 +829,42 @@ class TestAtualizacaoMotorista(unittest.TestCase):
 
     def test_aprovar_a_troca_grava_no_login_e_na_ficha(self):
         lid, token, r, _ = self._troca_pedida()
-        self.assertEqual(atu.decidir_pix(self.conn, lid, True, "hugo"), {"ok": True, "aprovado": True})
+        self.assertEqual(atu.decidir_pix(self.conn, lid, True, "hugo", pix_visto="pix-D"), {"ok": True, "aprovado": True})
         self.assertEqual(self._pix_login(), "pix-D")
         self.assertEqual(self._cadastro_row(r["cadastro_id"])["chave_pix"], "pix-D")
         alt = self.conn.execute("SELECT valor_antigo, valor_novo FROM motoristas_alteracoes WHERE campo = 'chave_pix'").fetchone()
         self.assertEqual(tuple(alt), ("pix-C", "pix-D"))
         self.assertIsNone(atu.pix_pendente(self.conn, self._pessoa(lid)))
         with self.assertRaises(atu.LinkInvalido) as cx:   # segundo clique não repete
-            atu.decidir_pix(self.conn, lid, True, "hugo")
+            atu.decidir_pix(self.conn, lid, True, "hugo", pix_visto="pix-D")
         self.assertEqual(cx.exception.codigo, 404)
 
     def test_recusar_a_troca_mantem_o_pix_atual(self):
         lid, token, r, _ = self._troca_pedida()
-        self.assertEqual(atu.decidir_pix(self.conn, lid, False, "hugo"), {"ok": True, "aprovado": False})
+        self.assertEqual(atu.decidir_pix(self.conn, lid, False, "hugo", pix_visto="pix-D"), {"ok": True, "aprovado": False})
         self.assertEqual(self._pix_login(), "pix-C")
         self.assertEqual(self._cadastro_row(r["cadastro_id"])["chave_pix"], "pix-C")
         self.assertIsNone(atu.pix_pendente(self.conn, self._pessoa(lid)))
         self.assertFalse(atu.pendencias(self.conn, self._pessoa(lid))["pix_pendente"])
+
+    def test_decidir_pix_do_link_pessoal_rejeita_chave_diferente_da_vista(self):
+        lid, token, r, _ = self._troca_pedida()
+        visto = atu.pix_pendente(self.conn, self._pessoa(lid))
+        self.assertEqual(visto["novo"], "pix-D")
+        self.conn.execute("UPDATE motoristas_links_atualizacao SET pix_pendente = 'pix-Z' WHERE id = ?", (visto["link_id"],))
+        self.conn.commit()
+        for aprovar in (True, False):
+            with self.assertRaises(atu.LinkInvalido) as cx:
+                atu.decidir_pix(self.conn, lid, aprovar, "hugo", pix_visto="pix-D")
+            self.assertEqual(cx.exception.codigo, 409)
+        self.assertEqual(self._pix_login(), "pix-C")
+        self.assertEqual(atu.pix_pendente(self.conn, self._pessoa(lid))["novo"], "pix-Z")
+        # corrida: leitura velha (pix-D) e banco ja com pix-Z -> o UPDATE guardado falha
+        with mock.patch.object(atu, "pix_pendente", return_value=visto):
+            with self.assertRaises(atu.LinkInvalido) as cx:
+                atu.decidir_pix(self.conn, lid, True, "hugo", pix_visto="pix-D")
+        self.assertEqual(cx.exception.codigo, 409)
+        self.assertEqual(self._pix_login(), "pix-C")
 
     def test_sem_login_trocar_o_pix_da_ficha_antiga_tambem_espera(self):
         lid = self._linha("Fulano de Tal", cpf=CPF_X, agent=7)
@@ -856,7 +875,7 @@ class TestAtualizacaoMotorista(unittest.TestCase):
         self._docs(r, ("cnh", "crlv", "selfie"))
         self.assertTrue(atu.concluir(self.conn, {}, token, r["chave_envio"])["pix_em_analise"])
         self.assertEqual(self._cadastro_row(r["cadastro_id"])["chave_pix"], "pix-A")
-        atu.decidir_pix(self.conn, lid, True, "hugo")
+        atu.decidir_pix(self.conn, lid, True, "hugo", pix_visto="pix-D")
         self.assertEqual(self._cadastro_row(r["cadastro_id"])["chave_pix"], "pix-D")
         self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM motoristas").fetchone()[0], 0)
 
@@ -961,21 +980,95 @@ class TestAtualizacaoMotorista(unittest.TestCase):
         lid = self._motorista_com_nascimento()
         self._login(CPF_X, agent_id=7, chave_pix="pix-B")
         atu.pedir_pix(self.conn, CPF_X, "pix-D", self.NASC)
-        self.assertEqual(atu.decidir_pix(self.conn, lid, True, "hugo"), {"ok": True, "aprovado": True})
+        pid = self._pedidos_pix()[0]["id"]
+        self.assertEqual(atu.decidir_pix(self.conn, lid, True, "hugo", pix_visto="pix-D", pedido_visto=pid),
+                         {"ok": True, "aprovado": True})
         self.assertEqual(self._pix_login(), "pix-D")
         p = self._pedidos_pix()[0]
         self.assertEqual((p["status"], p["decidido_por"]), ("APROVADO", "hugo"))
         self.assertIsNone(atu.pix_pendente(self.conn, self._pessoa(lid)))
         with self.assertRaises(atu.LinkInvalido):
-            atu.decidir_pix(self.conn, lid, True, "hugo")
+            atu.decidir_pix(self.conn, lid, True, "hugo", pix_visto="pix-D", pedido_visto=pid)
 
     def test_recusar_pedido_do_link_unico_mantem_o_pix(self):
         lid = self._motorista_com_nascimento()
         self._login(CPF_X, agent_id=7, chave_pix="pix-B")
         atu.pedir_pix(self.conn, CPF_X, "pix-D", self.NASC)
-        atu.decidir_pix(self.conn, lid, False, "hugo")
+        pid = self._pedidos_pix()[0]["id"]
+        atu.decidir_pix(self.conn, lid, False, "hugo", pix_visto="pix-D", pedido_visto=pid)
         self.assertEqual(self._pix_login(), "pix-B")
         self.assertEqual(self._pedidos_pix()[0]["status"], "RECUSADO")
+
+    # ── TOCTOU: a decisao vale so pro pedido e a chave que o operador viu ──
+    def _cenario_pix_visto(self):
+        """Operador ve o pedido de pix-A; antes do clique o link publico o substitui por pix-B."""
+        lid = self._motorista_com_nascimento()
+        self._login(CPF_X, agent_id=7, chave_pix="pix-ATUAL")
+        atu.pedir_pix(self.conn, CPF_X, "pix-A", self.NASC)
+        visto = atu.pix_pendente(self.conn, self._pessoa(lid))
+        atu.pedir_pix(self.conn, CPF_X, "pix-B", self.NASC)
+        return lid, visto
+
+    def _nada_gravado(self, lid):
+        self.assertEqual(self._pix_login(), "pix-ATUAL")
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM motoristas_alteracoes WHERE campo = 'chave_pix'")
+                         .fetchone()[0], 0)
+        atual = atu.pix_pendente(self.conn, self._pessoa(lid))
+        self.assertEqual(atual["novo"], "pix-B")   # o pedido novo segue PENDENTE
+        self.assertEqual([p["status"] for p in self._pedidos_pix()], ["SUBSTITUIDO", "PENDENTE"])
+
+    def test_decidir_pix_rejeita_pedido_trocado_depois_de_visto(self):
+        lid, visto = self._cenario_pix_visto()
+        with self.assertRaises(atu.LinkInvalido) as cx:
+            atu.decidir_pix(self.conn, lid, True, "hugo", pix_visto=visto["novo"], pedido_visto=visto["pedido_id"])
+        self.assertEqual(cx.exception.codigo, 409)
+        self.assertIn("mudou", str(cx.exception))
+        self._nada_gravado(lid)
+
+    def test_decidir_pix_aprova_exatamente_o_pix_visto(self):
+        lid = self._motorista_com_nascimento()
+        self._login(CPF_X, agent_id=7, chave_pix="pix-ATUAL")
+        atu.pedir_pix(self.conn, CPF_X, "pix-A", self.NASC)
+        visto = atu.pix_pendente(self.conn, self._pessoa(lid))
+        # chave certa mas id de outro pedido, ou id certo e chave diferente: ambos recusados
+        for kw in ({"pix_visto": "pix-A", "pedido_visto": visto["pedido_id"] + 1},
+                   {"pix_visto": "pix-X", "pedido_visto": visto["pedido_id"]},
+                   {"pix_visto": "pix-A", "pedido_visto": None}):
+            with self.assertRaises(atu.LinkInvalido) as cx:
+                atu.decidir_pix(self.conn, lid, True, "hugo", **kw)
+            self.assertEqual(cx.exception.codigo, 409)
+        self.assertEqual(self._pix_login(), "pix-ATUAL")
+        atu.decidir_pix(self.conn, lid, True, "hugo", pix_visto="pix-A", pedido_visto=visto["pedido_id"])
+        self.assertEqual(self._pix_login(), "pix-A")
+
+    def test_decidir_pix_recusar_tambem_exige_o_pedido_visto(self):
+        lid, visto = self._cenario_pix_visto()
+        with self.assertRaises(atu.LinkInvalido) as cx:
+            atu.decidir_pix(self.conn, lid, False, "hugo", pix_visto=visto["novo"], pedido_visto=visto["pedido_id"])
+        self.assertEqual(cx.exception.codigo, 409)
+        self._nada_gravado(lid)
+
+    def test_decidir_pix_corrida_entre_leitura_e_update(self):
+        """A leitura devolve o pedido velho (pix-A) mas, ate o UPDATE, o banco ja tem o pix-B."""
+        lid, visto = self._cenario_pix_visto()
+        with mock.patch.object(atu, "pix_pendente", return_value=visto):
+            with self.assertRaises(atu.LinkInvalido) as cx:
+                atu.decidir_pix(self.conn, lid, True, "hugo", pix_visto=visto["novo"], pedido_visto=visto["pedido_id"])
+        self.assertEqual(cx.exception.codigo, 409)
+        self._nada_gravado(lid)
+
+    def test_decidir_pix_grava_o_pix_do_banco_e_nao_o_da_leitura(self):
+        """Leitura velha e pix_visto iguais (pix-A), mas o id existe com outra chave no banco: nada passa."""
+        lid, visto = self._cenario_pix_visto()
+        self.conn.execute("UPDATE motoristas_pix_pedidos SET pix_novo = 'pix-B', status = 'PENDENTE' WHERE id = ?",
+                          (visto["pedido_id"],))
+        self.conn.execute("UPDATE motoristas_pix_pedidos SET status = 'SUBSTITUIDO' WHERE id <> ?", (visto["pedido_id"],))
+        self.conn.commit()
+        with mock.patch.object(atu, "pix_pendente", return_value=visto):
+            with self.assertRaises(atu.LinkInvalido) as cx:
+                atu.decidir_pix(self.conn, lid, True, "hugo", pix_visto="pix-A", pedido_visto=visto["pedido_id"])
+        self.assertEqual(cx.exception.codigo, 409)
+        self.assertEqual(self._pix_login(), "pix-ATUAL")
 
     def test_pedir_pix_so_grava_se_a_data_de_nascimento_bate_com_a_ficha(self):
         self._motorista_com_nascimento()

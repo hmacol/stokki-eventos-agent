@@ -295,11 +295,48 @@ class TestLinkEFicha(_Base):
         self.assertIn("PIX novo aguardando aprovação", self.cliente.get("/motoristas").get_data(as_text=True))
         d = self._get(f"/api/motoristas/{self.ana2}/ficha").get_json()
         self.assertEqual((d["pix_pendente"]["novo"], d["pix_pendente"]["atual"]), ("pix-NOVO", "pix-A"))
-        self.assertEqual(self._post(f"/api/motoristas/{self.ana1}/pix-pendente", {"aprovar": "sim"}).status_code, 400)
-        r = self._post(f"/api/motoristas/{self.ana2}/pix-pendente", {"aprovar": True})
+        url = f"/api/motoristas/{self.ana2}/pix-pendente"
+        self.assertEqual(self._post(url, {"aprovar": "sim", "pix_visto": "pix-NOVO"}).status_code, 400)
+        for corpo in ({"aprovar": True}, {"aprovar": True, "pix_visto": ""}, {"aprovar": True, "pix_visto": 5},
+                      {"aprovar": True, "pix_visto": "pix-NOVO", "pedido_visto": "1"}):
+            self.assertEqual(self._post(url, corpo).status_code, 400)       # corpo sem o que o operador viu
+        r = self._post(url, {"aprovar": True, "pix_visto": "pix-OUTRO"})   # chave diferente da exibida
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("mudou", r.get_json()["erro"])
+        self.assertEqual(auth.buscar_motorista(self.conn, CPF_A)["chave_pix"], "pix-A")
+        r = self._post(url, {"aprovar": True, "pix_visto": "pix-NOVO"})
         self.assertEqual((r.status_code, r.get_json()), (200, {"ok": True, "aprovado": True}))
         self.assertEqual(auth.buscar_motorista(self.conn, CPF_A)["chave_pix"], "pix-NOVO")
-        self.assertEqual(self._post(f"/api/motoristas/{self.ana1}/pix-pendente", {"aprovar": True}).status_code, 404)
+        self.assertEqual(self._post(f"/api/motoristas/{self.ana1}/pix-pendente",
+                                    {"aprovar": True, "pix_visto": "pix-NOVO"}).status_code, 404)
+
+    def test_ficha_e_decisao_do_pix_com_pedido_do_link_unico_exigem_o_pedido_visto(self):
+        self.conn.execute("INSERT INTO motoristas_cadastros (cpf, nome, chave_envio, status, origem, bd_motorista_id, "
+                          "chave_pix, criado_em) VALUES (?, 'Ana', 'k', 'APROVADO', 'app', ?, 'pix-A', ?)",
+                          (CPF_A, self.ana1, banco.agora()))
+        auth.criar_ou_atualizar_motorista(self.conn, CPF_A, "Ana Souza", pin="246802", agent_id=11)
+        self.conn.execute("UPDATE motoristas SET chave_pix = 'pix-A' WHERE cpf = ?", (CPF_A,))
+        self.conn.execute("INSERT INTO motoristas_pix_pedidos (cpf, pix_novo, criado_em) VALUES (?, 'pix-VISTO', ?)",
+                          (CPF_A, banco.agora()))
+        self.conn.commit()
+        self._logar("total")
+        pp = self._get(f"/api/motoristas/{self.ana1}/ficha").get_json()["pix_pendente"]
+        self.assertEqual(pp["novo"], "pix-VISTO")
+        self.assertIsInstance(pp["pedido_id"], int)
+        # o link publico substitui o pedido depois que o operador abriu a ficha
+        self.conn.execute("UPDATE motoristas_pix_pedidos SET status = 'SUBSTITUIDO'")
+        self.conn.execute("INSERT INTO motoristas_pix_pedidos (cpf, pix_novo, criado_em) VALUES (?, 'pix-TROCADO', ?)",
+                          (CPF_A, banco.agora()))
+        self.conn.commit()
+        url = f"/api/motoristas/{self.ana1}/pix-pendente"
+        r = self._post(url, {"aprovar": True, "pix_visto": pp["novo"], "pedido_visto": pp["pedido_id"]})
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(auth.buscar_motorista(self.conn, CPF_A)["chave_pix"], "pix-A")
+        novo = self._get(f"/api/motoristas/{self.ana1}/ficha").get_json()["pix_pendente"]
+        self.assertEqual(novo["novo"], "pix-TROCADO")
+        r = self._post(url, {"aprovar": True, "pix_visto": novo["novo"], "pedido_visto": novo["pedido_id"]})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(auth.buscar_motorista(self.conn, CPF_A)["chave_pix"], "pix-TROCADO")
 
     def test_ficha_mostra_o_pix_vigente_do_login(self):
         """C1: PIX trocado no app ("Meus dados") depois da aprovação: a ficha mostra o do login."""
