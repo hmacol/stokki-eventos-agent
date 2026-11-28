@@ -250,17 +250,18 @@ def pedir_pix(conn: sqlite3.Connection, cpf, pix, ip: str | None = None) -> dict
     pix = cad.validar_pix(pix)
     if not pix:
         raise cad.CadastroInvalido("Informe a chave PIX.")
-    if ip:
-        hora = (datetime.now() - timedelta(hours=1)).strftime(_FMT)
-        if conn.execute("SELECT COUNT(*) FROM motoristas_pix_pedidos WHERE ip_origem = ? AND criado_em >= ?",
-                        (ip, hora)).fetchone()[0] >= MAX_PEDIDOS_PIX_IP_HORA:
-            raise cad.CadastroInvalido("Muitos pedidos. Tente de novo mais tarde.", 429)
-    if conn.execute("SELECT COUNT(*) FROM motoristas_pix_pedidos WHERE cpf = ? AND criado_em >= ?",
-                    (cpf, (datetime.now() - timedelta(hours=1)).strftime(_FMT))).fetchone()[0] >= MAX_PEDIDOS_PIX_CPF_HORA:
-        raise cad.CadastroInvalido("Muitos pedidos. Tente de novo mais tarde.", 429)
-    # Resposta igual para CPF desconhecido, inativo ou chave já cadastrada: não revela quem é motorista
-    # nem o PIX dele. Nesses casos nada é registrado.
+    # Freios por IP e por CPF respondem igual ao sucesso e nao gravam: um 429 so para CPF que ja tem
+    # pedido seria um oracle de "esse CPF e de motorista".
     resposta = {"ok": True}
+    hora = (datetime.now() - timedelta(hours=1)).strftime(_FMT)
+    if conn.execute("SELECT COUNT(*) FROM motoristas_pix_pedidos WHERE cpf = ? AND criado_em >= ?",
+                    (cpf, hora)).fetchone()[0] >= MAX_PEDIDOS_PIX_CPF_HORA or (
+            ip and conn.execute("SELECT COUNT(*) FROM motoristas_pix_pedidos WHERE ip_origem = ? AND criado_em >= ?",
+                                (ip, hora)).fetchone()[0] >= MAX_PEDIDOS_PIX_IP_HORA):
+        logger.info("pedido de PIX acima do limite por CPF/IP descartado em silencio")
+        return resposta
+    # Resposta igual para CPF desconhecido, inativo ou chave ja cadastrada: nao revela quem e motorista
+    # nem o PIX dele. Nesses casos nada e registrado.
     pessoa = next((p for p in pessoas(conn) if p["cpf"] == cpf and p["ativo"]), None)
     if not pessoa:
         return resposta

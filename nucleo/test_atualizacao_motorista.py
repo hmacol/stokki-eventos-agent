@@ -937,17 +937,16 @@ class TestAtualizacaoMotorista(unittest.TestCase):
         atu.pedir_pix(self.conn, CPF_X, "pix-2", ip="9.9.9.9")
         self.assertEqual([p["status"] for p in self._pedidos_pix()], ["SUBSTITUIDO", "PENDENTE"])
         atu.pedir_pix(self.conn, CPF_X, "pix-3", ip="9.9.9.9")
-        with self.assertRaises(cad.CadastroInvalido) as cx:   # 4o do mesmo CPF na hora
-            atu.pedir_pix(self.conn, CPF_X, "pix-4", ip="8.8.8.8")
-        self.assertEqual(cx.exception.codigo, 429)
+        # 4o do mesmo CPF na hora: mesma resposta do sucesso, sem gravar (nao vira oracle de CPF)
+        self.assertEqual(atu.pedir_pix(self.conn, CPF_X, "pix-4", ip="8.8.8.8"), {"ok": True})
+        self.assertEqual(len(self._pedidos_pix()), 3)
         self.conn.execute("UPDATE motoristas_pix_pedidos SET cpf = '0'")   # IP: 3 gravados, completa o teto
         for _ in range(atu.MAX_PEDIDOS_PIX_IP_HORA - 3):
             self.conn.execute("INSERT INTO motoristas_pix_pedidos (cpf, pix_novo, criado_em, ip_origem) VALUES ('0','x',?,'9.9.9.9')",
                               (banco.agora(),))
         self.conn.commit()
-        with self.assertRaises(cad.CadastroInvalido) as cx:
-            atu.pedir_pix(self.conn, CPF_X, "pix-z", ip="9.9.9.9")
-        self.assertEqual(cx.exception.codigo, 429)
+        self.assertEqual(atu.pedir_pix(self.conn, CPF_X, "pix-z", ip="9.9.9.9"), {"ok": True})
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM motoristas_pix_pedidos WHERE cpf = ?", (CPF_X,)).fetchone()[0], 0)
 
     def test_aprovar_pedido_do_link_unico_grava_no_login_e_fecha_o_pedido(self):
         lid = self._linha("Fulano", cpf=CPF_X, agent=7)
