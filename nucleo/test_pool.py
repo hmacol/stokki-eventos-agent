@@ -17,7 +17,7 @@ from unittest import mock
 _RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_RAIZ))
 
-from nucleo import banco, pool, sincronizar_servicos_vuupt as sinc
+from nucleo import banco, pedidos, pool, sincronizar_servicos_vuupt as sinc
 from nucleo.normalizacao import local_para_vuupt, normalizar_codigo, vuupt_para_local
 
 
@@ -133,6 +133,144 @@ class TestFonte(unittest.TestCase):
             self.assertEqual(pool.listar_pool_not_assigned({"planejamento": {"fonte_pool": "nucleo"}}, vuupt), [{"id": 2}])
             lp.assert_called_once_with()
         vuupt.listar_servicos.assert_called_once()   # não chamou a Vuupt de novo
+
+
+class TestFonteStokki(_Base):
+    """fonte_pool = stokki: pedido sem servico entra com id negativo (-id_pool)."""
+
+    def _sem_servico(self, codigo="PS-900"):
+        """Como o pipeline grava com a chave ligada (pedido que NASCE sem servico)."""
+        pedidos.registrar_importacao({"code": f"#{codigo}", "title": f"{codigo} - X",
+                                      "customer": {"address": "Rua B, 2"}}, None, "nucleo_sem_servico", conn=self.conn)
+        return self.conn.execute("SELECT id_pool FROM nucleo_pedidos WHERE codigo=?", (codigo,)).fetchone()[0]
+
+    def test_stokki_inclui_pedido_sem_servico_com_id_negativo(self):
+        idp = self._sem_servico()
+        itens = pool.listar_pool(self.conn, incluir_sem_servico=True)
+        self.assertEqual(len(itens), 1)
+        self.assertEqual(itens[0]["id"], -idp)
+        self.assertTrue(itens[0]["_sem_servico_vuupt"])
+        self.assertTrue(pool.eh_sem_servico(itens[0]["id"]))
+        self.assertFalse(pool.eh_sem_servico(5001))
+        # default continua como antes: sem servico fica fora
+        self.assertEqual(pool.listar_pool(self.conn), [])
+
+    def test_stokki_nao_chama_vuupt(self):
+        vuupt = mock.Mock()
+        with mock.patch.object(pool, "listar_pool", return_value=[{"id": -1}]) as lp:
+            r = pool.listar_pool_not_assigned({"planejamento": {"fonte_pool": "stokki"}}, vuupt)
+        self.assertEqual(r, [{"id": -1}])
+        lp.assert_called_once_with(incluir_sem_servico=True)
+        self.assertEqual(vuupt.mock_calls, [])
+
+    def test_pedido_com_servico_mantem_id_real(self):
+        sinc.sincronizar_servicos([_servico()], self.conn)
+        idp = self._sem_servico()
+        itens = {s["code"]: s for s in pool.listar_pool(self.conn, incluir_sem_servico=True)}
+        self.assertEqual(itens["#PS-100"]["id"], 5001)
+        self.assertFalse(itens["#PS-100"].get("_sem_servico_vuupt", False))
+        self.assertEqual(itens["#PS-900"]["id"], -idp)
+
+    def test_varios_sem_servico_nao_se_fundem_nem_colidem(self):
+        a, b = self._sem_servico("PS-901"), self._sem_servico("PS-902")
+        ids = sorted(s["id"] for s in pool.listar_pool(self.conn, incluir_sem_servico=True))
+        self.assertEqual(ids, sorted([-a, -b]))
+
+    def test_ficam_fora_retirada_e_excluido_mesmo_sem_servico(self):
+        self._sem_servico("PS-903")
+        self.conn.execute("INSERT INTO nucleo_pedidos (codigo, status, origem, id_pool, excluido_em) "
+                          "VALUES ('PS-904', 'ABERTO', 'PIPELINE', 9001, '2026-09-16 10:00:00')")
+        self.conn.execute("INSERT INTO nucleo_pedidos (codigo, status, origem, id_pool, fluxo) "
+                          "VALUES ('PS-905', 'ABERTO', 'PIPELINE', 9002, ?)", (banco.FLUXO_RETIRADA,))
+        self.conn.commit()
+        self.assertEqual([s["code"] for s in pool.listar_pool(self.conn, incluir_sem_servico=True)], ["#PS-903"])
+
+    def test_linha_sem_id_pool_fica_fora_com_warning_sem_derrubar_o_pool(self):
+        """Revisao final M3: linha com id_pool NULL (codigo antigo inseriu entre o pull e o
+        restart) dava TypeError e derrubava o pool inteiro."""
+        self._sem_servico("PS-906")
+        self.conn.execute("INSERT INTO nucleo_pedidos (codigo, status, origem, id_pool) "
+                          "VALUES ('PS-907', 'ABERTO', 'PIPELINE', NULL)")
+        self.conn.commit()
+        with self.assertLogs("nucleo.pool", level="WARNING") as cap:
+            codigos = [s["code"] for s in pool.listar_pool(self.conn, incluir_sem_servico=True)]
+        self.assertEqual(codigos, ["#PS-906"])
+        self.assertTrue(any("PS-907" in m for m in cap.output))
+
+    def test_fonte_desconhecida_loga_warning(self):
+        pool._FONTES_AVISADAS.clear()
+        cfg = {"planejamento": {"fonte_pool": "banana"}}
+        vuupt = mock.Mock()
+        vuupt.listar_servicos.return_value = []
+        with self.assertLogs("nucleo.pool", level="WARNING") as cap:
+            pool.listar_pool_not_assigned(cfg, vuupt)
+        self.assertTrue(any("banana" in m for m in cap.output))
+        vuupt.listar_servicos.assert_called_once()   # fallback pra vuupt
+        # so uma vez por processo e por valor
+        with self.assertNoLogs("nucleo.pool", level="WARNING"):
+            pool.listar_pool_not_assigned(cfg, vuupt)
+
+    def test_vuupt_e_nucleo_seguem_iguais(self):
+        sinc.sincronizar_servicos([_servico()], self.conn)
+        self._sem_servico()
+        vuupt = mock.Mock()
+        vuupt.listar_servicos.return_value = [{"id": 1}]
+        self.assertEqual(pool.listar_pool_not_assigned({"planejamento": {"fonte_pool": "vuupt"}}, vuupt), [{"id": 1}])
+        self.assertEqual([s["id"] for s in pool.listar_pool(self.conn)], [5001])
+
+    def test_pedido_agrupado_noutro_servico_nao_entra_como_sem_servico(self):
+        """Fix round 1 da Task 7: "PS-10" virou "#PS-10, #PS-20" na Vuupt; a linha antiga perde o id no
+        sync e nao pode aparecer como pedido sem servico (o envio criaria outro servico)."""
+        sinc.sincronizar_servicos([_servico(service_id=5010, code="#PS-10")], self.conn)
+        sinc.sincronizar_servicos([_servico(service_id=5010, code="#PS-10, #PS-20")], self.conn)
+        self._sem_servico("PS-11")
+        codigos = [s["code"] for s in pool.listar_pool(self.conn, incluir_sem_servico=True)]
+        self.assertEqual(codigos, ["#PS-10, PS-20", "#PS-11"])
+
+    def test_composto_cancelado_nao_devolve_o_pedido_como_sem_servico(self):
+        """Revisao Fable FIX 2 (muda o fix round 1): PS-10 JA TEVE servico (5010); sem o id ele nao e
+        pedido novo sem servico -- fica fora do pool (conservador; conferir a mao na Vuupt)."""
+        sinc.sincronizar_servicos([_servico(service_id=5010, code="#PS-10")], self.conn)
+        sinc.sincronizar_servicos([_servico(service_id=5010, code="#PS-10, #PS-20", status="canceled")], self.conn)
+        codigos = [s["code"] for s in pool.listar_pool(self.conn, incluir_sem_servico=True)]
+        self.assertEqual(codigos, [])
+
+    def test_servico_renomeado_na_vuupt_nao_vira_pedido_sem_servico(self):
+        """Revisao Fable FIX 2: servico 5010 renomeado de #PS-10 pra #PS-99 na Vuupt; o sync tira o id da
+        linha PS-10, que ficaria ABERTA sem servico e ganharia um SEGUNDO servico no envio."""
+        sinc.sincronizar_servicos([_servico(service_id=5010, code="#PS-10")], self.conn)
+        sinc.sincronizar_servicos([_servico(service_id=5010, code="#PS-99")], self.conn)
+        self.assertIsNone(pedidos.buscar_pedido("PS-10", conn=self.conn)["vuupt_service_id"])
+        itens = pool.listar_pool(self.conn, incluir_sem_servico=True)
+        self.assertEqual([(s["code"], s["id"]) for s in itens], [("#PS-99", 5010)])
+
+    def test_linha_legada_pulada_sem_servico_fica_fora(self):
+        """Pedido 'pulado' pelo pipeline antigo (ou servico apagado): ABERTO sem id, mas nao nasceu sem servico."""
+        pedidos.registrar_importacao({"code": "#PS-50", "title": "x"}, None, "pulado_sem_alteracao", conn=self.conn)
+        self._sem_servico("PS-51")
+        self.assertEqual([s["code"] for s in pool.listar_pool(self.conn, incluir_sem_servico=True)], ["#PS-51"])
+
+    def test_pedido_que_ganhou_e_perdeu_o_servico_nao_volta_como_sem_servico(self):
+        self._sem_servico("PS-11")
+        self.assertEqual(len(pool.listar_pool(self.conn, incluir_sem_servico=True)), 1)
+        sinc.sincronizar_servicos([_servico(service_id=5001, code="#PS-11")], self.conn)   # materializado
+        self.assertEqual(pedidos.buscar_pedido("PS-11", conn=self.conn)["vuupt_service_id"], 5001)
+        sinc.sincronizar_servicos([_servico(service_id=5001, code="#PS-77")], self.conn)   # renomeado depois
+        self.assertIsNone(pedidos.buscar_pedido("PS-11", conn=self.conn)["vuupt_service_id"])
+        # a rodada seguinte do pipeline grava de novo pelo caminho sem servico: nao remarca
+        self._sem_servico("PS-11")
+        codigos = [s["code"] for s in pool.listar_pool(self.conn, incluir_sem_servico=True)]
+        self.assertEqual(codigos, ["#PS-77"])
+
+    def test_marca_de_nascimento_sem_servico(self):
+        self._sem_servico("PS-1")
+        marca = lambda: self.conn.execute(  # noqa: E731
+            "SELECT nasceu_sem_servico FROM nucleo_pedidos WHERE codigo = 'PS-1'").fetchone()[0]
+        self.assertEqual(marca(), 1)
+        self._sem_servico("PS-1")                      # 2a rodada: continua marcado
+        self.assertEqual(marca(), 1)
+        pedidos.upsert_pedido(self.conn, "PS-1", {}, banco.ORIGEM_VUUPT_SYNC, vuupt_service_id=5001)
+        self.assertFalse(marca())                      # ganhou servico: a marca sai
 
 
 class TestEquivalenciaComATela(_Base):

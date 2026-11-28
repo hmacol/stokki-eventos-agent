@@ -83,6 +83,11 @@ def _consultar(conn: sqlite3.Connection, sql: str, params=()) -> list[sqlite3.Ro
         return []
 
 
+def _colunas(conn: sqlite3.Connection, tabela: str) -> set[str]:
+    """Colunas da tabela (vazio se ela não existe)."""
+    return {r[1] for r in conn.execute(f"PRAGMA table_info({tabela})")}
+
+
 def _prazo_dias_regiao(endereco) -> int | None:
     """Dias corridos do prazo de pedido de região semanal/quinzenal (Hugo,
     03/10); None pra Grande SP, região interna ou endereço sem região."""
@@ -104,10 +109,14 @@ def coletar_fatos(conn: sqlite3.Connection, hoje: date) -> list[dict]:
     + os carimbos de tempo pra estimar o 'desde'."""
     abertos = {r["codigo"]: dict(r) for r in _consultar(conn, "SELECT * FROM vigia_stokki_abertos")}
 
-    servicos = _consultar(conn, """
+    # id_pool: pedido sem servico na Vuupt (pool direto da Stokki) esta no rascunho pelo id
+    # sintetico -id_pool. Banco anterior a coluna (ou de teste) segue sem ela.
+    com_id_pool = "id_pool" in _colunas(conn, "nucleo_pedidos")
+    servicos = _consultar(conn, f"""
         SELECT codigo, vuupt_service_id, status, agendamento_inicio, vuupt_route_id,
                criado_em_provedor, atualizado_em_provedor, criado_em, remetente_nome,
                destinatario_nome, fluxo, excluido_em, reentrega_de_service_id, endereco
+               {", id_pool" if com_id_pool else ", NULL AS id_pool"}
         FROM nucleo_pedidos
     """)
     duplicados = {r["service_id_original"]: r["cancelado_em"] for r in _consultar(
@@ -177,6 +186,10 @@ def coletar_fatos(conn: sqlite3.Connection, hoje: date) -> list[dict]:
         conn, "SELECT codigo_pedido FROM pedidos_dedicados WHERE removido_em IS NULL AND codigo_pedido IS NOT NULL")}
     area_nao_atendida = {r["service_id"]: r["notificado_em"] for r in _consultar(
         conn, "SELECT service_id, notificado_em FROM pedidos_area_notificada")}
+    # 26/11: o aviso tambem e gravado pelo codigo (o id do pedido sem servico troca no envio)
+    area_por_codigo = ({banco.normalizar(r["codigo"]): r["notificado_em"] for r in _consultar(
+        conn, "SELECT codigo, notificado_em FROM pedidos_area_notificada WHERE codigo IS NOT NULL")}
+        if "codigo" in _colunas(conn, "pedidos_area_notificada") else {})
     # Rota fraca adiada de propósito (roteirizacao/rotas_fracas.py): só
     # conta enquanto a data nova não chegou.
     segurados = {banco.normalizar(r["codigo"]): r["prazo_final"] for r in _consultar(
@@ -199,7 +212,10 @@ def coletar_fatos(conn: sqlite3.Connection, hoje: date) -> list[dict]:
         # viraria alerta.
         if s["status"] == "INSUCESSO" and not aberto:
             continue
-        rasc = rascunhos.get(sid) if sid else None
+        # pedido sem servico na Vuupt: a parada do rascunho tem o id sintetico (-id_pool)
+        id_parada = sid if sid else (-int(s["id_pool"]) if s["id_pool"] else None)
+        rasc = rascunhos.get(id_parada) if id_parada else None
+        aviso_area = (area_nao_atendida.get(sid) if sid else None) or area_por_codigo.get(codigo)
         concluido, motivo_insucesso = conclusoes.get(sid, (None, None))
         f = {
             "codigo": codigo, "service_id": sid, "status_nucleo": s["status"],
@@ -217,8 +233,8 @@ def coletar_fatos(conn: sqlite3.Connection, hoje: date) -> list[dict]:
             "motivo_insucesso": motivo_insucesso,
             "motivo_pool": ("dedicado -- transporte cotado à parte, fora da rota compartilhada"
                             if codigo in dedicados or base in dedicados else
-                            f"área não atendida (embarcador avisado em {str(area_nao_atendida[sid])[:10]})"
-                            if sid in area_nao_atendida else
+                            f"área não atendida (embarcador avisado em {str(aviso_area)[:10]})"
+                            if aviso_area else
                             f"segurado para consolidar (prazo {_d(segurados[base]):%d/%m})"
                             if base in segurados else None),
             "prazo_segurado": _d(segurados[base]) if base in segurados else None,

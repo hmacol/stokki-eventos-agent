@@ -24,6 +24,8 @@ from fora_dia_fixo import data_agendada  # noqa: E402
 from regioes_dia_fixo import ajustar_data_por_dia_fixo  # noqa: E402
 from roteirizacao_dados import ids_servicos_em_rotas  # noqa: E402
 from nucleo.normalizacao import vuupt_para_local  # noqa: E402
+from nucleo.pedidos import gravar_agendamento_sem_servico  # noqa: E402
+from nucleo.pool import eh_sem_servico  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +127,12 @@ def andar_datas_automaticas(servicos: list[dict], vuupt, data_alvo: date, ids_em
         inicio = f"{para.isoformat()}T{c['_ini']}:00-03:00"
         fim = f"{para.isoformat()}T{c['_fim']}:00-03:00"
         try:
-            vuupt.atualizar_servico(s["id"], {"scheduled_start": inicio, "scheduled_end": fim})
+            if eh_sem_servico(s["id"]):
+                # pedido ainda sem servico na Vuupt (fonte stokki): a data fica no nucleo
+                if not gravar_agendamento_sem_servico(s["id"], inicio, fim):
+                    raise RuntimeError(f"pedido {s['id']} sem servico nao achado no nucleo")
+            else:
+                vuupt.atualizar_servico(s["id"], {"scheduled_start": inicio, "scheduled_end": fim})
         except Exception as e:
             logger.warning(f"  {s.get('code')}: falha ao andar data automatica: {e}")
             continue

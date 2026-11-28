@@ -197,7 +197,8 @@ def notificar_remetentes(pendentes_com_tipo: list[tuple[dict, str]], config_emai
     """
     from fingerprint_area_nao_atendida import ja_notificado, marcar_notificado
 
-    pendentes_com_tipo = [(s, t) for s, t in pendentes_com_tipo if not ja_notificado(s["id"])]
+    # pelo codigo tambem: o id do pedido sem servico (sintetico) troca quando ele ganha o servico
+    pendentes_com_tipo = [(s, t) for s, t in pendentes_com_tipo if not ja_notificado(s["id"], s.get("code"))]
     if not pendentes_com_tipo:
         return {"enviados": 0, "falhas": 0, "sem_email": 0}
 
@@ -232,7 +233,7 @@ def notificar_remetentes(pendentes_com_tipo: list[tuple[dict, str]], config_emai
             enviados += 1
             if not modo_teste:
                 for p in pedidos:
-                    marcar_notificado(p["id"], tipo)
+                    marcar_notificado(p["id"], tipo, p.get("code"))
         else:
             falhas += 1
 

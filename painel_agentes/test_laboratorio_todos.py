@@ -31,5 +31,24 @@ class FiltroParticaoTestCase(unittest.TestCase):
             lab.filtrar_particao(self.servicos, "Misto")
 
 
+class PoolDiretoDaStokkiTestCase(unittest.TestCase):
+    """Fonte stokki (Task 7): a simulacao le o pool do nucleo, com o pedido ainda sem servico."""
+
+    def test_fonte_stokki_le_o_nucleo(self):
+        from unittest import mock
+        with mock.patch("nucleo.pool.listar_pool", return_value=[{"id": -1}]) as listar,                 mock.patch.object(lab, "VuuptClient", side_effect=AssertionError("Vuupt")):
+            self.assertEqual(lab._pool_vivo({"planejamento": {"fonte_pool": "stokki"}}), [{"id": -1}])
+        listar.assert_called_once_with(incluir_sem_servico=True)
+
+    def test_chave_desligada_igual_a_hoje(self):
+        from unittest import mock
+        with mock.patch.object(lab, "VuuptClient") as vc:
+            vc.return_value.listar_servicos.return_value = [{"id": 5}]
+            self.assertEqual(lab._pool_vivo({"vuupt_api": {"token": "t"}}), [{"id": 5}])
+        vc.assert_called_once_with("t")
+        vc.return_value.listar_servicos.assert_called_once_with(
+            [{"field": "status", "operator": "eq", "value": "not_assigned"}], per_page=100, include=["customer"])
+
+
 if __name__ == "__main__":
     unittest.main()

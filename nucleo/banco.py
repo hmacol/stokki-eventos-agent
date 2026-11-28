@@ -289,6 +289,15 @@ CREATE TABLE IF NOT EXISTS nucleo_rotas_trajeto (
     criado_em               TEXT NOT NULL
 );
 
+-- Trava da materializacao (26/11, pool direto da Stokki): um pedido sem servico na Vuupt
+-- so ganha o servico por UM processo de cada vez (clique duplo, "enviar todas" x incremento).
+-- Linha existe so enquanto alguem cria; trava velha (processo morto) expira (nucleo/materializar.py).
+CREATE TABLE IF NOT EXISTS nucleo_materializacao (
+    codigo                  TEXT PRIMARY KEY,
+    iniciado_em             TEXT NOT NULL,
+    processo                TEXT NOT NULL
+);
+
 -- Ponte nucleo -> Vuupt (12/11): o que o motorista faz no nosso app numa rota
 -- da Vuupt e repetido la por nucleo/ponte_vuupt.py. Uma linha por acao.
 CREATE TABLE IF NOT EXISTS nucleo_ponte_vuupt (
@@ -655,8 +664,66 @@ def _migrar_colunas(conn: sqlite3.Connection, tabela: str, colunas: list[tuple[s
     existentes = {row[1] for row in conn.execute(f"PRAGMA table_info({tabela})")}
     for nome, tipo in colunas:
         if nome not in existentes:
-            conn.execute(f"ALTER TABLE {tabela} ADD COLUMN {nome} {tipo}")
+            try:
+                conn.execute(f"ALTER TABLE {tabela} ADD COLUMN {nome} {tipo}")
+            except sqlite3.OperationalError as e:
+                # corrida logo apos o deploy: outro processo fez o ALTER entre o PRAGMA e aqui
+                if "duplicate column name" not in str(e):
+                    raise
+                continue
             logger.info(f"nucleo: coluna {tabela}.{nome} adicionada.")
+
+
+_AVISOU_ID_POOL_TRAVADO = False   # 1 WARNING por processo quando o backfill acha o banco travado
+
+
+def _garantir_id_pool(conn: sqlite3.Connection):
+    """id_pool: id inteiro estavel por pedido (o pool mostra -id_pool quando o
+    pedido ainda nao tem servico na Vuupt). Contador proprio em
+    nucleo_contadores: nunca reutiliza id de pedido apagado. Backfill unico
+    ordenado por criado_em, codigo; idempotente."""
+    # Estado estavel = SOMENTE LEITURA (sem BEGIN/lock de escrita a cada conectar()).
+    def _precisa_migrar() -> bool:
+        if conn.execute("SELECT 1 FROM nucleo_pedidos WHERE id_pool IS NULL LIMIT 1").fetchone():
+            return True
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'idx_nucleo_pedidos_id_pool'").fetchone():
+            return True
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'nucleo_contadores'").fetchone():
+            return True
+        return conn.execute("SELECT 1 FROM nucleo_contadores WHERE nome = 'id_pool'").fetchone() is None
+
+    if not _precisa_migrar():
+        return
+    global _AVISOU_ID_POOL_TRAVADO
+    if not conn.in_transaction:
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError as e:
+            # janela do deploy (revisao de seguranca M2): processo antigo ainda grava linha sem id_pool e
+            # segura o banco; a conexao NAO cai por isso (portal/timers seguem). upsert_pedido preenche o
+            # id_pool linha a linha e a proxima conexao tenta a migracao de novo.
+            if "locked" not in str(e):
+                raise
+            if not _AVISOU_ID_POOL_TRAVADO:
+                _AVISOU_ID_POOL_TRAVADO = True
+                logger.warning("nucleo: backfill do id_pool adiado, banco travado (%s); a proxima conexao tenta "
+                               "de novo. Reiniciar todos os processos que gravam nucleo_pedidos.", e)
+            return
+    # dentro do lock: outro processo pode ter migrado enquanto esperavamos
+    conn.execute("CREATE TABLE IF NOT EXISTS nucleo_contadores (nome TEXT PRIMARY KEY, valor INTEGER NOT NULL)")
+    base = conn.execute("SELECT COALESCE(MAX(id_pool), 0) FROM nucleo_pedidos").fetchone()[0]
+    atual = conn.execute("SELECT valor FROM nucleo_contadores WHERE nome = 'id_pool'").fetchone()
+    base = max(base, atual[0] if atual else 0)
+    codigos = [r[0] for r in conn.execute(
+        "SELECT codigo FROM nucleo_pedidos WHERE id_pool IS NULL ORDER BY criado_em, codigo")]
+    conn.executemany("UPDATE nucleo_pedidos SET id_pool = ? WHERE codigo = ?",
+                     [(base + i, c) for i, c in enumerate(codigos, 1)])
+    conn.execute("INSERT INTO nucleo_contadores (nome, valor) VALUES ('id_pool', ?) "
+                 "ON CONFLICT(nome) DO UPDATE SET valor = excluded.valor", (base + len(codigos),))
+    if codigos:
+        logger.info(f"nucleo: id_pool atribuido a {len(codigos)} pedidos.")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_nucleo_pedidos_id_pool ON nucleo_pedidos(id_pool)")
+    conn.commit()
 
 
 def garantir_esquema(conn: sqlite3.Connection):
@@ -678,6 +745,12 @@ def garantir_esquema(conn: sqlite3.Connection):
     # motorista digitou outro (tabela pode já existir de uma rodada anterior deste ramo)
     _migrar_colunas(conn, "motoristas_links_atualizacao", [("pix_inicial", "TEXT"), ("pix_pendente", "TEXT")])
     _migrar_colunas(conn, "nucleo_pedidos", _COLUNAS_PEDIDOS_NOVAS)
+    # edicao_local_json: {campo: quando} editado no Planejamento em pedido sem servico (o pipeline nao regrava)
+    # nasceu_sem_servico: 1 = a linha NASCEU pelo caminho sem servico do pipeline (fonte stokki) e nunca teve
+    # servico; sai (NULL) quando ganha servico. So linha marcada vira pedido sem servico no pool/materializacao
+    _migrar_colunas(conn, "nucleo_pedidos", [("id_pool", "INTEGER"), ("edicao_local_json", "TEXT"),
+                                             ("nasceu_sem_servico", "INTEGER")])
+    _garantir_id_pool(conn)
     _migrar_colunas(conn, "nucleo_paradas", _COLUNAS_PARADAS_NOVAS)
     _migrar_colunas(conn, "nucleo_rotas", _COLUNAS_ROTAS_NOVAS)
     _migrar_colunas(conn, "nucleo_pedagios", [("tipo", "TEXT NOT NULL DEFAULT 'PEDAGIO'"), ("descricao", "TEXT"),

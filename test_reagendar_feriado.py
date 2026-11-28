@@ -137,5 +137,59 @@ class TestAplicar(unittest.TestCase):
                     conn.close()
 
 
+class TestPoolDiretoDaStokki(unittest.TestCase):
+    """Fonte stokki (Task 7): o pool vem do nucleo e o pedido sem servico na Vuupt (id sintetico)
+    ganha a data nova nas colunas do nucleo (editar_sem_servico), nunca na Vuupt."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        from nucleo import banco, pedidos
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self.tmp.cleanup)
+        p = mock.patch.object(banco, "DB_PATH", Path(self.tmp.name) / "n.db")
+        p.start()
+        self.addCleanup(p.stop)
+        self.pedidos = pedidos
+        conn = banco.conectar()
+        pedidos.registrar_importacao({"code": "#PS-20", "title": "#PS-20", "sender_id": 1,
+                                      "address": "Rua A 1, Centro, Jacareí - SP, 12300-000, Brasil",
+                                      "scheduled_start": "2026-10-12T08:00:00-03:00",
+                                      "scheduled_end": "2026-10-12T16:00:00-03:00"}, None, "nucleo_sem_servico",
+                                     conn=conn)
+        conn.close()
+
+    def test_pool_vem_do_nucleo_com_a_chave(self):
+        from unittest import mock
+        vuupt = mock.Mock()
+        pool = rf.ler_pool({"planejamento": {"fonte_pool": "stokki"}}, vuupt)
+        self.assertEqual([s["code"] for s in pool], ["#PS-20"])
+        self.assertLess(pool[0]["id"], 0)
+        vuupt.listar_servicos.assert_not_called()
+
+    def test_chave_desligada_igual_a_hoje(self):
+        from unittest import mock
+        vuupt = mock.Mock()
+        vuupt.listar_servicos.return_value = ["x"]
+        self.assertEqual(rf.ler_pool({}, vuupt), ["x"])
+        vuupt.listar_servicos.assert_called_once_with([{"field": "status", "operator": "eq", "value": "not_assigned"}])
+
+    def test_sem_servico_grava_no_nucleo_e_nao_chama_a_vuupt(self):
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        pool = rf.ler_pool({"planejamento": {"fonte_pool": "stokki"}}, mock.Mock())
+        vuupt = mock.Mock()
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            n = rf.aplicar(rf.plano(pool, FERIADO), vuupt, db_path=Path(tmp) / "t.db")
+        self.assertEqual(n, 1)
+        vuupt.atualizar_servico.assert_not_called()
+        linha = self.pedidos.buscar_pedido("PS-20")
+        self.assertEqual((linha["agendamento_inicio"], linha["agendamento_fim"]),
+                         ("2026-10-13 08:00:00", "2026-10-13 16:00:00"))
+        self.assertIn("agendamento_inicio", self.pedidos.campos_editados(linha["edicao_local_json"]))
+
+
 if __name__ == "__main__":
     unittest.main()

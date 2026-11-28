@@ -51,6 +51,7 @@ _RAIZ = Path(__file__).parent.parent
 if str(_RAIZ) not in sys.path:
     sys.path.insert(0, str(_RAIZ))
 from regras import feriados  # noqa: E402
+from nucleo import pedidos as nucleo_pedidos, pool as nucleo_pool  # noqa: E402  (pedido sem servico)
 
 logger = logging.getLogger(__name__)
 
@@ -459,10 +460,15 @@ def aplicar_regioes_dia_fixo(servicos: list[dict], vuupt, hoje: date | None = No
         scheduled_end = f"{data_alvo.isoformat()}T{HORARIO_FIM_PADRAO}-03:00"
 
         try:
-            vuupt.atualizar_servico(s["id"], {
-                "scheduled_start": scheduled_start,
-                "scheduled_end": scheduled_end,
-            })
+            if nucleo_pool.eh_sem_servico(s["id"]):
+                # pedido ainda sem servico na Vuupt (fonte stokki): a data fica no nucleo
+                if not nucleo_pedidos.gravar_agendamento_sem_servico(s["id"], scheduled_start, scheduled_end):
+                    raise RuntimeError(f"pedido {s['id']} sem servico nao achado no nucleo")
+            else:
+                vuupt.atualizar_servico(s["id"], {
+                    "scheduled_start": scheduled_start,
+                    "scheduled_end": scheduled_end,
+                })
             s["scheduled_start"] = scheduled_start  # reflete no dict em memória também
             s["scheduled_end"] = scheduled_end
             logger.info(f"  {s.get('code')}: {regra['origem']} '{regra['nome']}' "

@@ -19,6 +19,12 @@ na mesma tabela com a coluna `fonte` e o placar é por fonte. Portão da 1.2:
 3 dias úteis seguidos com 0 divergências próprias na fonte freshhub, antes
 de `planejamento.fonte_pool: freshhub`.
 
+`--fonte stokki` (pool direto da Stokki, spec 2026-11-26-pool-direto-da-stokki): compara a Vuupt com
+nucleo/pool.listar_pool(incluir_sem_servico=True). Pedido do nucleo SEM servico na Vuupt (id sintetico
+negativo) ainda nao e divergencia -- a Vuupt nao o tem por desenho --: vai em `sem_servico`, so
+informativo, fora do placar. Pedido que a Vuupt tem e o nucleo nao, ou campo diferente em pedido COM
+servico, continuam divergencia. Portao: 3 dias uteis seguidos em 0 + a prova de homologacao.
+
 Nunca escreve na Vuupt. Grava no banco só com --salvar/--email.
 
 COMO USAR (VPS, como www-data):
@@ -26,6 +32,7 @@ COMO USAR (VPS, como www-data):
     venv/bin/python nucleo/comparar_pool.py --salvar --email # o que o timer horário roda
     venv/bin/python nucleo/comparar_pool.py --salvar --email --fonte freshhub   # idem, Vuupt x API nova
     venv/bin/python nucleo/comparar_pool.py --historico 10 [--fonte freshhub]   # placar por dia
+    venv/bin/python nucleo/comparar_pool.py --salvar --email --fonte stokki     # sombra do pool direto da Stokki
 Saída 0 = pools iguais; 2 = houve divergência.
 """
 import argparse
@@ -163,12 +170,16 @@ def comparar(pool_vuupt: list[dict], pool_nucleo: list[dict], dados_de=None, bus
                 atraso.append(codigo)
                 so_n.remove(codigo)
     atraso = sorted(atraso)
+    # fonte stokki: pedido do nucleo sem servico na Vuupt (id sintetico) e informativo, nao divergencia
+    sem_servico = [c for c in so_n if n_bruto[c].get("_sem_servico_vuupt")]
+    so_n = [c for c in so_n if c not in sem_servico]
     # "próprias" = o que é do espelho; o duplicado é da Vuupt (Hugo, 24/09:
     # não some sozinho, entra no relatório mas não no placar dos 3 dias).
     proprias = len(so_v) + len(so_n) + len(diferentes)
     return {"total_vuupt": len(v), "total_vuupt_bruto": len(pool_vuupt), "total_nucleo": len(n),
             "so_na_vuupt": so_v, "so_no_nucleo": so_n, "diferentes": diferentes, "duplicados_na_vuupt": duplicados,
-            "atraso": atraso, "fora_do_escopo": fora_do_escopo, "divergencias_proprias": proprias,
+            "atraso": atraso, "fora_do_escopo": fora_do_escopo, "sem_servico": sem_servico,
+            "divergencias_proprias": proprias,
             "total_divergencias": proprias + len(duplicados) + len(atraso) + len(fora_do_escopo)}
 
 
@@ -183,6 +194,9 @@ def resumir(r: dict, exemplos: int = 5, fonte: str = "nucleo") -> str:
     if r.get("fora_do_escopo"):
         linhas.append(f"  fora do escopo, sem codigo de pedido ({len(r['fora_do_escopo'])}, fora do placar): "
                       f"{', '.join(r['fora_do_escopo'][:exemplos])}")
+    if r.get("sem_servico"):
+        linhas.append(f"  sem servico na Vuupt ({len(r['sem_servico'])}, informativo, fora do placar): "
+                      f"{', '.join(r['sem_servico'][:exemplos])}")
     if r.get("atraso"):
         linhas.append(f"  atraso do pool do {nome} ({len(r['atraso'])}, fora do placar): "
                       f"{', '.join(r['atraso'][:exemplos])}")
@@ -201,7 +215,8 @@ def resumir(r: dict, exemplos: int = 5, fonte: str = "nucleo") -> str:
 
 FONTE_NUCLEO = pool.FONTE_NUCLEO
 FONTE_FRESHHUB = pool.FONTE_FRESHHUB
-FONTES = (FONTE_NUCLEO, FONTE_FRESHHUB)
+FONTE_STOKKI = pool.FONTE_STOKKI
+FONTES = (FONTE_NUCLEO, FONTE_FRESHHUB, FONTE_STOKKI)
 _DDL = """CREATE TABLE {nome} (
               rodado_em             TEXT NOT NULL,
               total_vuupt           INTEGER NOT NULL DEFAULT 0,
@@ -250,7 +265,7 @@ def salvar(r: dict, conn: sqlite3.Connection, rodado_em: str | None = None, font
                  (rodado_em or banco.agora(), r["total_vuupt"], r["total_nucleo"], r["total_divergencias"],
                   r["divergencias_proprias"], len(r["duplicados_na_vuupt"]),
                   json.dumps({k: r.get(k) for k in ("so_na_vuupt", "so_no_nucleo", "diferentes", "duplicados_na_vuupt",
-                                                    "atraso", "fora_do_escopo")},
+                                                    "atraso", "fora_do_escopo", "sem_servico")},
                              ensure_ascii=False, default=str), fonte))
     conn.commit()
 
@@ -288,6 +303,8 @@ def _enviar_email(r: dict, conn: sqlite3.Connection, config: dict, exemplos: int
     titulo = (f"Pool Vuupt × {nome}: {r['divergencias_proprias']} divergência(s)"
               + (f" (+{len(r['duplicados_na_vuupt'])} duplicado(s) na Vuupt)" if r["duplicados_na_vuupt"] else ""))
     criterio = ("Portão da 1.2 (freshhub): 3 dias úteis seguidos sem divergência própria" if fonte == FONTE_FRESHHUB
+                else "Portão do pool direto da Stokki: 3 dias úteis seguidos sem divergência própria (+ a prova de homologação)"
+                if fonte == FONTE_STOKKI
                 else "Critério da Entrega 1: 3 dias úteis seguidos sem divergência")
     corpo = [f"<h2 style='margin:0 0 12px'>{titulo}</h2>",
              f"<p>{criterio}. Hoje: <b>{limpos}</b>.</p>",
@@ -297,7 +314,7 @@ def _enviar_email(r: dict, conn: sqlite3.Connection, config: dict, exemplos: int
 
 
 def _nome_fonte(fonte: str) -> str:
-    return "freshhub" if fonte == FONTE_FRESHHUB else "núcleo"
+    return {FONTE_FRESHHUB: "freshhub", FONTE_STOKKI: "stokki"}.get(fonte, "núcleo")
 
 
 def _carregar_config() -> dict | None:
@@ -317,7 +334,7 @@ def main(argv=None) -> int:
     parser.add_argument("--email", action="store_true", help="manda e-mail SÓ quando há divergência")
     parser.add_argument("--historico", type=int, metavar="N", help="placar dos últimos N dias (não vai na Vuupt)")
     parser.add_argument("--fonte", choices=FONTES, default=FONTE_NUCLEO,
-                        help="o que comparar com a Vuupt: nucleo (padrão) ou freshhub (API nova, plano 1.2)")
+                        help="o que comparar com a Vuupt: nucleo (padrão) freshhub (API nova, plano 1.2) ou stokki (nucleo com pedido sem servico)")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -362,7 +379,7 @@ def main(argv=None) -> int:
             r = comparar(pool_vuupt, pool_fonte, dados_de=corpo.get("dados_de"),
                          buscar_servico=vuupt.buscar_servico_por_id)
         else:
-            pool_fonte = pool.listar_pool(conn)
+            pool_fonte = pool.listar_pool(conn, incluir_sem_servico=(args.fonte == FONTE_STOKKI))
             r = comparar(pool_vuupt, pool_fonte)
         if args.salvar:
             salvar(r, conn, fonte=args.fonte)

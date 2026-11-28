@@ -579,6 +579,89 @@ def registrar_data_automatica(servico: dict, scheduled_start: str, db_path=None)
         return 0
 
 
+# ── Pedido sem servico na Vuupt (planejamento.fonte_pool = stokki) ─────────────
+# Plano docs/superpowers/plans/2026-11-26-pool-direto-da-stokki.md (Task 4): com a chave ligada o
+# pedido nasce so no nucleo; o servico na Vuupt so e criado ao enviar a rota (materializacao).
+
+ACAO_NUCLEO_SEM_SERVICO = "nucleo_sem_servico"   # acao gravada no nucleo (dados_json)
+ACAO_GRAVADO_NUCLEO = "gravado_nucleo"           # acao do resultado da rodada
+
+# status do nucleo -> status no formato da Vuupt (o resto do processar_pedido le o da Vuupt)
+_STATUS_NUCLEO_PARA_VUUPT = {"ABERTO": "not_assigned", "CANCELADO": "canceled",
+                             "EM_ROTA": "assigned", "ENTREGUE": "done", "INSUCESSO": "done"}
+
+
+def _pedido_sem_servico(config_app: dict | None, codigo_ps: str):
+    """(sem_servico, servico_existente). sem_servico=True: fonte stokki e o pedido nao tem servico
+    na Vuupt segundo o nucleo (linha sem vuupt_service_id, ou pedido novo); servico_existente e a
+    linha do nucleo no formato de pool.pedido_para_servico (None = pedido novo). Pedido que ja tem
+    servico segue o caminho antigo (atualiza o servico existente). Nunca chama a Vuupt."""
+    from nucleo import pool
+    if pool.fonte_pool(config_app) != pool.FONTE_STOKKI:
+        return False, None
+    from nucleo.pedidos import buscar_pedido, nasceu_sem_servico
+    try:
+        linha = buscar_pedido(codigo_ps)
+    except Exception as e:
+        raise RuntimeError(f"nucleo indisponivel pra conferir o pedido (fonte stokki, nada enviado): {e}") from e
+    if linha is None:
+        return True, None
+    if linha["vuupt_service_id"] is not None:
+        return False, None
+    servico = pool.pedido_para_servico(linha)
+    servico["status"] = _STATUS_NUCLEO_PARA_VUUPT.get(linha["status"], str(linha["status"]).lower())
+    # linha sem id que nao nasceu sem servico (servico renomeado/apagado, pulado antigo): fica fora do pool
+    servico["_nasceu_sem_servico"] = nasceu_sem_servico(linha)
+    return True, servico
+
+
+def _fechar_sem_servico(codigo_ps: str, id_sintetico: int, motivo: str, modo_teste: bool,
+                        resultado: dict) -> None:
+    """Cancelado na Stokki / virou retirada, pedido sem servico na Vuupt: CANCELADO no nucleo
+    (o equivalente ao cancelar_servico_oficial do caminho antigo) e fora dos rascunhos nao enviados
+    (mesmo helper do conferir_pool), senao o envio criaria servico de pedido fechado."""
+    if modo_teste:
+        logger.info(f"  [TESTE] {codigo_ps}: {motivo} -- fecharia (CANCELADO) no nucleo o pedido sem servico na Vuupt.")
+        return
+    try:
+        from nucleo.pedidos import cancelar_sem_servico
+        from nucleo import banco as nucleo_banco
+        if not cancelar_sem_servico(codigo_ps, motivo, nucleo_banco.ORIGEM_PIPELINE):
+            from nucleo.pedidos import buscar_pedido
+            agora = buscar_pedido(codigo_ps) or {}
+            resultado["requer_revisao"] = True
+            if agora.get("vuupt_service_id") is None and agora.get("status") == "ABERTO":
+                # linha orfa (servico renomeado/agrupado/apagado na Vuupt, pulado antigo): nunca fecha local
+                resultado["observacao"] += (" Linha sem servico na Vuupt que nao nasceu sem servico (servico "
+                                            "agrupado/renomeado/apagado na Vuupt ou pulado antigo): nao fechada no "
+                                            "nucleo -- conferir na Vuupt e cancelar pela operacao.")
+                logger.warning(f"  {codigo_ps}: {motivo}, mas a linha sem servico nao e legitima: nao fechada "
+                               f"local, pede revisao (operacao)")
+                return
+            # mudou entre a leitura e o cancelamento (ganhou servico num envio, ou saiu de ABERTO)
+            resultado["observacao"] += (f" Pedido mudou no nucleo antes de fechar (servico "
+                                        f"{agora.get('vuupt_service_id') or '-'}, status {agora.get('status') or '-'}): "
+                                        f"nao fechado -- conferir e cancelar a mao (na Vuupt, se tem servico).")
+            logger.warning(f"  {codigo_ps}: {motivo}, mas o pedido sem servico mudou antes de fechar no nucleo "
+                           f"(servico {agora.get('vuupt_service_id') or '-'}, status {agora.get('status') or '-'}): "
+                           f"pede revisao")
+            return
+        resultado["observacao"] += " Pedido sem servico na Vuupt fechado (CANCELADO) no nucleo."
+    except Exception as e:
+        resultado["requer_revisao"] = True
+        resultado["observacao"] += f" Falha ao fechar no nucleo o pedido sem servico ({e}) -- fechar a mao."
+        return
+    try:
+        from roteirizacao.conferir_pool import tirar_dos_rascunhos
+        rascunhos = tirar_dos_rascunhos(id_sintetico)
+        if rascunhos:
+            resultado["observacao"] += f" Tirado dos rascunhos {rascunhos}."
+    except Exception as e:
+        resultado["requer_revisao"] = True
+        resultado["observacao"] += (f" Falha ao tirar dos rascunhos a parada {id_sintetico} ({e}) "
+                                    f"-- remover a mao no Planejamento.")
+
+
 # ── Processamento de um pedido ─────────────────────────────────────────────────
 
 def aplicar_alteracoes_do_cliente(
@@ -664,6 +747,9 @@ def processar_pedido(
     """
     Processa um único pedido: detalhe → endereço → VUUPT.
     Retorna dict com resultado: acao, fonte_endereco, requer_revisao, erro.
+    Com planejamento.fonte_pool = stokki, pedido sem servico na Vuupt vai so pro nucleo
+    (acao gravado_nucleo, nenhuma chamada a Vuupt); a fila do freshhub cria o servico depois
+    (atender_fila_freshhub, `materializar`).
     """
     resultado = {
         "codigo_ps":      codigo_ps,
@@ -707,7 +793,11 @@ def processar_pedido(
         # venceu), confere rápido direto no VUUPT (1 consulta, sem
         # geocodificar nada) — se saiu de not_assigned, marca no
         # fingerprint e pula sem gastar mais nada.
-        servico_existente = vuupt.buscar_servico_por_code(codigo_ps)
+        # Fonte stokki: pedido sem servico na Vuupt le a memoria do NUCLEO (data automatica,
+        # dia fixo, status) em vez de consultar a Vuupt.
+        sem_servico, servico_existente = _pedido_sem_servico(config_app, codigo_ps)
+        if not sem_servico:
+            servico_existente = vuupt.buscar_servico_por_code(codigo_ps)
         status_vuupt = (servico_existente or {}).get("status", "")
         # Serviço CANCELADO com o pedido ainda aberto na Stokki (28/09): não
         # entra no cache e segue até o desvio de RETIRADA -- é o caso do
@@ -716,8 +806,11 @@ def processar_pedido(
         # revisão). Se for ENTREGA, para logo depois com ação própria.
         cancelado_na_vuupt = status_vuupt == "canceled"
         if servico_existente and status_vuupt != vuupt.STATUS_ATUALIZAVEL and not cancelado_na_vuupt:
-            marcar_atribuido(codigo_ps, status=status_vuupt)
             resultado["acao"] = "pulado_atribuido"
+            if sem_servico:
+                resultado["observacao"] = f"Status no nucleo: {status_vuupt} (pedido sem servico na Vuupt)."
+                return resultado
+            marcar_atribuido(codigo_ps, status=status_vuupt)
             resultado["observacao"] = f"Status no VUUPT: {status_vuupt} (não é mais not_assigned)."
             resultado["vuupt_service_id"] = servico_existente.get("id")
             resultado["servico_vuupt"] = servico_existente
@@ -734,7 +827,11 @@ def processar_pedido(
             resultado["acao"] = "ignorado_cancelado_stokki"
             resultado["observacao"] = f"Cancelado na Stokki ({detalhe['situacao']}) -- não sobe pra VUUPT."
             if status_vuupt == vuupt.STATUS_ATUALIZAVEL:
-                if modo_teste:
+                if sem_servico:
+                    _fechar_sem_servico(codigo_ps, servico_existente["id"],
+                                        f"cancelado na Stokki ({detalhe['situacao']})",
+                                        modo_teste, resultado)
+                elif modo_teste:
                     logger.info(f"  [TESTE] {codigo_ps}: cancelado na Stokki -- cancelaria o serviço "
                                 f"{servico_existente['id']} (not_assigned) na VUUPT.")
                 else:
@@ -786,7 +883,11 @@ def processar_pedido(
             nome_transp = res_end.transportadora.get("nome") or "cliente"
             resultado["observacao"] = f"Retirada no galpão via {nome_transp} -- não sobe pra VUUPT."
             if status_vuupt == vuupt.STATUS_ATUALIZAVEL:
-                if modo_teste:
+                if sem_servico:
+                    _fechar_sem_servico(codigo_ps, servico_existente["id"],
+                                        f"virou retirada no galpao via {nome_transp}",
+                                        modo_teste, resultado)
+                elif modo_teste:
                     logger.info(f"  [TESTE] {codigo_ps}: RETIRADA -- cancelaria o serviço "
                                 f"{servico_existente['id']} (not_assigned) na VUUPT.")
                 else:
@@ -808,6 +909,9 @@ def processar_pedido(
             resultado["requer_revisao"] = True
             resultado["observacao"] = ("Serviço CANCELADO na VUUPT, mas o pedido segue aberto na Stokki "
                                        "-- conferir se deve voltar pra rota ou ser cancelado na Stokki.")
+            if sem_servico:
+                resultado["observacao"] = ("Pedido CANCELADO no nucleo (sem servico na Vuupt), mas segue aberto "
+                                           "na Stokki -- conferir se deve voltar pra rota ou ser cancelado na Stokki.")
             return resultado
 
         # Local de Entrega fora da área atendida e sem redespacho conhecido
@@ -894,7 +998,8 @@ def processar_pedido(
             cnpj_destino, mapa_niveis or {})
 
         nome_skill = f"{tipo_carga}-{nivel}"
-        skill_ids  = vuupt.skill_ids_por_nome(nome_skill) if not modo_teste else []
+        # sem servico (fonte stokki): os ids das skills ficam pra materializacao (nao chama a Vuupt)
+        skill_ids  = vuupt.skill_ids_por_nome(nome_skill) if not (modo_teste or sem_servico) else []
 
         resultado["skill_aplicada"]             = nome_skill
         resultado["fonte_tipo_carga"]           = "embarcador" if tipo_carga_encontrado else "padrao"
@@ -1094,6 +1199,33 @@ def processar_pedido(
             resultado["acao"] = "simulado"
             if fonte_agendamento == FONTE_PROXIMO_DIA_UTIL and payload.get("scheduled_start"):
                 logger.info(f"  {codigo_ps}: [TESTE] {_texto_agendado_automatico(payload)}")
+        elif sem_servico:
+            # Fonte stokki: grava so no nucleo (o servico na Vuupt nasce ao enviar a rota). Aqui o
+            # nucleo e o unico registro do pedido: falha vira erro do pedido (a rodada seguinte tenta).
+            payload["_skill_nome"] = nome_skill   # os ids das skills saem na materializacao
+            from nucleo.pedidos import registrar_importacao
+            try:
+                registrar_importacao(payload, None, ACAO_NUCLEO_SEM_SERVICO)
+            except Exception as e:
+                raise RuntimeError(f"nao gravado no nucleo (fonte stokki, sem servico na Vuupt): {e}") from e
+            resultado["acao"] = ACAO_GRAVADO_NUCLEO
+            logger.info(f"  {codigo_ps}: gravado no nucleo, sem servico na Vuupt (endereco via "
+                        f"{'cliente no portal' if resultado['endereco_cliente_portal'] else res_end.fonte})")
+            if servico_existente is not None and not servico_existente.get("_nasceu_sem_servico"):
+                # o pool e a materializacao recusam essa linha (criariam um 2o servico): sem revisao ela
+                # sumiria calada do planejamento
+                resultado["requer_revisao"] = True
+                resultado["observacao"] = ((resultado.get("observacao") or "") +
+                                           " Pedido ABERTO sem servico na Vuupt que nao nasceu sem servico (servico "
+                                           "renomeado/apagado na Vuupt ou pulado pelo pipeline antigo): fica fora do "
+                                           "pool -- conferir na Vuupt e criar/vincular o servico a mao.").strip()
+                logger.warning(f"  {codigo_ps}: {resultado['observacao']}")
+            # data automatica de pedido NOVO marcada AUTOMATICO (pelo codigo), senao vira data do
+            # cliente e o pedido vira dedicado; pedido que ja estava no nucleo repete a mesma data
+            if (servico_existente is None and fonte_agendamento == FONTE_PROXIMO_DIA_UTIL
+                    and payload.get("scheduled_start")):
+                registrar_data_automatica({"code": payload["code"]}, payload["scheduled_start"])
+                logger.info(f"  {codigo_ps}: {_texto_agendado_automatico(payload)}")
         else:
             resposta_vuupt, acao = vuupt.criar_ou_atualizar_servico(payload)
             resultado["acao"] = acao
@@ -1154,15 +1286,35 @@ def _espelho_para_freshhub(servico: dict | None) -> dict | None:
     return espelho
 
 
+class FalhaTransitoriaMaterializacao(Exception):
+    """Falha tecnica ao criar o servico pela fila (rede, 429, 5xx): nao e recusa do pedido."""
+
+
+def _materializar_para_fila(codigo: str, vuupt, config: dict) -> tuple[int | None, str]:
+    """Fonte stokki: o pedido so estava no nucleo e a fila exige o id -> o servico nasce agora.
+    (service_id, "") ou (None, motivo da recusa de regra); falha tecnica levanta
+    FalhaTransitoriaMaterializacao (atender_fila_freshhub nao devolve erro: o item volta em 1 h)."""
+    from nucleo import materializar
+    res = materializar.materializar_servicos([{"code": codigo}], vuupt, config)
+    sid = next(iter(res.ok.values()), None)
+    if sid:
+        return sid, ""
+    if res.transitorios:
+        raise FalhaTransitoriaMaterializacao(next(iter(res.transitorios.values())))
+    return None, next(iter(res.falhas.values()), "servico nao criado na Vuupt")
+
+
 def atender_fila_freshhub(cliente, processar, *, modo_teste: bool, limite: int = 50,
-                          buscar_servico=None) -> list[dict]:
+                          buscar_servico=None, materializar=None) -> list[dict]:
     """Pendentes de destino vuupt na fila de replica do sistema novo: pra cada um roda o MESMO
     processar_pedido do pipeline (`processar(id_stokki, codigo)`: payload, geocodificacao,
     criar_ou_atualizar_servico idempotente por code, registrar_importacao) e devolve o id do servico e o
     espelho; erro de um item vira resultado com erro e o lote segue. Servico que ja existia sem alteracao
     (pipeline normal chegou antes) volta sem id do processar: `buscar_servico(codigo)` (vuupt.
     buscar_servico_por_code) acha o existente e a fila devolve ok. Em modo teste simula e NAO devolve
-    (o item volta a pendente na API em 1 h). `cliente` None = freshhub_api sem configurar, nada a fazer."""
+    (o item volta a pendente na API em 1 h). `cliente` None = freshhub_api sem configurar, nada a fazer.
+    Fonte stokki: o processar so grava no nucleo (gravado_nucleo, sem id) e `materializar(codigo)` ->
+    (service_id | None, motivo) cria o servico na Vuupt (nucleo/materializar.py); falha volta com o motivo."""
     if cliente is None:
         return []
     try:
@@ -1198,6 +1350,27 @@ def atender_fila_freshhub(cliente, processar, *, modo_teste: bool, limite: int =
             res = {"acao": None, "erro": str(e), "vuupt_service_id": None, "servico_vuupt": None, "observacao": ""}
         sid = res.get("vuupt_service_id")
         servico = res.get("servico_vuupt")
+        if (sid is None and not res.get("erro") and materializar is not None
+                and res.get("acao") == ACAO_GRAVADO_NUCLEO):
+            try:
+                sid, motivo = materializar(codigo)
+            except FalhaTransitoriaMaterializacao as e:
+                # falha tecnica (rede, 429, 5xx) nao e erro do pedido: nada devolvido, o item fica
+                # 'enviado' e volta a pendente na API nova em 1 h (proxima rodada tenta de novo)
+                logger.warning(f"  fila freshhub {ident} ({codigo}): falha tecnica ao criar o servico na Vuupt "
+                               f"({e}); nada devolvido, volta na proxima rodada")
+                saida.append({"id": ident, "codigo": codigo, "ok": False, "vuupt_service_id": None,
+                              "acao": res.get("acao")})
+                continue
+            except Exception as e:  # noqa: BLE001 - o item falha sozinho
+                sid, motivo = None, str(e)
+            if sid is None:
+                res["erro"] = f"servico nao criado na Vuupt: {motivo}"
+            elif buscar_servico is not None:
+                try:
+                    servico = buscar_servico(codigo)   # espelho pro sistema novo (best-effort)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"  fila freshhub {ident} ({codigo}): espelho do servico {sid} nao lido ({e})")
         if sid is None and not res.get("erro") and buscar_servico is not None:
             # pulado_sem_alteracao / pulado pelo fingerprint: o servico existe, so nao foi tocado agora
             try:
@@ -1572,6 +1745,9 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
     # Fila de replica do sistema novo (plano 1.2): mesmo processar_pedido, mesma sessao da Stokki e mesma
     # trava da rodada; roda DEPOIS dos pedidos da Stokki (o pipeline normal pode ja ter criado o servico;
     # criar_ou_atualizar_servico e idempotente por code e a fila so devolve o id)
+    def _materializar_pela_fila(codigo: str):
+        return _materializar_para_fila(codigo, vuupt, config)
+
     def _atender_fila():
         if not fila_freshhub:
             return
@@ -1589,7 +1765,8 @@ def main(modo_teste: bool = False, filtro_pedido: str = "", filtro_embarcador: s
                 config_email=config.get("email", {}), config_app=config,
                 mapa_horarios=mapa_horarios, ajustes_manuais=ajustes_manuais, inicio_rodada=inicio_rodada,
                 conn_alteracoes=conn_alteracoes),
-            modo_teste=modo_teste, buscar_servico=vuupt.buscar_servico_por_code)
+            modo_teste=modo_teste, buscar_servico=vuupt.buscar_servico_por_code,
+            materializar=_materializar_pela_fila)
 
     # Lista pedidos
     # ── Coleta pedidos das fontes relevantes ──────────────────────────────────

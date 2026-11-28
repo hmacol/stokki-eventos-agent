@@ -546,6 +546,19 @@ class ConfirmarEnvioTravaCarroTestCase(_Base):
                                          "ou cadastre o veículo dele.")
         self.enviar.assert_called_once_with(self.com_carro, "")
 
+    def test_excecao_num_rascunho_nao_para_os_outros(self):
+        """Revisao final I2: "enviar todas" segue depois de uma excecao e diz qual falhou."""
+        def enviar(rid, token):
+            if rid == self.sem_carro:
+                raise RuntimeError("Vuupt fora do ar")
+            return {"ok": True, "rascunho_id": rid}
+        self.enviar.side_effect = enviar
+        with self.assertLogs(planejamento_rotas.logger, "ERROR"):
+            res = planejamento_rotas.confirmar_envio_rascunhos([self.sem_carro, self.com_carro], {})
+        self.assertEqual((res[0]["rascunho_id"], res[0]["ok"], res[0]["erro"]), (self.sem_carro, False, "Vuupt fora do ar"))
+        self.assertEqual(res[1], {"ok": True, "rascunho_id": self.com_carro})
+        self.assertEqual(self.enviar.call_count, 2)
+
 
 class RascunhoPorRotaTestCase(_Base):
     def test_rascunho_por_vuupt_route_id_so_enviado(self):

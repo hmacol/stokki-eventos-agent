@@ -35,6 +35,7 @@ if hasattr(sys.stdout, "reconfigure"):
 from regras import feriados  # noqa: E402
 from regioes_dia_fixo import (HORARIO_FIM_PADRAO, HORARIO_INICIO_PADRAO, proxima_data_valida,  # noqa: E402
                               regra_dia_fixo_do_servico)
+from nucleo import pedidos as nucleo_pedidos, pool as nucleo_pool  # noqa: E402
 from nucleo.normalizacao import vuupt_para_local  # noqa: E402
 
 logger = logging.getLogger("reagendar_feriado")
@@ -100,10 +101,18 @@ def aplicar(itens: list[dict], vuupt, db_path=None) -> int:
                 except Exception as e:
                     logger.warning(f"  {s.get('code')}: nao consegui consultar a origem ({e}); DIA_FIXO")
             try:
-                vuupt.atualizar_servico(s["id"], {
-                    "scheduled_start": f"{d.isoformat()}T{HORARIO_INICIO_PADRAO}-03:00",
-                    "scheduled_end": f"{d.isoformat()}T{HORARIO_FIM_PADRAO}-03:00",
-                })
+                if nucleo_pool.eh_sem_servico(s["id"]):
+                    # pedido sem servico na Vuupt (fonte stokki): a data vai pro nucleo, marcada como
+                    # edicao local (o pipeline nao regrava; a materializacao manda pra Vuupt)
+                    nucleo_pedidos.editar_sem_servico(s["id"], {
+                        "agendamento_inicio": f"{d.isoformat()} {HORARIO_INICIO_PADRAO}",
+                        "agendamento_fim": f"{d.isoformat()} {HORARIO_FIM_PADRAO}",
+                    })
+                else:
+                    vuupt.atualizar_servico(s["id"], {
+                        "scheduled_start": f"{d.isoformat()}T{HORARIO_INICIO_PADRAO}-03:00",
+                        "scheduled_end": f"{d.isoformat()}T{HORARIO_FIM_PADRAO}-03:00",
+                    })
                 (automaticos if automatica else feitos).append({"servico": s, "data": d})
                 logger.info(f"  {s.get('code')}: {i['de']:%d/%m} -> {d:%d/%m} ({i['regiao']})")
             except Exception as e:
@@ -114,6 +123,14 @@ def aplicar(itens: list[dict], vuupt, db_path=None) -> int:
     registro_dia_fixo.registrar_origens(feitos, registro_dia_fixo.ORIGEM_DIA_FIXO, db_path)
     registro_dia_fixo.registrar_origens(automaticos, registro_dia_fixo.ORIGEM_AUTOMATICO, db_path)
     return len(feitos) + len(automaticos)
+
+
+def ler_pool(config: dict, vuupt) -> list[dict]:
+    """Pool a reagendar. Fonte stokki: o do nucleo, incluindo pedido sem servico na Vuupt (id
+    sintetico); senao a mesma leitura da Vuupt de sempre."""
+    if nucleo_pool.fonte_pool(config) == nucleo_pool.FONTE_STOKKI:
+        return nucleo_pool.listar_pool(incluir_sem_servico=True)
+    return vuupt.listar_servicos([{"field": "status", "operator": "eq", "value": "not_assigned"}])
 
 
 def main(argv=None) -> int:
@@ -141,7 +158,7 @@ def main(argv=None) -> int:
         return 1
     from vuupt_client import VuuptClient
     vuupt = VuuptClient(token)
-    pool = vuupt.listar_servicos([{"field": "status", "operator": "eq", "value": "not_assigned"}])
+    pool = ler_pool(config, vuupt)
     itens = plano(pool, feriado)
     logger.info(f"{len(pool)} pedido(s) no pool; {len(itens)} agendado(s) pro feriado.")
     for i in itens:

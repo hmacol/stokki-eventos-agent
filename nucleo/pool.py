@@ -16,7 +16,9 @@ leram. Horários voltam como a Vuupt devolve (UTC sem fuso, ver
 normalizacao.local_para_vuupt): esta entrega NÃO muda o que as telas mostram.
 
 A fonte é escolhida por `planejamento.fonte_pool` no config.yaml
-('vuupt' | 'nucleo' | 'freshhub'; ausente = vuupt). Voltar atrás é trocar a chave.
+('vuupt' | 'nucleo' | 'freshhub' | 'stokki'; ausente = vuupt; valor desconhecido = vuupt + WARNING).
+Voltar atrás é trocar a chave. 'stokki' = pool do núcleo incluindo pedido ainda sem serviço na Vuupt
+(id negativo, ver pedidos.id_sintetico) e nunca consulta a Vuupt.
 'freshhub' (plano 1.2 do sistema novo) lê GET /api/pool pelo nucleo/freshhub_client, no
 MESMO formato; se a API cair, a rodada não para: cai pra Vuupt, loga
 `pool.freshhub_indisponivel` e avisa por e-mail (1 por hora).
@@ -29,7 +31,7 @@ import logging
 import sqlite3
 import time
 
-from nucleo import banco, freshhub_client
+from nucleo import banco, freshhub_client, pedidos
 from nucleo.normalizacao import local_para_vuupt
 
 logger = logging.getLogger("nucleo.pool")
@@ -37,6 +39,7 @@ logger = logging.getLogger("nucleo.pool")
 FONTE_VUUPT = "vuupt"
 FONTE_NUCLEO = "nucleo"
 FONTE_FRESHHUB = "freshhub"
+FONTE_STOKKI = "stokki"   # pool do nucleo + pedido ainda sem servico na Vuupt (id negativo); nunca chama a Vuupt
 # e-mail da queda pra Vuupt no maximo 1x/hora por processo (a tela recarrega o pool a toda hora)
 INTERVALO_ALERTA_S = 3600
 # o freshhub copia o legado a :10/:40 e carrega a :25/:55 a tarde: alteracao do portal pode levar
@@ -48,16 +51,42 @@ _SQL_BASE = """SELECT * FROM nucleo_pedidos
                WHERE status = ? AND COALESCE(fluxo, ?) = ? AND excluido_em IS NULL"""
 
 
+_FONTES_VALIDAS = (FONTE_VUUPT, FONTE_NUCLEO, FONTE_FRESHHUB, FONTE_STOKKI)
+_FONTES_AVISADAS: set[str] = set()
+
+
 def fonte_pool(config: dict | None) -> str:
     valor = ((config or {}).get("planejamento") or {}).get("fonte_pool") or FONTE_VUUPT
-    return str(valor).strip().lower()
+    valor = str(valor).strip().lower()
+    if valor not in _FONTES_VALIDAS and valor not in _FONTES_AVISADAS:
+        _FONTES_AVISADAS.add(valor)   # 1 aviso por valor e por processo
+        logger.warning("pool.fonte_desconhecida: planejamento.fonte_pool=%r nao existe (validas: %s); "
+                       "usando vuupt", valor, ", ".join(_FONTES_VALIDAS))
+    return valor
+
+
+def eh_sem_servico(service_id) -> bool:
+    """Id negativo = pedido do pool que ainda nao tem servico na Vuupt (id sintetico)."""
+    try:
+        return int(service_id) < 0
+    except (TypeError, ValueError):
+        return False
 
 
 def pedido_para_servico(p) -> dict:
     """Linha de nucleo_pedidos -> dict no formato do serviço da Vuupt. As
-    chaves com '_' na frente são nossas (a tela usa '_fonte' só pra depurar)."""
+    chaves com '_' na frente são nossas (a tela usa '_fonte' só pra depurar).
+    Sem vuupt_service_id o id é o sintético (-id_pool) e `_sem_servico_vuupt` vem True."""
+    sem_servico = p["vuupt_service_id"] is None
+    item = _pedido_para_servico(p, pedidos.id_sintetico(p) if sem_servico else p["vuupt_service_id"])
+    if sem_servico:
+        item["_sem_servico_vuupt"] = True
+    return item
+
+
+def _pedido_para_servico(p, service_id) -> dict:
     return {
-        "id": p["vuupt_service_id"],
+        "id": service_id,
         "code": f"#{p['codigo']}",
         "title": p["titulo"],
         "type": p["tipo"],
@@ -91,22 +120,51 @@ def pedido_para_servico(p) -> dict:
     }
 
 
-def listar_pool(conn: sqlite3.Connection | None = None) -> list[dict]:
+def listar_pool(conn: sqlite3.Connection | None = None, incluir_sem_servico: bool = False) -> list[dict]:
     """O que hoje é `not_assigned` na Vuupt: pedido ABERTO, de entrega, não
     excluído, e COM serviço na Vuupt (pedido "pulado" pelo pipeline fica
     fora: sem id não vira parada de rascunho -- rascunhos_parada.service_id
     é NOT NULL até a Entrega 2). Um serviço = um item: se duas linhas
     apontam pro mesmo id (serviço que absorveu outro código), fica a
-    atualizada por último."""
-    sql = _SQL_BASE + " AND vuupt_service_id IS NOT NULL"
+    atualizada por último.
+    Com `incluir_sem_servico` (fonte stokki) o pedido sem serviço entra com
+    id sintético negativo (-id_pool), um item por pedido; nunca colide com id real.
+    Só entra a linha que NASCEU sem serviço (pedidos.nasceu_sem_servico): linha ABERTA
+    sem id por serviço renomeado/apagado na Vuupt ou "pulado" antigo fica fora (o envio
+    criaria um segundo serviço), com 1 INFO por chamada."""
+    sql = _SQL_BASE + ("" if incluir_sem_servico else " AND vuupt_service_id IS NOT NULL")
     fechar = conn is None
     conn = conn or banco.conectar()
     try:
+        # pedido agrupado noutro servico da Vuupt perdeu o id no sync: nao e pedido sem servico
+        agrupados = pedidos.servicos_que_agrupam(conn) if incluir_sem_servico else {}
         por_id: dict[int, sqlite3.Row] = {}
+        sem_id_pool: list[str] = []
+        legados: list[str] = []
         for p in conn.execute(sql, (banco.PEDIDO_ABERTO, banco.FLUXO_ENTREGA, banco.FLUXO_ENTREGA)):
-            atual = por_id.get(p["vuupt_service_id"])
+            if p["vuupt_service_id"] is None and p["codigo"] in agrupados:
+                sid, composto = agrupados[p["codigo"]]
+                logger.info("pool.pedido_agrupado: %s esta no servico %s ('%s') da Vuupt; fora do pool sem servico",
+                            p["codigo"], sid, composto)
+                continue
+            if p["vuupt_service_id"] is None and p["id_pool"] is None:
+                # linha gravada por codigo antigo (antes do restart): sem id nao entra, mas nao derruba o pool
+                sem_id_pool.append(p["codigo"])
+                continue
+            if p["vuupt_service_id"] is None and not pedidos.nasceu_sem_servico(p):
+                legados.append(p["codigo"])   # ja teve servico / pulado antigo: nao e pedido novo sem servico
+                continue
+            chave = p["vuupt_service_id"] if p["vuupt_service_id"] is not None else pedidos.id_sintetico(p)
+            atual = por_id.get(chave)
             if atual is None or (p["atualizado_em"] or "") > (atual["atualizado_em"] or ""):
-                por_id[p["vuupt_service_id"]] = p
+                por_id[chave] = p
+        if sem_id_pool:
+            logger.warning("pool.sem_id_pool: %d pedido(s) sem servico e sem id_pool fora do pool: %s "
+                           "(reabrir uma conexao do nucleo faz o backfill)", len(sem_id_pool), ", ".join(sem_id_pool))
+        if legados:
+            logger.info("pool.sem_servico_legado: %d pedido(s) ABERTO(s) sem servico que nao nasceram sem servico "
+                        "(servico renomeado/apagado na Vuupt ou pulado antigo) fora do pool: %s%s", len(legados),
+                        ", ".join(legados[:20]), " ..." if len(legados) > 20 else "")
     finally:
         if fechar:
             conn.close()
@@ -120,6 +178,8 @@ def listar_pool_not_assigned(config: dict | None, vuupt) -> list[dict]:
     fonte = fonte_pool(config)
     if fonte == FONTE_NUCLEO:
         return listar_pool()
+    if fonte == FONTE_STOKKI:
+        return listar_pool(incluir_sem_servico=True)   # sem fallback: nunca toca na Vuupt
     if fonte == FONTE_FRESHHUB:
         # Cliente alterou entrega no portal ha pouco: o freshhub pode ainda nao ter o dado
         # (copia o legado a :10/:40), entao esta rodada le a Vuupt, que ja tem a alteracao.

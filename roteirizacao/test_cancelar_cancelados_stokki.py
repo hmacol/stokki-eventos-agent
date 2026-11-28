@@ -123,6 +123,68 @@ class Processar(Base):
         self.assertEqual(self.conn.execute("SELECT count(*) FROM cancelados_stokki_vuupt").fetchone()[0], 0)
 
 
+class SemServicoNaVuupt(unittest.TestCase):
+    """Fonte stokki: pedido do nucleo sem servico na Vuupt tambem fecha, so que LOCAL."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        from nucleo import banco, pedidos
+        self.banco, self.pedidos = banco, pedidos
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        mock.patch.object(banco, "DB_PATH", Path(tmp.name) / "t.db").start()
+        self.addCleanup(mock.patch.stopall)
+        self.conn = banco.conectar()
+        self.addCleanup(self.conn.close)
+        self.conn.execute("CREATE TABLE galpao_pedidos (id_stokki INTEGER PRIMARY KEY, codigo TEXT, "
+                          "embarcador TEXT, situacao TEXT)")
+        ccs.garantir_tabela(self.conn)
+        self.vuupt = mock.Mock()
+        self.rascunho = mock.patch.object(ccs.cs, "rascunho_do_servico", return_value=(None, None)).start()
+        self.cancelar = mock.patch.object(ccs.cs, "cancelar_servico_completo").start()
+        self.remover = mock.patch.object(ccs.cs.rascunhos_rota, "remover_parada").start()
+        self.conn.execute("INSERT INTO galpao_pedidos VALUES (1, 'PS-1', 'EMB', 'Cancelado')")
+        # pedido sem servico LEGITIMO, como o pipeline grava com a chave ligada (onda 4: so ele fecha local)
+        pedidos.registrar_importacao({"code": "#PS-1", "title": "x"}, None, "nucleo_sem_servico", conn=self.conn)
+        self.neg = -self.conn.execute("SELECT id_pool FROM nucleo_pedidos WHERE codigo='PS-1'").fetchone()[0]
+
+    def _status(self):
+        return self.conn.execute("SELECT status FROM nucleo_pedidos WHERE codigo='PS-1'").fetchone()[0]
+
+    def test_chave_desligada_nao_e_candidato(self):
+        self.assertEqual(ccs.candidatos(self.conn), [])
+        r = ccs.processar(self.conn, self.vuupt, "tok")
+        self.assertEqual(r["vistos"], 0)
+        self.assertEqual(self._status(), "ABERTO")
+
+    def test_cancelado_na_stokki_sem_servico_cancela_local(self):
+        self.rascunho.return_value = (7, "RASCUNHO")
+        r = ccs.processar(self.conn, self.vuupt, "tok", incluir_sem_servico=True)
+        self.assertEqual([i["codigo"] for i in r["cancelados"]], ["PS-1"])
+        self.assertEqual(self._status(), "CANCELADO")
+        self.assertEqual(self.vuupt.mock_calls, [])
+        self.cancelar.assert_not_called()
+        self.rascunho.assert_called_once_with(self.neg)
+        self.remover.assert_called_once_with(7, self.neg)
+        self.assertEqual(ccs._ja_registrado(self.conn, self.neg), ccs.CANCELADO)
+        # rodada seguinte: ja fechado, nao volta
+        self.assertEqual(ccs.processar(self.conn, self.vuupt, "tok", incluir_sem_servico=True)["vistos"], 0)
+
+    def test_sem_servico_em_rascunho_ofertado_so_avisa(self):
+        self.rascunho.return_value = (7, "OFERTADA")
+        r = ccs.processar(self.conn, self.vuupt, "tok", incluir_sem_servico=True)
+        self.assertEqual(len(r["em_rota"]), 1)
+        self.assertEqual(self._status(), "ABERTO")
+        self.remover.assert_not_called()
+
+    def test_modo_teste_nao_cancela(self):
+        r = ccs.processar(self.conn, self.vuupt, "tok", modo_teste=True, incluir_sem_servico=True)
+        self.assertEqual(len(r["cancelados"]), 1)
+        self.assertEqual(self._status(), "ABERTO")
+        self.assertEqual(self.vuupt.mock_calls, [])
+
+
 class Email(unittest.TestCase):
     def test_sem_novidade_nao_manda(self):
         with mock.patch("email_utils.enviar_email") as env:
@@ -135,6 +197,36 @@ class Email(unittest.TestCase):
         self.assertEqual(assunto, "[Freshlog] Cancelados na Stokki: 1 cancelado(s) na Vuupt, 1 em rota")
         self.assertIn("&lt;b&gt;X&lt;/b&gt;", corpo)
         self.assertNotIn("<b>X</b>", corpo)
+
+
+class CandidatosSemServicoLegitimo(unittest.TestCase):
+    """Onda 4 (M1): so pedido sem servico LEGITIMO e candidato a fechar local; a linha orfa (agrupada,
+    renomeada, pulada) nao entra (seria fechada local enquanto a Vuupt segue com a parada)."""
+
+    def test_orfa_nao_e_candidata_sem_servico(self):
+        import tempfile
+        from pathlib import Path as _P
+        from nucleo import banco, pedidos, sincronizar_servicos_vuupt as sinc
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        with mock.patch.object(banco, "DB_PATH", _P(tmp.name) / "t.db"):
+            conn = banco.conectar()
+            try:
+                for c in ("PS-501", "PS-502"):
+                    pedidos.registrar_importacao({"code": f"#{c}", "title": "x"}, None, "nucleo_sem_servico", conn=conn)
+                pedidos.registrar_importacao({"code": "#PS-503", "title": "x"}, {"id": 5010}, "criado", conn=conn)
+                sinc.sincronizar_servicos([{"id": 5010, "code": "#PS-503, #PS-600", "title": "x", "status": "assigned",
+                                            "sender_id": 1, "route_id": 77, "customer": {}}], conn)
+                conn.execute("CREATE TABLE IF NOT EXISTS galpao_pedidos (id_stokki INTEGER PRIMARY KEY, codigo TEXT, "
+                             "embarcador TEXT, situacao TEXT)")
+                for n in (501, 502, 503):
+                    conn.execute("INSERT INTO galpao_pedidos VALUES (?, ?, 'EMB', 'Cancelado')", (n, f"PS-{n}"))
+                conn.commit()
+                saida = ccs.candidatos(conn, incluir_sem_servico=True)
+            finally:
+                conn.close()
+        sem = sorted(c["codigo"] for c in saida if c.get("sem_servico"))
+        self.assertEqual(sem, ["PS-501", "PS-502"])
 
 
 if __name__ == "__main__":

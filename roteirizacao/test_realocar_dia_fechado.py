@@ -114,6 +114,34 @@ class Lote(Base):
         self.assertEqual(entram, [])
         self.assertEqual(resumo["falhas"][0]["codigo"], "#PS-1")
 
+    def test_pedido_sem_servico_grava_no_nucleo_e_nunca_chama_a_vuupt(self):
+        """Merge com o pool direto da Stokki: com fonte_pool = stokki o pool traz id negativo (-id_pool); a
+        realocacao nunca manda esse id pra Vuupt: a data vai pras colunas do nucleo (edicao local)."""
+        from nucleo import banco, pedidos
+        with mock.patch.object(banco, "DB_PATH", self.db):
+            pedidos.registrar_importacao({"code": "#PS-1", "title": "x", "customer": {"code": DOC}}, None,
+                                         "nucleo_sem_servico")
+            neg = pedidos.id_sintetico(pedidos.buscar_pedido("PS-1"))
+            vuupt = mock.Mock()
+            entram, resumo = rdf.realocar_lote([dict(serv(1), id=neg)], SAB, SEG_A_SEX, vuupt, hoje=HOJE,
+                                               db_path=self.db)
+            linha = pedidos.buscar_pedido("PS-1")
+        vuupt.atualizar_servico.assert_not_called()
+        self.assertEqual(entram, [])
+        self.assertEqual(resumo["falhas"], [])
+        self.assertTrue(linha["agendamento_inicio"].startswith("2026-11-30 08:00"), linha["agendamento_inicio"])
+        self.tirar.assert_called_once_with(neg, HOJE)
+
+    def test_linha_orfa_sem_servico_nao_e_realocada_local(self):
+        from nucleo import banco, pedidos
+        with mock.patch.object(banco, "DB_PATH", self.db):
+            pedidos.registrar_importacao({"code": "#PS-1", "title": "x"}, None, "pulado_sem_alteracao")
+            neg = pedidos.id_sintetico(pedidos.buscar_pedido("PS-1"))
+            vuupt = mock.Mock()
+            _, resumo = rdf.realocar_lote([dict(serv(1), id=neg)], SAB, SEG_A_SEX, vuupt, hoje=HOJE, db_path=self.db)
+        vuupt.atualizar_servico.assert_not_called()
+        self.assertIn("operacao", resumo["falhas"][0]["erro"])
+
     def test_sem_ninguem_com_dias_nao_mexe(self):
         vuupt = mock.Mock()
         lista = [serv(1)]

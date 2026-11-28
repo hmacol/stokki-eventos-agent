@@ -101,12 +101,38 @@ def _marcar_aplicado(pedido: str):
     conn.close()
 
 
+def _aplicar_sem_servico(linha: dict, pedido: str, scheduled_start: str, scheduled_end: str,
+                         modo_teste: bool) -> str:
+    """Pool direto da Stokki: pedido do pool sem servico na Vuupt. A data confirmada vai pras
+    colunas do nucleo, marcada como edicao local (vale na materializacao, o pipeline nao regrava),
+    como o PUT faria no servico. Devolve "aplicado" | "pulado" | "falha"."""
+    from nucleo import pedidos as nucleo_pedidos
+    from nucleo.normalizacao import para_local
+    if linha["status"] != "ABERTO":
+        logger.info(f"  {pedido}: pedido sem servico esta {linha['status']} no nucleo -- nao altera a data.")
+        return "pulado"
+    if modo_teste:
+        logger.info(f"  [TESTE] {pedido}: gravaria no nucleo (sem servico na Vuupt) {scheduled_start} - {scheduled_end}")
+        return "aplicado"
+    try:
+        nucleo_pedidos.editar_sem_servico(-int(linha["id_pool"]), {
+            "agendamento_inicio": para_local(scheduled_start), "agendamento_fim": para_local(scheduled_end)})
+    except ValueError as e:
+        logger.error(f"  {pedido}: falha ao gravar a data no nucleo (sem servico na Vuupt): {e}")
+        return "falha"
+    _marcar_aplicado(pedido)
+    logger.info(f"  {pedido}: agendamento gravado no nucleo, sem servico na Vuupt ({scheduled_start} - {scheduled_end}).")
+    return "aplicado"
+
+
 def main(modo_teste: bool = False):
     inicio = time.time()
     logger.info(f"{'[MODO TESTE] ' if modo_teste else ''}Atualização de agendamentos confirmados iniciada.")
 
     config = _carregar_config()
     token = config.get("vuupt_api", {}).get("token", "")
+    from nucleo import pedidos as nucleo_pedidos, pool as nucleo_pool
+    sem_servico_local = nucleo_pool.fonte_pool(config) == nucleo_pool.FONTE_STOKKI
 
     resumo_etapas = {}
 
@@ -141,6 +167,15 @@ def main(modo_teste: bool = False):
             # confirmações antigas que nunca foram marcadas).
             if date.fromisoformat(scheduled_start[:10]) < hoje:
                 pulados += 1
+                continue
+
+            linha = nucleo_pedidos.buscar_pedido(pedido) if sem_servico_local else None
+            if linha and linha["vuupt_service_id"] is None and linha["id_pool"]:
+                # fonte stokki: o pedido do pool ainda nao tem servico na Vuupt -- nada a buscar la
+                fim = _aplicar_sem_servico(linha, pedido, scheduled_start, scheduled_end, modo_teste)
+                atualizados += fim == "aplicado"
+                pulados += fim == "pulado"
+                falhas += fim == "falha"
                 continue
 
             servico = vuupt.buscar_servico_por_code(pedido)

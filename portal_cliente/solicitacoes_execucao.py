@@ -80,6 +80,8 @@ class Dependencias:
     abrir_stokki: Callable[[], bool]
     fechar_stokki: Callable[[], None]
     agent_lalamove: int = 0
+    # pool direto da Stokki (cancelamento.sem_servico_local): pedido sem servico na Vuupt vai pelo id sintetico
+    sem_servico_local: bool = False
 
 
 class _Falha(Exception):
@@ -128,6 +130,8 @@ def _servicos_vivos(conn, codigo: str, deps: Dependencias, checar_lalamove: bool
             servicos = [{"codigo": codigo, "vuupt_service_id": s["id"], "status": "ABERTO",
                          "status_provedor": s.get("status"), "vuupt_route_id": s.get("route_id"), "excluido_em": None}]
     vivos = cm._vivos(servicos)
+    if deps.sem_servico_local:
+        cm.com_id_sintetico(conn, vivos)   # as acoes de producao tratam o id sintetico no nucleo
     for s in vivos:
         if not s.get("vuupt_service_id"):
             raise _Falha(f"Serviço do {s.get('codigo')} sem id da Vuupt no núcleo.")
@@ -331,8 +335,12 @@ def _tirar_da_rota_real(token: str, service_id: int, agent_lalamove: int, usuari
     expedicao.excluir_pedido_da_rota (só rota que ainda não saiu; a rota
     some se era a última parada) e rascunho local pelo remover_parada.
     Devolve {"ok", "erro", "rota_id", "rota_cancelada"} (rota_id só quando
-    tirou de uma rota)."""
+    tirou de uma rota). Id sintetico (pedido sem servico na Vuupt, fonte stokki): nao ha rota na
+    Vuupt, so sai do rascunho local; a Vuupt nao e chamada."""
     _caminhos_painel()
+    from nucleo import pool
+    if pool.eh_sem_servico(service_id):
+        return _tirar_do_rascunho_sem_servico(service_id)
     from vuupt_client import VuuptClient
     s = VuuptClient(token).buscar_servico_por_id(service_id)
     if not s:
@@ -368,16 +376,47 @@ def _tirar_da_rota_real(token: str, service_id: int, agent_lalamove: int, usuari
     return {"ok": True, "erro": "", "rota_id": rota_id, "rota_cancelada": rota_cancelada}
 
 
+def _tirar_do_rascunho_sem_servico(service_id: int) -> dict:
+    """Mesmo tratamento do rascunho que o caminho com servico (rascunho vivo mais recente,
+    remover_parada), sem a etapa da Vuupt."""
+    from roteirizacao.cancelar_servico import rascunho_do_servico
+    rascunho_id, _ = rascunho_do_servico(service_id)
+    if rascunho_id:
+        import rascunhos_rota
+        try:
+            rascunhos_rota.remover_parada(rascunho_id, service_id)
+        except Exception as e:  # noqa: BLE001 -- sem Vuupt no meio: a falha local e a falha da etapa
+            return {"ok": False, "erro": f"pedido sem servico na Vuupt nao saiu do rascunho {rascunho_id} ({e})"}
+    return {"ok": True, "erro": "", "rota_id": None, "rota_cancelada": False}
+
+
+def _reagendar_sem_servico(service_id: int, inicio: str, termino: str) -> dict:
+    """Pedido sem servico na Vuupt (id sintetico, fonte stokki): a data vai pras colunas do nucleo,
+    marcadas como edicao local (o pipeline nao regrava; a materializacao manda pra Vuupt)."""
+    from nucleo import pedidos as nucleo_pedidos
+    from nucleo.normalizacao import para_local
+    try:
+        nucleo_pedidos.editar_sem_servico(service_id, {"agendamento_inicio": para_local(inicio),
+                                                       "agendamento_fim": para_local(termino)})
+    except ValueError as e:
+        return {"ok": False, "erro": str(e)}
+    return {"ok": True, "erro": ""}
+
+
 def reagendar_servico_vuupt(token: str, service_id: int, dia: str, ini: str, fim: str) -> dict:
     """PUT direto, como atualizar_agendamentos_confirmados (data do
     cliente). planejamento_rotas.reagendar_pedido NÃO: grava origem EQUIPE.
-    Também usado pelo worker da retomada (portal_cliente/retomada.py)."""
+    Também usado pelo worker da retomada (portal_cliente/retomada.py).
+    Id sintetico (pedido sem servico na Vuupt): grava no nucleo, sem Vuupt."""
     _caminhos_painel()
+    from nucleo import pool
     from vuupt_client import VuuptAPIError, VuuptClient, _converter_data_para_iso
     inicio = _converter_data_para_iso(f"{dia} {str(ini)[:5]}:00")
     termino = _converter_data_para_iso(f"{dia} {str(fim)[:5]}:00")
     if not inicio or not termino:
         return {"ok": False, "erro": f"data/horário inválidos: {dia} {ini}-{fim}"}
+    if pool.eh_sem_servico(service_id):
+        return _reagendar_sem_servico(service_id, inicio, termino)
     vuupt = VuuptClient(token)
     try:
         vuupt.atualizar_servico(service_id, {"scheduled_start": inicio, "scheduled_end": termino})
@@ -425,7 +464,8 @@ def dependencias_reais(config: dict, usuario: str = "") -> Dependencias:
 
     def cancelar_vuupt(service_id):
         from roteirizacao.cancelar_servico import cancelar_servico_completo
-        return cancelar_servico_completo(token, service_id)
+        return cancelar_servico_completo(token, service_id,
+                                         motivo_sem_servico="cancelado pela operacao (solicitacao do portal)")
 
     def cancelar_stokki(id_stokki, motivo):
         from stokki.cancelar import cancelar_pedido
@@ -447,4 +487,4 @@ def dependencias_reais(config: dict, usuario: str = "") -> Dependencias:
     return Dependencias(buscar_servico=buscar_servico, cancelar_vuupt=cancelar_vuupt, cancelar_stokki=cancelar_stokki,
                         tirar_da_rota_vuupt=tirar_da_rota_vuupt,
                         reagendar_vuupt=reagendar_vuupt, abrir_stokki=abrir_stokki, fechar_stokki=fechar_stokki,
-                        agent_lalamove=agent_lalamove)
+                        agent_lalamove=agent_lalamove, sem_servico_local=cm.sem_servico_local(config))

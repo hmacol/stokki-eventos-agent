@@ -25,6 +25,7 @@ import re
 import statistics
 import sys
 import threading
+import time
 from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
@@ -81,7 +82,7 @@ from mapa_util import carregar_remetentes_por_sender_id
 from executor import buscar_ultima_execucao, progresso_execucao
 
 import rascunhos_rota
-from nucleo.pool import fonte_pool, listar_pool_not_assigned
+from nucleo.pool import eh_sem_servico, fonte_pool, listar_pool_not_assigned
 
 logger = logging.getLogger(__name__)
 
@@ -302,15 +303,33 @@ def confirmar_envio_rascunhos(rascunho_ids: list, config: dict) -> list[dict]:
     placas = placas_veiculos_vuupt(config)
     trava = veiculos_regras.trava_sem_carro_ligada(config)
     resultados = []
+    inicio = time.monotonic()
     for rid in rascunho_ids:
         erro_carro = veiculos_regras.verificar_carro(rascunhos_rota.buscar_rascunho(rid) or {}, placas)
         if erro_carro and trava:
             resultados.append({"ok": False, "rascunho_id": rid, "erro": erro_carro})
             continue
-        resultado = rascunhos_rota.enviar_rascunho(rid, token)
+        # cada resultado ja traz codigos_sem_servico {codigo: motivo} (pool direto da Stokki: o servico
+        # na Vuupt nasce no envio e quem e recusado volta ao pool com o motivo) e codigos_pendentes_tecnico
+        # (falha tecnica/outro envio: ficou no rascunho)
+        inicio_rascunho = time.monotonic()
+        try:
+            resultado = rascunhos_rota.enviar_rascunho(rid, token)
+        except Exception as e:  # noqa: BLE001 -- um rascunho com erro nao para o "enviar todas"
+            logger.exception(f"Envio do rascunho {rid} falhou com excecao")
+            resultado = {"rascunho_id": rid, "ok": False, "erro": str(e)}
+        logger.info(f"Envio do rascunho {rid}: {'ok' if resultado.get('ok') else 'falhou'} em "
+                    f"{time.monotonic() - inicio_rascunho:.1f}s")
         if erro_carro:
             resultado = {**resultado, "aviso": erro_carro}
         resultados.append(resultado)
+    sem_servico = sum(len(r.get("codigos_sem_servico") or {}) for r in resultados)
+    pendentes = sum(len(r.get("codigos_pendentes_tecnico") or {}) for r in resultados)
+    logger.info(f"Envio de {len(rascunho_ids)} rascunho(s) em {time.monotonic() - inicio:.1f}s: "
+                f"{sum(1 for r in resultados if r.get('ok'))} ok"
+                + (f", {sem_servico} pedido(s) recusado(s) sem servico na Vuupt voltaram ao pool" if sem_servico else "")
+                + (f", {pendentes} pedido(s) sem servico ficaram no rascunho (falha tecnica/outro envio)"
+                   if pendentes else ""))
     return resultados
 
 
@@ -355,7 +374,9 @@ def sincronizar_pool_agora(config: dict | None = None) -> dict:
     Vuupt sobe pra quem chama."""
     config = config or _carregar_config()
     fonte = fonte_pool(config)
-    if fonte != "nucleo":
+    # stokki: pool do nucleo como o "nucleo"; o que muda na Vuupt (reentrega, servico ja
+    # materializado, edicao no site) continua chegando pelo incremental
+    if fonte not in ("nucleo", "stokki"):
         # fonte freshhub (plano 1.2 do sistema novo): o pool vem da API nova, nao ha nucleo a ressincronizar
         return {"pulado": True, "motivo": "fonte freshhub"} if fonte == "freshhub" else {"pulado": True}
     if not _TRAVA_SINCRONIZACAO.acquire(blocking=False):
@@ -2079,6 +2100,18 @@ def cancelar_pedido(service_id: int, rascunho_id: int | None = None, usuario: st
     if rascunho_id and not rascunho:
         return {"ok": False, "erro": f"Rascunho {rascunho_id} não encontrado."}
 
+    if eh_sem_servico(service_id):
+        # pedido sem servico na Vuupt (fonte stokki): cancela LOCAL no nucleo e tira dos rascunhos
+        from roteirizacao.cancelar_servico import cancelar_sem_servico_local
+        from nucleo import banco as nucleo_banco
+        r = cancelar_sem_servico_local(service_id, f"cancelado pelo Planejamento ({usuario or 'painel'})",
+                                       nucleo_banco.ORIGEM_PAINEL)
+        if not r["ok"]:
+            return {"ok": False, "erro": r["erro"]}
+        if rascunho and rascunho["status"] != rascunhos_rota.STATUS_ENVIADO:
+            rascunhos_rota.remover_parada(rascunho_id, service_id)
+        return {"ok": True}
+
     preparo = {}
     if rascunho and rascunho["status"] == rascunhos_rota.STATUS_ENVIADO:
         preparo = rascunhos_rota.preparar_cancelamento_de_parada(rascunho_id, service_id, token)
@@ -2102,20 +2135,56 @@ def cancelar_pedido(service_id: int, rascunho_id: int | None = None, usuario: st
     return {"ok": True}
 
 
-def _registrar_agendamento_equipe(service_ids: list[int], scheduled_start: str) -> None:
+def _registrar_agendamento_equipe(service_ids: list[int], scheduled_start: str,
+                                  codigos: dict[int, str] | None = None) -> None:
     """Data agendada pela equipe não é data do cliente (Hugo, 03/10 -- dias
     fixos v2): grava a origem EQUIPE em agendamentos_origem, pra regra de
     data fora do dia fixo (roteirizacao/fora_dia_fixo.py) não transformar o
-    pedido em dedicado. Nunca levanta: o reagendamento na Vuupt já foi feito."""
+    pedido em dedicado. Nunca levanta: o reagendamento na Vuupt já foi feito.
+    `codigos` {id sintetico: codigo}: pedido sem servico registra pelo codigo
+    (a materializacao copia pro id real)."""
     if not service_ids:
         return
+    codigos = codigos or {}
     try:
         import registro_dia_fixo
         data = date.fromisoformat(str(scheduled_start)[:10])
-        registro_dia_fixo.registrar_origens([{"servico": {"id": sid}, "data": data} for sid in service_ids],
-                                            registro_dia_fixo.ORIGEM_EQUIPE, registro_dia_fixo.DB_PATH)
+        registro_dia_fixo.registrar_origens(
+            [{"servico": {"id": sid, **({"code": f"#{codigos[sid]}"} if sid in codigos else {})}, "data": data}
+             for sid in service_ids],
+            registro_dia_fixo.ORIGEM_EQUIPE, registro_dia_fixo.DB_PATH)
     except Exception as e:
         logger.warning(f"Não registrou a origem EQUIPE do reagendamento {service_ids}: {e}")
+
+
+def _linha_sem_servico(service_id: int) -> dict | None:
+    """Linha do nucleo do pedido sem servico na Vuupt (id sintetico negativo) ou None."""
+    from nucleo import banco as nucleo_banco, pedidos as nucleo_pedidos
+    conn = nucleo_banco.conectar()
+    try:
+        codigo = nucleo_pedidos.codigo_por_id_sintetico(conn, service_id)
+        return nucleo_pedidos.buscar_pedido(codigo, conn=conn) if codigo else None
+    finally:
+        conn.close()
+
+
+def _reagendar_sem_servico(service_id: int, data: str, scheduled_start: str, scheduled_end: str,
+                           manter_horarios: bool) -> str:
+    """Pedido sem servico na Vuupt (fonte stokki): a data vai pras colunas do nucleo (valem na
+    materializacao, o pipeline nao regrava). "Manter os horarios" usa a janela gravada no nucleo.
+    Nunca chama a Vuupt. Devolve o codigo; ValueError com o motivo."""
+    from nucleo import pedidos as nucleo_pedidos
+    from nucleo.normalizacao import para_local
+    if manter_horarios:
+        linha = _linha_sem_servico(service_id) or {}
+        ini, fim = linha.get("agendamento_inicio") or "", linha.get("agendamento_fim") or ""
+        padrao = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}")
+        if padrao.match(ini) and padrao.match(fim):
+            scheduled_start, scheduled_end, erro = _converter_janela_reagendamento(data, ini[11:16], fim[11:16])
+            if erro:
+                raise ValueError(erro)
+    return nucleo_pedidos.editar_sem_servico(service_id, {"agendamento_inicio": para_local(scheduled_start),
+                                                          "agendamento_fim": para_local(scheduled_end)})
 
 
 def _janela_anterior(vuupt: VuuptClient, service_id: int) -> tuple[str, str] | None:
@@ -2165,6 +2234,14 @@ def reagendar_pedido(service_id: int, data: str, hora_inicio: str, hora_fim: str
     scheduled_start, scheduled_end, erro = _converter_janela_reagendamento(data, hora_inicio, hora_fim)
     if erro:
         return {"ok": False, "erro": erro}
+
+    if eh_sem_servico(service_id):
+        try:
+            codigo = _reagendar_sem_servico(service_id, data, scheduled_start, scheduled_end, manter_horarios)
+        except ValueError as e:
+            return {"ok": False, "erro": str(e)}
+        _registrar_agendamento_equipe([service_id], scheduled_start, {service_id: codigo})
+        return {"ok": True}
 
     config = _carregar_config()
     token = config.get("vuupt_api", {}).get("token", "")
@@ -2235,10 +2312,16 @@ def reagendar_pedidos(itens: list[dict], data: str, hora_inicio: str, hora_fim: 
 
     falhas = []
     ok_ids = []
+    codigos_sem_servico = {}   # {id sintetico: codigo}: gravados so no nucleo
     for item in itens:
         service_id = int(item["service_id"])
         inicio_item, fim_item = scheduled_start, scheduled_end
         try:
+            if eh_sem_servico(service_id):
+                codigos_sem_servico[service_id] = _reagendar_sem_servico(
+                    service_id, data, scheduled_start, scheduled_end, manter_horarios)
+                logger.info(f"Agendamento em lote: pedido sem serviço {service_id} atualizado no núcleo.")
+                continue
             if manter_horarios:
                 janela = _janela_anterior(vuupt, service_id)
                 if janela:
@@ -2263,7 +2346,8 @@ def reagendar_pedidos(itens: list[dict], data: str, hora_inicio: str, hora_fim: 
 
     if ok_ids:
         _ressincronizar(vuupt, ok_ids)
-        _registrar_agendamento_equipe(ok_ids, scheduled_start)
+    if ok_ids or codigos_sem_servico:
+        _registrar_agendamento_equipe(ok_ids + list(codigos_sem_servico), scheduled_start, codigos_sem_servico)
     return {"ok": True, "falhas": falhas}
 
 
@@ -2293,7 +2377,13 @@ def checar_reagendamento_dia_fixo(service_ids: list[int], data: str) -> dict:
     fora = []
     for sid in service_ids:
         try:
-            servico = vuupt.buscar_servico_por_id(int(sid))
+            if eh_sem_servico(sid):
+                # pedido sem servico na Vuupt: o mesmo formato, lido do nucleo
+                from nucleo.pool import pedido_para_servico
+                linha = _linha_sem_servico(sid)
+                servico = pedido_para_servico(linha) if linha else None
+            else:
+                servico = vuupt.buscar_servico_por_id(int(sid))
         except Exception as e:
             logger.warning(f"Checagem de dia fixo: serviço {sid} não carregou ({e}); segue sem a pergunta.")
             continue
@@ -2352,7 +2442,13 @@ def _gravar_endereco_pedido(vuupt: VuuptClient, service_id: int, endereco: str,
 
     Propaga VuuptAPIError da gravação principal (no serviço) pro
     chamador decidir como reportar -- é a única falha "fatal" aqui.
+
+    Pedido sem serviço na Vuupt (id negativo): _gravar_endereco_sem_servico.
     """
+    if eh_sem_servico(service_id):
+        _gravar_endereco_sem_servico(service_id, endereco, dados_endereco, rascunho_id)
+        return
+
     vuupt.atualizar_servico(service_id, dados_endereco)
 
     servico = vuupt.buscar_servico_por_id(service_id)
@@ -2380,6 +2476,22 @@ def _gravar_endereco_pedido(vuupt: VuuptClient, service_id: int, endereco: str,
     _ressincronizar(vuupt, [service_id])
 
 
+def _gravar_endereco_sem_servico(service_id: int, endereco: str, dados_endereco: dict,
+                                 rascunho_id: int | None) -> None:
+    """Pedido sem serviço na Vuupt (fonte stokki): endereço e coordenadas vão pras colunas do
+    núcleo (valem na materialização, o pipeline não regrava) e pra cópia do rascunho. Nunca
+    chama a Vuupt. Sem coordenada recusa: não há Vuupt pra geocodificar e o ponto antigo iria
+    junto com o endereço novo. ValueError com o motivo."""
+    from nucleo import pedidos as nucleo_pedidos
+    lat, lng = dados_endereco.get("latitude"), dados_endereco.get("longitude")
+    if lat is None or lng is None:
+        raise ValueError(f"Não consegui localizar o endereço {endereco!r} no mapa: confira o texto "
+                         f"(pedido sem serviço na Vuupt, nada foi alterado).")
+    nucleo_pedidos.editar_sem_servico(service_id, {"endereco": endereco, "latitude": lat, "longitude": lng})
+    if rascunho_id is not None:
+        rascunhos_rota.atualizar_endereco_parada(rascunho_id, service_id, endereco, lat, lng)
+
+
 def editar_endereco_pedido(service_id: int, endereco: str, rascunho_id: int | None = None) -> dict:
     """
     Edita o endereço de um pedido direto na VUUPT -- opção "Editar
@@ -2405,7 +2517,7 @@ def editar_endereco_pedido(service_id: int, endereco: str, rascunho_id: int | No
 
     config = _carregar_config()
     token = config.get("vuupt_api", {}).get("token", "")
-    vuupt = VuuptClient(token)
+    vuupt = None if eh_sem_servico(service_id) else VuuptClient(token)   # sem servico: so o nucleo
 
     from geocodificacao import geocodificar
     gmaps_key = config.get("google_maps", {}).get("api_key", "")
@@ -2428,7 +2540,25 @@ def editar_endereco_pedido(service_id: int, endereco: str, rascunho_id: int | No
 
 def _documento_do_pedido(service_id: int) -> tuple[str, str | None]:
     """(documento do destinatário, erro). Busca o serviço vivo na VUUPT só
-    pra descobrir customer.code -- não grava nada lá."""
+    pra descobrir customer.code -- não grava nada lá. Id negativo (pedido sem
+    serviço na Vuupt, pool direto da Stokki): o documento vem do núcleo, sem
+    Vuupt, e só pra pedido sem serviço legítimo (pedidos.eh_sem_servico_legitimo)."""
+    if eh_sem_servico(service_id):
+        from nucleo import banco as nucleo_banco, pedidos as nucleo_pedidos
+        conn = nucleo_banco.conectar()
+        try:
+            codigo = nucleo_pedidos.codigo_por_id_sintetico(conn, service_id)
+            linha = nucleo_pedidos.buscar_pedido(codigo, conn=conn) if codigo else None
+            if linha is None:
+                return "", f"Pedido {service_id} não encontrado no núcleo: recarregue a tela."
+            if not nucleo_pedidos.eh_sem_servico_legitimo(conn, codigo):
+                return "", f"Pedido {codigo} {nucleo_pedidos.MOTIVO_SEM_SERVICO_ILEGITIMO}."
+        finally:
+            conn.close()
+        documento = linha.get("destinatario_codigo") or ""
+        if not documento:
+            return "", "Pedido sem CNPJ/CPF de destinatário cadastrado -- não dá pra saber de qual cliente é."
+        return documento, None
     config = _carregar_config()
     token = config.get("vuupt_api", {}).get("token", "")
     vuupt = VuuptClient(token)

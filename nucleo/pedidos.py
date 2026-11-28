@@ -103,12 +103,26 @@ def upsert_pedido(conn: sqlite3.Connection, codigo: str, campos: dict, origem: s
     json_txt = json.dumps(dados_json, ensure_ascii=False, default=str) if dados_json is not None else None
 
     set_coalesce = ", ".join(f"{c} = COALESCE(excluded.{c}, nucleo_pedidos.{c})" for c in colunas)
+    # id_pool so no INSERT (pedido novo); contador nunca reutiliza id
+    # (pedido existente com id_pool NULL, ex. linha anterior ao backfill, tambem ganha um)
+    id_pool = None
+    existente = conn.execute("SELECT id_pool, vuupt_service_id FROM nucleo_pedidos WHERE codigo = ?", (codigo,)).fetchone()
+    # pedido que GANHA servico (id NULL -> real): rascunhos trocam o id sintetico pelo real
+    ganha_servico = existente is not None and existente[1] is None and vuupt_service_id is not None
+    if existente is None or existente[0] is None:
+        id_pool = _proximo_id_pool(conn)
+        if existente is not None and id_pool is not None:
+            conn.execute("UPDATE nucleo_pedidos SET id_pool = ? WHERE codigo = ?", (id_pool, codigo))
+        if existente is not None:
+            id_pool = None
     conn.execute(f"""
         INSERT INTO nucleo_pedidos (codigo, vuupt_service_id, {", ".join(colunas)}, tipo, status,
-                                    origem, dados_json, atualizado_em)
-        VALUES (?, ?, {", ".join("?" for _ in colunas)}, COALESCE(?, 'delivery'), COALESCE(?, ?), ?, ?, ?)
+                                    origem, dados_json, atualizado_em, id_pool)
+        VALUES (?, ?, {", ".join("?" for _ in colunas)}, COALESCE(?, 'delivery'), COALESCE(?, ?), ?, ?, ?, ?)
         ON CONFLICT(codigo) DO UPDATE SET
             vuupt_service_id = COALESCE(excluded.vuupt_service_id, nucleo_pedidos.vuupt_service_id),
+            nasceu_sem_servico = CASE WHEN excluded.vuupt_service_id IS NOT NULL THEN NULL
+                                      ELSE nucleo_pedidos.nasceu_sem_servico END,
             {set_coalesce},
             tipo = COALESCE(?, nucleo_pedidos.tipo),
             status = COALESCE(?, nucleo_pedidos.status),
@@ -120,7 +134,82 @@ def upsert_pedido(conn: sqlite3.Connection, codigo: str, campos: dict, origem: s
                 ELSE excluded.dados_json END,
             atualizado_em = excluded.atualizado_em
     """, (codigo, vuupt_service_id, *valores, tipo, status, banco.PEDIDO_ABERTO, origem, json_txt,
-          banco.agora(), tipo, status))
+          banco.agora(), id_pool, tipo, status))
+    if ganha_servico:
+        from nucleo.adocao_servico import adotar_servico
+        adotar_servico(conn, codigo, vuupt_service_id)
+
+
+ACAO_SEM_SERVICO = "nucleo_sem_servico"   # = pipeline.ACAO_NUCLEO_SEM_SERVICO (fonte stokki)
+
+
+def nasceu_sem_servico(pedido) -> bool:
+    """Linha que nasceu pelo caminho sem servico do pipeline e nunca teve servico (coluna
+    nasceu_sem_servico). Linha ABERTA sem id por outro motivo (servico renomeado/apagado na Vuupt,
+    pulado do pipeline antigo, agrupado) nao e pedido sem servico."""
+    try:
+        return bool(pedido["nasceu_sem_servico"])
+    except (IndexError, KeyError):
+        return False
+
+
+def _proximo_id_pool(conn: sqlite3.Connection) -> int | None:
+    """Proximo id do contador; None se o contador ainda nao existe (1a migracao adiada pelo banco
+    travado, banco._garantir_id_pool): a linha fica sem id_pool e a proxima conexao completa."""
+    try:
+        conn.execute("UPDATE nucleo_contadores SET valor = valor + 1 WHERE nome = 'id_pool'")
+        row = conn.execute("SELECT valor FROM nucleo_contadores WHERE nome = 'id_pool'").fetchone()
+    except sqlite3.OperationalError as e:
+        if "no such table" not in str(e):
+            raise
+        return None
+    return row[0] if row else None
+
+
+def id_sintetico(pedido) -> int:
+    """Id negativo do pedido no pool (-id_pool); nunca colide com id da Vuupt."""
+    return -int(pedido["id_pool"])
+
+
+def codigo_por_id_sintetico(conn: sqlite3.Connection, id_negativo) -> str | None:
+    try:
+        n = int(id_negativo)
+    except (TypeError, ValueError):
+        return None
+    if n >= 0 or -n > ID_POOL_MAXIMO:   # id gigante nao existe (e estouraria o INTEGER do SQLite)
+        return None
+    row = conn.execute("SELECT codigo FROM nucleo_pedidos WHERE id_pool = ?", (-n,)).fetchone()
+    return row[0] if row else None
+
+
+ID_POOL_MAXIMO = 2 ** 63 - 1   # maior INTEGER do SQLite
+
+MOTIVO_SEM_SERVICO_ILEGITIMO = ("nao e pedido sem servico legitimo (sem servico na Vuupt mas nao nasceu sem servico, "
+                                "ou esta agrupado num servico da Vuupt): tratar pela operacao")
+
+
+def eh_sem_servico_legitimo(conn: sqlite3.Connection, codigo_ou_linha, agrupados: dict | None = None) -> bool:
+    """Guarda UNICA (revisao de seguranca M1/L1) de tudo que age LOCALMENTE num pedido pelo id sintetico
+    (cancelar, reagendar, editar, fechar, id na tela/portal): so vale pra linha SEM vuupt_service_id, que
+    NASCEU sem servico (nasceu_sem_servico = 1, pipeline com fonte stokki) e que nao esta dentro de um
+    servico agrupado vivo da Vuupt (servicos_que_agrupam). Linha orfa (servico renomeado/agrupado/apagado
+    na Vuupt, pulado antigo) devolve False: segue o fluxo de sempre (operacao/Vuupt). Aceita o codigo
+    (qualquer forma) ou a linha ja lida. Coluna ausente = False (falha fechado). `agrupados` deixa quem
+    confere muitas linhas ler os compostos uma vez so."""
+    try:
+        if isinstance(codigo_ou_linha, str):
+            cur = conn.cursor()
+            cur.row_factory = sqlite3.Row   # nao depende do row_factory de quem chama (ha conexao crua)
+            linha = cur.execute("SELECT * FROM nucleo_pedidos WHERE codigo = ?",
+                                (normalizacao.normalizar_codigo(codigo_ou_linha),)).fetchone()
+        else:
+            linha = codigo_ou_linha
+        if linha is None or linha["vuupt_service_id"] is not None or not nasceu_sem_servico(linha):
+            return False
+        agrupados = servicos_que_agrupam(conn) if agrupados is None else agrupados
+        return linha["codigo"] not in agrupados
+    except (sqlite3.Error, IndexError, KeyError, TypeError):
+        return False
 
 
 _COLUNAS_SERVICO = ["status_provedor", "status_done_provedor", "vuupt_route_id", "driver_id",
@@ -226,18 +315,148 @@ def registrar_importacao(payload: dict, resposta, acao: str, conn: sqlite3.Conne
         # pelo galpão do redespacho no planejamento, PS-40473 em 01/10). Linha
         # que já existe fica como o sync da VUUPT deixou; só a primeira
         # passagem grava o payload, pra linha nascer com dados.
-        ja_existe = conn.execute("SELECT 1 FROM nucleo_pedidos WHERE codigo = ?",
-                                 (normalizacao.normalizar_codigo(codigo),)).fetchone() is not None
+        existente = conn.execute("SELECT vuupt_service_id, edicao_local_json FROM nucleo_pedidos WHERE codigo = ?",
+                                 (normalizacao.normalizar_codigo(codigo),)).fetchone()
+        ja_existe = existente is not None
         campos = {} if (acao or "").startswith("pulado") and ja_existe else _campos_do_payload(payload)
+        if ja_existe and existente[0] is None:
+            # pedido sem servico editado no Planejamento: a rodada seguinte nao desfaz (None = mantem)
+            for campo in campos_editados(existente[1]):
+                campos.pop(campo, None)
         upsert_pedido(
             conn, codigo, campos, origem=banco.ORIGEM_PIPELINE,
             dados_json={"payload": payload, "acao": acao, "service": servico or None},
             vuupt_service_id=int(service_id) if service_id is not None else None,
         )
+        if not ja_existe and acao == ACAO_SEM_SERVICO and service_id is None:
+            # so a linha que NASCE aqui e marcada; a que ja existia sem id (renomeada, pulada) nunca e
+            conn.execute("UPDATE nucleo_pedidos SET nasceu_sem_servico = 1 WHERE codigo = ?",
+                         (normalizacao.normalizar_codigo(codigo),))
         conn.commit()
     finally:
         if fechar:
             conn.close()
+
+
+def cancelar_sem_servico(codigo: str, motivo: str, origem: str, conn: sqlite3.Connection | None = None) -> bool:
+    """Fecha LOCAL (CANCELADO) pedido ABERTO que ainda nao tem servico na Vuupt (fonte stokki):
+    cancelado na Stokki, virou retirada, ja entregue. Pedido com servico nunca e tocado aqui (fecha
+    pela Vuupt). Registra o evento PEDIDO_CANCELADO com o motivo. Devolve True se mudou."""
+    fechar = conn is None
+    conn = conn or banco.conectar()
+    try:
+        codigo = normalizacao.normalizar_codigo(codigo)
+        if not eh_sem_servico_legitimo(conn, codigo):
+            return False   # linha orfa (agrupada/renomeada/pulada): fecha pela operacao/Vuupt, nunca local
+        cur = conn.execute("""UPDATE nucleo_pedidos SET status = ?, atualizado_em = ?
+                              WHERE codigo = ? AND vuupt_service_id IS NULL AND status = ?""",
+                           (banco.PEDIDO_CANCELADO, banco.agora(), codigo, banco.PEDIDO_ABERTO))
+        mudou = cur.rowcount > 0
+        if mudou:
+            from nucleo.rotas import registrar_evento
+            registrar_evento(conn, "PEDIDO_CANCELADO", origem,
+                             dados={"codigo": codigo, "motivo": motivo, "sem_servico_vuupt": True})
+        conn.commit()
+        return mudou
+    finally:
+        if fechar:
+            conn.close()
+
+
+def gravar_agendamento_sem_servico(id_negativo, inicio: str, fim: str | None,
+                                   conn: sqlite3.Connection | None = None) -> bool:
+    """Data de pedido sem servico na Vuupt (id sintetico do pool): dia fixo e data automatica que
+    andou gravam aqui em vez de PUT na Vuupt. `inicio`/`fim` como o PUT mandaria (com -03:00).
+    False = id nao achado; ValueError = linha que nao e pedido sem servico legitimo."""
+    if int(id_negativo) >= 0:
+        raise ValueError(f"id {id_negativo} nao e sintetico (pedido com servico grava na Vuupt)")
+    fechar = conn is None
+    conn = conn or banco.conectar()
+    try:
+        codigo = codigo_por_id_sintetico(conn, id_negativo)
+        if codigo is None:
+            return False
+        if not eh_sem_servico_legitimo(conn, codigo):
+            raise ValueError(f"pedido {codigo} {MOTIVO_SEM_SERVICO_ILEGITIMO}")
+        cur = conn.execute("""UPDATE nucleo_pedidos SET agendamento_inicio = ?, agendamento_fim = ?, atualizado_em = ?
+                              WHERE id_pool = ? AND vuupt_service_id IS NULL""",
+                           (normalizacao.para_local(inicio), normalizacao.para_local(fim), banco.agora(),
+                            -int(id_negativo)))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        if fechar:
+            conn.close()
+
+
+# Colunas que o Planejamento edita no pedido sem servico (a materializacao manda pra Vuupt)
+CAMPOS_EDICAO_LOCAL = ("endereco", "latitude", "longitude", "agendamento_inicio", "agendamento_fim")
+
+
+def _marcas_edicao(edicao_local_json) -> dict:
+    try:
+        marcas = json.loads(edicao_local_json or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return marcas if isinstance(marcas, dict) else {}
+
+
+def campos_editados(edicao_local_json) -> set[str]:
+    """Campos marcados como editados no Planejamento (pedido sem servico)."""
+    return set(_marcas_edicao(edicao_local_json))
+
+
+def editar_sem_servico(id_negativo, campos: dict, conn: sqlite3.Connection | None = None) -> str:
+    """Edicao do Planejamento em pedido sem servico na Vuupt (id sintetico): grava as colunas do
+    nucleo (hora local, sem fuso) e marca cada campo em `edicao_local_json` ({campo: quando}), pro
+    pipeline nao regravar na rodada seguinte (registrar_importacao). Devolve o codigo. ValueError com
+    o motivo se o id nao e sintetico, o pedido nao existe, ja ganhou servico ou nao esta ABERTO."""
+    if int(id_negativo) >= 0:
+        raise ValueError(f"id {id_negativo} nao e sintetico (pedido com servico grava na Vuupt)")
+    desconhecidos = set(campos) - set(CAMPOS_EDICAO_LOCAL)
+    if desconhecidos:
+        raise ValueError(f"campo(s) nao editavel(is) no pedido sem servico: {', '.join(sorted(desconhecidos))}")
+    fechar = conn is None
+    conn = conn or banco.conectar()
+    try:
+        row = conn.execute("SELECT codigo, status, vuupt_service_id, edicao_local_json FROM nucleo_pedidos "
+                           "WHERE id_pool = ?", (-int(id_negativo),)).fetchone()
+        if row is None:
+            raise ValueError(f"pedido {id_negativo} nao encontrado no nucleo: recarregue a tela")
+        codigo, status, service_id, marcas_json = row[0], row[1], row[2], row[3]
+        if service_id is not None:
+            raise ValueError(f"pedido {codigo} ja tem o servico {service_id} na Vuupt: recarregue a tela e tente de novo")
+        if status != banco.PEDIDO_ABERTO:
+            raise ValueError(f"pedido {codigo} esta {status} no nucleo: nao da pra alterar")
+        if not eh_sem_servico_legitimo(conn, codigo):
+            raise ValueError(f"pedido {codigo} {MOTIVO_SEM_SERVICO_ILEGITIMO}")
+        marcas = _marcas_edicao(marcas_json)
+        agora = banco.agora()
+        marcas.update({c: agora for c in campos})
+        sets = ", ".join(f"{c} = ?" for c in campos)
+        conn.execute(f"UPDATE nucleo_pedidos SET {sets}, edicao_local_json = ?, atualizado_em = ? WHERE codigo = ?",
+                     (*campos.values(), json.dumps(marcas), agora, codigo))
+        conn.commit()
+        return codigo
+    finally:
+        if fechar:
+            conn.close()
+
+
+def servicos_que_agrupam(conn: sqlite3.Connection) -> dict[str, tuple[int, str]]:
+    """{codigo: (service_id, codigo composto)} dos pedidos que estao dentro de um servico da Vuupt que
+    agrupa varios ("PS-10, PS-20", como normalizar_codigo grava). Quando o servico passa a agrupar outro
+    pedido, o sync tira o vuupt_service_id da linha antiga (PS-10), que fica ABERTA sem servico: no pool
+    direto da Stokki ela pareceria pedido sem servico e o envio criaria um SEGUNDO servico. Servico
+    composto cancelado/excluido nao segura ninguem."""
+    mapa: dict[str, tuple[int, str]] = {}
+    for codigo, sid in conn.execute("""SELECT codigo, vuupt_service_id FROM nucleo_pedidos
+                                       WHERE vuupt_service_id IS NOT NULL AND instr(codigo, ',') > 0
+                                         AND status != ? AND excluido_em IS NULL""", (banco.PEDIDO_CANCELADO,)):
+        for parte in codigo.split(","):
+            if parte.strip():
+                mapa.setdefault(parte.strip(), (int(sid), codigo))
+    return mapa
 
 
 def buscar_pedido(codigo: str, conn: sqlite3.Connection | None = None) -> dict | None:

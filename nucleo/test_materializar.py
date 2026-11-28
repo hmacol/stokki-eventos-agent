@@ -1,0 +1,791 @@
+# -*- coding: utf-8 -*-
+"""
+Materializacao do servico na Vuupt so ao enviar (pool direto da Stokki, Task 5):
+trava por codigo, idempotencia por code, recusa com motivo. Vuupt falsa, banco
+temporario, sem rede. Rodar (da raiz):
+    py -3.11 -m unittest nucleo.test_materializar -v
+"""
+import json
+import sqlite3
+import tempfile
+import threading
+import time
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from nucleo import banco, materializar, normalizacao, pedidos
+
+
+def _payload(codigo="PS-1", **extra):
+    p = {"title": f"#{codigo} - NF1 / EMB / DEST", "code": f"#{codigo}", "type": "delivery", "dimension_3": 2,
+         "sender_id": 11, "customer": {"name": "DEST", "code": "123", "address": "RUA A 1, Sao Paulo - SP"},
+         "scheduled_start": "2026-11-27T07:00:00-03:00", "scheduled_end": "2026-11-27T10:00:00-03:00",
+         "_skill_nome": "Seco-2"}
+    p.update(extra)
+    return p
+
+
+class FakeVuupt:
+    """So o que a materializacao usa; criar_ou_atualizar_servico guarda o servico criado
+    (buscar_servico_por_code passa a acha-lo, como na Vuupt de verdade)."""
+
+    def __init__(self, demora=0.0, acao="criado", falhar_em=()):
+        self.demora, self.acao, self.falhar_em = demora, acao, set(falhar_em)
+        self.existentes: dict[str, dict] = {}
+        self.criados: list[dict] = []
+        self.fingerprints: list[dict] = []
+        self.chamadas: list[str] = []
+        self._lock = threading.Lock()
+        self._proximo = 900
+
+    def buscar_servico_por_code(self, code):
+        self.chamadas.append(f"buscar {code}")
+        return self.existentes.get(normalizacao.normalizar_codigo(code))
+
+    def skill_ids_por_nome(self, *nomes):
+        self.chamadas.append(f"skills {nomes}")
+        return [55]
+
+    def salvar_fingerprint_importacao(self, payload, customer_id=None, sender_id=None):
+        self.chamadas.append(f"fingerprint {payload['code']}")
+        self.fingerprints.append(payload)
+
+    def criar_ou_atualizar_servico(self, payload):
+        self.chamadas.append(f"criar {payload['code']}")
+        time.sleep(self.demora)
+        codigo = normalizacao.normalizar_codigo(payload["code"])
+        if codigo in self.falhar_em:
+            raise RuntimeError("Status 500: erro da Vuupt")
+        if self.acao != "criado":
+            return None, self.acao
+        with self._lock:
+            sid = self._proximo
+            self._proximo += 1
+            servico = {"id": sid, "code": payload["code"], "status": "not_assigned"}
+            self.existentes[codigo] = servico
+            self.criados.append(payload)
+        return {"service": servico}, "criado"
+
+
+class _Base(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        self.db = Path(tmp.name) / "t.db"
+        p = mock.patch.object(banco, "DB_PATH", self.db)
+        p.start()
+        self.addCleanup(p.stop)
+        self.conn = banco.conectar()
+        self.addCleanup(self.conn.close)
+        self.conn.executescript("""
+            CREATE TABLE rascunhos_parada (id INTEGER PRIMARY KEY, rascunho_id INTEGER NOT NULL,
+                ordem INTEGER, service_id INTEGER NOT NULL, codigo TEXT, UNIQUE(rascunho_id, service_id));
+        """)
+
+    def _pedido(self, codigo="PS-1", status=None, **payload_extra) -> int:
+        """Pedido sem servico como o pipeline grava com fonte stokki; devolve o id sintetico."""
+        pedidos.registrar_importacao(_payload(codigo, **payload_extra), None, "nucleo_sem_servico", conn=self.conn)
+        if status:
+            self.conn.execute("UPDATE nucleo_pedidos SET status = ? WHERE codigo = ?", (status, codigo))
+            self.conn.commit()
+        return pedidos.id_sintetico(pedidos.buscar_pedido(codigo, conn=self.conn))
+
+    def _no_rascunho(self, sid, codigo, rascunho_id=1):
+        self.conn.execute("INSERT INTO rascunhos_parada (rascunho_id, ordem, service_id, codigo) VALUES (?, 0, ?, ?)",
+                          (rascunho_id, sid, f"#{codigo}"))
+        self.conn.commit()
+
+    def _travas(self):
+        return self.conn.execute("SELECT COUNT(*) FROM nucleo_materializacao").fetchone()[0]
+
+
+class MaterializarTest(_Base):
+    def test_cria_servico_e_adota_id(self):
+        sid = self._pedido()
+        self._no_rascunho(sid, "PS-1")
+        # o Planejamento editou o endereco e a data no nucleo: as colunas valem
+        self.conn.execute("UPDATE nucleo_pedidos SET endereco = 'RUA NOVA 2', agendamento_inicio = '2026-11-28 08:00:00', "
+                          "latitude = -23.5, longitude = -46.6 WHERE codigo = 'PS-1'")
+        self.conn.commit()
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": sid, "code": "#PS-1"}], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {"PS-1": 900})
+        self.assertEqual(res.falhas, {})
+        self.assertEqual(pedidos.buscar_pedido("PS-1", conn=self.conn)["vuupt_service_id"], 900)
+        self.assertEqual([r[0] for r in self.conn.execute("SELECT service_id FROM rascunhos_parada")], [900])
+        (enviado,) = vuupt.criados
+        self.assertEqual(enviado["code"], "#PS-1")
+        self.assertEqual(enviado["customer"]["address"], "RUA NOVA 2")
+        self.assertEqual((enviado["latitude"], enviado["customer"]["longitude"]), (-23.5, -46.6))
+        self.assertEqual(enviado["scheduled_start"], "2026-11-28T08:00:00-03:00")
+        self.assertEqual(enviado["scheduled_end"], "2026-11-27T10:00:00-03:00")
+        self.assertEqual(enviado["skills"], [{"id": 55}])
+        self.assertFalse([k for k in enviado if k.startswith("_")])
+        self.assertEqual(self._travas(), 0)
+
+    def test_clique_duplo_cria_um_servico_so(self):
+        sid = self._pedido()
+        vuupt = FakeVuupt(demora=0.4)
+        resultados = []
+
+        def enviar():
+            resultados.append(materializar.materializar_servicos([{"id": sid, "code": "#PS-1"}], vuupt, {}))
+
+        threads = [threading.Thread(target=enviar) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(10)
+        self.assertEqual(len(vuupt.criados), 1)
+        self.assertEqual([r.ok for r in resultados], [{"PS-1": 900}, {"PS-1": 900}])
+        self.assertEqual(self._travas(), 0)
+
+    def test_falha_de_um_nao_derruba_os_outros(self):
+        ids = [self._pedido(c) for c in ("PS-1", "PS-2", "PS-3")]
+        vuupt = FakeVuupt(falhar_em={"PS-2"})
+        res = materializar.materializar_servicos(
+            [{"id": i, "code": f"#PS-{n}"} for n, i in enumerate(ids, 1)], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {"PS-1": 900, "PS-3": 901})
+        self.assertIn("500", res.falhas["PS-2"])
+        self.assertIsNone(pedidos.buscar_pedido("PS-2", conn=self.conn)["vuupt_service_id"])
+        self.assertEqual(self._travas(), 0)   # trava liberada mesmo na falha
+
+    def test_pulado_atribuido_falha_com_motivo(self):
+        sid = self._pedido()
+        res = materializar.materializar_servicos([{"id": sid}], FakeVuupt(acao="pulado_atribuido"), {}, self.conn)
+        self.assertEqual(res.ok, {})
+        self.assertIn("pulado_atribuido", res.falhas["PS-1"])
+        self.assertIsNone(pedidos.buscar_pedido("PS-1", conn=self.conn)["vuupt_service_id"])
+
+    def test_servico_existente_fechado_falha_sem_criar(self):
+        sid = self._pedido()
+        vuupt = FakeVuupt()
+        vuupt.existentes["PS-1"] = {"id": 77, "code": "#PS-1", "status": "done"}
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        self.assertIn("'done'", res.falhas["PS-1"])
+        self.assertEqual(vuupt.criados, [])
+
+    def test_servico_ja_existente_livre_e_adotado_sem_criar(self):
+        sid = self._pedido()
+        self._no_rascunho(sid, "PS-1")
+        vuupt = FakeVuupt()
+        vuupt.existentes["PS-1"] = {"id": 77, "code": "#PS-1", "status": "not_assigned"}
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {"PS-1": 77})
+        self.assertEqual(vuupt.criados, [])
+        self.assertEqual(pedidos.buscar_pedido("PS-1", conn=self.conn)["vuupt_service_id"], 77)
+        self.assertEqual([r[0] for r in self.conn.execute("SELECT service_id FROM rascunhos_parada")], [77])
+
+    def test_reentrega_R_sem_id_falha_com_motivo(self):
+        sid = self._pedido("PS-1-R1")
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": sid, "code": "#PS-1-R1"}], vuupt, {}, self.conn)
+        self.assertIn("reentrega", res.falhas["PS-1-R1"])
+        self.assertEqual(vuupt.chamadas, [])
+
+    def test_pedido_nao_aberto_recusado(self):
+        sid = self._pedido(status=banco.PEDIDO_CANCELADO)
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        self.assertIn("CANCELADO", res.falhas["PS-1"])
+        self.assertEqual(vuupt.chamadas, [])
+
+    def test_modo_teste_nao_chama_a_vuupt(self):
+        sid = self._pedido()
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {"modo_teste": True}, self.conn)
+        self.assertIn("modo teste", res.falhas["PS-1"])
+        self.assertEqual(vuupt.chamadas, [])
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn, modo_teste=True)
+        self.assertIn("modo teste", res.falhas["PS-1"])
+        self.assertEqual(vuupt.chamadas, [])
+
+    def test_id_real_e_ignorado(self):
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": 5, "code": "#PS-9"}], vuupt, {}, self.conn)
+        self.assertEqual((res.ok, res.falhas, vuupt.chamadas), ({}, {}, []))
+
+    def test_sem_id_resolve_pelo_codigo(self):
+        self._pedido()
+        res = materializar.materializar_servicos([{"code": "PS-1"}], FakeVuupt(), {}, self.conn)
+        self.assertEqual(res.ok, {"PS-1": 900})
+
+    def test_trava_ocupada_espera_e_desiste_com_motivo(self):
+        sid = self._pedido()
+        self.conn.execute("INSERT INTO nucleo_materializacao VALUES ('PS-1', ?, 'outro')", (banco.agora(),))
+        self.conn.commit()
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn, espera_s=0.3)
+        self.assertIn("outro envio", res.falhas["PS-1"])
+        self.assertEqual(vuupt.criados, [])
+        self.assertEqual(self._travas(), 1)   # a do outro processo fica
+
+    def test_trava_velha_expira(self):
+        sid = self._pedido()
+        self.conn.execute("INSERT INTO nucleo_materializacao VALUES ('PS-1', '2026-01-01 00:00:00', 'morto')")
+        self.conn.commit()
+        res = materializar.materializar_servicos([{"id": sid}], FakeVuupt(), {}, self.conn, espera_s=0.3)
+        self.assertEqual(res.ok, {"PS-1": 900})
+        self.assertEqual(self._travas(), 0)
+
+    def test_origem_da_data_vai_pro_servico_real(self):
+        from roteirizacao import registro_dia_fixo
+        sid = self._pedido()
+        c = registro_dia_fixo.conectar(self.db)
+        try:
+            registro_dia_fixo.registrar_origem(c, {"code": "#PS-1"}, __import__("datetime").date(2026, 11, 27),
+                                               registro_dia_fixo.ORIGEM_AUTOMATICO)
+        finally:
+            c.close()
+        materializar.materializar_servicos([{"id": sid}], FakeVuupt(), {}, self.conn)
+        linhas = self.conn.execute("SELECT codigo, service_id, origem FROM agendamentos_origem "
+                                   "ORDER BY service_id").fetchall()
+        self.assertEqual([tuple(r) for r in linhas], [("PS-1", 0, "AUTOMATICO"), ("PS-1", 900, "AUTOMATICO")])
+
+    def test_dados_json_guarda_o_id_e_mantem_o_nome_da_skill(self):
+        sid = self._pedido()
+        materializar.materializar_servicos([{"id": sid}], FakeVuupt(), {}, self.conn)
+        dados = json.loads(pedidos.buscar_pedido("PS-1", conn=self.conn)["dados_json"])
+        self.assertEqual(dados["acao"], "criado")
+        self.assertEqual(dados["payload"]["_skill_nome"], "Seco-2")
+
+
+class _ConnQueFalhaAoSoltar:
+    """Conexao de verdade, mas o DELETE que solta a trava levanta 'database is locked'."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def execute(self, sql, *args):
+        if sql.startswith("DELETE FROM nucleo_materializacao WHERE codigo = ? AND processo"):
+            raise sqlite3.OperationalError("database is locked")
+        return self._conn.execute(sql, *args)
+
+    def __getattr__(self, nome):
+        return getattr(self._conn, nome)
+
+
+class FixRound1Test(_Base):
+    def test_janela_telefone_titulo_e_nome_do_nucleo_vao_no_payload(self):
+        sid = self._pedido(customer={"name": "DEST", "code": "123", "address": "RUA A 1",
+                                     "phone_number": "+5511900000000", "operating_hour_start": "07:00",
+                                     "operating_hour_end": "10:00"}, phone_number="+5511900000000")
+        self.conn.execute("UPDATE nucleo_pedidos SET horario_inicio = '13:00', horario_fim = '17:00', "
+                          "destinatario_telefone = '+5511988887777', titulo = '#PS-1 - NF1 / EMB / DEST NOVO', "
+                          "destinatario_nome = 'DEST NOVO' WHERE codigo = 'PS-1'")
+        self.conn.commit()
+        vuupt = FakeVuupt()
+        materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        (enviado,) = vuupt.criados
+        c = enviado["customer"]
+        self.assertEqual((c["operating_hour_start"], c["operating_hour_end"]), ("13:00", "17:00"))
+        self.assertEqual((c["phone_number"], enviado["phone_number"]), ("+5511988887777", "+5511988887777"))
+        self.assertEqual((enviado["title"], c["name"]), ("#PS-1 - NF1 / EMB / DEST NOVO", "DEST NOVO"))
+
+    def test_coluna_vazia_nao_apaga_o_valor_do_payload(self):
+        sid = self._pedido(customer={"name": "DEST", "code": "123", "address": "RUA A 1",
+                                     "phone_number": "+5511900000000", "operating_hour_start": "07:00"},
+                           phone_number="+5511900000000")
+        self.conn.execute("UPDATE nucleo_pedidos SET horario_inicio = NULL, destinatario_telefone = NULL, "
+                          "titulo = NULL, destinatario_nome = NULL WHERE codigo = 'PS-1'")
+        self.conn.commit()
+        vuupt = FakeVuupt()
+        materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        (enviado,) = vuupt.criados
+        self.assertEqual(enviado["customer"]["operating_hour_start"], "07:00")
+        self.assertEqual((enviado["customer"]["phone_number"], enviado["phone_number"]),
+                         ("+5511900000000", "+5511900000000"))
+        self.assertEqual((enviado["title"], enviado["customer"]["name"]), ("#PS-1 - NF1 / EMB / DEST", "DEST"))
+
+    def test_trava_ocupada_vai_em_ocupados(self):
+        sid = self._pedido()
+        self.conn.execute("INSERT INTO nucleo_materializacao VALUES ('PS-1', ?, 'outro')", (banco.agora(),))
+        self.conn.commit()
+        res = materializar.materializar_servicos([{"id": sid}], FakeVuupt(), {}, self.conn, espera_s=0.2)
+        self.assertEqual(res.ocupados, {"PS-1"})
+        self.assertIn("PS-1", res.falhas)
+        # recusa comum nao e "ocupado"
+        sid2 = self._pedido("PS-2", status=banco.PEDIDO_CANCELADO)
+        res = materializar.materializar_servicos([{"id": sid2}], FakeVuupt(), {}, self.conn)
+        self.assertEqual(res.ocupados, set())
+
+    def test_resultado_diz_o_codigo_de_cada_id(self):
+        sid = self._pedido()
+        res = materializar.materializar_servicos([{"id": sid, "code": "qualquer"}], FakeVuupt(), {}, self.conn)
+        self.assertEqual(res.codigos, {sid: "PS-1"})
+        self.assertEqual(res.ok, {"PS-1": 900})
+
+    def test_falha_ao_soltar_a_trava_nao_mascara_o_sucesso(self):
+        sid = self._pedido()
+        with self.assertLogs(materializar.logger, "WARNING") as logs:
+            res = materializar.materializar_servicos([{"id": sid}], FakeVuupt(), {}, _ConnQueFalhaAoSoltar(self.conn))
+        self.assertEqual(res.ok, {"PS-1": 900})
+        self.assertEqual(res.falhas, {})
+        self.assertTrue(any("trava" in m and "locked" in m for m in logs.output))
+
+
+class FalhaTransitoriaTest(_Base):
+    """Revisao Fable FIX 1: so recusa de REGRA (_Recusa) tira o pedido do envio; rede/HTTP/429/erro
+    inesperado e falha tecnica (transitoria): quem chama mantem a parada e tenta de novo."""
+
+    def test_classificacao_recusa_ocupado_transitorio(self):
+        c = materializar.classificar_falha
+        self.assertEqual(c(materializar._Recusa("pedido CANCELADO")), materializar.FALHA_RECUSA)
+        self.assertEqual(c(materializar._Ocupado("outro envio")), materializar.FALHA_OCUPADO)
+        for e in (RuntimeError("Status 429: Too Many Requests"), TimeoutError("read timed out"),
+                  ConnectionError("reset"), sqlite3.OperationalError("database is locked"),
+                  materializar._Transitorio("modo teste")):
+            self.assertEqual(c(e), materializar.FALHA_TRANSITORIA, e)
+
+    def test_erro_http_vai_em_transitorios_e_nao_derruba_os_outros(self):
+        ids = [self._pedido(c) for c in ("PS-1", "PS-2", "PS-3")]
+        vuupt = FakeVuupt(falhar_em={"PS-2"})
+        res = materializar.materializar_servicos([{"id": i} for i in ids], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {"PS-1": 900, "PS-3": 901})
+        self.assertEqual(list(res.transitorios), ["PS-2"])
+        self.assertIn("500", res.transitorios["PS-2"])
+        self.assertIn("falha tecnica ao criar servico na Vuupt", res.falhas["PS-2"])
+        self.assertIn("tente de novo", res.falhas["PS-2"])
+        self.assertEqual(res.ocupados, set())
+
+    def test_timeout_na_busca_e_transitorio(self):
+        sid = self._pedido()
+        vuupt = FakeVuupt()
+        vuupt.buscar_servico_por_code = mock.Mock(side_effect=TimeoutError("read timed out"))
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        self.assertIn("timed out", res.transitorios["PS-1"])
+        self.assertEqual(vuupt.criados, [])
+        self.assertEqual(self._travas(), 0)
+
+    def test_recusa_de_regra_nao_e_transitoria(self):
+        a = self._pedido("PS-1", status=banco.PEDIDO_CANCELADO)
+        b = self._pedido("PS-2-R1")
+        res = materializar.materializar_servicos([{"id": a}, {"id": b}], FakeVuupt(), {}, self.conn)
+        self.assertEqual(set(res.falhas), {"PS-1", "PS-2-R1"})
+        self.assertEqual(res.transitorios, {})
+        res = materializar.materializar_servicos([{"id": self._pedido("PS-3")}], FakeVuupt(acao="pulado_atribuido"),
+                                                 {}, self.conn)
+        self.assertIn("PS-3", res.falhas)
+        self.assertEqual(res.transitorios, {})
+
+    def test_modo_teste_e_transitorio(self):
+        """Modo teste nao e recusa do pedido: a parada nao pode sair do rascunho."""
+        sid = self._pedido()
+        res = materializar.materializar_servicos([{"id": sid}], FakeVuupt(), {"modo_teste": True}, self.conn)
+        self.assertIn("modo teste", res.transitorios["PS-1"])
+
+    def test_criado_na_vuupt_mas_nao_gravado_no_nucleo_e_transitorio(self):
+        sid = self._pedido()
+        with mock.patch.object(pedidos, "registrar_importacao", side_effect=sqlite3.OperationalError("database is locked")):
+            res = materializar.materializar_servicos([{"id": sid}], FakeVuupt(), {}, self.conn)
+        self.assertIn("PS-1", res.transitorios)
+        self.assertIn("servico 900 criado na Vuupt", res.falhas["PS-1"])
+
+    def test_lote_pula_o_transitorio_nesta_rodada(self):
+        a, b = self._pedido("PS-1"), self._pedido("PS-2")
+        saida, falhas, pendentes = materializar.materializar_lote([{"id": a}, {"id": b}],
+                                                                  FakeVuupt(falhar_em={"PS-2"}), {}, self.conn)
+        self.assertEqual([s["id"] for s in saida], [900])
+        self.assertIn("falha tecnica", falhas["PS-2"])
+        self.assertEqual(list(pendentes), ["PS-2"])   # onda 3: quem chama sabe que foi tecnico
+        self.assertIsNone(pedidos.buscar_pedido("PS-2", conn=self.conn)["vuupt_service_id"])   # nada gravado
+
+
+class _VuuptQueRecusa(FakeVuupt):
+    """criar_ou_atualizar_servico levanta o VuuptAPIError de verdade (texto "Status NNN: {...}")."""
+
+    def __init__(self, status_por_codigo, **kw):
+        super().__init__(**kw)
+        self.status_por_codigo = status_por_codigo
+
+    def criar_ou_atualizar_servico(self, payload):
+        from vuupt_client import VuuptAPIError
+        status = self.status_por_codigo.get(normalizacao.normalizar_codigo(payload["code"]))
+        if status:
+            self.chamadas.append(f"criar {payload['code']}")
+            raise VuuptAPIError(f"Status {status}: {{'message': 'erro {status} da Vuupt'}}")
+        return super().criar_ou_atualizar_servico(payload)
+
+
+class ErroHttpDaVuuptTest(_Base):
+    """Fix round 1 da onda 2: erro PERMANENTE da Vuupt (400/404/409/410/422) e recusa com o motivo real
+    (a parada sai); 401/403 e transitorio com mensagem propria; 408/425/429/5xx e o resto, transitorio."""
+
+    def test_classificacao_pelo_status_http(self):
+        from vuupt_client import VuuptAPIError
+        c = materializar.classificar_falha
+        for s in (400, 404, 409, 410, 422):
+            self.assertEqual(c(VuuptAPIError(f"Status {s}: {{}}")), materializar.FALHA_RECUSA, s)
+        for s in (401, 403, 408, 425, 429, 500, 502, 503):
+            self.assertEqual(c(VuuptAPIError(f"Status {s}: {{}}")), materializar.FALHA_TRANSITORIA, s)
+        # formato das acoes sobre o servico (vuupt_client: "<acao> do servico X: status NNN: ...")
+        self.assertEqual(c(VuuptAPIError("cancelar do servico 5: status 422: x")), materializar.FALHA_RECUSA)
+        self.assertEqual(c(VuuptAPIError("sem status nenhum")), materializar.FALHA_TRANSITORIA)
+        # so o erro do client da Vuupt e lido pelo status; texto parecido em outra excecao nao vira recusa
+        self.assertEqual(c(RuntimeError("Status 422: x")), materializar.FALHA_TRANSITORIA)
+
+    def test_422_e_recusa_com_o_motivo_real_e_nao_derruba_os_outros(self):
+        ids = [self._pedido(c) for c in ("PS-1", "PS-2", "PS-3")]
+        res = materializar.materializar_servicos([{"id": i} for i in ids], _VuuptQueRecusa({"PS-2": 422}), {},
+                                                 self.conn)
+        self.assertEqual(res.ok, {"PS-1": 900, "PS-3": 901})
+        self.assertEqual(res.transitorios, {})
+        self.assertTrue(res.falhas["PS-2"].startswith("a Vuupt recusou o pedido (Status 422): "), res.falhas)
+        self.assertIn("erro 422 da Vuupt", res.falhas["PS-2"])
+
+    def test_409_e_recusa(self):
+        sid = self._pedido()
+        res = materializar.materializar_servicos([{"id": sid}], _VuuptQueRecusa({"PS-1": 409}), {}, self.conn)
+        self.assertIn("Status 409", res.falhas["PS-1"])
+        self.assertEqual(res.transitorios, {})
+
+    def test_429_e_503_sao_transitorios(self):
+        a, b = self._pedido("PS-1"), self._pedido("PS-2")
+        res = materializar.materializar_servicos([{"id": a}, {"id": b}], _VuuptQueRecusa({"PS-1": 429, "PS-2": 503}),
+                                                 {}, self.conn)
+        self.assertEqual(set(res.transitorios), {"PS-1", "PS-2"})
+
+    def test_401_e_transitorio_com_mensagem_propria(self):
+        sid = self._pedido()
+        res = materializar.materializar_servicos([{"id": sid}], _VuuptQueRecusa({"PS-1": 401}), {}, self.conn)
+        self.assertIn("PS-1", res.transitorios)
+        for texto in ("credencial/permissao da Vuupt", "avise o Hugo", "401"):
+            self.assertIn(texto, res.falhas["PS-1"])
+            self.assertIn(texto, res.transitorios["PS-1"])
+
+    def test_vuupt_devolve_acao_sem_id_e_transitorio(self):
+        """Minor 4: anomalia da Vuupt (resposta sem id) nao pode tirar a parada."""
+        sid = self._pedido()
+        res = materializar.materializar_servicos([{"id": sid}], FakeVuupt(acao="atualizado"), {}, self.conn)
+        self.assertEqual(res.ok, {})
+        self.assertIn("PS-1", res.transitorios)
+        self.assertIn("sem id", res.falhas["PS-1"])
+        self.assertIsNone(pedidos.buscar_pedido("PS-1", conn=self.conn)["vuupt_service_id"])
+
+
+class ErroLocalSistemicoTest(_Base):
+    """Onda 4 round 1 (L4 parcial): o MESMO erro local de dado em TODOS os pedidos do lote (>= 2) e nenhum
+    sucesso e provavel bug nosso de codigo/formato, nao do pedido: lote inteiro transitorio, nada removido."""
+
+    def _customer_nulo(self, codigo):
+        # payload do pipeline com customer null: montar_payload estoura TypeError ao gravar o nome
+        self.conn.execute("UPDATE nucleo_pedidos SET dados_json = json_set(dados_json, '$.payload.customer', "
+                          "json('null')), destinatario_nome = 'DEST' WHERE codigo = ?", (codigo,))
+        self.conn.commit()
+
+    def _malformado(self, codigo):
+        self.conn.execute("UPDATE nucleo_pedidos SET agendamento_inicio = 'amanha cedo' WHERE codigo = ?", (codigo,))
+        self.conn.commit()
+
+    def _lote(self, estragos):
+        ids = []
+        for n, estrago in enumerate(estragos, 1):
+            ids.append(self._pedido(f"PS-{n}"))
+            if estrago:
+                estrago(f"PS-{n}")
+        return materializar.materializar_servicos([{"id": i} for i in ids], FakeVuupt(), {}, self.conn)
+
+    def test_todos_com_o_mesmo_typeerror_viram_transitorios(self):
+        res = self._lote([self._customer_nulo] * 3)
+        self.assertEqual(res.ok, {})
+        self.assertEqual(set(res.transitorios), {"PS-1", "PS-2", "PS-3"})
+        for texto in ("possivel problema sistemico", "TypeError", "nada foi removido", "avise o Hugo"):
+            self.assertIn(texto, res.falhas["PS-1"])
+
+    def test_um_malformado_so_segue_a_regra_normal(self):
+        res = self._lote([self._malformado])
+        self.assertEqual(res.transitorios, {})
+        self.assertIn("dado invalido no nucleo", res.falhas["PS-1"])
+
+    def test_dois_malformados_e_um_ok_tira_so_os_dois(self):
+        res = self._lote([self._malformado, self._malformado, None])
+        self.assertEqual(set(res.ok), {"PS-3"})
+        self.assertEqual(res.transitorios, {})
+        self.assertEqual(set(res.falhas), {"PS-1", "PS-2"})
+
+    def test_tipos_de_erro_diferentes_seguem_a_regra_normal(self):
+        res = self._lote([self._customer_nulo, self._malformado, self._customer_nulo])
+        self.assertEqual(res.transitorios, {})
+        self.assertEqual(set(res.falhas), {"PS-1", "PS-2", "PS-3"})
+
+    def test_erro_local_misturado_com_recusa_da_vuupt_segue_a_regra_normal(self):
+        a, b = self._pedido("PS-1"), self._pedido("PS-2")
+        self._customer_nulo("PS-1")
+        res = materializar.materializar_servicos([{"id": a}, {"id": b}], _VuuptQueRecusa({"PS-2": 422}), {},
+                                                 self.conn)
+        self.assertEqual(res.transitorios, {})
+        self.assertEqual(set(res.falhas), {"PS-1", "PS-2"})
+
+
+class DadoLocalInvalidoTest(_Base):
+    """Onda 4 (L4): ValueError/TypeError ao montar o payload (dado do nucleo malformado) e erro LOCAL
+    deterministico: recusa com o motivo (a parada sai), nunca transitorio (travaria a rota toda rodada)."""
+
+    def test_agendamento_malformado_e_recusa_e_os_outros_seguem(self):
+        a, b, c = self._pedido("PS-1"), self._pedido("PS-2"), self._pedido("PS-3")
+        self.conn.execute("UPDATE nucleo_pedidos SET agendamento_inicio = 'amanha cedo' WHERE codigo = 'PS-2'")
+        self.conn.commit()
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": i} for i in (a, b, c)], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {"PS-1": 900, "PS-3": 901})
+        self.assertEqual(res.transitorios, {})
+        self.assertIn("dado invalido no nucleo", res.falhas["PS-2"])
+        self.assertIn("amanha", res.falhas["PS-2"])
+        self.assertNotIn("criar #PS-2", vuupt.chamadas)
+        self.assertEqual(self._travas(), 0)
+
+    def test_erro_de_banco_continua_transitorio(self):
+        self.assertEqual(materializar.classificar_falha(sqlite3.OperationalError("database is locked")),
+                         materializar.FALHA_TRANSITORIA)
+
+
+class ErroSistemicoTest(_Base):
+    """Onda 3 (Hugo): TODOS os pedidos sem servico do lote (>= 2) recusados pela Vuupt com o MESMO status
+    permanente e nenhum sucesso = provavel problema sistemico (payload/config nosso), nao do pedido:
+    vira transitorio, nada e removido."""
+
+    def _lote(self, status):
+        ids = [self._pedido(f"PS-{n}") for n in range(1, len(status) + 1)]
+        vuupt = _VuuptQueRecusa({f"PS-{n}": s for n, s in enumerate(status, 1) if s})
+        return materializar.materializar_servicos([{"id": i} for i in ids], vuupt, {}, self.conn)
+
+    def test_todos_com_o_mesmo_422_viram_transitorios(self):
+        res = self._lote([422, 422, 422])
+        self.assertEqual(res.ok, {})
+        self.assertEqual(set(res.transitorios), {"PS-1", "PS-2", "PS-3"})
+        for c in ("PS-1", "PS-2", "PS-3"):
+            for texto in ("a Vuupt recusou todos os pedidos com o mesmo erro (Status 422",
+                          "possivel problema sistemico", "nada foi removido", "avise o Hugo"):
+                self.assertIn(texto, res.falhas[c])
+
+    def test_dois_pedidos_com_o_mesmo_erro_ja_e_sistemico(self):
+        res = self._lote([409, 409])
+        self.assertEqual(set(res.transitorios), {"PS-1", "PS-2"})
+
+    def test_um_422_e_dois_ok_tira_so_o_422(self):
+        res = self._lote([422, None, None])
+        self.assertEqual(set(res.ok), {"PS-2", "PS-3"})
+        self.assertEqual(res.transitorios, {})
+        self.assertTrue(res.falhas["PS-1"].startswith("a Vuupt recusou o pedido (Status 422)"))
+
+    def test_status_diferentes_seguem_a_regra_normal(self):
+        res = self._lote([422, 400, 422])
+        self.assertEqual(res.transitorios, {})
+        self.assertEqual(set(res.falhas), {"PS-1", "PS-2", "PS-3"})
+        self.assertIn("Status 400", res.falhas["PS-2"])
+
+    def test_um_pedido_so_segue_a_regra_normal(self):
+        res = self._lote([422])
+        self.assertEqual(res.transitorios, {})
+        self.assertIn("Status 422", res.falhas["PS-1"])
+
+    def test_recusa_de_regra_no_meio_desliga_o_sistemico(self):
+        ids = [self._pedido("PS-1"), self._pedido("PS-2"), self._pedido("PS-3", status=banco.PEDIDO_CANCELADO)]
+        res = materializar.materializar_servicos([{"id": i} for i in ids], _VuuptQueRecusa({"PS-1": 422, "PS-2": 422}),
+                                                 {}, self.conn)
+        self.assertEqual(res.transitorios, {})
+        self.assertIn("CANCELADO", res.falhas["PS-3"])
+
+
+class IdSinteticoNaoEncontradoTest(_Base):
+    """Revisao Fable FIX 6: id negativo que nao existe no nucleo e recusa com motivo; nunca cai pro
+    codigo do item (que pode ser de outro pedido / velho na parada)."""
+
+    def test_id_negativo_inexistente_recusa_sem_usar_o_codigo(self):
+        self._pedido("PS-1")
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": -999, "code": "#PS-1"}], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {})
+        self.assertIn("id sintetico -999 nao encontrado no nucleo", res.falhas["-999"])
+        self.assertEqual(res.transitorios, {})
+        self.assertEqual(vuupt.chamadas, [])
+        saida, falhas, pendentes = materializar.materializar_lote([{"id": -999, "code": "#PS-1"}], vuupt, {},
+                                                                  self.conn)
+        self.assertEqual(saida, [])
+        self.assertIn("-999", falhas)
+        self.assertEqual(pendentes, {})
+
+    def test_sem_id_continua_pelo_codigo(self):
+        self._pedido("PS-1")
+        res = materializar.materializar_servicos([{"code": "#PS-1"}], FakeVuupt(), {}, self.conn)
+        self.assertEqual(res.ok, {"PS-1": 900})
+
+
+class HistoricoDeServicoTest(_Base):
+    """Revisao Fable FIX 2: so materializa pedido que o pipeline marcou como nascido sem servico e sem
+    servico no historico (nucleo_servicos). Linha sem id por rename/servico apagado/pulado antigo: recusa."""
+
+    def test_linha_de_servico_renomeado_e_recusada(self):
+        from nucleo import sincronizar_servicos_vuupt as sinc
+        pedidos.registrar_importacao(_payload("PS-10"), {"id": 5010}, "criado", conn=self.conn)
+        sinc.sincronizar_servicos([{"id": 5010, "code": "#PS-99", "title": "x", "status": "not_assigned",
+                                    "sender_id": 11, "customer": {}}], self.conn)
+        sid = pedidos.id_sintetico(pedidos.buscar_pedido("PS-10", conn=self.conn))
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {})
+        self.assertIn("ja teve servico", res.falhas["PS-10"])
+        self.assertEqual(res.transitorios, {})
+        self.assertEqual(vuupt.chamadas, [])
+
+    def test_linha_legada_pulada_e_recusada(self):
+        pedidos.registrar_importacao(_payload("PS-5"), None, "pulado_sem_alteracao", conn=self.conn)
+        sid = pedidos.id_sintetico(pedidos.buscar_pedido("PS-5", conn=self.conn))
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        self.assertIn("nao nasceu sem servico", res.falhas["PS-5"])
+        self.assertEqual(vuupt.chamadas, [])
+
+    def test_codigo_com_servico_no_historico_e_recusado(self):
+        sid = self._pedido("PS-1")
+        pedidos.registrar_servico(self.conn, 4444, "PS-1", {}, status=banco.PEDIDO_CANCELADO)
+        self.conn.commit()
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        self.assertIn("4444", res.falhas["PS-1"])
+        self.assertEqual(vuupt.chamadas, [])
+
+    def test_pedido_nascido_sem_servico_materializa(self):
+        sid = self._pedido("PS-1")
+        res = materializar.materializar_servicos([{"id": sid}], FakeVuupt(), {}, self.conn)
+        self.assertEqual(res.ok, {"PS-1": 900})
+        marca = self.conn.execute("SELECT nasceu_sem_servico FROM nucleo_pedidos WHERE codigo = 'PS-1'").fetchone()[0]
+        self.assertFalse(marca)   # ganhou servico: a marca sai
+
+
+class HeartbeatTravaTest(_Base):
+    """Revisao Fable FIX 3: a trava do pedido e renovada (dono conferido) antes de cada passo na Vuupt;
+    trava assumida por outro = nao cria (ocupado, tente de novo). O `pulso` de quem chama para o lote."""
+
+    def _trava(self):
+        return self.conn.execute("SELECT iniciado_em, processo FROM nucleo_materializacao").fetchone()
+
+    def test_trava_renovada_antes_de_criar(self):
+        sid = self._pedido()
+        vuupt = FakeVuupt()
+        visto = {}
+        buscar = vuupt.buscar_servico_por_code
+
+        def buscar_e_envelhecer(code):
+            with sqlite3.connect(self.db) as c:   # a trava "envelhece" durante a chamada lenta
+                c.execute("UPDATE nucleo_materializacao SET iniciado_em = '2026-01-01 00:00:00'")
+            return buscar(code)
+        criar = vuupt.criar_ou_atualizar_servico
+
+        def criar_e_olhar(payload):
+            with sqlite3.connect(self.db) as c:
+                visto["iniciado_em"] = c.execute("SELECT iniciado_em FROM nucleo_materializacao").fetchone()[0]
+            return criar(payload)
+        vuupt.buscar_servico_por_code, vuupt.criar_ou_atualizar_servico = buscar_e_envelhecer, criar_e_olhar
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {"PS-1": 900})
+        self.assertGreater(visto["iniciado_em"], "2026-01-01 00:00:00")
+        self.assertEqual(self._travas(), 0)
+
+    def test_trava_assumida_por_outro_nao_cria(self):
+        sid = self._pedido()
+        vuupt = FakeVuupt()
+        buscar = vuupt.buscar_servico_por_code
+
+        def buscar_e_perder(code):
+            with sqlite3.connect(self.db) as c:   # outro processo achou a trava velha e assumiu
+                c.execute("UPDATE nucleo_materializacao SET processo = 'outro'")
+            return buscar(code)
+        vuupt.buscar_servico_por_code = buscar_e_perder
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        self.assertEqual(vuupt.criados, [])
+        self.assertEqual(res.ocupados, {"PS-1"})
+        self.assertIn("assumida", res.falhas["PS-1"])
+        self.assertEqual(self._trava()["processo"], "outro")   # a do outro fica
+
+    def test_pulso_de_quem_chama_para_o_lote(self):
+        ids = [self._pedido(c) for c in ("PS-1", "PS-2")]
+        chamadas = []
+
+        def pulso():
+            chamadas.append(1)
+            if len(vuupt.criados) >= 1:
+                raise materializar.EnvioInterrompido("trava do envio assumida")
+        vuupt = FakeVuupt()
+        with self.assertRaises(materializar.EnvioInterrompido):
+            materializar.materializar_servicos([{"id": i} for i in ids], vuupt, {}, self.conn, pulso=pulso)
+        self.assertEqual(len(vuupt.criados), 1)
+        self.assertGreaterEqual(len(chamadas), 3)   # antes de cada pedido e de cada passo na Vuupt
+        self.assertEqual(self._travas(), 0)
+
+
+class MaterializarLoteTest(_Base):
+    def test_lote_troca_o_id_e_tira_quem_falhou(self):
+        a, b = self._pedido("PS-1"), self._pedido("PS-2", status=banco.PEDIDO_CANCELADO)
+        lote = [{"id": 5, "code": "#PS-9"}, {"id": a, "code": "#PS-1"}, {"id": b, "code": "#PS-2"}]
+        saida, falhas, pendentes = materializar.materializar_lote(lote, FakeVuupt(), {}, self.conn)
+        self.assertEqual([s["id"] for s in saida], [5, 900])
+        self.assertEqual(list(falhas), ["PS-2"])
+        self.assertEqual(pendentes, {})
+        self.assertEqual(lote[1]["id"], a)   # a lista de quem chamou nao muda
+
+    def test_lote_so_com_id_real_nao_chama_nada(self):
+        vuupt = FakeVuupt()
+        lote = [{"id": 5, "code": "#PS-9"}]
+        with mock.patch.object(materializar, "materializar_servicos") as m:
+            saida, falhas, pendentes = materializar.materializar_lote(lote, vuupt, {})
+        m.assert_not_called()
+        self.assertEqual((saida, falhas, pendentes), (lote, {}, {}))
+
+
+class PedidoAgrupadoTest(_Base):
+    """Fix round 1 da Task 7: alguem agrupou o pedido num servico da Vuupt ("PS-10" virou "#PS-10, #PS-20").
+    O sync tira o vuupt_service_id da linha antiga PS-10 (fica ABERTO, sem servico); a busca por code
+    "#PS-10" nao acha o composto e o envio criaria um SEGUNDO servico (entrega em dobro)."""
+
+    def _agrupar(self, status_composto="not_assigned"):
+        from nucleo import sincronizar_servicos_vuupt as sinc
+
+        def servico(code, status="not_assigned"):
+            return {"id": 5010, "code": code, "title": code, "status": status, "sender_id": 11,
+                    "address": "RUA A 1", "customer": {"name": "DEST"}}
+        # o pipeline criou o PS-10 (caminho antigo, payload no nucleo) e alguem agrupou na Vuupt
+        pedidos.registrar_importacao(_payload("PS-10"), {"id": 5010}, "criado", conn=self.conn)
+        sinc.sincronizar_servicos([servico("#PS-10, #PS-20", status_composto)], self.conn)
+        linha = pedidos.buscar_pedido("PS-10", conn=self.conn)
+        self.assertEqual((linha["vuupt_service_id"], linha["status"]), (None, banco.PEDIDO_ABERTO))  # o diagnostico
+        return pedidos.id_sintetico(linha)
+
+    def test_pedido_agrupado_recusa_com_motivo_e_nao_cria(self):
+        sid = self._agrupar()
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": sid, "code": "#PS-10"}], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {})
+        self.assertIn("agrupado no servico 5010 ('PS-10, PS-20') na Vuupt", res.falhas["PS-10"])
+        self.assertEqual((vuupt.criados, vuupt.chamadas), ([], []))
+        self.assertEqual(self._travas(), 0)
+
+    def test_composto_ja_entregue_tambem_recusa(self):
+        sid = self._agrupar(status_composto="done")
+        res = materializar.materializar_servicos([{"id": sid}], FakeVuupt(), {}, self.conn)
+        self.assertIn("agrupado no servico 5010", res.falhas["PS-10"])
+
+    def test_composto_cancelado_ainda_recusa_porque_o_pedido_ja_teve_servico(self):
+        """Revisao Fable FIX 2 (muda o fix round 1): o pedido ja teve servico na Vuupt -> conservador."""
+        sid = self._agrupar(status_composto="canceled")
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {})
+        self.assertIn("ja teve servico", res.falhas["PS-10"])
+        self.assertEqual(res.transitorios, {})
+        self.assertEqual(vuupt.chamadas, [])
+
+    def test_codigo_parecido_nao_e_agrupado(self):
+        from nucleo import sincronizar_servicos_vuupt as sinc
+        sinc.sincronizar_servicos([{"id": 5100, "code": "#PS-100, #PS-200", "title": "x", "status": "not_assigned",
+                                    "sender_id": 11, "customer": {}}], self.conn)
+        sid = self._pedido("PS-10")
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": sid}], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {"PS-10": 900})
+        self.assertEqual(len(vuupt.criados), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

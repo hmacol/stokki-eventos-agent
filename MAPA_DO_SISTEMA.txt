@@ -261,7 +261,73 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                              nunca troca na hora. A equipe aprova/recusa no mesmo selo "PIX novo aguardando
                                              aprovação" da /motoristas (pix_pendente/decidir_pix). Config: pix_motoristas.ativo
                                              (ausente = 503).
- Pool do planejamento (Vuupt x núcleo) ..... nucleo/pool.py (config planejamento.fonte_pool: vuupt | nucleo | freshhub)
+ Pool do planejamento (Vuupt x núcleo) ..... nucleo/pool.py (config planejamento.fonte_pool: vuupt | nucleo | freshhub | stokki)
+   fonte stokki (pool direto da Stokki) .... ramo pool-stokki (26/11), spec docs/superpowers/specs/2026-11-26-
+                                             pool-direto-da-stokki-design.md, roteiro de prova em docs/superpowers/
+                                             plans/2026-11-26-pool-direto-da-stokki-roteiro-de-prova.md. DESLIGADA.
+                                             Vale MESMO com a chave desligada (efeito do deploy do ramo):
+                                             - trava de envio por rascunho (rascunho_envio_trava): restart do
+                                               painel no meio de um envio deixa o rascunho bloqueado até 15 min
+                                               ("envio deste rascunho ja em andamento"); o envio vivo renova a
+                                               trava (heartbeat) e reconfere o status antes/depois de criar a rota;
+                                               marcar_erro_envio nunca rebaixa ENVIADO/DESCARTADO;
+                                             - "Confirmar e enviar todas" segue depois de exceção num rascunho;
+                                             - aviso de área não atendida deduplicado também pelo código
+                                               (pedidos_area_notificada.codigo): serviço recriado não reavisa;
+                                             - 1 escrita em nucleo_contadores por pedido NOVO no núcleo
+                                               (id_pool), migração + backfill do id_pool e colunas novas
+                                               (edicao_local_json, nasceu_sem_servico) no deploy.
+                                             Com planejamento.fonte_pool: stokki:
+                                             - pool.listar_pool(incluir_sem_servico=True) lista também o pedido que
+                                               ainda NÃO tem serviço na Vuupt, com id sintético negativo (-id_pool;
+                                               pool.eh_sem_servico(id) = id < 0; item marcado _sem_servico_vuupt);
+                                               SÓ a linha com nucleo_pedidos.nasceu_sem_servico = 1 (nasceu pelo
+                                               caminho sem serviço do pipeline, nunca teve serviço). Linha ABERTA
+                                               sem id por serviço renomeado/apagado na Vuupt ou "pulado" antigo
+                                               fica fora (log pool.sem_servico_legado), é recusada na
+                                               materialização e o pipeline pede revisão dela. GUARDA ÚNICA das
+                                               ações locais por id sintético (cancelar, reagendar, editar, portal,
+                                               /pedidos, cancelar_cancelados_stokki, fechamento do pipeline):
+                                               nucleo/pedidos.eh_sem_servico_legitimo (sem id, nasceu_sem_servico
+                                               = 1, fora de serviço agrupado); a linha órfã vai pra operação,
+                                               também com a chave desligada;
+                                             - pipeline.py grava só no núcleo (nucleo_pedidos); não cria mais o
+                                               serviço na Vuupt na importação;
+                                             - o serviço nasce na Vuupt SÓ ao enviar a rota: rascunhos_rota
+                                               (enviar_rascunho, incremento, adicionar parada em rota enviada)
+                                               chama nucleo/materializar.materializar_servicos (ver seção do núcleo);
+                                               EXCEÇÃO: a fila de réplica do freshhub (pipeline.py --fila-freshhub,
+                                               _materializar_pela_fila em atender_fila_freshhub) materializa na
+                                               importação, porque a fila exige o id da Vuupt (spec item 8 permite).
+                                               Decisão pendente do Hugo: confirmar essa exceção;
+                                             - enviar_rascunho trava o rascunho em rascunho_envio_trava (1 envio por
+                                               rascunho; o 2º clique volta "envio deste rascunho ja em andamento" sem
+                                               mexer em nada; o envio vivo renova a trava antes de cada pedido e
+                                               passo na Vuupt; trava de processo morto expira em 15 min);
+                                             - falha técnica da Vuupt (timeout, 408/425/429/5xx, 401/403 com
+                                               "avise o Hugo", modo teste, resposta sem id) NÃO tira a parada: o
+                                               envio para em ERRO_ENVIO "falha tecnica ao criar servico na Vuupt
+                                               (...): tente de novo", sem rota parcial (resposta: codigos_pendentes_
+                                               tecnico); só recusa de regra ou erro PERMANENTE da Vuupt (400/404/
+                                               409/410/422, "a Vuupt recusou o pedido (Status NNN): ...") tira a
+                                               parada (volta ao pool; resposta: codigos_sem_servico). TODOS os
+                                               pedidos do lote (>= 2) com o MESMO status permanente = erro
+                                               sistêmico: nada sai ("possivel problema sistemico ... avise o Hugo");
+                                             - criação direta de rota (criar_rotas_diarias sem --gerar-rascunho)
+                                               NUNCA sai parcial por falha técnica: a rota fica pra próxima rodada
+                                               (RotaAdiada, [ALERTA_ROTA_NAO_CRIADA] no e-mail da execução); recusa
+                                               permanente tira só aquele pedido e a rota sai com o resto;
+                                             - enquanto o pedido não tem serviço, os campos marcados em
+                                               edicao_local_json ficam protegidos: mudança legítima da Stokki no
+                                               mesmo campo é ignorada até materializar (hoje viraria PUT);
+                                             - portal, Torre, feriado, laboratório e vigia leem o pool do núcleo;
+                                               ações do pool em pedido sem servico (cancelar, reagendar, alterar
+                                               endereço/janela) são LOCAIS (edicao_local_json), sem chamar a Vuupt.
+                                             Sombra: comparar_pool.py --fonte stokki (pedido sem servico vai em
+                                             "sem_servico", informativo, fora do placar). Portão: 3 dias úteis em 0
+                                             na sombra + a prova (decisão do Hugo ligar). Volta = trocar a chave;
+                                             pedido ainda sem servico segue materializando (por id negativo, não
+                                             pela chave).
    fonte freshhub (plano 1.2 do novo) ..... GET /api/pool da API nova via nucleo/freshhub_client.py (config
                                              freshhub_api.url = http://127.0.0.1:8100 e freshhub_api.token, token
                                              de serviço criado por `freshhub.jobs.usuarios criar-token`, só loopback).
@@ -530,7 +596,9 @@ Acoes da tela /pedidos (Reenvio, Cancelar, Endereco, Agendar) painel_agentes/aco
                                                              grava batimento_*; trava sessao_uso)
  07:40                       comparar-vuupt                  nucleo/comparar_vuupt.py
  07-20h xx:25                comparar-pool                   nucleo/comparar_pool.py (sombra Vuupt x núcleo e, desde
-                                                             25/10, Vuupt x freshhub com --fonte freshhub)
+                                                             25/10, Vuupt x freshhub com --fonte freshhub e,
+                                                             --fonte stokki só à mão, sem timer: a unit só roda nucleo e
+                                                             freshhub; criar timer da stokki é decisão do Hugo)
  07:15-08:45 (15 min)        resumo-email-whatsapp           resumo_email_whatsapp.py (lê no Gmail o "Resumo do
                                                              e-mail · DD/MM" que a rotina na nuvem manda ~07:07
                                                              e encaminha pro grupo grupo_resumo_email_id; 1x/dia)
@@ -1140,7 +1208,8 @@ embarcador (sem a lista valem wms.embarcador_piloto_id + wms.caixas_ativo, um pi
                            fusão/divisão de sublotes, macro-região, janela de
                            horário, orçamento de horas.
  criar_rotas_diarias.py    Job principal (16h). --gerar-rascunho grava rascunhos;
-                           sem a flag cria direto na Vuupt. Também expõe
+                           sem a flag cria direto na Vuupt (pool stokki: rota com falha
+                           técnica ao criar serviço não sai, RotaAdiada). Também expõe
                            roteirizar_para_rascunhos (botão "Roteirizar").
  otimizacao_rotas.py       Modelos: Sweep Polar, Clarke-Wright, 2-Opt, CEP, K-means.
  selecao_modelo.py         Roda os 5 e escolhe o melhor.
@@ -1305,6 +1374,56 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
  rotas.py                  Materializa rota/paradas ao enviar rascunho.
  pool.py                   listar_pool_not_assigned: pool vem da Vuupt ou do
                            núcleo conforme config planejamento.fonte_pool.
+                           listar_pool(incluir_sem_servico=True) = fonte stokki (id -id_pool).
+ adocao_servico.py         adotar_servico(conn, codigo, service_id): grava o id real em
+                           nucleo_pedidos e troca o sintético pelo real SÓ em rascunhos_parada e
+                           rascunhos_plano_original; chamado pelo sync, registrar_importacao com id
+                           novo, fila freshhub e materialização. Ficam com o id NEGATIVO (não são
+                           reescritas): agendamentos_origem.service_id, pedidos_dedicados.service_id,
+                           ciencias_dedicado.service_id, pedidos_area_notificada.service_id e o
+                           dados.service_id dos eventos do freshhub; todos esses consumidores casam
+                           também (ou só) pelo código do pedido.
+ materializar.py           materializar_servicos(itens, vuupt, config, ...) (e materializar_lote):
+                           cria o serviço na Vuupt SÓ ao enviar a rota, por pedido sem servico.
+                           Trava por código em nucleo_materializacao (idempotente; trava ocupada =
+                           "tente de novo", não descarta o pedido; 1 motivo por pedido recusado;
+                           renovada antes de buscar/criar: assumida por outro = não cria).
+                           Recusa de REGRA, com motivo (a parada sai): pedido não ABERTO no núcleo
+                           (cancelado, rascunho OFERTADA), reentrega -R (nasce na Vuupt), pedido
+                           agrupado noutro serviço da Vuupt, linha que não nasceu sem serviço
+                           (nasceu_sem_servico) ou código com serviço em nucleo_servicos, id
+                           sintético inexistente, serviço achado em done/canceled/atribuído.
+                           VuuptAPIError 400/404/409/410/422 (status lido do texto "Status NNN")
+                           também é recusa ("a Vuupt recusou o pedido (Status NNN): ..."), e
+                           ValueError/TypeError ao montar o payload (dado do núcleo malformado)
+                           também ("dado invalido no nucleo": sai só aquela parada).
+                           Qualquer outra exceção (rede, 408/425/429/5xx, 401/403 com mensagem
+                           própria, banco, modo teste, resposta sem id) é falha técnica:
+                           ResultadoMaterializacao.transitorios (classificar_falha), a parada fica. `pulso` = heartbeat de quem chama (EnvioInterrompido sobe).
+                           Erro sistêmico (_aplicar_erro_sistemico): >= MINIMO_LOTE_SISTEMICO (2)
+                           pedidos, todos recusados com o MESMO status 4xx permanente e nenhum ok
+                           = o lote inteiro vira transitório (nada removido); idem se todos falham
+                           com o MESMO erro local de dado (_RecusaDadoLocal, mesmo tipo). materializar_lote
+                           devolve (prontos, falhas, pendentes técnicos).
+                           Serviço já not_assigned com o mesmo code é adotado.
+                           Payload vem do núcleo (janela/telefone/edição local); o fingerprint da
+                           importação é regravado com o payload da Stokki
+                           (VuuptClient.salvar_fingerprint_importacao, local, sem HTTP).
+                           Chama a materialização por id negativo, não pela chave fonte_pool.
+                           Testes: nucleo/test_materializar.py, test_adocao_servico.py,
+                           test_id_pool.py, test_edicao_local.py (+ test_pipeline_sem_servico.py,
+                           test_pipeline_fila_freshhub.py, test_reagendar_feriado.py,
+                           test_atualizar_agendamentos_confirmados.py (todos na RAIZ do repo),
+                           painel_agentes/test_planejamento_sem_servico.py,
+                           portal_cliente/test_pool_stokki_portal.py).
+ Colunas/tabelas do pool stokki (nucleo/banco.py, migração sob demanda):
+                           nucleo_pedidos.id_pool (id inteiro estável por pedido, base do id
+                           sintético), nucleo_contadores (nome, valor; contador do id_pool),
+                           nucleo_pedidos.edicao_local_json (campos editados no núcleo que o
+                           pipeline não regrava), nucleo_pedidos.nasceu_sem_servico (1 = nasceu
+                           pelo caminho sem serviço e nunca teve serviço; sai ao ganhar serviço),
+                           nucleo_materializacao (trava por código),
+                           pedidos_area_notificada.codigo (dedupe da área não atendida por código).
 
  Espelhamento e conferência
  sincronizar_vuupt.py      Rotas/paradas da Vuupt -> núcleo (30 min).
@@ -1366,7 +1485,8 @@ documentacao_rota.py      Prepara o romaneio em segundo plano ao criar rota.
                            Liga em api_motorista.rota_sem_aceite (ativo, todos, grupo_id, link,
                            teto_mensagens, forcar_destino_whatsapp); desligada por padrão.
                            --situacao / --modo-teste.
- comparar_pool.py          Sombra: pool Vuupt x núcleo.
+ comparar_pool.py          Sombra: pool Vuupt x núcleo (--fonte nucleo|freshhub|stokki; coluna fonte
+                           em nucleo_reconciliacoes_pool; stokki: pedido sem servico = informativo).
  comparar_vuupt.py         Rotas Vuupt x núcleo.
  exportar_historico_vuupt.py  Exporta histórico da Vuupt para o GCS.
  migrar_espelho_15_09.py   Migração única.
@@ -2358,6 +2478,9 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
                              nome_anterior, renomeado_em). Fora da bd_motoristas de propósito (não mexe no
                              espelho BD_MOTORISTAS.xlsx, que o freshhub lê).
    rascunhos_rota, rascunhos_parada  painel_agentes/rascunhos_rota.py  (coluna turno: NULL = manha, TARDE)
+   rascunho_envio_trava      painel_agentes/rascunhos_rota.py (27/11, pool-stokki): 1 linha por rascunho em
+                             envio (rascunho_id PK, iniciado_em, processo); solta no fim; renovada pelo envio
+                             vivo (heartbeat); velha após 15 min sem renovação.
    painel_execucoes          painel_agentes/executor.py
    wms_*                     painel_agentes/wms*.py
    wms_caixas, wms_caixa_eventos, wms_contadores   painel_agentes/wms_caixas.py
@@ -2476,6 +2599,46 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
 ==============================================================================
  17. ARMADILHAS CONHECIDAS
 ==============================================================================
+
+ - Pool direto da Stokki (planejamento.fonte_pool: stokki, ramo pool-stokki, DESLIGADO):
+     * Pedido sem servico tem id NEGATIVO (-id_pool). Rascunho pode ter parada com id negativo; esse id
+       NUNCA vai pra Vuupt: enviar/incrementar/adicionar parada materializam antes (materializar.py).
+     * Pedido agrupado noutro serviço da Vuupt é RECUSADO pela materialização (não cria serviço duplicado).
+     * Rascunho OFERTADA mantém a parada fechada até o envio (cancelar pedido com id negativo não a tira antes).
+     * O envio cria o serviço pedido a pedido: ~5-7 chamadas à Vuupt por pedido; dezenas de pedidos num
+       clique de "Confirmar e enviar" podem estourar o timeout síncrono (sem barra de progresso). MEDIR no 1º
+       dia de produção supervisionado; se preciso, limite por clique.
+     * Homologação não prova a criação do serviço: lá a Vuupt é só GET e a Stokki nunca, e ninguém roda o
+       pipeline (nenhum pedido nasce sem serviço). `pipeline.py --modo-teste` também NÃO exercita o caminho
+       novo (o `simulado` vem antes de gravar no núcleo). A 1ª materialização real é em produção (roteiro,
+       seção "Primeiro dia supervisionado"). A chave é global: não dá pra ligar só pra alguns pedidos.
+     * Linha ABERTA sem serviço que não nasceu sem serviço (renomeado/apagado na Vuupt, pulado antigo) fica
+       fora do pool e o pipeline pede revisão dela toda rodada: trabalho manual (criar/vincular na Vuupt).
+     * Falha técnica da Vuupt no envio (429, 5xx, timeout, 401/403) deixa o rascunho em ERRO_ENVIO com essas
+       paradas dentro (erro permanente 400/404/409/410/422 tira só a parada recusada e a rota sai);
+       os pedidos que materializaram antes já têm serviço not_assigned na Vuupt (reenvio segue dali).
+     * Voltar a chave: a 1ª rodada do pipeline trata o pedido sem serviço como NOVO (data automática nova e
+       aviso de dia fixo reenviado ao embarcador). Checklist pré-volta no roteiro, seção 8.
+     * Área não atendida: dedupe por pedidos_area_notificada.codigo vale TAMBÉM com a chave desligada
+       (serviço recriado com o mesmo código não reavisa o cliente).
+     * DEPLOY (colunas novas id_pool/edicao_local_json/nasceu_sem_servico em nucleo_pedidos, tabela quente):
+         1. depois de `git pull --no-rebase` + chown, ANTES de reiniciar qualquer coisa, migrar 1x como www-data:
+            sudo -u www-data venv/bin/python -c "from nucleo import banco; banco.conectar().close()"
+            (o ALTER tolera a corrida "duplicate column name" desde a revisão final, mas migrar antes evita
+            processo antigo gravando no meio);
+         2. reiniciar painel-agentes, portal-cliente, motorista-api (nucleo/operacao.py chama
+            pedidos.upsert_pedido: código velho grava linha com id_pool NULL, que o pool pula com WARNING
+            pool.sem_id_pool) e portal-cliente-entradas (--loop; importa o núcleo sob demanda pelo
+            enviar_stokki), TODOS JUNTOS logo depois da migração. atendimento-central não importa o núcleo;
+            a cópia do repo de confirmacao_motoristas também não (a de /opt/confirmacao-motoristas conferir lá);
+         3. os timers (pipeline, sync, comparar_pool...) pegam o código novo sozinhos;
+         4. pós-deploy: SELECT COUNT(*) FROM nucleo_pedidos WHERE id_pool IS NULL tem que dar 0. Banco travado
+            no backfill (processo velho gravando) não derruba o conectar(): 1 WARNING por processo e segue;
+            sem o contador (1ª migração adiada) o upsert_pedido grava sem id_pool e a próxima conexão completa.
+     * Pedido sem serviço com campo editado no Planejamento (edicao_local_json): a mudança legítima da Stokki
+       nesse campo é ignorada até o serviço nascer (hoje viraria PUT na Vuupt).
+     * Fila freshhub (pipeline --fila-freshhub) materializa na importação, exceção ao "só no envio"
+       (decisão pendente do Hugo).
 
  - Login concorrente na Stokki derruba a outra sessão (401). Use
    stokki/sessao_uso.py. Não chute URL da Stokki: gera login em cascata.

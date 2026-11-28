@@ -569,6 +569,17 @@ class VuuptClient:
             customer = criado.get("customer", criado)
             return customer.get("id")
 
+    def salvar_fingerprint_importacao(self, payload: dict, customer_id: int | None = None,
+                                      sender_id: int | None = None) -> None:
+        """Regrava o fingerprint da importacao (o que a proxima rodada do pipeline compara) com
+        `payload`. Usado pela materializacao (nucleo/materializar.py): a Vuupt recebe o pedido com a
+        edicao do Planejamento, mas o fingerprint fica com o payload da Stokki, como quando o
+        Planejamento edita a Vuupt direto. Local (sem HTTP)."""
+        from fingerprint_importacao import salvar_fingerprint
+        code = payload.get("code", "")
+        if code:
+            salvar_fingerprint(code, payload, customer_id=customer_id, sender_id=sender_id)
+
     def criar_ou_atualizar_servico(self, payload: dict) -> tuple[dict | None, str]:
         """
         Verifica se já existe um serviço com o mesmo 'code':

@@ -55,6 +55,7 @@ from vuupt_client import VuuptClient
 from rotas_client import listar_rotas
 from regras.preferencias_motoristas import CatalogoMotoristas
 from motivos_falha import texto_do_motivo, pergunta_do_motivo
+from nucleo import pool as nucleo_pool
 from nucleo.normalizacao import janela_utc_do_dia, vuupt_para_local
 
 logger = logging.getLogger(__name__)
@@ -407,16 +408,49 @@ def linhas_das_rotas(rotas: list[dict], sender_id, motoristas: dict, nfs_cache: 
     return linhas
 
 
-def _coletar_sem_rota(vuupt: VuuptClient, sender_id, data_alvo: date, nfs_cache: dict) -> tuple[list[dict], list[dict]]:
+def _sem_servico_do_nucleo(remetentes: tuple[int, ...], config: dict | None) -> list[dict]:
+    """Pool direto da Stokki (planejamento.fonte_pool = stokki): o pedido que ainda nao tem
+    servico na Vuupt so existe no nucleo, com id sintetico negativo, no MESMO formato do
+    servico. Sem a chave devolve [] sem ler nada (igual a antes)."""
+    if nucleo_pool.fonte_pool(config) != nucleo_pool.FONTE_STOKKI:
+        return []
+    return [s for s in nucleo_pool.listar_pool(incluir_sem_servico=True)
+            if s.get("_sem_servico_vuupt") and s.get("sender_id") in remetentes]
+
+
+def servico_sem_servico(service_id) -> dict | None:
+    """Pedido sem servico na Vuupt pelo id sintetico (-id_pool), no formato do servico; None se o
+    id nao e sintetico, o pedido nao existe, nao esta ABERTO ou ja ganhou servico (a tela
+    recarregada traz o id real)."""
+    if not nucleo_pool.eh_sem_servico(service_id):
+        return None
+    from nucleo import banco as nucleo_banco, pedidos as nucleo_pedidos
+    conn = nucleo_banco.conectar()
+    try:
+        codigo = nucleo_pedidos.codigo_por_id_sintetico(conn, service_id)
+        linha = conn.execute("SELECT * FROM nucleo_pedidos WHERE codigo = ?", (codigo,)).fetchone() if codigo else None
+        # linha orfa (servico agrupado/renomeado na Vuupt) nao e pedido sem servico: o portal nao a serve
+        legitimo = linha is not None and nucleo_pedidos.eh_sem_servico_legitimo(conn, linha)
+    finally:
+        conn.close()
+    if not legitimo or linha["status"] != nucleo_banco.PEDIDO_ABERTO:
+        return None
+    return nucleo_pool.pedido_para_servico(linha)
+
+
+def _coletar_sem_rota(vuupt: VuuptClient, sender_id, data_alvo: date, nfs_cache: dict,
+                      config: dict | None = None) -> tuple[list[dict], list[dict]]:
     """(linhas do dia sem rota, agendados futuros). Filtra por sender_id na
     API (uma consulta por empresa do grupo) e reconfere localmente (a API às
-    vezes ignora filtro)."""
+    vezes ignora filtro). Com a fonte stokki entram tambem os pedidos do
+    embarcador que ainda nao tem servico na Vuupt (so no nucleo)."""
     servicos = []
     for remetente in _remetentes(sender_id):
         filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"},
                   {"field": "sender_id", "operator": "eq", "value": remetente}]
         servicos += [s for s in vuupt.listar_servicos(filtro, per_page=100, include=["customer"])
                      if s.get("sender_id") == remetente]
+    servicos += _sem_servico_do_nucleo(_remetentes(sender_id), config)
     nfs_cache.update(nf_por_codigo({c for s in servicos for c in codigos_base_lista(s.get("code", ""))}))
 
     do_dia, futuros = [], []
@@ -748,7 +782,7 @@ def _montar_dia(sender_id: tuple[int, ...], data_alvo: date, config: dict) -> di
     if data_alvo >= hoje:
         # pedido sem rota é "do dia" só olhando pra frente -- num dia passado
         # a lista é o que de fato rodou.
-        sem_rota, futuros = _coletar_sem_rota(vuupt, sender_id, data_alvo, nfs)
+        sem_rota, futuros = _coletar_sem_rota(vuupt, sender_id, data_alvo, nfs, config)
     pedidos, futuros = _unir_com_futuros(_carimbar_dia(linhas + sem_rota, data_alvo), futuros, data_alvo)
 
     pedidos.sort(key=lambda p: (ORDEM_SITUACAO.get(p["situacao"], 9), p.get("rota") or "", p.get("ordem") or 0, p["codigo"]))
@@ -809,7 +843,7 @@ def _montar_janela(sender_id: tuple[int, ...], dias: int, config: dict, hoje: da
     linhas = linhas_das_rotas(rotas, sender_id, motoristas, nfs)
     # O que ainda não tem rota e o que está agendado pra frente são do
     # AGORA, não da janela -- mesma coleta da tela de um dia só.
-    sem_rota, futuros = _coletar_sem_rota(vuupt, sender_id, hoje, nfs)
+    sem_rota, futuros = _coletar_sem_rota(vuupt, sender_id, hoje, nfs, config)
     pedidos, futuros = _unir_com_futuros(_carimbar_dia(linhas + sem_rota, hoje), futuros, hoje)
 
     # Mais recente primeiro; dentro do dia, a mesma ordem da tela do dia.
@@ -871,6 +905,18 @@ def buscar_servico(token: str, service_id: int, incluir: str = "checklistAnswers
     except Exception as e:
         logger.warning(f"[portal] serviço {service_id} indisponível: {e}")
         return None
+
+
+def buscar_servico_ou_nucleo(token: str, service_id: int, incluir: str = "checklistAnswers",
+                             config: dict | None = None) -> dict | None:
+    """buscar_servico, mas id negativo (pedido ainda sem servico na Vuupt, pool direto da Stokki)
+    vem do nucleo: a Vuupt nunca e consultada com id sintetico. Sem a chave
+    (planejamento.fonte_pool = stokki em `config`) id negativo nao existe: None."""
+    if nucleo_pool.eh_sem_servico(service_id):
+        if nucleo_pool.fonte_pool(config) != nucleo_pool.FONTE_STOKKI:
+            return None
+        return servico_sem_servico(service_id)
+    return buscar_servico(token, service_id, incluir)
 
 
 def checklist_id_do_servico(servico: dict) -> int | None:

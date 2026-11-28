@@ -856,7 +856,7 @@ def _badges_insucessos(insucessos: list[dict]) -> None:
         i["badges"] = badges
 
 
-def _coletar_backlog(vuupt: VuuptClient, data_alvo: date) -> dict:
+def _coletar_backlog(vuupt: VuuptClient, data_alvo: date, config: dict | None = None) -> dict:
     """Classifica os not_assigned da conta: 'atrasados' (agendamento
     <= data_alvo e ainda sem rota -- deviam estar na rua, é o número
     acionável) vs pool normal (sem agendamento, aguardando a próxima
@@ -868,7 +868,11 @@ def _coletar_backlog(vuupt: VuuptClient, data_alvo: date) -> dict:
     criar_rotas_diarias das 18h continua 'not_assigned' na VUUPT até o
     rascunho ser enviado, então sem esse desconto ele aparecia como
     "sem rota" na Fila de ação mesmo já tendo rota, deixando o alerta
-    quase sempre superestimado entre a criação do rascunho e o envio)."""
+    quase sempre superestimado entre a criação do rascunho e o envio).
+
+    Fonte stokki (planejamento.fonte_pool): o pool vem do núcleo, com o
+    pedido ainda sem serviço na Vuupt (id sintético, o mesmo das paradas
+    do rascunho) -- a Vuupt não é lida."""
     try:
         rascunhos_ativos = rascunhos_rota.listar_rascunhos_do_dia(data_alvo)
         ids_em_rascunho = {p["service_id"] for r in rascunhos_ativos for p in r["paradas"]}
@@ -876,8 +880,12 @@ def _coletar_backlog(vuupt: VuuptClient, data_alvo: date) -> dict:
         logger.warning(f"[torre] Falha ao ler rascunhos de {data_alvo} pro desconto do backlog: {e}")
         ids_em_rascunho = set()
 
-    filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"}]
-    servicos = vuupt.listar_servicos(filtro, per_page=100)
+    from nucleo import pool as nucleo_pool
+    if nucleo_pool.fonte_pool(config) == nucleo_pool.FONTE_STOKKI:
+        servicos = nucleo_pool.listar_pool(incluir_sem_servico=True)
+    else:
+        filtro = [{"field": "status", "operator": "eq", "value": "not_assigned"}]
+        servicos = vuupt.listar_servicos(filtro, per_page=100)
 
     atrasados = []
     pool = futuros = 0
@@ -909,7 +917,7 @@ def contar_sem_rota(data_alvo: date | None = None) -> dict:
     config = _carregar_config()
     token = config.get("vuupt_api", {}).get("token", "")
     vuupt = VuuptClient(token)
-    backlog = _coletar_backlog(vuupt, data_alvo)
+    backlog = _coletar_backlog(vuupt, data_alvo, config)
     return {
         "qtd": len(backlog["atrasados"]),
         "exemplos": [p["codigo"] for p in backlog["atrasados"][:5]],
@@ -2134,7 +2142,7 @@ def buscar_dados_torre(data_alvo: date | None = None) -> dict:
 
     rotas, agregado, rotas_brutas_hoje = _coletar_rotas_abertas(
         token, data_alvo, nomes_motoristas, _buscar_encerradas())
-    backlog = _coletar_backlog(vuupt, data_alvo)
+    backlog = _coletar_backlog(vuupt, data_alvo, config)
     pedidos = _montar_pedidos_dia(agregado, backlog)
     _badges_insucessos(pedidos["insucessos"])
     etapas = montar_etapas_pipeline()

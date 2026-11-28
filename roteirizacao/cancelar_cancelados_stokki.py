@@ -83,8 +83,10 @@ def base_do_codigo(codigo) -> str | None:
     return m.group(1) if m else None
 
 
-def candidatos(conn: sqlite3.Connection) -> list[dict]:
-    """Servicos vivos no nucleo cujo pedido esta Cancelado no galpao."""
+def candidatos(conn: sqlite3.Connection, incluir_sem_servico: bool = False) -> list[dict]:
+    """Servicos vivos no nucleo cujo pedido esta Cancelado no galpao. Com `incluir_sem_servico`
+    (planejamento.fonte_pool = stokki) entra tambem o pedido ABERTO sem servico na Vuupt, com o id
+    sintetico do pool (-id_pool) e "sem_servico": True."""
     cancelados = {}
     for r in conn.execute("SELECT codigo, embarcador FROM galpao_pedidos WHERE situacao = 'Cancelado'"):
         b = base_do_codigo(r[0])
@@ -100,6 +102,20 @@ def candidatos(conn: sqlite3.Connection) -> list[dict]:
         b = base_do_codigo(r[0])
         if b in cancelados:
             saida.append({"codigo": r[0], "service_id": int(r[1]), "embarcador": cancelados[b]})
+    if incluir_sem_servico:
+        from nucleo import pedidos as nucleo_pedidos
+        agrupados = nucleo_pedidos.servicos_que_agrupam(conn)
+        for r in conn.execute("""
+                SELECT codigo, id_pool FROM nucleo_pedidos
+                WHERE status = 'ABERTO' AND excluido_em IS NULL AND vuupt_service_id IS NULL
+                  AND id_pool IS NOT NULL AND codigo GLOB 'PS-*'""").fetchall():
+            # so pedido sem servico legitimo fecha local; a linha orfa (agrupada/renomeada) segue na Vuupt
+            if not nucleo_pedidos.eh_sem_servico_legitimo(conn, r[0], agrupados):
+                continue
+            b = base_do_codigo(r[0])
+            if b in cancelados:
+                saida.append({"codigo": r[0], "service_id": -int(r[1]), "embarcador": cancelados[b],
+                              "sem_servico": True})
     return saida
 
 
@@ -120,24 +136,44 @@ def _registrar(conn, c: dict, acao: str, status: str, detalhe: str, agora_txt: s
     conn.commit()
 
 
+def _cancelar_sem_servico(conn, c: dict, rascunho_id, status_rascunho, res: dict, item: dict,
+                          agora_txt: str) -> None:
+    """Pedido sem servico na Vuupt: CANCELADO no nucleo e fora do rascunho nao enviado. Nunca chama
+    a Vuupt (o id e sintetico)."""
+    from nucleo import banco as nucleo_banco
+    from nucleo.pedidos import cancelar_sem_servico
+    mudou = cancelar_sem_servico(c["codigo"], "cancelado na Stokki", nucleo_banco.ORIGEM_PIPELINE, conn=conn)
+    if rascunho_id and status_rascunho != cs.rascunhos_rota.STATUS_ENVIADO:
+        cs.rascunhos_rota.remover_parada(rascunho_id, c["service_id"])
+    item["detalhe"] = ("cancelado no nucleo (sem servico na Vuupt)" if mudou
+                       else "ja estava fechado no nucleo (sem servico na Vuupt)")
+    logger.info(f"{c['codigo']}: {item['detalhe']} (cancelado na Stokki)")
+    _registrar(conn, c, CANCELADO, "sem_servico", item["detalhe"], agora_txt)
+    res["cancelados"].append(item)
+
+
 def processar(conn: sqlite3.Connection, vuupt, token: str, modo_teste: bool = False,
-              agora: datetime | None = None) -> dict:
+              agora: datetime | None = None, incluir_sem_servico: bool = False) -> dict:
     """Devolve {"cancelados", "em_rota", "falhas"} so com o que e NOVO nesta
-    rodada (em_rota/falha ja avisados nao voltam), mais "vistos"."""
+    rodada (em_rota/falha ja avisados nao voltam), mais "vistos".
+    `incluir_sem_servico` (fonte stokki): pedido sem servico na Vuupt fecha LOCAL no nucleo."""
     agora_txt = (agora or datetime.now()).strftime(FMT)
     res = {"cancelados": [], "em_rota": [], "falhas": [], "vistos": 0}
-    for c in candidatos(conn):
+    for c in candidatos(conn, incluir_sem_servico):
         res["vistos"] += 1
         sid = c["service_id"]
-        atual = vuupt.buscar_servico_por_id(sid)
-        if not atual:
-            logger.warning(f"{c['codigo']}: servico {sid} nao respondeu na Vuupt; tenta na proxima rodada")
-            continue
-        status = atual.get("status") or ""
-        if status in ("done", "canceled"):
-            continue  # nucleo atrasado: nada a fazer
+        if c.get("sem_servico"):
+            status = "sem_servico"   # nada a ler na Vuupt
+        else:
+            atual = vuupt.buscar_servico_por_id(sid)
+            if not atual:
+                logger.warning(f"{c['codigo']}: servico {sid} nao respondeu na Vuupt; tenta na proxima rodada")
+                continue
+            status = atual.get("status") or ""
+            if status in ("done", "canceled"):
+                continue  # nucleo atrasado: nada a fazer
         rascunho_id, status_rascunho = cs.rascunho_do_servico(sid)
-        no_pool = (status == cs.VuuptClient.STATUS_ATUALIZAVEL
+        no_pool = (status in (cs.VuuptClient.STATUS_ATUALIZAVEL, "sem_servico")
                    and status_rascunho not in _RASCUNHO_COM_MOTORISTA)
         item = {**c, "status": status, "rascunho": rascunho_id}
 
@@ -155,6 +191,9 @@ def processar(conn: sqlite3.Connection, vuupt, token: str, modo_teste: bool = Fa
         if modo_teste:
             logger.info(f"[MODO TESTE] {c['codigo']}: cancelaria o servico {sid} (no pool)")
             res["cancelados"].append(item)
+            continue
+        if c.get("sem_servico"):
+            _cancelar_sem_servico(conn, c, rascunho_id, status_rascunho, res, item, agora_txt)
             continue
         r = cs.cancelar_servico_completo(token, sid, vuupt=vuupt)
         if r.get("ok"):
@@ -241,7 +280,9 @@ def main(argv=None) -> int:
     try:
         if not args.modo_teste:  # modo teste nao escreve nada no banco
             garantir_tabela(conn)
-        res = processar(conn, cs.VuuptClient(token), token, modo_teste=args.modo_teste)
+        from nucleo import pool
+        res = processar(conn, cs.VuuptClient(token), token, modo_teste=args.modo_teste,
+                        incluir_sem_servico=pool.fonte_pool(config) == pool.FONTE_STOKKI)
     finally:
         conn.close()
     logger.info(f"{'[MODO TESTE] ' if args.modo_teste else ''}vistos={res['vistos']} "

@@ -178,5 +178,105 @@ class RevisaoFilaTest(unittest.TestCase):
         self.assertIn("r1", logs.output[0])
 
 
+class FilaSemServicoTest(unittest.TestCase):
+    """Pool direto da Stokki (Task 5): com a chave ligada o processar so grava no nucleo
+    (gravado_nucleo, sem id); a fila exige o id, entao materializa o servico na hora."""
+
+    def test_fila_freshhub_materializa(self):
+        cliente = mock.Mock()
+        cliente.pendentes.return_value = [_item()]
+        processar = mock.Mock(return_value=_res(acao="gravado_nucleo", sid=None, servico=None))
+        materializar = mock.Mock(return_value=(901, ""))
+        buscar = mock.Mock(return_value={**SERVICO, "id": 901})
+        saida = pipeline.atender_fila_freshhub(cliente, processar, modo_teste=False, buscar_servico=buscar,
+                                               materializar=materializar)
+        materializar.assert_called_once_with("PS-41679")
+        args, kwargs = cliente.resultado.call_args
+        self.assertEqual(args, ("r1", True))
+        self.assertEqual(kwargs["resultado"]["vuupt_service_id"], 901)
+        self.assertEqual(kwargs["resultado"]["servico"]["title"], SERVICO["title"])
+        self.assertEqual(saida[0]["vuupt_service_id"], 901)
+
+    def test_falha_na_materializacao_devolve_erro_com_motivo(self):
+        cliente = mock.Mock()
+        cliente.pendentes.return_value = [_item()]
+        processar = mock.Mock(return_value=_res(acao="gravado_nucleo", sid=None, servico=None))
+        materializar = mock.Mock(return_value=(None, "pedido PS-41679 esta CANCELADO no nucleo"))
+        pipeline.atender_fila_freshhub(cliente, processar, modo_teste=False, buscar_servico=mock.Mock(),
+                                       materializar=materializar)
+        args, kwargs = cliente.resultado.call_args
+        self.assertEqual(args, ("r1", False))
+        self.assertIn("CANCELADO", kwargs["erro"])
+
+    def test_falha_tecnica_na_materializacao_nao_devolve_erro_e_volta_na_proxima(self):
+        """Revisao Fable FIX 1: 429/timeout nao e recusa do pedido; o item nao e devolvido com erro (fica
+        'enviado' e volta a pendente na API nova em 1 h)."""
+        cliente = mock.Mock()
+        cliente.pendentes.return_value = [_item()]
+        processar = mock.Mock(return_value=_res(acao="gravado_nucleo", sid=None, servico=None))
+        materializar = mock.Mock(side_effect=pipeline.FalhaTransitoriaMaterializacao("429 Too Many Requests"))
+        with self.assertLogs(pipeline.logger, "WARNING") as logs:
+            saida = pipeline.atender_fila_freshhub(cliente, processar, modo_teste=False, buscar_servico=mock.Mock(),
+                                                   materializar=materializar)
+        cliente.resultado.assert_not_called()
+        self.assertFalse(saida[0]["ok"])
+        self.assertTrue(any("429" in m and "PS-41679" in m for m in logs.output))
+
+    def test_materializar_para_fila_separa_transitorio_de_recusa(self):
+        from nucleo import materializar
+        transitorio = materializar.ResultadoMaterializacao(
+            falhas={"PS-1": "falha tecnica ao criar servico na Vuupt (429): tente de novo"}, transitorios={"PS-1": "429"})
+        with mock.patch.object(materializar, "materializar_servicos", return_value=transitorio):
+            with self.assertRaises(pipeline.FalhaTransitoriaMaterializacao):
+                pipeline._materializar_para_fila("PS-1", mock.Mock(), {})
+        recusa = materializar.ResultadoMaterializacao(falhas={"PS-1": "pedido PS-1 esta CANCELADO no nucleo"})
+        with mock.patch.object(materializar, "materializar_servicos", return_value=recusa):
+            self.assertEqual(pipeline._materializar_para_fila("PS-1", mock.Mock(), {}),
+                             (None, "pedido PS-1 esta CANCELADO no nucleo"))
+        ok = materializar.ResultadoMaterializacao(ok={"PS-1": 901})
+        with mock.patch.object(materializar, "materializar_servicos", return_value=ok):
+            self.assertEqual(pipeline._materializar_para_fila("PS-1", mock.Mock(), {}), (901, ""))
+
+    def test_422_da_vuupt_devolve_o_erro_a_fila(self):
+        """Fix round 1 da onda 2: erro PERMANENTE (422) nao pode virar retentativa eterna: devolve o erro."""
+        import tempfile
+        from pathlib import Path
+        from nucleo import banco, pedidos
+        from nucleo.test_materializar import _VuuptQueRecusa, _payload
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        with mock.patch.object(banco, "DB_PATH", Path(tmp.name) / "t.db"):
+            pedidos.registrar_importacao(_payload("PS-41679"), None, "nucleo_sem_servico")
+            vuupt = _VuuptQueRecusa({"PS-41679": 422})
+            sid, motivo = pipeline._materializar_para_fila("PS-41679", vuupt, {})
+            self.assertIsNone(sid)
+            self.assertIn("a Vuupt recusou o pedido (Status 422)", motivo)
+            cliente = mock.Mock()
+            cliente.pendentes.return_value = [_item()]
+            processar = mock.Mock(return_value=_res(acao="gravado_nucleo", sid=None, servico=None))
+            pipeline.atender_fila_freshhub(cliente, processar, modo_teste=False, buscar_servico=mock.Mock(),
+                                           materializar=lambda c: pipeline._materializar_para_fila(c, vuupt, {}))
+        args, kwargs = cliente.resultado.call_args
+        self.assertEqual(args, ("r1", False))
+        self.assertIn("Status 422", kwargs["erro"])
+
+    def test_caminho_antigo_nao_materializa(self):
+        cliente = mock.Mock()
+        cliente.pendentes.return_value = [_item()]
+        materializar = mock.Mock()
+        pipeline.atender_fila_freshhub(cliente, mock.Mock(return_value=_res()), modo_teste=False,
+                                       materializar=materializar)
+        materializar.assert_not_called()
+
+    def test_modo_teste_nao_materializa(self):
+        cliente = mock.Mock()
+        cliente.pendentes.return_value = [_item()]
+        materializar = mock.Mock()
+        pipeline.atender_fila_freshhub(cliente, mock.Mock(return_value=_res(acao="simulado", sid=None, servico=None)),
+                                       modo_teste=True, materializar=materializar)
+        materializar.assert_not_called()
+        cliente.resultado.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

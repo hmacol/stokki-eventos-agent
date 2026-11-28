@@ -953,8 +953,9 @@ def processar_cancelamentos_do_ciclo(conn, config: dict, simular: bool = False) 
             return sessao_cache["s"]
 
         def cancelar_vuupt(service_id):
+            # id sintetico (pedido sem servico na Vuupt, fonte stokki): cancela no nucleo, sem Vuupt
             from roteirizacao.cancelar_servico import cancelar_servico_completo
-            return cancelar_servico_completo(token, service_id)
+            return cancelar_servico_completo(token, service_id, motivo_sem_servico="cancelado pelo cliente no portal")
 
         def cancelar_stokki(id_stokki, motivo):
             from stokki.cancelar import cancelar_pedido
@@ -1019,9 +1020,19 @@ def processar_retomadas_do_ciclo(conn, config: dict, simular: bool = False) -> d
     def proxima_data(servico):
         # dia fixo da região a partir de amanhã; sem regra = None (não mexe na Vuupt)
         from datetime import date
-        from vuupt_client import VuuptClient
+        from nucleo import pool
         from roteirizacao.regioes_dia_fixo import proxima_data_valida, regra_dia_fixo_do_servico
-        s = VuuptClient(token).buscar_servico_por_id(servico["vuupt_service_id"])
+        if pool.eh_sem_servico(servico["vuupt_service_id"]):
+            # pedido sem servico na Vuupt (fonte stokki): o endereco vem do nucleo, nunca da Vuupt
+            from nucleo import pedidos as nucleo_pedidos
+            linha = nucleo_pedidos.buscar_pedido(servico["codigo"])
+            if not linha or linha["vuupt_service_id"] is not None:
+                raise RuntimeError(f"pedido {servico['codigo']} sem servico nao encontrado no nucleo "
+                                   f"(ou ganhou servico agora): tente de novo")
+            s = pool.pedido_para_servico(linha)
+        else:
+            from vuupt_client import VuuptClient
+            s = VuuptClient(token).buscar_servico_por_id(servico["vuupt_service_id"])
         if not s:  # não achou/falhou: NÃO é "sem dia fixo" -- a retomada falha e volta pra espera
             raise RuntimeError(f"Vuupt não devolveu o serviço {servico['vuupt_service_id']}")
         regra = regra_dia_fixo_do_servico(s)

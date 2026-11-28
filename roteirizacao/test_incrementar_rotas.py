@@ -252,6 +252,77 @@ class TestMainComRascunho(unittest.TestCase):
         self.assertTrue(all(s.get("_data_automatica") for s in vistos))
 
 
+class TestIncrementoSemServico(unittest.TestCase):
+    """Pool direto da Stokki (Task 5): pedido de id sintetico ganha o servico na Vuupt antes de
+    adicionar_atividades; quem falha na materializacao fica fora (nunca vai id negativo pra rota)."""
+    _rodar = TestMainComRascunho._rodar
+
+    def _rota(self):
+        return {"id": 50, "name": "Planejamento - 06/10/2026 - #1", "start_at": "2099-10-06T09:00:00Z",
+                "status": "not_started", "agent_id": None, "vehicle_id": None, "services": {"data": []}}
+
+    def _pool(self):
+        return [{"id": -7, "code": "#PS-7", "address": "Rua 7, São Paulo - SP", "dimension_3": 1, "sender_id": 1}]
+
+    def test_incremento_materializa_antes_de_adicionar(self):
+        vistos = []
+
+        def materializar(itens, vuupt, config):
+            vistos.extend(s["id"] for s in itens)
+            return inc.materializar.ResultadoMaterializacao(ok={"PS-7": 901})
+        with mock.patch.object(inc.materializar, "materializar_servicos", side_effect=materializar):
+            self._rodar([self._rota()], [], pool=self._pool())
+        self.assertEqual(vistos, [-7])
+        self.adicionar.assert_called_once()
+        self.assertEqual(self.adicionar.call_args.args[2], [901])
+
+    def test_incremento_pula_quem_nao_materializa(self):
+        res = inc.materializar.ResultadoMaterializacao(falhas={"PS-7": "pedido PS-7 esta CANCELADO no nucleo"})
+        with mock.patch.object(inc.materializar, "materializar_servicos", return_value=res):
+            self._rodar([self._rota()], [], pool=self._pool())
+        self.adicionar.assert_not_called()
+
+    def test_falha_tecnica_pula_so_nesta_rodada_com_log_proprio(self):
+        res = inc.materializar.ResultadoMaterializacao(
+            falhas={"PS-7": "falha tecnica ao criar servico na Vuupt (429): tente de novo"}, transitorios={"PS-7": "429"})
+        with mock.patch.object(inc.materializar, "materializar_servicos", return_value=res), \
+                self.assertLogs(inc.logger, "WARNING") as logs:
+            self.assertFalse(inc._garantir_servico({"id": -7, "code": "#PS-7"}, "vuupt", {}))
+        self.assertTrue(any("falha tecnica" in m and "proxima rodada" in m for m in logs.output))
+        self.assertFalse(any(" ERROR:" in m or m.startswith("ERROR") for m in logs.output))
+
+    def test_422_da_vuupt_registra_erro_no_incremento(self):
+        """Fix round 1 da onda 2: erro PERMANENTE da Vuupt e recusa (ERROR com o motivo), nao WARNING de rodada."""
+        import tempfile
+        from nucleo import banco, pedidos
+        from nucleo.test_materializar import _VuuptQueRecusa, _payload
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        with mock.patch.object(banco, "DB_PATH", Path(tmp.name) / "t.db"):
+            pedidos.registrar_importacao(_payload("PS-70"), None, "nucleo_sem_servico")
+            sid = pedidos.id_sintetico(pedidos.buscar_pedido("PS-70"))
+            with self.assertLogs(inc.logger, "ERROR") as logs:
+                ok = inc._garantir_servico({"id": sid, "code": "#PS-70"}, _VuuptQueRecusa({"PS-70": 422}), {})
+        self.assertFalse(ok)
+        self.assertTrue(any("PS-70" in m and "Status 422" in m for m in logs.output))
+
+    def test_ocupado_por_outro_envio_e_warning_nao_error(self):
+        """Onda 3 (nit): trava ocupada nao e recusa: WARNING de rodada."""
+        res = inc.materializar.ResultadoMaterializacao(
+            falhas={"PS-7": "outro envio esta criando o servico de PS-7"}, ocupados={"PS-7"})
+        with mock.patch.object(inc.materializar, "materializar_servicos", return_value=res), \
+                self.assertLogs(inc.logger, "WARNING") as logs:
+            self.assertFalse(inc._garantir_servico({"id": -7, "code": "#PS-7"}, "vuupt", {}))
+        self.assertTrue(any("outro envio" in m for m in logs.output))
+        self.assertFalse(any(m.startswith("ERROR") for m in logs.output))
+
+    def test_incremento_com_id_real_nao_materializa(self):
+        with mock.patch.object(inc.materializar, "materializar_servicos") as m:
+            self._rodar([self._rota()], [], pool=[_servico(1)])
+        m.assert_not_called()
+        self.assertEqual(self.adicionar.call_args.args[2], [1])
+
+
 class TestRetornandoNoIncremento(unittest.TestCase):
     """Editar rota enviada (10/11): pedido Retornando (no carro do motorista) nao e encaixado.
     Classe propria (reusa o _rodar) pra nao ser herdada pelas subclasses de TestMainComRascunho."""
