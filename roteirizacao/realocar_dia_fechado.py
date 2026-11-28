@@ -132,7 +132,17 @@ def reagendar(vuupt, servico: dict, data: date, ajustes: dict, modo_teste: bool 
         raise ValueError(f"janela invalida {data} {ini}-{fim}")
     if modo_teste:
         return
-    vuupt.atualizar_servico(servico["id"], {"scheduled_start": inicio, "scheduled_end": termino})
+    from nucleo import pool as nucleo_pool
+    if nucleo_pool.eh_sem_servico(servico["id"]):
+        # pool direto da Stokki: pedido sem servico na Vuupt (id sintetico) -- a data vai pras colunas do
+        # nucleo como edicao local (o pipeline nao regrava; a materializacao manda pra Vuupt). Nunca PUT com
+        # id negativo. Linha que nao e pedido sem servico legitimo levanta ValueError (fica no pool, operacao).
+        from nucleo import pedidos as nucleo_pedidos
+        from nucleo.normalizacao import para_local
+        nucleo_pedidos.editar_sem_servico(servico["id"], {"agendamento_inicio": para_local(inicio),
+                                                          "agendamento_fim": para_local(termino)})
+    else:
+        vuupt.atualizar_servico(servico["id"], {"scheduled_start": inicio, "scheduled_end": termino})
     registro_dia_fixo.registrar_origens([{"servico": servico, "data": data}], registro_dia_fixo.ORIGEM_AUTOMATICO,
                                         **({"db_path": db_path} if db_path else {}))
 

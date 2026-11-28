@@ -285,9 +285,26 @@ class EnderecoSemServicoTest(_Base):
         with mock.patch.object(planejamento_rotas, "definir_ajuste_manual") as definir, \
                 mock.patch.object(rascunhos_rota, "atualizar_nivel_horario_parada") as parada:
             r = planejamento_rotas.editar_nivel_horario_pedido(sid, 2, "08:00", "12:00", rid)
-        self.assertEqual(r, {"ok": True})
-        definir.assert_called_once_with("123", 2, "08:00", "12:00")
+        # contrato do master (dias da semana do cliente): realocacao None sem dias_semana
+        self.assertEqual(r, {"ok": True, "realocacao": None})
+        definir.assert_called_once_with("123", 2, "08:00", "12:00", None)
         parada.assert_called_once_with(rid, sid, 2, "08:00", "12:00")
+        self._sem_vuupt()
+
+    def test_nivel_horario_de_linha_orfa_recusa_sem_vuupt(self):
+        """Merge com o master: o desvio do id negativo foi pra dentro de _documento_do_pedido, com a guarda
+        unica (onda 4): linha que nao e pedido sem servico legitimo nao serve."""
+        conn = banco.conectar()
+        try:
+            pedidos.registrar_importacao(_payload("PS-5"), None, "pulado_sem_alteracao", conn=conn)
+            sid = pedidos.id_sintetico(pedidos.buscar_pedido("PS-5", conn=conn))
+        finally:
+            conn.close()
+        with mock.patch.object(planejamento_rotas, "definir_ajuste_manual") as definir:
+            r = planejamento_rotas.editar_nivel_horario_pedido(sid, 2, "08:00", "12:00")
+        self.assertFalse(r["ok"])
+        self.assertIn("operacao", r["erro"])
+        definir.assert_not_called()
         self._sem_vuupt()
 
 
