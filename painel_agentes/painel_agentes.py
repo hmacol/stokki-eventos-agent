@@ -6337,10 +6337,11 @@ def api_editar_nivel_horario():
     except (TypeError, ValueError) as e:
         return jsonify({"erro": f"dias_semana inválido: {e}"}), 400
 
-    resultado = editar_nivel_horario_pedido(service_id, nivel, horario_inicio, horario_fim, rascunho_id, dias_semana)
+    resultado = editar_nivel_horario_pedido(service_id, nivel, horario_inicio, horario_fim, rascunho_id, dias_semana,
+                                            usuario=_usuario_da_sessao())
     if not resultado["ok"]:
         return jsonify({"erro": resultado["erro"]}), 400
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "realocacao": resultado.get("realocacao")})
 
 
 @app.route("/api/planejamento/dias-atendimento", methods=["GET"])

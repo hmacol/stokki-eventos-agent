@@ -48,7 +48,7 @@ from regioes_dia_fixo import (DIAS_NOMES, data_valida_na_regiao, descricao_dias,
                               regiao_da_cidade, regra_dia_fixo_do_servico)
 from regras.complexidade_entrega import (
     carregar_niveis, carregar_horarios, carregar_ajustes_manuais,
-    definir_ajuste_manual, nivel_efetivo, horario_efetivo, dias_efetivos, aviso_dia_fechado, NIVEIS_VALIDOS,
+    definir_ajuste_manual, nivel_efetivo, horario_efetivo, dias_efetivos, NIVEIS_VALIDOS,
 )
 from regras.preferencias_motoristas import CatalogoMotoristas
 from regras.confirmacao_rotas import listar_do_dia as listar_confirmacoes_do_dia
@@ -1057,12 +1057,27 @@ def buscar_pool_e_agendados(data_alvo: date, config: dict | None = None) -> dict
         if aviso:
             fora_dia_fixo[s["id"]] = aviso
 
-    # Cliente que não recebe neste dia da semana (Hugo, 27/11): só rotula.
+    # Cliente que não recebe no dia do pedido (Hugo, 27/11): só rotula; quem
+    # realoca são as rodadas e o salvar do modal (roteirizacao/realocar_dia_fechado.py).
     cliente_fechado: dict[int, str] = {}
-    for s in servicos_brutos:
-        aviso = aviso_dia_fechado(s, data_alvo, ajustes_manuais)
-        if aviso:
-            cliente_fechado[s["id"]] = aviso
+    try:
+        import realocar_dia_fechado as rdf
+        import registro_dia_fixo
+        if any(aj.get("dias_semana") for aj in ajustes_manuais.values()):
+            conn_origem = registro_dia_fixo.conectar()
+            try:
+                for s in servicos_brutos:
+                    dia = rdf.dia_do_pedido(s, data_alvo)
+                    if not rdf.fechado_no_dia(s, dia, ajustes_manuais):
+                        continue
+                    aviso = rdf.texto_dia_fechado(s, dia, ajustes_manuais)
+                    if rdf.data_e_do_cliente(s, dia, conn_origem):
+                        aviso += " · data pedida pelo cliente, mantida"
+                    cliente_fechado[s["id"]] = aviso
+            finally:
+                conn_origem.close()
+    except Exception as e:
+        logger.warning(f"Falha ao marcar clientes que não recebem no dia (tela segue sem essa marcação): {e}")
 
     # Pool é sempre a FOTO AO VIVO do not_assigned na VUUPT -- não existe
     # "pool de um dia passado" (pedido do Hugo, 23/08: plano de dia
@@ -2444,7 +2459,7 @@ def dias_atendimento_pedido(service_id: int) -> dict:
 
 def editar_nivel_horario_pedido(service_id: int, nivel: int, horario_inicio: str,
                                  horario_fim: str, rascunho_id: int | None = None,
-                                 dias_semana: list[int] | None = None) -> dict:
+                                 dias_semana: list[int] | None = None, usuario: str | None = None) -> dict:
     """
     Corrige o nível de dificuldade e/ou horário de atendimento (padrão de
     recebimento) do DESTINATÁRIO de um pedido -- opção "Nível / horário
@@ -2488,7 +2503,139 @@ def editar_nivel_horario_pedido(service_id: int, nivel: int, horario_inicio: str
     if rascunho_id is not None:
         rascunhos_rota.atualizar_nivel_horario_parada(rascunho_id, service_id, nivel, horario_inicio, horario_fim)
 
-    return {"ok": True}
+    realocacao = None
+    if dias_semana is not None and len(set(dias_semana)) < 7:
+        try:
+            realocacao = realocar_pedidos_do_cliente(documento, usuario)
+        except Exception as e:  # noqa: BLE001 -- os dias já foram gravados; a rodada realoca depois
+            logger.exception(f"Realocação dos pedidos do cliente {documento} falhou")
+            realocacao = {"erro": f"Dias salvos, mas a realocação falhou ({e}). A próxima rodada tenta de novo."}
+    return {"ok": True, "realocacao": realocacao}
+
+
+def _service_ids_pendentes_do_cliente(documento: str) -> list[int]:
+    """Pedidos de entrega em aberto ou em rota do cliente, pelo espelho do núcleo
+    (destinatario_codigo vem formatado: compara só os dígitos)."""
+    from nucleo import banco as banco_nucleo
+    digitos = re.sub(r"\D", "", documento or "")
+    if not digitos:
+        return []
+    conn = banco_nucleo.conectar()
+    try:
+        linhas = conn.execute(
+            "SELECT DISTINCT vuupt_service_id FROM nucleo_pedidos "
+            "WHERE status IN ('ABERTO', 'EM_ROTA') AND excluido_em IS NULL AND vuupt_service_id IS NOT NULL "
+            "AND COALESCE(fluxo, 'ENTREGA') = 'ENTREGA' "
+            "AND REPLACE(REPLACE(REPLACE(REPLACE(destinatario_codigo, '.', ''), '/', ''), '-', ''), ' ', '') = ?",
+            (digitos,)).fetchall()
+    finally:
+        conn.close()
+    return [int(r[0]) for r in linhas]
+
+
+def _rascunhos_ativos_com(service_ids: list[int]) -> dict[int, dict]:
+    """{service_id: rascunho} das rotas ativas de hoje em diante (lote ativo do
+    dia + enviadas, igual à tela) que contêm esses pedidos."""
+    if not service_ids:
+        return {}
+    conn = rascunhos_rota._conectar()
+    try:
+        datas = [r[0] for r in conn.execute(
+            f"SELECT DISTINCT r.data_alvo FROM rascunhos_parada p JOIN rascunhos_rota r ON r.id = p.rascunho_id "
+            f"WHERE r.data_alvo >= ? AND r.status != ? AND p.service_id IN ({','.join('?' * len(service_ids))})",
+            (date.today().isoformat(), rascunhos_rota.STATUS_DESCARTADO, *service_ids)).fetchall()]
+    finally:
+        conn.close()
+    achados: dict[int, dict] = {}
+    for d in sorted(datas):
+        for r in rascunhos_rota.listar_rascunhos_do_dia(date.fromisoformat(d)):
+            if r["status"] not in (rascunhos_rota.STATUS_RASCUNHO, rascunhos_rota.STATUS_OFERTADA,
+                                   rascunhos_rota.STATUS_ENVIADO):
+                continue
+            for p in r["paradas"]:
+                if p["service_id"] in service_ids:
+                    achados.setdefault(p["service_id"], r)
+    return achados
+
+
+def realocar_pedidos_do_cliente(documento: str, usuario: str | None = None) -> dict:
+    """Salvar os dias no modal (Hugo, 27/11): cada pedido pendente do cliente que
+    cai num dia em que ele não recebe sai da rota (rascunho, ou enviada que o
+    motorista não começou) e é reagendado pra data mais próxima em que ele
+    recebe. Data informada pelo cliente vence; rota iniciada só fica com o selo.
+    Ninguém é avisado. Regra em roteirizacao/realocar_dia_fechado.py."""
+    import edicao_rota
+    import realocar_dia_fechado as rdf
+    import registro_dia_fixo
+
+    ajustes = carregar_ajustes_manuais()
+    resumo = {"realocados": [], "mantidos": [], "rota_iniciada": [], "sem_data": [], "falhas": []}
+    ids = _service_ids_pendentes_do_cliente(documento)
+    if not ids:
+        return resumo
+    em_rota = _rascunhos_ativos_com(ids)
+
+    config = _carregar_config()
+    token = config.get("vuupt_api", {}).get("token", "")
+    vuupt = VuuptClient(token)
+    hoje = date.today()
+    ok_ids: list[int] = []
+    conn_origem = registro_dia_fixo.conectar()
+    try:
+        for sid in ids:
+            try:
+                s = vuupt.buscar_servico_por_id(sid) or {}
+            except Exception as e:  # noqa: BLE001
+                resumo["falhas"].append({"codigo": str(sid), "erro": f"Vuupt: {e}"})
+                continue
+            if s.get("status") not in edicao_rota.STATUS_PODE_SAIR:
+                continue
+            s.setdefault("customer", {"code": documento})
+            codigo = s.get("code") or str(sid)
+            rascunho = em_rota.get(sid)
+            dia = date.fromisoformat(rascunho["data_alvo"]) if rascunho else rdf.data_agendada(s)
+            if dia is None or not rdf.fechado_no_dia(s, dia, ajustes):
+                continue  # sem data e fora de rota: a rodada cuida
+            if rdf.data_e_do_cliente(s, dia, conn_origem):
+                resumo["mantidos"].append(codigo)
+                continue
+            nova = rdf.nova_data(s, dia, ajustes, hoje)
+            if nova is None:
+                resumo["sem_data"].append(codigo)
+                continue
+            if rascunho and rascunho["status"] == rascunhos_rota.STATUS_ENVIADO:
+                try:
+                    rota = edicao_rota.ler_rota(token, rascunho["vuupt_route_id"])
+                except edicao_rota.ErroEdicao as e:
+                    resumo["falhas"].append({"codigo": codigo, "erro": str(e)})
+                    continue
+                if edicao_rota.rota_iniciada(rota):
+                    resumo["rota_iniciada"].append(codigo)
+                    continue
+                try:
+                    rascunhos_rota.remover_de_rota_enviada(
+                        rascunho["id"], sid, "Outros",
+                        f"Cliente não recebe {rdf.NOMES_DIAS[dia.weekday()].lower()} (realocado pra {nova:%d/%m})",
+                        token, usuario or "sistema")
+                except ValueError as e:
+                    resumo["falhas"].append({"codigo": codigo, "erro": str(e)})
+                    continue
+            elif rascunho:
+                rascunhos_rota.remover_parada(rascunho["id"], sid)
+            try:
+                rdf.reagendar(vuupt, s, nova, ajustes)
+            except Exception as e:  # noqa: BLE001
+                resumo["falhas"].append({"codigo": codigo, "erro": f"saiu da rota mas não reagendou: {e}"})
+                continue
+            ok_ids.append(sid)
+            resumo["realocados"].append({"codigo": codigo, "de": dia.isoformat(), "para": nova.isoformat(),
+                                         "rota": rascunho["nome"] if rascunho else None})
+    finally:
+        conn_origem.close()
+    if ok_ids:
+        _ressincronizar(vuupt, ok_ids)
+    logger.info(f"Realocação do cliente {documento} por {usuario}: {resumo}")
+    return resumo
 
 
 def editar_endereco_pedidos(itens: list[dict], endereco: str) -> dict:

@@ -431,35 +431,7 @@ def dias_efetivos(documento: str, ajustes_manuais: dict[str, dict]) -> list[int]
 
 
 NOMES_DIAS = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
-
-
-def _data_agendada_do_servico(servico: dict) -> datetime.date | None:
-    try:
-        return datetime.datetime.fromisoformat(servico.get("scheduled_start") or "").date()
-    except (ValueError, TypeError):
-        return None
-
-
-def aviso_dia_fechado(servico: dict, data: datetime.date, ajustes_manuais: dict[str, dict]) -> str | None:
-    """"Não recebe sábado (recebe: Seg, Ter, ...)" quando o cliente do serviço
-    não recebe no dia da semana de `data`; None caso contrário. Data de
-    agendamento do próprio pedido igual a `data` vence (alguém escolheu o dia)."""
-    documento = (servico.get("customer") or {}).get("code", "")
-    dias = dias_efetivos(documento, ajustes_manuais)
-    if data.weekday() in dias or _data_agendada_do_servico(servico) == data:
-        return None
-    recebe = ", ".join(NOMES_DIAS[d][:3] for d in dias)
-    return f"Não recebe {NOMES_DIAS[data.weekday()].lower()} (recebe: {recebe})"
-
-
-def separar_dia_fechado(servicos: list[dict], data: datetime.date,
-                        ajustes_manuais: dict[str, dict]) -> tuple[list[dict], list[dict]]:
-    """(abertos, fechados): tira da roteirização os pedidos cujo cliente não
-    recebe no dia da semana de `data`. Os fechados continuam no pool."""
-    abertos, fechados = [], []
-    for s in servicos:
-        (fechados if aviso_dia_fechado(s, data, ajustes_manuais) else abertos).append(s)
-    return abertos, fechados
+# Aviso, exclusão da rota e realocação do pedido em dia fechado: roteirizacao/realocar_dia_fechado.py
 
 
 def proximo_dia_atendido(data: datetime.date, dias: list[int], eh_dia_util) -> datetime.date:

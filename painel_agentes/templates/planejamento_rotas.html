@@ -7307,12 +7307,25 @@
     botao.disabled = true;
     botao.textContent = "Salvando...";
     try {
-      await postJSON("/api/planejamento/editar-nivel-horario", {
+      const resp = await postJSON("/api/planejamento/editar-nivel-horario", {
         service_id: pendente.serviceId, nivel, horario_inicio: horaInicio, horario_fim: horaFim,
         rascunho_id: pendente.rascunhoId,
         dias_semana: pendente.diasCarregados ? dias : null,
       });
       document.getElementById("modal-nivel-horario").classList.remove("aberto");
+      // pedidos do cliente realocados por cair em dia que ele não recebe (Hugo, 27/11)
+      const r = resp.realocacao;
+      if (r) {
+        const dm = iso => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
+        const linhas = [];
+        if (r.erro) linhas.push(r.erro);
+        (r.realocados || []).forEach(x => linhas.push(`• ${x.codigo}: ${dm(x.de)} → ${dm(x.para)}${x.rota ? ` (saiu de ${x.rota})` : ""}`));
+        if ((r.mantidos || []).length) linhas.push(`Mantidos (data pedida pelo cliente): ${r.mantidos.join(", ")}`);
+        if ((r.rota_iniciada || []).length) linhas.push(`Em rota já iniciada, não mexi: ${r.rota_iniciada.join(", ")}`);
+        if ((r.sem_data || []).length) linhas.push(`Sem data válida nos próximos dias: ${r.sem_data.join(", ")}`);
+        (r.falhas || []).forEach(x => linhas.push(`Falhou ${x.codigo}: ${x.erro}`));
+        if (linhas.length) alert(`Dias salvos. Pedidos do cliente:\n\n${linhas.join("\n")}`);
+      }
       // recarrega -- a correção vale pro cliente inteiro (mesmo CNPJ/CPF),
       // pode afetar outros cards visíveis do mesmo destinatário também
       location.reload();

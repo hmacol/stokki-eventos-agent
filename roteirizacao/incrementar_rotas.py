@@ -564,12 +564,13 @@ def main(modo_teste: bool = False):
         from pedidos_retornando import separar_retornando
         servicos, _retornando = separar_retornando(servicos)
 
-        # Dia da semana em que o cliente não recebe (Hugo, 27/11): não é encaixado.
+        # Dia da semana em que o cliente não recebe (Hugo, 27/11): realoca em vez de encaixar.
         try:
-            from regras.complexidade_entrega import carregar_ajustes_manuais as _aj, separar_dia_fechado
-            servicos, _fechados = separar_dia_fechado(servicos, data_alvo, _aj())
+            from regras.complexidade_entrega import carregar_ajustes_manuais as _aj
+            from realocar_dia_fechado import realocar_lote
+            servicos, _realocacao = realocar_lote(servicos, data_alvo, _aj(), vuupt, modo_teste=modo_teste)
         except Exception as e:
-            logger.error(f"Falha ao separar clientes que não recebem no dia (seguem no incremento): {e}")
+            logger.error(f"Falha ao realocar clientes que não recebem no dia (seguem no incremento): {e}")
 
         # Área não atendida (pedido do Hugo, 02/08) -- diferente do
         # agendamento pendente, esse aviso é ÚNICO (não é rate-limitado

@@ -2368,8 +2368,11 @@ alterar_entrega.py        Regra pura da alteração de entrega pelo cliente (que
    confirmacoes_rota, ofertas_rota, ofertas_avisos,
    disponibilidade_motoristas, ajustes_complexidade_cliente   regras/
       (ajustes_complexidade_cliente.dias_semana = dias que o cliente recebe, 0=seg..6=dom, NULL=todos:
-       aviso no card do /planejamento, fora de criar_rotas_diarias/incrementar_rotas, e data
-       automatica do pipeline vai pro proximo dia em que recebe -- regras/complexidade_entrega.py)
+       pedido em dia fechado e REALOCADO pra data mais proxima valida (cliente + dia fixo da regiao),
+       saindo de rascunho/enviada nao iniciada; data informada pelo cliente vence; sem aviso, origem
+       AUTOMATICO. Regra: roteirizacao/realocar_dia_fechado.py; usada por criar_rotas_diarias,
+       incrementar_rotas e pelo salvar do modal (planejamento_rotas.realocar_pedidos_do_cliente).
+       Data automatica nova do pipeline ja nasce no dia certo -- regras/complexidade_entrega.py)
    alteracoes_entrega_portal  regras/alteracoes_entrega.py (alterações de entrega do cliente no portal)
    pedidos_roteirizados, pedidos_area_notificada,
    pedidos_segurados, agendamentos_origem, avisos_fora_dia_fixo

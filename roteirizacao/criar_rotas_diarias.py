@@ -956,15 +956,14 @@ def main(modo_teste: bool = False, gerar_rascunho: bool = False):
         import pedidos_retornando
         servicos_brutos, _retornando = pedidos_retornando.separar_retornando(servicos_brutos)
 
-        # Dia da semana em que o cliente não recebe (Hugo, 27/11): fica no
-        # pool, fora da rota automática; o card avisa e dá pra rotear à mão.
+        # Dia da semana em que o cliente não recebe (Hugo, 27/11): realoca pra
+        # data mais próxima em que ele recebe (data do cliente vence e sai normal).
         try:
-            from regras.complexidade_entrega import separar_dia_fechado
-            servicos_brutos, _fechados = separar_dia_fechado(servicos_brutos, data_alvo, carregar_ajustes_manuais())
-            if _fechados:
-                logger.info(f"{len(_fechados)} pedido(s) ficam fora da rota: cliente não recebe nesse dia da semana.")
+            from realocar_dia_fechado import realocar_lote
+            servicos_brutos, _realocacao = realocar_lote(servicos_brutos, data_alvo, carregar_ajustes_manuais(),
+                                                         vuupt, modo_teste=modo_teste)
         except Exception as e:
-            logger.error(f"Falha ao separar clientes que não recebem no dia (seguem na roteirização): {e}")
+            logger.error(f"Falha ao realocar clientes que não recebem no dia (seguem na roteirização): {e}")
 
         # Área não atendida (pedido do Hugo, 02/08): pedido fora de
         # toda região com dia fixo E fora do raio da Grande SP (ou
