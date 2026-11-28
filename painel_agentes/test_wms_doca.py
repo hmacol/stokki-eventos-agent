@@ -318,18 +318,35 @@ class TestGuardar(unittest.TestCase):
         self.assertEqual([x[:2] for x in self.reservas(pid)], [(DEST, 6.0), (DOC, 24.0)])
 
     def test_retry_depois_de_queda_antes_da_reserva(self):
-        # caiu entre o movimento e a reserva; o aparelho repete o POST (ate com outra posicao)
+        # caiu entre o movimento e a reserva; o aparelho repete o mesmo POST
         s = self.caixas(2)
         pid = self.pedido(24)
         with mock.patch.object(wms_doca, "_levar_reservas", side_effect=RuntimeError("queda")):
             with self.assertRaises(RuntimeError):
                 self.guardar()
         self.assertEqual(self.reservas(pid)[0][0], DOC)
-        r = self.guardar(destino="C1-E2-N1")
+        r = self.guardar()
         self.assertEqual((r["movidas"], r["destino"], r["quantidade"], r["reservas_levadas"]), (s, DEST, 24, 1))
         self.assertEqual([x[:2] for x in self.reservas(pid)], [(DEST, 24.0)])
-        self.assertEqual((self.saldo(DOC), self.saldo(DEST), self.saldo("C1-E2-N1")), (0, 24, 0))
+        self.assertEqual((self.saldo(DOC), self.saldo(DEST)), (0, 24))
         self.assertEqual(cx.divergencias(self.conn, 48), [])
+
+    def test_guarda_diferente_depois_de_queda_antes_da_reserva_completa_e_recusa(self):
+        # mesma queda; o operador guarda o mesmo item em outra posicao com o uuid preso:
+        # a guarda gravada e completada (a reserva vai para onde o saldo foi) e a nova e recusada
+        s = self.caixas(2)
+        pid = self.pedido(24)
+        with mock.patch.object(wms_doca, "_levar_reservas", side_effect=RuntimeError("queda")):
+            with self.assertRaises(RuntimeError):
+                self.guardar()
+        with self.assertRaises(wms_doca.GuardaJaFeita) as ctx:
+            self.guardar(destino="C1-E2-N1")
+        self.assertEqual(ctx.exception.dados, {"destino": DEST, "quantidade": 24.0, "seriais": s})
+        self.assertEqual([x[:2] for x in self.reservas(pid)], [(DEST, 24.0)])
+        self.assertEqual((self.saldo(DOC), self.saldo(DEST), self.saldo("C1-E2-N1")), (0, 24, 0))
+        self.assertEqual([cx.obter_caixa(self.conn, x)["posicao"] for x in s], [DEST, DEST])
+        self.assertEqual(cx.divergencias(self.conn, 48), [])
+        self.assertFalse(self.conn.in_transaction)
 
     def test_pedir_mais_do_que_sobrou(self):
         self.entrada(10)
@@ -469,6 +486,62 @@ class TestGuardar(unittest.TestCase):
             self.guardar(quantidade=50)
         self.assertEqual([x[:2] for x in self.reservas(pid)], [(DOC, 30.0)])
         self.assertFalse(self.conn.in_transaction)
+
+    # Guarda DIFERENTE com o uuid ainda preso (a resposta da primeira se perdeu): nao e retry.
+    def test_guarda_diferente_sem_caixa_recusa(self):
+        self.entrada(120)
+        pid = self.pedido(100)
+        self.guardar(quantidade=40)   # doca 80 com 100 reservado: 20 vao junto
+        r = self.guardar(quantidade=40)   # retry identico: idempotente
+        self.assertEqual((r["quantidade"], r["restante_na_doca"], r["destino"]), (40, 80, DEST))
+        for kw in ({"quantidade": 40, "destino": "c1-e1-n2"}, {"quantidade": 20}, {}):
+            with self.assertRaises(wms_doca.GuardaJaFeita) as ctx:
+                self.guardar(**kw)
+            self.assertEqual(ctx.exception.dados, {"destino": DEST, "quantidade": 40.0, "seriais": []})
+        self.assertEqual(str(ctx.exception), "Essa guarda já foi registrada em C1-E1-N1 (40 UN). "
+                                             "Confira a prateleira e guarde o restante, se faltar.")
+        self.assertIsInstance(ctx.exception, wms.ErroWMS)
+        self.assertEqual((self.saldo(DOC), self.saldo(DEST), self.saldo("C1-E1-N2")), (80, 40, 0))
+        self.assertEqual([x[:2] for x in self.reservas(pid)], [(DEST, 20.0), (DOC, 80.0)])
+        n = self.conn.execute("SELECT COUNT(*) FROM wms_movimentos WHERE uuid LIKE 'g-u1%'").fetchone()[0]
+        self.assertEqual(n, 1)
+        self.assertFalse(self.conn.in_transaction)
+
+    def test_retry_identico_de_tudo_sem_caixa(self):
+        # "tudo" (sem quantidade) repetido com a doca ja vazia continua idempotente
+        self.entrada(120)
+        self.guardar()
+        r = self.guardar()
+        self.assertEqual((r["quantidade"], r["restante_na_doca"]), (120, 0))
+        self.assertEqual((self.saldo(DOC), self.saldo(DEST)), (0, 120))
+
+    def test_guarda_diferente_com_caixa_recusa(self):
+        s = self.caixas(2)
+        self.guardar(seriais=[s[0]])
+        r = self.guardar(seriais=[s[0].lower()])   # retry identico: idempotente
+        self.assertEqual((r["movidas"], r["quantidade"], r["destino"]), ([s[0]], 12, DEST))
+        for kw in ({"seriais": [s[1]]}, {"seriais": [s[0]], "destino": "C1-E1-N2"}):
+            with self.assertRaises(wms_doca.GuardaJaFeita) as ctx:
+                self.guardar(**kw)
+            self.assertEqual(ctx.exception.dados, {"destino": DEST, "quantidade": 12.0, "seriais": [s[0]]})
+        self.assertEqual([cx.obter_caixa(self.conn, x)["posicao"] for x in s], [DEST, DOC])
+        self.assertEqual((self.saldo(DOC), self.saldo(DEST), self.saldo("C1-E1-N2")), (12, 12, 0))
+        self.assertEqual(cx.divergencias(self.conn, 48), [])
+
+    def test_guarda_diferente_depois_de_queda_na_caixa_completa_e_recusa(self):
+        # caiu entre o movimento da 1a caixa e a caixa; a guarda seguinte (outras caixas) com o
+        # uuid preso completa a caixa gravada antes de recusar: saldo, caixa e reserva juntos
+        s = self.caixas(2)
+        pid = self.pedido(24)
+        with mock.patch.object(cx, "_mudar_caixa", side_effect=RuntimeError("queda")):
+            with self.assertRaises(RuntimeError):
+                self.guardar(seriais=[s[0]])
+        with self.assertRaises(wms_doca.GuardaJaFeita):
+            self.guardar(seriais=[s[1]])
+        self.assertEqual([cx.obter_caixa(self.conn, x)["posicao"] for x in s], [DEST, DOC])
+        self.assertEqual((self.saldo(DOC), self.saldo(DEST)), (12, 12))
+        self.assertEqual(sorted(x[:2] for x in self.reservas(pid)), [(DEST, 12.0), (DOC, 12.0)])
+        self.assertEqual(cx.divergencias(self.conn, 48), [])
 
 class TestFilaGuarda(unittest.TestCase):
     setUp = TestGuardar.setUp

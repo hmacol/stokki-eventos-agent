@@ -253,6 +253,23 @@ class Rotas(Base):
         r = self.enviar("/api/wms/guarda/guardar", self.corpo(confirmar_temperatura=True))
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
 
+    def test_guardar_diferente_com_mesmo_uuid_409(self):
+        # a 1a guarda chegou e a resposta se perdeu; outra guarda do item com o uuid preso
+        self.operador()
+        self.na_doca(qtd=10)
+        conn = wms.conectar()
+        wms.criar_posicao(conn, "C1-E1-N2")
+        conn.close()
+        r = self.enviar("/api/wms/guarda/guardar", self.corpo(quantidade=4))
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        r = self.enviar("/api/wms/guarda/guardar", self.corpo(quantidade=6, destino="C1-E1-N2"))
+        self.assertEqual(r.status_code, 409, r.get_data(as_text=True))
+        j = r.get_json()
+        self.assertEqual(j["guarda_ja_feita"], {"destino": POS, "quantidade": 4.0, "seriais": []})
+        self.assertTrue(j["erro"].startswith("Essa guarda já foi registrada em C1-E1-N1 (4 UN)."))
+        r = self.enviar("/api/wms/guarda/guardar", self.corpo(quantidade=4))   # retry identico segue 200
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+
     def test_guardar_uuid_reservado_recusa(self):
         self.operador()
         self.na_doca()
@@ -380,8 +397,15 @@ class GuardarNaTela(ConferirRecebimentoNaTela):
     def test_uuid_da_guarda_estavel_por_item_ate_o_sucesso(self):
         h = self.html()
         self.assertIn("uuid: uuidGuarda(it) });", h)
-        self.assertEqual(h.count("soltarUuidGuarda(corpo);"), 2)   # sucesso na tela e no envio da fila
+        # sucesso e guarda ja feita (409), na tela e no envio da fila
+        self.assertEqual(h.count("soltarUuidGuarda(corpo);"), 4)
         self.assertNotIn("ctx.uuid = uuid()", h)   # trocar a posicao nao troca o uuid
+
+    def test_guarda_ja_feita_solta_o_uuid_e_recarrega_o_item(self):
+        h = self.html()
+        self.assertIn("e.dados.guarda_ja_feita) { soltarUuidGuarda(corpo); return abrirGuardaItem(ctx.item, e.message); }", h)
+        self.assertIn("Guarda já registrada", h)
+        self.assertIn("if (e.dados && e.dados.guarda_ja_feita) soltarUuidGuarda(corpo);", h)   # fila offline
 
     def test_mover_nao_oferece_a_doca_como_origem(self):
         h = self.html()

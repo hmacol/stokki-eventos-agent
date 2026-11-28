@@ -1559,7 +1559,8 @@
     lista.querySelectorAll('[data-gi]').forEach((el) => el.addEventListener('click', () => abrirGuardaItem(ctx.fila[Number(el.dataset.gi)])));
   };
   // uuid da guarda por item (produto + lote + validade) até o servidor responder sucesso: reabrir o item
-  // ou trocar a posição repete a MESMA guarda (no retry o servidor usa o destino já gravado), nunca move de novo
+  // repete a MESMA guarda, nunca move de novo. Guarda diferente com o uuid preso (a anterior chegou e a
+  // resposta se perdeu): o servidor recusa com 409 guarda_ja_feita, o uuid é solto e o item recarrega
   const GUARDA_UUID = {};
   const chaveGuarda = (x) => 'wms_guarda_uuid_' + x.produto_id + '|' + (x.lote || '') + '|' + (x.validade || '');
   function uuidGuarda(x) {
@@ -1569,12 +1570,13 @@
     return GUARDA_UUID[k];
   }
   function soltarUuidGuarda(x) { const k = chaveGuarda(x); delete GUARDA_UUID[k]; try { localStorage.removeItem(k); } catch (e) { /* idem */ } }
-  async function abrirGuardaItem(it) {
+  // aviso: mensagem da guarda já registrada; se o item saiu da doca, volta para a fila com ela
+  async function abrirGuardaItem(it, aviso) {
     const q = '?produto_id=' + it.produto_id + '&lote=' + encodeURIComponent(it.lote || '') + '&validade=' + encodeURIComponent(it.validade || '');
     let d = null;
     try { d = await api('/guarda/item' + q); }
-    catch (e) { if (e.status) return toast(e.message, true); /* sem rede: segue com os dados da fila, sem sugestão */ }
-    ir('guardarItem', { item: d ? d.item : it, sugestoes: d ? d.sugestoes : null, caixas: d ? d.caixas : null, destino: '', modo: null, bipadas: [], conflito: null, corpo: null, uuid: uuidGuarda(it) });
+    catch (e) { if (e.status) { if (aviso) voltar(); return toast(aviso || e.message, true); } /* sem rede: segue com os dados da fila, sem sugestão */ }
+    ir('guardarItem', { item: d ? d.item : it, sugestoes: d ? d.sugestoes : null, caixas: d ? d.caixas : null, destino: '', modo: null, bipadas: [], conflito: null, corpo: null, aviso: aviso || '', uuid: uuidGuarda(it) });
   }
   async function enviarGuarda(ctx, corpo) {
     if (!S.operador) { toast('Identifique o operador primeiro', true); return ir('operador'); }
@@ -1587,6 +1589,7 @@
     } catch (e) {
       if (e.status === 409 && e.dados && e.dados.sem_operador) { S.operador = null; toast(e.message, true); return ir('operador'); }
       if (e.status === 409 && e.dados && e.dados.temperatura) { ctx.conflito = e.dados.temperatura; ctx.corpo = corpo; return render(); }
+      if (e.status === 409 && e.dados && e.dados.guarda_ja_feita) { soltarUuidGuarda(corpo); return abrirGuardaItem(ctx.item, e.message); }
       if (!e.status) { enfileirar(Object.assign({ tipo: 'guardar' }, corpo)); toast('Sem rede: guarda guardada na fila e será enviada quando a internet voltar.'); return voltar(); }
       toast(e.message, true);
       render();
@@ -1616,6 +1619,7 @@
     return `
     <button class="voltar" id="btn-voltar">‹ Voltar</button>
     <h1>${esc(it.descricao)}<small>${num(it.quantidade)} ${un} · ${seloTemperatura(it.temperatura)}${it.lote ? ' · lote ' + esc(it.lote) : ''}${it.validade ? ' · val. ' + dataBr(it.validade) : ''}</small></h1>
+    ${ctx.aviso ? '<div class="cartao atencao"><div class="rotulo">Guarda já registrada</div><div class="sub">' + esc(ctx.aviso) + '</div></div>' : ''}
     ${it.pedidos_reservados ? '<div class="cartao atencao"><div class="sub">reservado para ' + it.pedidos_reservados + ' pedido(s): a reserva acompanha o que for guardado.</div></div>' : ''}
     ${sug && sug.length ? `<div class="cartao ok"><div class="rotulo">Sugestão</div><div class="mono" style="font-size:34px;font-weight:800">${esc(sug[0].posicao)}</div><div class="sub">${esc(sug[0].motivo)}</div>
         ${sug.slice(1, 3).map((s) => '<div class="sub" style="margin-top:6px">Ou <b class="mono">' + esc(s.posicao) + '</b> · ' + esc(s.motivo) + '</div>').join('')}</div>`
@@ -2496,6 +2500,7 @@
         } catch (e) {
           if (e.status === 409 && e.dados && e.dados.sem_operador) { toast('Identifique o operador pra enviar a fila', true); ir('operador'); return; }
           if (!e.status || e.status >= 500) { toast('Fila: ' + (e.status ? e.message : 'sem rede'), true); return; }
+          if (e.dados && e.dados.guarda_ja_feita) soltarUuidGuarda(corpo);   // a tentativa anterior já foi aplicada
           recusados++; ultimoErro = e.message;
           filaRecusados('Guardar ' + gd.destino, e.message);
         }

@@ -7485,6 +7485,8 @@ def api_wms_guarda_guardar():
         return jsonify(r)
     except wms_doca.TemperaturaDiferente as e:
         return jsonify({"erro": str(e), "temperatura": e.dados}), 409
+    except wms_doca.GuardaJaFeita as e:
+        return jsonify({"erro": str(e), "guarda_ja_feita": e.dados}), 409
     except (wms.ErroWMS, ValueError, TypeError, OverflowError) as e:
         return _wms_json_erro(e)
     finally:

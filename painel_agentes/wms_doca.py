@@ -23,6 +23,16 @@ class TemperaturaDiferente(ErroWMS):
         self.dados = dados
 
 
+class GuardaJaFeita(ErroWMS):
+    """O uuid ja tem guarda gravada (a resposta se perdeu) e o pedido atual e outro
+    (destino, quantidade ou caixas). A gravada e completada e esta e recusada: a tela
+    solta o uuid e recarrega o item. dados: destino, quantidade e seriais gravados."""
+
+    def __init__(self, mensagem: str, dados: dict):
+        super().__init__(mensagem)
+        self.dados = dados
+
+
 def conectar(caminho: Path | None = None):
     return wms_caixas.conectar(caminho)
 
@@ -198,7 +208,8 @@ def guardar(conn, *, produto_id: int, lote: str, validade: str | None, destino: 
             confirmar_temperatura: bool = False) -> dict:
     """Leva produto + lote + validade da doca para `destino`. Com caixa: todas as da chave
     na doca (ou so `seriais`), cada uma por mover_caixa; sem caixa: `quantidade` (None = tudo)
-    numa TRANSFERENCIA. Repetir com o mesmo uuid nao move de novo e vale o destino ja gravado."""
+    numa TRANSFERENCIA. Repetir o mesmo pedido com o mesmo uuid nao move de novo; pedido
+    diferente com o mesmo uuid completa a guarda gravada e levanta GuardaJaFeita."""
     uuid = str(uuid or "").strip()
     if not uuid:
         raise ErroWMS("uuid do aparelho obrigatorio para guardar.")
@@ -215,9 +226,21 @@ def guardar(conn, *, produto_id: int, lote: str, validade: str | None, destino: 
                 or (m["validade"] or "") != val):
             raise ErroWMS(f"uuid {uuid} ja foi usado por outro movimento.")
 
-    sufixo = ""
+    ja_caixas = {m["uuid"][len(prefixo):] for m in feitos if m["uuid"].startswith(prefixo)}
+    sufixo, ja_feita = "", False
     if feitos:
-        destino = feitos[0]["posicao_destino"]   # resposta perdida: vale o destino ja gravado
+        # Retry (resposta perdida) so se o pedido for o mesmo: destino; sem caixa, a quantidade
+        # ("tudo" so e o mesmo se a doca ja esvaziou); com seriais, as gravadas entre as pedidas
+        # (cobre a queda no meio). Outro pedido com o uuid preso: completa a gravada e recusa.
+        gravado = feitos[0]["posicao_destino"]
+        if ja_caixas:
+            ja_feita = seriais is not None and not ja_caixas <= {str(s or "").strip().upper() for s in seriais}
+        elif quantidade is None:
+            ja_feita = seriais is not None or wms._saldo_atual(conn, DOCA_POSICAO, produto_id, lote, val) > 0.0004
+        else:
+            ja_feita = seriais is not None or abs(float(quantidade) - float(feitos[0]["quantidade"])) > 0.0004
+        ja_feita = ja_feita or wms.normalizar_codigo(destino) != gravado
+        destino = gravado
         if any("temperatura diferente confirmada" in (m["observacao"] or "") for m in feitos):
             sufixo = " · temperatura diferente confirmada"   # a decisao ja foi tomada na 1a chamada
     else:
@@ -236,14 +259,15 @@ def guardar(conn, *, produto_id: int, lote: str, validade: str | None, destino: 
 
     # Caixa em qualquer situacao que ainda esta no saldo da doca (inclusive a separada, que
     # nao sai): sem isso a chave cairia no caminho sem caixa e levaria o saldo dela.
-    ja_caixas = {m["uuid"][len(prefixo):] for m in feitos if m["uuid"].startswith(prefixo)}
     marcas = ",".join("?" * len(wms_caixas.NO_SALDO))
     na_doca = [r["serial"] for r in conn.execute(
         f"SELECT serial FROM wms_caixas WHERE posicao = ? AND produto_id = ? AND lote = ? "
         f"AND COALESCE(validade, '') = ? AND situacao IN ({marcas}) ORDER BY serial",
         (DOCA_POSICAO, produto_id, lote, val, *wms_caixas.NO_SALDO))]
     com_caixa = seriais is not None or bool(na_doca or ja_caixas)
-    if com_caixa:
+    if ja_feita:
+        com_caixa, alvo = bool(ja_caixas), sorted(ja_caixas)   # so completa o que ja foi gravado
+    elif com_caixa:
         if seriais is None:
             alvo = sorted(set(na_doca) | ja_caixas)
         else:
@@ -284,6 +308,11 @@ def guardar(conn, *, produto_id: int, lote: str, validade: str | None, destino: 
             "SELECT COALESCE(SUM(quantidade), 0) FROM wms_movimentos WHERE uuid = ? OR substr(uuid, 1, ?) = ?",
             (f"g-{uuid}", len(prefixo), prefixo)).fetchone()[0])
         levadas = _levar_reservas(conn, produto_id, lote, val, destino, teto, f"g-{uuid}") if teto > 0.0004 else 0
+    if ja_feita:
+        raise GuardaJaFeita(
+            f"Essa guarda já foi registrada em {destino} ({teto:g} UN). "
+            "Confira a prateleira e guarde o restante, se faltar.",
+            {"destino": destino, "quantidade": round(teto, 3), "seriais": sorted(ja_caixas)})
 
     total = 0.0
     for u in ([f"{prefixo}{s}" for s in movidas] if com_caixa else [f"g-{uuid}"]):
