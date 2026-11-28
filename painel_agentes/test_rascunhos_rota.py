@@ -155,6 +155,22 @@ class EnviarRascunhoSemServicoTest(_Base):
         self.assertIn("erro 422 da Vuupt", resultado["codigos_sem_servico"]["#PS-2"])
         self.assertEqual(resultado["codigos_pendentes_tecnico"], {})
 
+    def test_agendamento_malformado_tira_so_essa_parada_e_a_rota_sai(self):
+        """Onda 4 (L4): dado local invalido nao trava o rascunho inteiro em ERRO_ENVIO."""
+        a, b, c = self._sem_servico("PS-1"), self._sem_servico("PS-2"), self._sem_servico("PS-3")
+        conn = banco.conectar()
+        try:
+            conn.execute("UPDATE nucleo_pedidos SET agendamento_inicio = 'amanha cedo' WHERE codigo = 'PS-2'")
+            conn.commit()
+        finally:
+            conn.close()
+        rid = _inserir_rascunho([(a, "#PS-1"), (b, "#PS-2"), (c, "#PS-3")])
+        resultado = rascunhos_rota.enviar_rascunho(rid, "token")
+        self.assertTrue(resultado["ok"], resultado)
+        self.assertEqual(self._ids_enviados(), [900, 901])
+        self.assertIn("dado invalido no nucleo", resultado["codigos_sem_servico"]["#PS-2"])
+        self.assertEqual(_paradas(rid), [(900, "#PS-1"), (901, "#PS-3")])
+
     def test_todos_recusados_com_o_mesmo_422_e_sistemico_e_nada_sai(self):
         """Onda 3 (Hugo): o mesmo erro permanente em todos = problema nosso/da Vuupt, nao dos pedidos."""
         a, b, c = self._sem_servico("PS-1"), self._sem_servico("PS-2"), self._sem_servico("PS-3")

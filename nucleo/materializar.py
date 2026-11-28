@@ -404,7 +404,13 @@ def _criar_ou_adotar(conn: sqlite3.Connection, codigo: str, linha, vuupt, passo=
         logger.info(f"materializar {codigo}: servico {sid} ja existia na Vuupt (not_assigned); reenvia a edicao local")
 
     base = _payload_do_pipeline(linha, vuupt)
-    payload = montar_payload(linha, vuupt, base)
+    try:
+        payload = montar_payload(linha, vuupt, base)   # so local (base pronta): sem chamada a Vuupt
+    except (ValueError, TypeError) as e:
+        # dado do nucleo malformado (ex. agendamento_* que nao e data) e erro LOCAL deterministico: tentar de
+        # novo nao resolve, entao e recusa com o motivo (a parada sai), nunca transitorio (travaria a rota)
+        raise _Recusa(f"pedido {codigo} com dado invalido no nucleo ({e}): servico nao criado; corrigir o "
+                      f"pedido (data/endereco) e montar de novo") from e
     passo()
     resposta, acao = vuupt.criar_ou_atualizar_servico(payload)
     servico = pedidos.servico_da_resposta(resposta)

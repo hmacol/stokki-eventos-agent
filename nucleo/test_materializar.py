@@ -464,6 +464,28 @@ class ErroHttpDaVuuptTest(_Base):
         self.assertIsNone(pedidos.buscar_pedido("PS-1", conn=self.conn)["vuupt_service_id"])
 
 
+class DadoLocalInvalidoTest(_Base):
+    """Onda 4 (L4): ValueError/TypeError ao montar o payload (dado do nucleo malformado) e erro LOCAL
+    deterministico: recusa com o motivo (a parada sai), nunca transitorio (travaria a rota toda rodada)."""
+
+    def test_agendamento_malformado_e_recusa_e_os_outros_seguem(self):
+        a, b, c = self._pedido("PS-1"), self._pedido("PS-2"), self._pedido("PS-3")
+        self.conn.execute("UPDATE nucleo_pedidos SET agendamento_inicio = 'amanha cedo' WHERE codigo = 'PS-2'")
+        self.conn.commit()
+        vuupt = FakeVuupt()
+        res = materializar.materializar_servicos([{"id": i} for i in (a, b, c)], vuupt, {}, self.conn)
+        self.assertEqual(res.ok, {"PS-1": 900, "PS-3": 901})
+        self.assertEqual(res.transitorios, {})
+        self.assertIn("dado invalido no nucleo", res.falhas["PS-2"])
+        self.assertIn("amanha", res.falhas["PS-2"])
+        self.assertNotIn("criar #PS-2", vuupt.chamadas)
+        self.assertEqual(self._travas(), 0)
+
+    def test_erro_de_banco_continua_transitorio(self):
+        self.assertEqual(materializar.classificar_falha(sqlite3.OperationalError("database is locked")),
+                         materializar.FALHA_TRANSITORIA)
+
+
 class ErroSistemicoTest(_Base):
     """Onda 3 (Hugo): TODOS os pedidos sem servico do lote (>= 2) recusados pela Vuupt com o MESMO status
     permanente e nenhum sucesso = provavel problema sistemico (payload/config nosso), nao do pedido:
